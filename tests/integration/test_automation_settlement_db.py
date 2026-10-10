@@ -468,6 +468,214 @@ class TestTheStartsStamp:
         assert (await self._columns(db, eid))[0] == self._STAMP
 
 
+class _HeldRuns:
+    """A held run settled as a settle leaves its finish job."""
+
+    async def _thread(self, db, workspace_id):
+        from uuid import uuid4
+
+        thread_id = str(uuid4())
+        await _sql(
+            db,
+            "INSERT INTO conversation_threads "
+            "(conversation_thread_id, workspace_id, msg_type, current_status, thread_index) "
+            "VALUES (%s, %s, 'ptc', 'completed', 0)",
+            (thread_id, workspace_id),
+        )
+        return thread_id
+
+    async def _settle_leaving(self, user_id, eid, aid, thread_id, run_id, *, work=None):
+        """Settle the firing as completed, leaving its finish as a settle
+        does; whether the job was left."""
+        from src.server.database.automation_executions import settle_execution
+        from src.server.services import automation_settlement as settlement
+        from src.server.services.automation_delivery import Delivery, Target
+
+        held = Delivery(
+            eid, [Target(entry="slack:T/C", address="slack:T/C", name="#demo", ok=True)]
+        )
+        left = []
+
+        async def leave(conn, settled):
+            left.append(await settlement._leave_finish(
+                conn, settlement._POLICIES[settlement.Outcome.COMPLETED],
+                {"automation_id": aid, "user_id": user_id}, eid,
+                thread_id, run_id, held, settled, "The brief.",
+            ))
+            if work is not None:
+                await work()
+
+        await settle_execution(
+            eid, automation_id=aid, from_statuses=("running",), to="completed",
+            in_transaction=leave,
+        )
+        return left[0]
+
+    async def _jobs(self, db, run_id):
+        async with db() as conn, conn.cursor() as cur:
+            await cur.execute(
+                "SELECT hook_type, payload FROM hook_outbox WHERE run_id = %s",
+                (run_id,),
+            )
+            return await cur.fetchall()
+
+
+class TestTheFinishJobCommitsWithTheSettle(_HeldRuns):
+    """A held run's finish job is written in its settle's transaction
+    (``automation_settlement._leave_finish``): settled means the job is
+    there, and a job that can't be written leaves the settle as it is."""
+
+    async def test_the_job_is_there_once_the_firing_reads_settled(
+        self, seed_workspace, seed_response, patched_get_db_connection
+    ):
+        from uuid import uuid4
+
+        db = patched_get_db_connection
+        user_id = seed_workspace["user_id"]
+        aid = await _automation(user_id)
+        eid = await _firing(db, aid)
+        thread_id = await self._thread(db, seed_workspace["workspace_id"])
+        run_id = str(uuid4())
+        await seed_response(run_id, thread_id, 0)
+
+        assert await self._settle_leaving(user_id, eid, aid, thread_id, run_id)
+
+        assert (await _status(db, eid))[0] == "completed"
+        jobs = await self._jobs(db, run_id)
+        assert [j["hook_type"] for j in jobs] == ["automation_finish"]
+        assert jobs[0]["payload"]["final_text"] == "The brief."
+
+    async def test_a_settle_that_does_not_commit_leaves_no_job(
+        self, seed_workspace, seed_response, patched_get_db_connection
+    ):
+        from uuid import uuid4
+
+        db = patched_get_db_connection
+        user_id = seed_workspace["user_id"]
+        aid = await _automation(user_id)
+        eid = await _firing(db, aid)
+        thread_id = await self._thread(db, seed_workspace["workspace_id"])
+        run_id = str(uuid4())
+        await seed_response(run_id, thread_id, 0)
+
+        async def dies():
+            raise RuntimeError("the worker died before the commit")
+
+        with pytest.raises(RuntimeError):
+            await self._settle_leaving(user_id, eid, aid, thread_id, run_id, work=dies)
+
+        assert (await _status(db, eid))[0] == "running"
+        assert await self._jobs(db, run_id) == []
+
+    async def test_a_job_that_cannot_be_written_leaves_the_settle(
+        self, seed_user, patched_get_db_connection
+    ):
+        """A run with no ledger row can't hold the job; the settle commits
+        and the finish is asked in process instead."""
+        from uuid import uuid4
+
+        db = patched_get_db_connection
+        aid = await _automation(seed_user["user_id"])
+        eid = await _firing(db, aid)
+        run_id = str(uuid4())
+
+        assert not await self._settle_leaving(
+            seed_user["user_id"], eid, aid, str(uuid4()), run_id
+        )
+
+        assert (await _status(db, eid))[0] == "completed"
+        assert await self._jobs(db, run_id) == []
+
+
+class TestAFinishJobKeepsItsRecord(_HeldRuns):
+    """A finish job writes its record and what its next attempt needs to know
+    of it in one transaction (``automation_settlement._keep_record``)."""
+
+    _LANDED = [{
+        "method": "slack:T/C", "address": "slack:T/C", "name": "#demo",
+        "success": True, "via": "agent", "error": None,
+    }]
+    _UNCONFIRMED = [{
+        "method": "slack:T/C", "address": "slack:T/C", "name": "#demo",
+        "success": False, "via": None, "error": "Delivery couldn't be confirmed.",
+    }]
+
+    async def _held_job(self, db, seed_workspace, seed_response):
+        from uuid import uuid4
+
+        user_id = seed_workspace["user_id"]
+        aid = await _automation(user_id)
+        eid = await _firing(db, aid)
+        thread_id = await self._thread(db, seed_workspace["workspace_id"])
+        run_id = str(uuid4())
+        await seed_response(run_id, thread_id, 0)
+        assert await self._settle_leaving(user_id, eid, aid, thread_id, run_id)
+        return eid, run_id
+
+    async def _claimed(self, db, run_id, attempts):
+        """The job as a drainer claims it, with what earlier attempts merged."""
+        async with db() as conn, conn.cursor() as cur:
+            await cur.execute("SELECT * FROM hook_outbox WHERE run_id = %s", (run_id,))
+            return {**(await cur.fetchone()), "attempts": attempts}
+
+    async def _record(self, db, eid):
+        async with db() as conn, conn.cursor() as cur:
+            await cur.execute(
+                "SELECT delivery_result FROM automation_executions "
+                "WHERE automation_execution_id = %s",
+                (eid,),
+            )
+            return (await cur.fetchone())["delivery_result"]
+
+    async def test_a_job_run_again_after_its_answer_landed_keeps_it(
+        self, seed_workspace, seed_response, patched_get_db_connection
+    ):
+        """The acknowledgement was lost after the answer was recorded, and the
+        replay's ask got no answer."""
+        from unittest.mock import AsyncMock, patch
+
+        from src.server.services import automation_settlement as settlement
+        from src.server.services.automation_delivery import Finish
+
+        db = patched_get_db_connection
+        eid, run_id = await self._held_job(db, seed_workspace, seed_response)
+        asks = AsyncMock(side_effect=[
+            Finish(self._LANDED, answered=True),
+            Finish(self._UNCONFIRMED, retry=True),
+        ])
+        with patch.object(settlement.automation_delivery, "finish_run", new=asks):
+            await settlement._finish_held_run(await self._claimed(db, run_id, 1))
+            with pytest.raises(settlement._FinishPending):
+                await settlement._finish_held_run(await self._claimed(db, run_id, 2))
+
+        assert asks.await_count == 2
+        assert await self._record(db, eid) == self._LANDED
+
+    async def test_a_record_whose_bookkeeping_fails_is_not_kept(
+        self, seed_workspace, seed_response, patched_get_db_connection
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        from src.server.services import automation_settlement as settlement
+        from src.server.services.automation_delivery import Finish
+
+        db = patched_get_db_connection
+        eid, run_id = await self._held_job(db, seed_workspace, seed_response)
+        asks = AsyncMock(return_value=Finish(self._LANDED, answered=True))
+        with (
+            patch.object(settlement.automation_delivery, "finish_run", new=asks),
+            patch.object(
+                settlement.outbox_db, "merge_job_payload",
+                new=AsyncMock(side_effect=RuntimeError("the merge failed")),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            await settlement._finish_held_run(await self._claimed(db, run_id, 1))
+
+        assert await self._record(db, eid) is None
+        assert "recorded" not in (await self._claimed(db, run_id, 1))["payload"]
+
+
 class TestWhyAFiringFailed:
     """The failure a user acts on, and why an automation switched itself off."""
 

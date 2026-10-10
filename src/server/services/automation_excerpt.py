@@ -1,17 +1,16 @@
-"""The head of an automation run's answer, flattened to one line.
+"""An automation run's answer, and its head flattened to one line.
 
-The automation list and the run feed lead with it, so it is read from the
-checkpoint once, as the run completes, and kept on the execution row.
+The automation list and the run feed lead with the head, so the answer is
+read from the checkpoint once, as the run completes, and the head kept on the
+execution row. A run that delivers through the messaging service hands the
+chats its agent didn't reach the result it ended on sending, else the answer.
 """
 
 import html
-import logging
 import re
-from typing import Optional
+from typing import Any, NamedTuple, Optional
 
 from langchain_core.messages import AIMessage
-
-logger = logging.getLogger(__name__)
 
 # Markup is stripped from this raw head, so it leaves room for links and
 # tables to collapse and still fill the excerpt, and a long answer never
@@ -67,35 +66,70 @@ def plain_excerpt(answer: str) -> str:
     return cut.rstrip(" ,;:-") + "…" if cut else ""
 
 
-async def read_run_excerpt(thread_id: str, run_id: str) -> Optional[str]:
-    """The run's final answer as an excerpt, or None when it has no text.
+class RunAnswer(NamedTuple):
+    """What a completed run said: ``text``, the last text its agent wrote,
+    and ``sent``, the text of the ``send_message`` it ended on."""
 
-    Called as the run completes, while its turn is still the thread's newest,
-    so only that turn is materialized; a later read that finds a newer turn
-    leaves none. Background subagents checkpoint under their own ``task:``
-    namespaces, so these messages are the agent's own. An excerpt only
-    decorates a list: a failed read leaves none rather than failing the
-    execution.
+    text: Optional[str] = None
+    sent: Optional[str] = None
+
+
+# What a run may call after sending its result: looking up where to send,
+# and sending again. Any other call after a send makes that send an update
+# along the way.
+_MESSAGING_TOOLS = frozenset({"send_message", "list_message_targets"})
+
+
+def _result_sent(messages: list[Any]) -> Optional[str]:
+    """The text of the send a run ended on: its last ``send_message`` call
+    with text, whether it went out or not, since a chat it didn't reach is
+    owed the result the agent wrote for it. A call that sent only files is
+    passed over. None when the run did other work after its last send: that
+    send was an update along the way, and the answer is the result."""
+    for message in reversed(messages):
+        if not isinstance(message, AIMessage):
+            continue
+        for call in reversed(message.tool_calls or []):
+            name = call.get("name")
+            if name not in _MESSAGING_TOOLS:
+                return None
+            if name != "send_message":
+                continue
+            args = call.get("args")
+            text = args.get("text") if isinstance(args, dict) else None
+            if isinstance(text, str) and text.strip():
+                return text
+    return None
+
+
+async def read_run_answer(thread_id: str, run_id: str) -> RunAnswer:
+    """What the run said: the last text its agent wrote, and the text of the
+    send it ended on. Both are None when it has none.
+
+    A run that sends its result writes something else last, such as a line
+    saying where it sent it, so the send is the result a chat it didn't
+    reach is handed.
+
+    The run's own turn is read, found by its run: the thread can take another
+    turn before the settle runs, and the newest turn is then that one's, not
+    the run's. Only that turn is materialized. Background subagents
+    checkpoint under their own ``task:`` namespaces, so these messages are
+    the agent's own. A failed read raises: the caller knows whether the
+    answer only heads a list or is what the chats its agent didn't reach are
+    handed.
     """
     from src.server.services.history.projector import split_content_blocks
     from src.server.services.history.reader import CheckpointHistoryReader
 
-    try:
-        reader = CheckpointHistoryReader.get_instance()
-        anchors, _ = await reader.aget_turn_anchors(thread_id)
-        if not anchors or anchors[-1].run_id != run_id:
-            return None
-        (turn,) = await reader.aget_turn_slices(thread_id, anchors[-1:])
-    except Exception as e:
-        logger.warning(
-            f"[AUTOMATION] Excerpt read failed: thread_id={thread_id} "
-            f"run_id={run_id}: {e}"
-        )
-        return None
+    turn = await CheckpointHistoryReader.get_instance().aget_run_turn(thread_id, run_id)
+    if turn is None:
+        return RunAnswer()
+    text = None
     for message in reversed(turn.messages):
         if not isinstance(message, AIMessage):
             continue
-        text, _, _ = split_content_blocks(message.content)
-        if text and text.strip():
-            return plain_excerpt(text) or None
-    return None
+        written, _, _ = split_content_blocks(message.content)
+        if written and written.strip():
+            text = written
+            break
+    return RunAnswer(text=text, sent=_result_sent(turn.messages))

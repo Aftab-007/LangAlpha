@@ -278,6 +278,30 @@ class TestTheSendRequest:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", ["analyst", "chief_of_staff"])
+    async def test_an_automations_turn_names_its_run(self, gateway, role):
+        await _call(
+            _tool("send_message", role),
+            {"text": "Done.", "target": "slack:T1/C2"},
+            {**CONFIGURABLE, "automation_execution_id": "exec-9"},
+        )
+
+        assert (
+            json.loads(gateway.requests[0].content)["automation_execution_id"]
+            == "exec-9"
+        )
+
+    @pytest.mark.asyncio
+    async def test_any_other_turn_names_no_run(self, gateway):
+        await _call(
+            _tool("send_message"),
+            {"text": "hi"},
+            {**CONFIGURABLE, "automation_execution_id": None},
+        )
+
+        assert "automation_execution_id" not in json.loads(gateway.requests[0].content)
+
+    @pytest.mark.asyncio
     async def test_an_omitted_target_asks_for_this_conversation(self, gateway):
         await _call(_tool("send_message"), {"text": "hi"})
 

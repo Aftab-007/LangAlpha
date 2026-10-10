@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 from uuid import uuid4
 
 from psycopg.rows import dict_row
@@ -146,6 +146,7 @@ async def settle_execution(
     strike: Optional[Literal["count", "fuse", "reset"]] = None,
     schedule: Optional[ScheduleAction] = None,
     quiet_for: Optional[int] = None,
+    in_transaction: Optional[Callable[[Any, Dict[str, Any]], Awaitable[Any]]] = None,
     **fields: Any,
 ) -> Optional[Dict[str, Any]]:
     """End a firing and write what it leaves on its automation, in one
@@ -159,7 +160,9 @@ async def settle_execution(
     its start kept (``stamp_delivery``), and the ``previous_failure_reason``
     and ``previous_delivery_result`` of the automation's newest firing
     settled before this one, a server skip aside, so a caller can tell a
-    repeat the channel already heard from news.
+    repeat the channel already heard from news. ``in_transaction`` is
+    awaited with the connection and that row before the commit, for work
+    that must commit with the settle or not at all.
     """
     async with get_db_connection() as conn:
         async with conn.transaction():
@@ -224,7 +227,7 @@ async def settle_execution(
                     await cur.execute(
                         _SCHEDULE_SQL[schedule], (automation_id, prior["created_at"])
                     )
-                return {
+                settled = {
                     **row,
                     "settled_from": prior["status"],
                     "delivery": prior["delivery"],
@@ -235,6 +238,9 @@ async def settle_execution(
                         previous["delivery_result"] if previous else None
                     ),
                 }
+            if in_transaction is not None:
+                await in_transaction(conn, settled)
+            return settled
 
 
 async def stamp_delivery(execution_id: str, stamp: Optional[Dict[str, Any]]) -> bool:
@@ -257,9 +263,10 @@ async def stamp_delivery(execution_id: str, stamp: Optional[Dict[str, Any]]) -> 
             return cur.rowcount > 0
 
 
-async def record_delivery(execution_id: str, delivery_result: list) -> None:
-    """Record what the webhook delivery returned, whatever the status."""
-    async with get_db_connection() as conn:
+async def record_delivery(execution_id: str, delivery_result: list, *, conn=None) -> None:
+    """Record what the webhook delivery returned, whatever the status.
+    ``conn`` joins the caller's transaction."""
+    async with get_db_connection(conn) as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
                 UPDATE automation_executions SET delivery_result = %s
