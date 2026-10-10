@@ -242,7 +242,9 @@ export function MetaText({
 }
 
 /** The base status pill. Status vocabularies (lifecycle, OAuth) map their
- *  states onto this one shape so the two surfaces stay pixel-identical. */
+ *  states onto this one shape so the two surfaces stay pixel-identical.
+ *  `capsule` is for a pill nested in a fully rounded control, whose corners
+ *  it then follows. */
 export function StatusPill({
   icon: Icon,
   label,
@@ -250,6 +252,7 @@ export function StatusPill({
   bg,
   title,
   testid,
+  capsule = false,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -257,12 +260,15 @@ export function StatusPill({
   bg: string;
   title?: string;
   testid?: string;
+  capsule?: boolean;
 }) {
   return (
     <span
       // The glyph sits on the first line of the label rather than at the
       // middle of the pill, so a label that wraps keeps it beside its words.
-      className="inline-flex items-start gap-1 text-[0.6875rem] leading-4 px-1.5 py-0.5 rounded font-medium"
+      className={`inline-flex items-start gap-1 text-[0.6875rem] leading-4 py-0.5 font-medium ${
+        capsule ? 'rounded-full px-2' : 'rounded px-1.5'
+      }`}
       style={{ color, backgroundColor: bg }}
       title={title}
       data-testid={testid}
