@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 
-from ptc_agent.agent.middleware.runtime_context import TurnContext
+from ptc_agent.agent.middleware.runtime_context import TurnContext, parse_surface
 from src.config.settings import (
     get_langsmith_metadata,
     get_langsmith_tags,
@@ -339,15 +339,22 @@ def apply_fetch_override(config) -> None:
 class PriorThread(NamedTuple):
     """The thread row as it stood before this turn stamped it.
 
-    The time is absent on a thread's first turn, and every field on any turn
-    whose read failed: they are context for the turn rather than correctness,
-    so a read failure degrades to nothing rather than failing the turn start.
+    Every field is absent on a thread's first turn, and on any turn whose read
+    failed: they are context for the turn rather than correctness, so a read
+    failure degrades to nothing rather than failing the turn start.
     """
 
     last_turn_at: Optional[datetime] = None
     # 'flash' on a thread Flash started that the full agent has not taken over
     # yet; a missed read only defers the takeover to the next turn.
     msg_type: Optional[str] = None
+    # The surface the thread is bound to (the one it was created on, or a
+    # channel identity stamped onto it later). Stands in for the turn's own
+    # surface on a notification, which arrives without one (``turn_surface``).
+    platform: Optional[str] = None
+    # The surface the latest attempt recorded it ran on (``surface_stamp``).
+    # Stands in for a resume's, which continues that attempt.
+    attempt_platform: Optional[str] = None
 
 
 def _fork_predecessor_turn(request: ChatRequest) -> Optional[int]:
@@ -360,7 +367,8 @@ def _fork_predecessor_turn(request: ChatRequest) -> Optional[int]:
 async def _read_prior_thread(
     thread_id: str, *, before_turn: Optional[int] = None
 ) -> PriorThread:
-    """The prior-turn time.
+    """The prior-turn time, the thread's type, the surface it is bound to, and
+    the surface its latest attempt ran on.
 
     The time is the latest attempt row's, never the thread's ``updated_at``: a
     rename or a share bumps the thread stamp between turns, a concurrent POST
@@ -390,7 +398,19 @@ async def _read_prior_thread(
         # A naive stamp would raise against the envelope's aware clock.
         last_turn_at = stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
-    return PriorThread(last_turn_at, row.get("msg_type"))
+    platform = row.get("platform")
+    ran_on = ((attempt or {}).get("metadata") or {}).get(SURFACE_KEY)
+    attempt_platform = ran_on.get("platform") if isinstance(ran_on, dict) else None
+    return PriorThread(
+        last_turn_at=last_turn_at,
+        msg_type=row.get("msg_type"),
+        platform=platform if isinstance(platform, str) and platform else None,
+        attempt_platform=(
+            attempt_platform
+            if isinstance(attempt_platform, str) and attempt_platform
+            else None
+        ),
+    )
 
 
 async def ensure_thread(
@@ -470,6 +490,7 @@ def build_turn_context(
     user_profile: dict[str, Any] | None,
     disk_free_mb: int | None = None,
     disk_known: bool = False,
+    inherits_rules: bool = False,
 ) -> TurnContext:
     """What this turn knows about itself: the request's surface plus the prior row.
 
@@ -479,6 +500,8 @@ def build_turn_context(
     and the automation line in the rules would tell the model otherwise. An
     automation stamps the origin on every request it sends, so nothing is lost.
     ``disk_free_mb`` and ``disk_known`` come from :func:`read_disk_notice`.
+    ``inherits_rules`` is set for a retry whose attempt ran under the last
+    rules stated (:func:`retried_on_its_surface`).
 
     The zone is the profile's before the request's: a channel or an
     automation's own request names none, and the request alone would put
@@ -492,12 +515,100 @@ def build_turn_context(
         platform=request.platform,
         origin=request.origin.type if request.origin else None,
         surface_rules=request.surface_rules,
+        inherits_rules=inherits_rules or is_notification_turn(request),
         disk_free_mb=disk_free_mb,
         disk_known=disk_known,
         timezone=zone,
         tool_timezone=zone
         or get_locale_config(request.locale or "en-US", "en").get("timezone", "UTC"),
     )
+
+
+def is_notification_turn(request: ChatRequest) -> bool:
+    """Whether this server posted the turn itself to report finished background work.
+
+    A report-back arrives as a system query with no surface of its own. Nobody
+    sent it, so it speaks where the thread's last turn did rather than naming a
+    surface. ``query_type`` is stripped from every request that is not the
+    server's own (``threads/messaging.py``), so a client cannot claim one.
+    """
+    return request.query_type == "system" and not request.platform
+
+
+def turn_surface(request: ChatRequest, prior: PriorThread) -> Optional[str]:
+    """The name of the surface this turn's replies reach, without its symbol.
+
+    The request's own surface when it names one. A resumed interrupt can
+    arrive without one, and continues the attempt it answers, so it runs where
+    that attempt ran, as a retry does: the thread's bound surface would make
+    the answer to a web turn's question on a channel's thread the channel's.
+    A notification arrives without one too and continues work the thread
+    already had in hand, so it takes the surface the thread is bound to. Any
+    other turn without a surface is a plain web-app turn, which has none.
+    """
+    return parse_surface(_turn_platform(request, prior)).name
+
+
+def _turn_platform(request: ChatRequest, prior: PriorThread) -> Optional[str]:
+    """The surface :func:`turn_surface` names, as the request spells it."""
+    if request.platform:
+        return request.platform
+    if request.hitl_response:
+        return prior.attempt_platform
+    if is_notification_turn(request):
+        return prior.platform
+    return None
+
+
+#: The run-row key under which an attempt records where it ran, for its retry.
+SURFACE_KEY = "surface"
+
+
+def surface_stamp(
+    request: ChatRequest, prior: PriorThread, *, inherits_rules: bool
+) -> dict:
+    """START metadata naming the surface the attempt runs on and its rules.
+
+    ``/retry`` builds its attempt from the run row, with no surface, and the
+    thread's bound surface would make a web turn on a channel's thread the
+    channel's. So each attempt records where it ran and the rules it ran
+    under, and a retry of it runs there too (:func:`retried_on_its_surface`),
+    as does a resume of it (:func:`turn_surface`). A plain web-app turn
+    records nothing.
+    """
+    stamp: dict[str, Any] = {}
+    platform = _turn_platform(request, prior)
+    if platform:
+        stamp["platform"] = platform
+    if request.surface_rules:
+        stamp["rules"] = request.surface_rules
+    if inherits_rules:
+        stamp["inherits_rules"] = True
+    return {SURFACE_KEY: stamp} if stamp else {}
+
+
+async def retried_on_its_surface(request: ChatRequest) -> tuple[ChatRequest, bool]:
+    """A retry as the attempt it retries ran: on its surface, under its rules.
+
+    Returns the request to run and whether its turn runs under the last rules
+    stated. Any other turn, and a retry of an attempt that recorded no surface
+    (:func:`surface_stamp`), comes back as it is. A read failure fails the
+    turn start, as the retry's own predecessor check would.
+    """
+    if not request.retry_of_run_id or request.platform:
+        return request, False
+    run = await tl_db.get_run(request.retry_of_run_id)
+    stamp = ((run or {}).get("metadata") or {}).get(SURFACE_KEY)
+    if not isinstance(stamp, dict):
+        return request, False
+    platform, rules = stamp.get("platform"), stamp.get("rules")
+    request = request.model_copy(
+        update={
+            "platform": platform if isinstance(platform, str) and platform else None,
+            "surface_rules": rules if isinstance(rules, str) and rules else None,
+        }
+    )
+    return request, stamp.get("inherits_rules") is True
 
 
 async def read_disk_notice(workspace_id: str) -> tuple[int | None, bool]:
@@ -662,6 +773,7 @@ def build_graph_config(
     skill_dirs: list[str] | None = None,
     run_id: str | None = None,
     turn_index: int | None = None,
+    surface: str | None = None,
 ) -> dict:
     """Build the LangGraph ``config`` dict shared by flash and PTC handlers.
 
@@ -672,6 +784,9 @@ def build_graph_config(
     ``run_id`` / ``turn_index`` are stamped into config metadata so the run's
     checkpoints self-describe (checkpoint-sourced replay can correlate turns by
     these instead of ordinal matching).
+    ``run_id`` and ``surface`` (from :func:`turn_surface`) also ride
+    ``configurable`` as ``run_id`` and ``platform``, which is where a tool
+    reads which run and which conversation it is acting in.
     """
     workflow_type = "flash_agent" if mode == "flash" else "ptc_agent"
 
@@ -700,6 +815,8 @@ def build_graph_config(
         "workspace_id": workspace_id,
         "agent_mode": mode,
         "timezone": timezone_str,
+        "run_id": run_id,
+        "platform": surface,
     }
     if extra_configurable:
         configurable.update(extra_configurable)
