@@ -7,6 +7,7 @@ and sample data factories.
 
 pytest_plugins = ["tests.integration.sandbox.metrics.conftest"]
 
+import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -16,6 +17,15 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+
+# Runs before any ``src`` import: ``src.config`` calls ``load_dotenv()``, which
+# would otherwise pull ``LANGSMITH_TRACING=true`` from a developer's .env and
+# bill every test run as a trace. ``load_dotenv`` never overrides a var that is
+# already set, so pinning it here wins. Set LANGALPHA_TEST_TRACING=1 to trace
+# a run on purpose.
+if os.environ.get("LANGALPHA_TEST_TRACING") != "1":
+    for _flag in ("LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING"):
+        os.environ[_flag] = "false"
 
 
 # ---------------------------------------------------------------------------
