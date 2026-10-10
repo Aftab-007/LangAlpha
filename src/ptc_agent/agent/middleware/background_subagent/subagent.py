@@ -36,6 +36,7 @@ from ptc_agent.agent.middleware.background_subagent.token_forwarder import (
 from ptc_agent.agent.middleware._utils import append_to_system_message
 from ptc_agent.agent.state import DeltaAgentState
 from src.llms.llm import narrow_prompt_cache_key
+from src.utils.stream_coalescing import HEARTBEAT_EVENT_TYPE
 
 logger = structlog.get_logger(__name__)
 
@@ -328,6 +329,18 @@ async def arun_subagent_streaming(
                         "aborting so the run finalizes instead of "
                         "completing with a torn stream"
                     )
+                if bg_task is not None:
+                    try:
+                        await registry.flush_held_delta(bg_task, due_only=True)
+                    except Exception as exc:
+                        logger.debug("Subagent delta flush failed", error=str(exc))
+                # A beat only wakes the flush above.
+                if (
+                    mode == "custom"
+                    and isinstance(data, dict)
+                    and data.get("type") == HEARTBEAT_EVENT_TYPE
+                ):
+                    continue
                 if mode == "values":
                     last_state = data
                 elif mode == "messages" and forwarder is not None:

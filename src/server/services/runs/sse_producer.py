@@ -32,6 +32,12 @@ from src.server.services.runs.event_archive import (
 from src.server.services.runs.reasoning_facts import ReasoningDurations
 from src.server.services.runs.stream_errors import error_event_data
 from src.server.utils.text_phase import TextPhaseTracker
+from src.utils.stream_coalescing import (
+    HEARTBEAT_EVENT_TYPE,
+    DeltaCoalescer,
+    StreamFrame,
+    delta_piece,
+)
 from src.llms.content_utils import extract_reasoning_summary_index
 from src.config.settings import (
     get_workflow_timeout,
@@ -303,7 +309,43 @@ class RunSSEProducer:
         needs to interleave them with graph output. ``settled_results`` are
         tool results the turn wrote to the thread before the graph ran, so the
         graph never emits them; they go out as the turn's first results.
+
+        Frames pass through the coalescer and are numbered as they leave it,
+        so joined deltas keep the ids contiguous. A close that cannot yield
+        (stop, cancel, a transport quota) loses at most the held delta from
+        the live stream; the event archive saw every piece when it was built.
+
+        A frame is serialized where it is built, so one that cannot be fails
+        inside the body's own handling: an error frame and a failed run, or a
+        warning where the frame is optional (credit usage).
         """
+        frames = self._stream_frames(
+            graph, input_state, config, settled_results=settled_results
+        )
+        coalescer = DeltaCoalescer()
+        try:
+            async for frame in frames:
+                ready = coalescer.poll() if frame is None else coalescer.offer(frame)
+                for out in ready:
+                    yield self._number_sse_event(out)
+            for out in coalescer.drain():
+                yield self._number_sse_event(out)
+        finally:
+            # Close the body here rather than leave it to garbage collection:
+            # its finally releases the compaction admission window.
+            await frames.aclose()
+
+    async def _stream_frames(
+        self,
+        graph: Any,
+        input_state: Any,
+        config: dict,
+        *,
+        settled_results: list[ToolMessage] | None = None,
+    ) -> AsyncGenerator[StreamFrame | None, None]:
+        """The body of ``stream_workflow``: yields built frames, plus a None
+        per graph event so a held delta's window is checked even when the
+        event emits nothing."""
         import time
 
         # Track start time for timeout
@@ -335,7 +377,7 @@ class RunSSEProducer:
                 metadata["turn_index"] = self.turn_index
             if self.report_source:
                 metadata["report_source"] = self.report_source
-            yield self._format_sse_event("metadata", metadata, accumulate=False)
+            yield self._build_sse_event("metadata", metadata, accumulate=False)
 
             for result in settled_results or ():
                 async for event in self._process_message_chunk(
@@ -357,6 +399,8 @@ class RunSSEProducer:
             )
 
             async for graph_event in graph_stream:
+                yield None
+
                 # Unpack graph event data
                 agent_from_stream, stream_mode, event_data = graph_event
 
@@ -367,7 +411,7 @@ class RunSSEProducer:
                     # Send warning at 90% of timeout
                     if not timeout_warning_sent and elapsed_time >= (self.workflow_timeout * timeout_warning_threshold):
                         timeout_warning_sent = True
-                        warning_event = self._format_sse_event(
+                        warning_event = self._build_sse_event(
                             "warning",
                             {
                                 "thread_id": self.thread_id,
@@ -385,7 +429,7 @@ class RunSSEProducer:
 
                     # Hard timeout
                     if elapsed_time >= self.workflow_timeout:
-                        timeout_error = self._format_sse_event(
+                        timeout_error = self._build_sse_event(
                             "error",
                             {
                                 "thread_id": self.thread_id,
@@ -403,6 +447,14 @@ class RunSSEProducer:
                         raise asyncio.TimeoutError(
                             f"Workflow exceeded timeout of {self.workflow_timeout} seconds"
                         )
+
+                # A beat only wakes the coalescer and the timeout check.
+                if (
+                    stream_mode == "custom"
+                    and isinstance(event_data, dict)
+                    and event_data.get("type") == HEARTBEAT_EVENT_TYPE
+                ):
+                    continue
 
                 # Log raw stream data for debugging
                 logger.debug(
@@ -462,7 +514,7 @@ class RunSSEProducer:
                                 f"[CONTEXT_WINDOW] Emitting {action}/{signal} "
                                 f"(thread_id={self.thread_id})"
                             )
-                            yield self._format_sse_event("context_window", cw_data)
+                            yield self._build_sse_event("context_window", cw_data)
                             continue
 
                         # Handle provenance records (data the agent accessed).
@@ -477,12 +529,12 @@ class RunSSEProducer:
                             self.provenance_events.append(
                                 {"event": "provenance", "data": dict(prov_data)}
                             )
-                            yield self._format_sse_event("provenance", prov_data)
+                            yield self._build_sse_event("provenance", prov_data)
                             continue
 
                         # Handle steering delivery signal
                         if event_type == "steering_delivered":
-                            yield self._format_sse_event("steering_delivered", {
+                            yield self._build_sse_event("steering_delivered", {
                                 "thread_id": self.thread_id,
                                 "count": event_data.get("count", 0),
                                 "messages": event_data.get("messages", []),
@@ -541,14 +593,14 @@ class RunSSEProducer:
                             ):
                                 if key in event_data:
                                     resilience_data[key] = event_data[key]
-                            # Middleware error strings bypass format_error_event's
+                            # Middleware error strings bypass _build_error_event's
                             # scrubbing — sanitize here or BYOK URL userinfo leaks.
                             error_text = event_data.get("error")
                             if isinstance(error_text, str):
                                 resilience_data["error"] = _sanitize_error_text(
                                     error_text
                                 )
-                            yield self._format_sse_event(
+                            yield self._build_sse_event(
                                 event_type,
                                 resilience_data,
                                 accumulate=(event_type == "model_fallback"),
@@ -570,7 +622,7 @@ class RunSSEProducer:
                                 "payload": event_data.get("props", {}),
                             }
                             self._track_artifact_state(ui_artifact_event)
-                            yield self._format_sse_event("artifact", ui_artifact_event)
+                            yield self._build_sse_event("artifact", ui_artifact_event)
                             continue
 
                         # Live market-watch stamp notification. Transient like
@@ -579,7 +631,7 @@ class RunSSEProducer:
                         # GET /{thread}/market-watch, so this must not persist —
                         # see tests/.../history/test_event_ledger.py LIVE_ONLY.
                         if event_type == "market_watch_update":
-                            yield self._format_sse_event(
+                            yield self._build_sse_event(
                                 "market_watch_update",
                                 {
                                     "thread_id": self.thread_id,
@@ -614,7 +666,7 @@ class RunSSEProducer:
                                 f"(agent={agent_name}, status={artifact_event.get('status')})"
                             )
                             self._track_artifact_state(artifact_event)
-                            yield self._format_sse_event("artifact", artifact_event)
+                            yield self._build_sse_event("artifact", artifact_event)
                     continue
 
                 # State updates (stream_mode="updates") carry no SSE payloads of
@@ -706,7 +758,7 @@ class RunSSEProducer:
                         f"thread_id={self.thread_id} run_id={self.run_id} — "
                         f"suppressing interrupt SSE; turn will finalize failed"
                     )
-                    yield self.format_error_event(
+                    yield self._build_error_event(
                         "The assistant paused for input but the pause could not be "
                         "saved. Please retry this message.",
                     )
@@ -744,7 +796,7 @@ class RunSSEProducer:
                     total_credits = credit_service.get_total_credits()
 
                     # Emit credit_usage event
-                    yield self._format_credit_usage_event(
+                    yield self._build_credit_usage_event(
                         thread_id=self.thread_id,
                         token_usage=token_usage,
                         total_credits=total_credits
@@ -769,7 +821,7 @@ class RunSSEProducer:
             logger.exception(f"Error in stream generator for thread_id={self.thread_id}: {e}")
             _stream_span.record_exception(e)
             _stream_span.set_status(Status(StatusCode.ERROR))
-            yield self.format_error_event(str(e), exc=e)
+            yield self._build_error_event(str(e), exc=e)
             raise  # Re-raise so the run executor finalizes as failed
         finally:
             # Safety net: if the stream ends (timeout / error / CancelledError /
@@ -843,8 +895,8 @@ class RunSSEProducer:
             )
             return False
 
-    def _handle_interrupt(self, event_data: dict) -> Optional[str]:
-        """Format an ``__interrupt__`` event as an SSE string."""
+    def _handle_interrupt(self, event_data: dict) -> Optional[StreamFrame]:
+        """Build the ``interrupt`` frame for an ``__interrupt__`` event."""
         interrupt_obj = event_data["__interrupt__"][0]
 
         # Log interrupt trigger
@@ -871,7 +923,7 @@ class RunSSEProducer:
             action_requests = [{"description": interrupt_value}]
 
         kind = interrupt_value.get("kind") if isinstance(interrupt_value, dict) else None
-        return self._format_sse_event(
+        return self._build_sse_event(
             "interrupt",
             {
                 "thread_id": self.thread_id,
@@ -928,8 +980,8 @@ class RunSSEProducer:
         message_metadata: dict[str, Any] | None = None,
         *,
         is_compaction: bool = False,
-    ) -> AsyncGenerator[str, None]:
-        """Process a single message chunk and yield SSE events.
+    ) -> AsyncGenerator[StreamFrame, None]:
+        """Process a single message chunk and yield its built frames.
 
         When ``is_compaction`` is True, text / reasoning / finish events are
         emitted as ``compaction_chunk`` instead of ``message_chunk`` so the UI
@@ -956,14 +1008,14 @@ class RunSSEProducer:
                 if status_info.get("status") == "completed":
                     # Reasoning completed - emit completion signal
                     if agent_name in self.reasoning_active:
-                        yield self._format_reasoning_signal(agent_name, message_id, "complete", is_compaction=is_compaction)
+                        yield self._build_reasoning_signal(agent_name, message_id, "complete", is_compaction=is_compaction)
                         self.reasoning_active.discard(agent_name)
                     self._reasoning_block_index.pop(agent_name, None)
                     self._reasoning_separator_pending.discard(agent_name)
                 else:
                     # Reasoning started - emit start signal
                     if agent_name not in self.reasoning_active:
-                        yield self._format_reasoning_signal(agent_name, message_id, "start", is_compaction=is_compaction)
+                        yield self._build_reasoning_signal(agent_name, message_id, "start", is_compaction=is_compaction)
                         self.reasoning_active.add(agent_name)
             return  # Don't process status signals as regular content
 
@@ -980,14 +1032,14 @@ class RunSSEProducer:
                     if reasoning_status.get("status") == "completed":
                         # Reasoning completed - emit completion signal if agent was actively streaming
                         if agent_name in self.reasoning_active:
-                            yield self._format_reasoning_signal(agent_name, message_id, "complete", is_compaction=is_compaction)
+                            yield self._build_reasoning_signal(agent_name, message_id, "complete", is_compaction=is_compaction)
                             self.reasoning_active.discard(agent_name)
                         self._reasoning_block_index.pop(agent_name, None)
                         self._reasoning_separator_pending.discard(agent_name)
                     else:
                         # Reasoning started - emit start signal
                         if agent_name not in self.reasoning_active:
-                            yield self._format_reasoning_signal(agent_name, message_id, "start", is_compaction=is_compaction)
+                            yield self._build_reasoning_signal(agent_name, message_id, "start", is_compaction=is_compaction)
                             self.reasoning_active.add(agent_name)
                 return  # Don't process status signals as regular content
 
@@ -1049,7 +1101,7 @@ class RunSSEProducer:
                             f"args_length={len(arguments)} persisted={bool(persisted_state)}"
                         )
 
-                        yield self._format_sse_event("tool_call_chunks", event_stream_message)
+                        yield self._build_sse_event("tool_call_chunks", event_stream_message)
                         return  # Don't process function_call as regular content
 
                     # Claude (Anthropic): type=tool_use (initial metadata)
@@ -1104,7 +1156,7 @@ class RunSSEProducer:
                             f"partial_json_length={len(partial_json)} accumulated={len(self.anthropic_tool_call_state.get(state_key, {}).get('args_accumulated', ''))}"
                         )
 
-                        yield self._format_sse_event("tool_call_chunks", event_stream_message)
+                        yield self._build_sse_event("tool_call_chunks", event_stream_message)
                         return  # Don't process input_json_delta as regular content
 
         # Detect reasoning summary_text index transitions before normalization
@@ -1176,7 +1228,7 @@ class RunSSEProducer:
             # Check if we need to emit reasoning completion signal
             if content_type != "reasoning" and agent_name in self.reasoning_active:
                 # Reasoning completed, emit completion signal before this content
-                yield self._format_reasoning_signal(agent_name, message_id, "complete", is_compaction=is_compaction)
+                yield self._build_reasoning_signal(agent_name, message_id, "complete", is_compaction=is_compaction)
                 self.reasoning_active.discard(agent_name)
                 self._reasoning_block_index.pop(agent_name, None)
                 self._reasoning_separator_pending.discard(agent_name)
@@ -1191,7 +1243,7 @@ class RunSSEProducer:
                 # Emit start signal if this is the first reasoning content
                 # This handles providers that send content directly without status signal
                 if agent_name not in self.reasoning_active:
-                    yield self._format_reasoning_signal(agent_name, message_id, "start", is_compaction=is_compaction)
+                    yield self._build_reasoning_signal(agent_name, message_id, "start", is_compaction=is_compaction)
                     self.reasoning_active.add(agent_name)
 
         # Handle finish_reason/stop_reason - emit reasoning completion if needed
@@ -1255,7 +1307,7 @@ class RunSSEProducer:
 
             # If finishing while reasoning is active, emit completion signal
             if agent_name in self.reasoning_active:
-                yield self._format_reasoning_signal(agent_name, message_id, "complete", is_compaction=is_compaction)
+                yield self._build_reasoning_signal(agent_name, message_id, "complete", is_compaction=is_compaction)
                 self.reasoning_active.discard(agent_name)
                 self._reasoning_block_index.pop(agent_name, None)
                 self._reasoning_separator_pending.discard(agent_name)
@@ -1331,7 +1383,7 @@ class RunSSEProducer:
                             f"id={tool_call_id}"
                         )
 
-                        yield self._format_sse_event("tool_calls", tool_calls_message)
+                        yield self._build_sse_event("tool_calls", tool_calls_message)
 
                         # Clear state after emitting from the appropriate state dictionary
                         if provider_type == "response_api":
@@ -1384,7 +1436,7 @@ class RunSSEProducer:
                 # No top-level status: a live task artifact can't know its
                 # task's outcome — the client derives status from the task
                 # lifecycle, replay stamps payload.status from liveness truth.
-                yield self._format_sse_event("artifact", {
+                yield self._build_sse_event("artifact", {
                     "artifact_type": "task",
                     "artifact_id": f"task:{task_artifact['task_id']}",
                     "agent": "main",
@@ -1393,7 +1445,7 @@ class RunSSEProducer:
                     "tool_call_id": message_chunk.tool_call_id,
                 })
 
-            yield self._format_sse_event("tool_call_result", event_stream_message)
+            yield self._build_sse_event("tool_call_result", event_stream_message)
 
         elif isinstance(message_chunk, (AIMessageChunk, AIMessage)):
             # AI Message - Raw message tokens (AIMessageChunk during streaming)
@@ -1419,13 +1471,13 @@ class RunSSEProducer:
                     event_stream_message["tool_calls"] = filtered_tool_calls
                     # Don't include tool_call_chunks in complete tool_calls event
                     # This makes behavior consistent with Response API and Anthropic
-                    yield self._format_sse_event("tool_calls", event_stream_message)
+                    yield self._build_sse_event("tool_calls", event_stream_message)
                     # Note: file_operation events are now emitted via custom events from middleware
 
             # Emit tool_call_chunks event for client consumption (if present)
             elif is_chunk and message_chunk.tool_call_chunks:
                 event_stream_message["tool_call_chunks"] = message_chunk.tool_call_chunks
-                yield self._format_sse_event("tool_call_chunks", event_stream_message)
+                yield self._build_sse_event("tool_call_chunks", event_stream_message)
 
             else:
                 # AI Message - Raw message tokens
@@ -1446,7 +1498,7 @@ class RunSSEProducer:
                         and content_type != "reasoning_signal"
                     ):
                         self._open_message_ids[agent_name] = message_id
-                    yield self._format_sse_event(chunk_event_type, event_stream_message)
+                    yield self._build_sse_event(chunk_event_type, event_stream_message)
 
     def _track_artifact_state(self, artifact_event: dict) -> None:
         """Track open/closed artifact state for stop reconciliation.
@@ -1496,15 +1548,15 @@ class RunSSEProducer:
         """
         return extract_reasoning_summary_index(content)
 
-    def _format_reasoning_signal(
+    def _build_reasoning_signal(
         self,
         agent_name: str,
         message_id: str,
         signal_type: str,
         *,
         is_compaction: bool = False,
-    ) -> str:
-        """Format a reasoning lifecycle signal event.
+    ) -> StreamFrame:
+        """Build a reasoning lifecycle signal frame.
 
         A ``complete`` carries ``elapsed_ms`` since the matching ``start``; a
         close with no recorded open (a stop that synthesizes one) carries none.
@@ -1526,7 +1578,7 @@ class RunSSEProducer:
                 data["elapsed_ms"] = int((time.monotonic() - started) * 1000)
                 if not is_compaction:
                     self._reasoning.closed(message_id, data["elapsed_ms"])
-        return self._format_sse_event(event_type, data)
+        return self._build_sse_event(event_type, data)
 
     def record(self, stop_events: Optional[List[Dict[str, Any]]] = None) -> ProducerRecord:
         """What the finalize stores beside the status that the checkpoint
@@ -1543,18 +1595,20 @@ class RunSSEProducer:
         )
 
     def _format_sse_event(self, event_type: str, data: dict[str, Any], *, accumulate: bool = True) -> str:
-        """
-        Format data as SSE (Server-Sent Events) string with sequence numbering.
+        """Build and number one frame in a single step, for callers outside
+        the stream (``stream_workflow`` numbers through its coalescer)."""
+        return self._number_sse_event(
+            self._build_sse_event(event_type, data, accumulate=accumulate)
+        )
 
-        Args:
-            event_type: Type of SSE event
-            data: Event data dictionary
-            accumulate: Whether to add to the stream event accumulator for persistence.
-                        Set to False for old subagent events that belong to a previous
-                        response and should not be persisted with the current one.
+    def _build_sse_event(
+        self, event_type: str, data: dict[str, Any], *, accumulate: bool = True
+    ) -> StreamFrame:
+        """Build a frame and record it in the event archive, before numbering.
 
-        Returns:
-            SSE-formatted string (id: seq\\nevent: type\\ndata: json\\n\\n)
+        The archive sees each piece here, so it keeps every delta even when
+        the live stream loses a held one. ``accumulate=False``
+        keeps transient frames (``metadata``, ``model_retry``) out of it.
         """
         # Remove empty content to reduce payload size
         if data.get("content") == "":
@@ -1567,15 +1621,27 @@ class RunSSEProducer:
             except Exception as e:
                 logger.debug(f"[RunSSEProducer] Failed to accumulate stream event: {e}")
 
+        frame = StreamFrame(event_type, data)
+        if delta_piece(frame) is not None:
+            return frame  # serialized as it goes out, joined or not
+        # NaN/Inf floats from upstream data would serialize as bare `NaN`
+        # tokens (invalid JSON) and make the browser drop the whole frame.
+        return frame._replace(encoded=finite_json_dumps(data, ensure_ascii=False))
+
+    def _number_sse_event(self, frame: StreamFrame) -> str:
+        """Number a built frame and serialize it as ``id/event/data``."""
+        event_type = frame.event
+        # Only a delta arrives unencoded, and one built from strings cannot
+        # fail. Serialized before numbering, so a frame that fails spends no id.
+        json_data = frame.encoded
+        if json_data is None:
+            json_data = finite_json_dumps(frame.data, ensure_ascii=False)
+
         # Increment sequence number for this event
         if self.event_counter is not None:
             self.event_sequence = self.event_counter.next()
         else:
             self.event_sequence += 1
-
-        # NaN/Inf floats from upstream data would serialize as bare `NaN`
-        # tokens (invalid JSON) and make the browser drop the whole frame.
-        json_data = finite_json_dumps(data, ensure_ascii=False)
 
         # Include sequence ID for reconnection support
         # Format: id: sequence_number\nevent: type\ndata: json\n\n
@@ -1587,15 +1653,15 @@ class RunSSEProducer:
 
         return result
 
-    def format_error_event(
+    def _build_error_event(
         self,
         error_message: str,
         *,
         exc: Optional[BaseException] = None,
-    ) -> str:
-        """Format an error event as SSE string; ``exc`` enables the
-        classification ``error_event_data`` describes."""
-        return self._format_sse_event(
+    ) -> StreamFrame:
+        """Build an error frame; ``exc`` enables the classification
+        ``error_event_data`` describes."""
+        return self._build_sse_event(
             "error",
             error_event_data(
                 self.thread_id,
@@ -1605,14 +1671,14 @@ class RunSSEProducer:
             ),
         )
 
-    def _format_credit_usage_event(
+    def _build_credit_usage_event(
         self,
         thread_id: str,
         token_usage: dict,
         total_credits: float
-    ) -> str:
-        """Format a credit_usage SSE event with aggregated token counts and total credits."""
-        return self._format_sse_event(
+    ) -> StreamFrame:
+        """Build a credit_usage frame with aggregated token counts and total credits."""
+        return self._build_sse_event(
             "credit_usage",
             build_credit_usage_data(thread_id, token_usage, total_credits),
         )
@@ -1643,7 +1709,7 @@ class RunSSEProducer:
             # 1. Close every open reasoning block.
             for agent_name in list(self.reasoning_active):
                 msg_id = self._open_message_ids.get(agent_name) or f"{agent_name}:stopped"
-                self._format_reasoning_signal(agent_name, msg_id, "complete")
+                self._build_reasoning_signal(agent_name, msg_id, "complete")
             self.reasoning_active.clear()
 
             # 2. Close any in-flight tool-call streaming state with a terminal
@@ -1666,7 +1732,7 @@ class RunSSEProducer:
                 # shimmer actually clears off the step-4 message_chunk
                 # finish_reason:"stopped" below (matched by message id). This close
                 # event just keeps the persisted transcript internally consistent.
-                self._format_sse_event(
+                self._build_sse_event(
                     "tool_call_chunks",
                     {
                         "thread_id": self.thread_id,
@@ -1684,12 +1750,12 @@ class RunSSEProducer:
             for artifact_id, artifact_event in list(self._open_artifacts.items()):
                 closed = copy.deepcopy(artifact_event)
                 closed["status"] = "stopped"
-                self._format_sse_event("artifact", closed)
+                self._build_sse_event("artifact", closed)
             self._open_artifacts.clear()
 
             # 4. Close every open assistant message with finish_reason "stopped".
             for agent_name, msg_id in list(self._open_message_ids.items()):
-                self._format_sse_event(
+                self._build_sse_event(
                     "message_chunk",
                     {
                         "thread_id": self.thread_id,

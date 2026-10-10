@@ -201,7 +201,7 @@ export interface ErrorEvent extends BaseSSEEvent {
   /** Legacy single-field message; newer backends send ``error``/``message``. */
   content?: string;
   error_type?: string;
-  /** Enriched fields from ``streaming_handler.format_error_event``. */
+  /** Enriched fields from ``stream_errors.error_event_data``. */
   error?: string;
   message?: string;
   error_kind?: 'upstream' | 'internal';

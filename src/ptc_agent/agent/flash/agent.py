@@ -25,6 +25,7 @@ from ptc_agent.agent.middleware import (
     MultimodalStripMiddleware,
     ProvenanceMiddleware,
     ReasoningCompatibilityMiddleware,
+    StreamHeartbeatMiddleware,
 )
 from ptc_agent.agent.middleware.openai_prompt_caching import (
     OpenAIPromptCachingMiddleware,
@@ -338,6 +339,9 @@ class FlashAgent:
         from src.tools.secretary.approvals import StandingApprovalMiddleware
 
         main_middleware.append(StandingApprovalMiddleware(user_id))
+
+        # Outer to compaction and model resilience, so every model call beats.
+        main_middleware.append(StreamHeartbeatMiddleware())
 
         # Optional compaction (shares config with main agent)
         compaction = (

@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 # Attribute attached to the primary exception on total exhaustion. Read by the
-# server's ``format_error_event`` to enrich the SSE error payload with the
+# server's ``_build_error_event`` to enrich the SSE error payload with the
 # primary model name and the per-model attempt trace.
 RESILIENCE_TRACE_ATTR = "__model_resilience__"
 

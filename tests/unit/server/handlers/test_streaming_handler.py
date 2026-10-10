@@ -301,11 +301,11 @@ class TestRunSSEProducerFormatting:
         events = handler.get_sse_events()
         assert events is None  # No events accumulated
 
-    def test_format_error_event(self):
+    def test_build_error_event(self):
         handler = self._make_handler(thread_id="err-thread")
-        result = handler.format_error_event("Something went wrong")
-        assert "event: error\n" in result
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        frame = handler._build_error_event("Something went wrong")
+        assert frame.event == "error"
+        parsed = frame.data
         assert parsed["thread_id"] == "err-thread"
         assert parsed["error"] == "Something went wrong"
         assert "message" in parsed
@@ -313,7 +313,7 @@ class TestRunSSEProducerFormatting:
         assert "error_kind" not in parsed
         assert "hints" not in parsed
 
-    def test_format_error_event_with_upstream_exc(self):
+    def test_build_error_event_with_upstream_exc(self):
         """Upstream 5xx exceptions classify as upstream with provider-outage hints."""
         from anthropic import InternalServerError
 
@@ -325,15 +325,14 @@ class TestRunSSEProducerFormatting:
         Exception.__init__(exc, "Error code: 500 - {'error': {'message': 'Internal service error'}}")
 
         handler = self._make_handler(thread_id="err-thread")
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert parsed["error_kind"] == "upstream"
         assert parsed["status_code"] == 500
         assert parsed["provider_module"] == "anthropic"
         # 5xx is a provider outage — don't suggest checking the API key.
         assert parsed["hints"] == ["provider_status", "try_another_model"]
 
-    def test_format_error_event_upstream_401_auth_hints(self, monkeypatch):
+    def test_build_error_event_upstream_401_auth_hints(self, monkeypatch):
         """401 upstream surfaces credential-oriented hints first."""
         from anthropic import AuthenticationError
 
@@ -347,13 +346,12 @@ class TestRunSSEProducerFormatting:
         Exception.__init__(exc, "invalid x-api-key")
 
         handler = self._make_handler(thread_id="err-thread")
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert parsed["error_kind"] == "upstream"
         assert parsed["status_code"] == 401
         assert parsed["hints"] == ["api_key", "model_access", "try_another_model"]
 
-    def test_format_error_event_upstream_no_status_falls_back(self, monkeypatch):
+    def test_build_error_event_upstream_no_status_falls_back(self, monkeypatch):
         """Unknown status (network error) shows all hints."""
         from anthropic import APIConnectionError
 
@@ -363,8 +361,7 @@ class TestRunSSEProducerFormatting:
         Exception.__init__(exc, "Connection reset by peer")
 
         handler = self._make_handler(thread_id="err-thread")
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert parsed["error_kind"] == "upstream"
         assert parsed["hints"] == [
             "api_key",
@@ -387,8 +384,7 @@ class TestRunSSEProducerFormatting:
         handler = self._make_handler(
             thread_id="err-thread", credential_source=credential_source
         )
-        result = handler.format_error_event(str(exc), exc=exc)
-        return json.loads(result.split("data: ", 1)[1].rstrip("\n"))["hints"]
+        return handler._build_error_event(str(exc), exc=exc).data["hints"]
 
     @pytest.mark.parametrize("status", [400, 405, 413, 422])
     def test_request_refused_offers_only_a_model_switch(self, monkeypatch, status):
@@ -441,16 +437,15 @@ class TestRunSSEProducerFormatting:
         monkeypatch.setattr("src.config.settings.HOST_MODE", "platform")
         assert self._hints(self._upstream(401)) == ["try_another_model"]
 
-    def test_format_error_event_with_internal_exc(self):
+    def test_build_error_event_with_internal_exc(self):
         """Bare Exception from our code is classified as internal, no hints."""
         exc = RuntimeError("workspace state corrupted")
         handler = self._make_handler(thread_id="err-thread")
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert parsed["error_kind"] == "internal"
         assert "hints" not in parsed
 
-    def test_format_error_event_upstream_wrapped_by_internal(self):
+    def test_build_error_event_upstream_wrapped_by_internal(self):
         """Upstream error wrapped in our own exception still classifies as upstream."""
         from anthropic import APIConnectionError
 
@@ -465,8 +460,7 @@ class TestRunSSEProducerFormatting:
             exc = e
 
         handler = self._make_handler()
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert parsed["error_kind"] == "upstream"
         assert parsed["provider_module"] == "anthropic"
 
@@ -497,10 +491,12 @@ class TestRunSSEProducerFormatting:
                 },
             }
         }
-        result = handler._format_credit_usage_event(
-            thread_id="credit-thread",
-            token_usage=token_usage,
-            total_credits=1.5,
+        result = handler._number_sse_event(
+            handler._build_credit_usage_event(
+                thread_id="credit-thread",
+                token_usage=token_usage,
+                total_credits=1.5,
+            )
         )
         assert "event: credit_usage\n" in result
         parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
@@ -512,7 +508,9 @@ class TestRunSSEProducerFormatting:
 
     def test_format_reasoning_signal(self):
         handler = self._make_handler()
-        result = handler._format_reasoning_signal("main", "msg-1", "start")
+        result = handler._number_sse_event(
+            handler._build_reasoning_signal("main", "msg-1", "start")
+        )
         assert "event: message_chunk\n" in result
         parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
         assert parsed["content"] == "start"
@@ -608,8 +606,9 @@ class TestInterruptHandling:
         interrupt = MagicMock()
         interrupt.id = "int-1"
         interrupt.value = {"action_requests": [{"description": "Run analysis?"}]}
-        result = handler._handle_interrupt({"__interrupt__": [interrupt]})
-        assert result is not None
+        frame = handler._handle_interrupt({"__interrupt__": [interrupt]})
+        assert frame is not None
+        result = handler._number_sse_event(frame)
         parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
         assert parsed["interrupt_id"] == "int-1"
         assert parsed["action_requests"] == [{"description": "Run analysis?"}]
@@ -620,7 +619,9 @@ class TestInterruptHandling:
         interrupt = MagicMock()
         interrupt.id = "int-2"
         interrupt.value = "Should I proceed with plan?"
-        result = handler._handle_interrupt({"__interrupt__": [interrupt]})
+        result = handler._number_sse_event(
+            handler._handle_interrupt({"__interrupt__": [interrupt]})
+        )
         parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
         assert parsed["action_requests"] == [
             {"description": "Should I proceed with plan?"}
@@ -631,7 +632,9 @@ class TestInterruptHandling:
         interrupt = MagicMock()
         interrupt.id = "int-3"
         interrupt.value = [{"description": "step 1"}, {"description": "step 2"}]
-        result = handler._handle_interrupt({"__interrupt__": [interrupt]})
+        result = handler._number_sse_event(
+            handler._handle_interrupt({"__interrupt__": [interrupt]})
+        )
         parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
         assert len(parsed["action_requests"]) == 2
 
@@ -815,7 +818,14 @@ class TestToolNodeInnerLLMSuppression:
         )
 
     async def _drain(self, agen):
-        return [ev async for ev in agen]
+        # Frames come out unnumbered; the stream numbers them after coalescing.
+        return [self._number(ev) async for ev in agen]
+
+    @staticmethod
+    def _number(frame):
+        from src.server.services.runs.sse_producer import RunSSEProducer
+
+        return RunSSEProducer(thread_id="t-n", run_id="r-n")._number_sse_event(frame)
 
     def test_tool_node_reasoning_suppressed(self):
         handler = self._handler()
@@ -1046,14 +1056,18 @@ class TestCompactionChunkRouting:
 
     def test_reasoning_signal_routes_to_compaction_when_flagged(self):
         handler = self._handler()
-        evt = handler._format_reasoning_signal(
-            "agent", "msg-1", "start", is_compaction=True
+        evt = handler._number_sse_event(
+            handler._build_reasoning_signal(
+                "agent", "msg-1", "start", is_compaction=True
+            )
         )
         assert "event: compaction_chunk\n" in evt
 
     def test_reasoning_signal_stays_on_message_chunk_by_default(self):
         handler = self._handler()
-        evt = handler._format_reasoning_signal("agent", "msg-1", "start")
+        evt = handler._number_sse_event(
+            handler._build_reasoning_signal("agent", "msg-1", "start")
+        )
         assert "event: message_chunk\n" in evt
 
     @pytest.mark.asyncio
@@ -1064,7 +1078,7 @@ class TestCompactionChunkRouting:
         chunk = AIMessageChunk(content="summary text", id="s-1")
 
         events = [
-            e
+            handler._number_sse_event(e)
             async for e in handler._process_message_chunk(
                 chunk, "agent", is_compaction=True
             )
@@ -1080,7 +1094,8 @@ class TestCompactionChunkRouting:
         chunk = AIMessageChunk(content="hello", id="m-1")
 
         events = [
-            e async for e in handler._process_message_chunk(chunk, "agent")
+            handler._number_sse_event(e)
+            async for e in handler._process_message_chunk(chunk, "agent")
         ]
         assert any("event: message_chunk\n" in e for e in events)
         assert not any("event: compaction_chunk\n" in e for e in events)
@@ -1129,11 +1144,11 @@ class TestTextPhasePassthrough:
 
     def _drain(self, handler, chunk):
         return asyncio.run(
-            self._collect(handler._process_message_chunk(chunk, "agent"))
+            self._collect(handler, handler._process_message_chunk(chunk, "agent"))
         )
 
-    async def _collect(self, agen):
-        return [e async for e in agen]
+    async def _collect(self, handler, agen):
+        return [handler._number_sse_event(e) async for e in agen]
 
     def test_streaming_deltas_inherit_the_announced_phase(self):
         # output_item.added announces the phase in an empty text block, then
@@ -1653,7 +1668,7 @@ class TestModelResilienceEvents:
         assert data["agent"] == "task-ns-uuid"
 
 
-class TestFormatErrorEventResilienceTrace:
+class TestErrorEventResilienceTrace:
     def _make_handler(self):
         from src.server.services.runs.sse_producer import RunSSEProducer
 
@@ -1683,8 +1698,7 @@ class TestFormatErrorEventResilienceTrace:
         exc = RuntimeError("Error calling model 'primary-model'")
         exc.__model_resilience__ = self._trace()
         handler = self._make_handler()
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert parsed["model"] == "primary-model"
         attempted = parsed["attempted_models"]
         assert [a["model"] for a in attempted] == ["primary-model", "fallback-a"]
@@ -1703,15 +1717,13 @@ class TestFormatErrorEventResilienceTrace:
         except RuntimeError as outer:
             exc = outer
         handler = self._make_handler()
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert parsed["model"] == "primary-model"
 
     def test_no_trace_no_new_fields(self):
         exc = RuntimeError("plain failure")
         handler = self._make_handler()
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert "model" not in parsed
         assert "attempted_models" not in parsed
         assert parsed["error_kind"] == "internal"
@@ -1724,8 +1736,7 @@ class TestFormatErrorEventResilienceTrace:
         exc = RuntimeError("Error calling model 'primary-model'")
         exc.__model_resilience__ = self._trace()
         handler = self._make_handler()
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert parsed["error_kind"] == "upstream"
         # Status comes from the primary attempt record; 404 drives the hints.
         assert parsed["status_code"] == 404
@@ -1738,8 +1749,7 @@ class TestFormatErrorEventResilienceTrace:
         exc = RuntimeError("model call blew up without a status")
         exc.__model_resilience__ = trace
         handler = self._make_handler()
-        result = handler.format_error_event(str(exc), exc=exc)
-        parsed = json.loads(result.split("data: ", 1)[1].rstrip("\n"))
+        parsed = handler._build_error_event(str(exc), exc=exc).data
         assert parsed["error_kind"] == "upstream"
         assert "status_code" not in parsed
         assert parsed["hints"] == [
@@ -1877,10 +1887,10 @@ class TestReasoningWhitespaceDeltas:
         async def run():
             out = []
             for chunk in chunks:
-                async for ev in handler._process_message_chunk(
+                async for frame in handler._process_message_chunk(
                     chunk, "model:main", {"langgraph_node": "model"}
                 ):
-                    data = json.loads(ev.split("data: ", 1)[1].rstrip("\n"))
+                    data = frame.data
                     out.append((data.get("content_type"), data.get("content")))
             return out
 

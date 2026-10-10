@@ -106,6 +106,11 @@ from .reasoning_compat import (
     ReasoningCompatibilityMiddleware,
 )
 
+# Stream heartbeat (wakes the stream's delta lanes while a model call runs)
+from .stream_heartbeat import (
+    StreamHeartbeatMiddleware,
+)
+
 # Subagent steering middleware
 from .background_subagent.steering import (
     SubagentSteeringMiddleware,
@@ -170,6 +175,8 @@ __all__ = [
     "OpenAIPromptCachingMiddleware",
     # Cross-provider reasoning sanitizer
     "ReasoningCompatibilityMiddleware",
+    # Stream heartbeat
+    "StreamHeartbeatMiddleware",
     # Subagent middleware
     "CompiledSubAgent",
     "SubAgent",
