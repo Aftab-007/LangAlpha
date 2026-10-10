@@ -524,6 +524,34 @@ describe('useChatMessages – paging older history', () => {
     expect(result.current.tokenUsage).toMatchObject({ totalInput: 11_100, totalOutput: 850 });
   });
 
+  it('a settled turn shows the count its closing frame carries, with no reload', async () => {
+    mockStatus.mockImplementation(async () => ({
+      can_reconnect: false, status: 'completed', latest_turn_index: latest,
+      token_totals: { input_tokens: 9000, output_tokens: 700 },
+    }));
+    const { result } = await mount();
+    const replays = mockReplay.mock.calls.length;
+    // The count holds calls the stream never reported onto the totals, such
+    // as a compaction's summary, so it beats the live sum.
+    mockSendStream.mockImplementation(async (...args: unknown[]) => {
+      const { onEvent } = args[3] as { onEvent: Emit };
+      onEvent(call(400, 40));
+      onEvent(call(500, 50));
+      onEvent({
+        event: 'run_end', thread_id: 'thread-1', run_id: 'run-81', outcome: 'completed',
+        token_totals: { input_tokens: 12_500, output_tokens: 920 },
+      });
+      return { disconnected: false };
+    });
+    await act(async () => {
+      await result.current.handleSendMessage('next question');
+    });
+    expect(result.current.tokenUsage).toEqual({
+      totalInput: 12_500, totalOutput: 920, fromServer: true, lastOutput: 50, total: 550, threshold: 1000,
+    });
+    expect(mockReplay.mock.calls.length).toBe(replays);
+  });
+
   it('a load that rejoins a live run adds its calls to a count that leaves it out', async () => {
     mockStatus.mockImplementation(async () => ({
       can_reconnect: true, status: 'running', run_id: 'run-live', latest_turn_index: latest,

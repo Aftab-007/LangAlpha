@@ -223,6 +223,9 @@ export { decodeReportBackSignal, shouldArmReportBack } from '../reportBackSignal
 
 export type { ReportBackSignal } from '../reportBackSignal';
 
+/** Tokens a thread has used, as the server counts them. */
+export type ThreadTokenTotals = { input_tokens: number; output_tokens: number };
+
 /** Full workflow status for a thread (the `/status` response); the report-back
  *  fields are optional here (the full status may omit them). */
 export type WorkflowStatusResponse = Partial<ThreadReportBackStatus> & {
@@ -241,7 +244,7 @@ export type WorkflowStatusResponse = Partial<ThreadReportBackStatus> & {
   // Tokens the thread has used, over every model call of every run except the
   // live one, whose calls the reconnect replays from its stream. null when the
   // backend's read failed.
-  token_totals?: { input_tokens: number; output_tokens: number } | null;
+  token_totals?: ThreadTokenTotals | null;
   [key: string]: unknown;
 };
 

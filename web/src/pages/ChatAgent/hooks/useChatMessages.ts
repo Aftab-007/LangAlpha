@@ -41,7 +41,7 @@ import type { AssistantMessage, UserMessage, ChatMessage } from '@/types/chat';
 import type { PreviewData } from './utils/types';
 import { createRecentlySentTracker } from './utils/recentlySentTracker';
 import { createRequestKeyTracker } from './utils/requestKey';
-import { withoutServerTotals } from './utils/contextWindowEvent';
+import { withServerTotals, withoutServerTotals } from './utils/contextWindowEvent';
 import { handleReasoningSignal, handleTextContent } from './utils/streamEventHandlers';
 import { useMarketWatch } from './useMarketWatch';
 import { refreshComputersAfterTurn } from './useComputers';
@@ -974,12 +974,7 @@ export function useChatMessages(
       // this view already added is either in the count or about to come again.
       // Without a count they restart from zero and the replay sums what loads.
       const counted = status.token_totals;
-      setTokenUsage((prev) => (counted
-        ? {
-          lastOutput: 0, total: 0, threshold: 0, ...prev,
-          totalInput: counted.input_tokens, totalOutput: counted.output_tokens, fromServer: true,
-        }
-        : withoutServerTotals(prev)));
+      setTokenUsage((prev) => (counted ? withServerTotals(prev, counted) : withoutServerTotals(prev)));
 
       // Capture share status from workflow status response
       if (status.is_shared !== undefined) {

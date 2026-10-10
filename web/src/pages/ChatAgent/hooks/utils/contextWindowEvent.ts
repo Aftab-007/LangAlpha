@@ -5,6 +5,7 @@
 
 import type { SSEEvent, ContextWindowCallbacks, TokenUsage } from '../../session/types';
 import type { AssistantMessage } from '@/types/chat';
+import type { ThreadTokenTotals } from '../../utils/api/messages';
 import { updateMessage } from './messageHelpers';
 import { nextArrivalSeq } from '../../session/streamRefs';
 
@@ -26,6 +27,14 @@ function applyCallUsage(prev: TokenUsage | null, event: SSEEvent, live: boolean)
     lastOutput: callOutput,
     total: event.total_tokens || 0,
     threshold: event.threshold || prev?.threshold || 0,
+  };
+}
+
+/** The ring's state with the server's count as the totals; the window stays. */
+function withServerTotals(prev: TokenUsage | null, counted: ThreadTokenTotals): TokenUsage {
+  return {
+    lastOutput: 0, total: 0, threshold: 0, ...prev,
+    totalInput: counted.input_tokens, totalOutput: counted.output_tokens, fromServer: true,
   };
 }
 
@@ -160,4 +169,4 @@ function flushOffloadBatch(batch: ContextWindowCallbacks['offloadBatch']): void 
 }
 
 
-export { applyCallUsage, withoutServerTotals, handleContextWindowEvent, flushOffloadBatch };
+export { applyCallUsage, withServerTotals, withoutServerTotals, handleContextWindowEvent, flushOffloadBatch };

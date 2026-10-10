@@ -11,6 +11,7 @@ import type { SubagentTokenUsage } from '../utils/tokenUsage';
 import type { DecisionTarget } from './interrupts/toolApprovalCard';
 import type { StreamRefs, UpdateSubagentCard } from './streamRefs';
 import type { RetryNotice } from './stream/autoRetry';
+import type { ThreadTokenTotals } from '../utils/api/messages';
 
 // --- Internal types for useChatMessages ---
 
@@ -96,6 +97,8 @@ interface SSEEvent {
    *  replay paths and the live stream read it, so it is stated rather than
    *  left to the index signature below. */
   elapsed_ms?: number;
+  /** What the thread has used, on a `run_end` frame. */
+  token_totals?: ThreadTokenTotals | null;
   [key: string]: unknown;
 }
 
