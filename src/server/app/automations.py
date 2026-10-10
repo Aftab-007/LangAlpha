@@ -8,6 +8,8 @@ Endpoints (/api/v1/automations):
 - POST   /automations                              - Create automation
 - GET    /automations                              - List automations
 - GET    /automations/executions                   - Run feed across automations
+- GET    /automations/delivery-options             - Chats an automation's runs can reach
+- PUT    /automations/delivery-default             - Set a workspace's default chat
 - GET    /automations/{automation_id}              - Get automation
 - PATCH  /automations/{automation_id}              - Update automation
 - DELETE /automations/{automation_id}              - Delete automation
@@ -22,16 +24,19 @@ Endpoints (/api/v1/automations):
 """
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 
 from src.server.database import automation as auto_db
 from src.server.database import automation_executions as exec_db
+from src.server.database.home_workspace import is_flash_row
+from src.server.database.workspace import get_workspace
 from src.server.services.automations import lifecycle as handler
+from src.server.services.automations import delivery
 from src.server.models.automation import (
     AutomationCreate,
     AutomationResponse,
@@ -39,9 +44,15 @@ from src.server.models.automation import (
     AutomationRunsListResponse,
     AutomationsListResponse,
     AutomationUpdate,
+    DeliveryDefaultUpdate,
     ExecutionStatus,
 )
-from src.server.utils.api import CurrentUserId, handle_api_exceptions, raise_not_found
+from src.server.utils.api import (
+    CurrentUserId,
+    handle_api_exceptions,
+    raise_not_found,
+    require_workspace_owner,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +71,10 @@ async def create_automation(
     user_id: CurrentUserId,
 ):
     """Create a new scheduled automation."""
-    automation = await handler.create_automation(user_id=user_id, data=request)
+    try:
+        automation = await handler.create_automation(user_id=user_id, data=request)
+    except handler.DeliveryRefused as e:
+        return _delivery_refused(e)
     return AutomationResponse.model_validate(automation)
 
 
@@ -103,6 +117,86 @@ async def list_automation_runs(
     )
 
 
+# =============================================================================
+# Delivery through the messaging service
+# =============================================================================
+
+
+def _delivery_refused(e: handler.DeliveryRefused) -> JSONResponse:
+    """A write refused for its delivery: the 409 it has always been, with the
+    sentence in ``detail`` and each entry's reason in ``problems``."""
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": str(e),
+            "problems": [{"entry": entry, "message": why} for entry, why in e.refusals],
+        },
+    )
+
+
+def _unavailable(detail: str) -> HTTPException:
+    return HTTPException(status_code=503, detail=detail)
+
+
+async def _delivery_workspace(user_id: str, workspace_id: Optional[UUID]) -> Optional[str]:
+    """The workspace whose default chat an entry naming only an app follows,
+    once the user is checked as its owner. None without one, and for Home,
+    which is none of the user's workspaces: its runs deliver as a run with no
+    workspace does."""
+    if workspace_id is None:
+        return None
+    workspace = await get_workspace(str(workspace_id))
+    require_workspace_owner(workspace, user_id=user_id)
+    return None if is_flash_row(workspace) else str(workspace_id)
+
+
+# Declared before /automations/{automation_id}, which would otherwise capture
+# the path as an id.
+@router.get("/automations/delivery-options")
+@handle_api_exceptions("list delivery options", logger)
+async def get_delivery_options(
+    user_id: CurrentUserId,
+    workspace_id: Optional[UUID] = Query(None),
+) -> dict[str, Any]:
+    """The chats each linked app offers an automation's runs, and the one an
+    entry naming only the app reaches. Asked with the automation's workspace,
+    or with none for one that has none. ``workspace_id`` is the workspace the
+    answer was made for: null without one and for Home, which has no default
+    chat. ``enabled`` is false, with no apps, on a server with no messaging
+    service."""
+    workspace = await _delivery_workspace(user_id, workspace_id)
+    try:
+        return await delivery.options(user_id, workspace)
+    except delivery.Unavailable as e:
+        raise _unavailable(str(e))
+
+
+@router.put("/automations/delivery-default")
+@handle_api_exceptions("set delivery default", logger)
+async def set_delivery_default(
+    request: DeliveryDefaultUpdate,
+    user_id: CurrentUserId,
+):
+    """Set the chat on one app that a workspace's automations deliver to when
+    an entry names only the app, or clear it with a null address. Answers
+    the chat as saved. Home has none to set."""
+    workspace = await _delivery_workspace(user_id, request.workspace_id)
+    try:
+        return await delivery.set_default(
+            user_id, workspace, request.platform, request.address
+        )
+    except delivery.Refused as e:
+        return JSONResponse(
+            status_code=400, content={"detail": str(e), "problems": e.problems}
+        )
+    except delivery.NoService as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except delivery.Busy as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except delivery.Unavailable as e:
+        raise _unavailable(str(e))
+
+
 @router.get("/automations/{automation_id}", response_model=AutomationResponse)
 @handle_api_exceptions("get automation", logger)
 async def get_automation(
@@ -130,6 +224,8 @@ async def update_automation(
             user_id=user_id,
             fields=request.model_dump(exclude_none=True),
         )
+    except handler.DeliveryRefused as e:
+        return _delivery_refused(e)
     except ValidationError as e:
         # The body parsed, then failed against the stored kind of trigger:
         # a 422 shaped like the one FastAPI answers a bad body with.
