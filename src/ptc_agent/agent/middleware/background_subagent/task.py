@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
+    from src.utils.cache.stream_quota import StreamQuota
     from src.utils.stream_coalescing import DeltaCoalescer
 
 TerminalStatus = Literal[
@@ -154,6 +155,11 @@ class BackgroundTask:
     """Sticky circuit-break: a failed spill permanently stops this task's Redis
     writes, and the run ends as ``error(transport_lost)`` rather than degrading
     to the in-memory tail — a gap in the replay archive is not recoverable."""
+
+    stream_quota: StreamQuota | None = field(default=None, repr=False)
+    """This task's stream budget, made at its first spill. Unlike
+    ``captured_event_bytes`` it follows the stream, not the round, like the
+    sequence: a resume that keeps the stream keeps what it charged."""
 
     delta_coalescer: DeltaCoalescer | None = field(default=None, repr=False)
     """The registry's coalescer holding this task's unsent delta, created on

@@ -20,6 +20,8 @@ import redis.exceptions as redis_exceptions
 import structlog
 
 if TYPE_CHECKING:
+    from src.utils.cache.stream_quota import StreamQuota
+
     from .registry import BackgroundTask
 
 logger = structlog.get_logger(__name__)
@@ -245,6 +247,7 @@ async def spill_task_records(
     try:
         from src.config.settings import (
             get_max_stored_messages_per_agent,
+            get_max_stream_bytes_per_run,
             is_subagent_event_redis_spill_enabled,
         )
     except Exception:
@@ -262,6 +265,7 @@ async def spill_task_records(
             StreamAppendError,
             stream_append_with_retry,
         )
+        from src.utils.cache.stream_quota import StreamQuota
 
         cache = get_cache_client()
     except Exception as exc:
@@ -279,18 +283,22 @@ async def spill_task_records(
         return
 
     stream_key = task_stream_key(thread_id, task.task_id)
-    try:
-        quota = get_max_stored_messages_per_agent()
-    except Exception as exc:
-        task.redis_write_failed = True
-        logger.warning(
-            "subagent_event_spill_failed",
-            phase="exception",
-            tool_call_id=task.tool_call_id,
-            task_id=task.task_id,
-            error=str(exc),
-        )
-        return
+    if task.stream_quota is None:
+        try:
+            task.stream_quota = StreamQuota(
+                max_events=get_max_stored_messages_per_agent(),
+                max_bytes=get_max_stream_bytes_per_run(),
+            )
+        except Exception as exc:
+            task.redis_write_failed = True
+            logger.warning(
+                "subagent_event_spill_failed",
+                phase="quota_settings",
+                tool_call_id=task.tool_call_id,
+                task_id=task.task_id,
+                error=str(exc),
+            )
+            return
 
     # Serialize spills per task. The registry-wide lock is released
     # before this call so multiple tasks can spill in parallel; the
@@ -314,7 +322,7 @@ async def spill_task_records(
                 stream_key,
                 append=stream_append_with_retry,
                 append_exc=StreamAppendError,
-                quota=quota,
+                quota=task.stream_quota,
             )
 
 
@@ -327,7 +335,7 @@ async def _spill_one_locked(
     *,
     append: Callable[..., Awaitable[Any]],
     append_exc: type[Exception],
-    quota: int,
+    quota: StreamQuota,
 ) -> None:
     """Append one record to the task's streams; the caller holds
     ``task.redis_spill_lock``. ``append`` and ``append_exc`` are
@@ -376,6 +384,34 @@ async def _spill_one_locked(
         )
         return
 
+    # A record lands up to three times (the v1 wire frame and record, and the
+    # v2 payload), and the quota bounds what Redis holds, so it is charged
+    # before any write: a record that would break it never lands.
+    record_bytes = len(payload.encode("utf-8"))
+    breach = quota.charge(
+        seq,
+        len(stream_payload.encode("utf-8"))
+        + record_bytes * (2 if task.task_run_id else 1),
+        label=stream_key,
+    )
+    if breach is not None:
+        # Quota breach tears the transport by contract: opening the circuit
+        # here (instead of trimming FIFO) makes the abort loop + terminal
+        # escalation finalize error(transport_lost), so a replay with a
+        # silent hole is never served.
+        task.redis_write_failed = True
+        logger.warning(
+            "subagent_event_spill_failed",
+            phase="quota" if breach == "events" else "byte_quota",
+            tool_call_id=task.tool_call_id,
+            task_id=task.task_id,
+            seq=record.get("seq"),
+            max_events=quota.max_events,
+            stream_bytes=quota.bytes,
+            max_bytes=quota.max_bytes,
+        )
+        return
+
     try:
         # XADD carries both the pre-rendered SSE wire string
         # (``b"event"``, consumed live by ``stream_subagent_from_log``)
@@ -383,7 +419,7 @@ async def _spill_one_locked(
         # ``iter_subagent_events_full`` via XRANGE). Active streams
         # carry no TTL (retention contract — the attach-grace TTL is
         # stamped at terminal by ``stamp_terminal_retention``), and
-        # MAXLEN is a 2x backstop: the quota check below opens the
+        # MAXLEN is a 2x backstop: the quota check above opens the
         # circuit before FIFO trim could touch the head.
         # Same fenced-append policy as the root lane, including the
         # retry on pool exhaustion this path used to lack: an exhausted
@@ -396,7 +432,7 @@ async def _spill_one_locked(
                 cache,
                 stream_key,
                 event_id=seq,
-                max_size=quota * 2,
+                max_size=quota.maxlen,
                 stream_event=stream_payload,
                 stream_record=payload,
                 label=f"task:{task.task_id}",
@@ -426,12 +462,12 @@ async def _spill_one_locked(
                 try:
                     await asyncio.wait_for(
                         # Same 2x MAXLEN backstop as the v1 leg: the quota
-                        # circuit below tears the run before FIFO trim
+                        # circuit above tears the run before FIFO trim
                         # could touch the head (STREAM_CONTRACT_V2.md).
                         cache.client.xadd(
                             v2_key,
                             v2_fields,
-                            maxlen=quota * 2,
+                            maxlen=quota.maxlen,
                             approximate=True,
                         ),
                         timeout=_SPILL_TIMEOUT_SECONDS,
@@ -528,20 +564,6 @@ async def _spill_one_locked(
                 error=append_error,
             )
             return
-        if seq > quota:
-            # Quota breach tears the transport by contract: opening the
-            # circuit here (instead of trimming FIFO) makes the abort
-            # loop + terminal escalation finalize error(transport_lost),
-            # so a replay with a silent hole is never served.
-            task.redis_write_failed = True
-            logger.warning(
-                "subagent_event_spill_failed",
-                phase="quota",
-                tool_call_id=task.tool_call_id,
-                task_id=task.task_id,
-                seq=record.get("seq"),
-                quota=quota,
-            )
     except asyncio.TimeoutError:
         task.redis_write_failed = True
         logger.warning(
