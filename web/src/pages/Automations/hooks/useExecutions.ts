@@ -3,7 +3,7 @@ import { queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import type { AutomationExecution } from '@/types/automation';
 import { isRunLive } from '../utils/status';
-import { pollMs } from '../utils/polling';
+import { isDeliverySettling, pollMs } from '../utils/polling';
 import { listExecutions } from '../utils/api';
 
 interface UseExecutionsResult {
@@ -20,10 +20,14 @@ const executionsQuery = (automationId: string) =>
     staleTime: 5000,
   });
 
-export function useExecutions(automationId: string): UseExecutionsResult {
+/** An automation's runs, polled fast while one is live or its delivery may
+ *  still change. `delivers`: the automation has delivery entries, so a run
+ *  that ended with no record yet is waiting for one. */
+export function useExecutions(automationId: string, delivers = false): UseExecutionsResult {
   const { data, isLoading } = useQuery({
     ...executionsQuery(automationId),
-    refetchInterval: (query) => pollMs(!!query.state.data?.executions.some((e) => isRunLive(e.status))),
+    refetchInterval: (query) =>
+      pollMs(!!query.state.data?.executions.some((e) => isRunLive(e.status) || isDeliverySettling(e, delivers))),
     refetchIntervalInBackground: false,
   });
 
