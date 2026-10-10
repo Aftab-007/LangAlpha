@@ -12,7 +12,8 @@ from __future__ import annotations
 import logging
 import uuid
 
-from src.server.services.report_back.flash import leases, pointer, wake
+from src.server.services import automation_delivery
+from src.server.services.report_back.flash import leases, pointer, requested_from, wake
 from src.server.services.report_back.flash.keys import (
     decode,
     flash_rb_run_key,
@@ -364,8 +365,9 @@ async def _post_report_back(
     """POST the synthetic report-back message to the flash thread.
 
     Builds the flash-specific body (summary prompt, watch-member identity,
-    dispatch generation) and delegates the admission-aware defer loop to the
-    shared ``post_notification_turn``. Returns its ``(outcome, run_id)``:
+    dispatch generation, where the work was asked for) and delegates the
+    admission-aware defer loop to the shared ``post_notification_turn``.
+    Returns its ``(outcome, run_id)``:
     ``"dispatched"`` / ``"drop"``/``"cap"`` (caller clears the member) /
     ``"deleted"`` (caller discards the watch) / ``"lost"`` (caller stops,
     no teardown) / ``"superseded"`` (no turn started, nothing to tear down).
@@ -391,6 +393,20 @@ async def _post_report_back(
         # metadata so its consumption watch_clear is fenced to THIS incarnation.
         "origin_dispatch_gen": dispatch_gen,
     }
+    # Where the work was asked for: the turn is reminded, and each automation
+    # run a request came from rides into its config so a send to a run's
+    # targets is that run's own. A record from before this was kept names
+    # nothing.
+    reminder = requested_from.reminder(origin)
+    if reminder:
+        body["additional_context"] = [{"type": "directive", "content": reminder}]
+    runs = requested_from.deliveries(origin)
+    if runs:
+        body["automation_delivery"] = automation_delivery.stamp(runs[-1])
+    if len(runs) > 1:
+        body[automation_delivery.EARLIER_KEY] = [
+            automation_delivery.stamp(run) for run in runs[:-1]
+        ]
     if request_key:
         body["request_key"] = request_key
     return await post_notification_turn(

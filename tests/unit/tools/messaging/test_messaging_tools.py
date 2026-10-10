@@ -292,6 +292,35 @@ class TestTheSendRequest:
         )
 
     @pytest.mark.asyncio
+    async def test_a_report_back_of_several_runs_names_each_sends_own(self, gateway):
+        """Each outcome goes out under the run its request came from, since
+        the messaging service counts a send as a run's own only at that run's
+        targets."""
+        from src.server.services import automation_delivery
+        from src.server.services.automation_delivery import Delivery, Target
+
+        morning = Delivery(
+            "exec-1", [Target(entry="slack:T1/C2", address="slack:T1/C2", name="#desk", ok=True)]
+        )
+        evening = Delivery(
+            "exec-2", [Target(entry="discord", address="discord:@me", name=None, ok=True)]
+        )
+        configurable = {
+            **CONFIGURABLE,
+            **automation_delivery.turn_configurable(evening, [morning]),
+        }
+        for target in ("slack:T1/C2", "discord:@me", "telegram:@me"):
+            await _call(
+                _tool("send_message", "chief_of_staff"),
+                {"text": "Done.", "target": target},
+                configurable,
+            )
+
+        assert [
+            json.loads(r.content)["automation_execution_id"] for r in gateway.requests
+        ] == ["exec-1", "exec-2", "exec-2"]
+
+    @pytest.mark.asyncio
     async def test_any_other_turn_names_no_run(self, gateway):
         await _call(
             _tool("send_message"),

@@ -13,6 +13,13 @@ answers the same record to every later ask. Both calls name the run's
 thread, so what the service posts links back to it and a reply there
 continues it.
 
+The run's turn carries the run in its config (``turn_configurable``). Work it
+hands off is reported back by a later turn, after the run has settled; the
+hand-off records the run there, so that turn is told where the run delivers
+and sends there under the same id (``report_back.flash.requested_from``). A
+report-back of hand-offs from several runs carries each of them, and every
+send names the run whose targets hold the chat it goes to (``sends_for``).
+
 A run the service never took (no service, no entries, the start failed, or
 no entry resolved) delivers through the webhook (``webhook_client``) instead,
 exactly as before; when the webhook has nowhere to post either, a start that
@@ -46,6 +53,10 @@ logger = logging.getLogger(__name__)
 #: The run-row metadata key a run whose start asked the messaging service
 #: carries: the id the run is filed under and the targets its start resolved.
 DELIVERY_KEY = "automation_delivery"
+#: The key a report-back turn keeps the other held runs its requests came from
+#: under, in the order of their requests: in its request, its config and its
+#: run row. The turn's own run, under ``DELIVERY_KEY``, is the latest one.
+EARLIER_KEY = "automation_earlier_runs"
 
 FinishStatus = Literal["completed", "failed", "stopped"]
 
@@ -289,6 +300,14 @@ def read_stamp(data: Any, default_id: Optional[str] = None) -> Optional[Delivery
     )
 
 
+def read_stamps(data: Any) -> list[Delivery]:
+    """The deliveries a list of stamps names, leaving out any stamp that names
+    none."""
+    if not isinstance(data, list):
+        return []
+    return [d for d in (read_stamp(item) for item in data) if d is not None]
+
+
 def run_metadata(delivery: Delivery) -> Dict[str, Any]:
     """The run-row stamp a settle reads to follow this run's way of delivery."""
     return {DELIVERY_KEY: stamp(delivery)}
@@ -303,14 +322,21 @@ def delivery_of_run(run: Optional[Dict[str, Any]], execution_id: str) -> Optiona
     return read_stamp(data, execution_id)
 
 
-def turn_configurable(delivery: Delivery) -> Dict[str, Any]:
+def turn_configurable(
+    delivery: Delivery, earlier: Optional[list[Delivery]] = None
+) -> Dict[str, Any]:
     """What a held run's turn carries in its config for its tools.
 
     ``send_message`` names the id, so its sends may reach the run's targets.
     A hand-off records the targets too, so the turn that reports its result
-    back can say where the run delivers and send there under the same id.
+    back can say where the run delivers and send there under the same id. A
+    report-back of requests from several runs carries the ``earlier`` ones
+    too, so a send to one of their targets names that run (``sends_for``).
     """
-    return {"automation_execution_id": delivery.id, DELIVERY_KEY: stamp(delivery)}
+    configurable = {"automation_execution_id": delivery.id, DELIVERY_KEY: stamp(delivery)}
+    if earlier:
+        configurable[EARLIER_KEY] = [stamp(run) for run in earlier]
+    return configurable
 
 
 def delivery_of_turn(configurable: Dict[str, Any]) -> Optional[Delivery]:
@@ -326,6 +352,79 @@ def delivery_of_turn(configurable: Dict[str, Any]) -> Optional[Delivery]:
     if delivery is None or delivery.id != delivery_id:
         return Delivery(id=delivery_id, targets=[])
     return delivery
+
+
+def runs_of_turn(configurable: Dict[str, Any]) -> list[Delivery]:
+    """Every held run a turn sends for, by its config, its own run last: a
+    report-back of requests from several runs names the earlier ones first.
+    Empty when it sends for none."""
+    run = delivery_of_turn(configurable)
+    if run is None:
+        return []
+    earlier = [r for r in read_stamps(configurable.get(EARLIER_KEY)) if r.id != run.id]
+    return [*earlier, run]
+
+
+def turn_metadata(configurable: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The run-row stamp of the held run a turn sends for, by its config, and
+    of the earlier runs a report-back names, so the turn that resumes or
+    retries it sends for them too (``carry.carried_delivery``); empty when it
+    sends for none."""
+    runs = runs_of_turn(configurable or {})
+    if not runs or not runs[-1].held:
+        return {}
+    stamped = run_metadata(runs[-1])
+    if len(runs) > 1:
+        stamped[EARLIER_KEY] = [stamp(run) for run in runs[:-1]]
+    return stamped
+
+
+def _chat(address: Optional[str]) -> Optional[tuple[str, ...]]:
+    """The chat an address names, as a key every spelling of it shares: the
+    app and the chat, without a thread. A DM is the app's (on Slack, the
+    team's, which a DM's own ``D…`` channel names too). None for no address.
+    """
+    app, _, path = (address or "").strip().partition(":")
+    app = app.lower()
+    if not app:
+        return None
+    if path.lower() in ("", "@me"):
+        return (app,)
+    parts = path.split("/")
+    if app == "slack":
+        if len(parts) == 1 or parts[1].startswith("D"):
+            return (app, parts[0])
+        return (app, parts[0], parts[1])
+    if app == "discord":
+        return (app, *parts[:2])
+    if app == "telegram":
+        return (app, parts[0])
+    # An iMessage space id or a Feishu chat id is the whole path.
+    return (app, path)
+
+
+def sends_for(configurable: Dict[str, Any], target: Optional[str]) -> Optional[str]:
+    """The id a send to ``target`` names: the latest of the turn's runs whose
+    targets hold that chat, else the turn's own run. None when the turn sends
+    for none.
+
+    Only a report-back of requests from several runs has a choice to make. The
+    messaging service counts a send as a run's own only at that run's
+    targets, so each outcome goes out under the run its request came from.
+    A chat several runs' targets hold names the latest of them. A send into
+    the turn's conversation, or to a chat this can't match to any run's
+    targets, names the turn's own run, and the service, which knows every
+    chat, decides whether it is one of that run's.
+    """
+    runs = runs_of_turn(configurable)
+    if not runs:
+        return None
+    chat = _chat(target)
+    if chat is not None:
+        for run in reversed(runs):
+            if any(_chat(t.address) == chat for t in reached(run.targets)):
+                return run.id
+    return runs[-1].id
 
 
 def unsent(delivery: Delivery) -> list[Dict[str, Any]]:

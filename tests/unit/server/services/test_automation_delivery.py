@@ -310,6 +310,118 @@ class TestTheTurnsConfig:
     def test_a_stamp_naming_no_targets_or_id_names_nothing(self, stamp):
         assert delivery.read_stamp(stamp) is None
 
+    def test_a_report_back_of_several_runs_names_the_earlier_ones_first(self):
+        earlier = Delivery("exec-1", [DEMO])
+        own = Delivery("exec-2", [DISCORD_DM])
+        configurable = delivery.turn_configurable(own, [earlier])
+
+        assert configurable["automation_execution_id"] == "exec-2"
+        assert delivery.delivery_of_turn(configurable) == own
+        assert delivery.runs_of_turn(configurable) == [earlier, own]
+
+    def test_one_run_carries_no_earlier_ones(self):
+        configurable = delivery.turn_configurable(Delivery("exec-1", [DEMO]), [])
+        assert delivery.EARLIER_KEY not in configurable
+
+    def test_an_earlier_stamp_of_the_turns_own_run_is_not_a_second_run(self):
+        own = Delivery("exec-1", [DEMO])
+        configurable = delivery.turn_configurable(own, [Delivery("exec-1", [DISCORD_DM])])
+        assert delivery.runs_of_turn(configurable) == [own]
+
+    def test_earlier_runs_without_the_turns_own_are_none(self):
+        """Only a turn that sends for a run sends for the earlier ones too."""
+        configurable = {delivery.EARLIER_KEY: [delivery.stamp(Delivery("exec-1", [DEMO]))]}
+        assert delivery.runs_of_turn(configurable) == []
+
+    def test_the_run_row_keeps_the_earlier_runs_for_a_resume(self):
+        earlier = Delivery("exec-1", [DEMO])
+        own = Delivery("exec-2", [DISCORD_DM])
+        stamped = delivery.turn_metadata(delivery.turn_configurable(own, [earlier]))
+
+        assert stamped == {
+            delivery.DELIVERY_KEY: delivery.stamp(own),
+            delivery.EARLIER_KEY: [delivery.stamp(earlier)],
+        }
+
+
+class TestTheRunASendNames:
+    """A report-back of hand-offs from several runs names, on each send, the
+    run whose targets hold the chat sent to, as the messaging service counts a
+    send as a run's own only at that run's targets."""
+
+    MORNING = Delivery("exec-1", [DEMO])
+    EVENING = Delivery("exec-2", [DISCORD_DM])
+
+    def _report_back(self, *earlier: Delivery) -> dict:
+        return delivery.turn_configurable(self.EVENING, list(earlier or [self.MORNING]))
+
+    @pytest.mark.parametrize(
+        ("target", "named"),
+        [
+            ("slack:T/C", "exec-1"),
+            ("discord:@me", "exec-2"),
+        ],
+    )
+    def test_each_runs_target_names_that_run(self, target, named):
+        assert delivery.sends_for(self._report_back(), target) == named
+
+    @pytest.mark.parametrize(
+        "target",
+        ["slack:T/C/1712.3456", " SLACK:T/C ", "slack:T/C/"],
+        ids=["a thread in it", "case and spaces", "a trailing slash"],
+    )
+    def test_a_chat_is_matched_however_it_is_written(self, target):
+        assert delivery.sends_for(self._report_back(), target) == "exec-1"
+
+    @pytest.mark.parametrize(
+        ("address", "target", "other"),
+        [
+            ("discord:@me", "discord", "discord:1/2"),
+            ("slack:T", "slack:T/D7/1712.3456", "slack:T/C7/1712.3456"),
+            ("telegram:-5", "telegram:-5/9", "telegram:-6/9"),
+            ("discord:1/2", "discord:1/2/3", "discord:1/3/2"),
+            ("imessage:any;+;chat7", "imessage:any;+;chat7", "imessage:any;+;chat8"),
+        ],
+        ids=[
+            "a DM written bare",
+            "a Slack DM by its channel",
+            "a Telegram topic",
+            "a Discord thread",
+            "an iMessage group",
+        ],
+    )
+    def test_each_apps_spellings(self, address, target, other):
+        """``target`` is the run's chat however written; ``other`` is not."""
+        earlier = Delivery("exec-1", [Target(entry=address, address=address, name=None, ok=True)])
+        configurable = delivery.turn_configurable(Delivery("exec-2", [DEMO]), [earlier])
+        assert delivery.sends_for(configurable, target) == "exec-1"
+        assert delivery.sends_for(configurable, other) == "exec-2"
+
+    def test_a_chat_several_runs_hold_names_the_latest(self):
+        both = Delivery("exec-1", [DEMO, DISCORD_DM])
+        assert delivery.sends_for(self._report_back(both), "discord:@me") == "exec-2"
+
+    @pytest.mark.parametrize(
+        "target",
+        [None, "", "slack:T/C9", "slack", "telegram:@me"],
+        ids=["this conversation", "empty", "another chat", "a bare Slack", "unheld app"],
+    )
+    def test_any_other_send_names_the_turns_own_run(self, target):
+        assert delivery.sends_for(self._report_back(), target) == "exec-2"
+
+    def test_a_target_the_start_refused_holds_nothing(self):
+        refused = Target(entry="slack:T/C", address="slack:T/C", name=None, ok=False)
+        earlier = Delivery("exec-1", [refused])
+        assert delivery.sends_for(self._report_back(earlier), "slack:T/C") == "exec-2"
+
+    def test_a_turn_of_one_run_names_it_wherever_it_sends(self):
+        configurable = delivery.turn_configurable(self.MORNING)
+        assert delivery.sends_for(configurable, "discord:@me") == "exec-1"
+        assert delivery.sends_for({"automation_execution_id": "exec-9"}, "slack") == "exec-9"
+
+    def test_a_turn_sending_for_no_run_names_none(self):
+        assert delivery.sends_for({}, "slack:T/C") is None
+
 
 class TestUnsent:
     def test_each_entry_fails_for_the_reason_its_start_gave(self):
