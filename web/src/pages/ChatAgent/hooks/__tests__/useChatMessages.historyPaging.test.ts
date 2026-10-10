@@ -63,11 +63,11 @@ function turnEvents(from: number, to: number): Record<string, unknown>[] {
 }
 
 /** A paged replay: the page header, then the turns, then replay_done. */
-function pageOf(from: number, to: number, hasMore: boolean) {
+function pageOf(from: number, to: number, hasMore: boolean, threadId = 'thread-1') {
   return [
     { event: 'history_page', first_turn_index: from, has_more: hasMore },
     ...turnEvents(from, to),
-    { event: 'replay_done', thread_id: 'thread-1' },
+    { event: 'replay_done', thread_id: threadId },
   ];
 }
 
@@ -78,10 +78,10 @@ type PageRequest = { limit?: number; beforeTurn?: number; signal?: AbortSignal }
  * it: the newest `limit` turns, or the `limit` turns before `beforeTurn`.
  */
 function threadOf(latest: () => number) {
-  return async (_tid: string, onEvent: Emit, req: PageRequest = {}) => {
+  return async (tid: string, onEvent: Emit, req: PageRequest = {}) => {
     const end = req.beforeTurn === undefined ? latest() : req.beforeTurn - 1;
     const from = Math.max(0, end - (req.limit ?? end + 1) + 1);
-    for (const item of pageOf(from, end, from > 0)) onEvent(item);
+    for (const item of pageOf(from, end, from > 0, tid)) onEvent(item);
   };
 }
 
@@ -377,6 +377,41 @@ describe('useChatMessages – paging older history', () => {
     expect(ids(result.current.messages)).toEqual(opened);
     expect(result.current.messages.some((m) => m.id === 'history-user-41')).toBe(false);
     expect(result.current.olderHistory.status).toBe('idle');
+  });
+
+  it('a thread switch starts the new thread on its own token totals', async () => {
+    const counts: Record<string, { input_tokens: number; output_tokens: number }> = {
+      'thread-1': { input_tokens: 500, output_tokens: 10 },
+      'thread-2': { input_tokens: 200, output_tokens: 20 },
+    };
+    const serveStatus = async (tid: string) => ({
+      can_reconnect: false, status: 'completed', latest_turn_index: latest, token_totals: counts[tid],
+    });
+    mockStatus.mockImplementation(serveStatus);
+    let threadId = 'thread-1';
+    const { result, rerender } = await mount(() => threadId);
+    expect(result.current.tokenUsage).toMatchObject({ totalInput: 500, totalOutput: 10 });
+
+    const status = gate();
+    mockStatus.mockImplementationOnce(async (tid: string) => {
+      await status.opened;
+      return serveStatus(tid);
+    });
+    threadId = 'thread-2';
+    rerender();
+    await settleMountEffect();
+    // Nothing of the thread left behind shows while the new one loads.
+    expect(result.current.tokenUsage).toBeNull();
+
+    status.open();
+    await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
+    expect(result.current.tokenUsage).toMatchObject({ totalInput: 200, totalOutput: 20 });
+
+    // Back on the first thread, its own count again.
+    threadId = 'thread-1';
+    rerender();
+    await settleMountEffect();
+    await waitFor(() => expect(result.current.tokenUsage).toMatchObject({ totalInput: 500, totalOutput: 10 }));
   });
 
   it('a return to a thread left mid-way reaches back to the oldest page it had loaded', async () => {

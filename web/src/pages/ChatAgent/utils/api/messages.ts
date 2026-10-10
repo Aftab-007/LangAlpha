@@ -238,6 +238,10 @@ export type WorkflowStatusResponse = Partial<ThreadReportBackStatus> & {
   // older backends. The staleness signal for cached views whose missed run
   // already finished (can_reconnect=false carries no run_id to compare).
   latest_turn_index?: number | null;
+  // Tokens the thread has used, over every model call of every run except the
+  // live one, whose calls the reconnect replays from its stream. null when the
+  // backend's read failed.
+  token_totals?: { input_tokens: number; output_tokens: number } | null;
   [key: string]: unknown;
 };
 

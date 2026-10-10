@@ -19,7 +19,7 @@ import type { HtmlWidgetData } from '../../hooks/utils/types';
 import {
   buildModelFallbackSegment, appendNotificationSegmentOnce, mapToolCallIdToAgentId,
 } from '../../hooks/utils/messageFinalizers';
-import { handleContextWindowEvent } from '../../hooks/utils/contextWindowEvent';
+import { applyCallUsage, handleContextWindowEvent } from '../../hooks/utils/contextWindowEvent';
 import { handleProvenance } from '../stream/mainEventHandlers';
 import {
   handleHistoryUserMessage,
@@ -34,7 +34,7 @@ import {
   isSubagentHistoryEvent,
 } from './historyHandlers';
 import type {
-  TokenUsage, SSEEvent, HistoryInterruptInfo, SubagentHistoryData, PairState,
+  SSEEvent, HistoryInterruptInfo, SubagentHistoryData, PairState,
 } from '../types';
 import { createApprovalEvidence, recordApprovalEvidence } from '../interrupts/claims';
 import { projectHistoryInterrupt } from '../interrupts/fromHistoryEvent';
@@ -244,6 +244,7 @@ export async function loadConversationHistory(
           },
           setMessages: rt.setMessages,
           setTokenUsage: rt.setTokenUsage,
+          live: false,
           setIsCompacting: null,  // no start events in replayed history
           insertNotification: () => {},  // standalone notifications not needed in replay
           t: rt.t,
@@ -285,15 +286,7 @@ export async function loadConversationHistory(
 
       // Backward compat: handle old token_usage events from history
       if (eventType === 'token_usage') {
-        const callInput = event.input_tokens || 0;
-        const callOutput = event.output_tokens || 0;
-        rt.setTokenUsage((prev: TokenUsage | null) => ({
-          totalInput: (prev?.totalInput || 0) + callInput,
-          totalOutput: (prev?.totalOutput || 0) + callOutput,
-          lastOutput: callOutput,
-          total: event.total_tokens || 0,
-          threshold: event.threshold || prev?.threshold || 0,
-        }));
+        rt.setTokenUsage((prev) => applyCallUsage(prev, event, false));
         return;
       }
 

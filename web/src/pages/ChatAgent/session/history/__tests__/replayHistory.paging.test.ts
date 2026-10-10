@@ -84,6 +84,24 @@ function olderRequest(beforeTurn: number, signal = new AbortController().signal)
   return { threadId: 'thread-1', beforeTurn, limit: HISTORY_PAGE_TURNS, signal };
 }
 
+/** One main-agent model call's usage, as replay sends it. */
+const call = (k: number, input: number, output: number): Item => ({
+  event: 'context_window',
+  data: {
+    turn_index: k, action: 'token_usage', signal: 'complete',
+    input_tokens: input, output_tokens: output, total_tokens: input + output, threshold: 1000,
+  },
+});
+
+/** Holds what the runtime's token setter is given, as React state would. */
+function trackUsage(rt: HistoryRuntime): { current: TokenUsage | null } {
+  const usage: { current: TokenUsage | null } = { current: null };
+  rt.setTokenUsage = ((next) => {
+    usage.current = typeof next === 'function' ? next(usage.current) : next;
+  }) as HistoryRuntime['setTokenUsage'];
+  return usage;
+}
+
 const commitDeps = () => ({
   projectSubagentHistory: vi.fn(),
   prependSubagentRuns: vi.fn(),
@@ -141,6 +159,23 @@ describe('history replay: the newest page', () => {
     const { rt } = buildRuntime();
     const page = await loadNewest(rt, [header(null, true), DONE]);
     expect(page).toBeNull();
+  });
+
+  it('sets the window from the newest call and leaves the totals to the server count', async () => {
+    const { rt } = buildRuntime();
+    const usage = trackUsage(rt);
+    // The load puts the server's count in before the replay runs.
+    usage.current = { totalInput: 9000, totalOutput: 700, fromServer: true, lastOutput: 0, total: 0, threshold: 0 };
+    const items = [header(73, true), ...turns(73, 75), call(74, 100, 10), call(75, 300, 20), DONE];
+    await loadNewest(rt, items);
+    const loaded = { totalInput: 9000, totalOutput: 700, fromServer: true, lastOutput: 20, total: 320, threshold: 1000 };
+    expect(usage.current).toEqual(loaded);
+
+    // A reload, reaching back further or not, replays calls the count holds.
+    await loadNewest(rt, items);
+    expect(usage.current).toEqual(loaded);
+    await loadNewest(rt, [header(60, true), ...turns(60, 75), call(61, 50, 5), call(75, 300, 20), DONE], 16);
+    expect(usage.current).toEqual(loaded);
   });
 
   it('reports no page when the replay fails', async () => {
@@ -308,32 +343,39 @@ describe('history replay: an older page', () => {
     expect(read()).toBe(onScreen);
   });
 
-  it('adds the page to the thread token totals on commit, leaving the window the newest call', async () => {
+  it('leaves the token totals and the window as the newest page set them', async () => {
     const { rt } = buildRuntime();
-    let usage: TokenUsage | null = null;
-    rt.setTokenUsage = ((next) => {
-      usage = typeof next === 'function' ? next(usage) : next;
-    }) as HistoryRuntime['setTokenUsage'];
-    const call = (k: number, input: number, output: number): Item => ({
-      event: 'context_window',
-      data: {
-        turn_index: k, action: 'token_usage', signal: 'complete',
-        input_tokens: input, output_tokens: output, total_tokens: input + output, threshold: 1000,
-      },
-    });
+    const usage = trackUsage(rt);
+    usage.current = { totalInput: 9000, totalOutput: 700, fromServer: true, lastOutput: 0, total: 0, threshold: 0 };
     const page = await loadNewest(rt, [header(73, true), ...turns(73, 75), call(75, 300, 20), DONE]);
-    const newest = { totalInput: 300, totalOutput: 20, lastOutput: 20, total: 320, threshold: 1000 };
-    expect(usage).toEqual(newest);
+    const newest = { totalInput: 9000, totalOutput: 700, fromServer: true, lastOutput: 20, total: 320, threshold: 1000 };
+    expect(usage.current).toEqual(newest);
+
+    api.replayThreadHistory.mockImplementationOnce(replayOf([
+      header(70, true), ...turns(70, 72), call(71, 100, 10), call(72, 200, 15), DONE,
+    ]));
+    const older = await loadOlderHistoryPage(rt, olderRequest(73), page!.carry);
+    commitOlderHistoryPage(rt, commitDeps(), older!);
+    // The server counted the page's calls before any of it was on screen.
+    expect(usage.current).toEqual(newest);
+  });
+
+  it('adds a committed page to totals the server sent no count for', async () => {
+    const { rt } = buildRuntime();
+    const usage = trackUsage(rt);
+    const page = await loadNewest(rt, [header(73, true), ...turns(73, 75), call(75, 300, 20), DONE]);
+    const newest = { totalInput: 300, totalOutput: 20, fromServer: false, lastOutput: 20, total: 320, threshold: 1000 };
+    expect(usage.current).toEqual(newest);
 
     api.replayThreadHistory.mockImplementationOnce(replayOf([
       header(70, true), ...turns(70, 72), call(71, 100, 10), call(72, 200, 15), DONE,
     ]));
     const older = await loadOlderHistoryPage(rt, olderRequest(73), page!.carry);
     // A page that never joins the transcript counts for nothing.
-    expect(usage).toEqual(newest);
+    expect(usage.current).toEqual(newest);
 
     commitOlderHistoryPage(rt, commitDeps(), older!);
-    expect(usage).toEqual({ ...newest, totalInput: 600, totalOutput: 45 });
+    expect(usage.current).toEqual({ ...newest, totalInput: 600, totalOutput: 45 });
   });
 
   it('puts the page runs of a task a live stream wrote to ahead of what it wrote', () => {

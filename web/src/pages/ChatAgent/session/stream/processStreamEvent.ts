@@ -425,6 +425,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         },
         setMessages: rt.setMessages,
         setTokenUsage: rt.setTokenUsage,
+        live: true,
         setIsCompacting: rt.setIsCompacting,
         insertNotification: deps.insertNotification,
         t: rt.t,
