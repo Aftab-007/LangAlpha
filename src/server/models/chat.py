@@ -6,13 +6,23 @@ that use the ptc-agent library for code execution in Daytona sandboxes.
 """
 
 import copy
+import uuid
 from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator
 
 from src.server.models.additional_context import AdditionalContext
 
 from src.llms.reasoning import ReasoningLevel
+
+
+def _uuid_text(value: str) -> str:
+    # The key is stored in a UUID column, so anything else failed at the
+    # insert as a 500; refused here it is the client's 422.
+    return str(uuid.UUID(value))
+
+
+RequestKey = Annotated[str, AfterValidator(_uuid_text)]
 
 # Roles the chat path can VALIDLY persist into the ``messages`` channel. The
 # chat path writes ``{"role", "content"}`` dicts straight in; under DeltaChannel
@@ -343,7 +353,7 @@ class ChatRequest(BaseModel):
     # (globally unique), so a lost-response resubmit reconnects to the
     # existing run instead of starting a duplicate. Server-minted fallback
     # when omitted (no dedup).
-    request_key: Optional[str] = Field(
+    request_key: Optional[RequestKey] = Field(
         default=None,
         description="Client-generated UUID identifying this logical send; "
         "reuse across retransmits for idempotent delivery.",

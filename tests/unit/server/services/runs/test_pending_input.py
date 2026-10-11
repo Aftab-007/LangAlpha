@@ -68,7 +68,7 @@ async def test_rerun_takes_the_text_from_the_query_row():
         workspace_id="ws-1",
         run_id="run-1",
         checkpoint_id="cp-other",
-        request_key="rk-2",
+        request_key="9f2c0d1e-7b4a-4c3e-9a51-2d6f8e0b1c47",
         llm_model="model-a",
         additional_context=[IMAGE],
     )
@@ -89,7 +89,7 @@ async def test_rerun_takes_the_text_from_the_query_row():
     assert request.fork_from_turn is None
     assert [c.type for c in request.additional_context] == ["image"]
     assert (request.locale, request.timezone) == ("zh-CN", "Asia/Shanghai")
-    assert (request.request_key, request.llm_model) == ("rk-2", "model-a")
+    assert (request.request_key, request.llm_model) == ("9f2c0d1e-7b4a-4c3e-9a51-2d6f8e0b1c47", "model-a")
 
 
 @pytest.mark.asyncio

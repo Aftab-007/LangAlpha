@@ -26,6 +26,14 @@ from .reasoning_lineage import ROUTE_ENDPOINT_SEP
 load_dotenv()
 
 
+class MissingProviderKeyError(ValueError):
+    """The provider's key is in no override and not in the environment.
+
+    A ValueError still, for callers that already catch one; its own class lets
+    a resolver tell an unconfigured provider from a bad argument.
+    """
+
+
 class ModelConfig:
     """Manages model configuration from JSON files."""
 
@@ -658,7 +666,7 @@ class LLM:
             if key:
                 return key
             if self.provider_info.get("access_type") != "local":
-                raise ValueError(f"{self.env_key} environment variable is not set")
+                raise MissingProviderKeyError(f"{self.env_key} environment variable is not set")
         return "EMPTY"
 
     def _resolve_base_url(self, param_name: str = "base_url") -> dict:

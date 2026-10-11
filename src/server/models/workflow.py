@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.llms.reasoning import ReasoningLevel
 from src.server.models.additional_context import AdditionalContext
+from src.server.models.chat import RequestKey
 
 
 def serialize_message(message: Any) -> Dict[str, Any]:
@@ -470,7 +471,7 @@ class RetryRequest(BaseModel):
         "attempt; a stale id is rejected (409) instead of silently retrying "
         "a different run.",
     )
-    request_key: Optional[str] = Field(
+    request_key: Optional[RequestKey] = Field(
         None,
         description="Client-generated UUID for idempotent delivery; reuse "
         "across retransmits of the same retry.",
