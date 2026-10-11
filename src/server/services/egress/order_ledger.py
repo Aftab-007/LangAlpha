@@ -28,6 +28,7 @@ from src.server.database.order_attempts import (
     complete_attempt,
     consume_attempt,
     decide_attempt,
+    find_attempt_id,
     get_attempt,
     insert_attempt,
     latest_attempt_for_vendor_order,
@@ -200,6 +201,9 @@ class OrderAttemptLedger:
         return receipt_from_attempt(attempt_row_to_response(row))
 
     # -- execution -----------------------------------------------------------
+
+    async def find(self, message_id: str, tool_call_id: str) -> str | None:
+        return await find_attempt_id(self._user_id, message_id, tool_call_id)
 
     async def consume(self, attempt_id: str) -> ExecutionGrant | Refusal:
         row = await consume_attempt(attempt_id)

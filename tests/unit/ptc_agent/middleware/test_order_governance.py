@@ -46,8 +46,14 @@ def _tool(name: str = TOOL_NAME, stamp: dict | None = None) -> StructuredTool:
 
 
 class _Request:
-    def __init__(self, name: str = TOOL_NAME, call_id: str = "call-1") -> None:
+    def __init__(
+        self,
+        name: str = TOOL_NAME,
+        call_id: str = "call-1",
+        state: dict[str, Any] | None = None,
+    ) -> None:
         self.tool_call = {"id": call_id, "name": name, "args": dict(ARGS)}
+        self.state = state
 
 
 def _state(
@@ -102,6 +108,9 @@ class _FakeLedger:
             "approved" if decision == "approve" else "rejected_by_user"
         )
         return self._receipt(attempt_id)
+
+    async def find(self, message_id, tool_call_id) -> str | None:
+        return self.attempts.get((message_id, tool_call_id))
 
     async def consume(self, attempt_id):
         self.consumed.append(attempt_id)
@@ -330,6 +339,45 @@ async def test_a_call_with_no_attempt_on_this_turn_is_refused():
     result = await mw.awrap_tool_call(_Request(), handler)
 
     assert handler.calls == []
+    assert ledger.consumed == []
+    assert "no approved execution" in result.content
+
+
+@pytest.mark.asyncio
+async def test_a_call_the_gate_saw_in_an_earlier_run_takes_its_recorded_attempt(
+    monkeypatch,
+):
+    """A regenerate or a retry from past the gate's node starts on a new
+    middleware that never proposed; the call's message and id still name
+    the attempt, which then runs once and only once."""
+    ledger = _FakeLedger()
+    _answer(monkeypatch, {"order_decisions": {"att-1": {"type": "approve"}}})
+    await OrderGovernanceMiddleware(ledger, [_tool()]).aafter_model(_state(), None)
+
+    later_run = OrderGovernanceMiddleware(ledger, [_tool()])
+    handler = _Handler()
+    first = await later_run.awrap_tool_call(_Request(state=_state()), handler)
+    again = await OrderGovernanceMiddleware(ledger, [_tool()]).awrap_tool_call(
+        _Request(state=_state()), handler
+    )
+
+    assert handler.calls == ["call-1"]
+    assert first.artifact[RECEIPT_KEY]["outcome"]["status"] == "submitted"
+    # The ledger's own refusal, with the receipt, not "no approved execution".
+    assert "it is submitted" in again.content
+    assert again.artifact[RECEIPT_KEY]["outcome"]["status"] == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_a_call_no_gate_recorded_is_refused_without_a_write():
+    ledger = _FakeLedger()
+    mw = OrderGovernanceMiddleware(ledger, [_tool()])
+
+    handler = _Handler()
+    result = await mw.awrap_tool_call(_Request(state=_state()), handler)
+
+    assert handler.calls == []
+    assert ledger.attempts == {}
     assert ledger.consumed == []
     assert "no approved execution" in result.content
 
