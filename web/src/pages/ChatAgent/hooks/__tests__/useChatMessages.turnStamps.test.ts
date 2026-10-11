@@ -84,7 +84,7 @@ function turnOfText(messages: unknown[], role: 'user' | 'assistant', text: strin
   const entry = projectTurns(messages as MessageRecord[]).find(
     (p) => p.message.role === role && String(p.message.content ?? '').includes(text),
   );
-  if (!entry) throw new Error(`no ${role} bubble shows ${text}`);
+  if (!entry || entry.turnIndex === null) throw new Error(`no ${role} bubble shows ${text}`);
   return entry.turnIndex;
 }
 
@@ -324,7 +324,7 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
     expect(turnOfText(live(hook), 'assistant', 'fresh answer')).toBe(43);
   });
 
-  it('regenerating a turn a refused send shares a count with keeps the question it ran', async () => {
+  it('regenerating the turn after a refused send keeps the question it ran', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
     // Refused before admission: the server holds no turn for it.
@@ -343,7 +343,9 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
       await send;
     });
     await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
-    expect(turnOfText(live(hook), 'user', 'first try')).toBe(43);
+    // The refused send holds no turn; the send after it ran turn 43.
+    const firstTry = projectTurns(live(hook) as MessageRecord[]).find((p) => p.message.content === 'first try');
+    expect(firstTry?.turnIndex).toBeNull();
     expect(turnOfText(live(hook), 'user', 'go on')).toBe(43);
 
     mockStatus.mockResolvedValue(threadStatus({ latest_turn_index: 43 }));

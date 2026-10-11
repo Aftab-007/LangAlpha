@@ -17,14 +17,16 @@ import type { MessageRecord } from './types';
 export interface TurnLike extends MessageLike {
   id?: unknown;
   turnIndex?: unknown;
+  unadmitted?: unknown;
 }
 
 export interface ProjectedMessage<M extends TurnLike = MessageRecord> {
   message: M;
   /** Index into the RAW messages array. */
   rawIndex: number;
-  /** Backend turn this bubble belongs to. */
-  turnIndex: number;
+  /** Backend turn this bubble belongs to; null for a send the server never
+   *  stored, which holds no turn of its own. */
+  turnIndex: number | null;
 }
 
 function stampedTurn(message: TurnLike): number | null {
@@ -48,12 +50,20 @@ function stampedTurn(message: TurnLike): number | null {
  * non-steering assistants BEFORE a user message (exclusive) and the
  * feedback/regenerate paths counted up to AND INCLUDING an assistant bubble
  * minus one.
+ *
+ * A send the server refused before storing it has no turn: the next send
+ * takes the number it was given, so giving it one would set two messages on
+ * the same turn. It neither takes a turn nor moves the count.
  */
 export function projectTurns<M extends TurnLike>(messages: readonly M[]): ProjectedMessage<M>[] {
   const projected = new Array<ProjectedMessage<M>>(messages.length);
   let c = 0;
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
+    if (message.unadmitted === true) {
+      projected[i] = { message, rawIndex: i, turnIndex: null };
+      continue;
+    }
     const stamp = stampedTurn(message);
     let turnIndex: number;
     if (isSteeringContinuation(message)) {
@@ -76,6 +86,11 @@ export function projectTurns<M extends TurnLike>(messages: readonly M[]): Projec
   return projected;
 }
 
+/** Whether the bubble belongs to one of the server's turns. */
+export function hasTurn<M extends TurnLike>(entry: ProjectedMessage<M>): entry is ProjectedMessage<M> & { turnIndex: number } {
+  return entry.turnIndex !== null;
+}
+
 /**
  * The newest turn the transcript shows, or null when it shows none. Read from
  * the assistant bubbles alone: a notification rides the count of the turn
@@ -84,7 +99,7 @@ export function projectTurns<M extends TurnLike>(messages: readonly M[]): Projec
 export function newestTurn(messages: readonly TurnLike[]): number | null {
   let newest: number | null = null;
   for (const { message, turnIndex } of projectTurns(messages)) {
-    if (message.role === 'assistant' && (newest === null || turnIndex > newest)) newest = turnIndex;
+    if (message.role === 'assistant' && turnIndex !== null && (newest === null || turnIndex > newest)) newest = turnIndex;
   }
   return newest;
 }
@@ -97,7 +112,7 @@ export function newestTurn(messages: readonly TurnLike[]): number | null {
  */
 export function turnOf(messages: readonly TurnLike[], id: string): number | undefined {
   const entry = projectTurns(messages).find((p) => p.message.id === id);
-  return entry && entry.message.role !== 'notification' ? entry.turnIndex : undefined;
+  return entry && entry.message.role !== 'notification' ? entry.turnIndex ?? undefined : undefined;
 }
 
 /**
@@ -116,10 +131,14 @@ export function computeTurnTails(visible: readonly ProjectedMessage<TurnLike>[])
   const endedTurns = new Set<number>();
   for (let i = visible.length - 1; i >= 0; i--) {
     const { message, turnIndex } = visible[i];
-    if (message.role === 'assistant') {
-      tail[i] = !endedTurns.has(turnIndex);
-      endedTurns.add(turnIndex);
+    if (message.role !== 'assistant') continue;
+    // A reply the server never stored shares a turn with nothing.
+    if (turnIndex === null) {
+      tail[i] = true;
+      continue;
     }
+    tail[i] = !endedTurns.has(turnIndex);
+    endedTurns.add(turnIndex);
   }
   return tail;
 }

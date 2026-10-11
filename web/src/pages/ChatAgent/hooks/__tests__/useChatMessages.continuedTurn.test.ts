@@ -84,7 +84,7 @@ function turnOfAnswer(messages: unknown[], text: string): number {
   const entry = projectTurns(messages as MessageRecord[]).find(
     (p) => p.message.role === 'assistant' && String(p.message.content ?? '').includes(text),
   );
-  if (!entry) throw new Error(`no assistant bubble shows ${text}`);
+  if (!entry || entry.turnIndex === null) throw new Error(`no assistant bubble shows ${text}`);
   return entry.turnIndex;
 }
 

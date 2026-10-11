@@ -85,6 +85,9 @@ export async function loadConversationHistory(
   // An older page replays into a transcript of its own, which it adds to
   // rather than rebuilds, and its caller owns what a failure shows.
   const olderPage = deps.beforeTurn !== undefined;
+  // A live frame naming a run while this replay runs saw a run the server
+  // may have started after reading the one this replay names.
+  const liveRunEpoch = rt.latestRunEpochRef.current;
 
   // The todo card shows only the last state, so it is written once, with the
   // transcript and the caller's settle step. Written per event, it showed the
@@ -223,6 +226,15 @@ export async function loadConversationHistory(
         page = typeof event.first_turn_index === 'number'
           ? { firstTurnIndex: event.first_turn_index, hasMore: event.has_more === true }
           : null;
+        return;
+      }
+
+      // The newest page ends naming the thread's newest run, read before the
+      // transcript it follows; a server that names none leaves forks unchecked.
+      if (eventType === 'replay_done') {
+        if ('latest_run_id' in event && rt.latestRunEpochRef.current === liveRunEpoch) {
+          rt.latestRunIdRef.current = typeof event.latest_run_id === 'string' ? event.latest_run_id : null;
+        }
         return;
       }
 

@@ -44,12 +44,16 @@ interface MessageBubbleProps {
   message: MessageRecord;
   contentProjection?: ContentProjection;
   /** Backend turn this bubble belongs to (a steering continuation folds back
-   *  into the turn it continues). Feedback is addressed by turn, not bubble. */
-  turnIndex: number;
+   *  into the turn it continues). Feedback is addressed by turn, not bubble.
+   *  Null for a send the server refused or never got, which has no turn. */
+  turnIndex: number | null;
   /** Whether this assistant bubble is the LAST VISIBLE bubble of its backend
    *  turn (steering splits one turn across several bubbles). Regenerate renders
    *  only on the tail. Computed positionally in MessageList. */
   isTurnTail: boolean;
+  /** Whether this is the transcript's newest reply. Retry re-runs the
+   *  thread's latest attempt, so an older failed reply offers none. */
+  isLatestReply?: boolean;
   /** The turn is still running, tool execution and gaps between model calls
    *  included. `message.isStreaming` alone drops between two model calls, and
    *  the deliverables of a running turn are not deliverables yet. */
@@ -75,7 +79,7 @@ interface MessageBubbleProps {
  * MessageActionsContext (one identity-stable object per host), so a streamed
  * chunk never re-renders settled bubbles through a handler identity.
  */
-export const MessageBubble = memo(function MessageBubble({ message, contentProjection, turnIndex, isTurnTail, isTurnLive, turnFiles, feedback, isLoading, fold = 'unfolded', isSubagentView, readOnly, allowFiles, isMobile, flashContext }: MessageBubbleProps): React.ReactElement | null {
+export const MessageBubble = memo(function MessageBubble({ message, contentProjection, turnIndex, isTurnTail, isLatestReply = true, isTurnLive, turnFiles, feedback, isLoading, fold = 'unfolded', isSubagentView, readOnly, allowFiles, isMobile, flashContext }: MessageBubbleProps): React.ReactElement | null {
   const { onOpenFile, onDownloadFile, onRevealFiles, onOpenSources, onEditMessage, editDrafts, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
   const { t } = useTranslation();
   const projection = contentProjection ?? projectMessageContent(message, isSubagentView);
@@ -93,8 +97,9 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   // Edit mode lives in the host's draft store, so a reload that remounts the
   // bubble reopens the box with what was typed in it.
   const originalText = (message.content as string) || '';
+  const draftKey = { turnIndex, original: originalText, messageId: message.id as string };
   const draftStore = useEditDraftStore(editDrafts);
-  const draftText = useEditDraft(draftStore, turnIndex, isUser ? originalText : null);
+  const draftText = useEditDraft(draftStore, isUser ? draftKey : null);
   const isEditing = draftText !== undefined;
   const editContent = draftText ?? '';
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -118,7 +123,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   }, [isAssistant, feedback]);
 
   const handleThumbUpClick = async () => {
-    if (!onThumbUp) return;
+    if (!onThumbUp || turnIndex === null) return;
     const prevRating = feedbackRating;
     const newRating = prevRating === 'thumbs_up' ? null : 'thumbs_up';
     setFeedbackRating(newRating);
@@ -128,7 +133,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   };
 
   const handleThumbDownSubmit = async (issueCategories: string[], comment: string | null, consentHumanReview: boolean) => {
-    if (!onThumbDown) return;
+    if (!onThumbDown || turnIndex === null) return;
     const prevRating = feedbackRating;
     setFeedbackRating('thumbs_down');
     setShowThumbDownModal(false);
@@ -199,8 +204,8 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
     el.style.height = el.scrollHeight + 'px';
   };
   const handleStartEdit = useStableHandler(() => {
-    draftStore.markFocus(turnIndex, originalText);
-    draftStore.put({ turnIndex, original: originalText, text: originalText });
+    draftStore.markFocus(draftKey);
+    draftStore.put({ ...draftKey, text: originalText });
   });
   // A box that held the focus when a reload took it away takes it back when
   // it shows again, as does one just opened or given back, unless the user is
@@ -211,14 +216,15 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
     if (!isEditing || !el) return;
     resizeTextarea();
     const active = document.activeElement;
-    if (draftStore.takeFocus(turnIndex, originalText) && (!active || active === document.body)) {
+    const key = { turnIndex, original: originalText, messageId };
+    if (draftStore.takeFocus(key) && (!active || active === document.body)) {
       el.focus({ preventScroll: true });
       el.setSelectionRange(el.value.length, el.value.length);
     }
     return () => {
-      if (document.activeElement === el) draftStore.markFocus(turnIndex, originalText);
+      if (document.activeElement === el) draftStore.markFocus(key);
     };
-  }, [isEditing, draftStore, turnIndex, originalText]);
+  }, [isEditing, draftStore, turnIndex, originalText, messageId]);
   const handleCopy = useStableHandler(() => {
     const text = assistantText(message);
     // Confirm only after the write lands (it can reject when the document
@@ -234,7 +240,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   if (foldedAway) return null;
 
   const handleCancelEdit = () => {
-    draftStore.drop(turnIndex, originalText);
+    draftStore.drop(draftKey);
   };
 
   // A running turn holds the chat, so the edit waits in its box until it ends.
@@ -242,7 +248,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
     if (isLoading) return;
     const trimmed = editContent.trim();
     // Closed first: an edit the session cannot take yet reopens the box.
-    draftStore.drop(turnIndex, originalText);
+    draftStore.drop(draftKey);
     if (trimmed && trimmed !== originalText.trim()) {
       onEditMessage?.(message.id as string, trimmed);
     }
@@ -353,7 +359,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
         <RefreshCw className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
       </button>
     )}
-    {isAssistant && hasError && onRetry && (
+    {isAssistant && hasError && onRetry && isLatestReply && (
       <button
         onClick={onRetry}
         className="p-1 min-h-7 min-w-7 inline-flex items-center justify-center rounded transition-colors hover:bg-(--color-bg-elevated)"
@@ -514,7 +520,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
                 ref={editTextareaRef}
                 value={editContent}
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
-                  draftStore.put({ turnIndex, original: originalText, text: e.target.value });
+                  draftStore.put({ ...draftKey, text: e.target.value });
                   resizeTextarea();
                 }}
                 onKeyDown={handleEditKeyDown}

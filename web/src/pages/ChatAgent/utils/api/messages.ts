@@ -69,6 +69,9 @@ export interface SendChatMessageOptions extends StreamTurnOptions {
   timezone?: string;
   checkpointId?: string | null;
   forkFromTurn?: number | null;
+  /** On a fork, the thread's newest run as this view saw it: the server
+   *  refuses the fork as stale when another run came since. */
+  expectedLatestRunId?: string | null;
   platform?: string | null;
   threadSettings?: SendThreadSettings;
 }
@@ -87,6 +90,7 @@ export async function sendChatMessageStream(
     timezone = 'America/New_York',
     checkpointId = null,
     forkFromTurn = null,
+    expectedLatestRunId = null,
     llmModel = null,
     reasoningEffort = null,
     fastMode = null,
@@ -115,6 +119,7 @@ export async function sendChatMessageStream(
   }
   if (forkFromTurn != null) {
     body.fork_from_turn = forkFromTurn;
+    if (expectedLatestRunId) body.expected_latest_run_id = expectedLatestRunId;
   }
   if (llmModel) body.llm_model = llmModel;
   if (reasoningEffort) body.reasoning_effort = reasoningEffort;

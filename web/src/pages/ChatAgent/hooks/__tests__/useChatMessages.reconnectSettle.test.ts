@@ -815,10 +815,10 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     // never stored it, so it stays, with its error, below the replayed turns.
     const steer = messages.filter((m) => m.role === 'user' && m.content === 'also this');
     expect(steer).toHaveLength(1);
-    expect(steer[0].queueError).toBe('refused');
+    expect(steer[0].queueError).toBe('Failed to send message');
     expect(messages.at(-1)).toBe(steer[0]);
     // The reload cleared the banner as it started; the refusal shows after it.
-    expect(hook.result.current.messageError).toBe('refused');
+    expect(hook.result.current.messageError).toBe('Failed to send message');
   });
 
   /** A give-up whose reload waits on a steer, which the server then refuses. */
@@ -860,7 +860,7 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
 
-    expect(hook.result.current.messageError).toBe('refused');
+    expect(hook.result.current.messageError).toBe('Failed to send message');
   });
 
   it('a refusal whose waiting reload a new turn overtook stays down once that turn has gone through', async () => {
@@ -934,7 +934,7 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     const steer = (hook.result.current.liveMessages.get() as MessageRecord[]).find(
       (m) => m.role === 'user' && m.content === 'also this',
     );
-    expect(steer?.queueError).toBe('Server error');
+    expect(steer?.queueError).toBe('Failed to send message');
     expect(steer?.isHistory).toBeFalsy();
     expect(bubbleShowing(hook, 'the answer').isHistory).toBe(true);
   });
@@ -982,11 +982,15 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     expect(banner.links?.map((l) => l.label)).toEqual(['Manage plan', 'View usage']);
   });
 
-  it('a steer refused with a server error shows the server\'s message, as a send does', async () => {
+  it('a steer refused in the server\'s words shows them, as a send does', async () => {
     const hook = await mount();
-    await steerRefusedMidTurn(hook, Object.assign(new Error('Server error'), { status: 500 }));
+    const message = 'The event-stream transport is temporarily unreachable; retry shortly.';
+    await steerRefusedMidTurn(hook, Object.assign(new Error(message), {
+      status: 503,
+      errorInfo: { code: 'transport_unavailable', message },
+    }));
 
-    expect(hook.result.current.messageError).toBe('Server error');
+    expect(hook.result.current.messageError).toBe(message);
   });
 
   it('an attach that drops after a steer closes the todo list on the bubble before the steer', async () => {
@@ -1176,7 +1180,11 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     expect(hook.result.current.messageError).toBeNull();
   });
 
-  const refusal = () => Object.assign(new Error('crafted steer refusal'), { status: 409 });
+  // In the server's words: a steer the server gave none for says it was not sent.
+  const refusal = () => Object.assign(new Error('crafted steer refusal'), {
+    status: 409,
+    errorInfo: { message: 'crafted steer refusal' },
+  });
 
   /**
    * Sends a turn and steers it twice with the same text, failing the POSTs in
@@ -1265,7 +1273,7 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     expect(extra).toEqual([]);
     expect(older.steeringDelivered).toBe(true);
     expect(older.queueError).toBeUndefined();
-    expect(newer).toMatchObject({ queueError: 'Failed to fetch' });
+    expect(newer).toMatchObject({ queueError: 'Failed to send message' });
   });
 
   it('a steer refused after the run delivered another keeps its refusal', async () => {
@@ -1382,7 +1390,7 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
       expect(newer.queueError).toBeUndefined();
       expect(older.turnIndex).toBe(1);
       if (left === 'failed') {
-        expect(older).toMatchObject({ queueError: 'Bad Gateway' });
+        expect(older).toMatchObject({ queueError: 'Failed to send message' });
         expect(older.steeringDelivered).toBeFalsy();
       }
     },
@@ -1420,7 +1428,7 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     // The view's own count, which nothing from the run has corrected.
     expect(steerCopies(hook)[0].turnIndex).toBe(1);
     await step(() => lose());
-    expect(steerCopies(hook)[0]).toMatchObject({ queueError: 'Failed to fetch' });
+    expect(steerCopies(hook)[0]).toMatchObject({ queueError: 'Failed to send message' });
     await step(() => drop());
     await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
@@ -1689,8 +1697,8 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
 
-    expect(steerCopies(hook)).toMatchObject([{ queueError: 'refused' }]);
-    expect(hook.result.current.messageError).toBe('refused');
+    expect(steerCopies(hook)).toMatchObject([{ queueError: 'Failed to send message' }]);
+    expect(hook.result.current.messageError).toBe('Failed to send message');
   });
 
   it.each([
@@ -1742,7 +1750,7 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
         }));
       await step(() => void hook.result.current.handleSendMessage('go on'));
       await step(() => void hook.result.current.handleSendMessage('also this'));
-      const held = outcome === 'queued' ? { steering: true } : { queueError: 'Failed to fetch' };
+      const held = outcome === 'queued' ? { steering: true } : { queueError: 'Failed to send message' };
       // The view's own count, which nothing from the run has corrected.
       expect(steerCopies(hook)).toMatchObject([{ ...held, turnIndex: 1 }]);
       await step(() => drop());

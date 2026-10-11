@@ -12,9 +12,9 @@ import type { StructuredError } from '@/utils/rateLimitError';
 import type { EditDraft } from './editDrafts';
 
 /**
- * The codes a route 409 refuses a request with. Its error carries only the
- * code, where a frame also says `admission_conflict`. `duplicate_request` is
- * not one: that request was admitted, and the view adopts its run instead.
+ * The codes a request is refused with before the server kept anything of it,
+ * as a route 409 or as a stream's frame. `duplicate_request` is not one: that
+ * request was admitted, and the view adopts its run instead.
  */
 const REFUSAL_CODES: ReadonlySet<string> = new Set([
   'running',
@@ -28,6 +28,7 @@ const REFUSAL_CODES: ReadonlySet<string> = new Set([
   'turn_conflict',
   'stale_fork',
   'resend_required',
+  'writer_capacity',
 ]);
 
 function readForkRefusal(source: unknown): { code: unknown; message: string } | null {
@@ -41,8 +42,10 @@ function readForkRefusal(source: unknown): { code: unknown; message: string } | 
   if (typeof errorInfo?.code === 'string' && REFUSAL_CODES.has(errorInfo.code)) {
     return typeof errorInfo.message === 'string' ? { code: errorInfo.code, message: errorInfo.message } : null;
   }
-  if (errorType === 'admission_conflict') return typeof error === 'string' ? { code, message: error } : null;
-  return null;
+  // A frame says `admission_conflict` for most refusals, but not for one at
+  // capacity, so its code decides.
+  const refused = errorType === 'admission_conflict' || (typeof code === 'string' && REFUSAL_CODES.has(code));
+  return refused && typeof error === 'string' ? { code, message: error } : null;
 }
 
 /**
@@ -53,10 +56,14 @@ export function forkRefusalMessage(source: unknown): string | null {
   return readForkRefusal(source)?.message ?? null;
 }
 
+// A fork's branch or a retry's run is no longer the thread's newest: the chat
+// changed after this view read it.
+const isStaleCode = (code: unknown): boolean => code === 'stale_fork' || code === 'stale_retry';
+
 /** Whether `source` refuses its request because the chat changed after this
  *  view read it. */
 export function isStaleForkRefusal(source: unknown): boolean {
-  return readForkRefusal(source)?.code === 'stale_fork';
+  return isStaleCode(readForkRefusal(source)?.code);
 }
 
 /** What the user did that cut the transcript, and what a refusal gives back. */
@@ -106,7 +113,7 @@ export function createForkRefusalRecovery(deps: {
     recover(source, cut) {
       const refusal = readForkRefusal(source);
       if (refusal === null) return false;
-      refuse(refusal.code === 'stale_fork' ? deps.staleMessage(cut.kind) : refusal.message, cut);
+      refuse(isStaleCode(refusal.code) ? deps.staleMessage(cut.kind) : refusal.message, cut);
       return true;
     },
     stale(cut) {

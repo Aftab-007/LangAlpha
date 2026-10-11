@@ -619,6 +619,7 @@ export interface ChatMessageBody {
   additional_context?: unknown;
   checkpoint_id?: string;
   fork_from_turn?: number;
+  expected_latest_run_id?: string;
   llm_model?: string;
   reasoning_effort?: string;
   fast_mode?: true;

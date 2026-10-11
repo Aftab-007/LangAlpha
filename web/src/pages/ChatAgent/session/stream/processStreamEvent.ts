@@ -6,6 +6,7 @@
 
 import { finalizeAssistantMessage } from './finalizeMessage';
 import { readRetryNotice } from './autoRetry';
+import { noteLiveRun } from '../latestRun';
 import { isUpstreamHint, type StructuredError } from '@/utils/rateLimitError';
 import { applyAnnotationArtifact } from '@/pages/MarketView/stores/chartAnnotationStore';
 import type { AssistantMessage, ChatMessage } from '@/types/chat';
@@ -201,6 +202,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       metadataSeen = true;
       if (event.run_id) {
         rt.currentRunIdRef.current = event.run_id;
+        noteLiveRun(rt, event.run_id);
         if (event.report_source) {
           const { run_id: runId, report_source: source, turn_index: turn } = event;
           const beforeId = rt.currentMessageRef.current;
@@ -546,6 +548,8 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
     // a `retry` there, which only an older server sends, means only this
     // reader broke, and the transport drop that follows reconnects to the run.
     if (eventType === 'retry') {
+      // A run that failed after the server started it is the thread's newest.
+      if (!isSubagent && typeof event.run_id === 'string') noteLiveRun(rt, event.run_id);
       if (!isSubagent && !metadataSeen) {
         deps.clearModelStatus();
         refs.retryNotice = readRetryNotice(event);
@@ -784,6 +788,11 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       // agent: there is nothing to reconnect to, and the reply's Retry sends
       // what the recovery says.
       if (event.recovery) refs.retryNotice = readRetryNotice(event);
+      // One that names its run, a failure or a refusal, came after the server
+      // started that run, which left it the thread's newest.
+      if ((event.recovery || event.error_type === 'admission_conflict') && !isSubagent && typeof event.run_id === 'string') {
+        noteLiveRun(rt, event.run_id);
+      }
       // Only the frame that ends the server's own retries carries `max_retries`.
       const errorMessage = typeof event.max_retries === 'number'
         ? rt.t('chat.autoRetryExhausted')

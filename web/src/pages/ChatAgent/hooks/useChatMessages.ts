@@ -31,7 +31,8 @@ import { getStoredThreadId, setStoredThreadId } from './utils/threadStorage';
 import { type SubagentTokenUsage, ZERO_USAGE } from '../utils/tokenUsage';
 import { computeSteeringBoundary } from '../session/stream/steeringRollback';
 import { isSteeringUserMessage, opensTurn } from '../components/messageList/messagePredicates';
-import { newestTurn, projectTurns } from '../components/messageList/turnProjection';
+import { hasTurn, newestTurn, projectTurns } from '../components/messageList/turnProjection';
+import { isSubagentEvent } from '../session/subagents/liveEventHandlers';
 import { bumpThreadNavOrder } from './useNavigationData';
 import { invalidateNewWorkspace } from './workspaceRowActions';
 import { ensureThreadId } from '../session/threadCreation';
@@ -44,7 +45,7 @@ import { createRecentlySentTracker } from './utils/recentlySentTracker';
 import { createRequestKeyTracker } from './utils/requestKey';
 import { withServerTotals, withoutServerTotals } from './utils/contextWindowEvent';
 import { createForkRefusalRecovery, forkRefusalMessage, isStaleForkRefusal, type ForkCut } from './utils/forkRefusal';
-import { createEditDraftStore, type EditDraft } from './utils/editDrafts';
+import { createEditDraftStore, sameDraftMessage, type EditDraft } from './utils/editDrafts';
 import { handleReasoningSignal, handleTextContent } from './utils/streamEventHandlers';
 import { useMarketWatch } from './useMarketWatch';
 import { refreshComputersAfterTurn } from './useComputers';
@@ -64,6 +65,7 @@ import { createAnswerBoard, type AnswerBoard } from '../session/interrupts/answe
 import { useInterruptAnswers } from '../session/interrupts/useInterruptAnswers';
 export type { ModelStatus, FallbackSuggestion } from '../session/types';
 import type { ChatSessionRuntime } from '../session/runtime';
+import { noteLiveRun } from '../session/latestRun';
 import type { CardUpdater } from '../session/streamRefs';
 import { prependSubagentRuns, projectSubagentHistory } from '../session/subagents/projectHistory';
 import { createSubagentMuxController, getTaskIdFromEvent } from '../session/subagents/muxSink';
@@ -72,7 +74,7 @@ import { loadConversationHistory as replayConversationHistory } from '../session
 import { loadOlderHistoryPage, commitOlderHistoryPage } from '../session/history/olderPages';
 import { createHistoryWindow, HISTORY_PAGE_TURNS } from '../session/history/historyWindow';
 import { createStreamEventProcessor, type StreamRouterDeps } from '../session/stream/processStreamEvent';
-import { forkRequest, retryRequestFor, sendRequest, settleRetryNotice, type HeldRetry, type RetryNotice, type TurnRequest } from '../session/stream/autoRetry';
+import { forkRequest, retryRequest, retryRequestFor, sendRequest, settleRetryNotice, type HeldRetry, type RetryNotice, type TurnRequest } from '../session/stream/autoRetry';
 import { createLiveTranscript, type LiveMessages } from '../session/stream/liveMessages';
 import { useSubagentHistory } from '../session/subagents/useSubagentHistory';
 import {
@@ -86,6 +88,12 @@ import {
 import { collectRenderedInterruptIds, finalizeTodoListProcessesInMessages } from './utils/messageFinalizers';
 export { finalizeTodoListProcessesInMessages, mapToolCallIdToAgentId } from './utils/messageFinalizers';
 
+/** A send the server started no run of. Its automatic resends carry it, so
+ * the one that ends the chain can mark it never kept and give its turn back. */
+interface UnstartedSend {
+  userId: string;
+  watermarkBefore: number | null;
+}
 
 export function useChatMessages(
   workspaceId: string,
@@ -369,6 +377,21 @@ export function useChatMessages(
   // steering handler can detect when a POST was routed as a new turn
   // (race: status flipped terminal between isLoading check and POST land).
   const currentRunIdRef = useRef<string | null>(null);
+  // The thread's newest run as this view has seen it, which a fork names so
+  // the server refuses an edit from a view that missed a turn. A load starts
+  // it from the run the replay names; every run the view sees start
+  // afterwards, from a stream's first frame, a failure frame naming it, a
+  // reattach or an adopted duplicate, is the thread's newest at that moment,
+  // and outranks the run of a replay it arrived during (session/latestRun.ts).
+  // A response header names its run before the server starts it, and a
+  // refusal starts none, so a header only aims the reconnect. Null names
+  // none, and the fork goes unchecked as before.
+  const latestRunIdRef = useRef<string | null>(null);
+  const latestRunEpochRef = useRef(0);
+  const latchRun = (runId: string): void => {
+    currentRunIdRef.current = runId;
+    noteLiveRun({ latestRunIdRef, latestRunEpochRef }, runId);
+  };
   // Local-layer run-liveness publish (declared here so it sits below the
   // run-id ref it reads).
   useLocalRunPublisher(threadId, isLoading, currentRunIdRef);
@@ -406,10 +429,7 @@ export function useChatMessages(
   // bound) never counted. A send refused before admission opened no turn on
   // the server, so the next send takes its number, as the server will give it.
   const newestKnownTurn = (): number =>
-    Math.max(
-      lastRenderedTurnIndexRef.current ?? -1,
-      newestTurn(liveMessages.get().filter((m) => m.role === 'notification' || !m.unadmitted)) ?? -1,
-    );
+    Math.max(lastRenderedTurnIndexRef.current ?? -1, newestTurn(liveMessages.get()) ?? -1);
   // Terminal-run ids the latest history replay rendered; consumed by the
   // load flow's markRunsRendered call so the report-back catch-up can't
   // re-attach an already-on-screen turn as a duplicate bubble.
@@ -500,9 +520,10 @@ export function useChatMessages(
   // v4 idempotent delivery: one request_key per logical send, reused across
   // retransmits of the same send until response headers prove acceptance.
   const requestKeyRef = useRef(createRequestKeyTracker());
-  // What the failed reply's Retry sends, once the client stops retrying it,
-  // and the fork it stands for.
-  const heldRetryRef = useRef<(HeldRetry & { cut: ForkCut | null }) | null>(null);
+  // What each failed reply's Retry sends, once the client stops retrying it,
+  // and the fork it stands for, by bubble: a failure on another thread holds
+  // its own and leaves this one's in place.
+  const heldRetriesRef = useRef(new Map<string, HeldRetry & { cut: ForkCut | null }>());
 
   // The CURRENT stream processor for subagent frames off the thread mux.
   // Send, reconnect and HITL resume each install theirs at attach time, so
@@ -629,6 +650,8 @@ export function useChatMessages(
     currentToolCallIdRef,
     currentMessageRef,
     currentRunIdRef,
+    latestRunIdRef,
+    latestRunEpochRef,
     steeringAtOrderRef,
     lastEventIdRef,
     pendingInterruptIdsRef,
@@ -772,8 +795,10 @@ export function useChatMessages(
         historyWindow.reset();
         recentlySentTrackerRef.current.clear();
         turnCheckpointsRef.current = null;
-        // The rendered-turn watermark belongs to the thread we're leaving.
+        // The rendered-turn watermark belongs to the thread we're leaving, and
+        // so does the newest run it saw; the next replay names the new one's.
         lastRenderedTurnIndexRef.current = null;
+        latestRunIdRef.current = null;
         // Interrupt cards belong to the thread we're leaving; the next thread's
         // replay repopulates this from its persisted interrupt events.
         renderedInterruptIdsRef.current.clear();
@@ -814,13 +839,18 @@ export function useChatMessages(
     const shown = projectTurns(liveMessages.get()).filter(({ message }) =>
       message.role === 'user' && !isSteeringUserMessage(message));
     if (shown.length === 0) return;
-    const first = shown[0].turnIndex;
+    // A send the server refused has no turn; the transcript's first turn is
+    // its first stored message's.
+    const first = shown.find(hasTurn)?.turnIndex ?? null;
     const given: string[] = [];
     for (const draft of open) {
-      if (draft.turnIndex < first) continue;
-      if (shown.some(({ message, turnIndex }) =>
-        turnIndex === draft.turnIndex && (message as UserMessage).content.trim() === draft.original)) continue;
-      editDrafts.drop(draft.turnIndex, draft.original, draft.threadId);
+      if (draft.turnIndex !== null && (first === null || draft.turnIndex < first)) continue;
+      if (shown.some(({ message, turnIndex }) => sameDraftMessage(draft, {
+        turnIndex,
+        original: (message as UserMessage).content,
+        messageId: message.id,
+      }))) continue;
+      editDrafts.drop(draft, draft.threadId);
       const text = draft.text.trim();
       if (text && text !== draft.original) given.push(text);
     }
@@ -832,7 +862,7 @@ export function useChatMessages(
   /** Puts an edit's text back in its box. A reload in flight settles where
    *  the box goes once it shows the transcript. */
   const returnEditDraft = useStableHandler((draft: EditDraft) => {
-    editDrafts.markFocus(draft.turnIndex, draft.original, draft.threadId);
+    editDrafts.markFocus(draft, draft.threadId);
     editDrafts.put(draft);
     if (draft.threadId === threadIdRef.current && !historyLoadingRef.current) settleEditDrafts();
   });
@@ -960,9 +990,36 @@ export function useChatMessages(
     // shouldn't happen for an honest client): fall through to a plain error.
     if (!runId || !dupThreadId) return false;
     requestKeyRef.current.clear(); // consumed by the accepted copy
+    // A new chat's copy may have made the thread: the reload, the route and
+    // the next send all read the state.
     threadIdRef.current = dupThreadId;
-    currentRunIdRef.current = runId;
+    setThreadId(dupThreadId);
+    latchRun(runId);
+    // A settled copy has no stream to join, so the reconnect gives up and
+    // reloads. The server holds that whole turn, so the reload has to replace
+    // the bubbles this send drew: kept, they sit below the turn it renders.
+    const runStatus = e.errorInfo.run_status;
+    if (typeof runStatus === 'string' && runStatus !== 'in_progress') markTranscriptPersisted();
     attemptReconnectAfterDisconnect(assistantMessageId);
+    return true;
+  };
+
+  /**
+   * A copy of this request did arrive and its run failed, so this click asked
+   * for that run's Retry: it goes out at once, by the run's id, in place of a
+   * reply that would only show the failure. Any other run is adopted as it
+   * is, a stopped one too, since only a failed run can be retried.
+   */
+  const retryFailedDuplicate = (err: unknown, assistantMessageId: string, request: TurnRequest, modelOptions: ModelOptions): boolean => {
+    const e = err as { status?: number; errorInfo?: Record<string, unknown> };
+    if (e?.status !== 409 || e?.errorInfo?.code !== 'duplicate_request' || e.errorInfo.run_status !== 'error') return false;
+    const runId = e.errorInfo.run_id;
+    if (typeof runId !== 'string' || !runId || e.errorInfo.thread_id !== threadIdRef.current) return false;
+    requestKeyRef.current.clear();
+    noteLiveRun({ latestRunIdRef, latestRunEpochRef }, runId);
+    const transcript = liveMessages.get();
+    const at = transcript.findIndex((m) => m.id === assistantMessageId);
+    void streamFromCheckpoint(retryRequest(runId, request.additionalContext), at === -1 ? transcript.length : at, transcript, modelOptions);
     return true;
   };
 
@@ -1608,10 +1665,16 @@ export function useChatMessages(
   /** Live event routing lives in session/stream/processStreamEvent; the
    * hook binds the runtime + cross-lane callbacks per stream start. */
 
-  // The banner a refused send or steer shows, and whether it is the server's
-  // own answer to act on (a quota denial, a provider or access link). Under
-  // one of those a failed bubble would read as a second, unrelated fault.
-  const refusalBanner = (err: unknown): { banner: string | StructuredError; answered: boolean } => {
+  /**
+   * The composer banner for a turn request that failed, and whether it is the
+   * server's own answer to act on (a quota denial, a provider or access link),
+   * under which a failed bubble would read as a second, unrelated fault.
+   * Otherwise the banner is the server's own words, and null for a transport
+   * or bare HTTP failure: its raw text ("Failed to fetch", "HTTP error!
+   * status: 500") is no message to show, and a failed reply already says the
+   * request failed and offers Retry.
+   */
+  const refusalBanner = (err: unknown): { banner: string | StructuredError | null; answered: boolean } => {
     const errObj = err as Record<string, unknown>;
     if (errObj.status === 429) {
       const info = (errObj.rateLimitInfo || {}) as Record<string, unknown>;
@@ -1647,7 +1710,10 @@ export function useChatMessages(
         answered: true,
       };
     }
-    return { banner: (err as Error).message || 'Failed to send message', answered: false };
+    // The transport words an upload too large for the server itself.
+    if (errObj.status === 413) return { banner: (err as Error).message, answered: false };
+    const worded = typeof errorInfo?.message === 'string' && errorInfo.message ? errorInfo.message : null;
+    return { banner: worded, answered: false };
   };
 
   /**
@@ -1859,7 +1925,8 @@ export function useChatMessages(
             content: msg.content || 'Failed to send message. Please try again.',
           }))
         );
-        setMessageError((err as Error).message || 'Failed to send message');
+        const { banner } = refusalBanner(err);
+        if (banner !== null) setMessageError(banner);
         releaseStreamOwnership();
         setIsLoading(false);
         return;
@@ -1872,10 +1939,12 @@ export function useChatMessages(
       // refused steer was another with its text.
       const refused = isClientError(err);
       if (!refused && liveMessages.get().some((m) => m.id === userMessage.id && (m as { steeringDelivered?: boolean }).steeringDelivered)) return;
-      // Shown as a refused send's is. A load clears the banner as it starts,
-      // so the refusal is carried past the next one: a reload may be waiting
-      // on this answer, or asked for and yet to run.
-      const banner = refusalBanner(err).banner;
+      // Shown as a refused send's is. A steer has no reply to fail in its
+      // place, so one the server gave no words for still says it was not
+      // sent. A load clears the banner as it starts, so the refusal is
+      // carried past the next one: a reload may be waiting on this answer,
+      // or asked for and yet to run.
+      const banner = refusalBanner(err).banner ?? 'Failed to send message';
       refusalAfterReloadRef.current = { epoch: sessionEpochRef.current, banner };
       // Update user message to show steering failure. A stream end or a
       // give-up while it was out may have marked it persisted, but the server
@@ -1902,6 +1971,53 @@ export function useChatMessages(
         setReloadTrigger((n) => n + 1);
       }
     }
+  };
+
+  /**
+   * A plain send's standing with the server, read off its own stream. A send
+   * refused or lost before the run started left nothing on the server, so its
+   * bubbles take no turn and its Retry sends it again, under the same request
+   * key in case a copy arrived.
+   */
+  const trackPlainSend = (send: {
+    userId: string;
+    assistantId: string;
+    turnIndex: number;
+    request: TurnRequest & { requestKey: string };
+    watermarkBefore: number | null;
+  }) => {
+    const ids = new Set([send.userId, send.assistantId]);
+    let started = false;
+    let refused = false;
+    return {
+      /** Reads a frame of the send's stream, ahead of the processor. */
+      observe(event: SSEEvent): void {
+        if (isSubagentEvent(event)) return;
+        if (forkRefusalMessage(event) !== null) {
+          // One that names a run was refused after the run started.
+          if (typeof event.run_id === 'string') started = true;
+          else refused = true;
+          return;
+        }
+        if (event.event === 'metadata') {
+          started = true;
+          return;
+        }
+        // A failure that names its run came after the server started it.
+        if ((event.event === 'error' || event.event === 'retry') && event.recovery && typeof event.run_id === 'string') started = true;
+      },
+      /** Whether the server refused the send before starting its run. */
+      refused: () => refused && !started,
+      /** The send, for a resend to carry, until the server starts its run. */
+      unstarted: (): UnstartedSend | null => (started ? null : { userId: send.userId, watermarkBefore: send.watermarkBefore }),
+      /** Marks the send as one the server never kept, unless it started the run. */
+      unadmit(): void {
+        if (started) return;
+        setMessages((prev) => prev.map((m) => (ids.has(m.id as string) ? { ...m, unadmitted: true } : m)));
+        if (lastRenderedTurnIndexRef.current === send.turnIndex) lastRenderedTurnIndexRef.current = send.watermarkBefore;
+        heldRetriesRef.current.set(send.assistantId, { bubbleId: send.assistantId, request: send.request, cut: null });
+      },
+    };
   };
 
   const handleSendMessage = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed }: ModelOptions = {}) => {
@@ -2065,23 +2181,23 @@ export function useChatMessages(
     const requestKey = requestKeyRef.current.take(`send|${effectiveThreadId}|${message}`);
     let wasDisconnected = false;
     const wasInterruptedRef = { current: false };
-    // A refusal that comes before the server named a run left no row of the
-    // send: its bubbles open no turn of the server's, and an edit or a
-    // regenerate of it sends it as new rather than fork a turn it never had.
-    let latchedRunId: string | null = null;
-    const markUnadmitted = () => {
-      if (latchedRunId !== null) return;
-      setMessages((prev) =>
-        prev.map((m) => (m.id === userMessage.id || m.id === assistantMessageId ? { ...m, unadmitted: true } : m)),
-      );
-      if (lastRenderedTurnIndexRef.current === turnIndex) lastRenderedTurnIndexRef.current = watermarkBefore;
-    };
+    const admission = trackPlainSend({
+      userId: userMessage.id as string,
+      assistantId: assistantMessageId,
+      turnIndex,
+      request: { ...sendRequest(message, additionalContext, subagentsAllowed), requestKey },
+      watermarkBefore,
+    });
     try {
       // Prepare refs for event handlers — use persistent subagent state
       const refs = buildStreamRefs({ isNewConversation: isNewConversationRef.current });
 
       // Create the event processor using the shared factory
-      const processEvent = createStreamEventProcessor(runtime, streamRouterDeps, assistantMessageId, refs, getTaskIdFromEvent, wasInterruptedRef);
+      const processStreamFrame = createStreamEventProcessor(runtime, streamRouterDeps, assistantMessageId, refs, getTaskIdFromEvent, wasInterruptedRef);
+      const processEvent = (event: SSEEvent) => {
+        admission.observe(event);
+        processStreamFrame(event);
+      };
 
       const result = await sendChatMessageStream(message, workspaceId, effectiveThreadId, {
         onEvent: processEvent,
@@ -2101,7 +2217,6 @@ export function useChatMessages(
         // route/storage update (see the thread_id branch in processEvent).
         onRunIdResolved: (runId, resolvedThreadId) => {
           requestKeyRef.current.clear();
-          latchedRunId = runId;
           currentRunIdRef.current = runId;
           if (resolvedThreadId && resolvedThreadId !== '__default__') {
             threadIdRef.current = resolvedThreadId;
@@ -2127,7 +2242,7 @@ export function useChatMessages(
       // Checked before the disconnect: the server drops the connection right
       // after a retry notice, and the run it names is already over, so there
       // is nothing to reconnect to. A scheduled resend owns finalization.
-      if (refs.retryNotice && settleRetry(refs.retryNotice, currentMessageRef.current || assistantMessageId, 0, { model, reasoningEffort, fastMode }, sendRequest(message, additionalContext, subagentsAllowed))) {
+      if (refs.retryNotice && settleRetry(refs.retryNotice, currentMessageRef.current || assistantMessageId, 0, { model, reasoningEffort, fastMode }, sendRequest(message, additionalContext, subagentsAllowed), null, admission.unstarted())) {
         wasDisconnected = true;
         return;
       }
@@ -2146,8 +2261,9 @@ export function useChatMessages(
           updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, wasInterruptedRef.current ? 'paused' : 'completed'))
         );
         // A send the server never started left nothing to replay, so its
-        // bubbles have to outlive a reload.
-        if (refs.retryNotice?.recovery !== 'resend') markTranscriptPersisted();
+        // bubbles have to outlive a reload and take no turn.
+        if (admission.refused() || refs.retryNotice?.recovery === 'resend') admission.unadmit();
+        else markTranscriptPersisted();
       }
     } catch (err: unknown) {
           // An aborted stream (user hit stop) is intentional, not a failure.
@@ -2159,14 +2275,17 @@ export function useChatMessages(
           // 409 duplicate_request: an earlier copy of this send was already
           // accepted (its response was lost) — adopt that run instead of
           // erroring; the reconnect owns finalization from here.
-          if (adoptDuplicateRun(err, assistantMessageId)) {
+          if (
+            retryFailedDuplicate(err, assistantMessageId, sendRequest(message, additionalContext, subagentsAllowed), { model, reasoningEffort, fastMode })
+            || adoptDuplicateRun(err, assistantMessageId)
+          ) {
             wasDisconnected = true;
             return;
           }
-          markUnadmitted();
+          admission.unadmit();
           if ((err as Record<string, unknown>).status !== 429) console.error('Error sending message:', err);
           const { banner, answered } = refusalBanner(err);
-          setMessageError(banner);
+          if (banner !== null) setMessageError(banner);
           if (answered) {
             // When a banner with a CTA renders, drop the optimistic assistant
             // bubble so the transcript stays clean, as the `internal` SSE
@@ -2417,7 +2536,8 @@ export function useChatMessages(
         );
       } else {
         console.error('[HITL] Error resuming turn:', err);
-        setMessageError((err as Error).message || 'Failed to resume this turn');
+        const { banner } = refusalBanner(err);
+        if (banner !== null) setMessageError(banner);
         setMessages((prev) =>
           updateMessage(prev, assistantMessageId, (msg) => ({
             ...finalizeAssistantMessage(msg, 'failed'),
@@ -2501,6 +2621,9 @@ export function useChatMessages(
    */
   const claimForkPreflight = (): boolean => {
     if (isStreamingRef.current || historyLoadingRef.current) return false;
+    // Each fork reads the turns afresh: a reload since the last read can
+    // have shown other turns than the ones cached.
+    turnCheckpointsRef.current = null;
     sessionEpochRef.current += 1;
     historyWindow.hold();
     acquireStreamOwnership(threadId);
@@ -2539,10 +2662,11 @@ export function useChatMessages(
    * current platform, locale, timezone and runtime. `snapshot` is the render
    * the caller computed `truncateIndex` against. `rerun` marks another attempt
    * at a turn the transcript already shows, a send included, so its user
-   * bubble stays as it is; `spent` counts the automatic resends before it.
+   * bubble stays as it is; `spent` counts the automatic resends before it,
+   * and `send` is the send they resend while the server has kept none of it.
    * `cut` is what a fork's refusal gives back.
    */
-  const streamFromCheckpoint = useStableHandler(async (request: TurnRequest, truncateIndex: number, snapshot: readonly ChatMessage[], modelOptions: ModelOptions = {}, rerun: { spent: number } | null = null, cut: ForkCut | null = null) => {
+  const streamFromCheckpoint = useStableHandler(async (request: TurnRequest, truncateIndex: number, snapshot: readonly ChatMessage[], modelOptions: ModelOptions = {}, rerun: { spent: number; send?: UnstartedSend | null } | null = null, cut: ForkCut | null = null) => {
     const { message, checkpointId, forkFromTurn, retryOf } = request;
     const viaRetryEndpoint = retryOf !== null;
     // Callers check the slot is free: an edit or regenerate already holds it
@@ -2583,13 +2707,28 @@ export function useChatMessages(
 
     // A fork reruns the turn it names. Another attempt (retry, resend) reruns
     // the turn of the bubble it replaces, or the newest one when it appends.
+    // A send opens the next turn, in place of one the server never stored too.
     const projected = projectTurns(snapshot);
+    const replaced = projected[truncateIndex];
+    const plainSend = forkFromTurn === null && !viaRetryEndpoint;
     const turnIndex = forkFromTurn
-      ?? projected[truncateIndex]?.turnIndex
+      ?? replaced?.turnIndex
+      ?? (plainSend && (replaced !== undefined || !rerun) ? newestKnownTurn() + 1 : null)
       ?? newestTurn(snapshot)
       ?? newestKnownTurn() + 1;
     const assistantMessage = createAssistantMessage(assistantMessageId, turnIndex);
     const userMessage = message && !rerun ? createUserMessage(message, turnIndex) : null;
+    // Another attempt at a send the server never stored keeps its message,
+    // which takes the send's turn as it goes again.
+    const before = snapshot[truncateIndex - 1];
+    const resent = plainSend ? rerun?.send ?? null : null;
+    const resentUserId = resent?.userId
+      ?? (rerun && plainSend && replaced?.turnIndex === null && before?.role === 'user' && before.unadmitted ? before.id : null);
+    const sendUserId = userMessage?.id ?? resentUserId;
+    // A resend's send already counted its turn, so the count goes back to
+    // where it stood before the send.
+    const watermarkBefore = resent ? resent.watermarkBefore : lastRenderedTurnIndexRef.current;
+    if (sendUserId !== null && turnIndex > (watermarkBefore ?? -1)) lastRenderedTurnIndexRef.current = turnIndex;
 
     if (userMessage) {
       recentlySentTrackerRef.current.track(message!.trim(), userMessage.timestamp, userMessage.id);
@@ -2606,11 +2745,13 @@ export function useChatMessages(
     // The messages the cut removes take their open edit boxes along, as the
     // box warned of messages after the one edited.
     for (const { message: removed, turnIndex: turn } of projected.slice(truncateIndex)) {
-      if (removed.role === 'user') editDrafts.drop(turn, removed.content);
+      if (removed.role === 'user') editDrafts.drop({ turnIndex: turn, original: removed.content, messageId: removed.id });
     }
 
     setMessages((prev) => {
-      const truncated = prev.slice(0, truncateIndex);
+      const truncated = resentUserId === null
+        ? prev.slice(0, truncateIndex)
+        : prev.slice(0, truncateIndex).map((m) => (m.id === resentUserId ? { ...m, unadmitted: false, turnIndex } : m));
       const newMsgs = userMessage
         ? [...truncated, userMessage, assistantMessage]
         : [...truncated, assistantMessage];
@@ -2625,19 +2766,28 @@ export function useChatMessages(
 
     // One request_key per retry click / fork, reused on a retransmit after a
     // lost response — see createRequestKeyTracker.
-    const requestKey = requestKeyRef.current.take(
+    const requestKey = request.requestKey ?? requestKeyRef.current.take(
       viaRetryEndpoint
         ? `retry|${threadId}`
         : `fork|${threadId}|${checkpointId ?? ''}|${forkFromTurn ?? ''}|${message ?? ''}`,
     );
     // A fork cut turns the server still holds, so a refused one puts them
     // back, its resends included. A retry replaced only its own reply, which
-    // shows the refusal as before.
+    // shows the refusal as before, unless the chat changed under it: then it
+    // reloads as a regenerate does.
     const forkCut: ForkCut | null = forkFromTurn === null
       ? null
       : cut ?? { kind: message ? 'edit' : 'regenerate', transcript: snapshot, draft: null };
-    const recoverRefusedFork = (source: unknown) =>
-      forkCut !== null && forkRefusal.recover(source, forkCut);
+    const recoverRefusedFork = (source: unknown) => forkCut !== null
+      ? forkRefusal.recover(source, forkCut)
+      : isStaleForkRefusal(source) && forkRefusal.recover(source, { kind: 'regenerate', transcript: snapshot, draft: null });
+    const admission = sendUserId === null ? null : trackPlainSend({
+      userId: sendUserId,
+      assistantId: assistantMessageId,
+      turnIndex,
+      request: { ...request, requestKey },
+      watermarkBefore,
+    });
     let wasDisconnected = false;
     const wasInterruptedRef = { current: false };
     try {
@@ -2647,6 +2797,7 @@ export function useChatMessages(
       let refusalFrame: SSEEvent | null = null;
       const processEvent = (event: SSEEvent) => {
         if (forkRefusalMessage(event) !== null) refusalFrame = event;
+        admission?.observe(event);
         processStreamFrame(event);
       };
 
@@ -2670,7 +2821,9 @@ export function useChatMessages(
             latchRunId,
             abortController.signal,
             requestKey,
-            retryOf.runId,
+            // A Retry that names no run retries the newest one this view saw,
+            // which the server refuses when another run came since.
+            retryOf.runId ?? latestRunIdRef.current,
             request.additionalContext,
           )
         : await sendChatMessageStream(message || '', workspaceId, threadId, {
@@ -2681,6 +2834,7 @@ export function useChatMessages(
             timezone: userTimezone,
             checkpointId,
             forkFromTurn,
+            expectedLatestRunId: latestRunIdRef.current,
             llmModel: modelOptions.model || null,
             reasoningEffort: modelOptions.reasoningEffort || null,
             fastMode: modelOptions.fastMode ?? null,
@@ -2705,10 +2859,14 @@ export function useChatMessages(
       }
 
       if (recoverRefusedFork(refusalFrame)) return;
+      if (admission?.refused()) {
+        admission.unadmit();
+        return;
+      }
 
       // A resend that fails the same way counts against the same turn's
       // budget, which is what keeps a chain of notices from looping.
-      if (refs.retryNotice && settleRetry(refs.retryNotice, currentMessageRef.current || assistantMessageId, rerun?.spent ?? 0, modelOptions, request, forkCut)) {
+      if (refs.retryNotice && settleRetry(refs.retryNotice, currentMessageRef.current || assistantMessageId, rerun?.spent ?? 0, modelOptions, request, forkCut, plainSend ? admission?.unstarted() ?? null : null)) {
         wasDisconnected = true;
         return;
       }
@@ -2723,21 +2881,25 @@ export function useChatMessages(
       setMessages((prev) =>
         updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, wasInterruptedRef.current ? 'paused' : 'completed'))
       );
-      // As for a send: nothing to replay when the server started no run.
+      // As for a send: nothing to replay when the server started no run. A
+      // fork stays as it is, since the turn it would replace is still stored.
       if (refs.retryNotice?.recovery !== 'resend') markTranscriptPersisted();
+      else if (plainSend) admission?.unadmit();
     } catch (err: unknown) {
       if ((err as Error)?.name === 'AbortError' || wasStoppedRef.current) {
         return;
       }
       // 409 duplicate_request: an earlier copy of this retry/fork was already
       // accepted (its response was lost) — adopt that run instead of erroring.
-      if (adoptDuplicateRun(err, assistantMessageId)) {
+      if (retryFailedDuplicate(err, assistantMessageId, request, modelOptions) || adoptDuplicateRun(err, assistantMessageId)) {
         wasDisconnected = true;
         return;
       }
       if (recoverRefusedFork(err)) return;
+      admission?.unadmit();
       console.error('[streamFromCheckpoint] Error:', err);
-      setMessageError((err as Error).message || 'Failed to process request');
+      const { banner } = refusalBanner(err);
+      if (banner !== null) setMessageError(banner);
       setMessages((prev) =>
         updateMessage(prev, assistantMessageId, (msg) => ({
           ...finalizeAssistantMessage(msg, 'failed'),
@@ -2766,9 +2928,10 @@ export function useChatMessages(
    * notice's recovery calls for, or marks the reply failed and hands its Retry
    * that recovery. True when the resend owns the turn, so the caller skips its
    * own finalize and cleanup. `request` is what the stream sent, and `cut`
-   * the fork it stands for, which a resend of it carries.
+   * the fork it stands for, and `send` the send the server started no run
+   * of, which a resend of it carries.
    */
-  const settleRetry = (notice: RetryNotice, bubbleId: string, spent: number, modelOptions: ModelOptions, request: TurnRequest | null, cut: ForkCut | null = null): boolean =>
+  const settleRetry = (notice: RetryNotice, bubbleId: string, spent: number, modelOptions: ModelOptions, request: TurnRequest | null, cut: ForkCut | null = null, send: UnstartedSend | null = null): boolean =>
     settleRetryNotice(
       {
         setMessages,
@@ -2776,10 +2939,10 @@ export function useChatMessages(
         request,
         failedRunId: currentRunIdRef.current,
         resend: (next, truncateIndex, snapshot, nextSpent) => {
-          void streamFromCheckpoint(next, truncateIndex, snapshot, modelOptions, { spent: nextSpent }, cut);
+          void streamFromCheckpoint(next, truncateIndex, snapshot, modelOptions, { spent: nextSpent, send }, cut);
         },
         holdRetry: (held) => {
-          heldRetryRef.current = held && { ...held, cut };
+          if (held) heldRetriesRef.current.set(held.bubbleId, { ...held, cut });
         },
         wasStoppedRef,
         sessionEpochRef,
@@ -2798,9 +2961,8 @@ export function useChatMessages(
    * its first checkpoint has no /turns entry of its own: its message forks
    * where the next entry's does, from the state before both, so the first
    * entry at or after the turn serves. The thread's first message forks from
-   * the empty root the server names for it. With no entry at all, a message
-   * this view saw refused before admission has nothing to replace and goes
-   * out as a send; for any other the chat changed since this view read it.
+   * the empty root the server names for it. With no entry at all, the chat
+   * changed since this view read it.
    */
   const streamEdit = async (
     text: string,
@@ -2812,12 +2974,7 @@ export function useChatMessages(
   ) => {
     const turn = turnsData.turns.find((entry) => entry.turn_index >= turnIndex);
     if (!turn) {
-      const edited = cut.transcript[msgIndex];
-      if (edited?.role === 'user' && edited.unadmitted) {
-        await streamFromCheckpoint(sendRequest(text, null), msgIndex, cut.transcript, modelOptions);
-      } else {
-        refuseStaleForkPreflight(cut);
-      }
+      refuseStaleForkPreflight(cut);
       return;
     }
     // Only a resume has no edit checkpoint, and its answer has no message bubble.
@@ -2851,11 +3008,28 @@ export function useChatMessages(
 
     // The turn the bubble belongs to, never its position: a paged transcript
     // starts mid-thread.
-    const turnIndex = projectTurns(transcript)[msgIndex].turnIndex;
+    const projected = projectTurns(transcript);
+    const ownTurn = projected[msgIndex].turnIndex;
+    const draft: EditDraft = { threadId: threadIdRef.current, turnIndex: ownTurn, original: (editTarget as UserMessage).content, messageId, text: newContent };
+    // A message the server never stored has no turn of its own. Its edit takes
+    // the place of the first stored turn after it, so it replaces everything
+    // after it as any edit does.
+    const turnIndex = ownTurn ?? projected.slice(msgIndex + 1).find(hasTurn)?.turnIndex ?? null;
+
+    // With no stored turn after it, nothing after it reached the server
+    // either, and the edit goes out as a send in their place.
+    if (turnIndex === null) {
+      if (!claimForkPreflight()) {
+        returnEditDraft(draft);
+        return;
+      }
+      await streamFromCheckpoint(sendRequest(newContent, null), msgIndex, transcript, modelOptions);
+      return;
+    }
     const cut: ForkCut = {
       kind: 'edit',
       transcript,
-      draft: { threadId: threadIdRef.current, turnIndex, original: (editTarget as UserMessage).content, text: newContent },
+      draft,
     };
 
     // A turn holds the slot, so the edit waits in its box for the user.
@@ -2897,6 +3071,9 @@ export function useChatMessages(
     // continues), never its position: a paged transcript starts mid-thread.
     const projected = projectTurns(transcript);
     const turnIndex = projected[msgIndex].turnIndex;
+    // A reply the server never stored has no turn to run again; its Retry
+    // sends its message.
+    if (turnIndex === null) return;
 
     // A turn can render as several bubbles (a steered turn's pre-steering half
     // and continuations, the halves of a stream a reconnect resumed) but has
@@ -2904,10 +3081,12 @@ export function useChatMessages(
     // without the mid-run steering. Normalize truncation back to the turn's
     // first assistant bubble so the stale halves and the steering bubbles leave
     // the transcript together with the re-run. Not past the message the turn
-    // runs from: a refused send's bubbles above it can share the turn's count.
+    // runs from. A send the server never stored holds no turn, and is passed
+    // over.
     let truncateIndex = msgIndex;
     for (let i = msgIndex - 1; i >= 0; i--) {
       const { message, turnIndex: turn } = projected[i];
+      if (turn === null) continue;
       if (opensTurn(message)) break;
       if (message.role !== 'assistant') continue;
       if (turn !== turnIndex) break;
@@ -2935,9 +3114,7 @@ export function useChatMessages(
       ({ message, turnIndex: turn }, i) => i < truncateIndex && turn === turnIndex && message.role === 'user' && !isSteeringUserMessage(message),
     );
     const userMessage = userIndex === -1 ? null : transcript[userIndex] as UserMessage;
-    // A message the server never admitted shares its number with the turn the
-    // server gave the next send, so that turn's entry is not its own.
-    const turn = userMessage?.unadmitted ? undefined : turnsData.turns.find((entry) => entry.turn_index === turnIndex);
+    const turn = turnsData.turns.find((entry) => entry.turn_index === turnIndex);
     if (turn) {
       // Truncate at the turn's first assistant bubble (keep everything before it, including user msg)
       await streamFromCheckpoint(forkRequest(null, turn.regenerate_checkpoint_id, turnIndex), truncateIndex, transcript, modelOptions, null, cut);
@@ -2949,9 +3126,9 @@ export function useChatMessages(
     }
     // No checkpoint holds the turn's message to replay. The reply's own Retry
     // holds what its send carried, so it goes as that Retry would.
-    const held = heldRetryRef.current;
-    if (held && held.bubbleId === messageId) {
-      heldRetryRef.current = null;
+    const held = heldRetriesRef.current.get(messageId);
+    if (held) {
+      heldRetriesRef.current.delete(messageId);
       await streamFromCheckpoint(held.request, truncateIndex, transcript, modelOptions, { spent: 0 }, held.cut);
       return;
     }
@@ -2981,9 +3158,10 @@ export function useChatMessages(
     const transcript = liveMessages.get();
     const lastErrorIndex = transcript.findLastIndex((m) => m.role === 'assistant' && (m as AssistantMessage).error);
     const truncateIndex = lastErrorIndex !== -1 ? lastErrorIndex : transcript.length;
-    const held = heldRetryRef.current;
-    const request = retryRequestFor(held, transcript[lastErrorIndex]?.id);
-    heldRetryRef.current = null;
+    const bubbleId = transcript[lastErrorIndex]?.id;
+    const held = (bubbleId && heldRetriesRef.current.get(bubbleId)) || null;
+    const request = retryRequestFor(held, bubbleId);
+    if (bubbleId) heldRetriesRef.current.delete(bubbleId);
     // A held fork resend carries the fork it stands for, which a refusal of
     // it puts back.
     await streamFromCheckpoint(request, truncateIndex, transcript, modelOptions, { spent: 0 }, held && request === held.request ? held.cut : null);

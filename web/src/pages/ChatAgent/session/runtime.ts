@@ -106,6 +106,12 @@ export interface HistoryRuntime {
   historyPendingTaskToolCallIdsRef: Ref<string[]>;
   // stable containers, ref-current reads — shared with other lanes
   currentMessageRef: Ref<string | null>;
+  /** The thread's newest run as this view has seen it: the replay names it,
+   *  and every run the view latches afterwards is newer. A fork sends it. */
+  latestRunIdRef: Ref<string | null>;
+  /** Counts the live writes of that run (session/latestRun.ts): a replay
+   *  that ran across one keeps the live run over its own. */
+  latestRunEpochRef: Ref<number>;
   lastEventIdRef: Ref<number | string | null>;
   renderedInterruptIdsRef: Ref<Set<string>>;
   subagentHistory: SubagentHistoryStore;
@@ -148,6 +154,8 @@ export interface StreamRuntime {
   currentToolCallIdRef: Ref<string | null>;
   currentMessageRef: Ref<string | null>;
   currentRunIdRef: Ref<string | null>;
+  latestRunIdRef: Ref<string | null>;
+  latestRunEpochRef: Ref<number>;
   steeringAtOrderRef: Ref<number | null>;
   pendingPTCBackfillRef: Ref<Map<string, string>>;
   // stable containers, ref-current reads — shared with other lanes
@@ -193,6 +201,8 @@ export interface RecoveryRuntime {
   // stable containers, ref-current reads — shared with other lanes
   threadIdRef: Ref<string>;
   currentRunIdRef: Ref<string | null>;
+  latestRunIdRef: Ref<string | null>;
+  latestRunEpochRef: Ref<number>;
   lastEventIdRef: Ref<number | string | null>;
   currentMessageRef: Ref<string | null>;
   contentOrderCounterRef: Ref<number>;

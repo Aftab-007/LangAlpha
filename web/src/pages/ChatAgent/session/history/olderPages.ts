@@ -141,8 +141,11 @@ export async function loadOlderHistoryPage(
     lastRenderedTurnIndexRef: { current: null },
     newMessagesStartIndexRef: { current: 0 },
     historyPendingTaskToolCallIdsRef: { current: [] },
-    // No turn on an older page is one this view just sent or is streaming.
+    // No turn on an older page is one this view just sent or is streaming,
+    // and the thread's newest run is the newest page's to name.
     currentMessageRef: { current: null },
+    latestRunIdRef: { current: null },
+    latestRunEpochRef: { current: 0 },
     recentlySentTrackerRef: { current: createRecentlySentTracker() },
     lastEventIdRef: { current: null },
     // A copy: a re-raise the newer pages already carded stays a re-raise, and

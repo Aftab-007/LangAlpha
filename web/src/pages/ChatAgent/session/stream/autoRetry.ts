@@ -46,6 +46,9 @@ export interface TurnRequest {
   /** The send's subagents pick. A resend may be what creates the thread, so
    * it carries the pick too. */
   subagentsAllowed?: boolean;
+  /** A send the server may never have seen goes again under its first key,
+   * so a copy that did arrive is adopted rather than doubled. */
+  requestKey?: string;
 }
 
 export const sendRequest = (
@@ -60,7 +63,8 @@ export const forkRequest = (
   forkFromTurn: number,
 ): TurnRequest => ({ message, additionalContext: null, checkpointId, forkFromTurn, retryOf: null });
 
-const retryRequest = (
+/** A Retry of the run `runId`, or of the thread's latest one for null. */
+export const retryRequest = (
   runId: string | null,
   additionalContext: Record<string, unknown>[] | null,
 ): TurnRequest => ({ message: null, additionalContext, checkpointId: null, forkFromTurn: null, retryOf: { runId } });
