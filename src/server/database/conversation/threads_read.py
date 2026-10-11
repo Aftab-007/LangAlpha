@@ -117,6 +117,15 @@ _TURN_COUNT_LATERAL = """
     ) tc ON TRUE
 """
 
+# A thread's title, or for an untitled one its first message: a hand-off's
+# thread runs before its title is written.
+_TITLE_OR_FIRST_QUERY = """
+    COALESCE(NULLIF(t.title, ''), (
+        SELECT left(q.content, 120) FROM conversation_queries q
+        WHERE q.conversation_thread_id = t.conversation_thread_id
+        ORDER BY q.turn_index ASC LIMIT 1
+    ))"""
+
 
 async def get_workspace_threads(
     workspace_id: str,
@@ -303,12 +312,7 @@ async def get_recent_threads_for_user(
             await cur.execute(
                 f"""
                 SELECT t.conversation_thread_id, t.workspace_id, t.updated_at,
-                       t.workspace_name,
-                       COALESCE(NULLIF(t.title, ''), (
-                           SELECT left(q.content, 120) FROM conversation_queries q
-                           WHERE q.conversation_thread_id = t.conversation_thread_id
-                           ORDER BY q.turn_index ASC LIMIT 1
-                       )) AS title,
+                       t.workspace_name, {_TITLE_OR_FIRST_QUERY} AS title,
                        {_LATEST_ATTEMPT_LATERAL_COLS}
                 FROM (
                     SELECT t.conversation_thread_id, t.workspace_id, t.title,
@@ -329,6 +333,43 @@ async def get_recent_threads_for_user(
                 (user_id, exclude_thread_id, limit),
             )
             return [dict(row) for row in await cur.fetchall()]
+
+
+async def get_thread_labels(
+    thread_ids: List[str], user_id: str
+) -> List[Dict[str, Any]]:
+    """Workspace and title labels for ``thread_ids``, oldest thread first.
+
+    Threads of another user or in a deleted workspace are left out. Non-UUID
+    ids are dropped pre-bind.
+    """
+    normalized = [nid for nid in (normalize_uuid(t) for t in thread_ids) if nid]
+    if not normalized:
+        return []
+    async with pool.get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                f"""
+                SELECT t.conversation_thread_id, t.workspace_id,
+                       w.name AS workspace_name,
+                       {_TITLE_OR_FIRST_QUERY} AS title
+                FROM conversation_threads t
+                JOIN workspaces w ON t.workspace_id = w.workspace_id
+                WHERE t.conversation_thread_id = ANY(%s)
+                  AND w.user_id = %s AND w.status != 'deleted'
+                ORDER BY t.created_at ASC, t.conversation_thread_id ASC
+                """,
+                (normalized, user_id),
+            )
+            return [
+                {
+                    "thread_id": str(row["conversation_thread_id"]),
+                    "workspace_id": str(row["workspace_id"]),
+                    "workspace_name": row["workspace_name"],
+                    "title": row["title"],
+                }
+                for row in await cur.fetchall()
+            ]
 
 
 # Feed snapshot in one statement (v6 §2.2). `owned` is the pre-filter set —

@@ -145,7 +145,7 @@ async def test_status_surfaces_recent_run_ids_newest_first():
     cache.client.lists[keys.flash_rb_done_key(flash)] = ["rb-run-2", "rb-run-1"]
 
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
-        resp = await status.read_report_back_status(flash)
+        resp = await status.read_report_back_status(flash, "user-1")
 
     assert resp["recent_report_back_run_ids"] == ["rb-run-2", "rb-run-1"]
     # Drained thread: no live members, but the recent list is still served.
@@ -158,6 +158,6 @@ async def test_status_recent_run_ids_empty_when_key_absent():
     cache = _FakeCache()
 
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
-        resp = await status.read_report_back_status("flash-1")
+        resp = await status.read_report_back_status("flash-1", "user-1")
 
     assert resp["recent_report_back_run_ids"] == []

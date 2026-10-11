@@ -104,6 +104,8 @@ curl -N "http://localhost:8000/api/v1/threads/THREAD_ID/messages/stream?run_id=R
 curl "http://localhost:8000/api/v1/threads/THREAD_ID/status"
 ```
 
+Besides the run state, the response reports background work that will post into the thread: `pending_report_back`, `report_back_run_id`, `recent_report_back_run_ids`, and `owed_threads`, the dispatched threads a report is still owed by (`[{thread_id, workspace_id, workspace_name, title}]`, oldest first; `null` when unknown). `?fields=report_back` returns only those fields, skipping the checkpoint read.
+
 ---
 
 ## Resuming a Historical Conversation

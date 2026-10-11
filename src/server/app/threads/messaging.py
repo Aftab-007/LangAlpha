@@ -998,12 +998,15 @@ async def get_thread_status(
         raise HTTPException(status_code=404, detail="Thread not found")
     if meta["user_id"] != x_user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+    # "" for a thread with no kind, so the report-back read takes it as known
+    # rather than looking the thread up again.
+    msg_type = meta.get("msg_type") or ""
 
     if fields == "report_back":
         from src.server.services.report_back.flash.status import read_report_back_slice
 
         return await read_report_back_slice(
-            thread_id, msg_type=meta.get("msg_type") or ""
+            thread_id, msg_type=msg_type, user_id=meta["user_id"]
         )
 
     from src.server.services.thread_status import read_thread_runtime_status
@@ -1011,7 +1014,8 @@ async def get_thread_status(
     return await read_thread_runtime_status(
         thread_id,
         is_shared=bool(meta["is_shared"]),
-        msg_type=meta.get("msg_type"),
+        msg_type=msg_type,
+        user_id=meta["user_id"],
     )
 
 

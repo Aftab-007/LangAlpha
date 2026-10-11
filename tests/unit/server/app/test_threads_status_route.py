@@ -45,13 +45,14 @@ async def test_status_report_back_field_uses_cheap_path(threads_client):
         "report_back_run_id": "rb-1",
         "recent_report_back_run_ids": ["rb-0"],
     }
-    cheap.assert_awaited_once_with(TID)
+    cheap.assert_awaited_once_with(TID, CALLER)
     full.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_status_full_path_threads_is_shared(threads_client):
-    """is_shared resolved while authorizing is passed into read_thread_runtime_status."""
+    """What authorizing read (share flag, kind, owner) is passed into
+    read_thread_runtime_status, so it never reads the thread again."""
     meta = AsyncMock(return_value={"user_id": CALLER, "is_shared": True})
     full = AsyncMock(return_value={"thread_id": TID, "is_shared": True})
     with (
@@ -61,7 +62,7 @@ async def test_status_full_path_threads_is_shared(threads_client):
         resp = await threads_client.get(f"/api/v1/threads/{TID}/status")
 
     assert resp.status_code == 200
-    full.assert_awaited_once_with(TID, is_shared=True, msg_type=None)
+    full.assert_awaited_once_with(TID, is_shared=True, msg_type="", user_id=CALLER)
 
 
 @pytest.mark.asyncio

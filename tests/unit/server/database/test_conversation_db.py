@@ -833,6 +833,50 @@ async def test_get_workspace_threads_invalid_sort(mock_db_connection, mock_curso
     assert "DESC" in select_sql
 
 
+@pytest.mark.asyncio
+async def test_thread_labels_drop_non_uuids_and_scope_to_the_owner(
+    mock_db_connection, mock_cursor
+):
+    """One malformed watch member must not 22P02 the batch."""
+    from src.server.database.conversation.threads_read import get_thread_labels
+
+    member, workspace = (str(uuid.uuid4()) for _ in range(2))
+    mock_cursor.fetchall.return_value = [
+        {
+            "conversation_thread_id": uuid.UUID(member),
+            "workspace_id": uuid.UUID(workspace),
+            "workspace_name": "Semis",
+            "title": "NVDA margins",
+        }
+    ]
+
+    rows = await get_thread_labels([member, "not-a-uuid"], "user-1")
+
+    sql, params = mock_cursor.execute.call_args.args
+    assert params == ([member], "user-1")
+    assert "w.user_id = %s AND w.status != 'deleted'" in sql
+    assert "ORDER BY t.created_at ASC" in sql
+    # Ids leave as strings: the slice is JSON-encoded on the watch stream.
+    assert rows == [
+        {
+            "thread_id": member,
+            "workspace_id": workspace,
+            "workspace_name": "Semis",
+            "title": "NVDA margins",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_thread_labels_with_no_valid_ids_skip_the_database(
+    mock_db_connection, mock_cursor
+):
+    from src.server.database.conversation.threads_read import get_thread_labels
+
+    assert await get_thread_labels(["nope"], "user-1") == []
+    mock_cursor.execute.assert_not_awaited()
+
+
 # ===========================================================================
 # Thread sharing
 # ===========================================================================
