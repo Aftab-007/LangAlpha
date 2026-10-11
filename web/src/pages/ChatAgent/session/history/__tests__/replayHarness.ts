@@ -41,6 +41,8 @@ export function buildRuntime() {
     newMessagesStartIndexRef: ref(0),
     historyPendingTaskToolCallIdsRef: ref([] as string[]),
     currentMessageRef: ref<string | null>(null),
+    latestRunIdRef: ref<string | null>(null),
+    latestRunEpochRef: ref(0),
     lastEventIdRef: ref<number | string | null>(null),
     renderedInterruptIdsRef: ref(new Set<string>()),
     subagentHistory: createSubagentHistoryStore(),

@@ -993,6 +993,16 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     expect(hook.result.current.messageError).toBe(message);
   });
 
+  it.each([
+    ['a bare server error', Object.assign(new Error('HTTP error! status: 500'), { status: 500 })],
+    ['a lost connection', new TypeError('Failed to fetch')],
+  ])('a steer that failed on %s says it was not sent, never in the raw text', async (_case, failure) => {
+    const hook = await mount();
+    await steerRefusedMidTurn(hook, failure);
+
+    expect(hook.result.current.messageError).toBe('Failed to send message');
+  });
+
   it('an attach that drops after a steer closes the todo list on the bubble before the steer', async () => {
     const hook = await openMidTurn(inTurn(
       failsAfter([

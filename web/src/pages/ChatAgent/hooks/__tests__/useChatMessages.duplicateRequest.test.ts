@@ -26,11 +26,13 @@ vi.mock('../utils/threadStorage', () => ({
 
 vi.mock('../../utils/api', async () => (await import('./chatHookHarness')).apiMockModule());
 
-import { sendChatMessageStream, getWorkflowStatus } from '../../utils/api';
+import { sendChatMessageStream, getWorkflowStatus, replayThreadHistory } from '../../utils/api';
+import { getStoredThreadId } from '../utils/threadStorage';
 import { useChatMessages } from '../useChatMessages';
 
 const mockSendStream = sendChatMessageStream as Mock;
 const mockStatus = getWorkflowStatus as Mock;
+const mockReplay = replayThreadHistory as Mock;
 
 // onRunIdResolved and requestKey live in the options object (4th arg).
 const latchOf = (args: unknown[]) => (args[3] as { onRunIdResolved: (rid: string, tid: string) => void }).onRunIdResolved;
@@ -129,5 +131,34 @@ describe('useChatMessages — request_key dedup (409 duplicate_request)', () => 
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
     expect(second).not.toBe(first);
+  });
+
+  it('takes the thread a new chat\'s first message landed in, when its Retry finds the copy already answered', async () => {
+    // A new chat whose thread pre-create failed (this mock has none), so its
+    // first send went out with no thread. The server made one and accepted the
+    // send, but the response was lost, so the view never learned that thread.
+    (getStoredThreadId as Mock).mockReturnValue('__default__');
+    try {
+      mockSendStream.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      const { result } = renderHookWithProviders(() => useChatMessages('ws-test'));
+      await act(async () => {
+        await result.current.handleSendMessage('hello');
+      });
+      expect(result.current.threadId).toBe('__default__');
+
+      mockSendStream.mockRejectedValueOnce(
+        duplicateError({ thread_id: 'th-dup', run_id: 'run-dup', run_status: 'completed' }),
+      );
+      await act(async () => {
+        await result.current.handleRetry();
+      });
+
+      // The view moves to that thread and loads the turn the copy answered.
+      await waitFor(() => expect(result.current.threadId).toBe('th-dup'));
+      await waitFor(() => expect(mockReplay.mock.calls.some(([tid]) => tid === 'th-dup')).toBe(true));
+      expect(result.current.messageError).toBe(null);
+    } finally {
+      (getStoredThreadId as Mock).mockReturnValue(null);
+    }
   });
 });

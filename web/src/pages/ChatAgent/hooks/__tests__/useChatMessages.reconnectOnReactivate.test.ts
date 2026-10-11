@@ -600,7 +600,8 @@ describe('useChatMessages — reconnect-on-reactivation (cached view, run starte
     /** Starts an edit of the last question whose checkpoint read waits for answer(). */
     const editHeldInPreflight = async (result: { current: ReturnType<typeof useChatMessages> }) => {
       let answer!: (data: unknown) => void;
-      mockTurns.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+      let fail!: (error: Error) => void;
+      mockTurns.mockImplementationOnce(() => new Promise((resolve, reject) => { answer = resolve; fail = reject; }));
       const lastQuestion = result.current.messages.filter((m) => m.role === 'user').at(-1)!;
       let edited: Promise<unknown> = Promise.resolve();
       await act(async () => {
@@ -609,6 +610,7 @@ describe('useChatMessages — reconnect-on-reactivation (cached view, run starte
       });
       return {
         answer: (data: unknown) => act(async () => { answer(data); await new Promise((r) => setTimeout(r, 0)); }),
+        fail: (error: Error) => act(async () => { fail(error); await new Promise((r) => setTimeout(r, 0)); }),
         settled: () => edited,
       };
     };
@@ -637,15 +639,19 @@ describe('useChatMessages — reconnect-on-reactivation (cached view, run starte
 
     it('runs the reload that waited once a failed checkpoint read hands the transcript back', async () => {
       const { result, answer: answerStatus } = await reloadHeldInStatus();
+      const lastQuestion = result.current.messages.filter((m) => m.role === 'user').at(-1)!;
       const edit = await editHeldInPreflight(result);
       await answerStatus();
       await settleMountEffect();
 
-      await edit.answer({ turns: [] });
+      await edit.fail(new Error('network down'));
       await edit.settled();
       await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
       expect(mockSend).not.toHaveBeenCalled();
       expect(result.current.messages.some((m) => m.content === 'an edited question')).toBe(false);
+      // The edit given back stays open over its message through the reload.
+      expect(result.current.editDrafts.get({ turnIndex: lastQuestion.turnIndex as number, original: lastQuestion.content as string })).toBe('an edited question');
     });
 
     it('is refused while a replay is rebuilding the transcript it would cut', async () => {
@@ -671,7 +677,85 @@ describe('useChatMessages — reconnect-on-reactivation (cached view, run starte
       });
       expect(mockTurns).not.toHaveBeenCalled();
       expect(result.current.messages.some((m) => m.content === 'an edited question')).toBe(false);
+      // The edit waits in its box rather than vanishing.
+      expect(result.current.editDrafts.get({ turnIndex: lastQuestion.turnIndex as number, original: lastQuestion.content as string })).toBe('an edited question');
       await act(async () => { finishReplay(); });
     });
+  });
+});
+
+describe('useChatMessages — an edit open while the view follows a turn started elsewhere', () => {
+  const replayOf = (questions: string[]) => (_tid: string, onEvent: (e: Record<string, unknown>) => void) => {
+    questions.forEach((content, turn) => onEvent({ event: 'user_message', turn_index: turn, content, role: 'user' }));
+    return Promise.resolve();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReconnect.mockResolvedValue({ disconnected: false, aborted: false });
+    mockStatus.mockResolvedValue(threadStatus());
+  });
+
+  /** Mounts on two turns with an edit typed over question 1, then follows a
+   *  run started elsewhere whose reload shows `after`. */
+  async function followWithEditOpen(after: string[], text = 'question 1 half typed') {
+    mockReplay.mockImplementation(replayOf(['question 0', 'question 1']));
+    const hook = renderHookWithProviders(() => useChatMessages('ws', 'th'));
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(1));
+    await settleMountEffect();
+    act(() => hook.result.current.editDrafts.put({ turnIndex: 1, original: 'question 1', text }));
+
+    mockReplay.mockImplementation(replayOf(after));
+    mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-elsewhere' }));
+    await act(async () => {
+      await hook.result.current.reconnectIfStaleRun();
+    });
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
+    return hook;
+  }
+
+  it('keeps the edit open over its message through the reload', async () => {
+    const { result } = await followWithEditOpen(['question 0', 'question 1', 'question 2']);
+    expect(result.current.editDrafts.get({ turnIndex: 1, original: 'question 1' })).toBe('question 1 half typed');
+    expect(result.current.returnedEdit).toBeNull();
+    expect(result.current.messageError).toBeNull();
+  });
+
+  it('gives the composer an edit whose message an edit elsewhere replaced', async () => {
+    const { result } = await followWithEditOpen(['question 0', 'question 1 from elsewhere']);
+    expect(result.current.editDrafts.get({ turnIndex: 1, original: 'question 1' })).toBeUndefined();
+    expect(result.current.returnedEdit).toBe('question 1 half typed');
+    expect(result.current.messageError).toEqual({ message: 'chat.forkStaleEdit', kind: 'notice' });
+  });
+
+  it('lets go of a box left as it opened when its message is gone', async () => {
+    const { result } = await followWithEditOpen(['question 0', 'question 1 from elsewhere'], 'question 1');
+    expect(result.current.editDrafts.get({ turnIndex: 1, original: 'question 1' })).toBeUndefined();
+    expect(result.current.returnedEdit).toBeNull();
+    expect(result.current.messageError).toBeNull();
+  });
+
+  it("keeps a thread's edit off another thread whose messages read the same", async () => {
+    mockReplay.mockImplementation(replayOf(['question 0', 'question 1']));
+    let threadId = 'th';
+    const { result, rerender } = renderHookWithProviders(() => useChatMessages('ws', threadId));
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(1));
+    await settleMountEffect();
+    act(() => result.current.editDrafts.put({ turnIndex: 1, original: 'question 1', text: 'written on th' }));
+
+    threadId = 'th-2';
+    rerender();
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
+    expect(result.current.messages.some((m) => m.id === 'history-user-1')).toBe(true);
+    expect(result.current.editDrafts.get({ turnIndex: 1, original: 'question 1' })).toBeUndefined();
+    expect(result.current.returnedEdit).toBeNull();
+
+    threadId = 'th';
+    rerender();
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
+    expect(result.current.editDrafts.get({ turnIndex: 1, original: 'question 1' })).toBe('written on th');
   });
 });

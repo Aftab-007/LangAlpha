@@ -10,6 +10,7 @@ import React from 'react';
 import { vi } from 'vitest';
 import { act } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
+import { createEditDraftStore } from '../../hooks/utils/editDrafts';
 
 export const WORKSPACE_ID = 'ws-harness';
 export const THREAD_ID = 'thread-harness-1';
@@ -89,8 +90,11 @@ const baseChatState = () => ({
   fallbackSuggestion: null,
   clearFallbackSuggestion: vi.fn(),
   messageError: null as string | null,
-  returnedSteering: null,
+  returnedSteering: null as string | null,
   clearReturnedSteering: vi.fn(),
+  returnedEdit: null as string | null,
+  clearReturnedEdit: vi.fn(),
+  editDrafts: createEditDraftStore(() => 'thread-1'),
   handleSendMessage: vi.fn(),
   stopWorkflow: vi.fn(),
   stopCompaction: vi.fn(),
