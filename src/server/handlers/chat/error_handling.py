@@ -246,6 +246,7 @@ async def handle_workflow_error(
         RunSlotBusyError,
         RunCoordinator,
         RunOutcome,
+        StaleForkError,
         protected_finalize,
     )
 
@@ -422,19 +423,26 @@ async def handle_workflow_error(
     # QueryConflictError is the loser of an unfenced cross-instance race (two
     # servers sharing app tables with the guard disabled): its START rolled
     # back on the differing-content query collision, so it is a protocol 409
-    # like its siblings, never a workflow failure.
+    # like its siblings, never a workflow failure. StaleForkError is the
+    # route's stale_fork refusal arriving late: the branch moved between the
+    # route's check and START, which refused before truncating anything.
     if isinstance(
         e,
         (
             RunSlotBusyError,
             TaskRunSlotBusyError,
             AttemptConflictError,
+            StaleForkError,
             qr_db.QueryConflictError,
         ),
     ):
         await scope.release_slot()
         if isinstance(e, (RunSlotBusyError, TaskRunSlotBusyError)):
             detail = admission_conflict_detail("running")
+        elif isinstance(e, StaleForkError):
+            from src.server.handlers.checkpoint_handler import stale_fork_detail
+
+            detail = stale_fork_detail()
         elif isinstance(e, qr_db.QueryConflictError):
             detail = {
                 "code": "turn_conflict",

@@ -9,13 +9,16 @@ from collections import defaultdict
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 from fastapi import HTTPException
 from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+if TYPE_CHECKING:
+    from src.server.database.runs.lifecycle import NewestCheckpoint
 
 
 def _setup():
@@ -479,6 +482,99 @@ async def walk_current_branch_boundaries(
         if boundary.answered_checkpoint_id in starts:
             boundary.answered_checkpoint_id = None
     return boundaries, tip_id
+
+
+async def newest_checkpoint(
+    checkpointer: Any, thread_id: str
+) -> "NewestCheckpoint | None":
+    """The thread's newest root checkpoint, and the run whose graph step
+    wrote it.
+
+    ``build_graph_config`` stamps every step of a run with the run's id; an
+    update written beside a run (a stop's flush, a handover) is unstamped, so
+    the walk reads past updates to the step beneath them.
+    """
+    from src.server.database.runs.lifecycle import NewestCheckpoint
+
+    cp = await checkpointer.aget_tuple(build_checkpoint_config(thread_id))
+    if cp is None:
+        return None
+    checkpoint_id = cp.config["configurable"]["checkpoint_id"]
+    while (cp.metadata or {}).get("source") == "update" and cp.parent_config:
+        parent = await checkpointer.aget_tuple(cp.parent_config)
+        if parent is None:
+            break
+        cp = parent
+    return NewestCheckpoint(checkpoint_id, (cp.metadata or {}).get("run_id"))
+
+
+# Parent links from the tip down to the target, the same LATERAL PK probe as
+# the branch walk. Checkpoint ids are uuid6, ordered by time, so an ancestor
+# always sorts below its child and the walk stops once it passes the target.
+_ON_BRANCH_SQL = """
+    WITH RECURSIVE branch AS (
+        SELECT checkpoint_id, parent_checkpoint_id
+        FROM checkpoints
+        WHERE thread_id = %(thread_id)s AND checkpoint_ns = ''
+          AND checkpoint_id = %(tip)s
+      UNION ALL
+        SELECT p.checkpoint_id, p.parent_checkpoint_id
+        FROM branch b CROSS JOIN LATERAL (
+            SELECT c.checkpoint_id, c.parent_checkpoint_id
+            FROM checkpoints c
+            WHERE c.thread_id = %(thread_id)s AND c.checkpoint_ns = ''
+              AND c.checkpoint_id = b.parent_checkpoint_id
+            LIMIT 1
+        ) p
+        WHERE b.checkpoint_id COLLATE "C" > %(target)s COLLATE "C"
+    )
+    SELECT EXISTS (
+        SELECT 1 FROM branch WHERE checkpoint_id = %(target)s
+    ) AS on_branch
+"""
+
+
+async def checkpoint_on_branch(
+    thread_id: str,
+    checkpoint_id: str,
+    tip: str,
+    *,
+    checkpointer: Any = None,
+) -> bool:
+    """True when ``checkpoint_id`` is ``tip`` or one of its ancestors.
+
+    The checkpointer defaults to the app's, read at call time, so a fork can
+    carry this check into START before the graph is built.
+    """
+    checkpointer = checkpointer or _setup().checkpointer
+    if checkpointer is None:
+        return False
+    if isinstance(checkpointer, AsyncPostgresSaver):
+        conn_or_pool = checkpointer.conn
+        if isinstance(conn_or_pool, AsyncConnectionPool):
+            conn_ctx = conn_or_pool.connection()
+        else:
+            conn_ctx = nullcontext(conn_or_pool)
+        async with conn_ctx as conn, conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                _ON_BRANCH_SQL,
+                {"thread_id": thread_id, "tip": tip, "target": checkpoint_id},
+            )
+            row = await cur.fetchone()
+        return bool(row and row["on_branch"])
+    config: dict[str, Any] | None = build_checkpoint_config(thread_id, tip)
+    while config is not None:
+        cp = await checkpointer.aget_tuple(config)
+        if cp is None:
+            return False
+        current = cp.config["configurable"]["checkpoint_id"]
+        if current == checkpoint_id:
+            return True
+        # Ids are uuid6, ordered by time, and a parent is older than its child.
+        if current < checkpoint_id:
+            return False
+        config = cp.parent_config
+    return False
 
 
 async def update_at_commit(

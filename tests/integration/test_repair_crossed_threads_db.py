@@ -165,6 +165,7 @@ async def _turn(saver, thread_id: str, graph, text: str) -> str:
     with the turn stamped on its config, the run finalized at its tip. The
     input carries no id, as production's legacy inputs did not."""
     from src.server.database.runs.lifecycle import QuerySpec, RunOutcome, finalize_run, start_run
+    from src.server.utils.checkpoint_helpers import newest_checkpoint
 
     run_id = str(uuid.uuid4())
     row = await start_run(
@@ -179,14 +180,14 @@ async def _turn(saver, thread_id: str, graph, text: str) -> str:
         "metadata": {"run_id": run_id, "turn_index": row["turn_index"]},
     }
     await graph.ainvoke({"messages": [HumanMessage(text)]}, config)
-    tip = await _newest(saver, thread_id)
+    newest = await newest_checkpoint(saver, thread_id)
     await finalize_run(
         run_id=run_id,
         thread_id=thread_id,
         outcome=RunOutcome(status="completed"),
-        checkpoint_id=tip,
+        newest=newest,
     )
-    return tip
+    return newest.checkpoint_id
 
 
 async def _newest(saver, thread_id: str) -> str:

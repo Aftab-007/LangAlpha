@@ -54,6 +54,7 @@ async def _thread(saver, workspace_id: str, *, dead: int | None) -> str:
         finalize_run,
         start_run,
     )
+    from src.server.utils.checkpoint_helpers import newest_checkpoint
 
     graph = _graph(saver)
     thread_id = str(uuid.uuid4())
@@ -83,12 +84,11 @@ async def _thread(saver, workspace_id: str, *, dead: int | None) -> str:
             "metadata": {"run_id": run_id, "turn_index": turn_index},
         }
         await graph.ainvoke({"messages": [HumanMessage(content=text)]}, config)
-        state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
         await finalize_run(
             run_id=run_id,
             thread_id=thread_id,
             outcome=RunOutcome(status="completed"),
-            checkpoint_id=state.config["configurable"]["checkpoint_id"],
+            newest=await newest_checkpoint(graph.checkpointer, thread_id),
         )
     return thread_id
 

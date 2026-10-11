@@ -4,10 +4,11 @@ An attempt that fails before the executor takes it leaves nothing in any
 checkpoint, and replaying the thread's latest one would run something else.
 A send or an edit has written the user's message only to the turn's query
 row, so the replay would answer the turn before it and drop the message. A
-regenerate pinned its fork base, but the failed finalize re-pins the thread to
-the old branch tip, so the replay would answer from the wrong branch. The
-failed run row therefore records the input still pending, in the same
-finalize write as the error, and ``/retry`` runs that input again.
+regenerate pinned its fork base, but the thread's newest checkpoint is still
+the old branch's tip, which a replay that names no checkpoint takes, so it
+would answer from the wrong branch. The failed run row therefore records the
+input still pending, in the same finalize write as the error, and ``/retry``
+runs that input again.
 
 The latest attempt alone decides, and each attempt is stamped from its own
 request, so a retry never inherits a stale stamp. The query row keeps one text,
@@ -32,8 +33,8 @@ PENDING_INPUT_KEY = "pending_input"
 class PendingInput:
     # What the input ran against: None for a send, which takes the thread's
     # latest checkpoint, or the fork base of an edit or a regenerate. The
-    # failed run's finalize re-pins the thread to the old branch tip, so the
-    # base is kept here.
+    # thread's newest checkpoint is still the old branch's tip, so the base is
+    # kept here.
     checkpoint_id: Optional[str]
     # A regenerate: the checkpoint is the whole input, no message runs again.
     replay: bool = False

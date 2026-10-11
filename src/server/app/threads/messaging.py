@@ -357,22 +357,29 @@ async def _handle_send_message(
         # A fork deletes rows from the turn it replaces, and that turn is the
         # one its checkpoint forks, not the number the client counted. Every
         # later reader (the truncation, the regenerate's turn, the prior-turn
-        # read) takes it from the request, so it is settled here, once.
+        # read) takes it from the request, so it is settled here, once, with
+        # the branch tip it was read off for START to hold it to.
         if request.fork_from_turn is not None and request.checkpoint_id:
             from src.server.handlers.checkpoint_handler import resolve_fork_turn
 
-            fork_turn = await resolve_fork_turn(
+            fork = await resolve_fork_turn(
                 thread_id,
                 request.checkpoint_id,
                 regenerate=not request.messages,
                 requested=request.fork_from_turn,
             )
-            if fork_turn != request.fork_from_turn:
+            if fork.turn_index != request.fork_from_turn:
                 logger.warning(
                     f"[CHAT] fork turn {request.fork_from_turn} from the client "
-                    f"is turn {fork_turn} on the branch thread_id={thread_id}"
+                    f"is turn {fork.turn_index} on the branch thread_id={thread_id}"
                 )
-                request = request.model_copy(update={"fork_from_turn": fork_turn})
+            request = request.model_copy(
+                update={
+                    "fork_from_turn": fork.turn_index,
+                    "fork_branch_tip": fork.branch_tip,
+                    "fork_run_horizon": fork.run_horizon,
+                }
+            )
 
         # Resolve workspace_id from thread if not provided
         if not workspace_id and thread_meta:
@@ -1256,7 +1263,7 @@ async def retry_thread(
         else:
             # A checkpoint replay carrying the attempt chain (no
             # fork_from_turn: nothing is truncated). A failed regenerate
-            # replays its own fork base, which is no longer the thread's tip.
+            # replays its own fork base, which is not the newest checkpoint.
             explicit_checkpoint_id = (body.checkpoint_id if body else None) or (
                 pending.checkpoint_id if pending else None
             )

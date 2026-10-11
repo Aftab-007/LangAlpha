@@ -300,8 +300,8 @@ _SEND = {"messages": [{"role": "user", "content": "what moved NVDA?"}]}
     [
         # A send runs on the thread's latest checkpoint, as its re-run will.
         (_SEND, {"checkpoint_id": None}, "retry"),
-        # An edit keeps its fork base: the failed finalize re-pins the
-        # thread to the old branch tip.
+        # An edit keeps its fork base: the thread's newest checkpoint is
+        # still the old branch's tip.
         ({**_SEND, "checkpoint_id": "cp-base"}, {"checkpoint_id": "cp-base"}, "retry"),
         # A regenerate keeps its fork base for the same reason, and has no
         # message to run again.

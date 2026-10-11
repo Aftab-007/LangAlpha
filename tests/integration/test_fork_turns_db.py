@@ -41,7 +41,7 @@ def _graph(saver):
     )
 
 
-async def _start(thread_id, text, *, fork=None, turn_index=None, query=True):
+async def _start(thread_id, text, *, fork=None, turn_index=None, query=True, conn=None):
     from src.server.database.runs.lifecycle import QuerySpec, start_run
 
     run_id = str(uuid.uuid4())
@@ -57,14 +57,18 @@ async def _start(thread_id, text, *, fork=None, turn_index=None, query=True):
         ),
         fork=fork,
         metadata={"msg_type": "ptc"},
+        conn=conn,
     )
     return run_id, row["turn_index"]
 
 
-async def _run(graph, thread_id, run_id, turn_index, text, *, checkpoint_id=None):
+async def _run(
+    graph, thread_id, run_id, turn_index, text, *, checkpoint_id=None, conn=None
+):
     """The graph half of a turn: stamped the way ``build_graph_config`` stamps
     a run, then committed the way the finalize commits it."""
     from src.server.database.runs.lifecycle import RunOutcome, finalize_run
+    from src.server.utils.checkpoint_helpers import newest_checkpoint
 
     configurable = {"thread_id": thread_id}
     if checkpoint_id:
@@ -75,12 +79,12 @@ async def _run(graph, thread_id, run_id, turn_index, text, *, checkpoint_id=None
     }
     payload = {"messages": [HumanMessage(content=text)]} if text else None
     await graph.ainvoke(payload, config)
-    state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
     await finalize_run(
         run_id=run_id,
         thread_id=thread_id,
         outcome=RunOutcome(status="completed"),
-        checkpoint_id=state.config["configurable"]["checkpoint_id"],
+        newest=await newest_checkpoint(graph.checkpointer, thread_id),
+        conn=conn,
     )
 
 
@@ -120,11 +124,16 @@ async def thread(seed_workspace, test_db_pool, patched_get_db_connection):
             )
         ]
     )
-    with patch(
-        "src.server.handlers.checkpoint_handler.get_checkpointer",
-        return_value=saver,
+    from src.server.app import setup
+
+    with (
+        patch(
+            "src.server.handlers.checkpoint_handler.get_checkpointer",
+            return_value=saver,
+        ),
+        patch.object(setup, "checkpointer", saver),
     ):
-        yield SimpleNamespace(id=thread_id, graph=graph, runs=runs)
+        yield SimpleNamespace(id=thread_id, graph=graph, saver=saver, runs=runs)
     await saver.adelete_thread(thread_id)
 
 
@@ -137,17 +146,24 @@ async def _turns(thread_id):
 
 
 async def _fork(thread_id, checkpoint_id, client_turn, *, regenerate):
-    """What the send route hands ``start_run`` for a fork request."""
+    """What the send route and the request prep hand ``start_run`` for a fork
+    request."""
+    from src.server.handlers.chat.request_prep import _resolve_fork
     from src.server.handlers.checkpoint_handler import resolve_fork_turn
-    from src.server.services.runs.coordinator import ForkSpec
+    from src.server.models.chat import ChatRequest
 
-    return ForkSpec(
-        from_turn=await resolve_fork_turn(
-            thread_id, checkpoint_id, regenerate=regenerate, requested=client_turn
-        ),
-        checkpoint_id=checkpoint_id,
-        preserve_query_at_fork=regenerate,
+    point = await resolve_fork_turn(
+        thread_id, checkpoint_id, regenerate=regenerate, requested=client_turn
     )
+    request = ChatRequest(
+        messages=[] if regenerate else [{"role": "user", "content": "edited"}],
+        checkpoint_id=checkpoint_id,
+        fork_from_turn=point.turn_index,
+        fork_branch_tip=point.branch_tip,
+        fork_run_horizon=point.run_horizon,
+    )
+    _, fork = _resolve_fork(request=request, thread_id=thread_id)
+    return fork
 
 
 async def _rows(conn, table, thread_id):

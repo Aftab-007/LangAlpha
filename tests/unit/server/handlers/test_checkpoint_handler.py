@@ -436,7 +436,8 @@ class TestTurnNumbers:
 class TestResolveForkTurn:
     """The turn a fork replaces comes from the checkpoint it forks at."""
 
-    async def _resolve(self, checkpoint_id, *, regenerate, requested=None):
+    async def _point(self, checkpoint_id, *, regenerate, requested=None):
+        from src.server.database.conversation.threads_read import ThreadBranchRead
         from src.server.handlers.checkpoint_handler import resolve_fork_turn
 
         with (
@@ -445,13 +446,19 @@ class TestResolveForkTurn:
                 return_value=_checkpointer(*_DEAD_TURN_THEN_RESUME),
             ),
             patch(
-                "src.server.handlers.checkpoint_handler.threads_read.get_thread_checkpoint_id",
-                new=AsyncMock(return_value="cp-6"),
+                "src.server.handlers.checkpoint_handler.threads_read.get_thread_branch_read",
+                new=AsyncMock(return_value=ThreadBranchRead("cp-6", 9)),
             ),
         ):
             return await resolve_fork_turn(
                 "t1", checkpoint_id, regenerate=regenerate, requested=requested
             )
+
+    async def _resolve(self, checkpoint_id, *, regenerate, requested=None):
+        point = await self._point(
+            checkpoint_id, regenerate=regenerate, requested=requested
+        )
+        return point.turn_index
 
     @pytest.mark.asyncio
     async def test_an_edit_replaces_the_turn_after_its_checkpoint(self, persisted_turns):

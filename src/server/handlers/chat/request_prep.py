@@ -15,6 +15,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 
@@ -104,7 +105,9 @@ def _first_zone(*candidates: Optional[str]) -> Optional[str]:
     return None
 
 
-def _resolve_fork(*, request: ChatRequest) -> tuple[str, Optional[ForkSpec]]:
+def _resolve_fork(
+    *, request: ChatRequest, thread_id: str
+) -> tuple[str, Optional[ForkSpec]]:
     """Compute query_type and the fork cleanup spec (truncation + checkpoint
     pin), shared by flash and PTC handlers.
 
@@ -128,10 +131,21 @@ def _resolve_fork(*, request: ChatRequest) -> tuple[str, Optional[ForkSpec]]:
 
     fork = None
     if request.fork_from_turn is not None and request.checkpoint_id:
+        from src.server.utils.checkpoint_helpers import checkpoint_on_branch
+
         fork = ForkSpec(
             from_turn=request.fork_from_turn,
             checkpoint_id=request.checkpoint_id,
+            branch_tip=request.fork_branch_tip,
             preserve_query_at_fork=is_checkpoint_replay,
+            run_horizon=request.fork_run_horizon,
+            # The walk stops at the tip the fork was read off: the checkpoint
+            # is on that tip's branch, so a pointer above the tip still has it.
+            on_branch=(
+                partial(checkpoint_on_branch, thread_id, request.fork_branch_tip)
+                if request.fork_branch_tip
+                else None
+            ),
         )
 
     return query_type, fork

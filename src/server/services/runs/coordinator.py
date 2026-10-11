@@ -23,9 +23,11 @@ from src.server.database.runs.lifecycle import (  # re-exported for callers
     DuplicateRequestError,
     FinalizeResult,
     ForkSpec,
+    NewestCheckpoint,
     QuerySpec,
     RunOutcome,
     RunSlotBusyError,
+    StaleForkError,
 )
 from src.server.utils.error_sanitization import sanitize_error_text
 
@@ -39,6 +41,7 @@ __all__ = [
     "RunSlotBusyError",
     "DuplicateRequestError",
     "AttemptConflictError",
+    "StaleForkError",
     "protected_finalize",
 ]
 
@@ -147,7 +150,8 @@ class RunCoordinator:
 
         Raises RunSlotBusyError (409 admission), DuplicateRequestError
         (idempotent retransmit — reconnect to the existing run, guard
-        released first), AttemptConflictError, or WriterGuardUnavailable
+        released first), AttemptConflictError, StaleForkError (409, the
+        fork's branch moved after validation), or WriterGuardUnavailable
         (503 — pinned-session budget/lock bounded refusal). A server-minted
         request_key is the legacy fallback only; callers should supply one
         for dedup to mean anything.
@@ -291,7 +295,7 @@ class RunCoordinator:
         if handle.guard is not None:
             handle.guard.bind_owner(None)
         try:
-            checkpoint_id = await self._latest_checkpoint_id(handle)
+            newest = await self._newest_checkpoint(handle)
 
             usage_writer = None
             if outcome.per_call_records or outcome.tool_usage:
@@ -321,7 +325,7 @@ class RunCoordinator:
                     run_id=handle.run_id,
                     thread_id=handle.thread_id,
                     outcome=outcome,
-                    checkpoint_id=checkpoint_id,
+                    newest=newest,
                     usage_writer=usage_writer,
                     conn=guard.conn if guard is not None else None,
                 )
@@ -396,7 +400,7 @@ class RunCoordinator:
         run_id: str,
         outcome: RunOutcome,
         *,
-        checkpoint_id: Optional[str] = None,
+        newest: Optional[NewestCheckpoint] = None,
         error_frame: Optional[Dict[str, Any]] = None,
     ) -> FinalizeResult:
         """The guard-less finalize funnel for runs with no live owner
@@ -405,7 +409,9 @@ class RunCoordinator:
         on a won CAS, and terminal-frame emission through the run_end gate
         even on a lost one (the survivor may have died between its commit and
         its emission; the gate keeps the close exactly-once against a live
-        emitter). ``error_frame`` is the caller's client-facing failure
+        emitter). ``newest`` is the thread's newest checkpoint as the caller
+        read it, which the pointer moves to only when the run wrote it.
+        ``error_frame`` is the caller's client-facing failure
         payload, emitted only when the verified terminal status is ``error``.
         Raises like the CAS it wraps; callers that must never raise wrap it.
         """
@@ -413,7 +419,7 @@ class RunCoordinator:
             run_id=run_id,
             thread_id=thread_id,
             outcome=outcome,
-            checkpoint_id=checkpoint_id,
+            newest=newest,
         )
         if result.applied:
             self.post_finalize_tail(thread_id, result.run)
@@ -599,9 +605,11 @@ class RunCoordinator:
 
         return _write
 
-    async def _latest_checkpoint_id(self, handle: RunHandle) -> Optional[str]:
+    async def _newest_checkpoint(self, handle: RunHandle) -> Optional[NewestCheckpoint]:
         """Checkpoint tip via the run's own session when fenced (reads its
         own writes; a lock-lost session can't answer), else the pool saver."""
+        from src.server.utils.checkpoint_helpers import newest_checkpoint
+
         try:
             guard = handle.guard
             if guard is not None and guard.usable:
@@ -612,10 +620,7 @@ class RunCoordinator:
                 saver = setup.checkpointer
             if not saver:
                 return None
-            cp = await saver.aget_tuple(
-                {"configurable": {"thread_id": handle.thread_id}}
-            )
-            return cp.config["configurable"]["checkpoint_id"] if cp else None
+            return await newest_checkpoint(saver, handle.thread_id)
         except Exception:
             logger.warning(
                 f"[RunCoordinator] checkpoint_id read failed for "

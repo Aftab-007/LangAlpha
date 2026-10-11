@@ -375,6 +375,19 @@ class ChatRequest(BaseModel):
         "naming the turn it replaces. The server reads that turn from the "
         "checkpoint and deletes queries/responses from it onward.",
     )
+    # Server-stamped: the thread's branch tip when the route read the fork's
+    # turn. Read only for a fork, whose validation always overwrites it, so a
+    # client value never reaches START, which admits the fork only while the
+    # tip still holds this value.
+    fork_branch_tip: Optional[str] = Field(
+        default=None,
+        description="Branch tip the fork was validated against. Server-stamped.",
+    )
+    # Server-stamped beside fork_branch_tip: the newest run_seq read with it.
+    fork_run_horizon: Optional[int] = Field(
+        default=None,
+        description="Newest run sequence read with fork_branch_tip. Server-stamped.",
+    )
 
     # Localization and context
     locale: Optional[str] = Field(

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from src.server.database.runs.lifecycle import NewestCheckpoint
 from src.server.services.runs.coordinator import (
     FinalizeResult,
     RunCoordinator,
@@ -21,6 +22,7 @@ from src.server.services.runs.coordinator import (
 )
 
 LIFECYCLE = "src.server.database.runs.lifecycle.finalize_run"
+NEWEST = NewestCheckpoint("cp-1", "run-1")
 EXPORT = "src.server.services.transcripts.schedule_thread_export"
 
 
@@ -37,7 +39,7 @@ def _coordinator() -> RunCoordinator:
     coordinator = RunCoordinator()
     coordinator._schedule_replay_refresh = MagicMock()
     coordinator._nudge_hook_drainer = MagicMock()
-    coordinator._latest_checkpoint_id = AsyncMock(return_value="cp-1")
+    coordinator._newest_checkpoint = AsyncMock(return_value=NEWEST)
     return coordinator
 
 
@@ -52,7 +54,7 @@ async def _owner_finalize(status: str, result: FinalizeResult):
     order = []
 
     async def finalize(**kwargs):
-        order.append(("finalize", kwargs["checkpoint_id"]))
+        order.append(("finalize", kwargs["newest"]))
         return result
 
     with patch(LIFECYCLE, side_effect=finalize), \
@@ -71,7 +73,7 @@ async def test_an_owner_finalize_exports_at_every_terminal_status(status):
     )
 
     export.assert_called_once_with("thread-1", "ws-1")
-    assert order == [("finalize", "cp-1"), ("export", "thread-1", "ws-1")]
+    assert order == [("finalize", NEWEST), ("export", "thread-1", "ws-1")]
 
 
 @pytest.mark.asyncio
@@ -105,7 +107,7 @@ async def test_a_detached_finalize_exports():
     ) as executor_cls:
         executor_cls.get_instance.return_value = executor
         await _coordinator().finalize_detached_run(
-            "thread-1", "run-1", RunOutcome(status="error"), checkpoint_id="cp-2"
+            "thread-1", "run-1", RunOutcome(status="error")
         )
 
     export.assert_called_once_with("thread-1", "ws-1")

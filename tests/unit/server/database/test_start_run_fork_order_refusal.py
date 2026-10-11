@@ -4,7 +4,8 @@ An interrupted turn holding a proposal is not a live run, so a fork over it is
 admitted, and the ledger keeps no foreign key to the response rows the
 truncation deletes. Two orderings are load-bearing and pinned here:
 
-- the refusal runs AFTER both live-run guards, so a refused fork refuses no order;
+- the refusal runs AFTER the tip check and both live-run guards, so a refused
+  fork refuses no order;
 - it runs BEFORE the truncation, inside the START transaction on the fork's own
   session, so its subquery still sees the rows and a rollback undoes it.
 """
@@ -17,6 +18,7 @@ import pytest
 from src.server.database.runs.lifecycle import (
     ForkSpec,
     RunSlotBusyError,
+    StaleForkError,
     TurnLifecycleError,
     start_run,
 )
@@ -25,6 +27,7 @@ from src.server.database.runs.subagent_runs import TaskRunSlotBusyError
 OA_DB = "src.server.database.runs.lifecycle.oa_db"
 QR_DB = "src.server.database.runs.lifecycle.qr_db"
 SR_DB = "src.server.database.runs.lifecycle.sr_db"
+TT_DB = "src.server.database.runs.lifecycle.tt_db"
 REPAIR = "src.server.database.runs.lifecycle.subagent_repair"
 
 THREAD_ID = "11111111-1111-1111-1111-111111111111"
@@ -32,7 +35,7 @@ RUN_ID = "22222222-2222-2222-2222-222222222222"
 LIVE_RUN_ID = "33333333-3333-3333-3333-333333333333"
 TASK_RUN_ID = "44444444-4444-4444-4444-444444444444"
 
-FORK = ForkSpec(from_turn=2, checkpoint_id="ckpt-1")
+FORK = ForkSpec(from_turn=2, checkpoint_id="ckpt-1", branch_tip="ckpt-tip")
 
 
 async def _start(conn):
@@ -49,8 +52,9 @@ async def _start(conn):
 async def test_refusal_follows_the_guards_and_precedes_the_truncation(
     mock_connection, mock_cursor
 ):
-    # No duplicate request_key, no live root run.
+    # No duplicate request_key, the tip where the fork read it, no live run.
     mock_cursor.fetchone.side_effect = [{"status": "running"}, None, None]
+    mock_cursor.rowcount = 1
     calls: list[str] = []
 
     @asynccontextmanager
@@ -82,7 +86,7 @@ async def test_refusal_follows_the_guards_and_precedes_the_truncation(
         patch(f"{QR_DB}.truncate_thread_from_turn", new=_truncate),
         patch(f"{REPAIR}.repair_task_chains", new=AsyncMock()),
         # Aborts the START past the truncation, inside the same transaction.
-        patch(f"{QR_DB}.update_thread_checkpoint_id", new=AsyncMock(return_value=False)),
+        patch(f"{TT_DB}.drop_rewound", new=AsyncMock(side_effect=TurnLifecycleError)),
     ):
         with pytest.raises(TurnLifecycleError):
             await _start(mock_connection)
@@ -93,15 +97,18 @@ async def test_refusal_follows_the_guards_and_precedes_the_truncation(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("live_root", "live_task", "refusal"),
+    ("tip_moved", "live_root", "live_task", "refusal"),
     [
+        pytest.param(True, None, None, StaleForkError, id="moved-branch-tip"),
         pytest.param(
+            False,
             {"conversation_response_id": LIVE_RUN_ID, "status": "in_progress"},
             None,
             RunSlotBusyError,
             id="live-root-run",
         ),
         pytest.param(
+            False,
             None,
             {"task_run_id": TASK_RUN_ID, "task_id": "task-a", "status": "in_progress"},
             TaskRunSlotBusyError,
@@ -110,9 +117,10 @@ async def test_refusal_follows_the_guards_and_precedes_the_truncation(
     ],
 )
 async def test_a_refused_fork_refuses_no_order(
-    mock_connection, mock_cursor, live_root, live_task, refusal
+    mock_connection, mock_cursor, tip_moved, live_root, live_task, refusal
 ):
     mock_cursor.fetchone.side_effect = [{"status": "running"}, None, live_root]
+    mock_cursor.rowcount = 0 if tip_moved else 1
     refuse = AsyncMock(return_value=[])
     truncate = AsyncMock(return_value=0)
 
@@ -126,7 +134,7 @@ async def test_a_refused_fork_refuses_no_order(
         with pytest.raises(refusal):
             await _start(mock_connection)
 
-    # The caller retries once the live run settles, and the order is still
-    # waiting for the verdict that run may yet ask for.
+    # A refused fork changes nothing, so the order still waits for the
+    # verdict a later run may yet ask for.
     refuse.assert_not_awaited()
     truncate.assert_not_awaited()

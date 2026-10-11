@@ -8,6 +8,7 @@ Provides endpoints for:
 """
 
 import logging
+from typing import NamedTuple
 
 from fastapi import HTTPException
 
@@ -67,13 +68,36 @@ async def get_thread_turns(
     )
 
 
+def stale_fork_detail() -> dict:
+    """The 409 detail for a fork whose branch is no longer the thread's.
+
+    One wording for both refusals: the route's, when the checkpoint forks no
+    turn of the current branch, and START's, when another worker moved the
+    branch after that check.
+    """
+    return {
+        "code": "stale_fork",
+        "message": "That message is no longer on this thread's current "
+        "branch. Reload the thread and try again.",
+    }
+
+
+class ForkPoint(NamedTuple):
+    """The turn a fork replaces, the branch tip it was read off, and the
+    newest run's ``run_seq`` read with that tip."""
+
+    turn_index: int
+    branch_tip: str | None
+    run_horizon: int | None = None
+
+
 async def resolve_fork_turn(
     thread_id: str,
     checkpoint_id: str,
     *,
     regenerate: bool,
     requested: int | None = None,
-) -> int:
+) -> ForkPoint:
     """The turn an edit or regenerate at ``checkpoint_id`` replaces.
 
     The fork deletes rows from this turn onward, so the turn is read off the
@@ -84,8 +108,14 @@ async def resolve_fork_turn(
     between it and the forked one, so rewriting a failed message works and no
     kept turn is deleted. A checkpoint that forks no turn of the current
     branch is refused: the client read a branch that has since been replaced.
+
+    The answer holds only while the branch does, and this runs outside the
+    transaction that admits the fork, so the tip it read travels with it, and
+    the run horizon read with it: START refuses the fork once a run started
+    after this read or the fork's checkpoint left the thread's branch.
     """
-    branch_tip = await threads_read.get_thread_checkpoint_id(thread_id)
+    branch = await threads_read.get_thread_branch_read(thread_id)
+    branch_tip, horizon = branch.checkpoint_id, branch.run_horizon
     turns = await get_thread_turns(thread_id, branch_tip_checkpoint_id=branch_tip)
     kept: int | None = None
     for turn in turns.turns:
@@ -99,17 +129,10 @@ async def resolve_fork_turn(
                 and (kept is None or requested > kept)
                 and requested <= turn.turn_index
             ):
-                return requested
-            return turn.turn_index
+                return ForkPoint(requested, branch_tip, horizon)
+            return ForkPoint(turn.turn_index, branch_tip, horizon)
         kept = turn.turn_index if kept is None else max(kept, turn.turn_index)
-    raise HTTPException(
-        status_code=409,
-        detail={
-            "code": "stale_fork",
-            "message": "That message is no longer on this thread's current "
-            "branch. Reload the thread and try again.",
-        },
-    )
+    raise HTTPException(status_code=409, detail=stale_fork_detail())
 
 
 async def get_retry_checkpoint(thread_id: str, checkpoint_id: str | None = None) -> str:

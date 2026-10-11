@@ -2,7 +2,8 @@
 
 Every reader after the route (the truncation, the regenerate's turn, the
 prior-turn read) takes the turn from the request, so the route is where the
-client's count gives way to the branch.
+client's count gives way to the branch. The branch tip the turn was read off
+rides along, for START to refuse the fork if the branch moved since.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,6 +20,12 @@ from tests.unit.server.app.test_threads_authz import (
 )
 
 _RESOLVE = "src.server.handlers.checkpoint_handler.resolve_fork_turn"
+
+
+def _point(turn_index, branch_tip="cp-tip"):
+    from src.server.handlers.checkpoint_handler import ForkPoint
+
+    return ForkPoint(turn_index, branch_tip)
 
 
 async def _post(body):
@@ -40,7 +47,7 @@ async def _post(body):
 
 @pytest.mark.asyncio
 async def test_an_edit_runs_as_the_turn_its_checkpoint_forks():
-    resolve = AsyncMock(return_value=3)
+    resolve = AsyncMock(return_value=_point(3))
     with patch(_RESOLVE, resolve):
         resp, workflow = await _post(
             {
@@ -55,11 +62,12 @@ async def test_an_edit_runs_as_the_turn_its_checkpoint_forks():
         "tid-mine", "cp-before-3", regenerate=False, requested=2
     )
     assert workflow.call_args.kwargs["request"].fork_from_turn == 3
+    assert workflow.call_args.kwargs["request"].fork_branch_tip == "cp-tip"
 
 
 @pytest.mark.asyncio
 async def test_a_regenerate_is_resolved_at_its_boundary():
-    resolve = AsyncMock(return_value=3)
+    resolve = AsyncMock(return_value=_point(3))
     with patch(_RESOLVE, resolve):
         resp, workflow = await _post(
             {"messages": [], "checkpoint_id": "cp-3", "fork_from_turn": 3}

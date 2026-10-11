@@ -319,7 +319,7 @@ async def astream_ptc_workflow(
             inherits_rules=inherits_rules,
         )
 
-        query_type, fork = _resolve_fork(request=request)
+        query_type, fork = _resolve_fork(request=request, thread_id=thread_id)
         is_checkpoint_replay = bool(request.checkpoint_id and not request.messages)
 
         # Resolve LLM config (pre-resolved by the route handler, fallback for

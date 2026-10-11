@@ -233,7 +233,7 @@ async def astream_flash_workflow(
             request, prior_thread, user_profile=user_profile
         )
 
-        query_type, fork = _resolve_fork(request=request)
+        query_type, fork = _resolve_fork(request=request, thread_id=thread_id)
         is_checkpoint_replay = bool(request.checkpoint_id and not request.messages)
 
         # Resolve LLM config (pre-resolved by the route handler, fallback for
