@@ -31,7 +31,7 @@ import { getStoredThreadId, setStoredThreadId } from './utils/threadStorage';
 import { type SubagentTokenUsage, ZERO_USAGE } from '../utils/tokenUsage';
 import { computeSteeringBoundary } from '../session/stream/steeringRollback';
 import { isSteeringUserMessage, opensTurn } from '../components/messageList/messagePredicates';
-import { hasTurn, newestTurn, projectTurns } from '../components/messageList/turnProjection';
+import { hasTurn, newestTurn, projectTurns, turnOf } from '../components/messageList/turnProjection';
 import { isSubagentEvent } from '../session/subagents/liveEventHandlers';
 import { bumpThreadNavOrder } from './useNavigationData';
 import { invalidateNewWorkspace } from './workspaceRowActions';
@@ -44,7 +44,7 @@ import type { PreviewData } from './utils/types';
 import { createRecentlySentTracker } from './utils/recentlySentTracker';
 import { createRequestKeyTracker } from './utils/requestKey';
 import { withServerTotals, withoutServerTotals } from './utils/contextWindowEvent';
-import { createForkRefusalRecovery, forkRefusalMessage, isStaleForkRefusal, type ForkCut } from './utils/forkRefusal';
+import { createForkRefusalRecovery, forkRefusalMessage, isRecoverableRetryRefusal, isStaleForkRefusal, type ForkCut } from './utils/forkRefusal';
 import { createEditDraftStore, sameDraftMessage, type EditDraft } from './utils/editDrafts';
 import { handleReasoningSignal, handleTextContent } from './utils/streamEventHandlers';
 import { useMarketWatch } from './useMarketWatch';
@@ -861,27 +861,38 @@ export function useChatMessages(
 
   /** Puts an edit's text back in its box. A reload in flight settles where
    *  the box goes once it shows the transcript. */
-  const returnEditDraft = useStableHandler((draft: EditDraft) => {
-    editDrafts.markFocus(draft, draft.threadId);
+  const returnEditDraft = useStableHandler((draft: EditDraft, focus = true) => {
+    if (focus) editDrafts.markFocus(draft, draft.threadId);
     editDrafts.put(draft);
     if (draft.threadId === threadIdRef.current && !historyLoadingRef.current) settleEditDrafts();
   });
-  // Nothing failed and the user's text is kept, so it reads as a notice.
+  // Nothing failed and the user's text is kept, so these read as notices.
+  // Stable handlers, as the recovery below is built once: each reads the
+  // language shown when its refusal comes.
   const staleForkMessage = useStableHandler((kind: ForkCut['kind']): StructuredError => ({
     message: t(kind === 'edit' ? 'chat.forkStaleEdit' : 'chat.forkStaleRegenerate'),
     kind: 'notice',
   }));
+  const resendMessage = useStableHandler((givenBack: boolean): StructuredError => ({
+    message: t(givenBack ? 'chat.resendRequired' : 'chat.resendLastMessage'),
+    kind: 'notice',
+  }));
+  // Reloads the thread, once a stream has let go of it.
+  const requestThreadReload = () => {
+    if (isStreamingRef.current) pendingMuxResyncRef.current = true;
+    else setReloadTrigger((n) => n + 1);
+  };
 
   const [forkRefusal] = useState(() => createForkRefusalRecovery({
     setMessages,
     setMessageError,
-    requestReload: () => {
-      if (isStreamingRef.current) pendingMuxResyncRef.current = true;
-      else setReloadTrigger((n) => n + 1);
-    },
+    requestReload: () => requestThreadReload(),
     sessionEpoch: () => sessionEpochRef.current,
     staleMessage: staleForkMessage,
     returnDraft: returnEditDraft,
+    resendMessage,
+    giveBack: (text) => setReturnedEdit((prev) => [prev, text].filter(Boolean).join('\n\n')),
+    markPersisted: () => markTranscriptPersisted(),
   }));
 
   /**
@@ -2743,9 +2754,16 @@ export function useChatMessages(
     // the rebuild. The caller's snapshot, since truncateIndex indexes into it.
     renderedInterruptIdsRef.current = collectRenderedInterruptIds(snapshot.slice(0, truncateIndex));
     // The messages the cut removes take their open edit boxes along, as the
-    // box warned of messages after the one edited.
+    // box warned of messages after the one edited. A refused fork gives them
+    // back with the messages.
+    const dropped: EditDraft[] = [];
     for (const { message: removed, turnIndex: turn } of projected.slice(truncateIndex)) {
-      if (removed.role === 'user') editDrafts.drop({ turnIndex: turn, original: removed.content, messageId: removed.id });
+      if (removed.role !== 'user') continue;
+      const key = { turnIndex: turn, original: removed.content.trim(), messageId: removed.id };
+      const text = editDrafts.get(key);
+      if (text === undefined) continue;
+      dropped.push({ threadId: threadIdRef.current, ...key, text });
+      editDrafts.drop(key);
     }
 
     setMessages((prev) => {
@@ -2771,16 +2789,30 @@ export function useChatMessages(
         ? `retry|${threadId}`
         : `fork|${threadId}|${checkpointId ?? ''}|${forkFromTurn ?? ''}|${message ?? ''}`,
     );
+    // The message a reply answered when it is the one right above it, which a
+    // refusal that needs the turn's input sent again gives back to the
+    // composer. A request that carries its own text, or a reply to an answered
+    // pause, was asked by something else.
+    const asked = !message && before?.role === 'user' && !isSteeringUserMessage(before)
+      && projected[truncateIndex - 1]?.turnIndex === turnIndex
+      ? before.content
+      : null;
     // A fork cut turns the server still holds, so a refused one puts them
     // back, its resends included. A retry replaced only its own reply, which
-    // shows the refusal as before, unless the chat changed under it: then it
-    // reloads as a regenerate does.
+    // shows the refusal as before, unless the chat changed under it, the
+    // reply never failed, or the user has to send its input again.
     const forkCut: ForkCut | null = forkFromTurn === null
       ? null
-      : cut ?? { kind: message ? 'edit' : 'regenerate', transcript: snapshot, draft: null };
-    const recoverRefusedFork = (source: unknown) => forkCut !== null
-      ? forkRefusal.recover(source, forkCut)
-      : isStaleForkRefusal(source) && forkRefusal.recover(source, { kind: 'regenerate', transcript: snapshot, draft: null });
+      : {
+          ...(cut ?? { kind: message ? 'edit' : 'regenerate', transcript: snapshot, draft: null }),
+          dropped: [...(cut?.dropped ?? []), ...dropped],
+          asked,
+        };
+    const recoverRefusedFork = (source: unknown) => {
+      if (forkCut !== null) return forkRefusal.recover(source, forkCut);
+      if (viaRetryEndpoint) return isRecoverableRetryRefusal(source) && forkRefusal.recover(source, { kind: 'retry', transcript: snapshot, draft: null, asked });
+      return isStaleForkRefusal(source) && forkRefusal.recover(source, { kind: 'regenerate', transcript: snapshot, draft: null });
+    };
     const admission = sendUserId === null ? null : trackPlainSend({
       userId: sendUserId,
       assistantId: assistantMessageId,
@@ -3188,6 +3220,13 @@ export function useChatMessages(
     refreshWorkspaceFolder,
     armReportBack: () => armReportBackWatch(threadIdRef.current, null, null),
     refreshWorkspaces: () => invalidateNewWorkspace(queryClient),
+    // A turn other than the one this view counted for the run's bubble means
+    // turns were added where the view never saw them. The stream stamps the
+    // server's number, and only a reload shows those turns.
+    onAdmittedTurn: (bubbleId, turn) => {
+      const counted = turnOf(liveMessages.get(), bubbleId);
+      if (counted !== undefined && counted !== turn) requestThreadReload();
+    },
   };
 
   /** Composition-level callbacks for the recovery/ownership lifecycle; direct

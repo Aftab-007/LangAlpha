@@ -1551,6 +1551,8 @@
     "autoRetryExhausted": "多次尝试后回复仍未完成，请稍后重试。",
     "forkStaleEdit": "此对话已在别处更改，现已刷新。您编辑的消息已保留，可以重新发送。",
     "forkStaleRegenerate": "此对话已在别处更改，现已刷新。请重试。",
+    "resendRequired": "您的消息已放回下方输入框。如有附件，请重新添加后再发送。",
+    "resendLastMessage": "此回复无法重试。请重新发送您的上一条消息，如有附件请一并添加。",
     "editReplacesLater": "此消息之后的内容将被替换，且无法恢复。",
     "errorHintApiKey": "请确认 API 密钥正确且未被撤销。",
     "errorHintModelAccess": "请确认您的套餐或订阅允许访问此模型。",

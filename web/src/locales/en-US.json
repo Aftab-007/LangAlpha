@@ -1553,6 +1553,8 @@
     "autoRetryExhausted": "This reply didn't go through after a few tries. Try again in a moment.",
     "forkStaleEdit": "This chat changed somewhere else, so it was refreshed. Your edited message is ready to send again.",
     "forkStaleRegenerate": "This chat changed somewhere else, so it was refreshed. Try again.",
+    "resendRequired": "Your message is back in the box below. Add any attachments again, then send it.",
+    "resendLastMessage": "This reply can't be retried. Send your last message again, with any attachments.",
     "editReplacesLater": "Messages after this one will be replaced and can't be recovered.",
     "errorHintApiKey": "Check that your API key is correct and hasn't been revoked.",
     "errorHintModelAccess": "Confirm your plan or subscription allows access to this model.",

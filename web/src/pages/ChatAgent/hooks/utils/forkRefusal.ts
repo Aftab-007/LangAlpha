@@ -5,7 +5,8 @@
  * open the refusal arrives as an SSE error frame. Either way the server
  * truncated nothing, so the view puts back what the fork cut and reloads the
  * thread. An answer to a pause a fork elsewhere replaced is refused as
- * `stale_fork` too, and recovers the same way.
+ * `stale_fork` too, and recovers the same way, as does a Retry refused because
+ * the chat changed, its reply never failed, or its input has to be sent again.
  */
 import type { ChatMessage } from '@/types/chat';
 import type { StructuredError } from '@/utils/rateLimitError';
@@ -66,15 +67,28 @@ export function isStaleForkRefusal(source: unknown): boolean {
   return isStaleCode(readForkRefusal(source)?.code);
 }
 
+/** Whether `source` refuses a Retry in a way the view recovers from: the chat
+ *  changed, the reply was never failed, or only the user can send its input. */
+export function isRecoverableRetryRefusal(source: unknown): boolean {
+  const code = readForkRefusal(source)?.code;
+  return isStaleCode(code) || code === 'not_retryable' || code === 'resend_required';
+}
+
 /** What the user did that cut the transcript, and what a refusal gives back. */
 export interface ForkCut {
-  /** `resume` is an answer to a pause, which cuts nothing but its own reply. */
-  kind: 'edit' | 'regenerate' | 'resume';
+  /** `resume` is an answer to a pause, which cuts nothing but its own reply,
+   *  and `retry` replaces a failed reply. */
+  kind: 'edit' | 'regenerate' | 'resume' | 'retry';
   /** The transcript before the cut. An automatic resend of the fork carries
    *  it too, since the one it was handed is already cut. */
   transcript: readonly ChatMessage[];
   /** What an edit was typed with; null for a regenerate. */
   draft: EditDraft | null;
+  /** The edit boxes open on the messages the cut removed. */
+  dropped?: readonly EditDraft[];
+  /** The text of the message that opened the turn, which goes back to the
+   *  composer when the server needs the turn's input sent again. */
+  asked?: string | null;
 }
 
 export interface ForkRefusalRecovery {
@@ -96,24 +110,50 @@ export function createForkRefusalRecovery(deps: {
   sessionEpoch: () => number;
   /** The view's own words for a fork the chat changed under. */
   staleMessage: (kind: ForkCut['kind']) => string | StructuredError;
-  /** Gives an edit's text back to its box, which outlives the reload. */
-  returnDraft: (draft: EditDraft) => void;
+  /** Gives an edit's text back to its box, which outlives the reload; the
+   *  box takes the focus unless `focus` is false. */
+  returnDraft: (draft: EditDraft, focus?: boolean) => void;
+  /** The view's own words for a turn whose input the user has to send again;
+   *  `givenBack` when its question went back to the composer. */
+  resendMessage: (givenBack: boolean) => string | StructuredError;
+  /** Puts text in the composer, beside what is typed there. */
+  giveBack: (text: string) => void;
+  /** Marks every bubble on screen as one the server holds, which a reload
+   *  replaces. */
+  markPersisted: () => void;
 }): ForkRefusalRecovery {
   let notice: { message: string | StructuredError; epoch: number } | null = null;
-  const refuse = (message: string | StructuredError, cut: ForkCut) => {
+  const refuse = (message: string | StructuredError | null, cut: ForkCut, persisted = false) => {
     // The reload rebuilds only the bubbles a replay made, so the fork's own
     // would stay under it; the snapshot is also what a failed reload leaves.
     deps.setMessages([...cut.transcript]);
-    deps.setMessageError(message);
+    if (persisted) deps.markPersisted();
+    if (message !== null) deps.setMessageError(message);
+    // The edit itself goes back last, so its box is the one with the focus.
+    for (const draft of cut.dropped ?? []) deps.returnDraft(draft, false);
     if (cut.draft) deps.returnDraft(cut.draft);
-    notice = { message, epoch: deps.sessionEpoch() };
+    notice = message === null ? null : { message, epoch: deps.sessionEpoch() };
     deps.requestReload();
   };
   return {
     recover(source, cut) {
       const refusal = readForkRefusal(source);
       if (refusal === null) return false;
-      refuse(isStaleCode(refusal.code) ? deps.staleMessage(cut.kind) : refusal.message, cut);
+      if (isStaleCode(refusal.code)) {
+        refuse(deps.staleMessage(cut.kind), cut);
+      } else if (refusal.code === 'not_retryable' && cut.kind === 'retry') {
+        // The latest run did not fail, so the reply this view marked failed is
+        // not the server's: the reload shows the one it holds in its place.
+        refuse(null, cut, true);
+      } else if (refusal.code === 'resend_required') {
+        // What the turn carried besides its text is kept nowhere, so the user
+        // sends it again. The text goes back to the composer when the reply
+        // sits right under it; a reply to an answered pause has none to give.
+        if (cut.asked) deps.giveBack(cut.asked);
+        refuse(deps.resendMessage(Boolean(cut.asked)), cut);
+      } else {
+        refuse(refusal.message, cut);
+      }
       return true;
     },
     stale(cut) {

@@ -99,6 +99,9 @@ export interface StreamRouterDeps {
   armReportBack: () => void;
   /** Re-read the user's workspaces after an agent changed one. */
   refreshWorkspaces: () => void;
+  /** Hears the turn the server admitted the run to, before the run's bubbles
+   *  take it, while they still carry the turn the view counted. */
+  onAdmittedTurn?: (bubbleId: string, turnIndex: number) => void;
 }
 
 /**
@@ -216,6 +219,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         const turn = event.turn_index;
         const runBubbleId = assistantMessageId;
         const runId = typeof event.run_id === 'string' ? event.run_id : undefined;
+        deps.onAdmittedTurn?.(runBubbleId, turn);
         rt.setMessages((prev) => stampRunTurn(prev, runBubbleId, turn, runId));
       }
       // The server writes this only after the run has its sandbox, so any
