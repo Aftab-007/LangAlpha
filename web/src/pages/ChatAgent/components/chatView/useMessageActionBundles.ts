@@ -3,6 +3,7 @@ import type { RefObject } from 'react';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import type { ChatInputHandle } from '@/components/ui/chat-input';
 import type { MessageActions } from '../messageList/MessageActionsContext';
+import type { EditDraftStore } from '../../hooks/utils/editDrafts';
 import type { ModelOptions } from './types';
 
 type Action<K extends keyof MessageActions> = NonNullable<MessageActions[K]>;
@@ -39,6 +40,8 @@ export interface MessageActionSources {
   onEditMessage: (messageId: string, content: string, modelOptions?: ModelOptions) => unknown;
   onRegenerate: (messageId: string, modelOptions?: ModelOptions) => unknown;
   onRetry: (modelOptions?: ModelOptions) => unknown;
+  /** Created once by the session, so already identity-stable. */
+  editDrafts: EditDraftStore;
   onSendMessage: (text: string) => unknown;
   chatInputRef: RefObject<ChatInputHandle | null>;
 }
@@ -83,6 +86,7 @@ export function useMessageActionBundles(src: MessageActionSources): {
   const stableRegenerate = useStableHandler((id: string) =>
     src.onRegenerate(id, src.chatInputRef.current?.getModelOptions?.()));
   const stableRetry = useStableHandler(() => src.onRetry(src.chatInputRef.current?.getModelOptions?.()));
+  const editDrafts = src.editDrafts;
   const stableReportWithAgent = useStableHandler((instruction: string) => {
     src.onSendMessage(`/self-improve ${instruction}`);
   });
@@ -121,6 +125,7 @@ export function useMessageActionBundles(src: MessageActionSources): {
     onEditMessage: stableEditMessage,
     onRegenerate: stableRegenerate,
     onRetry: stableRetry,
+    editDrafts,
     onThumbUp: stableThumbUp,
     onThumbDown: stableThumbDown,
     onReportWithAgent: stableReportWithAgent,
@@ -131,7 +136,7 @@ export function useMessageActionBundles(src: MessageActionSources): {
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
     stableApprovePTCAgent, stableRejectPTCAgent, stableApproveSecretaryAction,
     stableRejectSecretaryAction, stableResumeCreditPause, stableApproveToolCall, stableRejectToolCall,
-    stableEditMessage, stableRegenerate, stableRetry,
+    stableEditMessage, stableRegenerate, stableRetry, editDrafts,
     stableThumbUp, stableThumbDown, stableReportWithAgent, stableSendMessage,
   ]);
 

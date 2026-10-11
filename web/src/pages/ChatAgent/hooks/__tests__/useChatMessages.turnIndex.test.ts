@@ -351,14 +351,15 @@ describe('useChatMessages – /turns entries named by turn_index', () => {
     expect(lastFork()).toEqual({ checkpointId, forkFromTurn: turn });
   });
 
-  it('refuses to regenerate a turn with no checkpoint', async () => {
+  it('regenerates a turn with no checkpoint by sending its message again in place', async () => {
     const { result } = await renderFourTurns();
-    const sends = mockSendStream.mock.calls.length;
     const assistantId = result.current.messages.filter((m) => m.role === 'assistant')[1].id;
     await act(async () => {
       await result.current.handleRegenerate(assistantId);
     });
-    expect(result.current.messageError).toBe('Unable to regenerate: checkpoint data unavailable');
-    expect(mockSendStream.mock.calls.length).toBe(sends);
+    expect(result.current.messageError).toBeNull();
+    expect(lastFork()).toEqual({ checkpointId: 'cp-end-0', forkFromTurn: 1 });
+    expect(mockSendStream.mock.lastCall?.[0]).toBe('q1');
+    expect(result.current.messages.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['q0', 'q1']);
   });
 });

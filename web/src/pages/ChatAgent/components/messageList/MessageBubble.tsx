@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, memo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Copy, FileSearch, Info, Pencil, RefreshCw, RotateCcw, StopCircle, ThumbsDown, ThumbsUp } from 'lucide-react';
 import ThumbDownModal from '../ThumbDownModal';
@@ -20,6 +20,7 @@ import { OverflowCollapse } from './OverflowCollapse';
 import { useMessageActions } from './MessageActionsContext';
 import { OpenThoughtContext, openThoughtLength, useArrivalQuiet, useOpenThoughts } from './useArrivalQuiet';
 import { useStableHandler } from '@/hooks/useStableHandler';
+import { useEditDraft, useEditDraftStore } from '../../hooks/utils/editDrafts';
 import { isSteeringUserMessage } from './messagePredicates';
 import { UserBubble } from './UserBubble';
 import { assistantText } from './messageText';
@@ -75,7 +76,7 @@ interface MessageBubbleProps {
  * chunk never re-renders settled bubbles through a handler identity.
  */
 export const MessageBubble = memo(function MessageBubble({ message, contentProjection, turnIndex, isTurnTail, isTurnLive, turnFiles, feedback, isLoading, fold = 'unfolded', isSubagentView, readOnly, allowFiles, isMobile, flashContext }: MessageBubbleProps): React.ReactElement | null {
-  const { onOpenFile, onDownloadFile, onRevealFiles, onOpenSources, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
+  const { onOpenFile, onDownloadFile, onRevealFiles, onOpenSources, onEditMessage, editDrafts, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
   const { t } = useTranslation();
   const projection = contentProjection ?? projectMessageContent(message, isSubagentView);
   const isUser = (message.role as string) === 'user';
@@ -89,9 +90,13 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   const hasChartSelections = isUser && chartSelections && chartSelections.length > 0;
   const provenance = isUser ? (message.provenance as MessageProvenance | undefined) : undefined;
 
-  // Edit mode state
-  const [isEditing, setIsEditing] = useState(false);
-  const [editContent, setEditContent] = useState('');
+  // Edit mode lives in the host's draft store, so a reload that remounts the
+  // bubble reopens the box with what was typed in it.
+  const originalText = (message.content as string) || '';
+  const draftStore = useEditDraftStore(editDrafts);
+  const draftText = useEditDraft(draftStore, turnIndex, isUser ? originalText : null);
+  const isEditing = draftText !== undefined;
+  const editContent = draftText ?? '';
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Copy state
@@ -194,13 +199,26 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
     el.style.height = el.scrollHeight + 'px';
   };
   const handleStartEdit = useStableHandler(() => {
-    setEditContent((message.content as string) || '');
-    setIsEditing(true);
-    setTimeout(() => {
-      editTextareaRef.current?.focus();
-      resizeTextarea();
-    }, 0);
+    draftStore.markFocus(turnIndex, originalText);
+    draftStore.put({ turnIndex, original: originalText, text: originalText });
   });
+  // A box that held the focus when a reload took it away takes it back when
+  // it shows again, as does one just opened or given back, unless the user is
+  // somewhere else by then. A layout effect, so its cleanup runs while the
+  // box is still in the document and can tell whether it held the focus.
+  useLayoutEffect(() => {
+    const el = editTextareaRef.current;
+    if (!isEditing || !el) return;
+    resizeTextarea();
+    const active = document.activeElement;
+    if (draftStore.takeFocus(turnIndex, originalText) && (!active || active === document.body)) {
+      el.focus({ preventScroll: true });
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
+    return () => {
+      if (document.activeElement === el) draftStore.markFocus(turnIndex, originalText);
+    };
+  }, [isEditing, draftStore, turnIndex, originalText]);
   const handleCopy = useStableHandler(() => {
     const text = assistantText(message);
     // Confirm only after the write lands (it can reject when the document
@@ -216,17 +234,18 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   if (foldedAway) return null;
 
   const handleCancelEdit = () => {
-    setIsEditing(false);
-    setEditContent('');
+    draftStore.drop(turnIndex, originalText);
   };
 
+  // A running turn holds the chat, so the edit waits in its box until it ends.
   const handleSubmitEdit = () => {
+    if (isLoading) return;
     const trimmed = editContent.trim();
-    if (trimmed && trimmed !== ((message.content as string) || '').trim()) {
+    // Closed first: an edit the session cannot take yet reopens the box.
+    draftStore.drop(turnIndex, originalText);
+    if (trimmed && trimmed !== originalText.trim()) {
       onEditMessage?.(message.id as string, trimmed);
     }
-    setIsEditing(false);
-    setEditContent('');
   };
 
   const handleEditKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -495,7 +514,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
                 ref={editTextareaRef}
                 value={editContent}
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
-                  setEditContent(e.target.value);
+                  draftStore.put({ turnIndex, original: originalText, text: e.target.value });
                   resizeTextarea();
                 }}
                 onKeyDown={handleEditKeyDown}
@@ -510,7 +529,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
               <div className="flex items-start gap-1.5 flex-1 min-w-0">
                 <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" style={{ color: 'var(--color-text-tertiary)' }} />
                 <span className="text-xs leading-snug" style={{ color: 'var(--color-text-tertiary)' }}>
-                  This will branch from the current thread. Messages after this point will be replaced and cannot be recovered.
+                  {t('chat.editReplacesLater')}
                 </span>
               </div>
               <div className={`flex gap-2 shrink-0 ${isMobile ? 'justify-end' : ''}`}>
@@ -526,7 +545,8 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
                 </button>
                 <button
                   onClick={handleSubmitEdit}
-                  className="px-4 py-1.5 rounded-full text-sm font-medium transition-colors"
+                  disabled={isLoading}
+                  className="px-4 py-1.5 rounded-full text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
                     color: 'var(--color-btn-primary-text)',
                     backgroundColor: 'var(--color-btn-primary-bg)',

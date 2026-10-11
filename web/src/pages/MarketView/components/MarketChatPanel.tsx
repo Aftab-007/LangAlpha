@@ -451,6 +451,11 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     handleThumbUp,
     handleThumbDown,
     feedbackByTurn,
+    returnedSteering,
+    clearReturnedSteering,
+    returnedEdit,
+    clearReturnedEdit,
+    editDrafts,
   } = chat;
 
   // The market panel's thread is what the user is looking at — same active
@@ -678,6 +683,22 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   const stableRegenerate = useStableHandler((id: string) =>
     handleRegenerate(id, chatInputRef.current?.getModelOptions?.()));
   const stableRetry = useStableHandler(() => handleRetry(chatInputRef.current?.getModelOptions?.()));
+  // Steering the agent finished without reading comes back to the composer,
+  // beside whatever was typed there since.
+  useEffect(() => {
+    if (returnedSteering) {
+      chatInputRef.current?.giveBack(returnedSteering);
+      clearReturnedSteering();
+    }
+  }, [returnedSteering, clearReturnedSteering]);
+  // Edit text whose message is gone comes back to the composer, beside
+  // whatever is typed there.
+  useEffect(() => {
+    if (returnedEdit) {
+      chatInputRef.current?.giveBack(returnedEdit);
+      clearReturnedEdit();
+    }
+  }, [returnedEdit, clearReturnedEdit]);
   const stableThumbUp = useStableHandler(handleThumbUp);
   const stableThumbDown = useStableHandler(handleThumbDown);
   const stableReportWithAgent = useStableHandler((instruction: string) => {
@@ -706,6 +727,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     onEditMessage: stableEditMessage,
     onRegenerate: stableRegenerate,
     onRetry: stableRetry,
+    editDrafts,
     onThumbUp: stableThumbUp,
     onThumbDown: stableThumbDown,
     onReportWithAgent: stableReportWithAgent,
@@ -716,7 +738,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
     stableApprovePTCAgent, stableRejectPTCAgent, stableApproveSecretaryAction,
     stableRejectSecretaryAction, stableResumeCreditPause, stableApproveToolCall, stableRejectToolCall,
-    stableEditMessage, stableRegenerate, stableRetry,
+    stableEditMessage, stableRegenerate, stableRetry, editDrafts,
     stableThumbUp, stableThumbDown, stableReportWithAgent, stableWidgetSendPrompt,
   ]);
 

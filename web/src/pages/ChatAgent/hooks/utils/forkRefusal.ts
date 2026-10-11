@@ -1,0 +1,122 @@
+/**
+ * An edit or regenerate the server refuses at admission: the thread is busy,
+ * a concurrent request claimed the turn, or the branch moved after this view
+ * read it (`stale_fork`). The route refuses with a 409, and once the stream is
+ * open the refusal arrives as an SSE error frame. Either way the server
+ * truncated nothing, so the view puts back what the fork cut and reloads the
+ * thread. An answer to a pause a fork elsewhere replaced is refused as
+ * `stale_fork` too, and recovers the same way.
+ */
+import type { ChatMessage } from '@/types/chat';
+import type { StructuredError } from '@/utils/rateLimitError';
+import type { EditDraft } from './editDrafts';
+
+/**
+ * The codes a route 409 refuses a request with. Its error carries only the
+ * code, where a frame also says `admission_conflict`. `duplicate_request` is
+ * not one: that request was admitted, and the view adopts its run instead.
+ */
+const REFUSAL_CODES: ReadonlySet<string> = new Set([
+  'running',
+  'stopping',
+  'compacting',
+  'not_running',
+  'request_cancelled',
+  'stale_retry',
+  'not_retryable',
+  'attempt_conflict',
+  'turn_conflict',
+  'stale_fork',
+  'resend_required',
+]);
+
+function readForkRefusal(source: unknown): { code: unknown; message: string } | null {
+  if (!source || typeof source !== 'object') return null;
+  const { errorInfo, error_type: errorType, error, code } = source as {
+    errorInfo?: Record<string, unknown>;
+    error_type?: unknown;
+    error?: unknown;
+    code?: unknown;
+  };
+  if (typeof errorInfo?.code === 'string' && REFUSAL_CODES.has(errorInfo.code)) {
+    return typeof errorInfo.message === 'string' ? { code: errorInfo.code, message: errorInfo.message } : null;
+  }
+  if (errorType === 'admission_conflict') return typeof error === 'string' ? { code, message: error } : null;
+  return null;
+}
+
+/**
+ * The server's message when `source`, a refused request's error or an SSE
+ * error frame, is an admission refusal.
+ */
+export function forkRefusalMessage(source: unknown): string | null {
+  return readForkRefusal(source)?.message ?? null;
+}
+
+/** Whether `source` refuses its request because the chat changed after this
+ *  view read it. */
+export function isStaleForkRefusal(source: unknown): boolean {
+  return readForkRefusal(source)?.code === 'stale_fork';
+}
+
+/** What the user did that cut the transcript, and what a refusal gives back. */
+export interface ForkCut {
+  /** `resume` is an answer to a pause, which cuts nothing but its own reply. */
+  kind: 'edit' | 'regenerate' | 'resume';
+  /** The transcript before the cut. An automatic resend of the fork carries
+   *  it too, since the one it was handed is already cut. */
+  transcript: readonly ChatMessage[];
+  /** What an edit was typed with; null for a regenerate. */
+  draft: EditDraft | null;
+}
+
+export interface ForkRefusalRecovery {
+  /** Recovers from `source` when it is an admission refusal; false otherwise. */
+  recover: (source: unknown, cut: ForkCut) => boolean;
+  /** Recovers a fork this view found the chat changed under before sending
+   *  it, as one the server refused as stale. */
+  stale: (cut: ForkCut) => void;
+  /** Runs when a thread reload shows its transcript. */
+  reveal: (ok: boolean) => void;
+}
+
+export function createForkRefusalRecovery(deps: {
+  setMessages: (messages: ChatMessage[]) => void;
+  setMessageError: (error: string | StructuredError) => void;
+  /** Reloads the thread once the fork's stream has let go of it. */
+  requestReload: () => void;
+  /** Moves on a new turn and on a thread switch. */
+  sessionEpoch: () => number;
+  /** The view's own words for a fork the chat changed under. */
+  staleMessage: (kind: ForkCut['kind']) => string | StructuredError;
+  /** Gives an edit's text back to its box, which outlives the reload. */
+  returnDraft: (draft: EditDraft) => void;
+}): ForkRefusalRecovery {
+  let notice: { message: string | StructuredError; epoch: number } | null = null;
+  const refuse = (message: string | StructuredError, cut: ForkCut) => {
+    // The reload rebuilds only the bubbles a replay made, so the fork's own
+    // would stay under it; the snapshot is also what a failed reload leaves.
+    deps.setMessages([...cut.transcript]);
+    deps.setMessageError(message);
+    if (cut.draft) deps.returnDraft(cut.draft);
+    notice = { message, epoch: deps.sessionEpoch() };
+    deps.requestReload();
+  };
+  return {
+    recover(source, cut) {
+      const refusal = readForkRefusal(source);
+      if (refusal === null) return false;
+      refuse(refusal.code === 'stale_fork' ? deps.staleMessage(cut.kind) : refusal.message, cut);
+      return true;
+    },
+    stale(cut) {
+      refuse(deps.staleMessage(cut.kind), cut);
+    },
+    reveal(ok) {
+      // The reload's replay clears the banner. A failed reload shows its own
+      // error, and after a new turn or on another thread this one is stale.
+      if (ok && notice && notice.epoch === deps.sessionEpoch()) deps.setMessageError(notice.message);
+      notice = null;
+    },
+  };
+}

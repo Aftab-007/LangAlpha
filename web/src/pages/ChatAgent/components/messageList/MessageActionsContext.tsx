@@ -18,6 +18,7 @@ import type { FeedbackResult, SubagentInfo } from './types';
 import type { ToolApprovalPosition } from '@/types/chat';
 import type { OpenFileHandler } from '../../utils/fileLocation';
 import type { ChartTabSpec } from '../filePanel/types';
+import type { EditDraftStore } from '../../hooks/utils/editDrafts';
 
 export interface MessageActions {
   onOpenSubagentTask?: (info: SubagentInfo) => void;
@@ -62,6 +63,9 @@ export interface MessageActions {
   onApproveToolCall?: (approvalId: string, interruptId: string, position: ToolApprovalPosition, attemptId?: string) => void;
   onRejectToolCall?: (approvalId: string, interruptId: string, position: ToolApprovalPosition, message?: string, attemptId?: string) => void;
   onEditMessage?: (messageId: string, content: string) => void;
+  /** The session's open edit boxes, which outlive the bubbles a reload
+   *  remounts. Without it a bubble keeps its own while it lives. */
+  editDrafts?: EditDraftStore;
   onRegenerate?: (messageId: string) => void;
   onRetry?: () => void;
   /** Feedback is addressed by BACKEND TURN, not by bubble — a steering

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Info } from 'lucide-react';
 import { UPSTREAM_HINT_I18N_KEY, type ErrorLinkSpec, type StructuredError } from '@/utils/rateLimitError';
 import { parseErrorMessage } from '@/pages/ChatAgent/utils/parseErrorMessage';
 
@@ -49,6 +49,21 @@ export function ErrorLink({ url, label, labelKey, external }: ErrorLinkSpec): Re
 export function ErrorBanner({ error, className, style }: ErrorBannerProps): React.ReactElement | null {
   const { t } = useTranslation();
   if (!error) return null;
+
+  // Nothing failed: the same quiet row as the thread's other notices.
+  if (typeof error === 'object' && error.kind === 'notice') {
+    return (
+      <div
+        className={`flex items-center gap-2 px-3 py-1.5 text-xs ${className ?? ''}`}
+        role="status"
+        aria-live="polite"
+        style={{ color: 'var(--color-text-tertiary)', ...style }}
+      >
+        <Info aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 wrap-break-word">{error.message}</span>
+      </div>
+    );
+  }
 
   const baseClass = `flex items-start gap-2 px-3 py-2 rounded-md text-sm ${className ?? ''}`;
   const baseStyle: React.CSSProperties = {

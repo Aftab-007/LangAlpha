@@ -62,6 +62,12 @@ export function createUserMessage(
   return msg;
 }
 
+/** Whether a user message carried more than its text: an attachment, a chart
+ *  selection or a widget, which a send of its text alone would drop. */
+export function carriesContext(message: UserMessage): boolean {
+  return !!(message.attachments?.length || message.chartSelections?.length || message.widgetSnapshots?.length);
+}
+
 /** `turnIndex` as for createUserMessage. */
 export function createAssistantMessage(id: string, turnIndex: number | undefined): AssistantMessage {
   return {

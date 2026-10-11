@@ -57,6 +57,9 @@ export interface ChatInputHandle {
    */
   addWidgetSnapshot: (snapshot: WidgetContextSnapshot) => void;
   setValue: (text: string) => void;
+  /** Puts back text the user wrote elsewhere without losing what is typed
+   *  here: into an empty box, else after it, a blank line between. */
+  giveBack: (text: string) => void;
 }
 
 
@@ -352,6 +355,15 @@ function ChatInput({
     },
     setValue(text) {
       setMessage(text);
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    },
+    giveBack(text) {
+      setMessage((prev) => {
+        const typed = prev.trimEnd();
+        if (!typed) return text;
+        if (typed === text || typed.endsWith(`\n\n${text}`)) return prev;
+        return `${typed}\n\n${text}`;
+      });
       setTimeout(() => textareaRef.current?.focus(), 0);
     },
   }), [pillModel, resolvedEffort, resolvedFastMode, effectiveMarketWatch, setMentionedFiles]);

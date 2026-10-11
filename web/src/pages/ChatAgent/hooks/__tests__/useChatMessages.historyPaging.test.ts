@@ -747,11 +747,11 @@ describe('useChatMessages – paging older history', () => {
 
   it('lets paging go on after a fork whose checkpoint read failed', async () => {
     const { result } = await mount();
-    mockFetchTurns.mockResolvedValue({ turns: [] });
+    mockFetchTurns.mockRejectedValue(new Error('network down'));
     await act(async () => {
       await result.current.handleRegenerate('history-assistant-70');
     });
-    expect(result.current.messageError).toBe('Unable to regenerate: checkpoint data unavailable');
+    expect(result.current.messageError).toBe('Failed to process request');
     expect(result.current.olderHistory.status).toBe('idle');
     await act(async () => {
       await result.current.olderHistory.load();
