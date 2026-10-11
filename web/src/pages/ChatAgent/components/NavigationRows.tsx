@@ -25,7 +25,7 @@ import { useNow } from '@/hooks/useNow';
 import { useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
 import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
 import { useThreadFlags } from '@/lib/threadLifecycle/store';
-import type { SidebarAgentRow } from '../session/subagents/subagentStatus';
+import { sidebarAgentRowLabel, type SidebarAgentRow } from '../session/subagents/subagentStatus';
 import { SubagentStatusIcon } from './taskStatusUi';
 import type { NavWorkspace } from '../hooks/useNavigationData';
 import { WorkspaceMenuItems } from './workspaceActions';
@@ -182,8 +182,7 @@ export function AgentRow({ agent, isSelected, isMobile, onSelectAgent, onRemoveA
   // prop (panel visibility) to avoid shadowing.
   const isAgentActive = status === 'active';
 
-  const trimmedDescription = agent.description.trim();
-  const rowLabel = !isMainAgent && trimmedDescription ? trimmedDescription : agent.name;
+  const rowLabel = sidebarAgentRowLabel(agent);
 
   return (
     <div

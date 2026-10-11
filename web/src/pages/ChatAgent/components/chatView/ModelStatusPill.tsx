@@ -2,6 +2,7 @@ import type React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader } from '@/components/ui/loader';
 import type { ModelStatus } from '../../session/types';
+import { StatusLine } from './StatusLine';
 
 /* Model resilience: the provider is retrying the current
    model, or has fallen back to a secondary. Transient —
@@ -13,12 +14,7 @@ export function ModelStatusPill({ modelStatus, isLoading }: {
   const { t } = useTranslation();
   if (!(modelStatus && isLoading)) return null;
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 text-xs"
-      role="status" aria-live="polite"
-      style={{ color: 'var(--color-text-tertiary)' }}>
-      <span aria-hidden="true" className="shrink-0">
-        <Loader size={14} className="text-(--color-accent-primary)" />
-      </span>
+    <StatusLine glyph={<Loader size={14} className="text-(--color-accent-primary)" />}>
       {modelStatus.kind === 'retrying'
         ? t('chat.modelRetrying', {
             model: modelStatus.model,
@@ -26,6 +22,6 @@ export function ModelStatusPill({ modelStatus, isLoading }: {
             total: modelStatus.maxRetries + 1,
           })
         : t('chat.modelFallingBack', { model: modelStatus.toModel })}
-    </div>
+    </StatusLine>
   );
 }

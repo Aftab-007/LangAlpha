@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Clock } from 'lucide-react';
 import { useAutomationMutations } from '@/pages/Automations/hooks/useAutomationMutations';
 import { useWaitingAutomations } from '@/pages/Automations/hooks/useWaitingAutomations';
+import { StatusLine } from './chatView/StatusLine';
 
 /**
  * Automations that came due on this thread while a turn runs here. They wait
@@ -14,20 +15,20 @@ export function QueuedAutomationNotice({ threadId, active }: { threadId: string;
   const waiting = useWaitingAutomations(threadId, active);
   const { skip, busy } = useAutomationMutations();
 
-  // Absent rather than empty: the composer column spaces every child it holds.
+  // Absent rather than empty: the status lines' column pads itself only while
+  // it holds a line.
   if (!waiting.length) return null;
   return (
-    <div className="space-y-3" role="status" aria-live="polite">
+    <div role="status" aria-live="polite">
       {waiting.map((run) => {
         // Truncated beside the Skip button, so the whole line is its title.
         const line = t('chat.automationWaiting', { name: run.automation_name });
         return (
-          <div
+          <StatusLine
             key={run.automation_execution_id}
-            className="flex items-center gap-2 px-3 py-1.5 text-xs"
-            style={{ color: 'var(--color-text-tertiary)' }}
+            live={false}
+            glyph={<Clock className="h-3.5 w-3.5" style={{ color: 'var(--color-accent-primary)' }} />}
           >
-            <Clock aria-hidden="true" className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
             <span className="min-w-0 truncate" title={line}>
               {line}
             </span>
@@ -40,7 +41,7 @@ export function QueuedAutomationNotice({ threadId, active }: { threadId: string;
             >
               {t('chat.automationWaitingSkip')}
             </button>
-          </div>
+          </StatusLine>
         );
       })}
     </div>

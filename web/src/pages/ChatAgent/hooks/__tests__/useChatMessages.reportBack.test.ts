@@ -573,6 +573,28 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     );
   });
 
+  it('names the owed analysts from the load-time /status while the turn it reconnects to streams', async () => {
+    // The watch's own reads wait out a live turn, so the /status the load
+    // holds is the only read that can name them before the turn ends.
+    const analyst = { thread_id: 'th-analyst', workspace_id: 'ws-a', workspace_name: 'Semis', title: 'NVDA margins' };
+    mockStatus.mockResolvedValue(threadStatus({
+      can_reconnect: true,
+      status: 'running',
+      run_id: 'live-run',
+      pending_report_back: true,
+      owed_threads: [analyst],
+    }));
+    const reconnects: CapturedReconnect[] = [];
+    mockReconnect.mockImplementation(hangingReconnect(reconnects));
+    captureWatch();
+
+    const { result } = renderHookWithProviders(() => useChatMessages('ws-rb', 'th-home'));
+
+    await waitFor(() => expect(reconnects.some((r) => r.rid === 'live-run')).toBe(true));
+    await waitFor(() => expect(result.current.reportBackOwedThreads).toEqual([analyst]));
+    expect(result.current.reportBackOwed).toBe(true);
+  });
+
   it('supersedes a streaming report-back when the user jumps into the live PTC thread', async () => {
     // A report-back is STILL streaming on the flash thread when the user clicks
     // the dispatch card. The flash reader owns isStreamingRef; navigation must

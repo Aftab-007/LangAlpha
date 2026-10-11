@@ -1,8 +1,7 @@
 import React, { Suspense, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, FolderOpen, TextSelect, Menu, Info, Clock } from 'lucide-react';
-import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
+import { ArrowLeft, FolderOpen, TextSelect, Menu } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { useLatestRef } from '@/hooks/useLatestRef';
@@ -32,7 +31,6 @@ import { useThreadModel } from '../hooks/useThreadModel';
 import { useThreadSubagents } from '../hooks/useThreadSubagents';
 import { useForeignRunCatchUp } from '../hooks/useForeignRunCatchUp';
 import { useComputerFolders } from '../hooks/useComputerFolders';
-import { QueuedAutomationNotice } from './QueuedAutomationNotice';
 import { saveChatSession, getChatSession, clearChatSession } from '../hooks/utils/chatSessionRestore';
 import type { PreviewData } from '../hooks/utils/types';
 import { useCardState } from '../hooks/useCardState';
@@ -67,8 +65,9 @@ import { WorkspaceProvider } from '../contexts/WorkspaceContext';
 import { RouteLeaveGuardContext } from '../contexts/RouteLeaveGuardContext';
 import SubagentStatusBar from './SubagentStatusBar';
 import TodoDrawer from './TodoDrawer';
-import MarketWatchChip from './MarketWatchChip';
-import { Loader } from '@/components/ui/loader';
+import { ComposerTray, ReconnectingChip, TrayDock } from './chatView/ComposerTray';
+import { useTrayContents } from './chatView/useTrayContents';
+import { useTrayFold } from './chatView/useTrayFold';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { motion, AnimatePresence, type PanInfo } from '@/lib/framer';
 import { MobileBottomSheet } from '@/components/ui/mobile-bottom-sheet';
@@ -85,9 +84,9 @@ import type {
   MsgSelectionTooltipData, ChatViewProps,
 } from './chatView/types';
 import SubagentStatusIndicator from './chatView/SubagentStatusIndicator';
-import { ModelStatusPill } from './chatView/ModelStatusPill';
+import { TranscriptStatus } from './chatView/TranscriptStatus';
 import { FallbackSuggestionPill } from './chatView/FallbackSuggestionPill';
-import { ThreadNotices } from './chatView/ThreadNotices';
+import { ThreadOffers } from './chatView/ThreadNotices';
 import { ChatDiskWarning } from './chatView/ChatDiskWarning';
 import { useToolCallAnnouncer } from './chatView/useToolCallAnnouncer';
 import { useNavPanel } from './chatView/useNavPanel';
@@ -111,7 +110,6 @@ import { useMessageActionBundles } from './chatView/useMessageActionBundles';
 // whole transcript on every frame the composer resized (1.3ms a change on a
 // three-turn thread, against 0.1ms, and growing with the thread).
 const TRANSCRIPT_BOTTOM_PAD = 'pb-[calc(var(--composer-h,0px)+0.5rem)] *:[--composer-h:initial]';
-
 function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName: initialWorkspaceName, isActive = true, onThreadResolved, warmingState = false }: ChatViewProps): React.ReactElement | null {
   const { t } = useTranslation();
   const locale = useLocale();
@@ -294,6 +292,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     hasActiveSubagents,
     awaitingReportBack,
     reportBackOwed,
+    reportBackOwedThreads,
     workspaceStarting,
     isCompacting,
     setIsCompacting,
@@ -384,11 +383,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     return t('chat.placeholderDefault');
   }, [wasStopped, isLoading, pendingInterrupt, hasActiveSubagents, t]);
 
-  // Status-row visibility, hoisted so the wrapper condition and its two children
-  // share one source of truth. The chip self-hides on empty symbols; the tail
-  // shows when the main turn ended but a dispatched subagent is still running.
+  // A market watch is running, so a watch call's row opens the watch's live
+  // Status tab (useRightPanel). The tray reads the same snapshot for its chip.
   const showWatchChip = (marketWatch?.symbols?.length ?? 0) > 0;
-  const showBackgroundTail = hasActiveSubagents && !isLoading;
 
   // Restore steering text to input when agent finishes without consuming it
   useEffect(() => {
@@ -878,6 +875,26 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // The file panel's props are one compiled scope, so this handler's per-chunk
   // identity would re-create every inline prop beside it and re-render the panel.
   const openSubagentTaskFromPanel = useStableHandler(handleOpenSubagentTask);
+
+  // The composer tray, and its fold: while the reader is up in the history the
+  // tray folds into the composer's toolbar, on the jump-to-latest pill's
+  // signal and until the pill's glide to the end has landed. Clicking the
+  // folded dock pours it back out where the reader is, until they scroll on.
+  const trayContents = useTrayContents({
+    marketWatch,
+    agentRows: sidebarAgentRows,
+    isLoading,
+    hasActiveSubagents,
+    reportBackOwed,
+    owedThreads: reportBackOwedThreads,
+    mode: isHome ? 'home' : isFlashMode ? 'flash' : 'ptc',
+  });
+  const { phase: trayPhase, trayRef, dockRef: trayDockRef, peek: peekTray } = useTrayFold({
+    scrolledUp: jumpPill.visible,
+    jumping: scroll.jumping,
+    contents: trayContents,
+    getScroller: getMainScrollRoot,
+  });
 
   // Keep the ref in sync so SSE events (via handleOpenPreviewFromStream) use the latest closure
   useLayoutEffect(() => {
@@ -1480,6 +1497,16 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                           />
                         </DispatchStatusProvider>
                       </MessageActionsProvider>
+                      <TranscriptStatus
+                        modelStatus={modelStatus}
+                        isLoading={isLoading}
+                        retired={threadModel.retired}
+                        workspaceStarting={displayWorkspaceStarting}
+                        isCompacting={isCompacting}
+                        queuedSend={queuedSend}
+                        threadId={feedThreadId}
+                        active={isActive}
+                      />
                     </div>
                   </div>
                 </ScrollArea>
@@ -1607,33 +1634,30 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
               ref={publishComposerHeight}
               className={`absolute inset-x-0 bottom-0 z-10 pointer-events-none ${isMobile ? 'p-3' : 'p-4'} flex justify-center`}
             >
-              {/* sibling-space-y, not space-y: the reconnect notice below floats,
-                  and as the last row it would otherwise hand the composer a
-                  bottom margin; SelectionChips' own margin would win too. */}
+              {/* sibling-space-y, not space-y: SelectionChips' own margin would
+                  otherwise win. */}
               {/* Re-declares --composer-h for the same reason the transcript
                   content does (TRANSCRIPT_BOTTOM_PAD): nothing in the stack
                   reads it. */}
               <div className="w-full max-w-3xl sibling-space-y-3 relative pointer-events-auto [--composer-h:initial]">
                 {activeAgentId === 'main' ? (
                   <>
-                    {/* Watch chip + background-tasks notice share one line, chip
-                        first. Both are presentational; either may be absent (the
-                        chip self-hides when the watch list is empty). Matched pill
-                        height (py-1) keeps them vertically aligned. */}
-                    {(showWatchChip || showBackgroundTail) && (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <MarketWatchChip symbols={marketWatch?.symbols} lastUpdate={marketWatch?.timestamp} onClick={handleOpenStatusFromChat} />
-                        {/* Tail mode: main turn finished but a dispatched subagent is
-                            still running in the backend. Independent of stop. */}
-                        {showBackgroundTail && (
-                          <div className="flex items-center gap-2 px-3 py-1 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-                            <span aria-hidden="true" className="shrink-0">
-                              <Loader size={12} className="text-(--color-accent-primary)" />
-                            </span>
-                            {t('chat.backgroundTasksRunning')}
-                          </div>
-                        )}
-                      </div>
+                    {/* Only rows with a surface of their own sit here: the
+                        transcript scrolls beneath this stack, and a bare line
+                        of text over it reads as part of whatever is under it.
+                        The thread's status lines are under the last reply
+                        instead (data-transcript-status), and what it waits on
+                        is chips in the tray. */}
+                    {trayContents && (
+                      <ComposerTray
+                        contents={trayContents}
+                        phase={trayPhase}
+                        trayRef={trayRef}
+                        dockRef={trayDockRef}
+                        from={flashContext}
+                        onOpenTask={handleSelectAgent}
+                        onOpenWatch={handleOpenStatusFromChat}
+                      />
                     )}
                     {messageError && !isLoading && (
                       <ErrorBanner error={messageError} />
@@ -1641,7 +1665,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                     {!isFlashMode && workspaceRecord?.computer_id && (
                       <ChatDiskWarning computerId={workspaceRecord.computer_id} />
                     )}
-                    <ModelStatusPill modelStatus={modelStatus} isLoading={isLoading} />
                     <FallbackSuggestionPill
                       fallbackSuggestion={fallbackSuggestion}
                       isLoading={isLoading}
@@ -1649,76 +1672,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       onSwitchModel={handleSwitchModel}
                       onDismiss={clearFallbackSuggestion}
                     />
-                    <ThreadNotices model={threadModel} subagents={threadSubagents} mode={composerMode} />
-                    {/* Report-back pending: a follow-up turn will land here —
-                        a flash summary of dispatched PTC thread(s), or a PTC
-                        notification for an unseen subagent result. Suppressed
-                        while the tail chip above already covers running
-                        subagents (they overlap only on PTC threads). */}
-                    {reportBackOwed && !isLoading && !hasActiveSubagents && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 text-xs"
-                        role="status" aria-live="polite"
-                        style={{ color: 'var(--color-text-tertiary)' }}>
-                        <span aria-hidden="true" className="shrink-0">
-                          <Loader size={12} className="text-(--color-accent-primary)" />
-                        </span>
-                        {isHome ? t('agents.reportBackPending') : isFlashMode ? t('chat.reportBackPending') : t('chat.taskReportBackPending')}
-                      </div>
-                    )}
-                    {displayWorkspaceStarting && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 text-xs"
-                        style={{ color: 'var(--color-text-tertiary)' }}>
-                        <span aria-hidden="true" className="shrink-0">
-                          <Loader size={12} className="text-(--color-accent-primary)" />
-                        </span>
-                        <span>{t(displayWorkspaceStarting === 'archived' ? 'chat.workspaceRestoring' : 'chat.workspaceStarting')}</span>
-                        <HoverCard openDelay={150} closeDelay={100}>
-                          <HoverCardTrigger asChild>
-                            <button
-                              type="button"
-                              aria-label={t('chat.workspaceStateHelp')}
-                              className="inline-flex items-center justify-center rounded-full p-0.5 hover:opacity-80 focus:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-                              style={{ color: 'var(--color-text-quaternary)' }}
-                            >
-                              <Info className="h-3 w-3" />
-                            </button>
-                          </HoverCardTrigger>
-                          <HoverCardContent side="top" align="start" className="w-80 text-xs leading-relaxed">
-                            <div className="font-medium mb-1" style={{ color: 'var(--color-text-primary)' }}>
-                              {t(displayWorkspaceStarting === 'archived' ? 'chat.workspaceStateArchivedTitle' : 'chat.workspaceStateStartingTitle')}
-                            </div>
-                            <p style={{ color: 'var(--color-text-secondary)' }}>
-                              {t(displayWorkspaceStarting === 'archived' ? 'chat.workspaceStateArchivedBody' : 'chat.workspaceStateStartingBody')}
-                            </p>
-                            {displayWorkspaceStarting === 'archived' && (
-                              <p className="mt-2" style={{ color: 'var(--color-text-tertiary)' }}>
-                                {t('chat.workspaceStateArchivedFootnote')}
-                              </p>
-                            )}
-                          </HoverCardContent>
-                        </HoverCard>
-                      </div>
-                    )}
-                    {isCompacting && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 text-xs"
-                        role="status" aria-live="polite"
-                        style={{ color: 'var(--color-text-tertiary)' }}>
-                        <span aria-hidden="true" className="shrink-0">
-                          <Loader size={14} className="text-(--color-accent-primary)" />
-                        </span>
-                        {t(isCompacting === 'offload' ? 'chat.offloading' : 'chat.compacting')}
-                      </div>
-                    )}
-                    {queuedSend && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 text-xs"
-                        role="status" aria-live="polite"
-                        style={{ color: 'var(--color-text-tertiary)' }}
-                        title={queuedSend === '…' ? undefined : queuedSend}>
-                        <Clock aria-hidden="true" className="h-3.5 w-3.5" style={{ color: 'var(--color-accent-primary)' }} />
-                        {t('chat.queuedSend')}
-                      </div>
-                    )}
-                    <QueuedAutomationNotice threadId={feedThreadId} active={isActive} />
+                    <ThreadOffers model={threadModel} subagents={threadSubagents} mode={composerMode} />
                     <SelectionChips chips={chartSelectionChips} />
                     {/* One row: the drawer is a tab tucked under the composer's top
                         edge, so no status row may come between them, and the
@@ -1747,26 +1701,15 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                         onToggleSubagents={threadSubagents.setAllowed}
                         mode={composerMode}
                         selectedWorkspaceId={workspaceId}
+                        toolbarStatus={trayContents && (
+                          <TrayDock ref={trayDockRef} phase={trayPhase} contents={trayContents} onOpen={peekTray} />
+                        )}
                       />
                     </div>
-                    {/* Floats above the composer instead of sitting in it: a
-                        reconnect that painted before its backlog landed would
-                        otherwise remove this row on catch-up and drop the whole
-                        input by one line, the one visible hop left on a
-                        mid-stream reload. Last in the stack on purpose: the
-                        parent's sibling gap gives every row after the first a
-                        top margin, so a row mounted ahead of the composer
-                        would shift it by that margin and hand the hop back. */}
-                    {isReconnecting && (
-                      <div className="absolute bottom-full left-0 mb-1 flex items-center gap-2 px-3 py-1.5 text-xs"
-                        role="status" aria-live="polite"
-                        style={{ color: 'var(--color-text-tertiary)' }}>
-                        <span aria-hidden="true" className="shrink-0">
-                          <Loader size={14} className="text-(--color-accent-primary)" />
-                        </span>
-                        {t('chat.reconnecting', 'Reconnecting…')}
-                      </div>
-                    )}
+                    {/* Last in the stack: the parent's sibling gap gives every
+                        row after the first a top margin, so one mounted ahead
+                        of the others would shift them by it. */}
+                    {isReconnecting && <ReconnectingChip />}
                   </>
                 ) : activeAgent && activeAgent.type !== WORKFLOW_TASK_TYPE ? (
                   // Workflow runs are script-driven and take no steering input —

@@ -50,6 +50,7 @@ vi.mock('@/lib/framer', async () => {
     useMotionValue: (v: unknown) => ({ get: () => v, set: () => {}, on: () => () => {}, onChange: () => () => {} }),
     useTransform: () => ({ get: () => 0, set: () => {}, on: () => () => {} }),
     useSpring: (v: unknown) => ({ get: () => v, set: () => {}, on: () => () => {} }),
+    useReducedMotion: () => false,
   };
 });
 

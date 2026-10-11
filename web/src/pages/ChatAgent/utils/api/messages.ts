@@ -215,6 +215,20 @@ interface ThreadReportBackStatus {
   // while this list is non-empty an `idle` read must not be taken as drained.
   // Optional: older backends and the flash slice omit it.
   active_tasks?: string[];
+  // The dispatched threads still owed, oldest first; null when the read
+  // failed. [] can come with a pending report: a PTC thread's slice names the
+  // analysts its hand-offs went to but not its own subagents, and a thread in
+  // a deleted workspace or another owner's has no label. Optional: older
+  // backends omit it.
+  owed_threads?: ReportBackOwedThread[] | null;
+}
+
+/** A dispatched thread that has yet to report back to the thread that sent it. */
+export interface ReportBackOwedThread {
+  thread_id: string;
+  workspace_id: string;
+  workspace_name: string;
+  title: string | null;
 }
 
 // Decoding lives in a dependency-free module (usable where `./api` is mocked);

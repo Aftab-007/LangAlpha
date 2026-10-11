@@ -8,6 +8,7 @@ import { useAllModels } from '@/hooks/useAllModels';
 import { useDefaultModelChange } from '@/hooks/useDefaultModelChange';
 import type { ComposerMode } from '@/lib/modelPreferences';
 import { ThreadOfferRow } from './ThreadOfferRow';
+import { StatusLine } from './StatusLine';
 
 /** Prints a model the way the composer pill does, so the banner names it as
  *  the control right below it. */
@@ -66,20 +67,19 @@ function ThreadModelOffer({ model, defaultModel, mode, onDismiss }: ThreadModelB
 export function RetiredModelNotice({
   model,
   fallback,
+  className,
 }: {
   model: string;
   fallback: string;
+  className?: string;
 }): React.ReactElement {
   const { t } = useTranslation();
   const label = useComposerModelLabel();
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 text-xs"
-      role="status" aria-live="polite"
-      style={{ color: 'var(--color-text-tertiary)' }}>
-      <Info aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+    <StatusLine glyph={<Info className="h-3.5 w-3.5" />} className={className}>
       <span className="min-w-0">
         {t('chat.threadModel.retired', { model: label(model), fallback: label(fallback) })}
       </span>
-    </div>
+    </StatusLine>
   );
 }
