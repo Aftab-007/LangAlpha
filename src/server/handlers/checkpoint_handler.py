@@ -23,6 +23,7 @@ from src.server.utils.checkpoint_helpers import (
     turn_base_checkpoint_id,
     walk_current_branch_boundaries,
 )
+from src.server.utils.pg_sanitize import normalize_uuid
 from src.server.models.chat import ChatRequest
 from src.server.models.workflow import (
     TurnCheckpointInfo,
@@ -112,14 +113,13 @@ async def get_thread_turns(
 def stale_fork_detail() -> dict:
     """The 409 detail for a fork whose branch is no longer the thread's.
 
-    One wording for both refusals: the route's, when the checkpoint forks no
-    turn of the current branch, and START's, when another worker moved the
-    branch after that check.
+    One wording for every refusal: the route's, when the checkpoint forks no
+    turn of the current branch or the client's view missed a newer run, and
+    START's, when another worker moved the branch after that check.
     """
     return {
         "code": "stale_fork",
-        "message": "That message is no longer on this thread's current "
-        "branch. Reload the thread and try again.",
+        "message": "This chat changed since it was loaded. Reload it and try again.",
     }
 
 
@@ -189,6 +189,15 @@ async def resolve_fork_turn(
     raise HTTPException(status_code=409, detail=stale_fork_detail())
 
 
+def _is_run(run: dict | None, run_id: str) -> bool:
+    expected = normalize_uuid(run_id)
+    return (
+        run is not None
+        and expected is not None
+        and normalize_uuid(run["conversation_response_id"]) == expected
+    )
+
+
 async def settle_fork_request(thread_id: str, request: ChatRequest) -> ChatRequest:
     """The fork ``request`` with its turn read off the current branch and the
     branch read START holds it to.
@@ -208,14 +217,25 @@ async def settle_fork_request(thread_id: str, request: ChatRequest) -> ChatReque
             f"[CHAT] fork turn {request.fork_from_turn} from the client "
             f"is turn {fork.turn_index} on the branch thread_id={thread_id}"
         )
-    if fork.unstarted and not request.messages:
+    unstarted_regenerate = fork.unstarted and not request.messages
+    latest = None
+    if request.expected_latest_run_id is not None or unstarted_regenerate:
         from src.server.database.runs.lifecycle import get_latest_attempt
+
+        latest = await get_latest_attempt(thread_id)
+    # The branch was read as it is now, a turn this client never saw on it
+    # included, so only the client's own last run tells a fork made from a
+    # stale view apart.
+    if request.expected_latest_run_id is not None and not _is_run(
+        latest, request.expected_latest_run_id
+    ):
+        raise HTTPException(status_code=409, detail=stale_fork_detail())
+    if unstarted_regenerate:
         from src.server.handlers.chat.admission_gate import admission_conflict_detail
         from src.server.services.runs.pending_input import (
             unstarted_regenerate_request,
         )
 
-        latest = await get_latest_attempt(thread_id)
         # An open run is the unstarted turn still starting: refused as any
         # fork into a running turn is.
         if latest is not None and latest["status"] == "in_progress":

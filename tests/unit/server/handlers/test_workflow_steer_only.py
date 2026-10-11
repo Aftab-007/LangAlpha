@@ -236,5 +236,7 @@ async def test_flash_dispatched_forwards_can_steer_false():
 def test_only_a_steerable_foreground_turn_steers(steerable, dispatched, retry_of, allowed):
     from src.server.handlers.chat.admission_gate import steer_allowed
 
-    request = MagicMock(retry_of_run_id=retry_of)
+    request = MagicMock(
+        retry_of_run_id=retry_of, fork_from_turn=None, checkpoint_id=None
+    )
     assert steer_allowed(request, dispatched=dispatched, steerable=steerable) is allowed

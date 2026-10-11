@@ -375,6 +375,14 @@ class ChatRequest(BaseModel):
         "naming the turn it replaces. The server reads that turn from the "
         "checkpoint and deletes queries/responses from it onward.",
     )
+    expected_latest_run_id: Optional[str] = Field(
+        default=None,
+        description="The thread's newest run as this client last saw it: the "
+        "replay's latest_run_id, or a run the client started or joined since. A "
+        "fork is refused (409 stale_fork) when the thread's latest run is a "
+        "different one, so an edit or regenerate from a view that missed a turn "
+        "cannot delete it. Omit to skip the check.",
+    )
     # Server-stamped: the thread's branch tip when the route read the fork's
     # turn. Read only for a fork, whose validation always overwrites it, so a
     # client value never reaches START, which admits the fork only while the

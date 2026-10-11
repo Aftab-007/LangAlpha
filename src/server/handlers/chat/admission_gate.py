@@ -85,11 +85,15 @@ def steer_allowed(
     """Whether a running turn on the thread may take this request as a steer.
 
     Foreground turns steer. A dispatched flow, a retry (a /retry that finds
-    another live run is a conflict, not an empty steering message into it)
-    and a non-steerable caller (an automation's instruction is a turn of its
-    own) meet a running peer with a 409 instead.
+    another live run is a conflict, not an empty steering message into it), a
+    fork (an edit or a regenerate replaces a turn, which a message added to
+    the running one cannot do) and a non-steerable caller (an automation's
+    instruction is a turn of its own) meet a running peer with a 409 instead.
     """
-    return steerable and not dispatched and request.retry_of_run_id is None
+    is_fork = request.fork_from_turn is not None and bool(request.checkpoint_id)
+    return (
+        steerable and not dispatched and request.retry_of_run_id is None and not is_fork
+    )
 
 
 async def wait_or_steer(

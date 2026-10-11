@@ -288,6 +288,32 @@ async def _reject_duplicate_request(request_key: str, user_id: str) -> None:
     raise HTTPException(status_code=409, detail=detail)
 
 
+async def _settle_against_branch(
+    thread_id: str, request: ChatRequest, user_id: str
+) -> ChatRequest:
+    """A fork or HITL answer checked against the thread's branch.
+
+    A retransmit whose first copy started after the duplicate probe finds
+    that copy's run there and reads it as a change its view never saw. Its
+    key names the run, so it gets the duplicate answer, not a refusal.
+    """
+    from src.server.handlers.checkpoint_handler import (
+        settle_fork_request,
+        settle_resume_request,
+    )
+
+    try:
+        if request.fork_from_turn is not None and request.checkpoint_id:
+            return await settle_fork_request(thread_id, request)
+        if request.hitl_response:
+            return await settle_resume_request(thread_id, request)
+        return request
+    except HTTPException as refused:
+        if refused.status_code == 409 and request.request_key:
+            await _reject_duplicate_request(request.request_key, user_id)
+        raise
+
+
 async def _handle_send_message(
     request: ChatRequest, auth: ChatRateLimited, thread_id: str,
     raw_request: Request | None = None,
@@ -405,14 +431,7 @@ async def _handle_send_message(
         # later reader (the truncation, the regenerate's turn, the prior-turn
         # read) takes it from the request, so it is settled here, once, with
         # the branch tip it was read off for START to hold it to.
-        if request.fork_from_turn is not None and request.checkpoint_id:
-            from src.server.handlers.checkpoint_handler import settle_fork_request
-
-            request = await settle_fork_request(thread_id, request)
-        elif request.hitl_response:
-            from src.server.handlers.checkpoint_handler import settle_resume_request
-
-            request = await settle_resume_request(thread_id, request)
+        request = await _settle_against_branch(thread_id, request, user_id)
 
         # Resolve workspace_id from thread if not provided
         if not workspace_id and thread_meta:
@@ -888,7 +907,8 @@ async def replay_thread_messages(
     - message_chunk/tool_* events: projected from checkpoints or emitted from
       stored sse_events, per ``source``
     - snapshot: cursors for the runs replay could not project (newest page only)
-    - replay_done: terminal sentinel
+    - replay_done: terminal sentinel; on the newest page it also names the
+      thread's newest run (``latest_run_id``), read before the transcript
     """
     try:
         rows = await get_replay_thread_data(thread_id)
@@ -958,8 +978,16 @@ async def replay_thread_messages(
                         f"data: {json.dumps(snapshot, ensure_ascii=False, default=str)}\n\n"
                     )
 
+            # The newest page names the thread's newest run as of this read,
+            # which a fork from this view sends back as expected_latest_run_id.
+            done: dict[str, object] = {"thread_id": thread_id}
+            if before_turn is None:
+                latest_run_id = rows.thread.get("latest_run_id")
+                done["latest_run_id"] = (
+                    str(latest_run_id) if latest_run_id is not None else None
+                )
             seq += 1
-            yield f"id: {seq}\nevent: replay_done\ndata: {json.dumps({'thread_id': thread_id}, default=str)}\n\n"
+            yield f"id: {seq}\nevent: replay_done\ndata: {json.dumps(done, default=str)}\n\n"
 
         return StreamingResponse(
             observe_replay_stream(event_generator(), source="private"),

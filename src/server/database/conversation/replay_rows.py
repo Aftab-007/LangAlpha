@@ -23,7 +23,8 @@ class ThreadRows:
     # Canonical, as the rows store it.
     thread_id: str
     owner_id: str
-    # The thread row's summary; ``latest_checkpoint_id`` is the commit pointer.
+    # The thread row's summary; ``latest_checkpoint_id`` is the commit pointer
+    # and ``latest_run_id`` the thread's newest run (its latest attempt).
     thread: dict[str, Any]
     queries: list[dict[str, Any]]
     # One settled response per turn, without its stored events.
@@ -88,11 +89,18 @@ async def get_replay_thread_data(thread_id: str) -> ThreadRows | None:
             if owner_id is None:
                 return None
 
-            # 2. Thread summary
+            # 2. Thread summary, with its newest run. Read before the rows and
+            # checkpoints the replay shows, so a run that starts during the
+            # read is never named as one the client has seen.
             await cur.execute(
                 """SELECT conversation_thread_id, workspace_id, current_status,
-                          thread_index, latest_checkpoint_id, created_at, updated_at
-                   FROM conversation_threads
+                          thread_index, latest_checkpoint_id, created_at, updated_at,
+                          (SELECT r.conversation_response_id
+                           FROM conversation_responses r
+                           WHERE r.conversation_thread_id = t.conversation_thread_id
+                           ORDER BY r.run_seq DESC
+                           LIMIT 1) AS latest_run_id
+                   FROM conversation_threads t
                    WHERE conversation_thread_id = %s""",
                 (thread_id,),
             )
