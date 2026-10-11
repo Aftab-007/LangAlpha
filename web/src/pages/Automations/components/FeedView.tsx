@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { HeaderButton, ListError, ListSkeleton } from '@/components/mcp/McpPrimitives';
 import { useLocale } from '@/hooks/useLocale';
@@ -10,7 +10,7 @@ import { useAutomationMutations, type AutomationMutations } from '../hooks/useAu
 import { useOpenThread } from '../hooks/useOpenThread';
 import { useRecentRuns } from '../hooks/useRecentRuns';
 import type { TemplateId } from '../utils/templates';
-import { deliveryMethodName } from '../utils/delivery';
+import { deliveryAttemptLabel } from '../utils/delivery';
 import { groupRunsByDay, nearDayKeys, runTime } from '../utils/feed';
 import { automationActions, describeRun } from '../utils/status';
 import { formatClock, formatDayHeading, formatDuration } from '../utils/time';
@@ -39,12 +39,13 @@ export default function FeedView({ automations, readings, onOpenAutomation, onOp
   const { t } = useTranslation();
   const locale = useLocale();
   const now = useNow();
-  const { runs, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage } = useRecentRuns();
+  const byId = useMemo(() => new Map(automations.map((a) => [a.automation_id, a])), [automations]);
+  const delivers = useCallback((id: string) => (byId.get(id)?.delivery_config?.methods.length ?? 0) > 0, [byId]);
+  const { runs, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage } = useRecentRuns(delivers);
   // Once for the feed, its entries and its rail: each would otherwise hold
   // its own observer for each verb.
   const mutations = useAutomationMutations();
   const { label: modeLabel } = useAgentModeLabels();
-  const byId = useMemo(() => new Map(automations.map((a) => [a.automation_id, a])), [automations]);
 
   const days = useMemo(() => groupRunsByDay(runs), [runs]);
 
@@ -130,13 +131,8 @@ function RunEntry({
   } else if (view.showDuration) {
     meta.push(formatDuration(run.started_at, run.completed_at, t));
   }
-  for (const attempt of run.delivery_result ?? []) {
-    meta.push(
-      t(attempt.success ? 'automation.deliveredVia' : 'automation.deliveryFailedVia', {
-        method: deliveryMethodName(attempt.method, t),
-      }),
-    );
-  }
+  // Where each delivery landed and how, by the name the run recorded.
+  for (const attempt of run.delivery_result ?? []) meta.push(deliveryAttemptLabel(attempt, t));
 
   // Retry is a fresh run, offered as the inspector's Run now is; a disabled
   // automation has to be resumed first.

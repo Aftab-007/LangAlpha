@@ -87,6 +87,7 @@ from .flash_handover import cancel_tool_calls_it_lacks
 from src.server.services.llm.clients import is_own_key_turn
 from src.server.services.llm.config import resolve_llm_config
 from src.server.services.llm.thread_model import NamedModel
+from src.tools.messaging import messaging_enabled
 from .steering import (
     drain_steering_return_event,
     steer_thread,
@@ -219,6 +220,12 @@ async def astream_flash_workflow(
             msg_type="flash",
             initial_query=user_input,
         )
+        # Flash has no messaging tools. With a channel gateway configured, the
+        # rules it sends are written for an agent that replies through them,
+        # and would tell Flash to call a tool it lacks, so Flash leaves them
+        # out. The turn's run line still names the surface.
+        if request.surface_rules and messaging_enabled():
+            request = request.model_copy(update={"surface_rules": None})
         user_profile = await get_user_profile_for_prompt(user_id) if user_id else None
         turn_context = build_turn_context(
             request, prior_thread, user_profile=user_profile

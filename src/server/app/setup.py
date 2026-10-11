@@ -954,6 +954,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Error closing usage limits HTTP client: {e}")
 
+    # 9.1. Close the messaging gateway HTTP client
+    try:
+        from src.tools.messaging.tools import close_client
+
+        await close_client()
+    except Exception as e:
+        logger.warning(f"Error closing messaging HTTP client: {e}")
+
     # 9.5. Close the PDF render browser singleton (headless Chromium), if one
     # was launched to serve ?format=pdf. No-op when the pdf extra is unused.
     try:

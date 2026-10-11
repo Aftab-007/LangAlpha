@@ -809,7 +809,7 @@ async def requeue_job_with_key(
 
 
 async def merge_job_payload(
-    job_id: str, patch: Dict[str, Any], *, remove: Optional[List[str]] = None
+    job_id: str, patch: Dict[str, Any], *, remove: Optional[List[str]] = None, conn=None
 ) -> bool:
     """Durably merge keys into a job's payload (e.g. dispatched_run_id after
     the synthetic POST) so a reclaiming drainer resumes instead of re-doing
@@ -818,8 +818,9 @@ async def merge_job_payload(
     run id lands — one atomic step, so a crash can never leave neither).
     Deliberately unfenced: a stale owner's merge carries the same
     request-key-deduped run id the live owner would write — the information
-    is true even after the lease was lost."""
-    async with pool.get_db_connection() as conn:
+    is true even after the lease was lost. ``conn`` joins the caller's
+    transaction, for a merge that must commit with the effect it records."""
+    async with pool.get_db_connection(conn) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """

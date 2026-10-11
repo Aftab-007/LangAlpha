@@ -20,6 +20,7 @@ from src.server.models.automation import (
     AutomationRunsListResponse,
     AutomationsListResponse,
     AutomationUpdate,
+    DeliveryConfig,
     ExecutionStatus,
     future_run,
     on_clock,
@@ -304,6 +305,16 @@ class TestDelivery:
     )
     def test_a_list_or_a_comma_string_is_the_methods(self, written, methods):
         assert parse_delivery(written) == {"methods": methods}
+
+    def test_a_blank_entry_in_a_request_is_dropped(self):
+        config = DeliveryConfig(methods=["slack", "", "  ", " discord:@me "])
+
+        assert config.methods == ["slack", "discord:@me"]
+
+    def test_an_update_naming_only_blanks_names_none(self):
+        update = AutomationUpdate.model_validate({"delivery_config": {"methods": [""]}})
+
+        assert update.delivery_config.methods == []
 
     @pytest.mark.parametrize("written", [None, 3, ["slack", 1], {"methods": ["slack"]}])
     def test_anything_else_is_refused_with_the_shape(self, written):

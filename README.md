@@ -76,7 +76,7 @@ A new thread builds it from the research and files earlier threads left in the w
 
 ### ⏰ Agents that keep watch
 
-Schedule a brief before the open, or wake an agent when a stock crosses a price or moves a set percentage in a day. Results land in one feed, and in Slack, Discord or iMessage if you connect them.
+Schedule a brief before the open, or wake an agent when a stock crosses a price or moves a set percentage in a day. Results land in one feed, and in Slack, Discord, Telegram or iMessage if you connect them and pick them for delivery.
 
 > *"Keep watch on CBRS for me. Check the model's assumptions every Monday, update it after Q3 results, and tell me if the stock breaks above our bull value or below $95."*
 
@@ -189,7 +189,7 @@ Open [http://localhost:5173](http://localhost:5173). The API listens on port 800
 | Market data | Live quotes for US equities and options, with extended hours. China A-shares coming soon | Yahoo Finance or FMP quotes, refreshed every 60 seconds and shown as delayed |
 | Options and market structure | Options chains and snapshots, short interest, float and top movers | Not available |
 | Price triggers | Fire on live ticks | Poll every 30 seconds against the delayed quotes |
-| Channels | Chat in Slack, Discord, Telegram, Feishu and iMessage, with automation results in Slack, Discord and iMessage | Web app and desktop app. Automation results go to a webhook you run (`AUTOMATION_WEBHOOK_URL`) |
+| Channels | Chat in Slack, Discord, Telegram, Feishu and iMessage, with automation results in Slack, Discord, Telegram and iMessage | Web app and desktop app. Automation results go to a webhook you run (`AUTOMATION_WEBHOOK_URL`) |
 | Accounts | Sign-in with separate data per user | One local user with no sign-in, so anyone who can reach it acts as you, connected brokerages included. Keep it on your machine or a private network |
 | Models | Models included with your plan, your own keys, or Claude and ChatGPT sign-in | Your own keys, coding plans, local models, or Claude and ChatGPT sign-in |
 | Availability | Runs 24/7 on AWS in US East, so automations and price triggers fire while your computer sleeps | Runs only while your machine and its Docker stack are up |

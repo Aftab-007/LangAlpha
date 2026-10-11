@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 from uuid import uuid4
 
 from psycopg.rows import dict_row
@@ -146,6 +146,7 @@ async def settle_execution(
     strike: Optional[Literal["count", "fuse", "reset"]] = None,
     schedule: Optional[ScheduleAction] = None,
     quiet_for: Optional[int] = None,
+    in_transaction: Optional[Callable[[Any, Dict[str, Any]], Awaitable[Any]]] = None,
     **fields: Any,
 ) -> Optional[Dict[str, Any]]:
     """End a firing and write what it leaves on its automation, in one
@@ -155,10 +156,13 @@ async def settle_execution(
     alert 'executing' behind a settled firing. ``quiet_for`` settles only a
     firing whose heartbeat has been quiet that many seconds, which is what
     keeps the sweep off a firing whose process came back. Returns the row's
-    thread and run, ``settled_from``, the status it left, and the
-    ``previous_failure_reason`` and ``previous_delivery_result`` of the
-    automation's newest firing settled before this one, a server skip aside,
-    so a caller can tell a repeat the channel already heard from news.
+    thread and run, ``settled_from``, the status it left, the ``delivery``
+    its start kept (``stamp_delivery``), and the ``previous_failure_reason``
+    and ``previous_delivery_result`` of the automation's newest firing
+    settled before this one, a server skip aside, so a caller can tell a
+    repeat the channel already heard from news. ``in_transaction`` is
+    awaited with the connection and that row before the commit, for work
+    that must commit with the settle or not at all.
     """
     async with get_db_connection() as conn:
         async with conn.transaction():
@@ -177,7 +181,8 @@ async def settle_execution(
                     quiet = "AND heartbeat_at < NOW() - make_interval(secs => %s)"
                     params.append(quiet_for)
                 await cur.execute(f"""
-                    SELECT status, created_at FROM automation_executions
+                    SELECT status, created_at, delivery
+                    FROM automation_executions
                     WHERE automation_execution_id = %s AND automation_id = %s
                       {quiet}
                     FOR UPDATE
@@ -222,9 +227,10 @@ async def settle_execution(
                     await cur.execute(
                         _SCHEDULE_SQL[schedule], (automation_id, prior["created_at"])
                     )
-                return {
+                settled = {
                     **row,
                     "settled_from": prior["status"],
+                    "delivery": prior["delivery"],
                     "previous_failure_reason": (
                         previous["failure_reason"] if previous else None
                     ),
@@ -232,11 +238,35 @@ async def settle_execution(
                         previous["delivery_result"] if previous else None
                     ),
                 }
+            if in_transaction is not None:
+                await in_transaction(conn, settled)
+            return settled
 
 
-async def record_delivery(execution_id: str, delivery_result: list) -> None:
-    """Record what the webhook delivery returned, whatever the status."""
+async def stamp_delivery(execution_id: str, stamp: Optional[Dict[str, Any]]) -> bool:
+    """Keep how the firing's start left its delivery in its ``delivery``
+    column, or clear it with None; False once the firing settled.
+
+    Its turn's run row carries the same stamp only from START, and a process
+    that dies before then leaves the sweep this row alone to settle by: the
+    settle reads the column under its lock (``settle_execution``). Only an
+    unsettled firing is written, so a settled one keeps the start its settle
+    went by.
+    """
     async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(f"""
+                UPDATE automation_executions SET delivery = %s
+                WHERE automation_execution_id = %s
+                  AND status IN {UNSETTLED_STATUSES}
+            """, (Json(stamp) if stamp is not None else None, execution_id))
+            return cur.rowcount > 0
+
+
+async def record_delivery(execution_id: str, delivery_result: list, *, conn=None) -> None:
+    """Record what the webhook delivery returned, whatever the status.
+    ``conn`` joins the caller's transaction."""
+    async with get_db_connection(conn) as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
                 UPDATE automation_executions SET delivery_result = %s
