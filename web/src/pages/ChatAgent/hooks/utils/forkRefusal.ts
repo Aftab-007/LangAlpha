@@ -61,6 +61,31 @@ export function forkRefusalMessage(source: unknown): string | null {
 // changed after this view read it.
 const isStaleCode = (code: unknown): boolean => code === 'stale_fork' || code === 'stale_retry';
 
+/** Refused because a reply in the chat was running or stopping, or the chat
+ *  was compacting. */
+export type BusyCode = 'running' | 'stopping' | 'compacting';
+
+/**
+ * The view's words for a busy refusal, by its code. The server's name the
+ * CLI's commands, and say the turn is still running when the reload that
+ * follows may find it over.
+ */
+export const BUSY_REFUSAL_KEYS: Readonly<Record<BusyCode, string>> = {
+  running: 'chat.busyRunning',
+  stopping: 'chat.busyStopping',
+  compacting: 'chat.busyCompacting',
+};
+
+/** The same, in the failed reply of a send the refusal stopped, whose Retry
+ *  sends the message again. */
+export const BUSY_REPLY_KEYS: Readonly<Record<BusyCode, string>> = {
+  ...BUSY_REFUSAL_KEYS,
+  running: 'chat.busyRunningSend',
+};
+
+export const isBusyCode = (code: unknown): code is BusyCode =>
+  typeof code === 'string' && Object.hasOwn(BUSY_REFUSAL_KEYS, code);
+
 /** Whether `source` refuses its request because the chat changed after this
  *  view read it. */
 export function isStaleForkRefusal(source: unknown): boolean {
@@ -97,8 +122,9 @@ export interface ForkRefusalRecovery {
   /** Recovers a fork this view found the chat changed under before sending
    *  it, as one the server refused as stale. */
   stale: (cut: ForkCut) => void;
-  /** Runs when a thread reload shows its transcript. */
-  reveal: (ok: boolean) => void;
+  /** Runs when a thread reload shows its transcript; `live` when it shows a
+   *  run in progress, which it then follows. */
+  reveal: (ok: boolean, live: boolean) => void;
 }
 
 export function createForkRefusalRecovery(deps: {
@@ -113,6 +139,8 @@ export function createForkRefusalRecovery(deps: {
   /** Gives an edit's text back to its box, which outlives the reload; the
    *  box takes the focus unless `focus` is false. */
   returnDraft: (draft: EditDraft, focus?: boolean) => void;
+  /** The view's own words for a request refused because the chat was busy. */
+  busyMessage: (code: BusyCode) => string | StructuredError;
   /** The view's own words for a turn whose input the user has to send again;
    *  `givenBack` when its question went back to the composer. */
   resendMessage: (givenBack: boolean) => string | StructuredError;
@@ -122,17 +150,23 @@ export function createForkRefusalRecovery(deps: {
    *  replaces. */
   markPersisted: () => void;
 }): ForkRefusalRecovery {
-  let notice: { message: string | StructuredError; epoch: number } | null = null;
-  const refuse = (message: string | StructuredError | null, cut: ForkCut, persisted = false) => {
+  let notice: { message: string | StructuredError; epoch: number; busy: boolean } | null = null;
+  const refuse = (
+    message: string | StructuredError | null,
+    cut: ForkCut,
+    { persisted = false, busy = false }: { persisted?: boolean; busy?: boolean } = {},
+  ) => {
     // The reload rebuilds only the bubbles a replay made, so the fork's own
     // would stay under it; the snapshot is also what a failed reload leaves.
     deps.setMessages([...cut.transcript]);
     if (persisted) deps.markPersisted();
-    if (message !== null) deps.setMessageError(message);
+    // A busy refusal waits for the reload, which alone knows if the turn it
+    // names is still running. One still running says so itself.
+    if (message !== null && !busy) deps.setMessageError(message);
     // The edit itself goes back last, so its box is the one with the focus.
     for (const draft of cut.dropped ?? []) deps.returnDraft(draft, false);
     if (cut.draft) deps.returnDraft(cut.draft);
-    notice = message === null ? null : { message, epoch: deps.sessionEpoch() };
+    notice = message === null ? null : { message, epoch: deps.sessionEpoch(), busy };
     deps.requestReload();
   };
   return {
@@ -144,13 +178,15 @@ export function createForkRefusalRecovery(deps: {
       } else if (refusal.code === 'not_retryable' && cut.kind === 'retry') {
         // The latest run did not fail, so the reply this view marked failed is
         // not the server's: the reload shows the one it holds in its place.
-        refuse(null, cut, true);
+        refuse(null, cut, { persisted: true });
       } else if (refusal.code === 'resend_required') {
         // What the turn carried besides its text is kept nowhere, so the user
         // sends it again. The text goes back to the composer when the reply
         // sits right under it; a reply to an answered pause has none to give.
         if (cut.asked) deps.giveBack(cut.asked);
         refuse(deps.resendMessage(Boolean(cut.asked)), cut);
+      } else if (isBusyCode(refusal.code)) {
+        refuse(deps.busyMessage(refusal.code), cut, { busy: true });
       } else {
         refuse(refusal.message, cut);
       }
@@ -159,10 +195,12 @@ export function createForkRefusalRecovery(deps: {
     stale(cut) {
       refuse(deps.staleMessage(cut.kind), cut);
     },
-    reveal(ok) {
+    reveal(ok, live) {
       // The reload's replay clears the banner. A failed reload shows its own
       // error, and after a new turn or on another thread this one is stale.
-      if (ok && notice && notice.epoch === deps.sessionEpoch()) deps.setMessageError(notice.message);
+      if (ok && notice && notice.epoch === deps.sessionEpoch() && !(notice.busy && live)) {
+        deps.setMessageError(notice.message);
+      }
       notice = null;
     },
   };

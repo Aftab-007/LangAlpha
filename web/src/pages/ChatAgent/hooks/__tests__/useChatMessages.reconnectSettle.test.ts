@@ -262,11 +262,11 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     const streaming = (hook.result.current.liveMessages.get() as MessageRecord[]).filter((m) => m.isStreaming);
     expect(streaming).toEqual([]);
     // The stream failed, which says nothing of the run: the bubble claims
-    // neither that the turn ended nor that it failed, and the banner carries
-    // the error.
+    // neither that the turn ended nor that it failed, and the banner says the
+    // view lost the reply, in its own words.
     expect(bubbleShowing(hook, 'and then').completionObservedAt).toBeUndefined();
     expect(bubbleShowing(hook, 'and then').error).toBeUndefined();
-    expect(hook.result.current.messageError).toBeTruthy();
+    expect(hook.result.current.messageError).toEqual({ message: 'chat.reconnectFailed', kind: 'notice' });
   });
 
   it('an attach a load opened that drops is retried, and the turn ends on the retry', async () => {
@@ -353,7 +353,7 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
 
     expect(mockReconnect).toHaveBeenCalledTimes(1);
-    expect(hook.result.current.messageError).toBe('Not authenticated');
+    expect(hook.result.current.messageError).toEqual({ message: 'chat.reconnectSignedOut', kind: 'notice' });
     // Nothing reloads the transcript over the error.
     expect(mockReplay).toHaveBeenCalledTimes(1);
     const streaming = (hook.result.current.liveMessages.get() as MessageRecord[]).filter((m) => m.isStreaming);
@@ -851,7 +851,7 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     await refuse();
     await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
-    expect(hook.result.current.messageError).toBe('crafted 500');
+    expect(hook.result.current.messageError).toEqual({ message: 'chat.historyLoadFailed', kind: 'notice' });
 
     await act(async () => {
       window.dispatchEvent(new Event('online'));

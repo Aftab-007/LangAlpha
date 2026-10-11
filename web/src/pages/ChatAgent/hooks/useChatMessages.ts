@@ -44,9 +44,9 @@ import type { PreviewData } from './utils/types';
 import { createRecentlySentTracker } from './utils/recentlySentTracker';
 import { createRequestKeyTracker } from './utils/requestKey';
 import { withServerTotals, withoutServerTotals } from './utils/contextWindowEvent';
-import { createForkRefusalRecovery, forkRefusalMessage, isRecoverableRetryRefusal, isStaleForkRefusal, type ForkCut } from './utils/forkRefusal';
+import { BUSY_REFUSAL_KEYS, createForkRefusalRecovery, forkRefusalMessage, isBusyCode, isRecoverableRetryRefusal, isStaleForkRefusal, type BusyCode, type ForkCut } from './utils/forkRefusal';
 import { createEditDraftStore, sameDraftMessage, type EditDraft } from './utils/editDrafts';
-import { handleReasoningSignal, handleTextContent } from './utils/streamEventHandlers';
+import { settleStoppedBubble } from '../session/stream/stopBubble';
 import { useMarketWatch } from './useMarketWatch';
 import { refreshComputersAfterTurn } from './useComputers';
 // Chart-annotation live bridge: writes agent-drawn annotations into the
@@ -394,7 +394,7 @@ export function useChatMessages(
   };
   // Local-layer run-liveness publish (declared here so it sits below the
   // run-id ref it reads).
-  useLocalRunPublisher(threadId, isLoading, currentRunIdRef);
+  useLocalRunPublisher(threadId, isLoading, currentRunIdRef, latestRunIdRef);
   // The host's read of that ref: whether a run is the one this view is
   // streaming or last streamed. Read, not handed out, so no caller can move
   // the reconnect target.
@@ -873,6 +873,10 @@ export function useChatMessages(
     message: t(kind === 'edit' ? 'chat.forkStaleEdit' : 'chat.forkStaleRegenerate'),
     kind: 'notice',
   }));
+  const busyRefusalMessage = useStableHandler((code: BusyCode): StructuredError => ({
+    message: t(BUSY_REFUSAL_KEYS[code]),
+    kind: 'notice',
+  }));
   const resendMessage = useStableHandler((givenBack: boolean): StructuredError => ({
     message: t(givenBack ? 'chat.resendRequired' : 'chat.resendLastMessage'),
     kind: 'notice',
@@ -890,6 +894,7 @@ export function useChatMessages(
     sessionEpoch: () => sessionEpochRef.current,
     staleMessage: staleForkMessage,
     returnDraft: returnEditDraft,
+    busyMessage: busyRefusalMessage,
     resendMessage,
     giveBack: (text) => setReturnedEdit((prev) => [prev, text].filter(Boolean).join('\n\n')),
     markPersisted: () => markTranscriptPersisted(),
@@ -904,6 +909,7 @@ export function useChatMessages(
   const loadConversationHistory = (
     beforeReveal?: (ok: boolean) => void,
     latestTurnIndex?: number | null,
+    live = false,
   ): Promise<boolean> => {
     const tid = threadId;
     // The newest turn the thread has: /status's count, or what this view has
@@ -918,7 +924,7 @@ export function useChatMessages(
       projectSubagentHistory: (byTaskId) => projectSubagentHistory(runtime, byTaskId),
       beforeReveal: (ok) => {
         beforeReveal?.(ok);
-        forkRefusal.reveal(ok);
+        forkRefusal.reveal(ok, live);
         // A failed reload leaves a transcript that cannot say what is gone.
         if (ok) settleEditDrafts();
       },
@@ -1176,7 +1182,7 @@ export function useChatMessages(
         );
         setMessages((prev) => (prev.some(behind) ? prev.map((m) => (behind(m) ? { ...m, turnIndex: liveTurn } : m)) : prev));
       }
-      const loadOk = await loadConversationHistory(settleEndedRun, status.latest_turn_index);
+      const loadOk = await loadConversationHistory(settleEndedRun, status.latest_turn_index, status.can_reconnect === true);
 
       if (cancelled || turnTookOver()) return;
 
@@ -1419,12 +1425,9 @@ export function useChatMessages(
    * surgery). Aborting the reader means no server terminal event arrives, so
    * without this the open blocks would render "thinking"/half-streamed forever.
    *
-   * Closes, for the main message: the open reasoning block (synthetic
-   * `reasoning_signal: 'complete'` via handleReasoningSignal) and the message
-   * itself (synthetic `finish_reason: 'stopped'` via the handleTextContent
-   * finishReason branch). Also stamps a `stopped` flag for the per-message chip.
-   * Then closes every active subagent card's open reasoning + marks its last
-   * streaming message complete.
+   * Closes the main message through settleStoppedBubble, the same close a
+   * cancel from elsewhere gets from its `run_end`. Then closes every active
+   * subagent card's open reasoning + marks its last streaming message complete.
    *
    * Idempotent: guarded by wasStoppedRef so a double-stop (or re-entry) is a
    * no-op and synthetic closes can't append twice.
@@ -1441,41 +1444,7 @@ export function useChatMessages(
       subagentStateRefs: subagentStateRefsRef.current,
     };
 
-    // Close the main message's open reasoning block (no-op if none open).
-    handleReasoningSignal({
-      assistantMessageId,
-      signalContent: 'complete',
-      refs,
-      setMessages: setMessagesForHandlers,
-    });
-
-    // Drive the message to a terminal "stopped" state through the same
-    // finishReason branch the server stream uses. This flips isStreaming off
-    // for any open tool-call/artifact rendering that keyed off isStreaming.
-    handleTextContent({
-      assistantMessageId,
-      content: '',
-      finishReason: 'stopped',
-      refs,
-      setMessages: setMessagesForHandlers,
-    });
-
-    // Stamp the stopped flag so the per-message "⏹ Stopped" chip renders, force
-    // isStreaming off (defensive: covers any branch that left it on), and fold
-    // any still-in-progress tool rows. Always-live tools (TaskOutput/WebFetch)
-    // render their spinner off `isInProgress` regardless of `isStreaming`, so
-    // without this they'd spin forever after the stop. Mirrors the steering
-    // finalize.
-    setMessages((prev) =>
-      updateMessage(prev, assistantMessageId, (msg) => {
-        const aMsg = msg as AssistantMessage;
-        const tp: typeof aMsg.toolCallProcesses = {};
-        for (const [id, val] of Object.entries(aMsg.toolCallProcesses || {})) {
-          tp[id] = val.isInProgress ? { ...val, isInProgress: false, isComplete: true } : val;
-        }
-        return { ...finalizeAssistantMessage(aMsg, 'stopped'), toolCallProcesses: tp };
-      }),
-    );
+    settleStoppedBubble({ assistantMessageId, refs, setMessages: setMessagesForHandlers });
 
     // Finalize each active subagent card: close its open reasoning block and
     // mark its last streaming message complete. Per-task state lives in
@@ -1723,6 +1692,11 @@ export function useChatMessages(
     }
     // The transport words an upload too large for the server itself.
     if (errObj.status === 413) return { banner: (err as Error).message, answered: false };
+    // A busy chat's refusal, in the view's words: the server's name the CLI's
+    // commands.
+    if (isBusyCode(errorInfo?.code)) {
+      return { banner: { message: t(BUSY_REFUSAL_KEYS[errorInfo.code]), kind: 'notice' }, answered: false };
+    }
     const worded = typeof errorInfo?.message === 'string' && errorInfo.message ? errorInfo.message : null;
     return { banner: worded, answered: false };
   };

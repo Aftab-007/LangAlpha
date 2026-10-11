@@ -82,7 +82,8 @@ describe('useChatMessages – history idempotency guard', () => {
 
   it('surfaces non-404 load errors via messageError without locking history-loading', async () => {
     // Pin the visible-to-user contract from the error path:
-    //   - Non-404 errors → messageError populated (UI shows it)
+    //   - Non-404 errors → messageError populated (UI shows it), in the
+    //     view's words rather than the error's own text
     //   - historyLoadingRef cleared (next deps change can attempt again)
     //   - isLoadingHistory flips back to false
     // The internal `historyLoadedKeyRef` behaviour can't be observed from the
@@ -94,7 +95,7 @@ describe('useChatMessages – history idempotency guard', () => {
     const { result } = renderHookWithProviders(() => useChatMessages('ws-A'));
 
     await waitFor(() => {
-      expect(result.current.messageError).toBe('network down');
+      expect(result.current.messageError).toEqual({ message: 'chat.historyLoadFailed', kind: 'notice' });
     });
     expect(result.current.isLoadingHistory).toBe(false);
   });

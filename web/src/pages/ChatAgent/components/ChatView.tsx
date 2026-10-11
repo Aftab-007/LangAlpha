@@ -1693,7 +1693,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                         onOpenWatch={handleOpenStatusFromChat}
                       />
                     )}
-                    {messageError && !isLoading && (
+                    {/* A notice is not about the running turn, so it need not wait for it to end. */}
+                    {messageError && (!isLoading || (typeof messageError === 'object' && messageError.kind === 'notice')) && (
                       <ErrorBanner error={messageError} />
                     )}
                     {!isFlashMode && workspaceRecord?.computer_id && (

@@ -179,6 +179,7 @@ export interface StreamRuntime {
  */
 export interface RecoveryRuntime {
   // render-current
+  t: Translate;
   updateSubagentCard: CardUpdater | null;
   // stable (setters)
   setMessages: SetMessages;
