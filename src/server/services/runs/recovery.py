@@ -470,6 +470,7 @@ class RecoveryScanner:
         must not lend false resumability to a run that died pre-graph (I8).
         """
         newest: Optional[tl_db.NewestCheckpoint] = None
+        newest_read = False
         tip_matches = False
         pending_interrupts: List[Any] = []
         try:
@@ -495,6 +496,7 @@ class RecoveryScanner:
                         )
             if saver:
                 newest = await newest_checkpoint(saver, thread_id)
+            newest_read = True
         except Exception:
             logger.error(
                 f"[RecoveryScanner] checkpoint read failed for {thread_id}; "
@@ -502,10 +504,24 @@ class RecoveryScanner:
                 exc_info=True,
             )
 
+        # With no handle, the input stamp comes from the row START wrote, and
+        # as on the owner's path a failed read decides nothing. A stopped run
+        # carries it as a failed one does.
+        from src.server.services.runs.pending_input import (
+            read_untaken_input,
+            untaken_input_stamp,
+        )
+
+        stamp = (
+            untaken_input_stamp(read_untaken_input(run), run_id, newest)
+            if newest_read
+            else {}
+        )
+
         if run.get("cancel_requested_at"):
             # The CAS adopts cancelled from the durable intent regardless;
             # requesting it just keeps the log honest.
-            return "cancelled", None, None, newest, {}
+            return "cancelled", None, None, newest, stamp
 
         if pending_interrupts:
             from src.server.contracts.status import (
@@ -528,7 +544,7 @@ class RecoveryScanner:
             None,
             ["worker_lost: no live executor holds this run's writer fence"],
             newest,
-            {},
+            stamp,
         )
 
     # --------------------------------------------------------------- salvage

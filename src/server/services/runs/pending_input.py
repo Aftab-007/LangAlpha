@@ -19,12 +19,16 @@ answers something the turn did not ask.
 """
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
-from src.server.models.chat import ChatMessage, ChatRequest
+from src.server.models.chat import ChatMessage, ChatRequest, ReportSource
 from src.server.models.workflow import RetryRequest
+
+if TYPE_CHECKING:
+    from src.server.database.runs.lifecycle import NewestCheckpoint
 
 PENDING_INPUT_KEY = "pending_input"
 
@@ -76,6 +80,53 @@ def pending_input_stamp(request: ChatRequest) -> dict:
     return {}
 
 
+def executor_input_stamp(request: ChatRequest) -> dict:
+    """The stamp for a run that fails in its executor before the graph takes
+    its input (``RunHandle.pending_input``).
+
+    A HITL resume is left out: the error path asks its client to send the
+    answers again while it still holds them, but the executor's failure has
+    the client retry, and replaying the checkpoint raises the pause again for
+    the user to answer.
+    """
+    return {} if request.hitl_response else pending_input_stamp(request)
+
+
+# START keeps a run's ``executor_input_stamp`` on its row under this key, which
+# ``/retry`` does not read: the recovery scanner settles a dead worker's run
+# from the row alone, with no request to stamp from.
+UNTAKEN_INPUT_KEY = "untaken_input"
+
+
+def untaken_input_metadata(stamp: Mapping[str, Any]) -> dict:
+    pending = stamp.get(PENDING_INPUT_KEY)
+    return {UNTAKEN_INPUT_KEY: pending} if pending else {}
+
+
+def read_untaken_input(run: Optional[Mapping[str, Any]]) -> dict:
+    pending = ((run or {}).get("metadata") or {}).get(UNTAKEN_INPUT_KEY)
+    return {PENDING_INPUT_KEY: pending} if isinstance(pending, dict) else {}
+
+
+def untaken_input_stamp(
+    stamp: Mapping[str, Any], run_id: str, newest: Optional["NewestCheckpoint"]
+) -> dict:
+    """``stamp`` for a failed or stopped attempt when no step of the thread is
+    its run's, ``newest`` being the thread's newest step as a read that
+    succeeded found it.
+
+    The graph stamps every checkpoint it writes with its run, the input's
+    first, so none means the run ended before the graph took the input, in
+    its executor as much as before handoff or with its worker. ``/retry`` then
+    sends that input again: a replay of the thread's checkpoint would answer
+    the turn before it, or, for an edit, run nothing at the fork's base. A
+    regenerate of the turn sends it again the same way.
+    """
+    if newest is not None and newest.run_id == run_id:
+        return {}
+    return dict(stamp)
+
+
 def read_pending_input(run: Optional[Mapping[str, Any]]) -> Optional[PendingInput]:
     pending = ((run or {}).get("metadata") or {}).get(PENDING_INPUT_KEY)
     if not isinstance(pending, dict):
@@ -92,6 +143,84 @@ def needs_resend(stamp: Mapping[str, Any]) -> bool:
     return (stamp.get(PENDING_INPUT_KEY) or {}).get("resend") is True
 
 
+def _resend_required() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "resend_required",
+            "message": "The failed turn's input was more than its stored "
+            "message; send it again.",
+        },
+    )
+
+
+def _message_gone() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "not_retryable",
+            "message": "The failed turn's message is no longer on the thread.",
+        },
+    )
+
+
+_REPORT_SOURCE = TypeAdapter(ReportSource)
+
+
+def _stored_turn_fields(query: Mapping[str, Any]) -> dict[str, Any]:
+    """The server-set fields a turn's query row keeps, for a request that runs
+    the turn again: its type, so a system turn (a report-back) runs as one,
+    and the report it announces, which labels it in history and the live
+    stream."""
+    stored = ((query.get("metadata") or {}).get("report_source")) or None
+    try:
+        report_source = _REPORT_SOURCE.validate_python(stored) if stored else None
+    except ValidationError:
+        report_source = None
+    return {"query_type": query.get("type"), "report_source": report_source}
+
+
+async def unstarted_regenerate_request(
+    thread_id: str,
+    request: ChatRequest,
+    turn_index: int,
+    latest_run: Optional[Mapping[str, Any]],
+) -> ChatRequest:
+    """A regenerate of a turn whose run never reached the graph, as the edit
+    that sends its message again.
+
+    The branch holds no input for that turn, so a replay at the tip would
+    answer the turn before it. The message comes from the turn's query row, as
+    a retry's does, and only when the thread's latest attempt, ``latest_run``,
+    is that turn's and was stamped as held by the row: an attempt that left no
+    stamp says nothing about what else its input carried. The row's type and
+    report come too, since the edit replaces the row.
+    """
+    from src.server.database.conversation.queries import get_query_at_turn
+
+    pending = (
+        read_pending_input(latest_run)
+        if latest_run is not None and latest_run["turn_index"] == turn_index
+        else None
+    )
+    if (
+        pending is None
+        or pending.resend
+        or pending.replay
+        or (pending.context and not request.additional_context)
+    ):
+        raise _resend_required()
+    query = await get_query_at_turn(thread_id, turn_index)
+    if query is None:
+        raise _message_gone()
+    return request.model_copy(
+        update={
+            "messages": [ChatMessage(role="user", content=query["content"])],
+            **_stored_turn_fields(query),
+        }
+    )
+
+
 async def input_rerun_request(
     thread_id: str,
     failed_run: Mapping[str, Any],
@@ -102,36 +231,24 @@ async def input_rerun_request(
 ) -> ChatRequest:
     """The retry of a pending input, as the send it stood in for.
 
-    The text comes from the turn's query row, never the client, so a retry
-    cannot rewrite what the turn asked. Context the turn carried (attachments,
-    widgets) comes from the client, which holds it until a reload, since only
-    the text is stored; a retry without it is refused rather than run as a
-    different question.
+    The text, its type and its report come from the turn's query row, never
+    the client, so a retry cannot rewrite what the turn asked, and a system
+    turn reruns as one. Context the turn carried (attachments, widgets) comes from the
+    client, which holds it until a reload, since only the text is stored; a
+    retry without it is refused rather than run as a different question.
     """
     from src.server.database.conversation.queries import get_query_at_turn
 
     if pending.resend or (pending.context and not (body and body.additional_context)):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "resend_required",
-                "message": "The failed turn's input was more than its stored "
-                "message; send it again.",
-            },
-        )
+        raise _resend_required()
     query = await get_query_at_turn(thread_id, failed_run["turn_index"])
     if query is None:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "not_retryable",
-                "message": "The failed turn's message is no longer on the thread.",
-            },
-        )
+        raise _message_gone()
     run_meta = failed_run.get("metadata") or {}
     return ChatRequest(
         workspace_id=workspace_id,
         messages=[{"role": "user", "content": query["content"]}],
+        **_stored_turn_fields(query),
         checkpoint_id=pending.checkpoint_id,
         additional_context=body.additional_context if body else None,
         locale=run_meta.get("locale"),

@@ -29,6 +29,10 @@ from src.server.database.runs.lifecycle import (  # re-exported for callers
     RunSlotBusyError,
     StaleForkError,
 )
+from src.server.services.runs.pending_input import (
+    untaken_input_metadata,
+    untaken_input_stamp,
+)
 from src.server.utils.error_sanitization import sanitize_error_text
 
 __all__ = [
@@ -103,6 +107,9 @@ class RunHandle:
     # lifecycle SQL, and per-run saver on one connection. None = Phase-1
     # fallback (memory saver, split app/checkpoint DBs, or pool not open).
     guard: Optional[Any] = None
+    # The ``pending_input`` stamp a failure or a stop before the graph took
+    # this attempt's input records on its row; empty when /retry should replay.
+    pending_input: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def checkpointer(self) -> Optional[Any]:
@@ -113,6 +120,20 @@ class RunHandle:
         from src.server.app import setup
 
         return setup.checkpointer
+
+
+def _stamp_untaken_input(
+    handle: RunHandle, outcome: RunOutcome, newest: Optional[NewestCheckpoint]
+) -> RunOutcome:
+    """Record a failed or stopped attempt's input as pending when no step of
+    the thread is its run's (``untaken_input_stamp``). A stopped one has no
+    input on the branch either, so its regenerate sends the message again."""
+    if outcome.status not in ("error", "cancelled"):
+        return outcome
+    stamp = untaken_input_stamp(handle.pending_input, handle.run_id, newest)
+    if stamp:
+        outcome.metadata = {**stamp, **(outcome.metadata or {})}
+    return outcome
 
 
 class RunCoordinator:
@@ -140,10 +161,12 @@ class RunCoordinator:
         is_byok: bool = False,
         query: Optional[QuerySpec] = None,
         fork: Optional[ForkSpec] = None,
+        run_horizon: Optional[int] = None,
         turn_index: Optional[int] = None,
         attempt_no: int = 1,
         retry_of_run_id: Optional[str] = None,
         run_metadata: Optional[Dict[str, Any]] = None,
+        pending_input: Optional[Dict[str, Any]] = None,
         on_started: Optional[Callable[[RunHandle], None]] = None,
     ) -> RunHandle:
         """Create the durable attempt: query row + in_progress run + projection.
@@ -151,7 +174,8 @@ class RunCoordinator:
         Raises RunSlotBusyError (409 admission), DuplicateRequestError
         (idempotent retransmit — reconnect to the existing run, guard
         released first), AttemptConflictError, StaleForkError (409, the
-        fork's branch moved after validation), or WriterGuardUnavailable
+        fork's branch moved after validation, or a run started after the
+        ``run_horizon`` a HITL answer was read at), or WriterGuardUnavailable
         (503 — pinned-session budget/lock bounded refusal). A server-minted
         request_key is the legacy fallback only; callers should supply one
         for dedup to mean anything.
@@ -162,7 +186,11 @@ class RunCoordinator:
         """
         from src.server.services import writer_guard as wg
 
-        metadata = {"msg_type": msg_type, **(run_metadata or {})}
+        metadata = {
+            "msg_type": msg_type,
+            **(run_metadata or {}),
+            **untaken_input_metadata(pending_input or {}),
+        }
         # START-stamp identity onto the durable row: finalize/recovery paths
         # build the user-feed event from row metadata alone, with no in-process
         # context surviving a crash (user_id names the channel, workspace_id
@@ -191,6 +219,7 @@ class RunCoordinator:
                     retry_of_run_id=retry_of_run_id,
                     query=query,
                     fork=fork,
+                    run_horizon=run_horizon,
                     metadata=metadata,
                     user_id=user_id,
                     conn=guard.conn if guard is not None else None,
@@ -206,6 +235,7 @@ class RunCoordinator:
                 is_byok=is_byok,
                 started_at=row["created_at"],
                 guard=guard,
+                pending_input=pending_input or {},
             )
             if guard is not None:
                 guard.bind_owner(handle)
@@ -295,7 +325,16 @@ class RunCoordinator:
         if handle.guard is not None:
             handle.guard.bind_owner(None)
         try:
-            newest = await self._newest_checkpoint(handle)
+            newest_read = True
+            try:
+                newest = await self._newest_checkpoint(handle)
+            except Exception:
+                logger.warning(
+                    f"[RunCoordinator] checkpoint_id read failed for "
+                    f"{handle.thread_id}",
+                    exc_info=True,
+                )
+                newest, newest_read = None, False
 
             usage_writer = None
             if outcome.per_call_records or outcome.tool_usage:
@@ -321,6 +360,8 @@ class RunCoordinator:
                 if guard is not None and not guard.usable:
                     guard = None
                 outcome = self._downgrade_if_guard_lost(handle, outcome, guard)
+                if newest_read:
+                    outcome = _stamp_untaken_input(handle, outcome, newest)
                 result = await tl_db.finalize_run(
                     run_id=handle.run_id,
                     thread_id=handle.thread_id,
@@ -461,6 +502,7 @@ class RunCoordinator:
             "error_type": "background_failure",
             "error": error_text or "background turn failed",
         }
+        newest, stamp = await self._detached_input_stamp(thread_id, run_id, label)
         try:
             result = await self.finalize_detached_run(
                 thread_id,
@@ -468,8 +510,9 @@ class RunCoordinator:
                 RunOutcome(
                     status="error",
                     errors=[error_text or "background turn failed"],
-                    metadata={"recovery": "dispatch_consumer_crash"},
+                    metadata={"recovery": "dispatch_consumer_crash", **stamp},
                 ),
+                newest=newest,
                 error_frame=error_frame,
             )
             return (result.run or {}).get("status")
@@ -494,6 +537,31 @@ class RunCoordinator:
                     exc_info=True,
                 )
             return None
+
+    async def _detached_input_stamp(
+        self, thread_id: str, run_id: str, label: str
+    ) -> tuple[Optional[NewestCheckpoint], Dict[str, Any]]:
+        """The thread's newest checkpoint and the input stamp for a run settled
+        with no handle, from the row START wrote, as the recovery scanner
+        settles one. Without them a retry replays the turn before this one,
+        or finds no checkpoint at all on a new thread. A failed read stamps
+        nothing and moves no pointer, as on the owner's path."""
+        from src.server.app import setup
+        from src.server.services.runs.pending_input import read_untaken_input
+        from src.server.utils.checkpoint_helpers import newest_checkpoint
+
+        try:
+            run = await tl_db.get_run(run_id)
+            saver = setup.checkpointer
+            newest = await newest_checkpoint(saver, thread_id) if saver else None
+        except Exception:
+            logger.warning(
+                f"[{label}] run or checkpoint read failed for run={run_id}; "
+                f"settling it unstamped",
+                exc_info=True,
+            )
+            return None, {}
+        return newest, untaken_input_stamp(read_untaken_input(run), run_id, newest)
 
     # ------------------------------------------------------------ guard utils
 
@@ -610,24 +678,16 @@ class RunCoordinator:
         own writes; a lock-lost session can't answer), else the pool saver."""
         from src.server.utils.checkpoint_helpers import newest_checkpoint
 
-        try:
-            guard = handle.guard
-            if guard is not None and guard.usable:
-                saver = guard.saver
-            else:
-                from src.server.app import setup
+        guard = handle.guard
+        if guard is not None and guard.usable:
+            saver = guard.saver
+        else:
+            from src.server.app import setup
 
-                saver = setup.checkpointer
-            if not saver:
-                return None
-            return await newest_checkpoint(saver, handle.thread_id)
-        except Exception:
-            logger.warning(
-                f"[RunCoordinator] checkpoint_id read failed for "
-                f"{handle.thread_id}",
-                exc_info=True,
-            )
+            saver = setup.checkpointer
+        if not saver:
             return None
+        return await newest_checkpoint(saver, handle.thread_id)
 
     def post_finalize_tail(
         self, thread_id: str, run: Optional[Dict[str, Any]]

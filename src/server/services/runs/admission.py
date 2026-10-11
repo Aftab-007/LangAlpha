@@ -351,6 +351,7 @@ async def begin_run(
     from uuid import uuid4
 
     from src.server.services.runs.coordinator import QuerySpec, RunCoordinator
+    from src.server.services.runs.pending_input import executor_input_stamp
 
     retry_of = await resolve_retry_of(request, thread_id)
     try:
@@ -376,6 +377,7 @@ async def begin_run(
                 )
             ),
             fork=fork,
+            run_horizon=request.resume_run_horizon if request.hitl_response else None,
             turn_index=(
                 retry_of["turn_index"]
                 if retry_of is not None
@@ -404,6 +406,7 @@ async def begin_run(
                 ),
                 **(extra_run_metadata or {}),
             },
+            pending_input=executor_input_stamp(request),
             on_started=scope.attach_run,
         )
     except BaseException as exc:
@@ -458,6 +461,7 @@ async def _committed_start(
     it cannot see from its own state."""
     from src.server.database.runs import lifecycle as tl_db
     from src.server.services.runs.coordinator import RunHandle
+    from src.server.services.runs.pending_input import read_untaken_input
 
     try:
         row = await tl_db.get_run(run_id)
@@ -480,4 +484,6 @@ async def _committed_start(
         user_id=user_id,
         is_byok=is_byok,
         started_at=row["created_at"],
+        # A disconnect settles this run as stopped, from the stamp START kept.
+        pending_input=read_untaken_input(row),
     )

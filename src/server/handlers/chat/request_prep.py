@@ -131,7 +131,11 @@ def _resolve_fork(
 
     fork = None
     if request.fork_from_turn is not None and request.checkpoint_id:
-        from src.server.utils.checkpoint_helpers import checkpoint_on_branch
+        from src.server.utils.checkpoint_helpers import (
+            FORK_ROOT_CHECKPOINT_ID,
+            checkpoint_on_branch,
+            write_fork_root,
+        )
 
         fork = ForkSpec(
             from_turn=request.fork_from_turn,
@@ -144,6 +148,11 @@ def _resolve_fork(
             on_branch=(
                 partial(checkpoint_on_branch, thread_id, request.fork_branch_tip)
                 if request.fork_branch_tip
+                else None
+            ),
+            write_root=(
+                partial(write_fork_root, thread_id)
+                if request.checkpoint_id == FORK_ROOT_CHECKPOINT_ID
                 else None
             ),
         )
@@ -808,6 +817,23 @@ def prepare_skill_contexts(
     ]
 
 
+async def turn_start_checkpoint_id(
+    thread_id: str, request: ChatRequest, checkpointer: Any
+) -> str | None:
+    """The checkpoint a new message runs from when the request names none and
+    the newest one is off the thread's branch (``turn_base_checkpoint_id``).
+
+    A HITL resume keeps the newest: it answers the pause there, and naming a
+    checkpoint would replay the pause's tasks that already finished. The route
+    refuses one whose pause is off the branch (``settle_resume_request``).
+    """
+    from src.server.utils.checkpoint_helpers import turn_base_checkpoint_id
+
+    if request.checkpoint_id or request.hitl_response:
+        return None
+    return await turn_base_checkpoint_id(checkpointer, thread_id)
+
+
 def build_graph_config(
     thread_id: str,
     user_id: str,
@@ -824,6 +850,7 @@ def build_graph_config(
     run_id: str | None = None,
     turn_index: int | None = None,
     surface: str | None = None,
+    base_checkpoint_id: str | None = None,
 ) -> dict:
     """Build the LangGraph ``config`` dict shared by flash and PTC handlers.
 
@@ -837,6 +864,8 @@ def build_graph_config(
     ``run_id`` and ``surface`` (from :func:`turn_surface`) also ride
     ``configurable`` as ``run_id`` and ``platform``, which is where a tool
     reads which run and which conversation it is acting in.
+    ``base_checkpoint_id`` is where a turn that names no checkpoint starts
+    (``turn_start_checkpoint_id``).
     """
     workflow_type = "flash_agent" if mode == "flash" else "ptc_agent"
 
@@ -882,8 +911,9 @@ def build_graph_config(
         "metadata": langsmith_metadata,
     }
 
-    if request.checkpoint_id:
-        graph_config["configurable"]["checkpoint_id"] = request.checkpoint_id
+    checkpoint_id = request.checkpoint_id or base_checkpoint_id
+    if checkpoint_id:
+        graph_config["configurable"]["checkpoint_id"] = checkpoint_id
 
     # Token tracking callback. LangSmith tracing is handled by the SDK's
     # ambient auto-tracer activated via LANGSMITH_TRACING env var.

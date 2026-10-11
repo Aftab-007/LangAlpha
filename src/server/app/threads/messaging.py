@@ -195,7 +195,9 @@ async def send_new_thread_message(
             )
     if not thread_id:
         thread_id = str(uuid4())
-    return await _handle_send_message(request, auth, thread_id, raw_request)
+    return await _handle_send_message(
+        _client_body(request, raw_request), auth, thread_id, raw_request
+    )
 
 
 @router.post("/{thread_id}/messages")
@@ -206,7 +208,50 @@ async def send_thread_message(
     """
     Send a message to an existing thread. Returns an SSE stream.
     """
-    return await _handle_send_message(request, auth, thread_id, raw_request)
+    return await _handle_send_message(
+        _client_body(request, raw_request), auth, thread_id, raw_request
+    )
+
+
+def _is_service_request(raw_request: Request | None) -> bool:
+    """Whether the server sent ``raw_request`` itself: it carries the service
+    token, or oss mode has no token configured to check, which trusts the
+    self-dispatch."""
+    from src.config.settings import HOST_MODE
+
+    token = _get_service_token()
+    sent = raw_request.headers.get("X-Service-Token", "") if raw_request else ""
+    return service_token_matches(sent, token) or (HOST_MODE == "oss" and not token)
+
+
+# Fields only the server's own requests set. A user's copy would post a system
+# message, label their message as a report-back, or forge a report-back watch's
+# cleanup; ``surface_rules`` is a channel gateway's, whose text rides the
+# operator role on providers with a native channel.
+_SERVER_ONLY_FIELDS = (
+    "query_type",
+    "report_back_ptc_thread_id",
+    "report_source",
+    "origin_flash_thread_id",
+    "origin_dispatch_gen",
+    "automation_delivery",
+    "automation_earlier_runs",
+    "disable_subagents",
+    "surface_rules",
+)
+
+
+def _client_body(request: ChatRequest, raw_request: Request) -> ChatRequest:
+    """``request`` with the server-only fields cleared, unless the server sent it.
+
+    Cleared as the body enters, before the route settles anything: a
+    regenerate of a turn that never started takes the type the turn's row
+    stored, a report-back's ``system``, which a strip after it would clear.
+    """
+    if _is_service_request(raw_request):
+        return request
+    cleared = {name: None for name in _SERVER_ONLY_FIELDS if getattr(request, name)}
+    return request.model_copy(update=cleared) if cleared else request
 
 
 async def _reject_duplicate_request(request_key: str, user_id: str) -> None:
@@ -250,6 +295,9 @@ async def _handle_send_message(
     retry_of_run_id: str | None = None,
 ):
     """Shared logic for both POST /threads/messages and POST /threads/{id}/messages.
+
+    Those routes pass a body already cleared of the server-only fields
+    (:func:`_client_body`); /retry builds its request from the stored rows.
 
     ``retry_of_run_id`` is retry provenance and route-internal: only the
     /retry route passes it. Whatever the public body carried is overwritten
@@ -325,12 +373,10 @@ async def _handle_send_message(
         # with no INTERNAL_SERVICE_TOKEN configured there is nothing to
         # authenticate against, so the self-dispatch is trusted; a configured
         # token is enforced in every mode. This single is_internal value is
-        # reused by the field strip and both dispatch branches below.
+        # reused by both dispatch branches below.
         _req_token = (raw_request.headers.get("X-Service-Token", "") if raw_request else "")
         _svc_token = _get_service_token()
-        is_internal = service_token_matches(_req_token, _svc_token) or (
-            HOST_MODE == "oss" and not _svc_token
-        )
+        is_internal = _is_service_request(raw_request)
         if (
             not is_internal
             and raw_request
@@ -360,26 +406,13 @@ async def _handle_send_message(
         # read) takes it from the request, so it is settled here, once, with
         # the branch tip it was read off for START to hold it to.
         if request.fork_from_turn is not None and request.checkpoint_id:
-            from src.server.handlers.checkpoint_handler import resolve_fork_turn
+            from src.server.handlers.checkpoint_handler import settle_fork_request
 
-            fork = await resolve_fork_turn(
-                thread_id,
-                request.checkpoint_id,
-                regenerate=not request.messages,
-                requested=request.fork_from_turn,
-            )
-            if fork.turn_index != request.fork_from_turn:
-                logger.warning(
-                    f"[CHAT] fork turn {request.fork_from_turn} from the client "
-                    f"is turn {fork.turn_index} on the branch thread_id={thread_id}"
-                )
-            request = request.model_copy(
-                update={
-                    "fork_from_turn": fork.turn_index,
-                    "fork_branch_tip": fork.branch_tip,
-                    "fork_run_horizon": fork.run_horizon,
-                }
-            )
+            request = await settle_fork_request(thread_id, request)
+        elif request.hitl_response:
+            from src.server.handlers.checkpoint_handler import settle_resume_request
+
+            request = await settle_resume_request(thread_id, request)
 
         # Resolve workspace_id from thread if not provided
         if not workspace_id and thread_meta:
@@ -497,32 +530,6 @@ async def _handle_send_message(
         if route.role == "chief_of_staff":
             await ensure_home(user_id, workspace)
 
-        # Strip internal-only fields from non-internal requests (prevent
-        # spoofing system messages / forging report-back watch cleanup).
-        if not is_internal:
-            internal_overrides = {}
-            if request.query_type:
-                internal_overrides["query_type"] = None
-            if request.report_back_ptc_thread_id:
-                internal_overrides["report_back_ptc_thread_id"] = None
-            if request.report_source:
-                internal_overrides["report_source"] = None
-            if request.origin_flash_thread_id:
-                internal_overrides["origin_flash_thread_id"] = None
-            if request.origin_dispatch_gen:
-                internal_overrides["origin_dispatch_gen"] = None
-            if request.automation_delivery:
-                internal_overrides["automation_delivery"] = None
-            if request.automation_earlier_runs:
-                internal_overrides["automation_earlier_runs"] = None
-            if request.disable_subagents:
-                internal_overrides["disable_subagents"] = None
-            # A channel gateway's field: the text rides the operator role on
-            # providers with a native channel, so a user's own copy is dropped.
-            if request.surface_rules:
-                internal_overrides["surface_rules"] = None
-            if internal_overrides:
-                request = request.model_copy(update=internal_overrides)
     except BaseException:
         await scope.release_slot()
         raise

@@ -5,8 +5,9 @@ patterns used across workflow endpoints.
 """
 
 import asyncio
+import logging
 from collections import defaultdict
-from contextlib import nullcontext
+from contextlib import AsyncExitStack, nullcontext
 from dataclasses import dataclass, field
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
@@ -19,6 +20,8 @@ from psycopg_pool import AsyncConnectionPool
 
 if TYPE_CHECKING:
     from src.server.database.runs.lifecycle import NewestCheckpoint
+
+_logger = logging.getLogger(__name__)
 
 
 def _setup():
@@ -110,6 +113,52 @@ def get_checkpointer():
             detail="Checkpointer not initialized"
         )
     return checkpointer
+
+
+# The empty state a thread's first message forks from. LangGraph builds a
+# thread's first input on an empty checkpoint it never saves, so that input has
+# no parent to fork at; an edit of the first message forks here instead, which
+# the fork's START writes as it pins it (``write_fork_root``). One fixed id
+# per thread keeps the write idempotent, and the lowest uuid6 sorts before
+# every checkpoint the graph writes: it is never the newest beside them, and a
+# fork at it drops every later transcript. Its source is neither ``input`` nor
+# a resume, so no walk counts it as a turn.
+FORK_ROOT_CHECKPOINT_ID = "00000000-0000-6000-8000-000000000000"
+
+
+async def ensure_fork_root(checkpointer: Any, thread_id: str) -> None:
+    """Write the thread's empty fork root, or rewrite the same one."""
+    from langgraph.checkpoint.base import empty_checkpoint
+
+    checkpoint = empty_checkpoint()
+    checkpoint["id"] = FORK_ROOT_CHECKPOINT_ID
+    # Step -2, as LangGraph numbers the empty checkpoint a first input builds
+    # on, so a turn forked here is numbered like a thread's first turn.
+    await checkpointer.aput(
+        {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+        checkpoint,
+        {"source": "fork", "step": -2, "parents": {}},
+        {},
+    )
+
+
+async def write_fork_root(thread_id: str, conn: Any) -> None:
+    """Write the fork root on START's connection, inside its transaction.
+
+    START pins the thread's pointer to the root, so both commit or roll back
+    together and a refused fork writes nothing; under the writer guard the
+    connection is the run's pinned session, which holds the thread's fence.
+    The guard runs only with the checkpoints in the app's database; without
+    it (one unfenced worker) the root goes through the app's checkpointer.
+    """
+    from src.server.services import writer_guard
+
+    if not writer_guard.guard_enabled():
+        await ensure_fork_root(_setup().checkpointer, thread_id)
+        return
+    # A saver of its own, whose lock is not the session's: START holds that
+    # one for the whole transaction.
+    await ensure_fork_root(AsyncPostgresSaver(conn), thread_id)
 
 
 # LangGraph records a pending write on this channel when a node pauses via
@@ -544,8 +593,11 @@ async def checkpoint_on_branch(
     """True when ``checkpoint_id`` is ``tip`` or one of its ancestors.
 
     The checkpointer defaults to the app's, read at call time, so a fork can
-    carry this check into START before the graph is built.
+    carry this check into START before the graph is built. The fork root is
+    on every branch: each one's first turn starts from the empty state.
     """
+    if checkpoint_id == FORK_ROOT_CHECKPOINT_ID:
+        return True
     checkpointer = checkpointer or _setup().checkpointer
     if checkpointer is None:
         return False
@@ -575,6 +627,117 @@ async def checkpoint_on_branch(
             return False
         config = cp.parent_config
     return False
+
+
+# The newest checkpoint and each parent beneath an update, stopping at the
+# pointer: the same walk ``newest_checkpoint`` takes to the step that wrote the
+# newest checkpoint, which is the walk's one row that is not an update.
+_NEWEST_STEP_SQL = """
+    WITH RECURSIVE chain AS (
+        SELECT * FROM (
+            SELECT checkpoint_id, parent_checkpoint_id,
+                   metadata->>'source' AS source, metadata->>'run_id' AS run_id
+            FROM checkpoints
+            WHERE thread_id = %(thread_id)s AND checkpoint_ns = ''
+            ORDER BY checkpoint_id DESC
+            LIMIT 1
+        ) newest
+      UNION ALL
+        SELECT p.checkpoint_id, p.parent_checkpoint_id, p.source, p.run_id
+        FROM chain c CROSS JOIN LATERAL (
+            SELECT k.checkpoint_id, k.parent_checkpoint_id,
+                   k.metadata->>'source' AS source, k.metadata->>'run_id' AS run_id
+            FROM checkpoints k
+            WHERE k.thread_id = %(thread_id)s AND k.checkpoint_ns = ''
+              AND k.checkpoint_id = c.parent_checkpoint_id
+            LIMIT 1
+        ) p
+        WHERE c.source = 'update' AND c.checkpoint_id <> %(pointer)s
+    )
+    SELECT
+        EXISTS (SELECT 1 FROM chain WHERE checkpoint_id = %(pointer)s) AS extends,
+        (SELECT run_id FROM chain WHERE source IS DISTINCT FROM 'update'
+         LIMIT 1) AS step_run_id,
+        EXISTS (
+            SELECT 1 FROM checkpoints
+            WHERE thread_id = %(thread_id)s AND checkpoint_ns = ''
+              AND checkpoint_id = %(pointer)s
+        ) AS pointer_exists
+"""
+
+
+async def _newest_step(
+    checkpointer: Any, thread_id: str, pointer: str
+) -> tuple[bool, str | None, bool]:
+    """Whether the newest checkpoint is ``pointer`` or updates on it, else the
+    run that wrote the step beneath its updates; and whether ``pointer`` is a
+    checkpoint of the thread."""
+    if isinstance(checkpointer, AsyncPostgresSaver):
+        async with AsyncExitStack() as stack:
+            if isinstance(checkpointer.conn, AsyncConnectionPool):
+                conn = await stack.enter_async_context(checkpointer.conn.connection())
+            else:
+                # A run's fenced session installs its I/O mutex as the saver's
+                # lock, which every statement on that connection must hold.
+                await stack.enter_async_context(checkpointer.lock)
+                conn = checkpointer.conn
+            cur = await stack.enter_async_context(conn.cursor(row_factory=dict_row))
+            await cur.execute(
+                _NEWEST_STEP_SQL, {"thread_id": thread_id, "pointer": pointer}
+            )
+            row = await cur.fetchone()
+        return bool(row["extends"]), row["step_run_id"], bool(row["pointer_exists"])
+    cp = await checkpointer.aget_tuple(build_checkpoint_config(thread_id))
+    while cp is not None:
+        if cp.config["configurable"]["checkpoint_id"] == pointer:
+            return True, None, True
+        if (cp.metadata or {}).get("source") != "update" or not cp.parent_config:
+            break
+        cp = await checkpointer.aget_tuple(cp.parent_config)
+    step_run_id = (cp.metadata or {}).get("run_id") if cp is not None else None
+    exists = (
+        await checkpointer.aget_tuple(build_checkpoint_config(thread_id, pointer))
+        is not None
+    )
+    return False, step_run_id, exists
+
+
+async def turn_base_checkpoint_id(checkpointer: Any, thread_id: str) -> str | None:
+    """The checkpoint a turn that names none starts from, when it is not the
+    newest one, which the graph loads by default.
+
+    They differ after a fork whose run failed or was stopped before its first
+    step: START pinned the pointer, the branch every reader shows, to the
+    fork's base and deleted the rows of the turns it replaced, whose steps are
+    still the newest. Only the fork's run row tells that pin from a pointer a
+    turn left behind, which keeps the newest (``pointer_pinned_by_fork``).
+
+    A read that fails raises: the newest checkpoint may be a replaced branch,
+    and a turn run there would write that branch's turns back.
+    """
+    from src.server.database.conversation import threads_read
+    from src.server.database.runs import lifecycle as tl_db
+
+    if checkpointer is None:
+        return None
+    pointer = (await threads_read.get_thread_branch_read(thread_id)).checkpoint_id
+    if pointer is None:
+        return None
+    extends, step_run_id, pointer_exists = await _newest_step(
+        checkpointer, thread_id, pointer
+    )
+    if extends:
+        return None
+    if not await tl_db.pointer_pinned_by_fork(thread_id, pointer, step_run_id):
+        return None
+    if not pointer_exists:
+        # Loading a checkpoint that is not there starts from an empty state.
+        _logger.warning(
+            f"[CHECKPOINT] pointer {pointer} of thread {thread_id} is not one "
+            "of its checkpoints; the turn starts from the newest checkpoint"
+        )
+        return None
+    return pointer
 
 
 async def update_at_commit(

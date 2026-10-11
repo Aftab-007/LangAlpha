@@ -418,12 +418,16 @@ class TurnCheckpointInfo(BaseModel):
         description="The turn's persisted turn_index, the one its replayed "
         "messages carry. Not its position in this list: a turn whose run "
         "never checkpointed has no entry, and the turns after it keep "
-        "their own numbers.",
+        "their own numbers. Such turns past the last checkpointed one share "
+        "a last entry whose checkpoints are both the branch tip, or the empty "
+        "fork root on a thread with no checkpoint.",
     )
     edit_checkpoint_id: Optional[str] = Field(
         None,
         description="Checkpoint ID before the user message was added. "
-        "Fork from here to edit/replace this user message.",
+        "Fork from here to edit/replace this user message. The thread's first "
+        "message forks from the empty fork root. None for a resume, which "
+        "has no message of its own.",
     )
     regenerate_checkpoint_id: str = Field(
         ...,

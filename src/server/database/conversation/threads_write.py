@@ -545,7 +545,11 @@ async def truncate_thread_from_turn(
         # Explicit transaction required (autocommit is ON by default)
         async with conn.transaction():
             async with conn.cursor() as cur:
-                # Always delete all responses at fork turn and beyond
+                # Always delete all responses at fork turn and beyond. The only
+                # per-turn delete of run rows, which turn_base_checkpoint_id
+                # relies on: under a fork's pin it reads a newest step whose run
+                # has no row as one the fork replaced, so a delete for any other
+                # reason would start the next turn behind that step.
                 await cur.execute(
                     """
                     DELETE FROM conversation_responses

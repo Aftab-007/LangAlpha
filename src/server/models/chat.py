@@ -388,6 +388,15 @@ class ChatRequest(BaseModel):
         default=None,
         description="Newest run sequence read with fork_branch_tip. Server-stamped.",
     )
+    # Server-stamped: the newest run_seq read before the route found a HITL
+    # answer's pause on the branch. Read only for an answer, whose route always
+    # overwrites it. START refuses the answer if a run started since, so a fork
+    # admitted after that check cannot leave it running on the replaced pause.
+    resume_run_horizon: Optional[int] = Field(
+        default=None,
+        description="Newest run sequence read with the pause a HITL answer "
+        "resumes. Server-stamped.",
+    )
 
     # Localization and context
     locale: Optional[str] = Field(

@@ -70,14 +70,15 @@ class RunNotFoundError(TurnLifecycleError):
 
 
 class StaleForkError(TurnLifecycleError):
-    """The branch a fork was validated against is no longer the thread's."""
+    """The branch a fork or a HITL answer was validated against is no longer
+    the thread's."""
 
     def __init__(self, thread_id: str, branch_tip: Optional[str]):
         self.thread_id = thread_id
         self.branch_tip = branch_tip
         super().__init__(
             f"thread {thread_id} moved off branch tip {branch_tip} before the "
-            "fork was admitted"
+            "run was admitted"
         )
 
 
@@ -106,7 +107,9 @@ class ForkSpec:
     (the newest ``run_seq`` read with that tip) refuses the fork once any run
     started after the read. With it, ``on_branch`` (whether ``branch_tip`` is
     on the branch a given pointer names) lets START admit the fork after the
-    pointer moved along the same branch; without both, any move refuses it."""
+    pointer moved along the same branch; without both, any move refuses it.
+    ``write_root`` writes a ``checkpoint_id`` no graph wrote (the empty fork
+    root) on START's connection, so it lands with the pin or not at all."""
 
     from_turn: int
     checkpoint_id: str
@@ -114,6 +117,11 @@ class ForkSpec:
     preserve_query_at_fork: bool = False
     run_horizon: Optional[int] = None
     on_branch: Optional[Callable[[str], Awaitable[bool]]] = None
+    write_root: Optional[Callable[[Any], Awaitable[None]]] = None
+
+
+# Run-row metadata: the checkpoint a fork's START pinned the pointer to.
+FORK_BASE_KEY = "fork_base"
 
 
 @dataclass(frozen=True)
@@ -217,16 +225,42 @@ def _violated_constraint(exc: Exception) -> Optional[str]:
     return getattr(diag, "constraint_name", None) if diag else None
 
 
-async def _run_since_read(conn, thread_id: str, fork: ForkSpec) -> bool:
-    """Whether a run started after the fork's turn was read.
+async def _run_by_request_key(conn, request_key: str) -> Optional[Dict[str, Any]]:
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            "SELECT * FROM conversation_responses WHERE request_key = %s",
+            (request_key,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
-    That run is a turn or fork the client never saw, and truncating would
-    delete it, so it refuses the fork whatever it did to the pointer: one that
-    failed before its first checkpoint left the pointer where the fork read it.
-    The caller holds the thread row's lock, so this read sees every START that
-    committed before it.
+
+async def _stale_refusal(
+    conn, thread_id: str, request_key: str, branch_tip: Optional[str]
+) -> TurnLifecycleError:
+    """What START raises when, holding the thread row, it finds the branch moved.
+
+    A retransmit and its first copy both miss the fast probe while neither
+    START has committed, so the retransmit waits on the row and finds the
+    first copy's own move. The key then names that run: a duplicate to
+    reconnect to, as the unique index would report, not a stale request.
     """
-    if fork.run_horizon is None:
+    existing = await _run_by_request_key(conn, request_key)
+    if existing:
+        return DuplicateRequestError(existing)
+    return StaleForkError(thread_id, branch_tip)
+
+
+async def _run_since_read(conn, thread_id: str, run_horizon: Optional[int]) -> bool:
+    """Whether a run started after ``run_horizon`` was read.
+
+    That run is a turn or fork the client never saw, so it refuses the request
+    whatever it did to the pointer: one that failed before its first
+    checkpoint left the pointer where the request read it. A fork would delete
+    it; a HITL answer would resume a pause it replaced. The caller holds the
+    thread row's lock, so this read sees every START that committed before it.
+    """
+    if run_horizon is None:
         return False
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
@@ -236,7 +270,7 @@ async def _run_since_read(conn, thread_id: str, fork: ForkSpec) -> bool:
                 WHERE conversation_thread_id = %s AND run_seq > %s
             ) AS run_since
             """,
-            (thread_id, fork.run_horizon),
+            (thread_id, run_horizon),
         )
         return (await cur.fetchone())["run_since"]
 
@@ -263,7 +297,7 @@ async def _pin_along_branch(conn, thread_id: str, fork: ForkSpec) -> bool:
         )
         row = await cur.fetchone()
         pointer = row["latest_checkpoint_id"] if row else None
-    if pointer is None or await _run_since_read(conn, thread_id, fork):
+    if pointer is None or await _run_since_read(conn, thread_id, fork.run_horizon):
         return False
     try:
         along = await fork.on_branch(pointer)
@@ -302,6 +336,7 @@ async def start_run(
     retry_of_run_id: Optional[str] = None,
     query: Optional[QuerySpec] = None,
     fork: Optional[ForkSpec] = None,
+    run_horizon: Optional[int] = None,
     metadata: Optional[Dict[str, Any]] = None,
     created_at: Optional[datetime] = None,
     user_id: Optional[str] = None,
@@ -313,7 +348,9 @@ async def start_run(
     Returns the run row. Raises DuplicateRequestError / RunSlotBusyError /
     AttemptConflictError, each backed by a DB constraint, so two workers
     racing the same admission cannot both win regardless of what they read,
-    and, for a fork, StaleForkError when the branch tip moved.
+    and, for a fork, StaleForkError when the branch tip moved. A HITL answer
+    passes the ``run_horizon`` its pause was read at, and StaleForkError
+    refuses it when a run started since.
     ``conn`` pins the transaction to the caller's session (WriterGuard);
     the post-conflict classification reads always use fresh pool reads.
     """
@@ -331,14 +368,9 @@ async def start_run(
                 # race-safe backstop; this just avoids burning a turn_index
                 # (and, on a fork, re-truncating rows the first transmit's
                 # run already rebuilt).
-                async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute(
-                        "SELECT * FROM conversation_responses WHERE request_key = %s",
-                        (request_key,),
-                    )
-                    existing = await cur.fetchone()
-                    if existing:
-                        raise DuplicateRequestError(dict(existing))
+                existing = await _run_by_request_key(conn, request_key)
+                if existing:
+                    raise DuplicateRequestError(existing)
 
                 if fork is not None:
                     # The fork's turn was read off the branch the thread's
@@ -365,10 +397,14 @@ async def start_run(
                     if pinned:
                         # The pointer did not move, but a run that failed
                         # before its first checkpoint leaves it unmoved.
-                        if await _run_since_read(conn, thread_id, fork):
-                            raise StaleForkError(thread_id, fork.branch_tip)
+                        if await _run_since_read(conn, thread_id, fork.run_horizon):
+                            raise await _stale_refusal(
+                                conn, thread_id, request_key, fork.branch_tip
+                            )
                     elif not await _pin_along_branch(conn, thread_id, fork):
-                        raise StaleForkError(thread_id, fork.branch_tip)
+                        raise await _stale_refusal(
+                            conn, thread_id, request_key, fork.branch_tip
+                        )
                     # Truncation would DELETE any in_progress row at/after the
                     # fork turn — silently freeing the slot under a live run —
                     # so a fork refuses while ANY run is open on the thread.
@@ -398,6 +434,8 @@ async def start_run(
                         raise sr_db.TaskRunSlotBusyError(
                             thread_id, str(live_task["task_id"]), live_task
                         )
+                    if fork.write_root is not None:
+                        await fork.write_root(conn)
                     # An order still waiting for a verdict or a call hangs off
                     # a response row about to be deleted, and nothing settles
                     # it once the row is gone. After the guards, so a refused
@@ -418,11 +456,33 @@ async def start_run(
                     # read an empty latest_run_id.
                     await subagent_repair.repair_task_chains(thread_id, conn=conn)
                     await tt_db.drop_rewound(thread_id, fork.checkpoint_id, conn=conn)
+                    # The run row is the one record of this pin that outlives a
+                    # run failing before its first step (``pointer_pinned_by_fork``).
+                    metadata = {**(metadata or {}), FORK_BASE_KEY: fork.checkpoint_id}
                     logger.info(
                         f"[turn_lifecycle] fork truncated {deleted} rows from "
                         f"turn>={fork.from_turn} thread={thread_id} "
                         f"checkpoint={fork.checkpoint_id}"
                     )
+                elif run_horizon is not None:
+                    # A HITL answer resumes the newest checkpoint, which the
+                    # route found on the branch outside this transaction. A
+                    # fork admitted since replaced that pause, and one whose
+                    # run failed before its first step left the replaced pause
+                    # newest. START holds no lock that serializes STARTs, so
+                    # the row lock does: it waits out a fork committing now and
+                    # holds off the next until this run's row is in.
+                    async with conn.cursor() as cur:
+                        await cur.execute(
+                            """
+                            SELECT 1 FROM conversation_threads
+                            WHERE conversation_thread_id = %s
+                            FOR UPDATE
+                            """,
+                            (thread_id,),
+                        )
+                    if await _run_since_read(conn, thread_id, run_horizon):
+                        raise await _stale_refusal(conn, thread_id, request_key, None)
 
                 if turn_index is None:
                     turn_index = await allocate_turn_index(conn, thread_id)
@@ -1112,14 +1172,43 @@ async def get_run_seqs(run_ids: List[str]) -> Dict[str, int]:
             }
 
 
-async def find_run_by_request_key(request_key: str) -> Optional[Dict[str, Any]]:
+async def pointer_pinned_by_fork(
+    thread_id: str, pointer: str, step_run_id: Optional[str]
+) -> bool:
+    """Whether a fork's START pinned ``pointer`` and replaced the newest step
+    beyond it, the one ``step_run_id`` wrote.
+
+    A step whose run still has a row was not replaced: the fork's own run or
+    a later one wrote it, and it stays the newest. Without a pin, a step
+    naming no run (written before runs were stamped) or a run that never had
+    a row is a turn that ended without moving the pointer, which keeps the
+    newest too.
+    """
     async with pool.get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                "SELECT * FROM conversation_responses WHERE request_key = %s",
-                (request_key,),
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM conversation_responses
+                    WHERE conversation_thread_id = %(thread_id)s
+                      AND metadata->>%(key)s = %(pointer)s
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM conversation_responses
+                    WHERE conversation_response_id = %(step_run_id)s
+                ) AS pinned
+                """,
+                {
+                    "thread_id": thread_id,
+                    "key": FORK_BASE_KEY,
+                    "pointer": pointer,
+                    "step_run_id": normalize_uuid(step_run_id),
+                },
             )
-            row = await cur.fetchone()
-            return dict(row) if row else None
+            return bool((await cur.fetchone())["pinned"])
+
+
+async def find_run_by_request_key(request_key: str) -> Optional[Dict[str, Any]]:
+    async with pool.get_db_connection() as conn:
+        return await _run_by_request_key(conn, request_key)
 
 
