@@ -498,6 +498,8 @@ async def _handle_send_message(
                 internal_overrides["query_type"] = None
             if request.report_back_ptc_thread_id:
                 internal_overrides["report_back_ptc_thread_id"] = None
+            if request.report_source:
+                internal_overrides["report_source"] = None
             if request.origin_flash_thread_id:
                 internal_overrides["origin_flash_thread_id"] = None
             if request.origin_dispatch_gen:

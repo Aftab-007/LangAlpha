@@ -303,12 +303,12 @@ async def _await_run_terminal(
             await wake.publish_wake(cache, flash_thread_id, cleared=True)
 
 
-async def _workspace_label(workspace_id: str | None) -> str:
-    """The workspace as the summary turn should name it to the user.
+async def _workspace_name(workspace_id: str | None) -> str | None:
+    """The workspace's name, as the summary turn should name it to the user.
 
-    The agent repeats this label in its summary, and the user knows a
-    workspace by its name, never its id; the thread id alone reads the result.
-    A failed read names no workspace rather than hold the report-back.
+    The agent repeats it in its summary, and the user knows a workspace by its
+    name, never its id; the thread id alone reads the result. A failed read
+    names no workspace rather than hold the report-back.
     """
     if workspace_id:
         from src.server.database.workspace import get_workspace_name_and_description
@@ -323,8 +323,8 @@ async def _workspace_label(workspace_id: str | None) -> str:
             )
             row = None
         if row and row.get("name"):
-            return f'the "{row["name"]}" workspace'
-    return "a workspace"
+            return row["name"]
+    return None
 
 
 # How the summary turn is told the run ended. A run that did not complete
@@ -372,14 +372,25 @@ async def _post_report_back(
     ``"deleted"`` (caller discards the watch) / ``"lost"`` (caller stops,
     no teardown) / ``"superseded"`` (no turn started, nothing to tear down).
     """
+    from src.server.models.chat import AnalystReport
     from src.server.services.report_back.notify_turn import post_notification_turn
 
-    ws_label = await _workspace_label(origin.get("ptc_workspace_id"))
+    ptc_workspace_id = origin.get("ptc_workspace_id")
+    ws_name = await _workspace_name(ptc_workspace_id)
+    ws_label = f'the "{ws_name}" workspace' if ws_name else "a workspace"
     message = (
         "<system>\n"
         f"The analysis you dispatched (thread {ptc_thread_id} in {ws_label}) "
         f"{_OUTCOME_INSTRUCTIONS[final_status]}\n"
         "</system>"
+    )
+    # The message above is model-facing and hidden; history labels the turn
+    # from this instead.
+    report_source = AnalystReport(
+        kind="analyst",
+        thread_id=ptc_thread_id,
+        workspace_id=str(ptc_workspace_id) if ptc_workspace_id else None,
+        workspace_name=ws_name,
     )
     body = {
         "messages": [{"role": "user", "content": message}],
@@ -392,6 +403,7 @@ async def _post_report_back(
         # The pair's dispatch generation rides into the summary run's START
         # metadata so its consumption watch_clear is fenced to THIS incarnation.
         "origin_dispatch_gen": dispatch_gen,
+        "report_source": report_source.model_dump(exclude_none=True),
     }
     # Where the work was asked for: the turn is reminded, and each automation
     # run a request came from rides into its config so a send to a run's

@@ -122,6 +122,7 @@ class RunSSEProducer:
         workflow_timeout: Optional[int] = None,
         merged_stream_chunk_max_bytes: int = MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT,
         agent_config: Optional[Any] = None,
+        report_source: Optional[Dict[str, Any]] = None,
     ):
         """Initialize the workflow stream handler.
 
@@ -134,9 +135,14 @@ class RunSSEProducer:
         steering / demotion off it. Constructing a handler without a
         ``run_id`` would silently strip that frame and leave the client
         racing on reconnect.
+
+        ``report_source`` rides the same frame on a report-back turn: a
+        client that attaches to the run live has no user message to label,
+        so it draws the report's row from this.
         """
         self.thread_id = thread_id
         self.run_id = run_id
+        self.report_source = report_source
         self.token_callback = token_callback
         self.tool_tracker = tool_tracker
         self.workflow_timeout = workflow_timeout or WORKFLOW_TIMEOUT
@@ -314,11 +320,13 @@ class RunSSEProducer:
             # the canonical run_id for this turn. Mirrors the
             # langgraph_sdk SSE protocol so frontend reconnect/demotion
             # logic can latch onto the authoritative identity immediately.
-            yield self._format_sse_event(
-                "metadata",
-                {"thread_id": self.thread_id, "run_id": self.run_id},
-                accumulate=False,
-            )
+            metadata: Dict[str, Any] = {
+                "thread_id": self.thread_id,
+                "run_id": self.run_id,
+            }
+            if self.report_source:
+                metadata["report_source"] = self.report_source
+            yield self._format_sse_event("metadata", metadata, accumulate=False)
 
             for result in settled_results or ():
                 async for event in self._process_message_chunk(

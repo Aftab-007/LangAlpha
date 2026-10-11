@@ -81,6 +81,7 @@ from .request_prep import (
     normalize_request_messages,
     prepare_skill_contexts,
     process_hitl_response,
+    provenance_metadata,
     retried_on_its_surface,
     serialize_context_metadata,
     setup_steering_tracking,
@@ -277,6 +278,7 @@ async def astream_ptc_workflow(
             user_input,
             user_id,
             steer_only=request.steer_only,
+            platform=request.platform,
             can_steer=steer_allowed(
                 request, dispatched=dispatched, steerable=steerable
             ),
@@ -357,11 +359,7 @@ async def astream_ptc_workflow(
         }
         if effective_model:
             query_metadata["llm_model"] = effective_model
-        if request.origin:
-            # Per-turn initiator, mirroring the thread-level metadata['origin']
-            # (threads go mixed: a pinned automation thread also takes manual
-            # user follow-ups, which carry no origin).
-            query_metadata["origin"] = request.origin.model_dump(exclude_none=True)
+        query_metadata.update(provenance_metadata(request))
 
         # Extract attachment and context metadata for display in history
         # (PTC skips this block for HITL resumes — contrast with Flash)
@@ -859,6 +857,7 @@ async def astream_ptc_workflow(
             token_callback=token_callback,
             tool_tracker=tool_tracker,
             agent_config=config,
+            report_source=query_metadata.get("report_source"),
         )
 
         # Track steering messages injected mid-workflow for post-completion backfill

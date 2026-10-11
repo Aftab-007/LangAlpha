@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.tools.secretary.chief_of_staff import delegate_to_analyst
 from src.tools.secretary.tools import ptc_agent
 from tests.unit.server.handlers.chat.redis_fakes import FakeCache as _FakeCache
 
@@ -104,6 +105,48 @@ async def test_continuation_owner_match_reaches_dispatch():
     assert payload.get("thread_id") == PTC_THREAD_ID
     assert payload.get("workspace_id") == WORKSPACE_ID
     owner.assert_awaited_once_with(PTC_THREAD_ID)
+
+
+class _RecordingSession(_FakeSession):
+    def __init__(self, resp: _FakeResp) -> None:
+        super().__init__(resp)
+        self.bodies: list[dict] = []
+
+    def post(self, *_args, **kwargs) -> _FakeResp:
+        self.bodies.append(kwargs.get("json"))
+        return self._resp
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool", "dispatcher"),
+    [(ptc_agent, "flash"), (delegate_to_analyst, "chief_of_staff")],
+    ids=["flash", "chief of staff"],
+)
+async def test_the_dispatched_thread_names_the_agent_that_sent_it(tool, dispatcher):
+    """History labels a handed-off thread by the agent that dispatched it."""
+    session = _RecordingSession(_FakeResp())
+    with patch(
+        "src.server.database.conversation.threads_read.get_thread_owner_id",
+        AsyncMock(return_value=USER_ID),
+    ), patch(
+        "src.server.database.conversation.threads_read.get_thread_by_id",
+        AsyncMock(return_value={"workspace_id": WORKSPACE_ID}),
+    ), patch(
+        "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
+    ), patch("aiohttp.ClientSession", return_value=session):
+        result = await tool.ainvoke(
+            {**_tool_call({"question": "follow up", "thread_id": PTC_THREAD_ID}),
+             "name": tool.name},
+            config={"configurable": {"user_id": USER_ID, "thread_id": "dispatcher-1"}},
+        )
+
+    assert _payload(result).get("success") is True
+    assert session.bodies[0]["origin"] == {
+        "type": "agent",
+        "id": "dispatcher-1",
+        "agent": dispatcher,
+    }
 
 
 @pytest.mark.asyncio

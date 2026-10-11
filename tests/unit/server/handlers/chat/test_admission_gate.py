@@ -205,7 +205,7 @@ class TestWaitOrSteer:
             return_value={"position": 1, "payload": "QUEUED_JSON"},
         ) as mock_steer:
             ready, event = await wait_or_steer(
-                manager, "t-1", "hello", "u-1"
+                manager, "t-1", "hello", "u-1", platform="telegram"
             )
 
         assert ready is False
@@ -213,8 +213,10 @@ class TestWaitOrSteer:
         assert "steering_accepted" in event
         assert '"position": 1' in event
         # Stamped with the live run so the middleware's own-run filter
-        # delivers it (v4 2.4c).
-        mock_steer.assert_awaited_once_with("t-1", "hello", "u-1", run_id="run-live")
+        # delivers it (v4 2.4c), and with the chat app its label names.
+        mock_steer.assert_awaited_once_with(
+            "t-1", "hello", "u-1", run_id="run-live", platform="telegram"
+        )
         # No wait helper exists anymore — admission decided immediately.
         manager.wait_for_admission.assert_awaited_once()
 

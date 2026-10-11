@@ -208,8 +208,8 @@ async def replay_shared_thread(share_token: str):
 def _shared_user_message(redaction: ShareRedaction, data: dict[str, Any]) -> dict[str, Any]:
     """A turn's user message as a viewer may read it.
 
-    The run id stays out: it exists for the owner's report-back catch-up,
-    which a public viewer never runs.
+    The run ids stay out: they exist for the owner's report-back catch-up and
+    report rows, neither of which a public viewer has.
     """
     content, metadata = redaction.query(
         {
@@ -219,7 +219,7 @@ def _shared_user_message(redaction: ShareRedaction, data: dict[str, Any]) -> dic
         }
     )
     return {
-        **{k: v for k, v in data.items() if k != "run_id"},
+        **{k: v for k, v in data.items() if k not in ("run_id", "report_run_id")},
         "content": content,
         "metadata": metadata,
     }

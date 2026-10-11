@@ -32,6 +32,10 @@ posture — the ledger stamp is the dedup, process memory never is.
 
 import logging
 import uuid
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.server.models.chat import TaskReport
 
 logger = logging.getLogger(__name__)
 
@@ -156,19 +160,33 @@ async def read_task_report_back_status(thread_id: str) -> dict:
     }
 
 
-def _build_notification_message(payload: dict) -> str:
+def _task_report(payload: dict) -> "TaskReport":
+    """The task a notification turn announces, read off its payload once: the
+    turn's message names it from this, and history labels the turn with it."""
+    from src.server.models.chat import TaskReport
+
+    task_id = payload.get("task_id")
+    return TaskReport(
+        kind="task",
+        task_id=str(task_id),
+        display_id=payload.get("display_id") or f"Task-{task_id}",
+        description=payload.get("description") or None,
+        # Pre-final_status jobs (enqueued before the field existed) carry no
+        # status; only completed runs were enqueued then.
+        failed=payload.get("final_status") == "error",
+    )
+
+
+def _build_notification_message(report: "TaskReport", subagent_type: str | None) -> str:
     """The synthetic turn's content: announce the run's outcome and direct
     the agent to TaskOutput, which serves the result — or the failure
     detail — from the durable ledger. A failed run must never be announced
     as finished work: the agent would report a deliverable that does not
     exist."""
-    display_id = payload.get("display_id") or f"Task-{payload.get('task_id')}"
-    subagent_type = payload.get("subagent_type") or "subagent"
-    description = payload.get("description") or ""
-    # Pre-final_status jobs (enqueued before the field existed) carry no
-    # status; only completed runs were enqueued then.
-    failed = payload.get("final_status") == "error"
-    if failed:
+    display_id = report.display_id
+    subagent_type = subagent_type or "subagent"
+    description = report.description or ""
+    if report.failed:
         headline = (
             f"Background subagent {display_id} ({subagent_type}) FAILED after "
             f"your previous turn ended, and you have not seen the failure. "
@@ -190,7 +208,7 @@ def _build_notification_message(payload: dict) -> str:
         f"{headline}\n"
         f"Task description: {description}\n"
         "</system>"
-        f"\n\nCall `TaskOutput(task_id=\"{payload.get('task_id')}\")` "
+        f"\n\nCall `TaskOutput(task_id=\"{report.task_id}\")` "
         f"{call_to_action}"
     )
 
@@ -378,15 +396,20 @@ async def execute_task_report_back(job: dict) -> None:
                 pass
             return
 
+        report = _task_report(payload)
+        message = _build_notification_message(report, payload.get("subagent_type"))
         body = {
-            "messages": [
-                {"role": "user", "content": _build_notification_message(payload)}
-            ],
+            "messages": [{"role": "user", "content": message}],
             "agent_mode": "ptc",
             "workspace_id": workspace_id,
             "query_type": "system",
             "request_key": _job_request_key(job_id),
         }
+        # The message is hidden, so history labels the turn from this. Every
+        # enqueue names its task; a payload that does not still announces,
+        # unlabelled, rather than have a label name `Task-None`.
+        if payload.get("task_id"):
+            body["report_source"] = report.model_dump(exclude_none=True)
         outcome, rb_run_id = await post_notification_turn(
             thread_id=thread_id,
             body=body,

@@ -269,6 +269,35 @@ async def test_user_message_run_id_stamped_only_when_terminal(monkeypatch):
     assert stamps == {0: "resp-0", 1: "resp-1", 2: "resp-2", 3: None}
 
 
+async def test_report_back_names_its_run_before_it_ends(monkeypatch):
+    # A reload mid report-back draws the row from history and again from the
+    # live attach; the client keeps one by the run, which run_id withholds.
+    # A running turn has only its in_progress slot, which replay reads by id.
+    turns = [_turn(0, [AIMessage(content="a0", id="ai-0")])]
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=turns))
+    queries = [_query(0), _query(1, qtype="system")]
+    items = await build_checkpoint_replay_items(
+        thread_rows(queries, {0: _response(0)}, open_runs={1: "run-1"}),
+    )
+    users = [i["data"] for i in items if i["event"] == "user_message"]
+    assert [u.get("report_run_id") for u in users] == [None, "run-1"]
+    assert users[1].get("run_id") is None
+
+    stored = build_sse_replay_items(THREAD, queries, {0: _response(0)}, {1: "run-1"})
+    users = [i["data"] for i in stored if i["event"] == "user_message"]
+    assert [u.get("report_run_id") for u in users] == [None, "run-1"]
+
+
+def test_report_back_retried_names_the_run_going():
+    # A retry's attempt is the run a live attach draws, not the one it replaces.
+    queries = [_query(0, qtype="system")]
+    stored = build_sse_replay_items(
+        THREAD, queries, {0: _response(0, status="error")}, {0: "run-2"}
+    )
+    (user,) = [i["data"] for i in stored if i["event"] == "user_message"]
+    assert user["report_run_id"] == "run-2"
+
+
 async def test_inflight_windowed_keeps_absolute_pairing(monkeypatch):
     # Regression for the live-proven mislabel: ?limit=N during a streaming
     # turn must not staple the previous turn's answer under the active turn's

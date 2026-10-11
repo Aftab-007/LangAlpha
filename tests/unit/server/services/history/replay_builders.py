@@ -62,6 +62,7 @@ def thread_rows(
     usages=None,
     provenance=None,
     run_facts=None,
+    open_runs=None,
     thread_id=THREAD,
     tip=TIP,
 ) -> ThreadRows:
@@ -75,6 +76,7 @@ def thread_rows(
         usages=list(usages or []),
         provenance=list(provenance or []),
         run_facts=list(run_facts or []),
+        open_runs=dict(open_runs or {}),
     )
 
 

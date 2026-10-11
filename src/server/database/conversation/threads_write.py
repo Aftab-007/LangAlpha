@@ -101,6 +101,8 @@ async def create_thread(
       - "origin": {"type": "agent"|"automation"|"system", "id": "<initiator id>"}
         — who initiated the thread ('agent' id = dispatching flash thread,
         'automation' id = automation). Absent origin key = user-initiated.
+        Display-only extras: "name" (the automation's) and "agent" (which
+        agent dispatched: "chief_of_staff" or "flash").
     `external_id` is only set by channel integrations and combined with platform
     is unique-indexed for dedup. Web-originated threads have external_id NULL.
     `subagents_allowed` None, or the side the owner's default is on, stores

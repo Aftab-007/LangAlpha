@@ -100,6 +100,7 @@ async def wait_or_steer(
     *,
     steer_only: bool = False,
     can_steer: bool = True,
+    platform: str | None = None,
 ) -> tuple[bool, str | None]:
     """Admit a new turn, steer the running one, or 409.
 
@@ -159,7 +160,7 @@ async def wait_or_steer(
         str(active_row["conversation_response_id"]) if active_row else None
     )
     result = await steer_thread(
-        thread_id, user_input, user_id, run_id=active_run_id
+        thread_id, user_input, user_id, run_id=active_run_id, platform=platform
     )
     if not result:
         # Steering failed (e.g. Redis unavailable) on a running turn.

@@ -6,7 +6,7 @@ that use the ptc-agent library for code execution in Daytona sandboxes.
 """
 
 import copy
-from typing import Any, Dict, List, Literal, Mapping, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -260,11 +260,44 @@ class ThreadOrigin(BaseModel):
     set aside for platform-initiated threads. The label is advisory —
     client-supplied, not authenticated, and nothing branches on it.
     User-initiated threads carry no origin at all rather than an explicit
-    'user' entry.
+    'user' entry. ``name`` and ``agent`` are display only (the history label
+    above a message) and never reach the model's context, which reads
+    ``type`` alone.
     """
 
     type: Literal["agent", "automation", "system"]
     id: Optional[str] = Field(default=None, max_length=100)
+    # automation: the automation's name at send time, capped as automations cap it
+    name: Optional[str] = Field(default=None, max_length=255)
+    # agent: which agent dispatched the thread
+    agent: Optional[Literal["chief_of_staff", "flash"]] = None
+
+
+class AnalystReport(BaseModel):
+    """A dispatched analyst's thread reporting back, and its workspace."""
+
+    kind: Literal["analyst"]
+    thread_id: str
+    workspace_id: Optional[str] = None
+    workspace_name: Optional[str] = None
+
+
+class TaskReport(BaseModel):
+    """A background subagent task in this thread, finished or failed."""
+
+    kind: Literal["task"]
+    task_id: str
+    display_id: str
+    description: Optional[str] = None
+    failed: bool = False
+
+
+# What a report-back turn announces, kept on its query row for display only.
+# The turn's own message is model-facing and hidden from the user, so history
+# shows a labelled row built from this instead. Only the server's own
+# report-back requests keep it: any other request has it dropped once parsed,
+# so a malformed one is still refused there.
+ReportSource = Annotated[AnalystReport | TaskReport, Field(discriminator="kind")]
 
 
 class ChatRequest(BaseModel):
@@ -446,6 +479,13 @@ class ChatRequest(BaseModel):
         default=None,
         description="The earlier automation runs (id and targets) a "
         "report-back turn sends for. Internal use only.",
+    )
+
+    # Internal: what a report-back turn announces, stamped on its query row so
+    # history can label the turn whose own message is hidden. Display only.
+    report_source: Optional[ReportSource] = Field(
+        default=None,
+        description="What this report-back turn reports on. Internal use only.",
     )
 
     # Internal: build this turn's agent without the subagent machinery

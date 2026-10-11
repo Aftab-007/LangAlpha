@@ -6,6 +6,7 @@ Covers:
 - ensure_thread: correct DB call with kwargs, title generation, and the
   prior-turn snapshot
 - build_turn_context: origin and surface from the request, and the turn's zones
+- provenance_metadata: the display labels a turn's query row carries
 """
 
 from datetime import UTC, datetime
@@ -13,7 +14,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.server.handlers.chat.request_prep import PriorThread, build_turn_context
+from src.server.handlers.chat.request_prep import (
+    PriorThread,
+    build_turn_context,
+    provenance_metadata,
+)
 
 PREP = "src.server.handlers.chat.request_prep"
 
@@ -472,11 +477,14 @@ class TestBuildTurnContext:
         from src.server.models.chat import ThreadOrigin
 
         ctx = build_turn_context(
-            self._request(origin=ThreadOrigin(type="agent", id="flash-t-1")),
+            self._request(
+                origin=ThreadOrigin(type="agent", id="flash-t-1", agent="flash")
+            ),
             PriorThread(),
             user_profile=None,
         )
 
+        # The display-only keys never reach the model's context.
         assert ctx.origin == "agent"
 
     def test_a_manual_follow_up_carries_no_origin(self):
@@ -495,6 +503,38 @@ class TestBuildTurnContext:
 
         assert (ctx.platform, ctx.surface_rules) == ("slack", "reply in one block")
         assert ctx.last_turn_at == stamp
+
+
+# ---------------------------------------------------------------------------
+# provenance_metadata: the query row's display labels
+# ---------------------------------------------------------------------------
+
+
+class TestProvenanceMetadata:
+    def test_a_report_back_turn_names_its_source_and_surface(self):
+        from src.server.models.chat import ChatRequest, TaskReport, ThreadOrigin
+
+        request = ChatRequest(
+            platform="telegram",
+            origin=ThreadOrigin(type="automation", id="a-1", name="NVDA Earnings"),
+            report_source=TaskReport(kind="task", task_id="k3x9", display_id="Task-k3x9"),
+        )
+
+        assert provenance_metadata(request) == {
+            "origin": {"type": "automation", "id": "a-1", "name": "NVDA Earnings"},
+            "platform": "telegram",
+            "report_source": {
+                "kind": "task",
+                "task_id": "k3x9",
+                "display_id": "Task-k3x9",
+                "failed": False,
+            },
+        }
+
+    def test_a_plain_user_turn_carries_none(self):
+        from src.server.models.chat import ChatRequest
+
+        assert provenance_metadata(ChatRequest()) == {}
 
 
 # ---------------------------------------------------------------------------

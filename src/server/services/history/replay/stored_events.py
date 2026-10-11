@@ -56,6 +56,7 @@ def build_sse_replay_items(
     thread_id: str,
     queries: list[dict[str, Any]],
     responses_by_turn: dict[Any, dict[str, Any]],
+    open_runs: dict[Any, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Replay items sourced verbatim from persisted ``sse_events`` (the fallback).
 
@@ -63,8 +64,10 @@ def build_sse_replay_items(
     emits either source through one loop. The terminal error event is
     synthesized from the response row here too — it is yielded live *after*
     the persist snapshot, so stored events never contain it. So is a user
-    stop's close when the archive lacks one.
+    stop's close when the archive lacks one. ``open_runs`` names the run of a
+    turn still going (``ThreadRows.open_runs``).
     """
+    open_runs = open_runs or {}
     out: list[dict[str, Any]] = []
     terminals_emitted: set[str] = set()
     for query in queries:
@@ -75,7 +78,11 @@ def build_sse_replay_items(
         response_id = (
             str(response.get("conversation_response_id")) if response else None
         )
-        out.append(items._user_message_item(thread_id, query, response))
+        out.append(
+            items._user_message_item(
+                thread_id, query, response, open_runs.get(turn_index)
+            )
+        )
         turn_items = [
             {"event": event["event"], "data": dict(event["data"])}
             for event in stored_merge._stored_events(response)

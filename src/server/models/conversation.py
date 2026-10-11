@@ -32,8 +32,10 @@ class WorkspaceThreadListItem(BaseModel):
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Thread annotations. Known keys: 'origin' — "
-        "{type: 'agent'|'automation'|'system', id?} recording who initiated "
-        "the thread; absent origin = user-initiated.",
+        "{type: 'agent'|'automation'|'system', id?, name?, agent?} recording "
+        "who initiated the thread (name: the automation's; agent: "
+        "'chief_of_staff'|'flash', the dispatcher); absent origin = "
+        "user-initiated.",
     )
     is_shared: bool = Field(False, description="Whether thread is publicly shared")
     is_pinned: bool = Field(

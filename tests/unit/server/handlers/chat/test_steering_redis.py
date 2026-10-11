@@ -56,6 +56,20 @@ async def test_steer_thread_queues_and_returns_the_exact_payload(monkeypatch):
     assert body["content"] == "hello" and body["user_id"] == "u-1"
     # An EXPIRE was issued so an unconsumed steer can't leak forever.
     assert KEY in cache.client.ttls
+    # No surface named, none stamped.
+    assert "platform" not in body
+
+
+@pytest.mark.asyncio
+async def test_steer_thread_stamps_the_chat_app(monkeypatch):
+    from src.server.handlers.chat.steering import steer_thread
+
+    cache = FakeCache()
+    monkeypatch.setattr(CACHE, lambda: cache)
+
+    result = await steer_thread("t-1", "hello", "u-1", platform="telegram")
+
+    assert json.loads(result["payload"])["platform"] == "telegram"
 
 
 @pytest.mark.asyncio

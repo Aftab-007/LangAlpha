@@ -206,6 +206,7 @@ async def build_replay_page(
                     turn_index,
                     inputs.queries_by_turn,
                     inputs.responses_by_turn,
+                    rows.open_runs.get(turn_index),
                 )
             )
         else:
@@ -305,7 +306,9 @@ async def stored_events_page(
     return ReplayPage(
         lines=[
             line_of(item)
-            for item in build_sse_replay_items(rows.thread_id, page_queries, responses)
+            for item in build_sse_replay_items(
+                rows.thread_id, page_queries, responses, rows.open_runs
+            )
         ],
         first_turn_index=min(page_turns) if page_turns else None,
         has_more=len(page_turns) < len(turns),

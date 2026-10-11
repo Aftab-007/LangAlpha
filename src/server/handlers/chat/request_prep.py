@@ -224,6 +224,31 @@ def process_hitl_response(request: ChatRequest) -> PreparedHitl:
     return PreparedHitl(feedback_action, summary["content"], metadata)
 
 
+def provenance_metadata(request: ChatRequest) -> dict[str, Any]:
+    """Where a turn came from, for its query row (display only).
+
+    History labels a message from these keys, and none of them reaches the
+    model: ``origin`` is per turn, mirroring the thread-level
+    metadata['origin'] (threads go mixed: a pinned automation thread also
+    takes manual user follow-ups, which carry no origin); ``platform`` is the
+    raw surface string, the client deciding which values it labels, and the
+    request's own rather than :func:`turn_surface`'s, which gives a
+    report-back the thread's channel although nobody sent it from there; and
+    ``report_source`` names what a report-back turn announces, since that
+    turn's own message is model-facing and hidden.
+    """
+    metadata: dict[str, Any] = {}
+    if request.origin:
+        metadata["origin"] = request.origin.model_dump(exclude_none=True)
+    if request.platform:
+        metadata["platform"] = request.platform
+    if request.report_source:
+        metadata["report_source"] = request.report_source.model_dump(
+            exclude_none=True
+        )
+    return metadata
+
+
 def serialize_context_metadata(
     request: ChatRequest,
     query_metadata: dict,
