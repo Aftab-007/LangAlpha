@@ -7,6 +7,7 @@
 import type React from 'react';
 import type { ChatMessage } from '@/types/chat';
 import type { ActionRequest, ToolCallData } from '@/types/sse';
+import type { ReportSource } from '@/types/api';
 import type { SubagentTokenUsage } from '../utils/tokenUsage';
 import type { DecisionTarget } from './interrupts/toolApprovalCard';
 import type { StreamRefs, UpdateSubagentCard } from './streamRefs';
@@ -90,6 +91,9 @@ interface SSEEvent {
   can_reconnect?: boolean;
   is_shared?: boolean;
   run_id?: string;
+  /** On a report-back's `metadata` frame: what it reports, for the row a live
+   *  attach draws, since no user message comes with it. */
+  report_source?: ReportSource;
   /** ISO instant the turn's run settled, on a terminal `user_message` only.
    *  Live turns carry none — their tail bubble is stamped when it finalizes. */
   run_completed_at?: string;

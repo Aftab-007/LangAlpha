@@ -5,6 +5,7 @@
  * gate, the regenerate tail, and the turn projection each carried their own
  * inline `role === 'assistant' && !isSteering` check before this module.
  */
+import type { MessageProvenance } from '@/types/chat';
 
 /** The subset of message fields the predicates read. Structural so both the
  *  loose `MessageRecord` wire shape and the typed `ChatMessage` union fit. */
@@ -34,4 +35,15 @@ export function isSteeringUserMessage(message: MessageLike): boolean {
  */
 export function isSteeringContinuation(message: MessageLike): boolean {
   return message.role === 'assistant' && !!message.isSteering;
+}
+
+/**
+ * A report-back's row: the turn's own message is written for the model, so
+ * the row is drawn as its label alone, with no bubble, actions or minimap
+ * entry. It still opens its turn like any user message.
+ */
+export function isReportRow(message: MessageLike & { provenance?: unknown }): boolean {
+  if (message.role !== 'user') return false;
+  const kind = (message.provenance as MessageProvenance | undefined)?.kind;
+  return kind === 'analyst_report' || kind === 'task_report';
 }

@@ -21,6 +21,9 @@ import type { ChartTabSpec } from '../filePanel/types';
 
 export interface MessageActions {
   onOpenSubagentTask?: (info: SubagentInfo) => void;
+  /** Opens the thread that handed a turn to this one, where the thread's own
+   *  back button goes. Only the host knows how that button gets there. */
+  onOpenDispatcher?: (threadId: string) => void;
   onOpenFile?: OpenFileHandler;
   /** Brings a turn's deliverables deck into view as it unfolds. The deck owns
    *  no scroll container and must not grab one: the host's scroll controller

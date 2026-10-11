@@ -10,7 +10,7 @@ import { useTranscriptDisplay } from '@/lib/transcriptDisplay';
 import { CitationMetadataProvider } from '../CitationMetadataContext';
 import { CreditPausePendingProvider } from '../CreditPausePendingContext';
 import TextMessageContent from '../TextMessageContent';
-import { countDedupedSources, type CreditPauseState, type ProvenanceRecord, type SubagentTaskRecord, type ToolApprovalState } from '@/types/chat';
+import { countDedupedSources, type CreditPauseState, type MessageProvenance, type ProvenanceRecord, type SubagentTaskRecord, type ToolApprovalState } from '@/types/chat';
 import { TextShimmer } from '@/components/ui/text-shimmer';
 import type { SelectionPreviewShape } from '../SelectionContextPreview';
 import { AttachmentCard, InlineSelectionCards, InlineWidgetDeck } from './attachments';
@@ -21,6 +21,7 @@ import { useMessageActions } from './MessageActionsContext';
 import { OpenThoughtContext, openThoughtLength, useArrivalQuiet, useOpenThoughts } from './useArrivalQuiet';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { isSteeringUserMessage } from './messagePredicates';
+import { UserBubble } from './UserBubble';
 import { assistantText } from './messageText';
 import { TurnFileCards } from './TurnFileCards';
 import type { TurnFile } from '../../utils/turnFiles';
@@ -86,6 +87,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   const hasWidgetSnapshots = isUser && widgetSnapshots && widgetSnapshots.length > 0;
   const chartSelections = message.chartSelections as SelectionPreviewShape[] | undefined;
   const hasChartSelections = isUser && chartSelections && chartSelections.length > 0;
+  const provenance = isUser ? (message.provenance as MessageProvenance | undefined) : undefined;
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -344,6 +346,120 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   </div>
   ) : null;
 
+  // A user's message goes in its bubble, a reply sits on the page itself; the
+  // content is the same either way.
+  const bubbleContent = (
+    <>
+      <OverflowCollapse enabled={isUser} maxHeight={USER_MESSAGE_COLLAPSE_PX}>
+      {isPendingDelivery ? (
+        <TextShimmer
+          as="span"
+          className="text-sm [--base-color:var(--color-text-secondary)] [--base-gradient-color:var(--color-text-primary)]"
+          duration={1.5}
+        >
+          {(message.content as string) || ''}
+        </TextShimmer>
+      ) : (
+      <>
+      {/* Render content segments in chronological order */}
+      {(message.contentSegments as ContentSegmentRecord[] | undefined) && (message.contentSegments as ContentSegmentRecord[]).length > 0 ? (
+        <CitationMetadataProvider toolCallProcesses={(message.toolCallProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}>
+        <CreditPausePendingProvider creditPauses={message.creditPauses as Record<string, CreditPauseState> | undefined}>
+        <OpenThoughtContext value={markOpenThought}>
+        <MessageContentSegments
+          contentProjection={projection}
+          segments={message.contentSegments as ContentSegmentRecord[]}
+          reasoningProcesses={(message.reasoningProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          toolCallProcesses={(message.toolCallProcesses as Record<string, ToolCallProcessRecord>) || EMPTY_OBJ}
+          todoListProcesses={(message.todoListProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          subagentTasks={(message.subagentTasks as Record<string, SubagentTaskRecord>) || EMPTY_OBJ}
+          userQuestions={(message.userQuestions as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          workspaceProposals={(message.workspaceProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          questionProposals={(message.questionProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          pendingToolCallChunks={(message.pendingToolCallChunks as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          isStreaming={message.isStreaming as boolean}
+          hasError={message.error as boolean}
+          structuredError={message.structuredError as import('@/utils/rateLimitError').StructuredError | undefined}
+          fold={fold}
+          isTurnTail={isTurnTail}
+          isSubagentView={isSubagentView}
+          ptcAgentProposals={(message.ptcAgentProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          secretaryActionProposals={(message.secretaryActionProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          creditPauses={(message.creditPauses as Record<string, CreditPauseState>) || EMPTY_OBJ}
+          toolApprovals={(message.toolApprovals as Record<string, ToolApprovalState>) || EMPTY_OBJ}
+          htmlWidgetProcesses={(message.htmlWidgetProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          readOnly={readOnly}
+          flashContext={flashContext}
+        />
+        </OpenThoughtContext>
+        </CreditPausePendingProvider>
+        </CitationMetadataProvider>
+      ) : (
+        // Fallback for messages without segments (backward compatibility) - main chat shows text only
+        ((message.contentType as string) === 'text' || !(message.contentType as string)) && (
+          <TextMessageContent
+            content={message.content as string}
+            isStreaming={message.isStreaming as boolean}
+            hasError={message.error as boolean}
+            structuredError={message.structuredError as import('@/utils/rateLimitError').StructuredError | undefined}
+            onOpenFile={onOpenFile}
+          />
+        )
+      )}
+      </>
+      )}
+      </OverflowCollapse>
+
+      {/* Streaming indicator. Stays mounted for the whole stream and only
+          fades: while text is landing it is invisible (the text is the
+          liveness signal), in a pause it fades back in so the turn never
+          looks finished. Fading rather than unmounting keeps its row, so
+          the transcript bottom does not hop by a line on every pause. */}
+      <AnimatePresence initial={false}>
+      {isStreaming && (() => {
+        const hasContent = projection.blocks.length > 0 || (message.content as string)?.trim();
+        // Arriving bytes are not visible progress while paragraph delivery
+        // is holding the tail back. The question is whether anything that
+        // arrived is unpainted, not whether the whole bubble is blank:
+        // requiring every block to be wholly invisible text went false for
+        // the rest of the reply the moment the first paragraph landed, and
+        // was never true at all once the turn called a tool, so the
+        // indicator vanished and a reply mid-paragraph looked finished.
+        // Only the block still being written is held. Asking every block
+        // counted a sentence a tool call followed, which shows whole, and
+        // held the indicator up through the rest of the turn.
+        const streamingText = projection.blocks[streamingTextBlockIndex(projection.blocks)];
+        const tail = streamingText?.type === 'text' ? streamingText.segment.content || '' : '';
+        const waitingForParagraph = streamingMode === 'paragraph'
+          && visibleParagraphPrefix(tail).length < tail.length;
+        const quiet = arrivalQuiet || waitingForParagraph;
+        const size = isMobile ? 20 : 24;
+        // The gap above the glyph is padding inside the row, not a margin:
+        // content that renders zero-height (text still held back, a block
+        // with nothing to show yet) lets a margin collapse out through the
+        // bubble's top, and the bubble then jumps up as the first visible
+        // content lands. The row leaves in px, never from `auto`: an auto
+        // exit inside the chat scroller forces a layout a row short and
+        // clamps the scroll.
+        const gap = hasContent ? 12 : 0;
+        return (
+          <motion.div
+            key="streaming-indicator"
+            className="transition-opacity"
+            style={{ opacity: quiet ? 1 : 0, transitionDuration: `${FADE_MS}ms`, height: size + gap, paddingTop: gap, overflow: 'hidden' }}
+            exit={{ height: 0, paddingTop: 0, opacity: 0, transition: EXIT_TWEEN }}
+            aria-hidden={!quiet}
+            data-testid="streaming-indicator"
+            data-quiet={quiet ? 'true' : 'false'}
+          >
+            <FigureEightLoading active={quiet} className={`${isMobile ? 'h-[20px]' : 'h-[24px]'} text-(--color-accent-primary)`} />
+          </motion.div>
+        );
+      })()}
+      </AnimatePresence>
+    </>
+  );
+
   return (
     <div
       data-message-id={message.id as string}
@@ -424,129 +540,22 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
         ) : (
         <>
         {/* ===== NORMAL MODE ===== */}
-        {/* Message bubble */}
-        <div
-          className={`rounded-lg ${
-            isUser
-              ? `${isMobile ? 'px-3 py-2' : 'px-4 py-3'} rounded-tr-none overflow-hidden`
-              : `pl-0 pr-0 ${showTurnFiles ? 'pb-0' : isMobile ? 'pb-2' : 'pb-3'} rounded-tl-none`
-          }`}
-          style={{
-            backgroundColor: isUser
-              ? 'var(--color-bg-elevated)'
-              : 'transparent',
-            border: 'none',
-            color: 'var(--color-text-primary)',
-          }}
-        >
-          <OverflowCollapse enabled={isUser} maxHeight={USER_MESSAGE_COLLAPSE_PX}>
-          {isPendingDelivery ? (
-            <TextShimmer
-              as="span"
-              className="text-sm [--base-color:var(--color-text-secondary)] [--base-gradient-color:var(--color-text-primary)]"
-              duration={1.5}
-            >
-              {(message.content as string) || ''}
-            </TextShimmer>
-          ) : (
-          <>
-          {/* Render content segments in chronological order */}
-          {(message.contentSegments as ContentSegmentRecord[] | undefined) && (message.contentSegments as ContentSegmentRecord[]).length > 0 ? (
-            <CitationMetadataProvider toolCallProcesses={(message.toolCallProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}>
-            <CreditPausePendingProvider creditPauses={message.creditPauses as Record<string, CreditPauseState> | undefined}>
-            <OpenThoughtContext value={markOpenThought}>
-            <MessageContentSegments
-              contentProjection={projection}
-              segments={message.contentSegments as ContentSegmentRecord[]}
-              reasoningProcesses={(message.reasoningProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              toolCallProcesses={(message.toolCallProcesses as Record<string, ToolCallProcessRecord>) || EMPTY_OBJ}
-              todoListProcesses={(message.todoListProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              subagentTasks={(message.subagentTasks as Record<string, SubagentTaskRecord>) || EMPTY_OBJ}
-              userQuestions={(message.userQuestions as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              workspaceProposals={(message.workspaceProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              questionProposals={(message.questionProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              pendingToolCallChunks={(message.pendingToolCallChunks as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              isStreaming={message.isStreaming as boolean}
-              hasError={message.error as boolean}
-              structuredError={message.structuredError as import('@/utils/rateLimitError').StructuredError | undefined}
-              fold={fold}
-              isTurnTail={isTurnTail}
-              isSubagentView={isSubagentView}
-              ptcAgentProposals={(message.ptcAgentProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              secretaryActionProposals={(message.secretaryActionProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              creditPauses={(message.creditPauses as Record<string, CreditPauseState>) || EMPTY_OBJ}
-              toolApprovals={(message.toolApprovals as Record<string, ToolApprovalState>) || EMPTY_OBJ}
-              htmlWidgetProcesses={(message.htmlWidgetProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
-              readOnly={readOnly}
-              flashContext={flashContext}
-            />
-            </OpenThoughtContext>
-            </CreditPausePendingProvider>
-            </CitationMetadataProvider>
-          ) : (
-            // Fallback for messages without segments (backward compatibility) - main chat shows text only
-            ((message.contentType as string) === 'text' || !(message.contentType as string)) && (
-              <TextMessageContent
-                content={message.content as string}
-                isStreaming={message.isStreaming as boolean}
-                hasError={message.error as boolean}
-                structuredError={message.structuredError as import('@/utils/rateLimitError').StructuredError | undefined}
-                onOpenFile={onOpenFile}
-              />
-            )
-          )}
-          </>
-          )}
-          </OverflowCollapse>
-
-          {/* Streaming indicator. Stays mounted for the whole stream and only
-              fades: while text is landing it is invisible (the text is the
-              liveness signal), in a pause it fades back in so the turn never
-              looks finished. Fading rather than unmounting keeps its row, so
-              the transcript bottom does not hop by a line on every pause. */}
-          <AnimatePresence initial={false}>
-          {isStreaming && (() => {
-            const hasContent = projection.blocks.length > 0 || (message.content as string)?.trim();
-            // Arriving bytes are not visible progress while paragraph delivery
-            // is holding the tail back. The question is whether anything that
-            // arrived is unpainted, not whether the whole bubble is blank:
-            // requiring every block to be wholly invisible text went false for
-            // the rest of the reply the moment the first paragraph landed, and
-            // was never true at all once the turn called a tool, so the
-            // indicator vanished and a reply mid-paragraph looked finished.
-            // Only the block still being written is held. Asking every block
-            // counted a sentence a tool call followed, which shows whole, and
-            // held the indicator up through the rest of the turn.
-            const streamingText = projection.blocks[streamingTextBlockIndex(projection.blocks)];
-            const tail = streamingText?.type === 'text' ? streamingText.segment.content || '' : '';
-            const waitingForParagraph = streamingMode === 'paragraph'
-              && visibleParagraphPrefix(tail).length < tail.length;
-            const quiet = arrivalQuiet || waitingForParagraph;
-            const size = isMobile ? 20 : 24;
-            // The gap above the glyph is padding inside the row, not a margin:
-            // content that renders zero-height (text still held back, a block
-            // with nothing to show yet) lets a margin collapse out through the
-            // bubble's top, and the bubble then jumps up as the first visible
-            // content lands. The row leaves in px, never from `auto`: an auto
-            // exit inside the chat scroller forces a layout a row short and
-            // clamps the scroll.
-            const gap = hasContent ? 12 : 0;
-            return (
-              <motion.div
-                key="streaming-indicator"
-                className="transition-opacity"
-                style={{ opacity: quiet ? 1 : 0, transitionDuration: `${FADE_MS}ms`, height: size + gap, paddingTop: gap, overflow: 'hidden' }}
-                exit={{ height: 0, paddingTop: 0, opacity: 0, transition: EXIT_TWEEN }}
-                aria-hidden={!quiet}
-                data-testid="streaming-indicator"
-                data-quiet={quiet ? 'true' : 'false'}
-              >
-                <FigureEightLoading active={quiet} className={`${isMobile ? 'h-[20px]' : 'h-[24px]'} text-(--color-accent-primary)`} />
-              </motion.div>
-            );
-          })()}
-          </AnimatePresence>
-        </div>
+        {isUser ? (
+          <UserBubble provenance={provenance} readOnly={readOnly} isMobile={isMobile}>
+            {bubbleContent}
+          </UserBubble>
+        ) : (
+          <div
+            className={`rounded-lg rounded-tl-none pl-0 pr-0 ${showTurnFiles ? 'pb-0' : isMobile ? 'pb-2' : 'pb-3'}`}
+            style={{
+              backgroundColor: 'transparent',
+              border: 'none',
+              color: 'var(--color-text-primary)',
+            }}
+          >
+            {bubbleContent}
+          </div>
+        )}
 
         {/* The turn's deliverables, on its last bubble, directly under the
             reply. A long turn names its files somewhere in the prose or only

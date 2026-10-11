@@ -130,6 +130,7 @@ function harness() {
         role: m.role,
         ...(notice ? { notice } : { content: m.content }),
         ...(m.isPending ? { isPending: true } : {}),
+        ...(m.provenance ? { from: (m.provenance as { kind: string }).kind } : {}),
       };
     });
   const ids = () => card().map((m) => m.id);
@@ -137,7 +138,7 @@ function harness() {
   const inputIds = () => vi.mocked(sendSubagentMessage).mock.calls.map((call) => call[3]);
   // A delivery as the drain frames it: the joined text the subagent reads,
   // and the queue entries it took.
-  const deliver = (...entries: { input_id: string; content: string }[]) =>
+  const deliver = (...entries: { input_id: string; content: string; sender?: 'user' | 'agent' }[]) =>
     feed({
       event: 'steering_delivered',
       content: entries.map((entry) => entry.content).join('\n'),
@@ -244,6 +245,26 @@ describe('useSubagentTabs — steering a streaming subagent', () => {
       { role: 'user', content: 'Also cover 2024 guidance' },
     ]);
     expect(ids()[1]).toBe(bubbleId);
+  });
+
+  it('labels what the main agent wrote, never the instruction the user sent', async () => {
+    const { feed, deliver, text, steer, frame, messages, inputIds } = harness();
+    feed({ event: 'user_message', content: 'Pull the 10-K' });
+    text('Revenue');
+    frame();
+    await steer('Focus on margins');
+
+    deliver(
+      { input_id: inputIds()[0], content: 'Focus on margins', sender: 'user' },
+      { input_id: '5d0c2e8a', content: 'Also cover 2024 guidance', sender: 'agent' },
+    );
+
+    expect(messages()).toEqual([
+      { role: 'user', content: 'Pull the 10-K', from: 'main_agent' },
+      { role: 'assistant', content: 'Revenue' },
+      { role: 'user', content: 'Focus on margins' },
+      { role: 'user', content: 'Also cover 2024 guidance', from: 'main_agent' },
+    ]);
   });
 
   it('confirms an instruction delivered before its send answered', async () => {

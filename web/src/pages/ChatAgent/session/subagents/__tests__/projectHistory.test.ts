@@ -182,6 +182,39 @@ describe('projectSubagentHistory steering', () => {
     expect(replayDelivery({ content: 'Focus on margins\nSkip 2019' }))
       .toEqual(['Focus on margins\nSkip 2019']);
   });
+
+  const replayLabels = (events: Record<string, unknown>[]) => {
+    const rt = makeRuntime();
+    projectSubagentHistory(
+      rt,
+      new Map([['task:k7Xm2p', { messages: [], events: events as unknown as SSEEvent[] }]]),
+    );
+    return (rt.subagentHistory.get().entries['task:k7Xm2p']!.messages as Record<string, unknown>[])
+      .filter((m) => m.role === 'user')
+      .map((m) => [m.content, (m.provenance as { kind: string } | undefined)?.kind ?? null]);
+  };
+
+  it('labels what the main agent wrote and leaves what the user sent unlabelled', () => {
+    expect(replayLabels([
+      { event: 'user_message', role: 'user', content: 'Pull the 10-K' },
+      { event: 'message_chunk', role: 'assistant', content_type: 'text', content: 'Revenue' },
+      {
+        event: 'steering_delivered',
+        content: 'Focus on margins\nAlso cover 2024 guidance',
+        entries: [
+          { input_id: 'a1', content: 'Focus on margins', sender: 'user' },
+          { input_id: 'b2', content: 'Also cover 2024 guidance', sender: 'agent' },
+        ],
+      },
+      // Captured before the drain named its sender.
+      { event: 'steering_delivered', content: 'Skip 2019', entries: [{ input_id: 'c3', content: 'Skip 2019' }] },
+    ])).toEqual([
+      ['Pull the 10-K', 'main_agent'],
+      ['Focus on margins', null],
+      ['Also cover 2024 guidance', 'main_agent'],
+      ['Skip 2019', null],
+    ]);
+  });
 });
 
 describe('prependSubagentRuns', () => {

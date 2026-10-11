@@ -51,6 +51,8 @@ import ChatInput, { type ChatInputHandle } from '../../../components/ui/chat-inp
 import { attachmentsToContexts, widgetSnapshotsToContexts, type Attachment } from '../utils/fileUpload';
 import MessageList, { LiveMessageList, normalizeSubagentText } from './MessageList';
 import { MessageActionsProvider } from './messageList/MessageActionsContext';
+import { UserBubble } from './messageList/UserBubble';
+import { MAIN_AGENT_PROVENANCE } from '../session/provenance';
 import { SubagentTelemetryContext } from './SubagentTelemetryContext';
 import { WorkflowRunContext } from './WorkflowRunContext';
 import WorkflowRunDetail from './WorkflowRunDetail';
@@ -942,6 +944,23 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     });
   }, [workspaceId, downloadKeyFor, getRecentWritePaths, handleOpenFileFromChat, t]);
 
+  // The thread that handed this one its turn, reached the same way from the
+  // back button and from the label over a hand-off in the transcript: Flash's,
+  // or under the all-workspaces agent Home's (the flash row's route state names
+  // either, resolveChatMode). The workspace rides along when this thread was
+  // opened from that one; otherwise the route looks it up.
+  const fromThreadId = state?.fromThreadId;
+  const fromWorkspaceId = state?.fromWorkspaceId;
+  const openDispatcher = useCallback((dispatcherThreadId: string) => {
+    intentionalExitRef.current = true;
+    navigate(`/chat/t/${dispatcherThreadId}`, {
+      state: {
+        ...(dispatcherThreadId === fromThreadId && fromWorkspaceId ? { workspaceId: fromWorkspaceId } : {}),
+        ...FLASH_ROUTE_STATE,
+      },
+    });
+  }, [navigate, fromThreadId, fromWorkspaceId]);
+
   // Identity-stable action bundles for the memoized message tree
   // (chatView/useMessageActionBundles).
   const { messageActions, subagentMessageActions } = useMessageActionBundles({
@@ -953,6 +972,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     onToolCallDetailClick: handleToolCallDetailClick,
     onOpenChart: handleOpenChart,
     onOpenSubagentTask: handleOpenSubagentTask,
+    onOpenDispatcher: openDispatcher,
     onAnswerQuestion: handleAnswerQuestion,
     onSkipQuestion: handleSkipQuestion,
     onApproveCreateWorkspace: handleApproveCreateWorkspace,
@@ -1352,13 +1372,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                   // everything else returns to the main chat.
                   handleSelectAgent(activeAgent?.ownerTaskId ?? 'main');
                 } else if (state?.fromThreadId) {
-                  // Navigate back to the thread that dispatched this PTC thread:
-                  // Flash's, or under the all-workspaces agent Home's. The
-                  // flash row's route state names either (resolveChatMode).
-                  intentionalExitRef.current = true;
-                  navigate(`/chat/t/${state.fromThreadId}`, {
-                    state: { workspaceId: state.fromWorkspaceId, ...FLASH_ROUTE_STATE },
-                  });
+                  // Back to the thread that dispatched this PTC thread.
+                  openDispatcher(state.fromThreadId);
                 } else {
                   intentionalExitRef.current = true;
                   onBack();
@@ -1542,26 +1557,20 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                           {activeAgent.description}
                         </div>
                       )}
-                      {/* Prompt as user message bubble — matches MessageBubble user style.
+                      {/* The prompt as a user bubble, the one the transcript draws.
                           Only until the transcript's own epoch-opening user bubble
                           arrives: new task streams open with the run's instruction as
                           a user_message, so rendering both would duplicate it. Legacy
                           tasks (no opener) keep the static bubble. */}
                       {activeAgent.prompt && activeAgent.messages?.[0]?.role !== 'user' && (
                         <div className="flex justify-end">
-                          <div
-                            className={`max-w-[80%] rounded-lg rounded-tr-none ${isMobile ? 'px-3 py-2' : 'px-4 py-3'} overflow-hidden`}
-                            style={{
-                              backgroundColor: 'var(--color-bg-elevated)',
-                              color: 'var(--color-text-primary)',
-                            }}
-                          >
+                          <UserBubble provenance={MAIN_AGENT_PROVENANCE} isMobile={isMobile} className="max-w-[80%]">
                             <Markdown
                               variant="chat"
                               content={normalizeSubagentText(activeAgent.prompt)}
                               className="text-sm leading-relaxed"
                             />
-                          </div>
+                          </UserBubble>
                         </div>
                       )}
                       {/* Status indicator */}

@@ -6,10 +6,11 @@ import { MessageBubble } from './messageList/MessageBubble';
 import { TurnFold } from './messageList/TurnFold';
 import { projectMessageContent, visibleProjection } from './messageList/contentProjection';
 import { useMessageActions } from './messageList/MessageActionsContext';
-import { isSteeringUserMessage } from './messageList/messagePredicates';
+import { isReportRow, isSteeringUserMessage } from './messageList/messagePredicates';
+import { UserBubble } from './messageList/UserBubble';
 import { computeTurnTails, projectTurns } from './messageList/turnProjection';
 import { useLiveMessages, type LiveMessages } from '../session/stream/liveMessages';
-import type { ChatMessage } from '@/types/chat';
+import type { ChatMessage, MessageProvenance } from '@/types/chat';
 import { turnFilesByTurn } from '../utils/turnFiles';
 import { useWorkspaceFolders } from '../contexts/WorkspaceContext';
 import type { FeedbackResult, FoldState, MessageRecord } from './messageList/types';
@@ -156,8 +157,9 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
       else assistantBubbles.set(turnIndex, [message]);
     }
 
-    // A turn nobody typed to start, a subagent's report-back, has no user
-    // bubble to take its clock from; its first reply is the nearest thing.
+    // A turn with no row of its own to take its clock from (a report-back
+    // whose row names no source, or one attached live) starts at its first
+    // reply, the nearest thing.
     for (const [turnIndex, ts] of firstReplyAt) {
       if (!startedAt.has(turnIndex)) startedAt.set(turnIndex, ts);
     }
@@ -252,6 +254,23 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
       {visible.map(({ message, turnIndex }, i) => {
         if ((message.role as string) === 'notification') {
           return <NotificationDivider key={message.id as string} message={message} />;
+        }
+        if (isReportRow(message)) {
+          return (
+            <div
+              key={message.id as string}
+              data-message-id={message.id as string}
+              data-message-role="user"
+              className="flex justify-end"
+            >
+              <UserBubble
+                provenance={message.provenance as MessageProvenance}
+                readOnly={readOnly}
+                flashContext={flashContext}
+                className="max-w-[80%]"
+              />
+            </div>
+          );
         }
         // A bubble only ever folds when its turn shows the row that unfolds it:
         // a turn with no fold row (no initiating message, nothing foldable yet)

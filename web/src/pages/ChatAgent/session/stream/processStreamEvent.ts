@@ -13,6 +13,7 @@ import { CREDIT_STOP_ERROR_TYPE } from '@/types/sse';
 import { setStoredThreadId } from '../../hooks/utils/threadStorage';
 import { createAssistantMessage, appendMessage, updateMessage } from '../../hooks/utils/messageHelpers';
 import { turnOf } from '../../components/messageList/turnProjection';
+import { senderProvenance, withLiveReportRow } from '../provenance';
 import type { HtmlWidgetData } from '../../hooks/utils/types';
 import {
   ZERO_USAGE, extractTokenUsageDelta, accumulateTokenUsage,
@@ -158,6 +159,11 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       metadataSeen = true;
       if (event.run_id) {
         rt.currentRunIdRef.current = event.run_id;
+        if (event.report_source) {
+          const { run_id: runId, report_source: source } = event;
+          const beforeId = rt.currentMessageRef.current;
+          rt.setMessages((prev) => withLiveReportRow(prev, runId, source, beforeId));
+        }
       }
       // The server writes this only after the run has its sandbox, so any
       // folder move that acquisition made is already on the row.
@@ -338,16 +344,20 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         const steeringMsgs = (event.messages || []).filter((qMsg) => qMsg.content);
         if (steeringMsgs.length === 0) return prev;
         const turnIndex = turnOf(prev, steeredId);
-        const newUserMessages: ChatMessage[] = steeringMsgs.map((qMsg) => ({
-          id: `steering-user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          role: 'user' as const,
-          content: qMsg.content as string,
-          contentType: 'text' as const,
-          timestamp: qMsg.timestamp ? new Date((qMsg.timestamp as number) * 1000) : new Date(),
-          isStreaming: false as const,
-          steeringDelivered: true,
-          turnIndex,
-        }));
+        const newUserMessages: ChatMessage[] = steeringMsgs.map((qMsg) => {
+          const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
+          return {
+            id: `steering-user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            role: 'user' as const,
+            content: qMsg.content as string,
+            contentType: 'text' as const,
+            timestamp: qMsg.timestamp ? new Date((qMsg.timestamp as number) * 1000) : new Date(),
+            isStreaming: false as const,
+            steeringDelivered: true,
+            turnIndex,
+            ...(provenance ? { provenance } : {}),
+          };
+        });
         return [...prev, ...newUserMessages];
       });
 
@@ -609,11 +619,12 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
           // Epoch-opening run boundary (spawn/resume instruction) — first
           // entry of the task stream. Same mechanics as a steering
           // follow-up: finalize the previous run, render the bubble,
-          // open a new run.
+          // open a new run. Only the main agent spawns or resumes a task.
           if (event.content) {
             handleTaskSteeringAccepted({
               taskId,
               content: event.content as string,
+              entries: [{ content: event.content as string, sender: 'agent' }],
               refs,
               updateSubagentCard: rt.updateSubagentCard,
             });

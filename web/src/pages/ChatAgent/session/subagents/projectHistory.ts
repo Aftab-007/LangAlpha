@@ -155,11 +155,13 @@ export function projectSubagentHistory(
         // Run boundary from the wire: the spawn/resume instruction the
         // backend materializes from the task namespace. Same mechanics
         // as a steering follow-up — finalize the previous run's
-        // message, render the instruction bubble, open a new run.
+        // message, render the instruction bubble, open a new run. Only
+        // the main agent spawns or resumes a task.
         if (event.content) {
           handleTaskSteeringAccepted({
             taskId,
             content: event.content as string,
+            entries: [{ content: event.content as string, sender: 'agent' }],
             refs: tempRefs,
             updateSubagentCard: historyUpdateSubagentCard,
           });
