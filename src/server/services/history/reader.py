@@ -105,6 +105,12 @@ class TurnAnchor:
     # The state before the turn, where an edit of its message forks; a
     # resume has no message of its own to edit.
     parent_checkpoint_id: str | None = None
+    # Where a regenerate reruns the turn's reply. A run addressed at the
+    # resume boundary itself drops the answer and asks again (langgraph
+    # re-fires interrupts on replay), while the user's answer row stays; so a
+    # resume reruns from the checkpoint its answered step finished on, as a
+    # message turn reruns from the checkpoint holding its message.
+    regenerate_checkpoint_id: str | None = None
 
 
 def pair_turns(anchors: list[TurnAnchor], persisted: list[int]) -> list[int | None]:
@@ -177,6 +183,9 @@ def turn_anchors(boundaries: list[Boundary], tip_id: str) -> list[TurnAnchor]:
                 ending_interrupts=[] if is_last else boundaries[i + 1].interrupts,
                 is_resume=not boundary.is_input,
                 parent_checkpoint_id=boundary.parent_checkpoint_id,
+                regenerate_checkpoint_id=(
+                    boundary.answered_checkpoint_id or boundary.checkpoint_id
+                ),
             )
         )
     return anchors

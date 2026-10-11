@@ -427,7 +427,8 @@ class TurnCheckpointInfo(BaseModel):
     )
     regenerate_checkpoint_id: str = Field(
         ...,
-        description="Checkpoint ID with user message present but before AI response. "
+        description="Checkpoint ID with the user message (or, for a turn that "
+        "resumed from a question, its answer) present but before AI response. "
         "Fork from here to regenerate the AI response.",
     )
 

@@ -8,6 +8,7 @@ rule added to only one side shows up here as the two paths disagreeing.
 from __future__ import annotations
 
 import uuid
+from unittest.mock import AsyncMock
 
 import psycopg
 import pytest
@@ -18,6 +19,7 @@ from langgraph.graph import START, StateGraph
 from langgraph.types import Command, interrupt
 
 from ptc_agent.agent.state import DeltaAgentState
+from src.server.handlers import checkpoint_handler
 from src.server.utils import checkpoint_helpers
 from src.server.utils.checkpoint_helpers import (
     CheckpointBranchTipNotFound,
@@ -149,6 +151,91 @@ async def test_answered_interrupt_and_an_interrupt_at_the_tip(saver):
     assert boundaries[1].interrupts == [
         {"id": interrupt_id, "value": {"action_requests": [{"description": "go?"}]}}
     ]
+
+
+async def test_an_answered_turn_regenerates_with_its_answer(saver, monkeypatch):
+    """The answered turn's regenerate checkpoint holds the answer, so the
+    reply reruns and nothing asks. At the resume boundary itself langgraph
+    drops the answer and asks again, beside the turn's kept answer row."""
+    thread = str(uuid.uuid4())
+    graph = _graph(saver)
+    interrupt_tip, interrupt_id = await _interrupted_turn(graph, thread)
+    await graph.ainvoke(Command(resume={interrupt_id: "yes"}), _cfg(thread, run_id="run-1"))
+    await _both_walks(saver, thread)  # the two walks find the same answered step
+
+    monkeypatch.setattr(checkpoint_handler, "get_checkpointer", lambda: saver)
+    monkeypatch.setattr(
+        checkpoint_handler.queries_db,
+        "get_query_turn_indexes",
+        AsyncMock(return_value=[0, 1]),
+    )
+    turns = (await checkpoint_handler.get_thread_turns(thread)).turns
+    regenerate_at = turns[1].regenerate_checkpoint_id
+    assert regenerate_at != interrupt_tip
+
+    await graph.ainvoke(None, _cfg(thread, run_id="run-2", checkpoint_id=regenerate_at))
+    state = await graph.aget_state(_cfg(thread))
+    assert not state.interrupts
+    assert [m.content for m in state.values["messages"]].count("asked: yes") == 1
+
+    await graph.ainvoke(None, _cfg(thread, run_id="run-3", checkpoint_id=interrupt_tip))
+    assert (await graph.aget_state(_cfg(thread))).interrupts
+
+
+def _two_question_graph(saver):
+    """The answered step's next step asks again: an order approved at the
+    gate whose tools step then asks the user something."""
+
+    def gate(state):
+        answer = interrupt({"action_requests": [{"description": "place it?"}]})
+        return {"messages": [AIMessage(content=f"gate: {answer}", id="ai-gate")]}
+
+    def ask(state):
+        answer = interrupt({"action_requests": [{"description": "which one?"}]})
+        return {"messages": [AIMessage(content=f"asked: {answer}", id="ai-asked")]}
+
+    def reply(state):
+        return {"messages": [AIMessage(content="reply", id=f"ai-{len(state['messages'])}")]}
+
+    return (
+        StateGraph(DeltaAgentState)
+        .add_node("gate", gate)
+        .add_node("ask", ask)
+        .add_node("reply", reply)
+        .add_edge(START, "gate")
+        .add_edge("gate", "ask")
+        .add_edge("ask", "reply")
+        .compile(checkpointer=saver)
+    )
+
+
+async def test_an_answered_step_that_asked_again_keeps_its_boundary(
+    saver, monkeypatch
+):
+    """Turn 1's answered step finished on the checkpoint turn 2's answer is
+    written on. A fork there deletes turn 2 and leaves that answer behind,
+    so turn 1 regenerates at its own boundary and no regenerate checkpoint
+    opens another turn."""
+    thread = str(uuid.uuid4())
+    graph = _two_question_graph(saver)
+    gate_tip, gate_id = await _interrupted_turn(graph, thread)
+    await graph.ainvoke(Command(resume={gate_id: "yes"}), _cfg(thread, run_id="run-1"))
+    ask_state = await graph.aget_state(_cfg(thread))
+    ask_tip = ask_state.config["configurable"]["checkpoint_id"]
+    await graph.ainvoke(
+        Command(resume={ask_state.interrupts[0].id: "this"}), _cfg(thread, run_id="run-2")
+    )
+    assert (await _both_walks(saver, thread))[1:] == [gate_tip, ask_tip]
+
+    monkeypatch.setattr(checkpoint_handler, "get_checkpointer", lambda: saver)
+    monkeypatch.setattr(
+        checkpoint_handler.queries_db,
+        "get_query_turn_indexes",
+        AsyncMock(return_value=[0, 1, 2]),
+    )
+    turns = (await checkpoint_handler.get_thread_turns(thread)).turns
+    assert [t.regenerate_checkpoint_id for t in turns][1] == gate_tip
+    assert turns[2].regenerate_checkpoint_id not in (gate_tip, ask_tip)
 
 
 async def test_a_fork_walks_only_its_own_branch(saver):
