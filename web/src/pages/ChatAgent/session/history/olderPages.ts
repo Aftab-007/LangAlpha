@@ -57,7 +57,8 @@ export interface OlderHistoryPage {
   subagents: Map<string, SubagentHistoryData>;
   /** The runs the page alone holds of each task it touched. */
   ownSubagents: Map<string, SubagentHistoryData>;
-  /** Tokens the page's model calls read and wrote, for the thread's totals. */
+  /** Tokens the page's model calls read and wrote, for totals the server
+   *  sent no count for. */
   tokens: { input: number; output: number };
 }
 
@@ -89,11 +90,11 @@ function mergeSubagentHistory(older: SubagentHistoryData, newer: SubagentHistory
  * the page still belongs (no reload, thread switch or fork since it started)
  * and drops it otherwise. Resolves null when the fetch was aborted.
  *
- * Only the transcript and the page's share of the token totals come from an
- * older page. The rest of the thread-level state a replay sets (the context
- * window and last output, the fallback suggestion, the todo card, the
- * rendered-turn watermark, the replayed run ids, a paused interrupt) belongs
- * to the newest turns, which the newest page already set.
+ * Only the transcript comes from an older page, and its calls' tokens when the
+ * server sent no count for the totals. The rest of the thread-level state a
+ * replay sets (the context window and last output, the fallback suggestion,
+ * the todo card, the rendered-turn watermark, the replayed run ids, a paused
+ * interrupt) belongs to the newest turns, which the newest page already set.
  */
 export async function loadOlderHistoryPage(
   rt: HistoryRuntime,
@@ -283,15 +284,12 @@ export function commitOlderHistoryPage(
   for (const id of older.renderedInterruptIds) rt.renderedInterruptIdsRef.current.add(id);
   const { input, output } = older.tokens;
   if (input > 0 || output > 0) {
-    // The totals are the thread's, so the page's calls join them. The window
-    // and the last output stay the newest call's; with no newest call there is
-    // no window to show them against.
+    // A count from the server already holds the page's calls. Without one the
+    // totals are what the view has loaded, so the page's calls join them.
     rt.setTokenUsage((prev) =>
-      prev && {
-        ...prev,
-        totalInput: prev.totalInput + input,
-        totalOutput: prev.totalOutput + output,
-      },
+      prev && !prev.fromServer
+        ? { ...prev, totalInput: prev.totalInput + input, totalOutput: prev.totalOutput + output }
+        : prev,
     );
   }
   if (older.threadModels.length > 0) {

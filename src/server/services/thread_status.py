@@ -168,12 +168,21 @@ async def read_thread_runtime_status(
 
         latest_turn_index = await get_latest_turn_index(thread_id)
 
+        # What the thread has used, for the chat's token totals. Read here, not
+        # with the replay, because this status decides whether the client
+        # reconnects: the run it names live is left out, and the reconnect
+        # replays that run's calls from the start.
+        from src.server.database.conversation.usage import get_thread_token_totals
+
+        token_totals = await get_thread_token_totals(thread_id, live_run_id=run_id)
+
         response = {
             "thread_id": thread_id,
             "run_id": run_id,
             "status": status,
             "can_reconnect": can_reconnect,
             "latest_turn_index": latest_turn_index,
+            "token_totals": token_totals,
             "last_update": last_update,
             "progress": checkpoint_info,
             "active_tasks": active_tasks,

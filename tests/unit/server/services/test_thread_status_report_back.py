@@ -84,6 +84,10 @@ def _patches(cache: _FakeCache, latest_turn: int | None = None) -> list:
             AsyncMock(return_value=latest_turn),
         ),
         patch(
+            "src.server.database.conversation.usage.get_thread_token_totals",
+            AsyncMock(return_value=None),
+        ),
+        patch(
             "src.utils.cache.redis_cache.get_cache_client", return_value=cache
         ),
         _no_open_jobs(),
@@ -327,6 +331,10 @@ def _live_patches(cache: _FakeCache, row: dict) -> list:
             AsyncMock(return_value=3),
         ),
         patch(
+            "src.server.database.conversation.usage.get_thread_token_totals",
+            AsyncMock(return_value=None),
+        ),
+        patch(
             "src.utils.cache.redis_cache.get_cache_client", return_value=cache
         ),
     ]
@@ -368,6 +376,52 @@ async def test_status_live_slot_with_cancel_intent_reads_stopping():
     assert resp["status"] == "stopping"
     assert resp["run_id"] == "run-live"
     assert resp["can_reconnect"] is True
+
+
+# --- token_totals (the chat's whole-thread token totals) ---------------------
+
+
+@pytest.mark.parametrize(
+    ("row", "live_run_id"),
+    [
+        (
+            {
+                "conversation_response_id": "run-live",
+                "status": "in_progress",
+                "cancel_requested_at": None,
+                "created_at": None,
+            },
+            "run-live",
+        ),
+        (
+            {
+                "conversation_response_id": "run-done",
+                "status": "completed",
+                "created_at": None,
+            },
+            None,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_status_totals_leave_out_only_the_run_it_names_live(row, live_run_id):
+    """The client replays the live run's calls from its stream onto these
+    totals, so the read that rides the status must not count that run too."""
+    totals = AsyncMock(return_value={"input_tokens": 900, "output_tokens": 40})
+    with contextlib.ExitStack() as stack:
+        for p in _live_patches(_FakeCache(), row):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "src.server.database.conversation.usage.get_thread_token_totals",
+                totals,
+            )
+        )
+        resp = await thread_status.read_thread_runtime_status("t-1")
+
+    totals.assert_awaited_once_with("t-1", live_run_id=live_run_id)
+    assert resp["run_id"] == live_run_id
+    assert resp["token_totals"] == {"input_tokens": 900, "output_tokens": 40}
 
 
 def _task_slice(**over) -> dict:

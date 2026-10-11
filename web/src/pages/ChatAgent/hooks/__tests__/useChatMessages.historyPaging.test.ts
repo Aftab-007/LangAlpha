@@ -37,6 +37,7 @@ import {
   fetchThreadTurns,
   replayThreadHistory,
   getWorkflowStatus,
+  reconnectToWorkflowStream,
 } from '../../utils/api';
 import { useChatMessages } from '../useChatMessages';
 import { HISTORY_PAGE_TURNS } from '../../session/history/historyWindow';
@@ -47,6 +48,7 @@ const mockSendStream = sendChatMessageStream as Mock;
 const mockFetchTurns = fetchThreadTurns as Mock;
 const mockReplay = replayThreadHistory as Mock;
 const mockStatus = getWorkflowStatus as Mock;
+const mockReconnect = reconnectToWorkflowStream as Mock;
 
 type Emit = (e: Record<string, unknown>) => void;
 
@@ -63,11 +65,11 @@ function turnEvents(from: number, to: number): Record<string, unknown>[] {
 }
 
 /** A paged replay: the page header, then the turns, then replay_done. */
-function pageOf(from: number, to: number, hasMore: boolean) {
+function pageOf(from: number, to: number, hasMore: boolean, threadId = 'thread-1') {
   return [
     { event: 'history_page', first_turn_index: from, has_more: hasMore },
     ...turnEvents(from, to),
-    { event: 'replay_done', thread_id: 'thread-1' },
+    { event: 'replay_done', thread_id: threadId },
   ];
 }
 
@@ -78,11 +80,29 @@ type PageRequest = { limit?: number; beforeTurn?: number; signal?: AbortSignal }
  * it: the newest `limit` turns, or the `limit` turns before `beforeTurn`.
  */
 function threadOf(latest: () => number) {
-  return async (_tid: string, onEvent: Emit, req: PageRequest = {}) => {
+  return async (tid: string, onEvent: Emit, req: PageRequest = {}) => {
     const end = req.beforeTurn === undefined ? latest() : req.beforeTurn - 1;
     const from = Math.max(0, end - (req.limit ?? end + 1) + 1);
-    for (const item of pageOf(from, end, from > 0)) onEvent(item);
+    for (const item of pageOf(from, end, from > 0, tid)) onEvent(item);
   };
+}
+
+/** One model call's usage, as the stream and the replay report it. */
+function call(input: number, output: number, extra: Record<string, unknown> = {}) {
+  return {
+    event: 'context_window', action: 'token_usage', signal: 'complete',
+    input_tokens: input, output_tokens: output, total_tokens: input + output, threshold: 1000, ...extra,
+  };
+}
+
+/** threadOf, with each turn's reply followed by its call: 10k in, k out. */
+function threadWithCallsOf(latest: () => number) {
+  const serve = threadOf(latest);
+  return (tid: string, onEvent: Emit, req: PageRequest = {}) => serve(tid, (e) => {
+    onEvent(e);
+    const k = e.turn_index as number;
+    if (e.event === 'message_chunk') onEvent(call(10 * k, k, { turn_index: k }));
+  }, req);
 }
 
 /** A promise the test opens by hand. */
@@ -377,6 +397,181 @@ describe('useChatMessages – paging older history', () => {
     expect(ids(result.current.messages)).toEqual(opened);
     expect(result.current.messages.some((m) => m.id === 'history-user-41')).toBe(false);
     expect(result.current.olderHistory.status).toBe('idle');
+  });
+
+  it('a thread switch starts the new thread on its own token totals', async () => {
+    const counts: Record<string, { input_tokens: number; output_tokens: number }> = {
+      'thread-1': { input_tokens: 500, output_tokens: 10 },
+      'thread-2': { input_tokens: 200, output_tokens: 20 },
+    };
+    const serveStatus = async (tid: string) => ({
+      can_reconnect: false, status: 'completed', latest_turn_index: latest, token_totals: counts[tid],
+    });
+    mockStatus.mockImplementation(serveStatus);
+    let threadId = 'thread-1';
+    const { result, rerender } = await mount(() => threadId);
+    expect(result.current.tokenUsage).toMatchObject({ totalInput: 500, totalOutput: 10 });
+
+    const status = gate();
+    mockStatus.mockImplementationOnce(async (tid: string) => {
+      await status.opened;
+      return serveStatus(tid);
+    });
+    threadId = 'thread-2';
+    rerender();
+    await settleMountEffect();
+    // Nothing of the thread left behind shows while the new one loads.
+    expect(result.current.tokenUsage).toBeNull();
+
+    status.open();
+    await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
+    expect(result.current.tokenUsage).toMatchObject({ totalInput: 200, totalOutput: 20 });
+
+    // Back on the first thread, its own count again.
+    threadId = 'thread-1';
+    rerender();
+    await settleMountEffect();
+    await waitFor(() => expect(result.current.tokenUsage).toMatchObject({ totalInput: 500, totalOutput: 10 }));
+  });
+
+  it('the token totals are the server count, whatever paging and reloads replay', async () => {
+    let counted = { input_tokens: 9000, output_tokens: 700 };
+    mockStatus.mockImplementation(async () => ({
+      can_reconnect: false, status: 'completed', latest_turn_index: latest, token_totals: counted,
+    }));
+    mockReplay.mockImplementation(threadWithCallsOf(() => latest));
+    const { result } = await mount();
+    // The window is the newest call's, turn 80's.
+    const opened = { totalInput: 9000, totalOutput: 700, fromServer: true, lastOutput: 80, total: 880, threshold: 1000 };
+    expect(result.current.tokenUsage).toEqual(opened);
+
+    await act(async () => {
+      await result.current.olderHistory.load();
+      await result.current.olderHistory.load();
+    });
+    expect(result.current.messages[0].id).toBe('history-user-21');
+    expect(result.current.tokenUsage).toEqual(opened);
+
+    // Two turns finished elsewhere. The reload replays every loaded turn's
+    // calls again, and the totals are the new count all the same.
+    latest = 82;
+    counted = { input_tokens: 10_640, output_tokens: 862 };
+    await act(async () => {
+      await result.current.reconnectIfStaleRun();
+    });
+    await waitFor(() => expect(result.current.messages.some((m) => m.id === 'history-user-82')).toBe(true));
+    expect(result.current.tokenUsage).toEqual({
+      totalInput: 10_640, totalOutput: 862, fromServer: true, lastOutput: 82, total: 902, threshold: 1000,
+    });
+  });
+
+  it('with no server count, the totals sum the calls the view loads, once each', async () => {
+    // A /status whose count read failed, or a backend that predates it.
+    mockReplay.mockImplementation(threadWithCallsOf(() => latest));
+    const { result } = await mount();
+    // Each turn k makes one call of 10k in and k out; the newest page is 61 to 80.
+    const sum = (from: number, to: number) => ((from + to) * (to - from + 1)) / 2;
+    expect(result.current.tokenUsage).toMatchObject({
+      totalInput: 10 * sum(61, 80), totalOutput: sum(61, 80), fromServer: false,
+    });
+
+    await act(async () => {
+      await result.current.olderHistory.load();
+      await result.current.olderHistory.load();
+    });
+    expect(result.current.messages[0].id).toBe('history-user-21');
+    expect(result.current.tokenUsage).toMatchObject({ totalInput: 10 * sum(21, 80), totalOutput: sum(21, 80) });
+
+    // A reload replays every loaded turn again, with a margin above them, and
+    // still counts each call once.
+    latest = 82;
+    await act(async () => {
+      await result.current.reconnectIfStaleRun();
+    });
+    await waitFor(() => expect(result.current.messages.some((m) => m.id === 'history-user-82')).toBe(true));
+    const first = Number(result.current.messages[0].id.replace('history-user-', ''));
+    expect(first).toBeLessThanOrEqual(21);
+    expect(result.current.tokenUsage).toMatchObject({ totalInput: 10 * sum(first, 82), totalOutput: sum(first, 82) });
+  });
+
+  it('a live turn adds its calls on top, and the next count holds them once', async () => {
+    let counted = { input_tokens: 9000, output_tokens: 700 };
+    mockStatus.mockImplementation(async () => ({
+      can_reconnect: false, status: 'completed', latest_turn_index: latest, token_totals: counted,
+    }));
+    const { result } = await mount();
+    mockSendStream.mockImplementation(async (...args: unknown[]) => {
+      const { onEvent } = args[3] as { onEvent: Emit };
+      onEvent(call(400, 40));
+      onEvent(call(500, 50));
+      return { disconnected: false };
+    });
+    await act(async () => {
+      await result.current.handleSendMessage('next question');
+    });
+    expect(result.current.tokenUsage).toMatchObject({
+      totalInput: 9900, totalOutput: 790, lastOutput: 50, total: 550,
+    });
+
+    // The turn's row has landed, and another turn finished elsewhere: the
+    // next load reads a count holding both, and adds nothing to it.
+    latest = 82;
+    counted = { input_tokens: 9900 + 1200, output_tokens: 790 + 60 };
+    await act(async () => {
+      await result.current.reconnectIfStaleRun();
+    });
+    await waitFor(() => expect(result.current.messages.some((m) => m.id === 'history-user-82')).toBe(true));
+    expect(result.current.tokenUsage).toMatchObject({ totalInput: 11_100, totalOutput: 850 });
+  });
+
+  it('a settled turn shows the count its closing frame carries, with no reload', async () => {
+    mockStatus.mockImplementation(async () => ({
+      can_reconnect: false, status: 'completed', latest_turn_index: latest,
+      token_totals: { input_tokens: 9000, output_tokens: 700 },
+    }));
+    const { result } = await mount();
+    const replays = mockReplay.mock.calls.length;
+    // The count holds calls the stream never reported onto the totals, such
+    // as a compaction's summary, so it beats the live sum.
+    mockSendStream.mockImplementation(async (...args: unknown[]) => {
+      const { onEvent } = args[3] as { onEvent: Emit };
+      onEvent(call(400, 40));
+      onEvent(call(500, 50));
+      onEvent({
+        event: 'run_end', thread_id: 'thread-1', run_id: 'run-81', outcome: 'completed',
+        token_totals: { input_tokens: 12_500, output_tokens: 920 },
+      });
+      return { disconnected: false };
+    });
+    await act(async () => {
+      await result.current.handleSendMessage('next question');
+    });
+    expect(result.current.tokenUsage).toEqual({
+      totalInput: 12_500, totalOutput: 920, fromServer: true, lastOutput: 50, total: 550, threshold: 1000,
+    });
+    expect(mockReplay.mock.calls.length).toBe(replays);
+  });
+
+  it('a load that rejoins a live run adds its calls to a count that leaves it out', async () => {
+    mockStatus.mockImplementation(async () => ({
+      can_reconnect: true, status: 'running', run_id: 'run-live', latest_turn_index: latest,
+      active_tasks: [], token_totals: { input_tokens: 9000, output_tokens: 700 },
+    }));
+    mockReplay.mockImplementation(threadWithCallsOf(() => latest));
+    // The rejoin replays the run's stream from its start.
+    mockReconnect.mockImplementation(async (...args: unknown[]) => {
+      const onEvent = args[3] as Emit;
+      onEvent(call(400, 40));
+      onEvent(call(500, 50));
+      return { disconnected: false, aborted: false };
+    });
+    const { result } = renderHookWithProviders(() => useChatMessages('ws-test'));
+    await waitFor(() => expect(mockReconnect).toHaveBeenCalled());
+    await settleMountEffect();
+    expect(mockReconnect.mock.calls[0][1]).toBe('run-live');
+    await waitFor(() => expect(result.current.tokenUsage).toMatchObject({
+      totalInput: 9900, totalOutput: 790, lastOutput: 50, total: 550,
+    }));
   });
 
   it('a return to a thread left mid-way reaches back to the oldest page it had loaded', async () => {

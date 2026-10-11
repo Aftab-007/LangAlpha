@@ -673,31 +673,95 @@ def _retain_collector(task: asyncio.Task) -> None:
     task.add_done_callback(_discard)
 
 
-async def spawn_subagent_collector(
+def _billable_at_run_end(tasks: list, response_id: str) -> list:
+    """The claimed tasks whose usage is final: settled, and not a child of a
+    workflow still running. A driver reads each child's records when the
+    child settles, and billing clears them, so a running workflow's children
+    wait for the collector, which bills only after their owner settles."""
+    by_id = {t.task_id: t for t in tasks}
+    return [
+        t for t in tasks
+        if t.collector_response_id == response_id
+        and t.completed
+        and (
+            t.owner_task_id is None
+            or getattr(by_id.get(t.owner_task_id), "completed", False)
+        )
+    ]
+
+
+async def claim_turn_subagents(
     thread_id: str,
     run_id: str,
+    metadata: dict,
+    workspace_id: Optional[str],
+    user_id: Optional[str],
+) -> list:
+    """Claim a finished turn's subagents and bill the ones already settled.
+
+    Runs before the turn's run_end so the token totals that frame carries
+    count every subagent that finished inside the turn; the collector would
+    bill them only after the turn's housekeeping. Billing takes each task's
+    usage off it, so the collector bills only what settles later. Never
+    raises, so the run_end after it always goes out.
+    """
+    response_id = run_id  # 1:1 contract
+
+    from src.server.services.background_registry_store import BackgroundRegistryStore
+
+    try:
+        bg_registry = await BackgroundRegistryStore.get_instance().get_registry(
+            thread_id
+        )
+        if not bg_registry:
+            return []
+        tasks = await bg_registry.claim_run_subagents(run_id, response_id)
+    except Exception:
+        logger.warning(
+            f"[SubagentCollector] claim failed for run={run_id} "
+            f"thread_id={thread_id}",
+            exc_info=True,
+        )
+        return []
+    if tasks and workspace_id and user_id:
+        try:
+            _settle_finished(tasks, response_id)
+            await _claim_settled_parents(thread_id, tasks, response_id, {})
+            await persist_subagent_usage(
+                response_id,
+                _billable_at_run_end(tasks, response_id),
+                thread_id,
+                workspace_id,
+                user_id,
+                is_byok=metadata.get("is_byok", False),
+            )
+        except Exception:
+            logger.warning(
+                f"[SubagentCollector] run-end billing failed for run={run_id} "
+                f"thread_id={thread_id}",
+                exc_info=True,
+            )
+    return tasks
+
+
+def spawn_subagent_collector(
+    thread_id: str,
+    run_id: str,
+    tasks: list,
     metadata: dict,
     workspace_id: Optional[str],
     user_id: Optional[str],
     *,
     collect_for_turn: Callable[..., Any],
 ) -> None:
-    """Claim this run's subagents and collect their events post-terminal."""
-    response_id = run_id  # 1:1 contract
-
-    from src.server.services.background_registry_store import BackgroundRegistryStore
-    bg_store = BackgroundRegistryStore.get_instance()
-    bg_registry = await bg_store.get_registry(thread_id)
-    if not bg_registry:
-        return
-    tasks_to_collect = await bg_registry.claim_run_subagents(run_id, response_id)
-    if tasks_to_collect and workspace_id and user_id:
+    """Collect the claimed subagents' events post-terminal."""
+    if tasks and workspace_id and user_id:
         _retain_collector(
             asyncio.create_task(
                 collect_for_turn(
                     thread_id=thread_id,
-                    response_id=response_id,
-                    tasks=tasks_to_collect,
+                    response_id=run_id,
+                    tasks=tasks,
                     workspace_id=workspace_id,
                     user_id=user_id,
                     is_byok=metadata.get("is_byok", False),

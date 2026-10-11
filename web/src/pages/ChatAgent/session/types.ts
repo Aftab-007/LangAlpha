@@ -11,16 +11,22 @@ import type { SubagentTokenUsage } from '../utils/tokenUsage';
 import type { DecisionTarget } from './interrupts/toolApprovalCard';
 import type { StreamRefs, UpdateSubagentCard } from './streamRefs';
 import type { RetryNotice } from './stream/autoRetry';
+import type { ThreadTokenTotals } from '../utils/api/messages';
 
 // --- Internal types for useChatMessages ---
 
 /** React state setter for messages array. */
 type SetMessages = React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 
-/** Token usage state for context window progress ring. */
+/** Token usage state for context window progress ring. The totals are the
+ *  thread's: the server's count when it loaded, plus live calls since. The
+ *  rest is the newest call's. */
 interface TokenUsage {
   totalInput: number;
   totalOutput: number;
+  /** Whether the totals started from the server's count. Without one they
+   *  sum the calls the view has loaded, the closest it can come. */
+  fromServer: boolean;
   lastOutput: number;
   total: number;
   threshold: number;
@@ -91,6 +97,8 @@ interface SSEEvent {
    *  replay paths and the live stream read it, so it is stated rather than
    *  left to the index signature below. */
   elapsed_ms?: number;
+  /** What the thread has used, on a `run_end` frame. */
+  token_totals?: ThreadTokenTotals | null;
   [key: string]: unknown;
 }
 
@@ -154,6 +162,8 @@ interface ContextWindowCallbacks {
   nextOrder: () => number;
   setMessages: SetMessages;
   setTokenUsage: React.Dispatch<React.SetStateAction<TokenUsage | null>>;
+  /** A live call adds to the totals; a replayed one is already in them. */
+  live: boolean;
   setIsCompacting: ((v: string | false) => void) | null;
   insertNotification: (text: string, variant?: 'info' | 'success' | 'warning', detail?: string) => void;
   t: (key: string, opts?: Record<string, unknown>) => string;

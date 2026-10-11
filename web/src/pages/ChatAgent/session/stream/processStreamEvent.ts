@@ -22,7 +22,7 @@ import {
   buildModelFallbackSegment, appendNotificationSegmentOnce,
   isWorkspaceChangingToolSuccess, mapToolCallIdToAgentId,
 } from '../../hooks/utils/messageFinalizers';
-import { handleContextWindowEvent } from '../../hooks/utils/contextWindowEvent';
+import { handleContextWindowEvent, withServerTotals } from '../../hooks/utils/contextWindowEvent';
 import {
   handleReasoningSignal, handleReasoningContent, handleTextContent,
   handleToolCalls, handleToolCallResult, handleToolCallChunks,
@@ -180,6 +180,15 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         rt.setThreadId(event.thread_id);
         setStoredThreadId(rt.workspaceId, event.thread_id);
       }
+    }
+
+    // The run's closing frame counts what the thread has used once the run's
+    // own usage committed, calls this stream never reported included, so the
+    // count replaces the live sum.
+    if (eventType === 'run_end' && !isSubagent) {
+      const counted = event.token_totals;
+      if (counted) rt.setTokenUsage((prev) => withServerTotals(prev, counted));
+      return;
     }
 
     // Handle workspace_status events (workspace starting/ready).
@@ -425,6 +434,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         },
         setMessages: rt.setMessages,
         setTokenUsage: rt.setTokenUsage,
+        live: true,
         setIsCompacting: rt.setIsCompacting,
         insertNotification: deps.insertNotification,
         t: rt.t,

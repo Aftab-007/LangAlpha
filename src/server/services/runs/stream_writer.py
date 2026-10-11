@@ -36,9 +36,9 @@ def stream_meta_key(thread_id: str, run_id: str) -> str:
 
 
 # Visible end-of-run frame (I6): written only after the finalize CAS commits,
-# carrying {thread_id, run_id, outcome}. Replaces the pre-finalize
-# ``workflow_stream_end`` sentinel, which survives only as a deploy-compat
-# swallow in ``stream_from_log``.
+# carrying {thread_id, run_id, outcome}, plus the thread's token_totals when
+# they were read. Replaces the pre-finalize ``workflow_stream_end`` sentinel,
+# which survives only as a deploy-compat swallow in ``stream_from_log``.
 RUN_END_EVENT_TYPE = "run_end"
 
 
@@ -140,6 +140,7 @@ async def append_run_end_event(
     outcome: Optional[str],
     *,
     error_frame: Optional[Dict[str, Any]] = None,
+    token_totals: Optional[Dict[str, int]] = None,
     redis_event_ttl: int,
     max_stored_messages: int,
 ) -> None:
@@ -212,10 +213,14 @@ async def append_run_end_event(
         )
         if not acquired:
             return
-        data = json.dumps(
-            {"thread_id": thread_id, "run_id": run_id, "outcome": outcome},
-            ensure_ascii=False,
-        )
+        frame_data: Dict[str, Any] = {
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "outcome": outcome,
+        }
+        if token_totals is not None:
+            frame_data["token_totals"] = token_totals
+        data = json.dumps(frame_data, ensure_ascii=False)
         payload = f"event: {RUN_END_EVENT_TYPE}\ndata: {data}\n\n".encode(
             "utf-8"
         )

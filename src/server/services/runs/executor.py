@@ -851,13 +851,24 @@ class LocalRunExecutor:
         """Write the closing frames to the per-run Stream (I6), exactly once.
 
         Delegates to ``stream_writer.append_run_end_event`` — see there for
-        the SETNX gate and retention-stamp contract.
+        the SETNX gate and retention-stamp contract. A terminal frame also
+        carries the thread's token totals: every caller has committed the
+        finalize, and with it the run's own usage row, so the count holds
+        every call the run recorded, whether or not its stream reported it.
         """
         if self.event_storage_backend != "redis":
             return
+        token_totals = None
+        if outcome is not None:
+            from src.server.database.conversation.usage import (
+                get_thread_token_totals,
+            )
+
+            token_totals = await get_thread_token_totals(thread_id)
         await stream_writer.append_run_end_event(
             thread_id, run_id, outcome,
             error_frame=error_frame,
+            token_totals=token_totals,
             redis_event_ttl=self.redis_event_ttl,
             max_stored_messages=self.max_stored_messages,
         )
@@ -1139,7 +1150,19 @@ class LocalRunExecutor:
         _run_workflow's failure handler and trigger a second finalize."""
         key = (thread_id, run_id)
         status = verdict.status
+        collected = kind == "stream_end" and status in COLLECTED_ENDINGS
         try:
+            # A collected run's subagents are claimed, and the settled ones
+            # billed, before its run_end, so the token totals the frame
+            # carries count them. Never raises.
+            turn_subagents = (
+                await subagent_collection.claim_turn_subagents(
+                    thread_id, run_id, metadata, workspace_id, user_id
+                )
+                if collected
+                else []
+            )
+
             # Visible run_end AFTER the commit, carrying the adopted
             # status (I6). Attached consumers yield it and close. Losers
             # of a finalize race skip it — their consumers close via the
@@ -1166,9 +1189,10 @@ class LocalRunExecutor:
             # A failure, a timeout or a shutdown is not, so its subagents go
             # unbilled. The kill is run-scoped, so prior turns' orphan
             # collectors and claims survive.
-            if kind == "stream_end" and status in COLLECTED_ENDINGS:
-                await self._spawn_subagent_collector(
-                    thread_id, run_id, metadata, workspace_id, user_id
+            if collected:
+                self._spawn_subagent_collector(
+                    thread_id, run_id, turn_subagents, metadata,
+                    workspace_id, user_id,
                 )
             elif status in ("error", "cancelled"):
                 try:
@@ -1196,17 +1220,18 @@ class LocalRunExecutor:
                 exc_info=True,
             )
 
-    async def _spawn_subagent_collector(
+    def _spawn_subagent_collector(
         self,
         thread_id: str,
         run_id: str,
+        tasks: list,
         metadata: dict,
         workspace_id: Optional[str],
         user_id: Optional[str],
     ) -> None:
-        """Claim this run's subagents and collect their events post-terminal."""
-        await subagent_collection.spawn_subagent_collector(
-            thread_id, run_id, metadata, workspace_id, user_id,
+        """Collect the run's claimed subagents' events post-terminal."""
+        subagent_collection.spawn_subagent_collector(
+            thread_id, run_id, tasks, metadata, workspace_id, user_id,
             collect_for_turn=self._collect_subagent_results_for_turn,
         )
 

@@ -41,6 +41,7 @@ import type { AssistantMessage, UserMessage, ChatMessage } from '@/types/chat';
 import type { PreviewData } from './utils/types';
 import { createRecentlySentTracker } from './utils/recentlySentTracker';
 import { createRequestKeyTracker } from './utils/requestKey';
+import { withServerTotals, withoutServerTotals } from './utils/contextWindowEvent';
 import { handleReasoningSignal, handleTextContent } from './utils/streamEventHandlers';
 import { useMarketWatch } from './useMarketWatch';
 import { refreshComputersAfterTurn } from './useComputers';
@@ -724,6 +725,7 @@ export function useChatMessages(
       if (isThreadSwitch) {
         setMessages([]);
         setThreadModels([]);
+        setTokenUsage(null);
         setFallbackSuggestion(null);
         // A mid-retry pill belongs to the thread we're leaving; without this
         // it would render over thread B until B's next content event.
@@ -965,6 +967,14 @@ export function useChatMessages(
       });
 
       if (cancelled || turnTookOver()) return;
+
+      // The token totals restart from what the server counted, which is every
+      // run but the one this status names live. No stream runs here, and the
+      // reconnect below replays that run from its start onto them, so a call
+      // this view already added is either in the count or about to come again.
+      // Without a count they restart from zero and the replay sums what loads.
+      const counted = status.token_totals;
+      setTokenUsage((prev) => (counted ? withServerTotals(prev, counted) : withoutServerTotals(prev)));
 
       // Capture share status from workflow status response
       if (status.is_shared !== undefined) {

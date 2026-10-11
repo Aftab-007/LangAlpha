@@ -1986,7 +1986,220 @@ def _sentinel_cache(
     return cache
 
 
+class TestRunEndCountsSettledSubagents:
+    """A collected run's settled subagents are billed before its run_end, so
+    the token totals the frame carries count them; the collector gets the
+    claimed tasks and bills whatever settles later."""
+
+    @staticmethod
+    def _task(task_id, *, spawned_run_id="run-1", owner_task_id=None):
+        return BackgroundTask(
+            tool_call_id=f"tc-{task_id}",
+            task_id=task_id,
+            description="d",
+            prompt="p",
+            subagent_type="workflow" if task_id.startswith("wf") else "research",
+            spawned_run_id=spawned_run_id,
+            owner_task_id=owner_task_id,
+        )
+
+    @staticmethod
+    async def _finished_writer():
+        async def body():
+            return {"success": True, "result": "ok"}
+
+        writer = asyncio.create_task(body())
+        await writer
+        return writer
+
+    @pytest.mark.asyncio
+    async def test_bills_only_tasks_whose_usage_is_final(self):
+        from ptc_agent.agent.middleware.background_subagent.registry import (
+            BackgroundTaskRegistry,
+        )
+
+        gate = asyncio.Event()
+
+        async def running():
+            await gate.wait()
+            return {"success": True, "result": "late"}
+
+        registry = BackgroundTaskRegistry(thread_id="t-1")
+        done = self._task("done")
+        done.per_call_records = [{"usage": {"input_tokens": 5}}]
+        done.asyncio_task = await self._finished_writer()
+        live = self._task("live")
+        live.asyncio_task = asyncio.create_task(running())
+        # A running workflow's settled child: its driver still reads the
+        # child's records, so billing must wait for the collector.
+        wf_live = self._task("wf_live")
+        wf_live.asyncio_task = asyncio.create_task(running())
+        child_of_live = self._task("c_live", owner_task_id="wf_live")
+        child_of_live.per_call_records = [{"usage": {"input_tokens": 7}}]
+        child_of_live.asyncio_task = await self._finished_writer()
+        # A settled workflow's child registered after the sweep's run.
+        wf_done = self._task("wf_done")
+        wf_done.captured_event_count = 1
+        wf_done.asyncio_task = await self._finished_writer()
+        child_of_done = self._task(
+            "c_done", spawned_run_id="run-0", owner_task_id="wf_done"
+        )
+        child_of_done.per_call_records = [{"usage": {"input_tokens": 9}}]
+        child_of_done.asyncio_task = await self._finished_writer()
+        for t in (done, live, wf_live, child_of_live, wf_done, child_of_done):
+            registry._tasks[t.tool_call_id] = t
+
+        bg_store = MagicMock()
+        bg_store.get_registry = AsyncMock(return_value=registry)
+        with patch(
+            f"{REGISTRY_STORE_MOD}.BackgroundRegistryStore.get_instance",
+            return_value=bg_store,
+        ), patch.object(
+            subagent_collection, "persist_subagent_usage", new_callable=AsyncMock
+        ) as persist:
+            tasks = await subagent_collection.claim_turn_subagents(
+                "t-1", "run-1", {"is_byok": False}, "ws-1", "user-1"
+            )
+
+        billed = persist.await_args.args[1]
+        assert {t.task_id for t in billed} == {"done", "wf_done", "c_done"}
+        assert {t.task_id for t in tasks} == {
+            "done", "live", "wf_live", "c_live", "wf_done", "c_done",
+        }
+        gate.set()
+        await asyncio.gather(live.asyncio_task, wf_live.asyncio_task)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_bill_still_hands_the_tasks_to_the_collector(self):
+        task = self._task("done")
+        registry = MagicMock()
+        registry.claim_run_subagents = AsyncMock(return_value=[task])
+        bg_store = MagicMock()
+        bg_store.get_registry = AsyncMock(return_value=registry)
+        with patch(
+            f"{REGISTRY_STORE_MOD}.BackgroundRegistryStore.get_instance",
+            return_value=bg_store,
+        ), patch.object(
+            subagent_collection,
+            "persist_subagent_usage",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("db down"),
+        ):
+            tasks = await subagent_collection.claim_turn_subagents(
+                "t-1", "run-1", {}, "ws-1", "user-1"
+            )
+
+        assert tasks == [task]
+
+    @staticmethod
+    async def _post_terminal(btm, *, kind, status):
+        from src.server.services.runs.finalization import FinalizeVerdict
+
+        await btm._apply_post_terminal_effects(
+            "t-1",
+            "run-1",
+            FinalizeVerdict(applied=True, status=status),
+            kind=kind,
+            stop=None,
+            carried_events=[],
+            task_info=MagicMock(),
+            completion_callback=None,
+            execution_time=1.0,
+            interrupt_reason=None,
+            error=None,
+            metadata={"is_byok": False},
+            workspace_id="ws-1",
+            user_id="user-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_claims_and_bills_before_run_end_then_collects(self):
+        btm = _make_btm()
+        claimed = [MagicMock()]
+        order: list = []
+        btm.append_run_end_event = AsyncMock(
+            side_effect=lambda *a, **k: order.append("run_end")
+        )
+        with patch.object(
+            subagent_collection,
+            "claim_turn_subagents",
+            new_callable=AsyncMock,
+            side_effect=lambda *a, **k: order.append("claim") or claimed,
+        ), patch.object(
+            subagent_collection,
+            "spawn_subagent_collector",
+            side_effect=lambda *a, **k: order.append("collect"),
+        ) as spawn:
+            await self._post_terminal(btm, kind="stream_end", status="completed")
+
+        assert order == ["claim", "run_end", "collect"]
+        assert spawn.call_args.args[2] is claimed
+
+    @pytest.mark.asyncio
+    async def test_a_failed_run_claims_nothing_before_run_end(self):
+        btm = _make_btm()
+        btm.append_run_end_event = AsyncMock()
+        with patch.object(
+            subagent_collection, "claim_turn_subagents", new_callable=AsyncMock
+        ) as claim, patch.object(
+            subagent_collection, "end_run_subagents", new_callable=AsyncMock
+        ):
+            await self._post_terminal(btm, kind="failed", status="error")
+
+        claim.assert_not_awaited()
+        btm.append_run_end_event.assert_awaited_once()
+
+
 class TestAppendRunEndEvent:
+
+    @pytest.fixture(autouse=True)
+    def totals(self):
+        # Unit tests have no pool; a failed read leaves the totals off.
+        with patch(
+            "src.server.database.conversation.usage.get_thread_token_totals",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as read:
+            yield read
+
+    @pytest.mark.asyncio
+    async def test_terminal_frame_carries_the_threads_token_totals(self, totals):
+        """Read after the finalize committed the run's usage row, so the
+        client takes the count over the calls its stream reported."""
+        import json as _json
+
+        btm = _make_btm()
+        btm.event_storage_backend = "redis"
+        totals.return_value = {"input_tokens": 1460, "output_tokens": 20}
+        calls: list = []
+
+        with patch(
+            "src.server.services.runs.stream_writer.get_cache_client",
+            return_value=_sentinel_cache(calls),
+        ):
+            await btm.append_run_end_event("t-1", "r-1", "completed")
+
+        totals.assert_awaited_once_with("t-1")
+        wire = next(c for c in calls if c[0] == "xadd")[2][b"event"].decode("utf-8")
+        assert _json.loads(wire.split("data: ", 1)[1])["token_totals"] == {
+            "input_tokens": 1460,
+            "output_tokens": 20,
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_truth_frame_reads_no_totals(self, totals):
+        btm = _make_btm()
+        btm.event_storage_backend = "redis"
+
+        with patch(
+            "src.server.services.runs.stream_writer.get_cache_client",
+            return_value=_sentinel_cache([]),
+        ):
+            await btm.append_run_end_event(
+                "t-1", "r-1", None, error_frame={"error": "boom"}
+            )
+
+        totals.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_appends_sse_wire_frame_with_outcome_and_ttl(self):
