@@ -1536,7 +1536,6 @@
       "overflowLabel": "in context"
     },
     "running": "Running: {{tool}}",
-    "completedWithCalls": "Completed ({{count}} tool calls)",
     "completed": "Completed",
     "runningStatus": "Running",
     "initializing": "Initializing",
