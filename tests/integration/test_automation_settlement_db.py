@@ -377,6 +377,97 @@ class TestSettleExecution:
         assert fetched["last_execution"]["status"] == "skipped"
 
 
+class TestTheStartsStamp:
+    """The stamp a firing's start keeps in its execution's ``delivery``
+    column, for a sweep after a process that died before its turn's run row
+    could carry it."""
+
+    _STAMP = {
+        "id": "exec.2",
+        "targets": [
+            {"entry": "slack:T/C", "address": "slack:T/C", "name": "#demo",
+             "ok": True, "message": None},
+        ],
+    }
+    _LATER = {"id": "exec.3", "targets": []}
+
+    async def _columns(self, db, execution_id):
+        async with db() as conn, conn.cursor() as cur:
+            await cur.execute(
+                "SELECT delivery, delivery_result FROM automation_executions "
+                "WHERE automation_execution_id = %s",
+                (execution_id,),
+            )
+            row = await cur.fetchone()
+            return (row["delivery"], row["delivery_result"])
+
+    async def test_the_settle_reads_the_stamp_its_start_kept(
+        self, seed_user, patched_get_db_connection
+    ):
+        db = patched_get_db_connection
+        from src.server.database.automation_executions import (
+            settle_execution,
+            stamp_delivery,
+        )
+
+        aid = await _automation(seed_user["user_id"])
+        eid = await _firing(db, aid)
+
+        assert await stamp_delivery(eid, self._STAMP)
+        # Where the delivery landed is the settle's to record, not the start's.
+        assert await self._columns(db, eid) == (self._STAMP, None)
+
+        row = await settle_execution(
+            eid, automation_id=aid, from_statuses=("running",), to="failed",
+        )
+        assert row["delivery"] == self._STAMP
+
+    async def test_a_start_that_asked_nothing_clears_the_stamp(
+        self, seed_user, patched_get_db_connection
+    ):
+        db = patched_get_db_connection
+        from src.server.database.automation_executions import (
+            settle_execution,
+            stamp_delivery,
+        )
+
+        aid = await _automation(seed_user["user_id"])
+        eid = await _firing(db, aid, status="waiting")
+        await stamp_delivery(eid, self._STAMP)
+        assert await stamp_delivery(eid, None)
+
+        await _sql(
+            db,
+            "UPDATE automation_executions SET status = 'running' "
+            "WHERE automation_execution_id = %s",
+            (eid,),
+        )
+        row = await settle_execution(
+            eid, automation_id=aid, from_statuses=("running",), to="failed",
+        )
+        assert row["delivery"] is None
+
+    async def test_a_settled_firing_keeps_the_start_it_settled_by(
+        self, seed_user, patched_get_db_connection
+    ):
+        db = patched_get_db_connection
+        from src.server.database.automation_executions import (
+            settle_execution,
+            stamp_delivery,
+        )
+
+        aid = await _automation(seed_user["user_id"])
+        eid = await _firing(db, aid)
+        await stamp_delivery(eid, self._STAMP)
+        await settle_execution(
+            eid, automation_id=aid, from_statuses=("running",), to="completed",
+        )
+
+        # A start landing after the settle leaves the row as it settled.
+        assert not await stamp_delivery(eid, self._LATER)
+        assert (await self._columns(db, eid))[0] == self._STAMP
+
+
 class TestWhyAFiringFailed:
     """The failure a user acts on, and why an automation switched itself off."""
 
