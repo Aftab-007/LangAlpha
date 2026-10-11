@@ -349,6 +349,28 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
     expect(turnOfText(live(hook), 'assistant', 'next answer')).toBe(44);
   });
 
+  it('a steer another surface delivered keeps the label of the chat app it came from', async () => {
+    mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-43', latest_turn_index: 43 }));
+    mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
+      onEvent(chunk('part one'));
+      onEvent({
+        event: 'steering_delivered',
+        messages: [
+          { content: 'from the phone', timestamp: 1_700_000_000, platform: 'telegram' },
+          { content: 'from the web', timestamp: 1_700_000_001, platform: 'web' },
+        ],
+      });
+      return { disconnected: false, aborted: false };
+    });
+    const running = [{ event: 'user_message', turn_index: 43, content: 'go on', run_id: 'run-43' }];
+    const hook = await mountOnPage(pageOf(40, 42, running));
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    const users = live(hook) as MessageRecord[];
+    expect(users.find((m) => m.content === 'from the phone')?.provenance).toEqual({ kind: 'channel', platform: 'telegram' });
+    expect(users.find((m) => m.content === 'from the web')?.provenance).toBeUndefined();
+  });
+
   it('a send the replay already holds takes the turn the replay names', async () => {
     const opened = { open: () => {} };
     const gate = new Promise<void>((resolve) => {

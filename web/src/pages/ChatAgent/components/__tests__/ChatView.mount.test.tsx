@@ -64,10 +64,13 @@ describe('ChatView mounting harness', () => {
     expect(container.querySelector('[data-message-id="a1"]')).not.toBeNull();
   });
 
-  it('shows the reconnecting status row while isReconnecting', () => {
+  it('floats the reconnecting chip over the composer, outside the transcript', () => {
     chatState.isReconnecting = true;
     mountChatView(ChatView);
-    expect(screen.getByText('chat.reconnecting')).toBeInTheDocument();
+    const chip = screen.getByText('chat.reconnecting');
+    // In the transcript, a reconnect that catches up would take the line out
+    // from under a reader at the end and drop the reply by its height.
+    expect(chip.closest('[data-transcript-status]')).toBeNull();
   });
 
   it('shows the model-retry pill only while loading', () => {
