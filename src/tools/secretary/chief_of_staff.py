@@ -110,6 +110,7 @@ async def delegate_to_analyst(
     return await dispatch(
         question, config, workspace_id, thread_id, report_back, tool_call_id,
         preapproved=preapproved(state, tool_call_id),
+        dispatcher="chief_of_staff",
     )
 
 

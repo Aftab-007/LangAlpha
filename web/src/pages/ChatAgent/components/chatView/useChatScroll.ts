@@ -5,6 +5,7 @@ import { anchorTop, findMessageElement, resolveScrollContent, resolveScrollViewp
 import { scrollMemory } from '@/lib/scrollMemory';
 import { ANCHORED_TOGGLE_EVENT } from '../../utils/anchoredToggle';
 import { useLatestRef } from '@/hooks/useLatestRef';
+import { TRANSCRIPT_STATUS_SELECTOR } from './TranscriptStatus';
 
 // Fallback for engines without a `scrollend` event.
 const SCROLLEND_FALLBACK_MS = 600;
@@ -231,9 +232,14 @@ export function useChatScroll({
   /** A turn is streaming or just ended, nothing else owns the scroll and the
    *  reader is riding the end. Growth in a settled transcript is the reader's
    *  own doing (a block opened, a panel rewrapping the text) and is left where
-   *  it is. */
+   *  it is, except growth of the chrome around the transcript (`chromeGrew`):
+   *  a status line arriving under the last reply, which is the thread's news,
+   *  or the composer growing under a reader at the very end. Either would
+   *  otherwise land the last lines under the composer. */
   const isFollowing = useCallback(
-    () => (isStreamingRef.current || followTailRef.current) && !pinTargetRef.current && isNearBottomRef.current && entryRestoreSettled(),
+    (chromeGrew = false) =>
+      (chromeGrew || isStreamingRef.current || followTailRef.current)
+      && !pinTargetRef.current && isNearBottomRef.current && entryRestoreSettled(),
     [entryRestoreSettled, isStreamingRef],
   );
 
@@ -261,9 +267,10 @@ export function useChatScroll({
   // rAF). The flag is shared, so a newer scroll detaches the previous release
   // first: a release firing mid-way through this scroll would hand its
   // remaining scroll events to the user-scroll branch, which drops the pin
-  // the new scroll just set.
+  // the new scroll just set. `onEnd` runs once a smooth scroll is over: landed,
+  // gone quiet, or cut short by a newer one.
   const withProgrammaticScroll = useCallback(
-    (fn: () => void, behavior: 'auto' | 'smooth' = 'auto') => {
+    (fn: () => void, behavior: 'auto' | 'smooth' = 'auto', onEnd?: () => void) => {
       programmaticReleaseRef.current?.();
       programmaticScrollRef.current = true;
       fn();
@@ -275,6 +282,7 @@ export function useChatScroll({
           c?.removeEventListener('scroll', arm);
           if (timer) clearTimeout(timer);
           if (programmaticReleaseRef.current === detach) programmaticReleaseRef.current = null;
+          onEnd?.();
         }
         function clear() {
           detach();
@@ -323,6 +331,11 @@ export function useChatScroll({
     settleRef.current.arm();
   }, []);
 
+  // A smooth jump to the end still gliding there. The pill hides at the click,
+  // but the reader reaches the end only when the glide lands, and chrome that
+  // grows on arrival waits for that: a resize mid-glide re-applies the pin
+  // instantly and cuts the glide short.
+  const [jumping, setJumping] = useState(false);
   const pinToBottom = useCallback(
     (behavior: 'auto' | 'smooth' = 'auto') => {
       const c = getScrollContainer(scrollAreaRef);
@@ -331,7 +344,9 @@ export function useChatScroll({
       isNearBottomRef.current = true;
       pillBaselineLenRef.current = messagesLenRef.current;
       setPillState({ visible: false, hasNew: false, newCount: 0 });
-      withProgrammaticScroll(() => c.scrollTo({ top: c.scrollHeight, behavior }), behavior);
+      withProgrammaticScroll(() => c.scrollTo({ top: c.scrollHeight, behavior }), behavior, () => setJumping(false));
+      // Set after the scroll it replaces has ended, which ends that one's jump.
+      setJumping(behavior === 'smooth');
       armSettleTimers();
     },
     [getScrollContainer, withProgrammaticScroll, armSettleTimers, setPillState, messagesLenRef],
@@ -608,13 +623,45 @@ export function useChatScroll({
     // exactly where they were.
     let ro: ResizeObserver | null = null;
     if (isMain) {
+      const content = getScrollContent(c);
+      const padded = content.parentElement ?? content;
+      const status = content.querySelector<HTMLElement>(TRANSCRIPT_STATUS_SELECTOR);
       let lastHeight = -1;
+      let lastPad = -1;
+      let lastStatusHeight = -1;
+      const blockSize = (e: ResizeObserverEntry) => e.borderBoxSize?.[0]?.blockSize ?? e.contentRect.height;
       ro = new ResizeObserver((entries) => {
-        const entry = entries[0];
-        const height = entry?.borderBoxSize?.[0]?.blockSize ?? entry?.contentRect.height ?? lastHeight;
+        // A cached view is display:none and measures 0. Coming back from that
+        // is not growth: the composer and the status lines would read as grown
+        // and carry a reader near the end to it. A hidden view keeps the sizes
+        // it last showed.
+        if (entries.some((e) => e.target !== status && blockSize(e) === 0)) return;
+        let entry: ResizeObserverEntry | undefined;
+        let statusGrew = false;
+        for (const e of entries) {
+          if (e.target !== status) {
+            entry = e;
+            continue;
+          }
+          const h = blockSize(e);
+          statusGrew = lastStatusHeight >= 0 && h > lastStatusHeight;
+          lastStatusHeight = h;
+        }
+        if (!entry) return;
+        const height = blockSize(entry);
         const grew = lastHeight >= 0 && height > lastHeight;
         const growth = grew ? height - lastHeight : 0;
         lastHeight = height;
+        // The wrapper's bottom padding is the composer's height
+        // (TRANSCRIPT_BOTTOM_PAD), so what its border box has over its content
+        // box grows with the composer and nothing else.
+        const pad = height - (entry.contentBoxSize?.[0]?.blockSize ?? entry.contentRect.height);
+        const composerGrew = lastPad >= 0 && pad > lastPad;
+        lastPad = pad;
+        const atEndBefore = () => isNearBottom(
+          { scrollTop: c.scrollTop, scrollHeight: c.scrollHeight - growth, clientHeight: c.clientHeight },
+          AT_BOTTOM_PX,
+        );
         if (pinTargetRef.current) {
           // A toggle clears every pin, so one set since (a send, the jump pill)
           // has placed the reader anew and ends the toggle's hold: holding the
@@ -632,27 +679,29 @@ export function useChatScroll({
             // on the next growth. Ask where the hold actually left them, before
             // the growth this callback is reporting, or a reader at the end is
             // read as that growth short of it.
-            nearBottomRef.current = isNearBottom(
-              { scrollTop: c.scrollTop, scrollHeight: c.scrollHeight - growth, clientHeight: c.clientHeight },
-              AT_BOTTOM_PX,
-            );
+            nearBottomRef.current = atEndBefore();
           } else {
             const delta = toggleAnchor.el.getBoundingClientRect().top - toggleAnchor.top;
             if (Math.abs(delta) >= 1) withProgrammaticScroll(() => c.scrollTo({ top: c.scrollTop + delta }), 'auto');
             return;
           }
         }
-        if (grew && isFollowing()) {
+        // The composer carries only a reader at the very end, measured before
+        // the growth as for the toggle above: one in the band short of the end
+        // is reading there.
+        if (grew && isFollowing(statusGrew || (composerGrew && atEndBefore()))) {
           stream.follow();
           if (followTailRef.current) tailWindowRef.current?.arm();
         }
       });
       // The padded wrapper's border box, not the content's: its bottom padding
-      // is the floating composer's height, and a taller composer (a todo tab
-      // arriving, the input wrapping) must re-pin and follow like content, or
-      // the last line ends up under it.
-      const content = getScrollContent(c);
-      ro.observe(content.parentElement ?? content, { box: 'border-box' });
+      // is the floating composer's height, and a taller composer (the tray
+      // unfolding, a todo tab arriving, the input wrapping) must re-pin and
+      // follow like content, or the last line ends up under it. The status
+      // lines are watched on their own so their growth can be told from the
+      // reader's.
+      ro.observe(padded, { box: 'border-box' });
+      if (status) ro.observe(status, { box: 'border-box' });
     }
     // A hidden tab gets no rendering updates, so the observer above does not
     // fire and the view sits still while the transcript grows; the animations
@@ -825,6 +874,7 @@ export function useChatScroll({
     pinTargetRef,
     saveScrollPosition,
     jumpPill,
+    jumping,
     scrollPositionsRef,
     skipSubagentAutoScrollRef,
     activeAgentIdRef,

@@ -138,16 +138,13 @@ class SubagentSteeringMiddleware(AgentMiddleware):
             content = "\n".join(contents) if len(contents) > 1 else contents[0]
             # The user's instructions and the main agent's follow-ups share
             # this queue and join into one text, so the delivery names each
-            # entry: a client settles its own instruction by id, and shows a
-            # follow-up it never sent as one of its own.
+            # entry: a client settles its own instruction by id, and labels
+            # each by who queued it (a legacy payload names no sender).
             delivered = {
                 "content": content,
                 "count": len(parsed),
                 "input_ids": input_ids,
-                "entries": [
-                    {"input_id": p["input_id"], "content": p["content"]}
-                    for p in parsed
-                ],
+                "entries": [_delivered_entry(p) for p in parsed],
             }
             # Stamp the delivered payload so checkpoint-sourced replay can
             # re-emit steering_delivered without the captured SSE stream.
@@ -187,6 +184,13 @@ class SubagentSteeringMiddleware(AgentMiddleware):
             await self.registry.append_captured_event(tool_call_id, event)
         except Exception:
             pass
+
+
+def _delivered_entry(payload: dict[str, Any]) -> dict[str, Any]:
+    entry = {"input_id": payload["input_id"], "content": payload["content"]}
+    if payload.get("sender"):
+        entry["sender"] = payload["sender"]
+    return entry
 
 
 def _last_message_id(state: Any) -> str | None:

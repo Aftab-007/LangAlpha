@@ -18,6 +18,7 @@ def _user_message_item(
     thread_id: str,
     query: dict[str, Any],
     response: dict[str, Any] | None = None,
+    open_run: str | None = None,
 ) -> dict[str, Any]:
     payload = {
         "thread_id": thread_id,
@@ -28,6 +29,14 @@ def _user_message_item(
     }
     if query.get("type") == "system":
         payload["query_type"] = "system"
+        # A report-back's row is drawn from its query, and a live attach draws
+        # it again from the stream's first frame. Naming the run here, ended or
+        # not, lets the client keep one. Not ``run_id``, which means rendered.
+        # A running turn's run is ``open_run``, the in_progress slot's id: it
+        # has no settled response, or only an earlier attempt's.
+        run = open_run or (str(response.get("conversation_response_id")) if response else None)
+        if run:
+            payload["report_run_id"] = run
     # The turn's run id, stamped only once the run is terminal — i.e. when this
     # replay carries the turn's actual content. The client records it as
     # "already rendered" so the report-back catch-up never re-attaches a run
@@ -254,11 +263,13 @@ def _stub_turn_items(
     turn_index: Any,
     queries_by_turn: dict[Any, list[dict[str, Any]]],
     responses_by_turn: dict[Any, dict[str, Any]],
+    open_run: str | None = None,
 ) -> list[dict[str, Any]]:
     """A persisted turn with no committed boundary: the in-flight active turn
-    (frontend attaches to the live run via /status + run_id) or a run that
-    never checkpointed. The user_message stub, plus the terminal error or stop
-    close the response row records, is the whole replay. Never cached.
+    (frontend attaches to the live run via /status + run_id, ``open_run``) or
+    a run that never checkpointed. The user_message stub, plus the terminal
+    error or stop close the response row records, is the whole replay. Never
+    cached.
 
     Output the turn streamed before it stopped or failed is not on the
     committed branch, so it is not in the model's context either, and replay
@@ -267,7 +278,7 @@ def _stub_turn_items(
     response = responses_by_turn.get(turn_index)
     response_id = str(response.get("conversation_response_id")) if response else None
     items = [
-        _user_message_item(thread_id, q, response)
+        _user_message_item(thread_id, q, response, open_run)
         for q in queries_by_turn.get(turn_index, [])
     ]
     turn_items = terminal_items(thread_id, response, [])

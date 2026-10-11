@@ -7,6 +7,8 @@ import { isToolResultFailure, toolNameOf } from '../subagents/subagentStatus';
 import { ownerOfToolCall } from '../toolCallOwner';
 import { isTaskAgentId } from '../../utils/agentId';
 import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subagents/taskSegmentBuilder';
+import { reportRowProvenance, senderProvenance, type SenderMetadata } from '../provenance';
+import type { ReportSource } from '@/types/api';
 import type { SubagentTaskRecord, TextSegment } from '@/types/chat';
 import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from '../../hooks/utils/types';
 import type { PairState } from '../types';
@@ -17,7 +19,14 @@ interface HistoryEvent {
   agent?: string;
   content?: string;
   timestamp?: string | number;
-  metadata?: Record<string, unknown>;
+  /** On a report-back's `user_message`, the run its turn opened, ended or not. */
+  report_run_id?: string;
+  /** On a `user_message`, its query row's metadata. */
+  metadata?: SenderMetadata & {
+    /** On a report-back only: what it reports on. */
+    report_source?: ReportSource;
+    [key: string]: unknown;
+  };
   messages?: Array<Record<string, unknown>>;
   [key: string]: unknown;
 }
@@ -110,10 +119,15 @@ export function handleHistoryUserMessage({
       steeringBatches: 0,
     });
 
-    // Create user message bubble (skip for empty content, HITL resume pairs,
-    // and system queries like report-back invocations)
+    // Create user message bubble (skip for empty content and HITL resume
+    // pairs). A system query, a report-back's invocation, is written for the
+    // model: it shows only as the label naming what it reports, and stays
+    // hidden when the row names nothing (an older row, or a share's replay).
     const isSystemQuery = (event as Record<string, unknown>).query_type === 'system';
-    if (messageContent && !isSystemQuery) {
+    const provenance = isSystemQuery
+      ? reportRowProvenance(event.metadata?.report_source)
+      : senderProvenance(event.metadata);
+    if (isSystemQuery ? provenance : messageContent) {
       // Deterministic id keyed only on pairIndex (the server-side turn_index,
       // unique per turn). Earlier code suffixed `Date.now()` here as
       // speculative collision defense, but that made the same logical bubble
@@ -123,13 +137,15 @@ export function handleHistoryUserMessage({
       const userMessage: MessageRecord = {
         id: currentUserMessageId,
         role: 'user',
-        content: event.content,
+        content: isSystemQuery ? '' : event.content,
         contentType: 'text',
         timestamp: event.timestamp ? new Date(event.timestamp as string | number) : new Date(),
         isStreaming: false,
         isHistory: true,
         turnIndex: pairIndex,
       };
+      if (provenance) userMessage.provenance = provenance;
+      if (isSystemQuery && event.report_run_id) userMessage.runId = event.report_run_id;
 
       // Restore attachment metadata from persisted query metadata
       const attachments = event.metadata?.attachments as unknown[] | undefined;
@@ -154,12 +170,17 @@ export function handleHistoryUserMessage({
         userMessage.chartSelections = event.metadata!.chart_selections;
       }
 
+      // A live attach that drew this report's row before a reload keeps it
+      // through the reload, which keeps live rows; this row, which knows its
+      // turn, replaces it. Live rows sit past the insert point, so it holds.
+      const runId = userMessage.runId;
       setMessages((prev: MessageRecord[]) => {
+        const kept = runId ? prev.filter((m) => m.isHistory || m.runId !== runId) : prev;
         const insertIndex = newMessagesStartIndexRef.current;
         const newMessages = [
-          ...prev.slice(0, insertIndex),
+          ...kept.slice(0, insertIndex),
           userMessage,
-          ...prev.slice(insertIndex),
+          ...kept.slice(insertIndex),
         ];
         newMessagesStartIndexRef.current = insertIndex + 1;
         return newMessages;
@@ -556,6 +577,8 @@ export function handleHistorySteeringDelivered({
       turnIndex: pairIndex,
       steeringDelivered: true,
     };
+    const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
+    if (provenance) userMessage.provenance = provenance;
     setMessages((prev: MessageRecord[]) => {
       const idx = newMessagesStartIndexRef.current;
       const next = [...prev.slice(0, idx), userMessage, ...prev.slice(idx)];

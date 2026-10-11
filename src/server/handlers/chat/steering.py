@@ -82,7 +82,11 @@ async def drain_pending_steerings(thread_id: str) -> list[dict] | None:
 
 
 async def steer_thread(
-    thread_id: str, content: str, user_id: str, run_id: str | None = None
+    thread_id: str,
+    content: str,
+    user_id: str,
+    run_id: str | None = None,
+    platform: str | None = None,
 ) -> dict | None:
     """Steer a running workflow by injecting a user message via Redis.
 
@@ -97,6 +101,7 @@ async def steer_thread(
             legacy unstamped ones), so a message steered into a run that
             died un-drained is returned by the next turn's end-of-run drain
             instead of leaking into its context. None = unstamped.
+        platform: The chat app the message came from, which its label names.
 
     Returns:
         Dict with queue position and the exact queued payload (for a
@@ -114,6 +119,8 @@ async def steer_thread(
         payload = {"content": content, "user_id": user_id, "timestamp": time.time()}
         if run_id is not None:
             payload["run_id"] = run_id
+        if platform:
+            payload["platform"] = platform
         message = json.dumps(payload)
         pipe = cache.client.pipeline()
         pipe.rpush(key, message)
@@ -293,6 +300,7 @@ async def steer_subagent(
                 "content": content,
                 "expected_task_run_id": expected_task_run_id,
                 "input_id": input_id,
+                "sender": "user",
             }
         )
         pipe = cache.client.pipeline()

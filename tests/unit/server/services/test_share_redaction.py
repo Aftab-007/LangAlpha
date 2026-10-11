@@ -175,10 +175,24 @@ def test_strips_owner_ids_and_order_verdicts_from_query_metadata():
 
 def test_blanks_the_text_of_a_system_query():
     """A report-back names the dispatched thread and its workspace."""
-    content, _ = ShareRedaction([]).query(
-        {"type": "system", "content": f"The analysis in workspace {_OWNER_WS} completed."}
+    content, metadata = ShareRedaction([]).query(
+        {
+            "type": "system",
+            "content": f"The analysis in workspace {_OWNER_WS} completed.",
+            "metadata": {
+                "msg_type": "flash",
+                "report_source": {
+                    "kind": "analyst",
+                    "thread_id": "t-1",
+                    "workspace_id": _OWNER_WS,
+                    "workspace_name": "Chips",
+                },
+            },
+        }
     )
     assert content == ""
+    # Its label names the same, so it goes too.
+    assert metadata == {"msg_type": "flash"}
 
 
 # --- An order's identifiers --------------------------------------------------

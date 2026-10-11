@@ -9,6 +9,7 @@ import type {
   ProvenanceSourceType,
 } from './sse';
 import type { ErrorLinkSpec } from '@/utils/rateLimitError';
+import type { DispatchingAgent } from './api';
 
 // --- Content Segments (discriminated union) ---
 
@@ -419,6 +420,26 @@ export interface CreditPauseState {
 
 // --- Chat Messages ---
 
+/**
+ * Where a message came from when nobody typed it in this view, named by the
+ * label above it. The user's own messages carry none. Unrelated to a reply's
+ * `provenanceRecords`, which are the sources it read.
+ */
+export type MessageProvenance =
+  /** A turn an agent handed to this thread. `agent` is null on rows from
+   *  before the dispatcher was recorded. */
+  | { kind: 'agent'; agent: DispatchingAgent | null; threadId: string | null }
+  | { kind: 'automation'; automationId: string | null; name: string | null }
+  /** `platform` is the chat app's key as a gateway sends it (`telegram`). */
+  | { kind: 'channel'; platform: string }
+  /** A subagent's instruction its main agent wrote: the spawn or resume
+   *  prompt, or a follow-up. */
+  | { kind: 'main_agent' }
+  /** The two report-backs. Each is drawn as its label alone: the turn's own
+   *  message is written for the model. */
+  | { kind: 'analyst_report'; threadId: string; workspaceId: string | null; workspaceName: string | null }
+  | { kind: 'task_report'; taskId: string; displayId: string; description: string | null; failed: boolean };
+
 export type UserMessage = {
   id: string;
   role: 'user';
@@ -446,6 +467,12 @@ export type UserMessage = {
    * re-renders these cards (see serialize_chart_selections_for_metadata).
    */
   chartSelections?: import('@/pages/MarketView/stores/chartSelectionStore').ChartSelectionSnapshot[];
+  /** Who sent it, when not the user in this view. A report-back's row has
+   *  empty content and is drawn as this label alone. */
+  provenance?: MessageProvenance;
+  /** On a report-back's row only: the run it opened. History and a live
+   *  attach can both draw that row, and know it by this. */
+  runId?: string;
   steeringDelivered?: boolean;
   steering?: boolean;
   /**

@@ -235,7 +235,7 @@ export const reconnectToStream = async (
   // would dismiss a slow-but-live run #1 in favor of run #2. Otherwise re-arm,
   // bounded, so a genuinely wedged run still force-releases.
   let idleClosed = false;
-  // Whether ANY event arrived. A latched run that never streamed must release
+  // Whether any content arrived. A latched run that never streamed must release
   // currentRunIdRef in the finally, or attach() dedups on the stale id and the
   // still-pending summary only surfaces on reload.
   let receivedEvent = false;
@@ -354,7 +354,9 @@ export const reconnectToStream = async (
       flushBacklog();
       return;
     }
-    receivedEvent = true;
+    // Nor is the run's id frame: it is sent before the graph starts, so a
+    // stream that went quiet after it rendered nothing either.
+    if (event.event !== 'metadata') receivedEvent = true;
     if (backlog) {
       backlog.push(event);
       armBacklogTimer();

@@ -14,6 +14,7 @@ import type { MessageRecord, ToolCallRecord, ToolCallResultRecord } from '../../
 import { getOrCreateTaskRefs, nextArrivalSeq } from '../streamRefs';
 import { isTaskAgentId } from '../../utils/agentId';
 import { appendTextChunk } from '../stream/textChunks';
+import { MAIN_AGENT_PROVENANCE } from '../provenance';
 import type { ContentSegment } from '@/types/chat';
 import type {
   StreamRefs, TaskRefs, ToolCallChunkRecord, UpdateSubagentCard,
@@ -748,10 +749,15 @@ export function handleWorkflowLifecycle({ taskId, event, refs, updateSubagentCar
   return true;
 }
 
+/** Who queued an instruction for a subagent: the user, or its main agent. */
+export type InstructionSender = 'user' | 'agent';
+
 /** One queue entry a steering delivery took, under the id its sender gave it. */
 export interface DeliveredInstruction {
   input_id?: string | null;
   content?: string;
+  /** Absent on entries from before the drain recorded it, which get no label. */
+  sender?: InstructionSender;
 }
 
 /**
@@ -806,7 +812,7 @@ export function handleTaskSteeringAccepted({ taskId, content, entries, refs, upd
     for (const entry of entries) {
       const i = pendingInstructionIndex(updatedMessages, entry.input_id);
       if (i !== -1) take(i);
-      else if (entry.content) delivered.push(instructionBubble(entry.content));
+      else if (entry.content) delivered.push(instructionBubble(entry.content, entry.sender));
     }
   } else {
     const matched = deliveredInstructionIndexes(updatedMessages, content);
@@ -836,7 +842,10 @@ export function handleTaskSteeringAccepted({ taskId, content, entries, refs, upd
   return true;
 }
 
-function instructionBubble(content: string): MessageRecord {
+/** A delivered instruction with no pending bubble to confirm. Only the main
+ *  agent's carry a label: the user's own, sent from another tab or read back
+ *  from history, look as they did when sent here. */
+function instructionBubble(content: string, sender?: InstructionSender): MessageRecord {
   return {
     id: `followup-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
     role: 'user',
@@ -844,6 +853,7 @@ function instructionBubble(content: string): MessageRecord {
     contentSegments: [{ type: 'text', content, order: 0 }],
     reasoningProcesses: {},
     toolCallProcesses: {},
+    ...(sender === 'agent' ? { provenance: MAIN_AGENT_PROVENANCE } : {}),
   };
 }
 

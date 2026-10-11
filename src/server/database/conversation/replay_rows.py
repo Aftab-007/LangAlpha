@@ -1,7 +1,7 @@
 """One-shot read of every table a thread replay needs."""
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -33,6 +33,9 @@ class ThreadRows:
     provenance: list[dict[str, Any]]
     # The thread's runs that hold replay facts, each with its launching turn.
     run_facts: list[dict[str, Any]]
+    # The run still going on each turn that has one, by id. Replay draws
+    # nothing from it; a turn with no settled response only names its run.
+    open_runs: dict[Any, str] = field(default_factory=dict)
 
 
 async def get_branch_pointer(thread_id: str) -> tuple[str, list[Any]] | None:
@@ -106,7 +109,25 @@ async def get_replay_thread_data(thread_id: str) -> ThreadRows | None:
             )
             queries = [dict(r) for r in await cur.fetchall()]
 
-            # 4. Responses — one settled row per turn; an in_progress slot or
+            # 4. The in_progress slots, by id alone: what each running turn's
+            # run is called, which its replay stub names and nothing reads.
+            # Read before the settled rows, since each read is its own
+            # snapshot: a run settling between the two then shows in one or
+            # both, where the other order would miss it in both.
+            await cur.execute(
+                """SELECT DISTINCT ON (turn_index) turn_index,
+                          conversation_response_id
+                   FROM conversation_responses
+                   WHERE conversation_thread_id = %s AND status = 'in_progress'
+                   ORDER BY turn_index ASC, attempt_no DESC""",
+                (thread_id,),
+            )
+            open_runs = {
+                r["turn_index"]: str(r["conversation_response_id"])
+                for r in await cur.fetchall()
+            }
+
+            # 4b. Responses — one settled row per turn; an in_progress slot or
             # superseded attempt must never drive replay rendering. Without
             # their stored events: a turn replay projects afresh re-reads its
             # row whole (see get_replay_responses).
@@ -159,6 +180,7 @@ async def get_replay_thread_data(thread_id: str) -> ThreadRows | None:
         usages=usages,
         provenance=provenance,
         run_facts=run_facts,
+        open_runs=open_runs,
     )
 
 

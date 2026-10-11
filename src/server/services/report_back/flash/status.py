@@ -27,7 +27,7 @@ from src.server.services.report_back.flash.keys import (
 logger = logging.getLogger("src.server.handlers.chat_handler")
 
 
-async def read_report_back_status(thread_id: str) -> dict:
+async def read_report_back_status(thread_id: str, user_id: str | None) -> dict:
     """Report-back-only status slice for a flash thread.
 
     The JSON shape is a frontend contract; the recent list is NEWEST FIRST
@@ -38,12 +38,16 @@ async def read_report_back_status(thread_id: str) -> dict:
     thread is still waiting on its own (see ``ended_run_ids``). On its own
     registry-read failure (Redis or the outbox) ``pending_report_back`` is
     ``None`` (unknown — the frontend keeps watching), distinct from an
-    explicit ``False`` (drained).
+    explicit ``False`` (drained). ``owed_threads`` names every thread of
+    ``user_id``, the thread's owner, that a report is still owed by: unsettled
+    members and the analysts of queued jobs alike (``None`` when unknown).
     """
     pending_report_back: bool | None = False
     report_back_run_id = None
     recent_report_back_run_ids: list[str] = []
     ended: list[str] = []
+    owed: list[str] = []
+    owed_threads: list[dict] | None = []
     try:
         from src.utils.cache.redis_cache import get_cache_client
 
@@ -109,16 +113,33 @@ async def read_report_back_status(thread_id: str) -> dict:
                 jobs = await outbox_db.list_open_notification_jobs(
                     thread_id, "report_back"
                 )
-                job_runs = [
-                    (job.get("payload") or {}).get("dispatched_run_id")
-                    for job in jobs
-                ]
+                payloads = [job.get("payload") or {} for job in jobs]
                 ended = await ended_run_ids(
-                    [*(ptr["run_id"] for ptr in pointers.values()), *job_runs]
+                    [
+                        *(ptr["run_id"] for ptr in pointers.values()),
+                        *(p.get("dispatched_run_id") for p in payloads),
+                    ]
                 )
-                pending_report_back = any(r not in ended for r in job_runs) or any(
-                    not _settles(pointers.get(m), origins.get(m), ended)
+                unsettled = [
+                    m
                     for m in members
+                    if not _settles(pointers.get(m), origins.get(m), ended)
+                ]
+                open_jobs = [
+                    p for p in payloads if p.get("dispatched_run_id") not in ended
+                ]
+                pending_report_back = bool(unsettled or open_jobs)
+                # A report queued behind an ended summary is owed by the
+                # thread its job names, though that member has settled.
+                owed = list(
+                    dict.fromkeys(
+                        t
+                        for t in [
+                            *unsettled,
+                            *(p.get("ptc_thread_id") for p in open_jobs),
+                        ]
+                        if t
+                    )
                 )
                 report_back_run_id = next(
                     (
@@ -137,6 +158,10 @@ async def read_report_back_status(thread_id: str) -> dict:
         report_back_run_id = None
         recent_report_back_run_ids = []
         ended = []
+        owed = []
+        owed_threads = None
+    if owed:
+        owed_threads = await _owed_thread_labels(thread_id, owed, user_id)
 
     return {
         "thread_id": thread_id,
@@ -145,36 +170,64 @@ async def read_report_back_status(thread_id: str) -> dict:
         "recent_report_back_run_ids": list(
             dict.fromkeys([*ended, *recent_report_back_run_ids])
         ),
+        "owed_threads": owed_threads,
         # Flash threads run no sandbox subagents; present for shape parity
         # with the task slice so watch snapshots decode uniformly.
         "active_tasks": [],
     }
 
 
+async def _owed_thread_labels(
+    thread_id: str, owed: list[str], user_id: str | None
+) -> list[dict] | None:
+    """Labels for the owed members, or ``None`` when the read fails.
+
+    Kept out of the registry read's ``try`` so a label failure can never turn
+    pendingness unknown. No owner (the thread is gone) names nothing.
+    """
+    if user_id is None:
+        return []
+    try:
+        from src.server.database.conversation.threads_read import get_thread_labels
+
+        return await get_thread_labels(owed, user_id)
+    except Exception:
+        logger.warning(
+            f"Owed-thread label read failed for {thread_id}; reporting unknown",
+            exc_info=True,
+        )
+        return None
+
+
 async def read_report_back_slice(
-    thread_id: str, msg_type: str | None = None
+    thread_id: str, msg_type: str | None = None, user_id: str | None = None
 ) -> dict:
     """Route to the right pending-registry read for this thread kind.
 
     Flash pendingness lives in the Redis watch set; PTC task report-back
     pendingness IS the open outbox row. A PTC thread reads both: the Chief of
     Staff runs on one, and its analysts report back through the watch set
-    while its own subagents use the outbox. ``msg_type`` skips the thread
-    lookup when the caller already holds it.
+    while its own subagents use the outbox. ``msg_type`` and the owner's
+    ``user_id`` skip the thread lookup when the caller already holds both, as
+    the ``/status`` route does once it has authorized.
     """
-    if msg_type is None:
+    if msg_type is None or user_id is None:
         from src.server.database.conversation import get_thread_auth_meta
 
-        meta = await get_thread_auth_meta(thread_id)
-        msg_type = (meta or {}).get("msg_type")
+        meta = await get_thread_auth_meta(thread_id) or {}
+        if msg_type is None:
+            msg_type = meta.get("msg_type")
+        if user_id is None:
+            user_id = meta.get("user_id")
     if msg_type != "ptc":
-        return await read_report_back_status(thread_id)
+        return await read_report_back_status(thread_id, user_id)
     from src.server.services.report_back.subagent import (
         read_task_report_back_status,
     )
 
     tasks, handoffs = await asyncio.gather(
-        read_task_report_back_status(thread_id), read_report_back_status(thread_id)
+        read_task_report_back_status(thread_id),
+        read_report_back_status(thread_id, user_id),
     )
     return {
         **tasks,
@@ -187,6 +240,9 @@ async def read_report_back_slice(
             tasks["recent_report_back_run_ids"],
             handoffs["recent_report_back_run_ids"],
         ),
+        # Only an analyst hand-off is owed by another thread; the task
+        # slice's subagents run in this one.
+        "owed_threads": handoffs["owed_threads"],
     }
 
 

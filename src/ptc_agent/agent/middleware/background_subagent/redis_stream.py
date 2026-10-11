@@ -658,19 +658,27 @@ def steering_queue_key(tool_call_id: str, task_run_id: str | None = None) -> str
 
 def parse_steering_payload(raw: Any) -> dict[str, Any] | None:
     """Normalize a raw steering-queue entry to ``{content,
-    expected_task_run_id, input_id}``. Legacy entries are bare JSON strings
-    (no fence, no id); unparseable entries return None."""
+    expected_task_run_id, input_id, sender}``, where ``sender`` ("user" or
+    "agent") is who queued it, for display only. Legacy entries are bare JSON
+    strings (no fence, no id, no sender); unparseable entries return None."""
     try:
         data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     if isinstance(data, str):
-        return {"content": data, "expected_task_run_id": None, "input_id": None}
+        return {
+            "content": data,
+            "expected_task_run_id": None,
+            "input_id": None,
+            "sender": None,
+        }
     if isinstance(data, dict) and data.get("content"):
+        sender = data.get("sender")
         return {
             "content": str(data["content"]),
             "expected_task_run_id": data.get("expected_task_run_id") or None,
             "input_id": data.get("input_id") or None,
+            "sender": sender if sender in ("user", "agent") else None,
         }
     return None
 

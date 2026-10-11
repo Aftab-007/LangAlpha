@@ -1534,7 +1534,6 @@
       "overflowLabel": "上下文"
     },
     "running": "运行中: {{tool}}",
-    "completedWithCalls": "已完成 ({{count}} 次工具调用)",
     "completed": "已完成",
     "runningStatus": "运行中",
     "initializing": "初始化中",
@@ -1622,6 +1621,24 @@
     "backgroundTasksRunning": "后台任务仍在运行",
     "reportBackPending": "等待 PTC Agent 汇报结果",
     "taskReportBackPending": "等待子代理结果汇报",
+    "tray": {
+      "backgroundTasks_one": "{{count}} 个后台任务",
+      "backgroundTasks_other": "{{count}} 个后台任务",
+      "backgroundTasksHeading": "正在此对话中运行",
+      "show": "显示正在进行的内容"
+    },
+    "provenance": {
+      "fromChiefOfStaff": "来自 CoS Agent",
+      "fromFlash": "来自 Flash",
+      "automation": "自动化",
+      "automationNamed": "自动化 · {{name}}",
+      "viaChannel": "来自 {{platform}}",
+      "fromMainAgent": "来自主 Agent",
+      "reportFrom": "来自 {{name}} 的汇报",
+      "reportFromAnalyst": "来自分析师的汇报",
+      "taskFinished": "{{id}} 已完成",
+      "taskFailed": "{{id}} 已失败"
+    },
     "taskCard": {
       "statusRunning": "运行中",
       "statusPausing": "完成当前步骤",
@@ -4376,6 +4393,12 @@
     "pickWhere": "选择 Agent 的工作范围",
     "backToChiefOfStaff": "返回 CoS Agent",
     "reportBackPending": "等待分析师汇报结果",
+    "tray": {
+      "waitingOn": "等待 {{name}}",
+      "waitingOnAnalysts_one": "等待 {{count}} 位分析师",
+      "waitingOnAnalysts_other": "等待 {{count}} 位分析师",
+      "analystsHeading": "完成后会向此对话汇报"
+    },
     "inWorkspace": "在 {{workspace}} 中",
     "workspaceRequired": "请选择一个工作区，或选择所有工作区。",
     "widgets": {

@@ -573,6 +573,28 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     );
   });
 
+  it('names the owed analysts from the load-time /status while the turn it reconnects to streams', async () => {
+    // The watch's own reads wait out a live turn, so the /status the load
+    // holds is the only read that can name them before the turn ends.
+    const analyst = { thread_id: 'th-analyst', workspace_id: 'ws-a', workspace_name: 'Semis', title: 'NVDA margins' };
+    mockStatus.mockResolvedValue(threadStatus({
+      can_reconnect: true,
+      status: 'running',
+      run_id: 'live-run',
+      pending_report_back: true,
+      owed_threads: [analyst],
+    }));
+    const reconnects: CapturedReconnect[] = [];
+    mockReconnect.mockImplementation(hangingReconnect(reconnects));
+    captureWatch();
+
+    const { result } = renderHookWithProviders(() => useChatMessages('ws-rb', 'th-home'));
+
+    await waitFor(() => expect(reconnects.some((r) => r.rid === 'live-run')).toBe(true));
+    await waitFor(() => expect(result.current.reportBackOwedThreads).toEqual([analyst]));
+    expect(result.current.reportBackOwed).toBe(true);
+  });
+
   it('supersedes a streaming report-back when the user jumps into the live PTC thread', async () => {
     // A report-back is STILL streaming on the flash thread when the user clicks
     // the dispatch card. The flash reader owns isStreamingRef; navigation must
@@ -1493,6 +1515,43 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     });
     expect(mockReconnect).toHaveBeenCalledTimes(2);
     expect(mockReconnect.mock.calls[1][1]).toBe('rb-x');
+  });
+
+  it('an attach that got only the run metadata frame is a zero-content attach, and the retry keeps one report row', async () => {
+    // The server sends the run's id frame before the graph starts, so a run
+    // slow to its first token can idle the attach out with only that frame.
+    // It drew the report's row but none of its reply: the run must be retried.
+    mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true, report_back_run_id: null }));
+    const watchCalls = captureWatch();
+    const metadata = {
+      event: 'metadata', thread_id: 'th-rb', run_id: 'rb-x',
+      report_source: { kind: 'task', task_id: 'k3', display_id: 'Task-k3', failed: false },
+    };
+    const reconnectWith = (...events: Record<string, unknown>[]) => (...args: unknown[]) => {
+      const onEvent = args[3] as (e: Record<string, unknown>) => void;
+      for (const event of events) onEvent(event);
+      return Promise.resolve({ disconnected: false, aborted: false });
+    };
+
+    const { result } = renderHookWithProviders(() => useChatMessages('ws-rb', 'th-rb'));
+    await waitFor(() => expect(mockWatch).toHaveBeenCalledTimes(1));
+
+    mockReconnect.mockImplementation(reconnectWith(metadata));
+    await act(async () => {
+      await watchCalls[0].cb({ run_id: 'rb-x' });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    mockReconnect.mockImplementation(reconnectWith(metadata, {
+      event: 'message_chunk', role: 'assistant', agent: 'main', content_type: 'text', content: 'summary…',
+    }));
+    await act(async () => {
+      await watchCalls[0].cb({ run_id: 'rb-x' });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(mockReconnect).toHaveBeenCalledTimes(2);
+    expect(result.current.messages.filter((m) => m.id === 'report-rb-x')).toHaveLength(1);
+    expect(JSON.stringify(result.current.messages)).toContain('summary…');
   });
 
   it('resubscribe catch-up: in-loop /watch recovery reconciles and never tears the watch down', async () => {

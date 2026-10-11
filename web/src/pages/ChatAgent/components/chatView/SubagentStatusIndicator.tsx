@@ -63,7 +63,7 @@ export default function SubagentStatusIndicator({ status, currentTool, toolCalls
     if (!isTerminal && derivedCurrentTool) return t('chat.running', { tool: derivedCurrentTool });
     if (effectiveStatus === 'error') return t('common.failed');
     if (effectiveStatus === 'completed') {
-      return toolCalls > 0 ? t('chat.completedWithCalls', { count: toolCalls }) : t('chat.completed');
+      return toolCalls > 0 ? t('chat.subagentBar.completedWithTools', { count: toolCalls }) : t('chat.completed');
     }
     if (effectiveStatus === 'cancelled') {
       return t('chat.stoppedChip');

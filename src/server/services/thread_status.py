@@ -56,7 +56,10 @@ def extract_state_values(checkpoint_tuple) -> dict:
 
 
 async def read_thread_runtime_status(
-    thread_id: str, is_shared: Optional[bool] = None, msg_type: Optional[str] = None
+    thread_id: str,
+    is_shared: Optional[bool] = None,
+    msg_type: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Get current workflow execution status.
@@ -69,6 +72,9 @@ async def read_thread_runtime_status(
         msg_type: Pre-resolved thread kind; picks the report-back read model
             (``ptc`` → task outbox, else flash watch set). Fetched with the
             thread row when ``None`` and the row is read anyway.
+        user_id: Pre-resolved thread owner, which scopes the labels of the
+            threads a report-back is owed by. Looked up with the report-back
+            read when ``None``.
 
     Returns:
         Dict with current status, reconnectability, and progress info
@@ -153,11 +159,12 @@ async def read_thread_runtime_status(
         # subagents outlive the run's terminal row.
         from src.server.services.report_back.flash.status import read_report_back_slice
 
-        rb = await read_report_back_slice(thread_id, msg_type)
+        rb = await read_report_back_slice(thread_id, msg_type, user_id)
         active_tasks = rb.get("active_tasks", [])
         pending_report_back = rb["pending_report_back"]
         report_back_run_id = rb["report_back_run_id"]
         recent_report_back_run_ids = rb.get("recent_report_back_run_ids", [])
+        owed_threads = rb.get("owed_threads")
 
         # Staleness signal for cached (never-unmounted) frontend views: once a
         # run is terminal there is no reconnectable run_id, so the persisted
@@ -190,6 +197,7 @@ async def read_thread_runtime_status(
             "pending_report_back": pending_report_back,
             "report_back_run_id": report_back_run_id,
             "recent_report_back_run_ids": recent_report_back_run_ids,
+            "owed_threads": owed_threads,
         }
 
         logger.debug(f"Status check for {thread_id}: {status}")

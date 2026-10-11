@@ -328,6 +328,7 @@ async def ptc_agent(
     return await dispatch(
         question, config, workspace_id, thread_id, report_back, tool_call_id,
         preapproved=preapproved(state, tool_call_id),
+        dispatcher="flash",
     )
 
 

@@ -133,9 +133,13 @@ export function useSubagentTabs({
       .filter(([cardId]) => cardId.startsWith('subagent-'))
       .map(([cardId, card]): AgentInfo => {
         const sd = card.subagentData;
+        const id = cardId.replace('subagent-', '');
+        // Only the live stream stamps a display id; a card opened from history
+        // has none, and its id still names the task.
+        const taskId = taskIdFromAgentId(id);
         return {
-          id: cardId.replace('subagent-', ''),
-          name: sd?.displayId || t('chat.worker'),
+          id,
+          name: sd?.displayId || (taskId ? `Task-${taskId}` : t('chat.worker')),
           taskId: sd?.taskId || sd?.agentId || '',
           description: sd?.description || '',
           prompt: sd?.prompt || '',

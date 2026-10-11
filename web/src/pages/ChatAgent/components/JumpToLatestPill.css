@@ -21,7 +21,10 @@
   /* Theme-aware token (strong on the dark default, soft on light) — a hardcoded
      near-black shadow was invisible against the dark theme's near-black bg. */
   box-shadow: var(--shadow-card);
+  /* `bottom` follows the composer's height, which drops by a whole row when
+     the tray folds into it as this pill appears. */
   transition:
+    bottom 240ms cubic-bezier(0.16, 1, 0.3, 1),
     transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
     border-color 180ms ease;
   animation: jumpPillIn 220ms cubic-bezier(0.16, 1, 0.3, 1);

@@ -144,6 +144,24 @@ describe('useSubagentTabs — workflow-child transcript hydration', () => {
     });
   });
 
+  it('names a task opened from history by its id, which only the live stream stamps', async () => {
+    const { rendered } = harness();
+
+    act(() => {
+      rendered.result.current.handleOpenSubagentTask({
+        subagentId: 'task:k7Xm2p',
+        description: 'Pull AMD calls',
+        type: 'general-purpose',
+        status: 'completed',
+      } as never);
+    });
+
+    await waitFor(() => {
+      const row = rendered.result.current.sidebarAgentRows.find((r) => r.id === 'task:k7Xm2p');
+      expect(row?.name).toBe('Task-k7Xm2p');
+    });
+  });
+
   it('keeps a live streaming card active across a refresh', async () => {
     const { rendered } = harness();
 

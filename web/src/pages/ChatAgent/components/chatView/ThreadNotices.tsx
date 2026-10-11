@@ -21,7 +21,9 @@ interface SubagentsNotices {
 /* The rows a thread's composer settings raise above it: why the thread moved
    off a retired model, and the offers to make a model pick or a subagents flip
    the default. Every host renders them from here, so the chat view and the
-   market panels show the same rows. */
+   market panels show the same rows. The chat view takes the offers alone and
+   shows the retired line under its last reply, since its composer floats over
+   the transcript and a bare line of text there reads as part of it. */
 export function ThreadNotices({
   model,
   subagents,
@@ -33,7 +35,24 @@ export function ThreadNotices({
 }): React.ReactElement {
   return (
     <>
-      {model.retired && <RetiredModelNotice {...model.retired} />}
+      {/* Inset like the offer rows beside it. */}
+      {model.retired && <RetiredModelNotice {...model.retired} className="px-3" />}
+      <ThreadOffers model={model} subagents={subagents} mode={mode} />
+    </>
+  );
+}
+
+export function ThreadOffers({
+  model,
+  subagents,
+  mode,
+}: {
+  model: Omit<ModelNotices, 'retired'>;
+  subagents: SubagentsNotices;
+  mode: ComposerMode;
+}): React.ReactElement {
+  return (
+    <>
       {model.offer && <ThreadModelBanner {...model.offer} mode={mode} onDismiss={model.dismissOffer} />}
       {subagents.offer !== null && (
         // Keyed by the value, so an offer for the other side starts its own clock.

@@ -1,0 +1,477 @@
+import { useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref, type RefObject } from 'react';
+import { useTranslation } from 'react-i18next';
+import { ArrowUpRight, ChevronUp, Folder } from 'lucide-react';
+import { motion, type Easing } from '@/lib/framer';
+import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import PulseDot from '@/components/ui/pulse-dot';
+import { useLocale } from '@/hooks/useLocale';
+import { mediumTime } from '@/lib/format';
+import { DURATION } from '@/lib/motion';
+import { cn } from '@/lib/utils';
+import { SubagentStatusIcon } from '../taskStatusUi';
+import { DispatchStatusIndicator, LiveSpinner } from '../dispatchStatusUi';
+import { DispatchStatusProvider, useDispatchStatus } from '../../hooks/usePTCDispatchStatus';
+import { useOpenDispatchedThread, type DispatcherContext } from '../../hooks/useOpenDispatchedThread';
+import type { MarketWatchState } from '../../session/marketWatchEvents';
+import { sidebarAgentRowLabel, type SidebarAgentRow } from '../../session/subagents/subagentStatus';
+import type { ReportBackOwedThread } from '../../utils/api';
+import { SHAPE_RUN, SHAPE_STAGGER, liquidRunMs, type TrayFoldPhase } from './useTrayFold';
+import { trayChipCount, type TrayContents } from './useTrayContents';
+
+// Solid, not a translucent tint: the transcript scrolls under the tray. The
+// liquid and the dock are the chips' own fill, so a chip, its shape and the
+// drop it becomes read as one body.
+const TRAY_FILL = 'bg-(--color-bg-tag)';
+const CHIP = cn('inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs text-(--color-text-tertiary)', TRAY_FILL);
+const CHIP_BUTTON = cn(
+  CHIP,
+  'cursor-pointer outline-hidden transition-colors hover:bg-(--color-bg-elevated) hover:text-(--color-text-secondary) focus-visible:ring-2 focus-visible:ring-ring',
+  'data-[state=open]:bg-(--color-bg-elevated) data-[state=open]:text-(--color-text-primary)',
+);
+const ROW = 'flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left outline-hidden transition-colors hover:bg-(--color-bg-hover) focus-visible:bg-(--color-bg-hover)';
+
+interface ComposerTrayProps {
+  contents: TrayContents;
+  phase: TrayFoldPhase;
+  /** The tray's own row, which the fold measures. */
+  trayRef: RefObject<HTMLDivElement | null>;
+  /** The dock in the composer's toolbar that the chips fold into. */
+  dockRef: RefObject<HTMLElement | null>;
+  /** This thread, which an Analyst's thread opened from here links back to. */
+  from: DispatcherContext | null;
+  onOpenTask: (agentId: string) => void;
+  /** Opens the market watch's live prices. */
+  onOpenWatch: () => void;
+}
+
+/**
+ * The tray's chips, above the composer. Each chip that names more than one
+ * thing opens a list whose rows jump to it; a chip that names one jumps
+ * straight there. The tray stays while a turn runs: what it lists outlives the
+ * turn.
+ *
+ * While the reader is up in the history the chips fold into the composer, and
+ * they run there as liquid: their shapes flow together into one drop that
+ * falls into the composer's toolbar and becomes the dock, which pours them
+ * back out the same way.
+ */
+export function ComposerTray({
+  contents, phase, trayRef, dockRef, from, onOpenTask, onOpenWatch,
+}: ComposerTrayProps) {
+  const chipsRef = useRef<HTMLDivElement>(null);
+  const [run, setRun] = useState<LiquidRun | null>(null);
+  const liquid = phase === 'folding' || phase === 'unfolding';
+
+  // Measured once the phase is in the DOM and before it paints, so the first
+  // frame that drops the chips' fill already has their shapes under them.
+  useLayoutEffect(() => {
+    if (!liquid) return;
+    const geometry = measureRun(trayRef.current, chipsRef.current, dockRef.current);
+    setRun(geometry && { phase, ...geometry });
+  }, [liquid, phase, trayRef, dockRef]);
+
+  if (phase === 'folded') return null;
+  const { watch, tasks, analysts, reportBackLabel } = contents;
+  // Unfolding, the chips are back in full as the last shape lands, when the
+  // liquid under them goes.
+  const unfoldFadeDelay = liquidRunMs(trayChipCount(contents)) / 1000 - DURATION.quick;
+
+  return (
+    // Inset as the to-do tab is, so the chips line up with it over the composer.
+    <div ref={trayRef} className="relative px-4">
+      {liquid && run?.phase === phase && <LiquidLayer key={run.phase} run={run} />}
+      <motion.div
+        ref={chipsRef}
+        inert={liquid}
+        // Over the liquid, which starts and ends in their shapes and fill: they
+        // fade out from over it and back in onto it. Their own fills stay put,
+        // since a chip's color transition would blink one in late.
+        className={cn('flex flex-wrap items-center gap-1.5', liquid && 'relative z-30')}
+        initial={{ opacity: phase === 'unfolding' ? 0 : 1 }}
+        animate={{ opacity: phase === 'folding' ? 0 : 1 }}
+        transition={phase === 'unfolding'
+          ? { delay: unfoldFadeDelay, duration: DURATION.quick }
+          : { duration: DURATION.exit }}
+      >
+        {watch && <WatchChip watch={watch} onOpen={onOpenWatch} />}
+        {tasks && <TasksChip rows={tasks} onOpen={onOpenTask} />}
+        {analysts && <AnalystsChip threads={analysts} from={from} />}
+        {reportBackLabel && <StatusChip label={reportBackLabel} />}
+      </motion.div>
+    </div>
+  );
+}
+
+interface Box { x: number; y: number; w: number; h: number }
+
+interface LiquidRun {
+  phase: TrayFoldPhase;
+  /** The layer's box in the tray row; everything else is in the layer. */
+  box: Box;
+  chips: Box[];
+  dock: Box;
+}
+
+/** Room around every shape for the blur that joins them. */
+const BLUR_ROOM = 24;
+
+function measureRun(
+  row: HTMLElement | null,
+  chips: HTMLElement | null,
+  dock: HTMLElement | null,
+): Omit<LiquidRun, 'phase'> | null {
+  if (!row || !chips || !dock) return null;
+  const rects = [...chips.children].map((el) => el.getBoundingClientRect());
+  const dockRect = dock.getBoundingClientRect();
+  if (rects.length === 0 || dockRect.width === 0) return null;
+  const all = [...rects, dockRect];
+  const left = Math.min(...all.map((r) => r.left)) - BLUR_ROOM;
+  const top = Math.min(...all.map((r) => r.top)) - BLUR_ROOM;
+  const right = Math.max(...all.map((r) => r.right)) + BLUR_ROOM;
+  const bottom = Math.max(...all.map((r) => r.bottom)) + BLUR_ROOM;
+  const origin = row.getBoundingClientRect();
+  const local = (r: DOMRect): Box => ({ x: r.left - left, y: r.top - top, w: r.width, h: r.height });
+  return {
+    box: { x: left - origin.left, y: top - origin.top, w: right - left, h: bottom - top },
+    chips: rects.map(local),
+    dock: local(dockRect),
+  };
+}
+
+/**
+ * The chips' fills, drawn through a goo filter: a blur, then an alpha cut
+ * that turns the blur's soft edge back into a hard one. Two shapes whose blurs
+ * overlap cross the cut together, so they read as one body of liquid, joined
+ * by a neck that thins and snaps as they part. Above the composer, so the drop
+ * can fall into its toolbar: it lands in the dock's own shape, and the dock
+ * takes its place without a seam.
+ */
+function LiquidLayer({ run }: { run: LiquidRun }) {
+  // React's ids are word characters only (`_r_1_`), so one is valid in
+  // url(#…) as it is.
+  const filterId = `tray-goo-${useId()}`;
+  const { box, chips, dock, phase } = run;
+  // Nearest the dock first: the pills beside it reach it first and the rest
+  // run into them, so they merge one by one on the way, and split that way.
+  const dockX = dock.x + dock.w / 2;
+  const rank: number[] = [];
+  chips
+    .map((chip, i) => ({ i, distance: Math.abs(chip.x + chip.w / 2 - dockX) }))
+    .sort((a, b) => a.distance - b.distance)
+    .forEach(({ i }, place) => {
+      rank[i] = place;
+    });
+
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute z-20"
+      style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
+    >
+      <svg className="absolute h-0 w-0">
+        <filter id={filterId} colorInterpolationFilters="sRGB">
+          <feGaussianBlur stdDeviation="5" />
+          <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7" />
+        </filter>
+      </svg>
+      <div className="absolute inset-0" style={{ filter: `url(#${filterId})` }}>
+        {chips.map((chip, i) => (
+          <LiquidShape key={i} chip={chip} dock={dock} unfolding={phase === 'unfolding'} delay={rank[i] * SHAPE_STAGGER} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface ShapeFrame { cx: number; cy: number; w: number; h: number }
+
+/** The goo cut sits outside a shape's edge; this much in, it matches the dock. */
+const CUT_SPREAD = 1;
+
+function LiquidShape({ chip, dock, unfolding, delay }: { chip: Box; dock: Box; unfolding: boolean; delay: number }) {
+  const cx = chip.x + chip.w / 2;
+  const cy = chip.y + chip.h / 2;
+  const dx = dock.x + dock.w / 2;
+  const dy = dock.y + dock.h / 2;
+  const ballY = cy + chip.h * 0.4;
+  // The pill, narrowing as it runs toward the dock's column; a ball there,
+  // just under the tray; a drop drawn long by its fall; the dock.
+  const pill: ShapeFrame = { cx, cy, w: chip.w, h: chip.h };
+  const running: ShapeFrame = { cx: cx + (dx - cx) * 0.8, cy: cy + 1, w: chip.h + (chip.w - chip.h) * 0.25, h: chip.h };
+  const ball: ShapeFrame = { cx: dx, cy: ballY, w: chip.h * 0.92, h: chip.h * 0.92 };
+  const falling: ShapeFrame = { cx: dx, cy: (ballY + dy) / 2, w: chip.h * 0.7, h: chip.h * 1.2 };
+  const landed: ShapeFrame = { cx: dx, cy: dy, w: dock.w - CUT_SPREAD * 2, h: dock.h - CUT_SPREAD * 2 };
+  const frames = unfolding ? [landed, falling, ball, running, pill] : [pill, running, ball, falling, landed];
+  // Folding: slow off the tray, faster as it falls, and a splash as it lands.
+  // Unfolding: drawn up out of the dock, and the last stretch overshoots a
+  // little and settles.
+  const times = unfolding ? [0, 0.24, 0.48, 0.64, 1] : [0, 0.34, 0.5, 0.74, 1];
+  const ease: Easing[] = unfolding
+    ? ['easeIn', 'easeOut', 'easeIn', [0.3, 1.35, 0.5, 1]]
+    : ['easeInOut', 'easeOut', 'easeIn', [0.3, 1.4, 0.5, 1]];
+  const at = (frame: ShapeFrame) => ({ left: frame.cx - frame.w / 2, top: frame.cy - frame.h / 2, width: frame.w, height: frame.h });
+
+  return (
+    <motion.span
+      className={cn('absolute rounded-full', TRAY_FILL)}
+      initial={at(frames[0])}
+      animate={{
+        left: frames.map((f) => at(f).left),
+        top: frames.map((f) => at(f).top),
+        width: frames.map((f) => f.w),
+        height: frames.map((f) => f.h),
+      }}
+      transition={{ duration: SHAPE_RUN, times, ease, delay }}
+    />
+  );
+}
+
+interface TrayDockProps {
+  ref?: Ref<HTMLButtonElement>;
+  phase: TrayFoldPhase;
+  contents: TrayContents;
+  onOpen: () => void;
+}
+
+/**
+ * The folded tray, in the composer's toolbar: the drop the chips ran into,
+ * which pours them back out when clicked. In the layout but unseen while the
+ * liquid runs, so the drop has a place to land and to rise from; the swap is
+ * a single frame, since the drop ends in the dock's shape and fill.
+ */
+export function TrayDock({ ref, phase, contents, onOpen }: TrayDockProps) {
+  const { t } = useTranslation();
+  const label = t('chat.tray.show');
+  const folded = phase === 'folded';
+  // Running work: tasks, or a report on its way.
+  const working = !!(contents.tasks || contents.analysts || contents.reportBackLabel);
+  return (
+    <button
+      ref={ref}
+      type="button"
+      aria-label={label}
+      title={label}
+      inert={!folded}
+      onClick={onOpen}
+      className={cn(
+        phase === 'open' ? 'hidden' : 'inline-flex',
+        'h-6 flex-none items-center gap-1.5 rounded-full px-2 text-(--color-text-tertiary) outline-hidden transition-colors',
+        TRAY_FILL,
+        'hover:text-(--color-text-secondary) focus-visible:ring-2 focus-visible:ring-ring',
+        !folded && 'opacity-0',
+      )}
+    >
+      {/* What it holds surfaces once the drop has settled. */}
+      <span
+        className={cn(
+          'inline-flex items-center gap-1.5',
+          folded ? 'opacity-100 transition-opacity duration-150 motion-reduce:transition-none' : 'opacity-0',
+        )}
+      >
+        {contents.watch && <PulseDot />}
+        {working && <LiveSpinner />}
+        <ChevronUp aria-hidden="true" className="h-3 w-3 shrink-0" />
+      </span>
+    </button>
+  );
+}
+
+/**
+ * The tickers the agent is live-stamping, opening their live prices. The label
+ * is the polite live region, not the button: a live region should not be the
+ * control itself.
+ */
+function WatchChip({ watch, onOpen }: { watch: MarketWatchState; onOpen: () => void }) {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const title = watch.timestamp
+    ? t('chat.marketWatch.chipTitleUpdated', { time: mediumTime(watch.timestamp * 1000, locale) })
+    : t('chat.marketWatch.chipTitle');
+  return (
+    <button type="button" className={CHIP_BUTTON} title={title} aria-label={t('chat.marketWatch.chipAction')} onClick={onOpen}>
+      <PulseDot />
+      <span role="status" aria-live="polite">
+        {t('chat.marketWatch.watching', { symbols: watch.symbols.join(', ') })}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * A reconnect in progress, floated above the composer stack at the tray's
+ * inset rather than mounted in it: a reconnect that catches up takes it away
+ * again, and a row leaving the flow would drop everything under it.
+ */
+export function ReconnectingChip() {
+  const { t } = useTranslation();
+  // The gap is a translate: the stack's sibling gap zeroes a bottom margin.
+  return (
+    <div className={cn(CHIP, 'absolute bottom-full left-4 -translate-y-2')} role="status" aria-live="polite">
+      <LiveSpinner />
+      {t('chat.reconnecting', 'Reconnecting…')}
+    </div>
+  );
+}
+
+function StatusChip({ label }: { label: string }) {
+  return (
+    <div className={CHIP} role="status" aria-live="polite">
+      <LiveSpinner />
+      <span className="truncate">{label}</span>
+    </div>
+  );
+}
+
+/**
+ * A chip that opens a list, whose rows close it as they open what they name.
+ * It mounts only while there is more than one thing to list, so the open state
+ * goes with it: a list that shrinks to one while open does not spring back
+ * open when a second arrives.
+ */
+function ListChip({ label, heading, children }: { label: string; heading: string; children: ReactNode }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" className={cn(CHIP_BUTTON, 'group')}>
+          <LiveSpinner />
+          <span>{label}</span>
+          <ChevronUp aria-hidden="true" className="h-3 w-3 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+        </button>
+      </PopoverTrigger>
+      <TrayList heading={heading}>{children}</TrayList>
+    </Popover>
+  );
+}
+
+function TasksChip({ rows, onOpen }: { rows: SidebarAgentRow[]; onOpen: (agentId: string) => void }) {
+  const { t } = useTranslation();
+
+  // Running, but nothing the sidebar lists (a workflow's own steps, or rows
+  // not loaded yet).
+  if (rows.length === 0) return <StatusChip label={t('chat.backgroundTasksRunning')} />;
+
+  if (rows.length === 1) {
+    const label = sidebarAgentRowLabel(rows[0]);
+    return (
+      <button type="button" className={CHIP_BUTTON} title={label} onClick={() => onOpen(rows[0].id)}>
+        <LiveSpinner />
+        <span className="max-w-64 truncate">{label}</span>
+        <ArrowUpRight aria-hidden="true" className="h-3 w-3 shrink-0" />
+      </button>
+    );
+  }
+
+  return (
+    <ListChip label={t('chat.tray.backgroundTasks', { count: rows.length })} heading={t('chat.tray.backgroundTasksHeading')}>
+      {rows.map((row) => {
+        const label = sidebarAgentRowLabel(row);
+        return (
+          <li key={row.id}>
+            <PopoverClose asChild>
+              <button type="button" className={ROW} onClick={() => onOpen(row.id)}>
+                <span className="flex w-3.5 shrink-0 justify-center">
+                  <SubagentStatusIcon status={row.status} className="h-3 w-3" />
+                </span>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate text-[0.8125rem]" style={{ color: 'var(--color-text-primary)' }} title={label}>
+                    {label}
+                  </span>
+                  {label !== row.name && (
+                    <span className="truncate text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{row.name}</span>
+                  )}
+                </span>
+                <ArrowUpRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--color-text-quaternary)' }} />
+              </button>
+            </PopoverClose>
+          </li>
+        );
+      })}
+    </ListChip>
+  );
+}
+
+function AnalystsChip({ threads, from }: { threads: ReportBackOwedThread[]; from: DispatcherContext | null }) {
+  const { t } = useTranslation();
+  const openDispatchedThread = useOpenDispatchedThread(from);
+  const openThread = (thread: ReportBackOwedThread) => openDispatchedThread(thread.thread_id, thread.workspace_id);
+
+  if (threads.length === 1) {
+    const [thread] = threads;
+    const name = thread.workspace_name || thread.title;
+    return (
+      <button type="button" className={CHIP_BUTTON} title={thread.title ?? undefined} onClick={() => openThread(thread)}>
+        <LiveSpinner />
+        <span className="max-w-64 truncate">
+          {name ? t('agents.tray.waitingOn', { name }) : t('agents.tray.waitingOnAnalysts', { count: 1 })}
+        </span>
+        <ArrowUpRight aria-hidden="true" className="h-3 w-3 shrink-0" />
+      </button>
+    );
+  }
+
+  return (
+    <ListChip label={t('agents.tray.waitingOnAnalysts', { count: threads.length })} heading={t('agents.tray.analystsHeading')}>
+      {/* Status is read only while the list is open, through the same
+          batched read the hand-off cards use. */}
+      <DispatchStatusProvider>
+        {threads.map((thread) => (
+          <li key={thread.thread_id}>
+            <AnalystRow thread={thread} onOpen={() => openThread(thread)} />
+          </li>
+        ))}
+      </DispatchStatusProvider>
+    </ListChip>
+  );
+}
+
+function AnalystRow({ thread, onOpen }: { thread: ReportBackOwedThread; onOpen: () => void }) {
+  const { t } = useTranslation();
+  const { status, startedAt } = useDispatchStatus(thread.thread_id, true);
+  const title = thread.title || t('nav.untitledThread');
+  return (
+    <PopoverClose asChild>
+      <button type="button" className={ROW} onClick={onOpen}>
+        <span
+          aria-hidden="true"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+          style={{ background: 'var(--color-bg-hover)', color: 'var(--color-text-tertiary)' }}
+        >
+          <Folder className="h-3.5 w-3.5" />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate text-[0.8125rem]" style={{ color: 'var(--color-text-primary)' }} title={title}>
+            {title}
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+            {thread.workspace_name && (
+              <>
+                <span className="truncate">{thread.workspace_name}</span>
+                <span aria-hidden="true">·</span>
+              </>
+            )}
+            <DispatchStatusIndicator status={status} startedAt={startedAt} />
+          </span>
+        </span>
+        <ArrowUpRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--color-text-quaternary)' }} />
+      </button>
+    </PopoverClose>
+  );
+}
+
+function TrayList({ heading, children }: { heading: string; children: ReactNode }) {
+  return (
+    <PopoverContent
+      side="top"
+      align="start"
+      sideOffset={8}
+      aria-label={heading}
+      className="w-[22.5rem] max-w-[calc(100vw-2rem)] rounded-xl p-1.5 shadow-lg"
+      style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}
+    >
+      <div className="px-2.5 pt-1.5 pb-1 text-[0.6875rem] font-medium" style={{ color: 'var(--color-text-tertiary)' }}>
+        {heading}
+      </div>
+      <ul className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">{children}</ul>
+    </PopoverContent>
+  );
+}

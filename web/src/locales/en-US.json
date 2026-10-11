@@ -1536,7 +1536,6 @@
       "overflowLabel": "in context"
     },
     "running": "Running: {{tool}}",
-    "completedWithCalls": "Completed ({{count}} tool calls)",
     "completed": "Completed",
     "runningStatus": "Running",
     "initializing": "Initializing",
@@ -1626,6 +1625,24 @@
     "backgroundTasksRunning": "Background tasks are still running",
     "reportBackPending": "Waiting for PTC Agent to report back",
     "taskReportBackPending": "Waiting for subagent results to report back",
+    "tray": {
+      "backgroundTasks_one": "{{count}} background task",
+      "backgroundTasks_other": "{{count}} background tasks",
+      "backgroundTasksHeading": "Running in this thread",
+      "show": "Show what's running"
+    },
+    "provenance": {
+      "fromChiefOfStaff": "From Chief of Staff",
+      "fromFlash": "From Flash",
+      "automation": "Automation",
+      "automationNamed": "Automation · {{name}}",
+      "viaChannel": "Via {{platform}}",
+      "fromMainAgent": "From main agent",
+      "reportFrom": "Report from {{name}}",
+      "reportFromAnalyst": "Report from an Analyst",
+      "taskFinished": "{{id}} finished",
+      "taskFailed": "{{id}} failed"
+    },
     "taskCard": {
       "statusRunning": "Running",
       "statusPausing": "Finishing current step",
@@ -4422,6 +4439,12 @@
     "pickWhere": "Choose where the agent works",
     "backToChiefOfStaff": "Back to Chief of Staff",
     "reportBackPending": "Waiting for the Analyst to report back",
+    "tray": {
+      "waitingOn": "Waiting on {{name}}",
+      "waitingOnAnalysts_one": "Waiting on {{count}} Analyst",
+      "waitingOnAnalysts_other": "Waiting on {{count}} Analysts",
+      "analystsHeading": "Reporting back to this thread"
+    },
     "inWorkspace": "In {{workspace}}",
     "workspaceRequired": "Choose a workspace, or All workspaces.",
     "widgets": {

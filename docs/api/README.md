@@ -77,7 +77,7 @@ curl -N -X POST "http://localhost:8000/api/v1/threads/messages" \
   }'
 ```
 
-The first SSE frame is `event: metadata` carrying `{thread_id, run_id}` — the canonical per-turn identity. The HTTP response also sets `Content-Location: /api/v1/threads/{thread_id}/messages/stream?run_id={run_id}` so the client knows the exact reconnect URL for this turn.
+The first SSE frame is `event: metadata` carrying `{thread_id, run_id}`, the canonical per-turn identity. A report-back turn's frame also carries `report_source`: the dispatched analyst thread (`{kind: "analyst", thread_id, workspace_id?, workspace_name?}`) or the background task (`{kind: "task", task_id, display_id, description?, failed}`) it reports on. The HTTP response also sets `Content-Location: /api/v1/threads/{thread_id}/messages/stream?run_id={run_id}` so the client knows the exact reconnect URL for this turn.
 
 ### Step 3: Continue the Conversation
 
@@ -103,6 +103,8 @@ curl -N "http://localhost:8000/api/v1/threads/THREAD_ID/messages/stream?run_id=R
 ```bash
 curl "http://localhost:8000/api/v1/threads/THREAD_ID/status"
 ```
+
+Besides the run state, the response reports background work that will post into the thread: `pending_report_back`, `report_back_run_id`, `recent_report_back_run_ids`, and `owed_threads`, the dispatched threads a report is still owed by (`[{thread_id, workspace_id, workspace_name, title}]`, oldest first; `null` when unknown). `?fields=report_back` returns only those fields, skipping the checkpoint read.
 
 ---
 
@@ -169,7 +171,7 @@ User identification is handled via:
 ## SSE Event Types
 
 The streaming endpoints emit Server-Sent Events. Key event types:
-- `metadata` — first frame of every stream, carries `{thread_id, run_id}` for reconnect/steering
+- `metadata` — first frame of every stream, carries `{thread_id, run_id}` for reconnect/steering, plus `report_source` on a report-back turn
 - `message_chunk` / `reasoning_content` / `reasoning_signal` — text + reasoning streaming
 - `tool_calls` / `tool_call_chunks` / `tool_call_result` — tool execution
 - `artifact` — file operations and outputs

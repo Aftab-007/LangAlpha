@@ -17,6 +17,7 @@ export interface MessageActionSources {
   onToolCallDetailClick: Action<'onToolCallDetailClick'>;
   onOpenChart: Action<'onOpenChart'>;
   onOpenSubagentTask: Action<'onOpenSubagentTask'>;
+  onOpenDispatcher: Action<'onOpenDispatcher'>;
   onAnswerQuestion: Action<'onAnswerQuestion'>;
   onSkipQuestion: Action<'onSkipQuestion'>;
   onApproveCreateWorkspace: Action<'onApproveCreateWorkspace'>;
@@ -63,6 +64,7 @@ export function useMessageActionBundles(src: MessageActionSources): {
   const stableToolCallDetail = useStableHandler(src.onToolCallDetailClick);
   const stableOpenChart = useStableHandler(src.onOpenChart);
   const stableOpenSubagentTask = useStableHandler(src.onOpenSubagentTask);
+  const stableOpenDispatcher = useStableHandler(src.onOpenDispatcher);
   const stableAnswerQuestion = useStableHandler(src.onAnswerQuestion);
   const stableSkipQuestion = useStableHandler(src.onSkipQuestion);
   const stableApproveCreateWorkspace = useStableHandler(src.onApproveCreateWorkspace);
@@ -102,6 +104,7 @@ export function useMessageActionBundles(src: MessageActionSources): {
     onToolCallDetailClick: stableToolCallDetail,
     onOpenChart: stableOpenChart,
     onOpenSubagentTask: stableOpenSubagentTask,
+    onOpenDispatcher: stableOpenDispatcher,
     onAnswerQuestion: stableAnswerQuestion,
     onSkipQuestion: stableSkipQuestion,
     onApproveCreateWorkspace: stableApproveCreateWorkspace,
@@ -124,7 +127,7 @@ export function useMessageActionBundles(src: MessageActionSources): {
     onWidgetSendPrompt: stableSendMessage,
   }), [
     stableOpenFile, stableDownloadFile, stableDownloadKeyFor, stableRevealFiles, stableOpenSources, stableToolCallDetail,
-    stableOpenChart, stableOpenSubagentTask, stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
+    stableOpenChart, stableOpenSubagentTask, stableOpenDispatcher, stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
     stableRejectCreateWorkspace, stableApproveStartQuestion, stableRejectStartQuestion,
     stableApprovePTCAgent, stableRejectPTCAgent, stableApproveSecretaryAction,
     stableRejectSecretaryAction, stableResumeCreditPause, stableApproveToolCall, stableRejectToolCall,

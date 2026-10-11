@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import uuid
+from typing import Literal
 
 from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -175,6 +176,8 @@ async def dispatch(
     report_back: bool,
     tool_call_id: str,
     preapproved: bool = False,
+    *,
+    dispatcher: Literal["chief_of_staff", "flash"],
 ) -> Command:
     """Start ``question`` as a background turn of a workspace's own agent.
 
@@ -182,7 +185,8 @@ async def dispatch(
     with neither, a workspace is created for the question. The dispatcher's
     own workspace is refused: a turn there is the dispatcher again, not the
     agent of the workspace it meant. A ``preapproved`` hand-off, one the user
-    approved in advance, starts without asking.
+    approved in advance, starts without asking. ``dispatcher`` names the
+    calling agent on the thread's origin, for history's label only.
     """
     import aiohttp
 
@@ -404,6 +408,7 @@ async def dispatch(
                         "origin": {
                             "type": "agent",
                             "id": configurable.get("thread_id"),
+                            "agent": dispatcher,
                         },
                         # Ordering hint for finalize hooks: only a WIRED
                         # report-back binds the run to this flash thread's

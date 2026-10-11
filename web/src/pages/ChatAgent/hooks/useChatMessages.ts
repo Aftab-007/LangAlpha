@@ -458,7 +458,7 @@ export function useChatMessages(
   // `arm` is identity-stable (facade over a latest-impl ref), so callbacks that
   // dispatch through it can dep on it without churning per render — the whole
   // reportBackWatch object would change identity on awaitingReportBack flips.
-  const { awaitingReportBack, reportBackOwed, arm: armReportBackWatch } = reportBackWatch;
+  const { awaitingReportBack, reportBackOwed, owedThreads: reportBackOwedThreads, arm: armReportBackWatch } = reportBackWatch;
 
   // Batch back-to-back offload events into a single notification
   const offloadBatchRef = useRef<OffloadBatch>({ args: 0, reads: 0, timer: null });
@@ -1056,7 +1056,7 @@ export function useChatMessages(
         // reconcile ONLY when the thread isn't also active — poking would race
         // the reconnect branch's attach of status.run_id (double-attach); the
         // seeded id is picked up once that active stream ends.
-        reportBackWatch.arm(threadId, status.report_back_run_id, status.can_reconnect ? null : 'load');
+        reportBackWatch.arm(threadId, status.report_back_run_id, status.can_reconnect ? null : 'load', status.owed_threads);
       }
 
       // The report-back watch attaches its runs on a wake, which can land
@@ -2745,6 +2745,7 @@ export function useChatMessages(
     hasActiveSubagents,
     awaitingReportBack,
     reportBackOwed,
+    reportBackOwedThreads,
     workspaceStarting,
     isCompacting,
     setIsCompacting,

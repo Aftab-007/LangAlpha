@@ -36,8 +36,11 @@ _ERROR_TEXT_EVENTS = frozenset({"workflow_lifecycle", "model_fallback"})
 _PRIVATE_ARTIFACT_KEYS = (RECEIPT_KEY, "provenance")
 # The owner's own turn, and the resume that answers an approval names every
 # order it decided by the attempt's ledger id. A viewer cannot answer one and
-# must not read which of the owner's orders were approved.
-_PRIVATE_QUERY_METADATA_KEYS = frozenset({"workspace_id", "order_decisions"})
+# must not read which of the owner's orders were approved. A report-back's
+# source names the dispatched thread and its workspace.
+_PRIVATE_QUERY_METADATA_KEYS = frozenset(
+    {"workspace_id", "order_decisions", "report_source"}
+)
 # Keys naming the owner's account wherever they sit in an event: no share
 # renders them, and none is the viewer's to read.
 _OWNER_ID_KEYS = frozenset({"workspace_id", "user_id"})

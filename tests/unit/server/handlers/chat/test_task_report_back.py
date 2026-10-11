@@ -15,6 +15,7 @@ import pytest
 
 from src.server.services.report_back.subagent import (
     _build_notification_message,
+    _task_report,
     publish_cleared_wake_if_no_open_job,
     execute_task_report_back,
 )
@@ -39,9 +40,22 @@ def _payload(**over) -> dict:
     return base
 
 
+class TestTaskReport:
+    def test_a_failed_run_without_a_display_id_names_the_task(self):
+        report = _task_report(
+            _payload(display_id=None, description="", final_status="error")
+        )
+        assert report.model_dump(exclude_none=True) == {
+            "kind": "task",
+            "task_id": "abc123",
+            "display_id": "Task-abc123",
+            "failed": True,
+        }
+
+
 class TestBuildNotificationMessage:
     def test_directs_to_taskoutput(self):
-        msg = _build_notification_message(_payload())
+        msg = _build_notification_message(_task_report(_payload()), "research")
         assert 'TaskOutput(task_id="abc123")' in msg
         assert "Retrieve it" in msg
         assert "look things up" in msg
@@ -258,6 +272,21 @@ async def test_dispatch_proceeds_for_undelivered_run_on_settled_parent():
     post.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_a_payload_naming_no_task_still_announces_unlabelled():
+    """The label would name nothing, and the turn is owed all the same."""
+    post = AsyncMock(return_value=("dispatched", "rb-run-1"))
+    with _arb_env(
+        run_row={"status": "completed", "result_delivered_at": None},
+        latest_statuses=["completed"],
+        post=post,
+    ):
+        await execute_task_report_back(_arb_job(task_id=None, display_id=None))
+
+    post.assert_awaited_once()
+    assert "report_source" not in post.await_args.kwargs["body"]
+
+
 # ---------------------------------------------------------------------------
 # dispatch: the notification turn points at TaskOutput
 # ---------------------------------------------------------------------------
@@ -310,6 +339,14 @@ async def test_dispatch_posts_taskoutput_pointer_turn():
     assert len(posted) == 1
     content = posted[0]["messages"][0]["content"]
     assert 'TaskOutput(task_id="abc123")' in content
+    # The message is hidden, so history labels the turn from this.
+    assert posted[0]["report_source"] == {
+        "kind": "task",
+        "task_id": "abc123",
+        "display_id": "Task-abc123",
+        "description": "look things up",
+        "failed": False,
+    }
 
 
 @pytest.mark.asyncio

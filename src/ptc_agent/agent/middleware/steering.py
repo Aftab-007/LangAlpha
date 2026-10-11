@@ -118,6 +118,7 @@ class SteeringMiddleware(AgentMiddleware):
                         "content": q.get("content", ""),
                         "user_id": q.get("user_id"),
                         "timestamp": q.get("timestamp"),
+                        **({"platform": q["platform"]} if q.get("platform") else {}),
                     }
                     for q in parsed
                 ],

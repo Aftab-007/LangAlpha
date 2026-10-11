@@ -280,12 +280,33 @@ export interface ReorderItem {
 
 // --- Thread ---
 
-/** Who initiated a thread; absent origin (or empty metadata) = user-initiated. */
+/** An agent that hands turns to a workspace's thread. */
+export type DispatchingAgent = 'chief_of_staff' | 'flash';
+
+/**
+ * Who initiated a thread, or one turn of it (a query row's metadata carries
+ * its own); absent origin (or empty metadata) = user-initiated.
+ */
 export interface ThreadOrigin {
   type: 'agent' | 'automation' | 'system';
-  /** agent → dispatching flash thread id; automation → automation id */
+  /** agent → dispatching thread id; automation → automation id */
   id?: string;
+  /** automation → its name when the turn was sent. Display only. */
+  name?: string;
+  /** agent → which agent dispatched it. Absent on rows from before it was recorded. */
+  agent?: DispatchingAgent;
 }
+
+/**
+ * What a report-back turn reports on, stamped on its query row. The turn's own
+ * message is written for the model, so history labels the turn from this
+ * instead. Shares drop it. Mirrors `ReportSource` in src/server/models/chat.py.
+ */
+export type ReportSource =
+  /** A dispatched analyst's thread reporting back, and its workspace. */
+  | { kind: 'analyst'; thread_id: string; workspace_id?: string; workspace_name?: string }
+  /** A background subagent task in this thread, finished or failed. */
+  | { kind: 'task'; task_id: string; display_id: string; description?: string; failed: boolean };
 
 export interface ThreadMetadata {
   origin?: ThreadOrigin;

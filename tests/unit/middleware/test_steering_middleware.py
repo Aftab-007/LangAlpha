@@ -65,6 +65,25 @@ async def test_delivers_own_and_unstamped_but_leaves_foreign_queued():
 
 
 @pytest.mark.asyncio
+async def test_delivered_entry_keeps_its_chat_app():
+    """The label reads the platform off the delivered entry; the model reads
+    only the content."""
+    cache = FakeCache()
+    cache.client.lists[_KEY] = [
+        json.dumps({"content": "from the phone", "run_id": "run-A", "platform": "telegram"}),
+        _payload("from the web", "run-A"),
+    ]
+
+    result = await _run(cache, _config("run-A"))
+
+    (msg,) = result["messages"]
+    assert "telegram" not in msg.content
+    phone, web = msg.additional_kwargs["steering_delivered"]["messages"]
+    assert phone["platform"] == "telegram"
+    assert "platform" not in web
+
+
+@pytest.mark.asyncio
 async def test_all_foreign_queue_is_left_intact():
     cache = FakeCache()
     queued = [_payload("x", "run-B"), _payload("y", "run-C")]

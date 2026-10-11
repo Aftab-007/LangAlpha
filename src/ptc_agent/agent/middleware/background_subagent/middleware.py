@@ -131,6 +131,7 @@ class BackgroundSubagentMiddleware(AgentMiddleware):
                     "content": description,
                     "expected_task_run_id": task.task_run_id,
                     "input_id": input_id,
+                    "sender": "agent",
                 }
             )
             await cache.client.rpush(key, payload)

@@ -124,6 +124,13 @@ export interface ChatInputProps {
   threadModels?: string[];
   dropdownDirection?: 'up' | 'down';
   minRows?: number;
+  /**
+   * A status item the host shows at the end of the left tools (the chat view
+   * docks its folded tray here). Outside the fold budget on purpose: a host's
+   * status comes and goes on its own clock, and the toggles must not hop into
+   * the overflow menu with it, so the model label gives up the room instead.
+   */
+  toolbarStatus?: React.ReactNode;
 }
 
 /* --- MAIN COMPONENT --- */
@@ -173,6 +180,7 @@ function ChatInput({
   dropdownDirection = 'up',
   // Minimum visible rows for the textarea (default 1 = compact; pass 2 for roomier non-ChatView callsites)
   minRows = 1,
+  toolbarStatus = null,
   ref,
 }: ChatInputProps & { ref?: React.Ref<ChatInputHandle> }) {
   const { t } = useTranslation();
@@ -912,6 +920,8 @@ function ChatInput({
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
+
+              {toolbarStatus}
 
               {/* Hidden measure row — the SAME components rendered geometry-only
                   (no handlers, menus, or aria state), so the fold budget can

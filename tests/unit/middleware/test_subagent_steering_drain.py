@@ -3,9 +3,9 @@
 The user's instruction (the steer POST) and the main agent's Task update push
 into the same run-scoped queue, and the subagent reads everything drained in
 one step as a single newline-joined instruction. The delivery also names each
-entry it took, in the captured event and in the stamp checkpoint replay
-re-emits, so a client settles its own instruction by id however the text was
-joined.
+entry it took, and who queued it, in the captured event and in the stamp
+checkpoint replay re-emits, so a client settles its own instruction by id
+however the text was joined, and labels each by its sender.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from ptc_agent.agent.middleware.background_subagent.middleware import (
     current_background_tool_call_id,
 )
 from ptc_agent.agent.middleware.background_subagent.redis_stream import (
+    parse_steering_payload,
     steering_queue_key,
 )
 from ptc_agent.agent.middleware.background_subagent.steering import (
@@ -44,10 +45,11 @@ class _Registry:
         self.events.append(event)
 
 
-def _entry(content: str, input_id: str) -> str:
-    return json.dumps(
-        {"content": content, "expected_task_run_id": _RUN, "input_id": input_id}
-    )
+def _entry(content: str, input_id: str, sender: str | None = None) -> str:
+    payload = {"content": content, "expected_task_run_id": _RUN, "input_id": input_id}
+    if sender:
+        payload["sender"] = sender
+    return json.dumps(payload)
 
 
 async def _drain(cache: FakeCache, registry: _Registry):
@@ -62,8 +64,8 @@ async def _drain(cache: FakeCache, registry: _Registry):
 
 
 ENTRIES = [
-    {"input_id": "u-1", "content": "Focus on margins"},
-    {"input_id": "m-1", "content": "Also cover 2024 guidance"},
+    {"input_id": "u-1", "content": "Focus on margins", "sender": "user"},
+    {"input_id": "m-1", "content": "Also cover 2024 guidance", "sender": "agent"},
 ]
 
 
@@ -72,7 +74,7 @@ def mixed_queue() -> FakeCache:
     """The user's instruction, then the main agent's follow-up, same run."""
     cache = FakeCache()
     cache.client.lists[steering_queue_key(_CALL, _RUN)] = [
-        _entry(e["content"], e["input_id"]) for e in ENTRIES
+        _entry(e["content"], e["input_id"], e["sender"]) for e in ENTRIES
     ]
     return cache
 
@@ -106,3 +108,31 @@ async def test_checkpoint_replay_carries_the_entries(mixed_queue):
     assert item["event"] == "steering_delivered"
     assert item["data"]["agent"] == "task:k7Xm2p"
     assert item["data"]["entries"] == ENTRIES
+
+
+@pytest.mark.asyncio
+async def test_an_entry_queued_without_a_sender_names_none():
+    """A payload queued before senders were stamped still delivers."""
+    cache = FakeCache()
+    cache.client.lists[steering_queue_key(_CALL, _RUN)] = [_entry("Go on", "x-1")]
+
+    result = await _drain(cache, _Registry())
+
+    (msg,) = result["messages"]
+    assert msg.additional_kwargs["steering_delivered"]["entries"] == [
+        {"input_id": "x-1", "content": "Go on"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw", "sender"),
+    [
+        (json.dumps({"content": "a", "sender": "user"}), "user"),
+        (json.dumps({"content": "a", "sender": "agent"}), "agent"),
+        (json.dumps({"content": "a", "sender": "someone"}), None),
+        (json.dumps("a legacy bare string"), None),
+    ],
+    ids=["user", "agent", "unknown", "legacy string"],
+)
+def test_parse_keeps_only_a_known_sender(raw, sender):
+    assert parse_steering_payload(raw)["sender"] == sender

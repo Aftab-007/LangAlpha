@@ -367,6 +367,22 @@ async def test_the_summary_turn_is_told_how_the_run_ended(final_status, says, ne
 
 
 @pytest.mark.asyncio
+async def test_the_body_names_the_reporting_thread_for_history():
+    """The summary turn's message is hidden, so history labels the turn from
+    ``report_source``; the message itself keeps naming the workspace."""
+    with patch.object(executor, "_workspace_name", AsyncMock(return_value="Chips")):
+        _, session = await _run([_FakeResp(200, json_data={"run_id": "rid-1"})])
+    body = session.last_json
+    assert body["report_source"] == {
+        "kind": "analyst",
+        "thread_id": "ptc-1",
+        "workspace_id": "ws-ptc",
+        "workspace_name": "Chips",
+    }
+    assert 'in the "Chips" workspace' in body["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_ending_raises_instead_of_reading_as_completed():
     """Raising nacks the job, and a dead one's compensation tears the pair
     down: better than a summary telling the user the work completed."""

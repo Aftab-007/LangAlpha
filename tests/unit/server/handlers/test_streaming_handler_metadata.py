@@ -84,6 +84,16 @@ class TestMetadataFrameFirst:
         assert data == {"thread_id": "t-1", "run_id": "r-abc"}
 
     @pytest.mark.asyncio
+    async def test_report_source_rides_the_metadata_frame(self):
+        """A report-back's stream names its report up front: a client that
+        attaches live gets no user message to draw the report's row from."""
+        source = {"kind": "task", "task_id": "k3", "display_id": "Task-k3", "failed": False}
+        handler = RunSSEProducer(thread_id="t-1", run_id="r-abc", report_source=source)
+        event_name, data = _parse_sse((await _collect_stream(handler))[0])
+        assert event_name == "metadata"
+        assert data == {"thread_id": "t-1", "run_id": "r-abc", "report_source": source}
+
+    @pytest.mark.asyncio
     async def test_metadata_frame_is_not_persisted(self):
         """Persisted SSE log must NOT include the metadata frame — it's a
         per-connection identity hand-shake. The accumulator owns persistence,

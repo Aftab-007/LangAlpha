@@ -43,27 +43,29 @@ export const MESSAGE_DELIVERY_TYPE = 'message_delivery';
 const STATUSES = new Set<DeliveryStatus>(['sent', 'partial', 'failed', 'unknown']);
 const FILE_STATUSES = new Set(['sent', 'linked', 'failed']);
 
-const APP_NAMES: Record<string, string> = {
-  slack: 'Slack',
-  discord: 'Discord',
-  telegram: 'Telegram',
-  imessage: 'iMessage',
-  feishu: 'Feishu',
-};
+// Maps, not object literals: a platform reaches these from a request field
+// that only matches a pattern, and `constructor` would find Object's own.
+const APP_NAMES = new Map([
+  ['slack', 'Slack'],
+  ['discord', 'Discord'],
+  ['telegram', 'Telegram'],
+  ['imessage', 'iMessage'],
+  ['feishu', 'Feishu'],
+]);
 
 /** The site whose favicon stands for each app. */
-const APP_DOMAINS: Record<string, string> = {
-  slack: 'slack.com',
-  discord: 'discord.com',
-  telegram: 'telegram.org',
-  imessage: 'apple.com',
-  feishu: 'feishu.cn',
-};
+const APP_DOMAINS = new Map([
+  ['slack', 'slack.com'],
+  ['discord', 'discord.com'],
+  ['telegram', 'telegram.org'],
+  ['imessage', 'apple.com'],
+  ['feishu', 'feishu.cn'],
+]);
 
 /** The domain an app's favicon comes from; none for an app this build does not list. */
 export function messagingAppDomain(platform: string | null | undefined): string | null {
   const key = platform?.trim().toLowerCase();
-  return (key && APP_DOMAINS[key]) || null;
+  return (key && APP_DOMAINS.get(key)) || null;
 }
 
 /** The app an address belongs to: `slack:T1/C2` → `slack`, bare `imessage` → `imessage`. */
@@ -89,7 +91,7 @@ export function isDmAddress(address: unknown): boolean {
 export function messagingAppName(platform: string | null | undefined): string | null {
   const key = platform?.trim().toLowerCase();
   if (!key) return null;
-  return APP_NAMES[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
+  return APP_NAMES.get(key) ?? key.charAt(0).toUpperCase() + key.slice(1);
 }
 
 function str(value: unknown): string | null {

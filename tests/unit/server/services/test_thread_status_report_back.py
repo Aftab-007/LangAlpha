@@ -18,6 +18,9 @@ from src.server.services import thread_status
 from src.server.services.report_back.flash import keys, status
 from tests.unit.server.handlers.chat.redis_fakes import FakeCache as _FakeCache
 
+# The thread owner, which scopes the owed threads' labels.
+OWNER = "user-1"
+
 
 def _seed(cache: _FakeCache, flash: str, members: list[str], run_pointers: dict[str, str]) -> None:
     cache.client.sets[keys.flash_watch_key(flash)] = set(members)
@@ -140,6 +143,7 @@ async def test_status_no_pending_report_back():
     assert resp["pending_report_back"] is False
     assert resp["report_back_run_id"] is None
     assert resp["recent_report_back_run_ids"] == []
+    assert resp["owed_threads"] == []
 
 
 class _BoomClient:
@@ -162,12 +166,13 @@ async def test_report_back_status_redis_error_returns_unknown_not_false():
     with patch(
         "src.utils.cache.redis_cache.get_cache_client", return_value=_BoomCache()
     ):
-        resp = await status.read_report_back_status("flash-err")
+        resp = await status.read_report_back_status("flash-err", OWNER)
 
     assert resp["pending_report_back"] is None
     assert resp["pending_report_back"] is not False
     assert resp["report_back_run_id"] is None
     assert resp["recent_report_back_run_ids"] == []  # never omitted, [] on failure
+    assert resp["owed_threads"] is None
 
 
 @pytest.mark.asyncio
@@ -176,7 +181,7 @@ async def test_report_back_status_success_returns_real_bool():
     # Drained: empty watch SET + queue -> explicit False.
     empty = _FakeCache()
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=empty):
-        drained = await status.read_report_back_status("flash-empty")
+        drained = await status.read_report_back_status("flash-empty", OWNER)
     assert drained["pending_report_back"] is False
     assert drained["report_back_run_id"] is None
 
@@ -187,7 +192,7 @@ async def test_report_back_status_success_returns_real_bool():
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=pending),
         _no_open_jobs(),
     ):
-        live = await status.read_report_back_status("flash-pending")
+        live = await status.read_report_back_status("flash-pending", OWNER)
     assert live["pending_report_back"] is True
     assert live["report_back_run_id"] == "rb-1"
 
@@ -210,7 +215,7 @@ async def test_status_excludes_and_reaps_originless_members():
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
         _no_open_jobs(),
     ):
-        resp = await status.read_report_back_status(flash)
+        resp = await status.read_report_back_status(flash, OWNER)
 
     assert resp["pending_report_back"] is True
     assert resp["report_back_run_id"] == "rb-live"
@@ -226,7 +231,7 @@ async def test_status_with_only_orphans_reads_drained():
     del cache.client.kv[keys.ptc_origin_key("ptc-orphan")]
 
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
-        resp = await status.read_report_back_status(flash)
+        resp = await status.read_report_back_status(flash, OWNER)
 
     assert resp["pending_report_back"] is False
     assert resp["report_back_run_id"] is None
@@ -248,7 +253,7 @@ async def test_status_orphan_reap_failure_still_filters_the_derivation():
     cache.client.eval = _boom
 
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
-        resp = await status.read_report_back_status(flash)
+        resp = await status.read_report_back_status(flash, OWNER)
 
     assert resp["pending_report_back"] is False  # filtered, not None/unknown
     # The unreaped member stays for a later reap attempt.
@@ -424,6 +429,18 @@ async def test_status_totals_leave_out_only_the_run_it_names_live(row, live_run_
     assert resp["token_totals"] == {"input_tokens": 900, "output_tokens": 40}
 
 
+LABELS = "src.server.database.conversation.threads_read.get_thread_labels"
+
+
+def _label(thread_id: str) -> dict:
+    return {
+        "thread_id": thread_id,
+        "workspace_id": f"ws-{thread_id}",
+        "workspace_name": f"Workspace {thread_id}",
+        "title": f"Title {thread_id}",
+    }
+
+
 def _task_slice(**over) -> dict:
     return {
         "thread_id": "cos-1",
@@ -453,12 +470,14 @@ async def test_a_ptc_thread_is_pending_on_an_analyst_hand_off():
             "src.server.database.runs.lifecycle.get_run",
             AsyncMock(return_value={"status": "in_progress"}),
         ),
+        patch(LABELS, AsyncMock(return_value=[_label("analyst-1")])),
     ):
-        resp = await status.read_report_back_slice("cos-1", "ptc")
+        resp = await status.read_report_back_slice("cos-1", "ptc", OWNER)
 
     assert resp["pending_report_back"] is True
     assert resp["report_back_run_id"] == "rb-1"
     assert resp["active_tasks"] == ["task-1"]
+    assert resp["owed_threads"] == [_label("analyst-1")]
 
 
 @pytest.mark.asyncio
@@ -478,7 +497,7 @@ async def test_a_ptc_thread_lists_both_registries_drained_runs_in_thread_order()
             AsyncMock(return_value=seqs),
         ),
     ):
-        resp = await status.read_report_back_slice("cos-1", "ptc")
+        resp = await status.read_report_back_slice("cos-1", "ptc", OWNER)
 
     assert resp["pending_report_back"] is False
     assert resp["recent_report_back_run_ids"] == ["hand-off-2", "task-1", "hand-off-1"]
@@ -513,7 +532,7 @@ async def _read(cache: _FakeCache, flash: str, run_statuses, open_jobs=()):
             AsyncMock(return_value=list(open_jobs)),
         ),
     ):
-        return await status.read_report_back_status(flash)
+        return await status.read_report_back_status(flash, OWNER)
 
 
 @pytest.mark.asyncio
@@ -543,17 +562,22 @@ async def test_a_report_queued_behind_the_ended_summary_keeps_the_member_owed():
     report is on its way."""
     cache = _FakeCache()
     _seed_summary(cache, "flash-1", "ptc-1", origin_gen="g1", ptr_gen="g1")
+    labels = AsyncMock(return_value=[_label("ptc-1")])
 
-    resp = await _read(
-        cache,
-        "flash-1",
-        AsyncMock(return_value={"rb-1": "completed"}),
-        open_jobs=[_job("ptc-1", "rb-1"), _job("ptc-1")],
-    )
+    with patch(LABELS, labels):
+        resp = await _read(
+            cache,
+            "flash-1",
+            AsyncMock(return_value={"rb-1": "completed"}),
+            open_jobs=[_job("ptc-1", "rb-1"), _job("ptc-1")],
+        )
 
     assert resp["pending_report_back"] is True
     assert resp["report_back_run_id"] is None
     assert resp["recent_report_back_run_ids"] == ["rb-1"]
+    # The member settled, but the queued job still names its thread.
+    assert resp["owed_threads"] == [_label("ptc-1")]
+    labels.assert_awaited_once_with(["ptc-1"], OWNER)
 
 
 @pytest.mark.asyncio
@@ -589,3 +613,75 @@ async def test_a_summary_not_known_to_have_ended_keeps_the_member_owed(run_statu
     assert resp["pending_report_back"] is True
     assert resp["report_back_run_id"] == "rb-1"
     assert resp["recent_report_back_run_ids"] == []
+
+
+# --- owed_threads: the analysts a thread is still waiting on -----------------
+
+
+def _seed_two(cache: _FakeCache, flash: str) -> None:
+    """``ptc-owed``'s summary is still running; ``ptc-settled``'s has ended
+    for its current dispatch."""
+    cache.client.sets[keys.flash_watch_key(flash)] = {"ptc-owed", "ptc-settled"}
+    for ptc, run_id in (("ptc-owed", "rb-owed"), ("ptc-settled", "rb-settled")):
+        cache.client.kv[keys.ptc_origin_key(ptc)] = json.dumps(
+            {"flash_thread_id": flash, "report_back": True, "dispatch_gen": "g1"}
+        )
+        cache.client.kv[keys.flash_rb_run_key(flash, ptc)] = json.dumps(
+            {"run_id": run_id, "dispatch_gen": "g1"}
+        )
+
+
+_TWO_STATUSES = {"rb-owed": "in_progress", "rb-settled": "completed"}
+
+
+@pytest.mark.asyncio
+async def test_owed_threads_lists_only_unsettled_members_with_labels():
+    cache = _FakeCache()
+    _seed_two(cache, "flash-1")
+    labels = AsyncMock(return_value=[_label("ptc-owed")])
+
+    with patch(LABELS, labels):
+        resp = await _read(cache, "flash-1", AsyncMock(return_value=_TWO_STATUSES))
+
+    assert resp["pending_report_back"] is True
+    assert resp["owed_threads"] == [_label("ptc-owed")]
+    labels.assert_awaited_once_with(["ptc-owed"], OWNER)
+
+
+@pytest.mark.asyncio
+async def test_owed_threads_label_failure_is_unknown_but_pendingness_holds():
+    cache = _FakeCache()
+    _seed_two(cache, "flash-1")
+
+    with patch(LABELS, AsyncMock(side_effect=RuntimeError("db down"))):
+        resp = await _read(cache, "flash-1", AsyncMock(return_value=_TWO_STATUSES))
+
+    assert resp["owed_threads"] is None
+    assert resp["pending_report_back"] is True
+    assert resp["report_back_run_id"] == "rb-owed"
+
+
+@pytest.mark.asyncio
+async def test_the_watch_snapshot_scopes_labels_to_the_threads_owner():
+    """The snapshot holds neither the kind nor the owner, so one thread read
+    yields both."""
+    cache = _FakeCache()
+    _seed_two(cache, "flash-1")
+    meta = AsyncMock(return_value={"user_id": OWNER, "msg_type": "flash"})
+    labels = AsyncMock(return_value=[_label("ptc-owed")])
+
+    with (
+        patch("src.server.database.conversation.get_thread_auth_meta", meta),
+        patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
+        patch(
+            "src.server.database.runs.lifecycle.get_run_statuses",
+            AsyncMock(return_value=_TWO_STATUSES),
+        ),
+        _no_open_jobs(),
+        patch(LABELS, labels),
+    ):
+        resp = await status.read_report_back_slice("flash-1")
+
+    assert resp["owed_threads"] == [_label("ptc-owed")]
+    meta.assert_awaited_once_with("flash-1")
+    labels.assert_awaited_once_with(["ptc-owed"], OWNER)

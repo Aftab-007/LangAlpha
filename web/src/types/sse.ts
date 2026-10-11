@@ -248,6 +248,8 @@ export interface SteeringDeliveredEvent extends BaseSSEEvent {
   messages: Array<{
     content: string;
     timestamp?: number;
+    /** The surface it was sent from, as on a turn's query. */
+    platform?: string;
   }>;
 }
 

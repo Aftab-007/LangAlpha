@@ -25,6 +25,7 @@ import {
   getReportBackStatus,
   getWorkflowStatus,
   watchThread,
+  type ReportBackOwedThread,
   type ReportBackStatusResponse,
   type WorkflowStatusResponse,
 } from '../utils/api';
@@ -152,14 +153,25 @@ export interface ReportBackWatch {
    */
   reportBackOwed: boolean;
   /**
+   * The dispatched threads the tip waits on, oldest first, while the tip is
+   * up and the latest read named any; null otherwise. A read can name none
+   * while a report is owed: a PTC thread's slice names the analysts its
+   * hand-offs went to but not its own subagents, and a thread in a deleted
+   * workspace or another owner's has no label.
+   */
+  owedThreads: ReportBackOwedThread[] | null;
+  /**
    * High-level arm: mark awaiting, open/keep the keyed watch, seed the
    * backend-named run, and optionally poke a catch-up reconcile. Seeds AFTER
    * arming, since a fresh arm tears down + rebuilds and would drop the seed.
+   * `owedThreads` is what a full /status in hand named: the watch's own reads
+   * wait out a live turn, which would leave the tip unnamed until it ends.
    */
   arm: (
     flashThreadId: string | null | undefined,
     reportBackRunId: string | null | undefined,
     pokeSource: string | null,
+    owedThreads?: ReportBackOwedThread[] | null,
   ) => void;
   /**
    * Record run ids whose turns are already on screen (a fresh history replay
@@ -218,10 +230,22 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
   // source of truth.
   const [awaitingReportBack, setAwaitingReportBackState] = useState(false);
   const [reportBackOwed, setReportBackOwed] = useState(false);
+  const [owedThreads, setOwedThreads] = useState<ReportBackOwedThread[] | null>(null);
   const setAwaiting = useCallback((v: boolean) => {
     awaitingReportBackRef.current = v;
     setAwaitingReportBackState(v);
-    if (!v) setReportBackOwed(false);
+    if (!v) {
+      setReportBackOwed(false);
+      setOwedThreads(null);
+    }
+  }, []);
+  // Every read sends a new array; keep the old one while nothing in it changed
+  // so the composer does not re-render on each wake. A read that could not name
+  // them (null) keeps the last names too: unknown is not none, and only an
+  // empty list clears them.
+  const rememberOwedThreads = useCallback((next: ReportBackOwedThread[] | null | undefined) => {
+    if (next == null) return;
+    setOwedThreads((prev) => (sameOwedThreads(prev, next) ? prev : next));
   }, []);
   const reportBackWatchAbortRef = useRef<AbortController | null>(null);
   // The active watch's reconcile fn, exposed so gap events outside the watch
@@ -345,8 +369,10 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
       if (!runId || runId === currentRunIdRef.current) return false;
       clearIdleConfirm(); // attaching IS evidence of life
       // This run is the report arriving. Whether another is still owed is the
-      // next read's to say, so the tip stays down when the stream ends.
+      // next read's to say, so the tip stays down when the stream ends. So are
+      // the names: the list held now still names the Analyst reporting.
       setReportBackOwed(false);
+      setOwedThreads(null);
       // Record BEFORE streaming so a racing reconcile / recents read can't
       // re-enqueue this run; un-recorded below if the stream delivered nothing.
       attachedRunIdsRef.current.add(runId);
@@ -444,6 +470,7 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
         if (threadIdRef.current !== tid || isStreamingRef.current) return;
       }
 
+      rememberOwedThreads(status.owed_threads);
       enqueueReportBackRun(status.report_back_run_id);
       // Recent-runs catch-up (drained-run discovery): once a report-back turn
       // drains, its live pointer is deleted server-side — report_back_run_id can
@@ -629,10 +656,13 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
     flashThreadId: string | null | undefined,
     reportBackRunId: string | null | undefined,
     pokeSource: string | null,
+    owedThreads?: ReportBackOwedThread[] | null,
     owed = true,
   ) => {
     setAwaiting(true);
     setReportBackOwed(owed);
+    // Left alone by an arm with no read in hand: the watch's next read names them.
+    if (owedThreads !== undefined) rememberOwedThreads(owedThreads);
     startReportBackWatch(flashThreadId);
     // Seed AFTER arming: a fresh arm tears down + rebuilds and would drop it.
     enqueueReportBackRun(reportBackRunId);
@@ -696,7 +726,7 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
       status.run_id !== currentRunIdRef.current &&
       !attachedRunIdsRef.current.has(status.run_id)
     ) {
-      arm(threadId, status.run_id, 'activate');
+      arm(threadId, status.run_id, 'activate', status.owed_threads);
       // A turn counter /status could not read hides that turn just the same.
       const rendered = lastRenderedTurnIndexRef.current;
       return rendered === null || status.latest_turn_index === rendered + 1;
@@ -740,7 +770,7 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
     // Without this, a report-back finished while hidden would never stream —
     // the hidden view holds no watch to hear it.
     if (shouldArmForStatus(status)) {
-      arm(threadId, status.report_back_run_id ?? null, 'activate');
+      arm(threadId, status.report_back_run_id ?? null, 'activate', status.owed_threads);
       return settled;
     }
     // Everything drained while hidden (explicit idle) but the recents list names
@@ -753,7 +783,7 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
         (rid) => !attachedRunIdsRef.current.has(rid) && rid !== currentRunIdRef.current,
       )
     ) {
-      arm(threadId, status.report_back_run_id, 'activate', false);
+      arm(threadId, status.report_back_run_id, 'activate', status.owed_threads, false);
     }
     return settled;
   };
@@ -784,7 +814,8 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
       flashThreadId: string | null | undefined,
       reportBackRunId: string | null | undefined,
       pokeSource: string | null,
-    ) => implRef.current.arm(flashThreadId, reportBackRunId, pokeSource),
+      owedThreads?: ReportBackOwedThread[] | null,
+    ) => implRef.current.arm(flashThreadId, reportBackRunId, pokeSource, owedThreads),
     [],
   );
   const markRunsRenderedStable = useCallback(
@@ -794,15 +825,30 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
   const onStreamEndStable = useCallback(() => implRef.current.onStreamEnd(), []);
   const reconnectIfStaleRunStable = useCallback(() => implRef.current.reconnectIfStaleRun(), []);
 
+  // The names show only under the tip, which also moves without a read that
+  // names anyone: an attach drops it, a failed read raises it.
+  const tipThreads = reportBackOwed && owedThreads?.length ? owedThreads : null;
+
   return useMemo(
     () => ({
       awaitingReportBack,
       reportBackOwed,
+      owedThreads: tipThreads,
       arm: armStable,
       markRunsRendered: markRunsRenderedStable,
       onStreamEnd: onStreamEndStable,
       reconnectIfStaleRun: reconnectIfStaleRunStable,
     }),
-    [awaitingReportBack, reportBackOwed, armStable, markRunsRenderedStable, onStreamEndStable, reconnectIfStaleRunStable],
+    [awaitingReportBack, reportBackOwed, tipThreads, armStable, markRunsRenderedStable, onStreamEndStable, reconnectIfStaleRunStable],
   );
+}
+
+function sameOwedThreads(a: ReportBackOwedThread[] | null, b: ReportBackOwedThread[] | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((x, i) => {
+    const y = b[i];
+    return x.thread_id === y.thread_id && x.workspace_id === y.workspace_id
+      && x.workspace_name === y.workspace_name && x.title === y.title;
+  });
 }

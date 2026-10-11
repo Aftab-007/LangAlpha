@@ -773,13 +773,40 @@ async def test_replay_data_excludes_subagent_usage_rows(
             "latest_checkpoint_id": "cp-1",
         },
     ]
-    mock_cursor.fetchall.side_effect = [[], [], [], [], []]
+    mock_cursor.fetchall.return_value = []
 
     await get_replay_thread_data(thread_id)
 
-    usage_sql = mock_cursor.execute.call_args_list[4].args[0]
+    (usage_sql,) = [
+        c.args[0]
+        for c in mock_cursor.execute.call_args_list
+        if "FROM conversation_usages" in c.args[0]
+    ]
     assert "SELECT conversation_response_id, msg_type" in usage_sql
     assert "msg_type <> 'task'" in usage_sql
+
+
+@pytest.mark.asyncio
+async def test_replay_data_reads_running_slots_before_settled_rows(
+    mock_db_connection, mock_cursor
+):
+    """Each read is its own snapshot, so a run settling between them must land
+    in the later one: the in_progress read goes first."""
+    from src.server.database.conversation import get_replay_thread_data
+
+    thread_id = str(uuid.uuid4())
+    mock_cursor.fetchone.side_effect = [
+        {"user_id": "user-1"},
+        {"conversation_thread_id": thread_id, "latest_checkpoint_id": "cp-1"},
+    ]
+    mock_cursor.fetchall.return_value = []
+
+    await get_replay_thread_data(thread_id)
+
+    sql = [c.args[0] for c in mock_cursor.execute.call_args_list]
+    running = next(i for i, s in enumerate(sql) if "status = 'in_progress'" in s)
+    settled = next(i for i, s in enumerate(sql) if "status <> 'in_progress'" in s)
+    assert running < settled
 
 
 @pytest.mark.asyncio
@@ -831,6 +858,50 @@ async def test_get_workspace_threads_invalid_sort(mock_db_connection, mock_curso
     select_sql = mock_cursor.execute.call_args_list[1][0][0]
     assert "updated_at" in select_sql
     assert "DESC" in select_sql
+
+
+@pytest.mark.asyncio
+async def test_thread_labels_drop_non_uuids_and_scope_to_the_owner(
+    mock_db_connection, mock_cursor
+):
+    """One malformed watch member must not 22P02 the batch."""
+    from src.server.database.conversation.threads_read import get_thread_labels
+
+    member, workspace = (str(uuid.uuid4()) for _ in range(2))
+    mock_cursor.fetchall.return_value = [
+        {
+            "conversation_thread_id": uuid.UUID(member),
+            "workspace_id": uuid.UUID(workspace),
+            "workspace_name": "Semis",
+            "title": "NVDA margins",
+        }
+    ]
+
+    rows = await get_thread_labels([member, "not-a-uuid"], "user-1")
+
+    sql, params = mock_cursor.execute.call_args.args
+    assert params == ([member], "user-1")
+    assert "w.user_id = %s AND w.status != 'deleted'" in sql
+    assert "ORDER BY t.created_at ASC" in sql
+    # Ids leave as strings: the slice is JSON-encoded on the watch stream.
+    assert rows == [
+        {
+            "thread_id": member,
+            "workspace_id": workspace,
+            "workspace_name": "Semis",
+            "title": "NVDA margins",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_thread_labels_with_no_valid_ids_skip_the_database(
+    mock_db_connection, mock_cursor
+):
+    from src.server.database.conversation.threads_read import get_thread_labels
+
+    assert await get_thread_labels(["nope"], "user-1") == []
+    mock_cursor.execute.assert_not_awaited()
 
 
 # ===========================================================================

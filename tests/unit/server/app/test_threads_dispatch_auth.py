@@ -529,6 +529,38 @@ async def test_a_turn_naming_no_run_carries_none(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "kept"),
+    [({}, False), ({"X-Service-Token": TOKEN}, True)],
+)
+async def test_report_source_survives_only_a_service_token_request(monkeypatch, headers, kept):
+    """A user's own copy would label their message as a report-back."""
+    monkeypatch.setattr("src.config.settings.HOST_MODE", "platform")
+    monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", TOKEN)
+    app = _app()
+    seen = {}
+
+    def _capture(**kwargs):
+        seen["request"] = kwargs["request"]
+        return _stub_ptc_workflow(**kwargs)
+
+    with (
+        _stub_workflow(),
+        patch("src.server.handlers.chat.astream_ptc_workflow", new=_capture),
+    ):
+        resp = await _post(
+            app,
+            headers=headers,
+            body={
+                **_BODY,
+                "report_source": {"kind": "task", "task_id": "k3x9", "display_id": "Task-k3x9"},
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    assert (seen["request"].report_source is not None) is kept
+
+
+@pytest.mark.asyncio
 async def test_non_ascii_service_token_rejected_not_500(monkeypatch):
     """A non-ASCII X-Service-Token must 403, not 500. Header values arrive
     latin-1-decoded, and the compare now runs through service_token_matches

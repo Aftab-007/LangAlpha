@@ -1,10 +1,10 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import React, { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence, type MotionProps } from '@/lib/framer';
-import { Check, X, ChevronRight, ArrowRight, AlertTriangle, Square } from 'lucide-react';
-import { Loader } from '@/components/ui/loader';
+import { X, ChevronRight, ArrowRight } from 'lucide-react';
 import { useDispatchStatus, type PTCDispatchStatus } from '../hooks/usePTCDispatchStatus';
+import { DispatchStatusIndicator } from './dispatchStatusUi';
+import { useOpenDispatchedThread, type DispatcherContext } from '../hooks/useOpenDispatchedThread';
 import { AUTO_APPROVE, useApproveAlways } from '@/hooks/useAutoApprove';
 import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 
@@ -19,16 +19,11 @@ interface ProposalData {
   dispatch_failed?: boolean;
 }
 
-interface FlashContext {
-  threadId: string;
-  workspaceId: string;
-}
-
 interface PTCAgentCardProps {
   proposalData: ProposalData | null;
   onApprove?: (overrides?: { report_back?: boolean }) => void;
   onReject?: () => void;
-  flashContext?: FlashContext | null;
+  flashContext?: DispatcherContext | null;
 }
 
 // Featured-surface visual language (matches ConversationWidget / AIDailyBriefCard).
@@ -38,23 +33,14 @@ const PANEL_BG = 'var(--color-bg-tool-card)';
 const MONO = 'var(--font-mono)';
 
 /**
- * Single source of truth for the dispatch card's per-status presentation.
- * Every status-driven attribute — glyph, label color, whether the run is still
- * in flight (the amber left rule), and the footer hint/CTA — lives in this one
- * declarative table so adding or renaming a status is a single-row edit.
- * `hintKey`/`ctaKey`/`labelKey` are i18n keys resolved with `t()` at the render
- * site. Status is text + a small glyph, never a filled pill or accent bar: the
- * design system keeps amber annotation-only, and the glyphs match the sidebar's
- * thread rows (ascii spinner = running, hollow ring = needs input) so run state
- * reads the same everywhere.
+ * The card's own reading of each status: whether the run is still in flight
+ * (the shell keeps the slightly stronger border) and the footer hint and CTA.
+ * How the status itself reads lives with DispatchStatusIndicator. Keys are
+ * resolved with `t()` at the render site.
  */
-const STATUS_UI: Record<
+const CARD_UI: Record<
   PTCDispatchStatus,
   {
-    labelKey: string;
-    glyph: React.ReactNode;
-    labelColor: string;
-    /** Run still in flight — the shell keeps the slightly stronger border. */
     live: boolean;
     hintKey: string | null;
     ctaKey: string;
@@ -62,122 +48,13 @@ const STATUS_UI: Record<
     ctaAccent?: boolean;
   }
 > = {
-  starting: {
-    labelKey: 'chat.ptcCard.statusStarting',
-    glyph: <LiveSpinner />,
-    labelColor: 'var(--color-text-tertiary)',
-    live: true,
-    hintKey: 'chat.ptcCard.hintProvisioning',
-    ctaKey: 'chat.ptcCard.ctaOpenThread',
-  },
-  running: {
-    labelKey: 'chat.ptcCard.statusWorking',
-    glyph: <LiveSpinner />,
-    labelColor: 'var(--color-text-tertiary)',
-    live: true,
-    hintKey: 'chat.ptcCard.hintWorking',
-    ctaKey: 'chat.ptcCard.ctaOpenThread',
-  },
-  needs_input: {
-    labelKey: 'chat.ptcCard.statusNeedsInput',
-    glyph: (
-      <span aria-hidden className="flex h-3 w-3 shrink-0 items-center justify-center">
-        <span className="rounded-full" style={{ width: 7, height: 7, border: '1.5px solid var(--color-accent-primary)' }} />
-      </span>
-    ),
-    labelColor: 'var(--color-accent-primary)',
-    live: true,
-    hintKey: null,
-    ctaKey: 'chat.ptcCard.ctaAnswerContinue',
-    ctaAccent: true,
-  },
-  completed: {
-    labelKey: 'chat.ptcCard.statusCompleted',
-    glyph: <Check aria-hidden className="h-3 w-3 shrink-0 stroke-[2.5]" style={{ color: 'var(--color-success)' }} />,
-    labelColor: 'var(--color-text-tertiary)',
-    live: false,
-    hintKey: null,
-    ctaKey: 'chat.ptcCard.ctaOpenThread',
-  },
-  failed: {
-    labelKey: 'chat.ptcCard.statusFailed',
-    glyph: <AlertTriangle aria-hidden className="h-3 w-3 shrink-0" style={{ color: 'var(--color-loss)' }} />,
-    labelColor: 'var(--color-loss)',
-    live: false,
-    hintKey: 'chat.ptcCard.hintFailed',
-    ctaKey: 'chat.ptcCard.ctaViewThread',
-  },
-  stopped: {
-    labelKey: 'chat.ptcCard.statusStopped',
-    glyph: <Square aria-hidden className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-icon-muted)' }} />,
-    labelColor: 'var(--color-text-tertiary)',
-    live: false,
-    hintKey: 'chat.ptcCard.hintStopped',
-    ctaKey: 'chat.ptcCard.ctaViewThread',
-  },
+  starting: { live: true, hintKey: 'chat.ptcCard.hintProvisioning', ctaKey: 'chat.ptcCard.ctaOpenThread' },
+  running: { live: true, hintKey: 'chat.ptcCard.hintWorking', ctaKey: 'chat.ptcCard.ctaOpenThread' },
+  needs_input: { live: true, hintKey: null, ctaKey: 'chat.ptcCard.ctaAnswerContinue', ctaAccent: true },
+  completed: { live: false, hintKey: null, ctaKey: 'chat.ptcCard.ctaOpenThread' },
+  failed: { live: false, hintKey: 'chat.ptcCard.hintFailed', ctaKey: 'chat.ptcCard.ctaViewThread' },
+  stopped: { live: false, hintKey: 'chat.ptcCard.hintStopped', ctaKey: 'chat.ptcCard.ctaViewThread' },
 };
-
-/** The sidebar's running-thread glyph (amber ascii spinner), reused so "amber
- *  spinner = agent working" reads identically on every surface. The Loader
- *  ships its own role="status"; the aria-hidden wrapper drops it from the a11y
- *  tree — the card's persistent live region already announces the label. */
-function LiveSpinner() {
-  return (
-    <span aria-hidden className="shrink-0">
-      <Loader size={12} className="text-(--color-accent-primary)" />
-    </span>
-  );
-}
-
-function fmtElapsed(secs: number): string {
-  const m = Math.floor(secs / 60);
-  return `${m}:${String(secs % 60).padStart(2, '0')}`;
-}
-
-/** Seconds the run has been working: from its start once the server says when
- *  that was, from when this card first saw it running until then. */
-function useElapsedSeconds(active: boolean, startedAt: number | undefined): number {
-  const [secs, setSecs] = useState(0);
-  const seenRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!active) {
-      seenRef.current = null;
-      setSecs(0);
-      return;
-    }
-    if (seenRef.current === null) seenRef.current = Date.now();
-    const from = startedAt ?? seenRef.current;
-    const tick = () => setSecs(Math.max(0, Math.floor((Date.now() - from) / 1000)));
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [active, startedAt]);
-  return secs;
-}
-
-function StatusIndicator({ status, elapsed }: { status: PTCDispatchStatus; elapsed: string | null }) {
-  const { t } = useTranslation();
-  const ui = STATUS_UI[status];
-  // One persistent role="status" live region; only the inner glyph/label swap
-  // per state. Mounting a fresh live region per state can drop the
-  // announcement, so transitions stay reliably announced this way.
-  return (
-    <span
-      role="status"
-      aria-live="polite"
-      className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[0.75rem] font-medium"
-      style={{ color: ui.labelColor }}
-    >
-      {ui.glyph}
-      {t(ui.labelKey)}
-      {status === 'running' && elapsed && (
-        <span aria-hidden className="text-[0.6875rem]" style={{ fontFamily: MONO, color: 'var(--color-text-quaternary)' }}>
-          {elapsed}
-        </span>
-      )}
-    </span>
-  );
-}
 
 interface MissionPanelProps {
   /** Small mono kicker naming the workspace the run belongs to. */
@@ -258,7 +135,7 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
   const { approveAlways, saving } = useApproveAlways(AUTO_APPROVE.handoffs);
   // Flash proposes hand-offs too, to a PTC workspace rather than an Analyst.
   const allWorkspaces = useAllWorkspacesAgent();
-  const navigate = useNavigate();
+  const openDispatchedThread = useOpenDispatchedThread(flashContext);
   const detailId = useId();
 
   const status = proposalData?.status;
@@ -270,7 +147,6 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
   // thread an unknown outcome named.
   const notStarted = proposalData?.dispatch_failed === true && runStatus === 'starting';
   const dispatchStatus: PTCDispatchStatus = notStarted ? 'failed' : runStatus;
-  const elapsedSecs = useElapsedSeconds(isApproved && dispatchStatus === 'running', startedAt);
 
   if (!proposalData) return null;
 
@@ -281,13 +157,7 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
   const eyebrow = workspace_name?.trim() || '';
 
   const openThread = () => {
-    if (!threadId) return;
-    navigate(`/chat/t/${threadId}`, {
-      state: {
-        ...(workspace_id ? { workspaceId: workspace_id } : {}),
-        ...(flashContext ? { fromThreadId: flashContext.threadId, fromWorkspaceId: flashContext.workspaceId } : {}),
-      },
-    });
+    if (threadId) openDispatchedThread(threadId, workspace_id);
   };
 
   // ---------------- Rejected: quiet collapsible row ----------------
@@ -326,8 +196,7 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
 
   // ---------------- Approved: live work-order panel ----------------
   if (isApproved) {
-    const ui = STATUS_UI[dispatchStatus];
-    const elapsed = dispatchStatus === 'running' ? fmtElapsed(elapsedSecs) : null;
+    const ui = CARD_UI[dispatchStatus];
     const hintKey = notStarted ? 'chat.ptcCard.hintNotStarted' : ui.hintKey;
 
     return (
@@ -337,7 +206,7 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
         border={ui.live ? 'var(--color-border-default)' : 'var(--color-border-muted)'}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-        statusSlot={<StatusIndicator status={dispatchStatus} elapsed={elapsed} />}
+        statusSlot={<DispatchStatusIndicator status={dispatchStatus} startedAt={startedAt} />}
       >
         {(threadId || notStarted) && (
           <div className="mt-3 flex items-center justify-between gap-3 pt-2.5" style={{ borderTop: '1px solid var(--color-border-muted)' }}>

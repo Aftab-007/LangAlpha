@@ -337,6 +337,7 @@ class AutomationExecutor:
                     "origin": {
                         "type": "automation",
                         "id": str(automation["automation_id"]),
+                        "name": name,
                     }
                 },
             )
@@ -697,7 +698,9 @@ class AutomationExecutor:
                 llm_model=automation.get("llm_model"),
                 additional_context=additional_context,
                 origin=ThreadOrigin(
-                    type="automation", id=str(automation["automation_id"])
+                    type="automation",
+                    id=str(automation["automation_id"]),
+                    name=(automation.get("name") or "").strip() or None,
                 ),
             )
             # Generate run_id locally: automations don't pass through the

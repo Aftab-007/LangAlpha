@@ -66,6 +66,7 @@ from .request_prep import (
     normalize_request_messages,
     prepare_skill_contexts,
     process_hitl_response,
+    provenance_metadata,
     serialize_context_metadata,
     setup_steering_tracking,
     turn_skill_names,
@@ -190,6 +191,7 @@ async def astream_flash_workflow(
             user_input,
             user_id,
             steer_only=request.steer_only,
+            platform=request.platform,
             can_steer=can_steer,
         )
         if not ready:
@@ -269,11 +271,7 @@ async def astream_flash_workflow(
         query_metadata = {"msg_type": "flash"}
         if effective_model:
             query_metadata["llm_model"] = effective_model
-        if request.origin:
-            # Per-turn initiator, mirroring the thread-level metadata['origin']
-            # (threads go mixed: a pinned automation thread also takes manual
-            # user follow-ups, which carry no origin).
-            query_metadata["origin"] = request.origin.model_dump(exclude_none=True)
+        query_metadata.update(provenance_metadata(request))
         widget_ctxs = parse_widget_contexts(request.additional_context)
         chart_selections = parse_chart_selection_contexts(request.additional_context)
         if request.additional_context:
@@ -527,6 +525,7 @@ async def astream_flash_workflow(
             token_callback=token_callback,
             tool_tracker=tool_tracker,
             agent_config=config,
+            report_source=query_metadata.get("report_source"),
         )
 
         # Track steering messages injected mid-workflow for post-completion backfill
@@ -595,7 +594,9 @@ async def astream_flash_workflow(
                 metadata={"superseded": True},
             )
             result = (
-                await steer_thread(thread_id, user_input, user_id)
+                await steer_thread(
+                    thread_id, user_input, user_id, platform=request.platform
+                )
                 if can_steer
                 else None
             )

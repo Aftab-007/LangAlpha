@@ -2,6 +2,7 @@ import { registerAuthReset } from '@/lib/authResets';
 import type { Attachment } from '@/types/sse';
 import type { MessageRecord } from './messageList/types';
 import { assistantText } from './messageList/messageText';
+import { isReportRow } from './messageList/messagePredicates';
 
 export interface TurnEntry {
   id: string;
@@ -127,6 +128,9 @@ export function buildEntries(messages: MessageRecord[], turnInFlight: boolean): 
   let open: Draft | null = null;
 
   for (const m of messages) {
+    // A report-back's row has no prompt to show, so its reply joins the entry
+    // above, as it did while the row was hidden.
+    if (isReportRow(m)) continue;
     if (m.role === 'user') {
       if (failedSend(m)) {
         drafts.push({ id: String(m.id), prompts: [promptOf(m)], reply: '', answered: false, failed: true });
