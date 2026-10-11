@@ -253,11 +253,15 @@ async def test_the_copy_of_a_task_a_truncation_deleted_is_dropped(monkeypatch, s
 
 @pytest.mark.asyncio
 async def test_a_render_older_than_the_stored_copy_stands_down_before_reading(monkeypatch):
+    """Another worker's turn end moved the pointer past the one this export
+    read, so the store keeps the copy it landed."""
     reader = SimpleNamespace(aget_state=AsyncMock())
     monkeypatch.setattr(
         "src.server.services.history.reader.CheckpointHistoryReader.get_instance",
         lambda: reader,
     )
+    drop = AsyncMock(return_value=False)
+    monkeypatch.setattr("src.server.database.thread_transcripts.drop_own_past", drop)
     save = AsyncMock()
     monkeypatch.setattr("src.server.database.thread_transcripts.save_stored", save)
 
@@ -265,6 +269,7 @@ async def test_a_render_older_than_the_stored_copy_stands_down_before_reading(mo
         _target(), Behind(T1, "cp-1", {}, {""}, set()), {"": _stored(checkpoint_id="cp-2")}
     )
     assert saved is False
+    drop.assert_awaited_once_with(T1, "cp-1")
     reader.aget_state.assert_not_awaited()
     save.assert_not_called()
 
