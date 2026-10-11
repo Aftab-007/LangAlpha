@@ -32,7 +32,9 @@ dependencies = [
     # in pregel/_messages.py), which stamps id-less BaseMessage/dict/list writes
     # before persistence — the mechanism that keeps reconstruction deterministic
     # paired with the non-minting reducer in ptc_agent.agent.state.
-    "langgraph>=1.2.2,<2",
+    # >=1.2.11 is the release ptc_agent.agent.delta_branch backports onto: it
+    # wraps loop and update_state internals in their 1.2.11 shape.
+    "langgraph>=1.2.11,<2",
     # ceiling mirrors langgraph<2 — the postgres saver serializes the same delta
     # blobs and moves in lockstep with core, so it can't cross a major on its own.
     "langgraph-checkpoint-postgres>=3.1,<4",

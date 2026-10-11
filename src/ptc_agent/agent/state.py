@@ -15,6 +15,10 @@ One-way data format: once a thread is checkpointed under `DeltaChannel` its head
 blob is a sentinel or `_DeltaSnapshot`, which reverting to `add_messages` (or
 downgrading langgraph below 1.2) cannot read — so keep the `langgraph`/
 `langgraph-checkpoint*` floors pinned at >=1.2 in pyproject.toml.
+
+Importing this module installs `delta_branch`'s backport, so a graph built on
+`DeltaAgentState` that runs from an older checkpoint, or from a state update
+written on one, stores each message once.
 """
 
 from __future__ import annotations
@@ -35,6 +39,14 @@ from langgraph.channels import DeltaChannel
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.graph.ui import AnyUIMessage, ui_message_reducer
 from typing_extensions import NotRequired, Required
+
+from ptc_agent.agent.delta_branch import (
+    snapshot_delta_channels_on_new_branch,
+    snapshot_delta_channels_on_update,
+)
+
+snapshot_delta_channels_on_new_branch()
+snapshot_delta_channels_on_update()
 
 # A full snapshot blob is written every N updates, bounding delta replay depth.
 # Storage per message written is about 1 + W/N for a list of W messages. At 250
