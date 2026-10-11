@@ -420,3 +420,36 @@ class TestSubagentMessageRequest:
     def test_input_id_rejects_anything_but_a_short_safe_token(self, input_id):
         with pytest.raises(ValidationError):
             SubagentMessageRequest(content="Do X", input_id=input_id)
+
+
+# ---------------------------------------------------------------------------
+# Request keys
+# ---------------------------------------------------------------------------
+
+
+class TestRequestKey:
+    """The key lands in a UUID column, so the request model has to refuse what
+    the column would, as a validation error rather than a failed insert."""
+
+    @pytest.mark.parametrize("model", ["send", "retry"])
+    @pytest.mark.parametrize("key", ["not-a-uuid", "", "4f121907-7851-438c-93ea"])
+    def test_refuses_a_key_that_is_not_a_uuid(self, model, key):
+        with pytest.raises(ValidationError):
+            _request(model, key)
+
+    @pytest.mark.parametrize("model", ["send", "retry"])
+    def test_keeps_a_uuid_in_its_canonical_form(self, model):
+        key = "4F121907-7851-438C-93EA-023DD02A6914"
+        assert _request(model, key).request_key == key.lower()
+
+    @pytest.mark.parametrize("model", ["send", "retry"])
+    def test_a_key_is_optional(self, model):
+        assert _request(model, None).request_key is None
+
+
+def _request(model: str, key):
+    from src.server.models.workflow import RetryRequest
+
+    if model == "send":
+        return ChatRequest(messages=[], request_key=key)
+    return RetryRequest(workspace_id="ws", request_key=key)

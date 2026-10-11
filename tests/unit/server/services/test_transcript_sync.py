@@ -252,6 +252,72 @@ async def test_the_copy_of_a_task_a_truncation_deleted_is_dropped(monkeypatch, s
 
 
 @pytest.mark.asyncio
+async def test_the_copies_of_tasks_a_failed_first_message_edit_replaced_are_dropped(
+    monkeypatch, store
+):
+    """The edit's START dropped the thread's own copy and the replaced turns'
+    tasks, and its run failed before its first step, leaving the thread on the
+    empty fork root: the own agent has nothing to render there, and the tasks'
+    copies still go rather than stay served until a turn succeeds."""
+    from src.server.utils.checkpoint_helpers import FORK_ROOT_CHECKPOINT_ID
+
+    store.in_store[T1] = {"tasks/k9/": "run r1"}
+    [behind] = await transcripts.behind_in_store([(T1, FORK_ROOT_CHECKPOINT_ID)])
+    assert behind.agents == {""} and behind.gone == {"tasks/k9/"}
+
+    state = SimpleNamespace(
+        config={"configurable": {"checkpoint_id": FORK_ROOT_CHECKPOINT_ID}},
+        values={},
+    )
+    reader = SimpleNamespace(aget_state=AsyncMock(return_value=state))
+    monkeypatch.setattr(
+        "src.server.services.history.reader.CheckpointHistoryReader.get_instance",
+        lambda: reader,
+    )
+    delete = AsyncMock()
+    monkeypatch.setattr("src.server.database.thread_transcripts.delete_stored", delete)
+    save = AsyncMock()
+    monkeypatch.setattr("src.server.database.thread_transcripts.save_stored", save)
+
+    assert await _render(_target(), behind, {}) is False
+    delete.assert_awaited_once_with(T1, {"tasks/k9/"})
+    save.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dropped", [True, False], ids=["idle", "run-open"])
+async def test_the_own_copy_of_turns_a_failed_first_message_edit_replaced_goes(
+    monkeypatch, dropped
+):
+    """An export that read the replaced turns landed their copy after the
+    edit's START: it reads as newer than the empty root, which renders
+    nothing over it, so the store drops it unless a run is open there."""
+    from src.server.utils.checkpoint_helpers import FORK_ROOT_CHECKPOINT_ID
+
+    state = SimpleNamespace(
+        config={"configurable": {"checkpoint_id": FORK_ROOT_CHECKPOINT_ID}},
+        values={},
+    )
+    reader = SimpleNamespace(aget_state=AsyncMock(return_value=state))
+    monkeypatch.setattr(
+        "src.server.services.history.reader.CheckpointHistoryReader.get_instance",
+        lambda: reader,
+    )
+    drop = AsyncMock(return_value=dropped)
+    monkeypatch.setattr("src.server.database.thread_transcripts.drop_own_past", drop)
+    save = AsyncMock()
+    monkeypatch.setattr("src.server.database.thread_transcripts.save_stored", save)
+
+    behind = Behind(T1, FORK_ROOT_CHECKPOINT_ID, {}, {""}, set())
+    assert await _render(_target(), behind, {"": _stored(checkpoint_id="cp-2")}) is False
+
+    drop.assert_awaited_once_with(T1, FORK_ROOT_CHECKPOINT_ID)
+    # Dropped, the root is read and renders nothing; kept, the copy of the
+    # open run stands the render down before it reads.
+    assert reader.aget_state.await_count == (1 if dropped else 0)
+    save.assert_not_called()
+
+@pytest.mark.asyncio
 async def test_a_render_older_than_the_stored_copy_stands_down_before_reading(monkeypatch):
     """Another worker's turn end moved the pointer past the one this export
     read, so the store keeps the copy it landed."""

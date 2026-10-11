@@ -327,6 +327,46 @@ class TestWaitOrSteer:
         assert exc_info.value.detail["code"] == "running"
         mock_steer.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "messages",
+        [[{"role": "user", "content": "the edited question"}], []],
+        ids=["edit", "regenerate"],
+    )
+    async def test_a_fork_meeting_a_running_turn_is_a_conflict(self, messages):
+        """An edit or a regenerate replaces a turn; steered into the running
+        one it would add a message instead and truncate nothing."""
+        from fastapi import HTTPException
+
+        from src.server.handlers.chat.admission_gate import (
+            steer_allowed,
+            wait_or_steer,
+        )
+        from src.server.models.chat import ChatRequest
+
+        request = ChatRequest(messages=messages, checkpoint_id="cp-3", fork_from_turn=3)
+        manager = AsyncMock()
+        manager.wait_for_admission = AsyncMock(return_value=("running", _LIVE_ROW))
+
+        with (
+            patch(
+                "src.server.handlers.chat.steering.steer_thread",
+                new_callable=AsyncMock,
+            ) as mock_steer,
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await wait_or_steer(
+                manager,
+                "t-1",
+                "the edited question",
+                "u-1",
+                can_steer=steer_allowed(request, dispatched=False, steerable=True),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail["code"] == "running"
+        mock_steer.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # admission_conflict_detail (single 409 wording source)

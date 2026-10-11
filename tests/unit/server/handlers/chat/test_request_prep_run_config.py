@@ -9,7 +9,7 @@ Covers:
 - setup_steering_tracking: wires callback on handler
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -243,6 +243,53 @@ class TestApplyFetchOverrideContextVars:
 
 
 # ---------------------------------------------------------------------------
+# turn_start_checkpoint_id
+# ---------------------------------------------------------------------------
+
+
+class TestTurnStartCheckpointId:
+    """Only a new message that names no checkpoint reads the thread's base: a
+    resume answers the pause on the newest checkpoint, and a fork or replay
+    already names its own."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"checkpoint_id": "cp-fork", "hitl_response": None},
+            {"checkpoint_id": None, "hitl_response": {"intr-1": {}}},
+        ],
+    )
+    async def test_named_or_resumed_turns_keep_their_checkpoint(self, fields):
+        from src.server.handlers.chat.request_prep import turn_start_checkpoint_id
+
+        with patch(
+            "src.server.utils.checkpoint_helpers.turn_base_checkpoint_id",
+            new=AsyncMock(return_value="cp-base"),
+        ) as base:
+            got = await turn_start_checkpoint_id("t-1", MagicMock(**fields), MagicMock())
+
+        assert got is None
+        base.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_send_starts_from_the_base(self):
+        from src.server.handlers.chat.request_prep import turn_start_checkpoint_id
+
+        saver = MagicMock()
+        with patch(
+            "src.server.utils.checkpoint_helpers.turn_base_checkpoint_id",
+            new=AsyncMock(return_value="cp-base"),
+        ) as base:
+            got = await turn_start_checkpoint_id(
+                "t-1", MagicMock(checkpoint_id=None, hitl_response=None), saver
+            )
+
+        assert got == "cp-base"
+        base.assert_awaited_once_with(saver, "t-1")
+
+
+# ---------------------------------------------------------------------------
 # build_graph_config
 # ---------------------------------------------------------------------------
 
@@ -300,6 +347,21 @@ class TestBuildGraphConfig:
     def test_no_checkpoint_id(self):
         config = self._build()
         assert "checkpoint_id" not in config["configurable"]
+
+    def test_base_checkpoint_id_when_the_request_names_none(self):
+        config = self._build(base_checkpoint_id="cp-base")
+        assert config["configurable"]["checkpoint_id"] == "cp-base"
+
+    def test_request_checkpoint_id_over_the_base(self):
+        request = MagicMock(
+            locale="en-US",
+            checkpoint_id="cp-123",
+            reasoning_effort=None,
+            fast_mode=None,
+            platform=None,
+        )
+        config = self._build(request=request, base_checkpoint_id="cp-base")
+        assert config["configurable"]["checkpoint_id"] == "cp-123"
 
     def test_token_callback_in_callbacks(self):
         cb = MagicMock()

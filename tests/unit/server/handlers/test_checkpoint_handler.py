@@ -449,6 +449,20 @@ class TestTurnNumbers:
         ] == [(0, FORK_ROOT_CHECKPOINT_ID, FORK_ROOT_CHECKPOINT_ID)]
 
     @pytest.mark.asyncio
+    async def test_turns_past_the_root_alone_fork_from_it(self, persisted_turns):
+        """A failed first-message edit pinned the root, which is the whole
+        branch."""
+        persisted_turns.return_value = [0]
+        root = _make_cp_tuple(FORK_ROOT_CHECKPOINT_ID, source="fork")
+
+        result = await _turns(_checkpointer(root))
+
+        assert [
+            (t.turn_index, t.edit_checkpoint_id, t.regenerate_checkpoint_id)
+            for t in result.turns
+        ] == [(0, FORK_ROOT_CHECKPOINT_ID, FORK_ROOT_CHECKPOINT_ID)]
+
+    @pytest.mark.asyncio
     async def test_a_failed_row_read_fails_the_listing(self, persisted_turns):
         persisted_turns.side_effect = RuntimeError("db down")
 
@@ -483,6 +497,16 @@ class TestResolveForkTurn:
             checkpoint_id, regenerate=regenerate, requested=requested
         )
         return point.turn_index
+
+    @pytest.mark.asyncio
+    async def test_the_turn_travels_with_the_tip_it_was_read_off(self, persisted_turns):
+        """START holds the fork to this tip and the run horizon read with it,
+        so the tip must be the one the branch walk started from."""
+        persisted_turns.return_value = [0, 1, 2, 3]
+
+        point = await self._point("cp-3", regenerate=False)
+
+        assert (point.branch_tip, point.run_horizon) == ("cp-6", 9)
 
     @pytest.mark.asyncio
     async def test_an_edit_replaces_the_turn_after_its_checkpoint(self, persisted_turns):
