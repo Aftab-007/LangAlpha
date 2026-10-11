@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
@@ -282,14 +283,20 @@ def setup_steering_tracking(handler) -> None:
 
 
 def normalize_request_messages(request: ChatRequest) -> list[dict]:
-    """Convert ``request.messages`` to a flat list of ``{"role": ..., "content": ...}`` dicts.
+    """Convert ``request.messages`` to ``{"id", "role", "content"}`` dicts.
 
     Handles both plain-string and multi-part (text / image_url) content items.
+    The id is minted here rather than left to langgraph at write time because
+    the turn's input checkpoint keeps the input as sent, and a regenerate runs
+    that input again: an id it carries comes back as the same message, which
+    the reducer merges, while one minted per run is a second copy.
     """
     messages: list[dict] = []
     for msg in request.messages:
         if isinstance(msg.content, str):
-            messages.append({"role": msg.role, "content": msg.content})
+            messages.append(
+                {"id": str(uuid.uuid4()), "role": msg.role, "content": msg.content}
+            )
         elif isinstance(msg.content, list):
             content_items = []
             for item in msg.content:
@@ -304,7 +311,11 @@ def normalize_request_messages(request: ChatRequest) -> list[dict]:
                             }
                         )
             messages.append(
-                {"role": msg.role, "content": content_items or str(msg.content)}
+                {
+                    "id": str(uuid.uuid4()),
+                    "role": msg.role,
+                    "content": content_items or str(msg.content),
+                }
             )
     return messages
 
