@@ -301,6 +301,86 @@ class TestGetThreadTurns:
         assert result.retry_checkpoint_id == "cp-2"
 
 
+class TestResumeRegenerate:
+    """A resume turn regenerates from where its answer was applied. At the
+    boundary itself langgraph drops the answer and asks again, while the
+    turn's answer row stays and keeps the old card answered."""
+
+    _RESUME = [("task-1", "__resume__", {"decisions": [{"type": "approve"}]})]
+
+    @pytest.mark.asyncio
+    async def test_an_answered_resume_regenerates_after_its_answered_step(self):
+        result = await _turns(
+            _checkpointer(
+                _make_cp_tuple("cp-4", "cp-3", source="loop"),
+                _make_cp_tuple("cp-3", "cp-2", source="loop", pending_writes=self._RESUME),
+                _make_cp_tuple("cp-2", "cp-1", source="loop"),
+                _make_cp_tuple("cp-1", source="input"),
+            )
+        )
+
+        assert [(t.turn_index, t.regenerate_checkpoint_id) for t in result.turns] == [
+            (0, "cp-1"),
+            (1, "cp-4"),
+        ]
+        assert result.turns[1].edit_checkpoint_id is None
+
+    @pytest.mark.asyncio
+    async def test_a_resume_whose_step_never_finished_regenerates_at_its_boundary(
+        self,
+    ):
+        """A stop's flush or a new message after the answer: no checkpoint
+        holds the answered step, so there is nowhere past the boundary."""
+        for after in ("update", "input"):
+            result = await _turns(
+                _checkpointer(
+                    _make_cp_tuple("cp-3", "cp-2", source=after),
+                    _make_cp_tuple(
+                        "cp-2", "cp-1", source="loop", pending_writes=self._RESUME
+                    ),
+                    _make_cp_tuple("cp-1", source="input"),
+                )
+            )
+
+            assert result.turns[1].regenerate_checkpoint_id == "cp-2", after
+
+    @pytest.mark.asyncio
+    async def test_an_answered_step_that_asked_again_regenerates_at_its_boundary(
+        self, persisted_turns
+    ):
+        """cp-3 finished turn 1's answered step and holds turn 2's answer. A
+        fork there would delete turn 2 and leave its answer on cp-3, read
+        later as a turn nothing stored, so turn 1 keeps its boundary."""
+        persisted_turns.return_value = [0, 1, 2]
+        result = await _turns(
+            _checkpointer(
+                _make_cp_tuple("cp-4", "cp-3", source="loop"),
+                _make_cp_tuple("cp-3", "cp-2", source="loop", pending_writes=self._RESUME),
+                _make_cp_tuple("cp-2", "cp-1", source="loop", pending_writes=self._RESUME),
+                _make_cp_tuple("cp-1", source="input"),
+            )
+        )
+
+        assert [(t.turn_index, t.regenerate_checkpoint_id) for t in result.turns] == [
+            (0, "cp-1"),
+            (1, "cp-2"),
+            (2, "cp-4"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_message_turn_regenerates_at_its_message_even_when_answered(self):
+        """An interrupt on the message's own checkpoint (a pause before the
+        first model call) answers inside the message's turn."""
+        result = await _turns(
+            _checkpointer(
+                _make_cp_tuple("cp-2", "cp-1", source="loop"),
+                _make_cp_tuple("cp-1", source="input", pending_writes=self._RESUME),
+            )
+        )
+
+        assert [t.regenerate_checkpoint_id for t in result.turns] == ["cp-1"]
+
+
 class TestTurnNumbers:
     """``turn_index`` is the turn's persisted number, which the client matches
     against the turn its bubble replayed under."""
@@ -314,7 +394,7 @@ class TestTurnNumbers:
         assert [(t.turn_index, t.regenerate_checkpoint_id) for t in result.turns] == [
             (0, "cp-1"),
             (2, "cp-4"),
-            (3, "cp-5"),
+            (3, "cp-6"),
         ]
         assert result.turns[1].edit_checkpoint_id == "cp-3"
         assert result.turns[2].edit_checkpoint_id is None
@@ -399,7 +479,7 @@ class TestResolveForkTurn:
         persisted_turns.return_value = [0, 1, 2, 3]
 
         assert await self._resolve("cp-4", regenerate=True) == 2
-        assert await self._resolve("cp-5", regenerate=True) == 3
+        assert await self._resolve("cp-6", regenerate=True) == 3
         # A regenerate keeps its turn's question, so no other turn will do.
         assert await self._resolve("cp-4", regenerate=True, requested=1) == 2
 
@@ -410,6 +490,7 @@ class TestResolveForkTurn:
         for checkpoint_id, regenerate in (
             ("cp-4", False),  # a boundary is no edit point
             ("cp-3", True),  # an edit point is no boundary
+            ("cp-5", True),  # an answered resume reruns past its boundary
             ("cp-off-branch", False),
         ):
             with pytest.raises(HTTPException) as exc_info:

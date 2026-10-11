@@ -54,7 +54,7 @@ async def get_thread_turns(
         TurnCheckpointInfo(
             turn_index=turn_index,
             edit_checkpoint_id=None if anchor.is_resume else anchor.parent_checkpoint_id,
-            regenerate_checkpoint_id=anchor.input_checkpoint_id,
+            regenerate_checkpoint_id=anchor.regenerate_checkpoint_id,
         )
         for anchor, turn_index in zip(anchors, pair_turns(anchors, persisted))
         if turn_index is not None
@@ -78,12 +78,12 @@ async def resolve_fork_turn(
 
     The fork deletes rows from this turn onward, so the turn is read off the
     current branch by the checkpoint it forks at (an edit at the parent of the
-    turn's input checkpoint, a regenerate at the boundary itself), not taken
-    from the client's count. An edit keeps the client's ``requested`` turn
-    only when nothing but turns that never checkpointed lie between it and
-    the forked one, so rewriting a failed message works and no kept turn is
-    deleted. A checkpoint that forks no turn of the current branch is
-    refused: the client read a branch that has since been replaced.
+    turn's input checkpoint, a regenerate at its ``regenerate_checkpoint_id``),
+    not taken from the client's count. An edit keeps the client's
+    ``requested`` turn only when nothing but turns that never checkpointed lie
+    between it and the forked one, so rewriting a failed message works and no
+    kept turn is deleted. A checkpoint that forks no turn of the current
+    branch is refused: the client read a branch that has since been replaced.
     """
     branch_tip = await threads_read.get_thread_checkpoint_id(thread_id)
     turns = await get_thread_turns(thread_id, branch_tip_checkpoint_id=branch_tip)

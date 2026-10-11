@@ -4,14 +4,21 @@ messages, HITL answers, and context into the turn.
 
 Covers:
 - process_hitl_response: the PreparedHitl record, various HITL scenarios
-- normalize_request_messages: dict conversion, multimodal, empty
+- normalize_request_messages: dict conversion, multimodal, empty, ids
 - serialize_context_metadata: context serialization + slash fallback
 - prepare_skill_contexts: skill contexts and slash-command detection
 - inject_inline_reminders: reminders appended to the user tail
 """
 
+import uuid
 from unittest.mock import MagicMock, patch
 
+import pytest
+from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import START, StateGraph
+
+from ptc_agent.agent.state import DeltaAgentState
 from src.server.models.additional_context import SkillContext
 
 PREP = "src.server.handlers.chat.request_prep"
@@ -160,7 +167,50 @@ class TestNormalizeRequestMessages:
         msg.role = "user"
         msg.content = "hello"
         result = normalize_request_messages(self._make_request([msg]))
-        assert result == [{"role": "user", "content": "hello"}]
+        assert result == [{"id": result[0]["id"], "role": "user", "content": "hello"}]
+
+    def test_every_message_carries_its_own_id(self):
+        from src.server.handlers.chat.request_prep import normalize_request_messages
+
+        item = MagicMock(type="text", text="look")
+        messages = [
+            MagicMock(role="user", content="hello"),
+            MagicMock(role="user", content=[item]),
+        ]
+        request = self._make_request(messages)
+        ids = [m["id"] for _ in range(2) for m in normalize_request_messages(request)]
+        assert len(set(ids)) == 4
+        assert all(uuid.UUID(i) for i in ids)
+
+    @pytest.mark.asyncio
+    async def test_a_regenerate_brings_the_turns_message_back_under_its_id(self):
+        """A regenerate reruns the input its turn's checkpoint stored, so the
+        id must travel in that input for the rerun to be the same message."""
+        from src.server.handlers.chat.request_prep import normalize_request_messages
+
+        def reply(state):
+            return {"messages": [AIMessage("a", id=str(uuid.uuid4()))]}
+
+        graph = (
+            StateGraph(DeltaAgentState)
+            .add_node("reply", reply)
+            .add_edge(START, "reply")
+            .compile(checkpointer=InMemorySaver())
+        )
+        thread = {"configurable": {"thread_id": "regenerate-keeps-id"}}
+        request = self._make_request([MagicMock(role="user", content="q0")])
+        await graph.ainvoke({"messages": normalize_request_messages(request)}, thread)
+        sent = (await graph.aget_state(thread)).values["messages"][0].id
+        turn = [
+            s
+            async for s in graph.aget_state_history(thread)
+            if s.metadata.get("source") == "input"
+        ][0]
+
+        await graph.ainvoke(None, turn.config)
+
+        head = (await graph.aget_state(thread)).values["messages"]
+        assert [m.id for m in head if m.type == "human"] == [sent]
 
     def test_list_content_text(self):
         from src.server.handlers.chat.request_prep import normalize_request_messages

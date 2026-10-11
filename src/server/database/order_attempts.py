@@ -557,6 +557,28 @@ async def refuse_attempts_on_fork(
     return refused
 
 
+async def find_attempt_id(
+    user_id: str, message_id: str, tool_call_id: str
+) -> str | None:
+    """The attempt already written for one call, by the key a proposal
+    conflicts on, or None."""
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT attempt_id FROM order_attempts
+                 WHERE user_id = %s AND message_id = %s AND tool_call_id = %s
+                """,
+                (
+                    user_id,
+                    strip_pg_nul_str(message_id),
+                    strip_pg_nul_str(tool_call_id),
+                ),
+            )
+            row = await cur.fetchone()
+    return str(row["attempt_id"]) if row else None
+
+
 async def get_attempt(attempt_id: str) -> dict[str, Any] | None:
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:

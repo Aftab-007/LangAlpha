@@ -121,6 +121,10 @@ class OrderLedger(Protocol):
         """
         ...
 
+    async def find(self, message_id: str, tool_call_id: str) -> str | None:
+        """The attempt already written for this call, or None. Never writes."""
+        ...
+
     async def consume(self, attempt_id: str) -> ExecutionGrant | Refusal:
         """Take the one execution, or say what state was found instead."""
         ...
@@ -197,7 +201,8 @@ class OrderGovernanceMiddleware(AgentMiddleware):
         # Per-turn execution context, rebuilt by the node that proposes: which
         # attempt each call in flight belongs to. Never truth about whether a
         # call may run -- that answer is the guarded consume, on the row. A
-        # miss here refuses the call rather than running it unattributed.
+        # miss here is looked up on the ledger, and a call no gate recorded is
+        # refused rather than run unattributed.
         self._attempts: dict[str, str] = {}
 
     # -- proposal and verdict ------------------------------------------------
@@ -345,6 +350,29 @@ class OrderGovernanceMiddleware(AgentMiddleware):
 
     # -- execution -----------------------------------------------------------
 
+    async def _recorded_attempt(self, request: ToolCallRequest) -> str | None:
+        """The attempt an earlier run's gate wrote for this call.
+
+        A run that starts past the gate's node, a regenerate or a retry from
+        the checkpoint between the gate and the tools, never proposes, so the
+        context above is empty while the row it needs exists. The call's
+        message and id are the row's key.
+        """
+        tool_call_id = request.tool_call["id"]
+        messages = (request.state or {}).get("messages") or []
+        message_id = next(
+            (
+                m.id
+                for m in reversed(messages)
+                if isinstance(m, AIMessage)
+                and any(call.get("id") == tool_call_id for call in m.tool_calls)
+            ),
+            None,
+        )
+        if not message_id:
+            return None
+        return await self._ledger.find(message_id, tool_call_id)
+
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
@@ -368,7 +396,9 @@ class OrderGovernanceMiddleware(AgentMiddleware):
         if stamp is None:
             return await handler(request)
         tool_call_id = request.tool_call["id"]
-        attempt_id = self._attempts.get(tool_call_id)
+        attempt_id = self._attempts.get(
+            tool_call_id
+        ) or await self._recorded_attempt(request)
         if attempt_id is None:
             return self._blocked(
                 request.tool_call,

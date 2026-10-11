@@ -127,6 +127,10 @@ class Boundary:
     # answered interrupts of the turn it resumes: interrupt and resume writes
     # attach to the same checkpoint.
     interrupts: list[dict[str, Any]] = field(default_factory=list)
+    # On an answered boundary, the checkpoint the answered step finished on:
+    # the next one on the branch, when the resume's own step wrote it and it
+    # opens no turn of its own. None while that step has not finished.
+    answered_checkpoint_id: str | None = None
 
     @property
     def is_input(self) -> bool:
@@ -159,6 +163,25 @@ def is_turn_boundary(cp_tuple: Any) -> bool:
     return any(
         channel == "__resume__" for _, channel, _ in (cp_tuple.pending_writes or [])
     )
+
+
+def _answered_checkpoint_id(branch: list[Any], i: int) -> str | None:
+    """Where the answer to ``branch[i]``'s interrupt has been applied.
+
+    The step an answer resumes writes no checkpoint of its own until it
+    finishes, and its next checkpoint is a ``loop`` one. An ``update`` or an
+    ``input`` there means the step never finished (a stop's flush, a new
+    message), so there is none.
+    """
+    cp = branch[i]
+    if (cp.metadata or {}).get("source") == "input" or i + 1 >= len(branch):
+        return None
+    if not any(channel == "__resume__" for _, channel, _ in (cp.pending_writes or [])):
+        return None
+    nxt = branch[i + 1]
+    if (nxt.metadata or {}).get("source") != "loop":
+        return None
+    return nxt.config["configurable"]["checkpoint_id"]
 
 
 def _resumed_by_later_run(branch: list[Any], i: int) -> bool:
@@ -205,7 +228,8 @@ _BRANCH_TIP_SQL = """
 # probe back into that join. For the later-run test, ``moves_after`` counts the
 # non-update checkpoints after each one and ``move_no`` numbers them from the
 # tip, so the first non-update checkpoint after a row is the one whose
-# ``move_no`` equals that row's ``moves_after``.
+# ``move_no`` equals that row's ``moves_after``. ``child_*`` is the row after
+# it, for _answered_checkpoint_id.
 _BRANCH_BOUNDARIES_SQL = """
     WITH RECURSIVE branch AS (
         SELECT checkpoint_id, parent_checkpoint_id,
@@ -236,6 +260,8 @@ _BRANCH_BOUNDARIES_SQL = """
         SELECT b.checkpoint_id, b.parent_checkpoint_id, b.source, b.run_id,
                coalesce(m.resumed, false) AS resumed,
                coalesce(m.interrupted, false) AS interrupted,
+               lag(b.checkpoint_id) OVER (ORDER BY b.checkpoint_id DESC) AS child_id,
+               lag(b.source) OVER (ORDER BY b.checkpoint_id DESC) AS child_source,
                count(*) FILTER (WHERE b.source IS DISTINCT FROM 'update') OVER (
                    ORDER BY b.checkpoint_id DESC
                    ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
@@ -245,7 +271,10 @@ _BRANCH_BOUNDARIES_SQL = """
                ) AS move_no
         FROM branch b LEFT JOIN marks m USING (checkpoint_id)
     ), bounds AS (
-        SELECT s.checkpoint_id, s.parent_checkpoint_id
+        SELECT s.checkpoint_id, s.parent_checkpoint_id,
+               CASE WHEN s.resumed AND s.source IS DISTINCT FROM 'input'
+                         AND s.child_source = 'loop'
+                    THEN s.child_id END AS answered_checkpoint_id
         FROM steps s
         LEFT JOIN steps nxt
           ON nxt.move_no = s.moves_after
@@ -257,7 +286,8 @@ _BRANCH_BOUNDARIES_SQL = """
                AND nxt.run_id IS NOT NULL
                AND nxt.run_id IS DISTINCT FROM s.run_id)
     )
-    SELECT b.checkpoint_id, b.parent_checkpoint_id, m.metadata
+    SELECT b.checkpoint_id, b.parent_checkpoint_id, b.answered_checkpoint_id,
+           m.metadata
     FROM bounds b CROSS JOIN LATERAL (
         SELECT c.metadata
         FROM checkpoints c
@@ -344,19 +374,22 @@ async def _walk_via_tables(
             parent_checkpoint_id=r["parent_checkpoint_id"],
             metadata=r["metadata"] or {},
             interrupts=interrupt_records(writes_by_cp.get(r["checkpoint_id"])),
+            answered_checkpoint_id=r["answered_checkpoint_id"],
         )
         for r in rows
     ]
     return boundaries, tip_id
 
 
-def _boundary(cp: CheckpointTuple) -> Boundary:
+def _boundary(branch: list[CheckpointTuple], i: int) -> Boundary:
+    cp = branch[i]
     parent = (cp.parent_config or {}).get("configurable") or {}
     return Boundary(
         checkpoint_id=cp.config["configurable"]["checkpoint_id"],
         parent_checkpoint_id=parent.get("checkpoint_id"),
         metadata=dict(cp.metadata or {}),
         interrupts=interrupt_records(cp.pending_writes),
+        answered_checkpoint_id=_answered_checkpoint_id(branch, i),
     )
 
 
@@ -396,7 +429,7 @@ async def _walk_via_alist(
         if cp.config["configurable"]["checkpoint_id"] in current_branch
     ]
     boundaries = [
-        _boundary(cp)
+        _boundary(branch, i)
         for i, cp in enumerate(branch)
         if is_turn_boundary(cp) or _resumed_by_later_run(branch, i)
     ]
@@ -430,13 +463,22 @@ async def walk_current_branch_boundaries(
         if isinstance(checkpointer, AsyncPostgresSaver)
         else _walk_via_alist
     )
-    return await walk(
+    boundaries, tip_id = await walk(
         checkpointer,
         thread_id,
         branch_tip_checkpoint_id,
         strict_branch_tip,
         checkpoint_ns,
     )
+    # When the answered step's checkpoint is itself the next turn's boundary
+    # (that step asked again, and was answered), a fork there deletes that
+    # turn but leaves its answer written on the checkpoint, which a later walk
+    # reads as a turn nothing stored. The turn falls back to its own boundary.
+    starts = {b.checkpoint_id for b in boundaries}
+    for boundary in boundaries:
+        if boundary.answered_checkpoint_id in starts:
+            boundary.answered_checkpoint_id = None
+    return boundaries, tip_id
 
 
 async def update_at_commit(
