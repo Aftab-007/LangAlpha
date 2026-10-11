@@ -2660,9 +2660,13 @@ async def test_terminal_error_synthesized_on_both_paths(monkeypatch):
     ]
     assert items[-1]["data"]["response_id"] == "resp-1"
 
-    # Legacy errored rows (errors column empty — pre-fix) stay silent.
+    # An errored row with no error text (an exception with no message, or a
+    # row from before errors were stored) still ends on the error event that
+    # marks the turn failed, its text left for the client to word.
     legacy = _response(0, status="error")
-    assert build_sse_replay_items(THREAD, [_query(0)], {0: legacy})[-1]["event"] == "user_message"
+    last = build_sse_replay_items(THREAD, [_query(0)], {0: legacy})[-1]
+    assert last["event"] == "error"
+    assert last["data"]["error"] == ""
 
 
 async def test_terminal_error_replay_sanitizes_legacy_rows(monkeypatch):
