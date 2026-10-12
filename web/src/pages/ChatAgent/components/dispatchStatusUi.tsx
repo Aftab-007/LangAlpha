@@ -94,6 +94,19 @@ function useElapsedSeconds(active: boolean, startedAt: number | undefined): numb
   return secs;
 }
 
+/** A dispatched run's glyph alone, beside a label that names the run. The
+ *  glyph is decorative, so its status word stays for a screen reader. */
+export function DispatchStatusGlyph({ status }: { status: PTCDispatchStatus }) {
+  const { t } = useTranslation();
+  const ui = STATUS_LOOK[status];
+  return (
+    <>
+      {ui.glyph}
+      <span className="sr-only">{t(ui.labelKey)}</span>
+    </>
+  );
+}
+
 /** A dispatched run's status word and glyph, with the time it has been working
  *  while it runs. */
 export function DispatchStatusIndicator({ status, startedAt }: { status: PTCDispatchStatus; startedAt?: number }) {

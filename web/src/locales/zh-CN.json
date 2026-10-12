@@ -1622,10 +1622,12 @@
     "reportBackPending": "等待 PTC Agent 汇报结果",
     "taskReportBackPending": "等待子代理结果汇报",
     "tray": {
-      "backgroundTasks_one": "{{count}} 个后台任务",
-      "backgroundTasks_other": "{{count}} 个后台任务",
-      "backgroundTasksHeading": "正在此对话中运行",
-      "show": "显示正在进行的内容"
+      "tasks_one": "{{count}} 个任务",
+      "tasks_other": "{{count}} 个任务",
+      "tasksRunning_one": "{{count}} 个任务 · {{running}} 个运行中",
+      "tasksRunning_other": "{{count}} 个任务 · {{running}} 个运行中",
+      "tasksHeading": "来自此对话",
+      "show": "显示此对话的工作"
     },
     "provenance": {
       "fromChiefOfStaff": "来自 CoS Agent",
@@ -4395,9 +4397,11 @@
     "reportBackPending": "等待分析师汇报结果",
     "tray": {
       "waitingOn": "等待 {{name}}",
-      "waitingOnAnalysts_one": "等待 {{count}} 位分析师",
-      "waitingOnAnalysts_other": "等待 {{count}} 位分析师",
-      "analystsHeading": "完成后会向此对话汇报"
+      "analysts_one": "{{count}} 位分析师",
+      "analysts_other": "{{count}} 位分析师",
+      "analystsRunning_one": "{{count}} 位分析师 · {{running}} 位运行中",
+      "analystsRunning_other": "{{count}} 位分析师 · {{running}} 位运行中",
+      "analystsHeading": "由此对话交办"
     },
     "inWorkspace": "在 {{workspace}} 中",
     "workspaceRequired": "请选择一个工作区，或选择所有工作区。",

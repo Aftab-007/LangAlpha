@@ -58,13 +58,16 @@ def collect_task_ids(items: list[dict]) -> list[str]:
 async def resolve_task_details(
     thread_id: str, task_ids: list[str]
 ) -> dict[str, dict[str, Any]]:
-    """Map each task id to ``{"status", "error", "error_type"}``.
+    """Map each task id to ``{"status", "error", "error_type"}``, plus
+    ``"last_activity_ms"`` when the ledger knows it.
 
     ``status`` is ``running`` / ``completed`` / ``cancelled`` / ``error``;
     ``error`` is the ledger failure message, present for any terminal that
     settled with a failure payload (``error`` and ``cancelled``), None
     otherwise, and ``error_type`` is its machine spelling — the client reads
     it to tell a stop it can offer a remedy for from one it can only report.
+    ``last_activity_ms`` is when the latest run last started, finished or
+    delivered its result, which is how long the task has been quiet.
     The run ledger is the authority
     (M4): the latest run row's status maps straight to the client vocabulary —
     a dead worker's in_progress row reads "running" only until the recovery
@@ -112,6 +115,9 @@ async def resolve_task_details(
                 # vocabulary this codebase writes, never quoted upstream text.
                 "error_type": row.get("error_type") if carries_reason else None,
             }
+            last_activity = row.get("last_activity_at")
+            if last_activity is not None:
+                details[task_id]["last_activity_ms"] = last_activity.timestamp() * 1000
     if legacy_ids:
         for task_id, status in (
             await _resolve_legacy_statuses(thread_id, legacy_ids)
@@ -156,19 +162,23 @@ def stamp_task_artifact_data(
     data: Any, details: dict[str, dict[str, Any]], *, status_only: bool = False
 ) -> Any:
     """Return ``data`` with ``payload.status`` (and the failure reason when the
-    task settled with one) stamped — copies, never mutates: stored/cached event
-    dicts are shared objects. ``status_only`` restricts the stamp to the
-    whitelisted status value — public replay must never ship failure text
-    unauthenticated, and the type travels with the message it classifies."""
+    task settled with one, and when it was last active) stamped — copies,
+    never mutates: stored/cached event dicts are shared objects.
+    ``status_only`` restricts the stamp to the whitelisted status value —
+    public replay must never ship failure text unauthenticated, and the type
+    travels with the message it classifies."""
     task_id = _artifact_task_id(data)
     if not task_id or task_id not in details:
         return data
     detail = details[task_id]
     payload = {**(data.get("payload") or {}), "status": detail["status"]}
-    if not status_only and detail.get("error"):
-        payload["error"] = detail["error"]
-        if detail.get("error_type"):
-            payload["error_type"] = detail["error_type"]
+    if not status_only:
+        if detail.get("error"):
+            payload["error"] = detail["error"]
+            if detail.get("error_type"):
+                payload["error_type"] = detail["error_type"]
+        if detail.get("last_activity_ms") is not None:
+            payload["last_activity_ms"] = detail["last_activity_ms"]
     return {**data, "payload": payload}
 
 

@@ -5,6 +5,7 @@ subagent cards: running requires proven liveness, terminal is the default,
 and stamping must copy — stored/cached event dicts are shared objects.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -326,3 +327,44 @@ class TestLedgerReasonCarry:
             "error": None,
             "error_type": None,
         }
+
+
+class TestLastActivity:
+    """When a task last did anything: what the tray ages it by after a reload,
+    since a task that settles mid-turn leaves no mark in the transcript."""
+
+    SETTLED = datetime(2026, 1, 5, 14, 42, tzinfo=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_ledger_time_reaches_the_detail_in_epoch_ms(self):
+        with patch(
+            "src.server.database.runs.subagent_runs.get_latest_run_details",
+            new=AsyncMock(
+                return_value={
+                    "done1": {
+                        "status": "completed",
+                        "error": None,
+                        "error_type": None,
+                        "last_activity_at": self.SETTLED,
+                    }
+                }
+            ),
+        ):
+            details = await resolve_task_details("t", ["done1"])
+        assert details["done1"]["last_activity_ms"] == self.SETTLED.timestamp() * 1000
+
+    def test_stamp_carries_it(self):
+        stamped = stamp_task_artifact_data(
+            _artifact("aaa")["data"],
+            {"aaa": {"status": "completed", "error": None, "last_activity_ms": 1.5e12}},
+        )
+        assert stamped["payload"]["last_activity_ms"] == 1.5e12
+
+    def test_status_only_withholds_it(self):
+        # Public replay ships the whitelisted status value and nothing else.
+        stamped = stamp_task_artifact_data(
+            _artifact("aaa")["data"],
+            {"aaa": {"status": "completed", "error": None, "last_activity_ms": 1.5e12}},
+            status_only=True,
+        )
+        assert "last_activity_ms" not in stamped["payload"]

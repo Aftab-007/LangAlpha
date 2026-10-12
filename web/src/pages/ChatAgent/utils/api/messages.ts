@@ -305,6 +305,12 @@ export interface DispatchLiveness {
   can_reconnect: boolean;
   /** ISO start of the live run; null once it settled. */
   run_started_at?: string | null;
+  /** ISO time the thread's latest turn started or settled, whoever sent it. */
+  last_activity_at?: string | null;
+  /** The thread's title; null until it is named. */
+  title?: string | null;
+  /** The current name of the thread's workspace. */
+  workspace_name?: string | null;
 }
 
 /**
@@ -313,14 +319,23 @@ export interface DispatchLiveness {
  * `/status` polls. Foreign/unknown/expired ids are omitted from the response.
  * Returns `[]` without a request for an empty id list.
  */
+/** The most ids the liveness route reads per request; it drops the rest. */
+const LIVENESS_IDS_PER_REQUEST = 100;
+
 export async function getDispatchLiveness(
   threadIds: string[],
 ): Promise<DispatchLiveness[]> {
-  if (!threadIds.length) return [];
-  const { data } = await api.get('/api/v1/threads/dispatches/liveness', {
-    params: { ids: threadIds.join(',') },
-  });
-  return (data?.liveness ?? []) as DispatchLiveness[];
+  const batches: string[][] = [];
+  for (let i = 0; i < threadIds.length; i += LIVENESS_IDS_PER_REQUEST) {
+    batches.push(threadIds.slice(i, i + LIVENESS_IDS_PER_REQUEST));
+  }
+  const pages = await Promise.all(batches.map(async (ids) => {
+    const { data } = await api.get('/api/v1/threads/dispatches/liveness', {
+      params: { ids: ids.join(',') },
+    });
+    return (data?.liveness ?? []) as DispatchLiveness[];
+  }));
+  return pages.flat();
 }
 
 // SSE event name of a report-back wake on GET /threads/{id}/watch. Contract:
@@ -608,7 +623,7 @@ export async function sendSubagentMessage(threadId: string, taskId: string, cont
 export async function getSubagentTaskStatus(
   threadId: string,
   taskId: string,
-): Promise<{ task_id: string; status: string | null; error: string | null }> {
+): Promise<{ task_id: string; status: string | null; error: string | null; last_activity_ms?: number | null }> {
   const { data } = await api.get(
     `/api/v1/threads/${threadId}/tasks/${taskId}/status`,
   );

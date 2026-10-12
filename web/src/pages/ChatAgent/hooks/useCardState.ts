@@ -49,6 +49,11 @@ interface SubagentData {
   /** Owning workflow run's agent id (workflow children only) — such cards
    *  are hidden from the sidebar and reached via the run's detail view. */
   ownerTaskId?: string;
+  /** When the task went quiet (epoch ms), set only by the write that settles
+   *  it: the time that write carries, else when this view saw it. A card
+   *  created already settled has only the time its write carries, which a
+   *  close that is news here and a ledger read do and opening it does not. */
+  lastActivityMs?: number;
   [key: string]: unknown;
 }
 
@@ -115,6 +120,8 @@ export function useCardState(initialCards: CardsMap = {}): UseCardStateResult {
     // as inactive or absent — otherwise a closure is silently dropped and the card
     // is left free to be re-activated by a stale-liveness signal.
     const isTerminalWrite = isTerminalStatus(subagentDataUpdate.status);
+    // Read here, not in the updater, which React may run twice.
+    const now = Date.now();
 
     const apply = (prev: CardsMap): CardsMap => {
       if (prev[cardId]) {
@@ -175,6 +182,13 @@ export function useCardState(initialCards: CardsMap = {}): UseCardStateResult {
           return preservedStatus;
         })();
 
+        // The write that settles a task is the tray's record of when it went
+        // quiet, at the time it carries or now; a history refresh only reports
+        // a settle from before, and any other write leaves the time as it was.
+        const settles = isTerminalStatus(finalStatus)
+          && !isTerminalStatus(existingSubagentData.status)
+          && !subagentDataUpdate.isHistory;
+
         const finalIsActive = subagentDataUpdate.isHistory
           ? false
           : (subagentDataUpdate.isActive !== undefined
@@ -221,6 +235,9 @@ export function useCardState(initialCards: CardsMap = {}): UseCardStateResult {
                 : existingSubagentData.currentTool || '',
               status: finalStatus,
               isActive: finalIsActive,
+              lastActivityMs: settles
+                ? subagentDataUpdate.lastActivityMs ?? now
+                : existingSubagentData.lastActivityMs,
             },
           },
         };

@@ -264,6 +264,7 @@ export function projectSubagentHistory(
       tokenUsage: tempTokenUsage,
       currentTool: '',
       projectedRunStartedMs: taskMetadata?.projectedRunStartedMs,
+      lastActivityMs: taskMetadata?.lastActivityMs,
       ...(workflowRun ? { workflowRun } : {}),
       ...(taskMetadata?.ownerTaskId ? { ownerTaskId: taskMetadata.ownerTaskId } : {}),
     };

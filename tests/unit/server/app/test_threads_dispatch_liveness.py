@@ -21,15 +21,19 @@ LEDGER = "src.server.database.runs.lifecycle.get_latest_attempts_for_threads"
 
 
 STARTED = datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)
+SETTLED = datetime(2026, 1, 5, 14, 42, tzinfo=timezone.utc)
 
 
-def _row(tid, status, *, run_id=None, cancel_requested_at=None):
+def _row(tid, status, *, run_id=None, cancel_requested_at=None, last_activity_at=STARTED):
     return {
         "conversation_thread_id": tid,
         "conversation_response_id": run_id or str(uuid.uuid4()),
         "status": status,
         "cancel_requested_at": cancel_requested_at,
         "run_started_at": STARTED,
+        "last_activity_at": last_activity_at,
+        "title": "Size the market",
+        "workspace_name": "Semis",
     }
 
 
@@ -57,6 +61,9 @@ async def test_live_run_maps_to_running_with_reconnect(threads_client):
                 "run_id": "r-1",
                 "can_reconnect": True,
                 "run_started_at": STARTED.isoformat(),
+                "last_activity_at": STARTED.isoformat(),
+                "title": "Size the market",
+                "workspace_name": "Semis",
             }
         ]
     }
@@ -88,6 +95,9 @@ async def test_cancel_requested_maps_to_stopping_still_reconnectable(threads_cli
             "run_id": "r-1",
             "can_reconnect": True,
             "run_started_at": STARTED.isoformat(),
+            "last_activity_at": STARTED.isoformat(),
+            "title": "Size the market",
+            "workspace_name": "Semis",
         }
     ]
 
@@ -108,7 +118,9 @@ async def test_terminal_attempt_maps_to_public_vocabulary(
     """Terminal rows come back as the public enum value (not the raw internal
     spelling), with no run_id and no reconnect."""
     tid = str(uuid.uuid4())
-    resp, _ = await _liveness(threads_client, {tid: _row(tid, ledger_status)}, tid)
+    resp, _ = await _liveness(
+        threads_client, {tid: _row(tid, ledger_status, last_activity_at=SETTLED)}, tid
+    )
 
     assert resp.status_code == 200
     assert resp.json() == {
@@ -119,6 +131,11 @@ async def test_terminal_attempt_maps_to_public_vocabulary(
                 "run_id": None,
                 "can_reconnect": False,
                 "run_started_at": None,
+                # Outlives the run: a settled thread still says how long it
+                # has been quiet.
+                "last_activity_at": SETTLED.isoformat(),
+                "title": "Size the market",
+                "workspace_name": "Semis",
             }
         ]
     }

@@ -41,7 +41,12 @@ async def get_subagent_task_status(
     detail = details.get(task_id)
     if detail is None:
         return {"task_id": task_id, "status": None, "error": None}
-    return {"task_id": task_id, "status": detail["status"], "error": detail.get("error")}
+    return {
+        "task_id": task_id,
+        "status": detail["status"],
+        "error": detail.get("error"),
+        "last_activity_ms": detail.get("last_activity_ms"),
+    }
 
 
 @router.get("/{thread_id}/tasks/{task_id}/history")

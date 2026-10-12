@@ -148,11 +148,19 @@ export function createSubagentMuxController(rt: SubagentRuntime, deps: SubagentM
       const normalized = normalizeWireStatus(outcome);
       const status =
         normalized && isTerminalStatus(normalized) ? normalized : 'completed';
+      // When it went quiet, for a close that is news here, which may be the
+      // first this page hears of the task. A drain re-closing a task already
+      // settled here must not restart its clock.
+      const news = !isSettledTask(shortTaskId);
       // Record the exact outcome so every downstream reactivation guard can seed
       // the RIGHT terminal status (a failed task must not resurface as completed).
       rt.terminalTaskOutcomesRef.current.set(shortTaskId, status);
       if (rt.updateSubagentCard) {
-        rt.updateSubagentCard(`task:${shortTaskId}`, { status, isActive: false });
+        rt.updateSubagentCard(`task:${shortTaskId}`, {
+          status,
+          isActive: false,
+          ...(news ? { lastActivityMs: Date.now() } : {}),
+        });
       }
       // A workflow run reads its own lifecycle state ahead of the card status,
       // so the stamp above is invisible to it. When the lane closed without a

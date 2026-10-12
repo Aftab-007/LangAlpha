@@ -45,7 +45,7 @@ const POLL_FAST_COUNT = 5;
  *  "starting" and keep polling; `stopping` is still a live run. `raw` stays
  *  `unknown` — the wire boundary is untrusted, so the default absorbs anything
  *  off-vocabulary, including legacy pre-1.6 spellings (`active`). */
-function mapStatus(raw: unknown): PTCDispatchStatus {
+export function mapLivenessStatus(raw: unknown): PTCDispatchStatus {
   switch (raw) {
     case 'running':
     case 'stopping':
@@ -174,8 +174,8 @@ export function DispatchStatusProvider({ children }: { children: ReactNode }) {
     refetchInterval: (query) => {
       const rows = (query.state.data ?? []) as DispatchLiveness[];
       const byId = new Map(rows.map((r) => [r.thread_id, r]));
-      // Omitted ids map to 'starting' (keep watching), matching mapStatus.
-      const statuses = sortedIds.map((id) => mapStatus(byId.get(id)?.status));
+      // Omitted ids map to 'starting' (keep watching), matching mapLivenessStatus.
+      const statuses = sortedIds.map((id) => mapLivenessStatus(byId.get(id)?.status));
       const aggregate = aggregateStatus(statuses);
       // Advance window-scoped counters once per SETTLED fetch, deduped on the
       // cumulative settle count since this callback re-evaluates more often.
@@ -203,7 +203,7 @@ export function DispatchStatusProvider({ children }: { children: ReactNode }) {
     for (const row of (data ?? []) as DispatchLiveness[]) {
       const startedAt = row.run_started_at ? Date.parse(row.run_started_at) : NaN;
       slices.set(row.thread_id, {
-        status: mapStatus(row.status),
+        status: mapLivenessStatus(row.status),
         startedAt: Number.isFinite(startedAt) ? startedAt : undefined,
       });
     }
@@ -226,7 +226,7 @@ export function DispatchStatusProvider({ children }: { children: ReactNode }) {
 
 /** Lifecycle-store status → card status; null while the store has nothing
  *  ('idle') so the pre-ledger dispatch window falls through to the poll. */
-function mapLifecycleStatus(s: PublicRunStatus): PTCDispatchStatus | null {
+export function mapLifecycleStatus(s: PublicRunStatus): PTCDispatchStatus | null {
   switch (s) {
     case 'running':
     case 'stopping': return 'running';

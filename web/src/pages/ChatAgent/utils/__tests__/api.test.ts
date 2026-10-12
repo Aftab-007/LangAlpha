@@ -924,6 +924,15 @@ describe('ChatAgent API utilities', () => {
         params: { ids: 't-1,t-2' },
       });
     });
+
+    it('reads more ids than the route takes in batches it does', async () => {
+      const ids = Array.from({ length: 150 }, (_, i) => `t-${i}`);
+      mockGet.mockImplementation((_url: string, { params }: { params: { ids: string } }) =>
+        Promise.resolve({ data: { liveness: params.ids.split(',').map((thread_id) => ({ thread_id })) } }));
+      const res = await getDispatchLiveness(ids);
+      expect(mockGet.mock.calls.map(([, { params }]) => params.ids.split(',').length)).toEqual([100, 50]);
+      expect(res.map((row) => row.thread_id)).toEqual(ids);
+    });
   });
 
   describe('apiErrorDetailMessage', () => {

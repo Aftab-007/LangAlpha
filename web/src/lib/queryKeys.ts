@@ -103,6 +103,10 @@ export const queryKeys = {
     // on the SORTED id set so registration order never churns the cache entry.
     dispatchLivenessAll: () => [...queryKeys.threads.all, 'dispatch-liveness'],
     dispatchLiveness: (ids: string[]) => [...queryKeys.threads.dispatchLivenessAll(), [...ids].sort()],
+    // The same read keyed on the threads' run states as well, so a run that
+    // starts or settles is a fresh read of how long each has been quiet.
+    dispatchActivity: (ids: string[], revision: string) =>
+      [...queryKeys.threads.dispatchLivenessAll(), 'activity', [...ids].sort(), revision],
   },
   workspaceFiles: {
     all:  ['workspaceFiles'],

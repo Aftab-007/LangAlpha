@@ -81,6 +81,10 @@ function mergeSubagentHistory(older: SubagentHistoryData, newer: SubagentHistory
       newer.projectedRunStartedMs != null && older.projectedRunStartedMs != null
         ? Math.max(newer.projectedRunStartedMs, older.projectedRunStartedMs)
         : (newer.projectedRunStartedMs ?? older.projectedRunStartedMs),
+    lastActivityMs:
+      newer.lastActivityMs != null && older.lastActivityMs != null
+        ? Math.max(newer.lastActivityMs, older.lastActivityMs)
+        : (newer.lastActivityMs ?? older.lastActivityMs),
   };
 }
 

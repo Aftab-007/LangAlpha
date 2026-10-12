@@ -619,6 +619,8 @@ export async function loadConversationHistory(
             typeof payload.projected_run_started_ms === 'number'
               ? payload.projected_run_started_ms
               : undefined;
+          const stampedActivityMs =
+            typeof payload.last_activity_ms === 'number' ? payload.last_activity_ms : undefined;
           const action = (() => { if (rawAction === 'spawned') return 'init'; if (rawAction === 'steering_accepted') return 'update'; if (rawAction === 'resumed') return 'resume'; return rawAction || 'init'; })();
           if (task_id) {
             const agentId = `task:${task_id}`;
@@ -633,6 +635,7 @@ export async function loadConversationHistory(
                 error: stampedError,
                 errorType: stampedErrorType,
                 projectedRunStartedMs: stampedRunStartedMs,
+                lastActivityMs: stampedActivityMs,
               });
             } else {
               const existing = subagentHistoryByTaskId.get(agentId)!;
@@ -658,6 +661,9 @@ export async function loadConversationHistory(
                   existing.projectedRunStartedMs != null
                     ? Math.max(existing.projectedRunStartedMs, stampedRunStartedMs)
                     : stampedRunStartedMs;
+              }
+              if (stampedActivityMs != null) {
+                existing.lastActivityMs = Math.max(existing.lastActivityMs ?? stampedActivityMs, stampedActivityMs);
               }
             }
             // Patch the inline card(s) for THIS artifact's tool_call_id so a
