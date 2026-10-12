@@ -535,7 +535,7 @@ _REPLY_ARG = Annotated[
 ]
 _NEW_THREAD_ARG = Annotated[
     bool,
-    "True to start a new thread in that chat (a new topic on Telegram) instead of "
+    "True to start a new thread in that chat (a new topic on Telegram and Feishu) instead of "
     "continuing this conversation's thread there; it then becomes this conversation's "
     "thread. Use it for an unrelated update, or when list_message_targets shows the "
     "thread was last used long ago. Has no effect where the chat has no threads.",
