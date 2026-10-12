@@ -532,7 +532,7 @@ async def enqueue_compensation_job(
     past so a migrated entry keeps its chain position ahead of younger
     pending rows. ``defer=True`` inserts the row with
     ``next_retry_at='infinity'`` — durable but never claimable until
-    ``release_deferred_jobs`` flips it due (interrupted-root task
+    ``release_deferred_report_backs`` flips it due (interrupted-root task
     report-backs wait for the thread's next completed finalize). ON
     CONFLICT DO NOTHING: re-running the sweep never double-registers.
     ``conn`` joins the caller's transaction — how a job commits atomically
@@ -591,26 +591,31 @@ async def _insert_compensation_job(
     )
 
 
-async def release_deferred_jobs(
-    conn, thread_id: str, hook_type: str
-) -> int:
-    """Flip a thread's deferred (``next_retry_at='infinity'``) jobs due.
+async def release_deferred_report_backs(conn, thread_id: str) -> int:
+    """Flip the deferred (``next_retry_at='infinity'``) report-backs owed to a
+    thread due.
 
-    Runs on the caller's connection so the release commits atomically with
-    the finalize that makes posting safe again (a completed PTC run means
-    no pending HITL checkpoint to collide with).
+    A task report-back is the thread's own row; an analyst's report-back
+    (``report_back``) belongs to the analyst's thread and is keyed on the
+    thread it reports to, so each is matched by its own column. Runs on the
+    caller's connection so the release commits atomically with the finalize
+    that makes posting safe again (a completed run means no pending HITL
+    checkpoint to collide with).
     """
     async with conn.cursor() as cur:
         await cur.execute(
             """
             UPDATE hook_outbox
             SET next_retry_at = NOW()
-            WHERE conversation_thread_id = %s
-              AND hook_type = %s
-              AND status = 'pending'
+            WHERE status = 'pending'
               AND next_retry_at = 'infinity'::timestamptz
+              AND (
+                (hook_type = 'task_report_back'
+                 AND conversation_thread_id = %s)
+                OR (hook_type = 'report_back' AND ordering_key = %s)
+              )
             """,
-            (thread_id, hook_type),
+            (thread_id, str(thread_id)),
         )
         return cur.rowcount
 
@@ -620,35 +625,46 @@ async def defer_claimed_job(
 ) -> Optional[str]:
     """Park a CLAIMED job back to deferred (``next_retry_at='infinity'``).
 
-    For a task report-back whose thread turned interrupted between the
-    deferred release and this claim: posting would collide with the pending
-    HITL checkpoint, so the job re-parks until the next completed finalize
-    flips it due again. Fenced by ``attempts``. At the attempts ceiling the
-    job is parked dead instead — a pending row below the ceiling blocks its
-    ordering chain, so an unclaimable-forever deferred row would wedge every
-    later notification on the thread. Returns the new status ('pending' or
-    'dead'), or None if the fence was lost; the caller stops either way and
-    its fenced ack no-ops.
+    For a report-back whose receiving thread is live or interrupted: a live
+    turn takes it in as a steer before its next model call, and posting into
+    an interrupted one would collide with the pending HITL checkpoint, so the
+    job re-parks until the next dead-turn finalize flips it due again. Fenced
+    by ``attempts``. At the attempts ceiling the job is parked dead instead
+    (a dead report_back with its watch_clear compensation), since a pending
+    row below the ceiling blocks its ordering chain and an unclaimable-forever
+    deferred row would wedge every later notification on the thread. Returns
+    the new status ('pending' or 'dead'), or None if the fence was lost; the
+    caller stops either way and its fenced ack no-ops. A turn's hold on the
+    job is dropped: a job its executor holds was never confirmed, so the next
+    live turn may take it in again.
     """
     async with pool.get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                """
-                UPDATE hook_outbox
-                SET status = CASE
-                        WHEN attempts >= %s THEN 'dead' ELSE 'pending'
-                    END,
-                    next_retry_at = CASE
-                        WHEN attempts >= %s THEN NOW()
-                        ELSE 'infinity'::timestamptz
-                    END,
-                    lease_expires_at = NULL,
-                    completed_at = CASE
-                        WHEN attempts >= %s THEN NOW() ELSE completed_at
-                    END
-                WHERE hook_outbox_id = %s AND status = 'claimed'
-                  AND attempts = %s
-                RETURNING status
+                f"""
+                WITH parked AS (
+                    UPDATE hook_outbox
+                    SET status = CASE
+                            WHEN attempts >= %s THEN 'dead' ELSE 'pending'
+                        END,
+                        next_retry_at = CASE
+                            WHEN attempts >= %s THEN NOW()
+                            ELSE 'infinity'::timestamptz
+                        END,
+                        lease_expires_at = NULL,
+                        completed_at = CASE
+                            WHEN attempts >= %s THEN NOW() ELSE completed_at
+                        END,
+                        payload = payload - 'steered_run_id'
+                    WHERE hook_outbox_id = %s AND status = 'claimed'
+                      AND attempts = %s
+                    RETURNING *
+                ),
+                dead_rows AS (
+                    SELECT * FROM parked WHERE status = 'dead'
+                ),
+                comp AS ({_DEAD_REPORT_BACK_COMPENSATION_SQL})
+                SELECT status FROM parked
                 """,
                 (max_attempts, max_attempts, max_attempts, job_id, attempts),
             )
@@ -686,6 +702,127 @@ async def list_open_notification_jobs(
                 (thread_id, hook_type, limit),
             )
             return [dict(row) for row in await cur.fetchall()]
+
+
+async def list_steerable_report_jobs(
+    thread_id: str, *, limit: int = 10
+) -> List[Dict[str, Any]]:
+    """Report-backs owed to a thread that no executor or turn holds, oldest
+    first.
+
+    Pending in any form (due, backing off, parked), never dispatched and not
+    held by a turn: a claimed job belongs to its executor, whose POST may
+    already be in flight, a dispatched one already has its turn, and a held
+    one is already in a turn's messages.
+    """
+    async with pool.get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT hook_outbox_id, hook_type, run_id, payload, created_at
+                FROM hook_outbox
+                WHERE ordering_key = %s
+                  AND status = 'pending'
+                  AND hook_type IN ('task_report_back', 'report_back')
+                  AND NOT (payload ? 'dispatched_run_id')
+                  AND NOT (payload ? 'steered_run_id')
+                ORDER BY created_at, hook_outbox_id
+                LIMIT %s
+                """,
+                (str(thread_id), limit),
+            )
+            return [dict(row) for row in await cur.fetchall()]
+
+
+async def hold_steered_report_jobs(
+    job_ids: List[str], *, run_id: Optional[str]
+) -> List[str]:
+    """Park report-backs a live turn is taking in as a steer, stamped with
+    its run; returns the ids won.
+
+    The same ``pending`` gate the drainer's claim takes, so a job is either
+    steered or claimed, never both. Held, not closed: until the message
+    carrying it is checkpointed, a turn that dies loses it, so it stays a
+    parked report until ``close_steered_report_jobs`` confirms it. A turn
+    that ends unconfirmed releases it with the rest of the thread's parked
+    report-backs, and its executor posts it as its own turn.
+    """
+    if not job_ids:
+        return []
+    async with pool.get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE hook_outbox
+                SET next_retry_at = 'infinity'::timestamptz,
+                    payload = COALESCE(payload, '{}'::jsonb)
+                        || jsonb_build_object('steered_run_id', %s::text)
+                WHERE hook_outbox_id = ANY(%s::uuid[])
+                  AND status = 'pending'
+                  AND NOT (payload ? 'dispatched_run_id')
+                  AND NOT (payload ? 'steered_run_id')
+                RETURNING hook_outbox_id
+                """,
+                (run_id, job_ids),
+            )
+            return [str(r[0]) for r in await cur.fetchall()]
+
+
+async def close_steered_report_jobs(
+    job_ids: List[str], *, run_id: Optional[str]
+) -> List[str]:
+    """Close report-backs a live turn delivered; returns the ids won.
+
+    Two kinds: a report the turn held, once its model step confirms the
+    message is checkpointed (only the holding run closes it), and a report
+    nothing is owed for any more, closed outright. An analyst's report
+    closes the way its summary run would: a ``watch_clear`` in the same
+    statement releases the pair, at the report's own chain position
+    (created_at inherited, as the dead compensation does) so it does not
+    queue behind younger jobs. Not an error wake: the live turn is the
+    delivery.
+    """
+    if not job_ids:
+        return []
+    async with pool.get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                WITH steered AS (
+                    UPDATE hook_outbox
+                    SET status = 'done', completed_at = NOW(),
+                        next_retry_at = NULL,
+                        payload = COALESCE(payload, '{}'::jsonb)
+                            || jsonb_build_object('steered_run_id', %s::text)
+                    WHERE hook_outbox_id = ANY(%s::uuid[])
+                      AND status = 'pending'
+                      AND NOT (payload ? 'dispatched_run_id')
+                      AND (NOT (payload ? 'steered_run_id')
+                           OR payload->>'steered_run_id' = %s::text)
+                    RETURNING *
+                ),
+                clears AS (
+                    INSERT INTO hook_outbox (
+                        run_id, conversation_thread_id, hook_type,
+                        payload, ordering_key, idempotency_key, created_at
+                    )
+                    SELECT run_id, conversation_thread_id, 'watch_clear',
+                           jsonb_build_object(
+                               'ptc_thread_id', payload->>'ptc_thread_id',
+                               'error_wake', false,
+                               'dispatch_gen', payload->'dispatch_gen'
+                           ),
+                           ordering_key, hook_outbox_id || ':steered_clear',
+                           created_at
+                    FROM steered
+                    WHERE hook_type = 'report_back' AND payload ? 'ptc_thread_id'
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                )
+                SELECT hook_outbox_id FROM steered
+                """,
+                (run_id, job_ids, run_id),
+            )
+            return [str(r[0]) for r in await cur.fetchall()]
 
 
 async def get_recent_notification_run_ids(

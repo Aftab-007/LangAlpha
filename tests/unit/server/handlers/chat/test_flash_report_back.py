@@ -81,6 +81,8 @@ class _ExecHarness:
             patch("src.utils.cache.redis_cache.get_cache_client", return_value=self.cache),
             patch.object(executor, "_post_report_back", self.post),
             patch("src.server.database.runs.lifecycle.get_run", self.get_run),
+            # The thread reported to is idle, so the job is not parked.
+            patch.object(executor, "_park_while_busy", AsyncMock(return_value=False)),
             patch("src.server.database.runs.outbox.extend_job_lease", self.extend_lease),
             patch("src.server.database.runs.outbox.merge_job_payload", self.merge_payload),
             patch("src.server.database.runs.outbox.requeue_job_with_key", self.requeue),

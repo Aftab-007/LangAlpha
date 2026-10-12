@@ -8,10 +8,11 @@ the EXECUTOR's decision at claim time, against the ledger: a run whose
 ``result_delivered_at`` is stamped (TaskOutput delivered it) is dropped
 with a cleared wake; a live or interrupted parent parks the job until the
 thread's next dead-turn finalize (completed, error or cancelled) releases
-it. A release the user's own stop caused drops too, for a run that had
-already settled when they stopped (``_stop_already_covered``) — the whole
-point of a stop is that no new turn starts. The POST is a synthetic
-notification turn via the shared
+it, and a live turn may close it first by taking the report in as a steer
+(``report_back.steer``). A release the user's own stop caused drops too,
+for a run that had already settled when they stopped
+(``_stop_already_covered``) — the whole point of a stop is that no new
+turn starts. The POST is a synthetic notification turn via the shared
 ``notify_turn`` machinery: it announces the outcome and leaves TaskOutput
 to fetch the result from the durable archive — nothing volatile rides the
 payload.
@@ -177,19 +178,22 @@ def _task_report(payload: dict) -> "TaskReport":
     )
 
 
-def _build_notification_message(report: "TaskReport", subagent_type: str | None) -> str:
-    """The synthetic turn's content: announce the run's outcome and direct
-    the agent to TaskOutput, which serves the result — or the failure
-    detail — from the durable ledger. A failed run must never be announced
-    as finished work: the agent would report a deliverable that does not
-    exist."""
+def _build_notification_message(
+    report: "TaskReport", subagent_type: str | None, *, steered: bool = False
+) -> str:
+    """The report's content, as its own turn or as a steer into a live one:
+    announce the run's outcome and direct the agent to TaskOutput, which
+    serves the result — or the failure detail — from the durable ledger. A
+    failed run must never be announced as finished work: the agent would
+    report a deliverable that does not exist."""
     display_id = report.display_id
     subagent_type = subagent_type or "subagent"
     description = report.description or ""
+    when = "while you were working" if steered else "after your previous turn ended"
     if report.failed:
         headline = (
-            f"Background subagent {display_id} ({subagent_type}) FAILED after "
-            f"your previous turn ended, and you have not seen the failure. "
+            f"Background subagent {display_id} ({subagent_type}) FAILED "
+            f"{when}, and you have not seen the failure. "
             f"Retrieve the error details and report the failure to the user "
             f"honestly — do not claim its work exists. Re-dispatch only if "
             f"the user still needs the work."
@@ -198,7 +202,7 @@ def _build_notification_message(report: "TaskReport", subagent_type: str | None)
     else:
         headline = (
             f"Background subagent {display_id} ({subagent_type}) finished "
-            f"after your previous turn ended, and you have not seen its "
+            f"{when}, and you have not seen its "
             f"result. Retrieve it and report the outcome to the user "
             f"(integrate it with your prior work where relevant)."
         )
@@ -353,13 +357,15 @@ async def execute_task_report_back(job: dict) -> None:
                     pass
                 return
 
-        # Live/interrupted-latest guard. A live parent turn may still fetch
-        # the result itself (jobs are born at the run's CAS, usually
-        # mid-turn); an interrupted one must not receive a POST that would
-        # collide with the pending HITL checkpoint. Both park the job until
-        # the thread's next dead-turn finalize releases it — the re-read
-        # closes the race where that finalize landed between the status
-        # read and the park (its release pass saw no deferred row yet).
+        # Live/interrupted-latest guard. A live turn takes the report in as
+        # a steer before its next model call (``report_back.steer``; jobs
+        # are born at the run's CAS, usually mid-turn), or fetches the
+        # result itself; an interrupted one must not receive a POST that
+        # would collide with the pending HITL checkpoint. Both park the job
+        # until the thread's next dead-turn finalize releases it — the
+        # re-read closes the race where that finalize landed between the
+        # status read and the park (its release pass saw no deferred row
+        # yet).
         latest = await tl_db.get_latest_attempt(thread_id)
         if latest and latest.get("status") in ("interrupted", "in_progress"):
             parked = await _repark()
@@ -372,8 +378,8 @@ async def execute_task_report_back(job: dict) -> None:
                     from src.server.database.pool import get_db_connection
 
                     async with get_db_connection() as conn:
-                        await outbox_db.release_deferred_jobs(
-                            conn, thread_id, "task_report_back"
+                        await outbox_db.release_deferred_report_backs(
+                            conn, thread_id
                         )
                     try:
                         from src.server.services.hook_outbox import (

@@ -178,7 +178,7 @@ The streaming endpoints emit Server-Sent Events. Key event types:
 - `provenance` — record of external data the agent accessed (one per source). Flat payload: `record_id`, `source_type`, `identifier`, `title?`, `provider?`, `tool_call_id?`, `args_fingerprint?`, `result_sha256?`, `result_size?`, `result_snippet?`, `timestamp`, plus `agent` (`main`/`task:{id}`, resolved server-side from the LangGraph namespace)
 - `user_message` — echo of user input (including mid-turn steering)
 - `workflow_status` / `thread_created` — lifecycle signals
-- `steering_delivered` / `task_steering_accepted` — steering acknowledgements
+- `steering_delivered` / `task_steering_accepted` — steering acknowledgements. A report that reached a live turn instead of posting its own (a background task or a hand-off that finished while the agent was still working) is a `steering_delivered` entry with empty `content` and the same `report_source` a report-back turn's `metadata` carries
 - `model_retry` — a model call hit a transient error and is being retried: `{model, attempt, max_retries, error, status_code?, delay_seconds, agent}` (`attempt` = calls failed so far). Live/reconnect only — not persisted to history
 - `model_fallback` — a model failed (retries exhausted or non-retryable error) and the run switched to a fallback model: `{from_model, to_model, from_is_primary, error, status_code?, attempts_on_from, agent}`. Persisted and replayed
 - `interrupt` — human-in-the-loop pause

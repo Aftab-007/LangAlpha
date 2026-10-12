@@ -8,7 +8,7 @@ import { ownerOfToolCall } from '../toolCallOwner';
 import { isTaskAgentId } from '../../utils/agentId';
 import { opensTurn } from '../../components/messageList/messagePredicates';
 import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subagents/taskSegmentBuilder';
-import { reportRowProvenance, senderProvenance, type SenderMetadata } from '../provenance';
+import { reportRowProvenance, senderProvenance, steeredReportRow, type SenderMetadata } from '../provenance';
 import type { ReportSource } from '@/types/api';
 import type { SubagentTaskRecord, TextSegment } from '@/types/chat';
 import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from '../../hooks/utils/types';
@@ -632,8 +632,9 @@ export function handleHistoryToolCallResult({ assistantMessageId, toolCallId, re
 
 /**
  * Handles steering_delivered events in history replay. Creates user bubble(s)
- * for each steering message, then a new assistant placeholder so subsequent
- * events render in a fresh assistant bubble.
+ * for each steering message, and a report's caption row for each report the
+ * turn took in, then a new assistant placeholder so subsequent events render
+ * in a fresh assistant bubble.
  */
 export function handleHistorySteeringDelivered({
   event,
@@ -665,21 +666,33 @@ export function handleHistorySteeringDelivered({
   const batchId = (pairStateByPair.get(pairIndex)?.steeringBatches ?? 0) + 1;
   for (let sIdx = 0; sIdx < steeringMessages.length; sIdx++) {
     const qMsg = steeringMessages[sIdx];
-    if (!qMsg.content) continue;
-    const userMsgId = `history-steering-user-${pairIndex}-${batchId}-${sIdx}`;
-    const userMessage: MessageRecord = {
-      id: userMsgId,
-      role: 'user',
-      content: qMsg.content,
-      contentType: 'text',
-      timestamp: qMsg.timestamp ? new Date((qMsg.timestamp as number) * 1000) : new Date(),
-      isStreaming: false,
-      isHistory: true,
-      turnIndex: pairIndex,
-      steeringDelivered: true,
-    };
-    const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
-    if (provenance) userMessage.provenance = provenance;
+    const timestamp = qMsg.timestamp ? new Date((qMsg.timestamp as number) * 1000) : new Date();
+    let userMessage: MessageRecord;
+    if (qMsg.report_source) {
+      const row = steeredReportRow(
+        qMsg.report_source as ReportSource,
+        `history-steering-report-${pairIndex}-${batchId}-${sIdx}`,
+        timestamp,
+        pairIndex,
+      );
+      if (!row) continue;
+      userMessage = { ...row, isHistory: true };
+    } else {
+      if (!qMsg.content) continue;
+      userMessage = {
+        id: `history-steering-user-${pairIndex}-${batchId}-${sIdx}`,
+        role: 'user',
+        content: qMsg.content,
+        contentType: 'text',
+        timestamp,
+        isStreaming: false,
+        isHistory: true,
+        turnIndex: pairIndex,
+        steeringDelivered: true,
+      };
+      const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
+      if (provenance) userMessage.provenance = provenance;
+    }
     let delivered: string | null = null;
     setMessages((prev: MessageRecord[]) => {
       // A steer whose POST lost its answer after the server took it stays on

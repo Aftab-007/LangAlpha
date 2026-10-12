@@ -561,8 +561,11 @@ class PTCAgent:
         # --- Build main-only middleware (NOT passed to subagents) ---
         main_only_middleware: list[Any] = []
 
-        # Must be first: steering context must be visible before any other middleware.
-        main_only_middleware.append(SteeringMiddleware())
+        _bg_registry = background_registry or BackgroundTaskRegistry()
+
+        # Must be first: steering context must be visible before any other
+        # middleware. The registry carries the server's report inbox.
+        main_only_middleware.append(SteeringMiddleware(registry=_bg_registry))
 
         # Right after steering, so a steer and a flip sent together reach the
         # model in that order, with the operator-role row last. Its tool hook
@@ -577,7 +580,6 @@ class PTCAgent:
         direct_tools = list(direct_mcp.tools) if direct_mcp is not None else []
         main_only_middleware.extend(direct_tool_middleware(direct_mcp, order_ledger))
 
-        _bg_registry = background_registry or BackgroundTaskRegistry()
         event_capture_middleware = SubagentEventCaptureMiddleware(registry=_bg_registry)
 
         background_middleware = BackgroundSubagentMiddleware(

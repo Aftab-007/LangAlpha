@@ -10,7 +10,7 @@ read and remove can only re-deliver, never lose, an accepted user message.
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -34,14 +34,32 @@ def _payload(content: str, run_id: str | None) -> str:
     return json.dumps(data)
 
 
-async def _run(cache: FakeCache, config: dict):
+async def _run(cache: FakeCache, config: dict, registry=None):
     runtime = MagicMock()
     with patch(
         "src.utils.cache.redis_cache.get_cache_client", return_value=cache
     ):
-        return await SteeringMiddleware().abefore_model(
+        return await SteeringMiddleware(registry).abefore_model(
             {}, runtime, config=config
         )
+
+
+def _registry(*reports: dict) -> MagicMock:
+    registry = MagicMock()
+    registry.report_inbox = AsyncMock(return_value=list(reports))
+    return registry
+
+
+_R1 = {
+    "content": "REPORT ONE",
+    "report_source": {"kind": "task", "task_id": "a"},
+    "job_id": "job-1",
+}
+_R2 = {
+    "content": "REPORT TWO",
+    "report_source": {"kind": "task", "task_id": "b"},
+    "job_id": "job-2",
+}
 
 
 @pytest.mark.asyncio
@@ -198,3 +216,148 @@ async def test_a_steer_with_no_keyed_send_keeps_an_ordinary_id():
 
     assert msg.id is None
 
+
+@pytest.mark.asyncio
+async def test_reports_alone_inject_one_message_without_user_header():
+    registry = _registry(_R1, _R2)
+
+    result = await _run(FakeCache(), _config(), registry)
+
+    (msg,) = result["messages"]
+    assert msg.content == "REPORT ONE\n\nREPORT TWO"
+    assert "[Steering from User]" not in msg.content
+    assert msg.additional_kwargs["lc_source"] == "steering"
+    delivered = msg.additional_kwargs["steering_delivered"]
+    assert delivered["count"] == 2
+    assert [(m["content"], m["report_source"]) for m in delivered["messages"]] == [
+        ("", _R1["report_source"]),
+        ("", _R2["report_source"]),
+    ]
+    registry.report_inbox.assert_awaited_once_with("t-1", "run-A")
+    # The run holds them until the model call that reads them confirms them.
+    assert msg.additional_kwargs["held_reports"] == {
+        "run_id": "run-A",
+        "job_ids": ["job-1", "job-2"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_reports_come_before_user_steering():
+    cache = FakeCache()
+    cache.client.lists[_KEY] = [_payload("do it differently", "run-A")]
+
+    result = await _run(cache, _config(), _registry(_R1))
+
+    (msg,) = result["messages"]
+    assert msg.content.index("REPORT ONE") < msg.content.index("[Steering from User]")
+    assert msg.content.endswith("do it differently")
+    delivered = msg.additional_kwargs["steering_delivered"]
+    assert delivered["count"] == 2
+    report, user = delivered["messages"]
+    assert report["report_source"] == _R1["report_source"]
+    assert user["content"] == "do it differently"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registry", [None, object()])
+async def test_without_a_report_inbox_only_user_steering_is_delivered(registry):
+    cache = FakeCache()
+    cache.client.lists[_KEY] = [_payload("just me", "run-A")]
+
+    result = await _run(cache, _config(), registry)
+
+    (msg,) = result["messages"]
+    assert msg.content == "[Steering from User]\njust me"
+    assert msg.additional_kwargs["steering_delivered"]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_failing_report_inbox_still_delivers_user_steering():
+    registry = MagicMock()
+    registry.report_inbox = AsyncMock(side_effect=RuntimeError("db down"))
+    cache = FakeCache()
+    cache.client.lists[_KEY] = [_payload("just me", "run-A")]
+
+    result = await _run(cache, _config(), registry)
+
+    (msg,) = result["messages"]
+    assert msg.content == "[Steering from User]\njust me"
+
+
+@pytest.mark.asyncio
+async def test_failing_user_steering_read_still_injects_handed_over_reports():
+    cache = FakeCache()
+    cache.client.lrange = AsyncMock(side_effect=RuntimeError("redis down"))
+
+    result = await _run(cache, _config(), _registry(_R1))
+
+    (msg,) = result["messages"]
+    assert msg.content == "REPORT ONE"
+    assert msg.additional_kwargs["steering_delivered"]["count"] == 1
+
+
+
+# ---------------------------------------------------------------------------
+# The model call confirms the reports injected since the last model response
+# ---------------------------------------------------------------------------
+
+
+async def _model_call(messages, registry):
+    from langchain_core.messages import AIMessage
+
+    request = MagicMock()
+    request.state = {"messages": messages}
+    handler = AsyncMock(return_value=AIMessage(content="ok"))
+    response = await SteeringMiddleware(registry).awrap_model_call(request, handler)
+    handler.assert_awaited_once_with(request)
+    return response
+
+
+def _held(*job_ids: str, run_id: str = "run-A"):
+    from langchain_core.messages import HumanMessage
+
+    return HumanMessage(
+        content="REPORT",
+        additional_kwargs={"held_reports": {"run_id": run_id, "job_ids": list(job_ids)}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_call_confirms_reports_injected_since_the_last_response():
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    registry = MagicMock()
+    registry.report_confirm = AsyncMock()
+    messages = [
+        HumanMessage(content="go"),
+        _held("job-old"),
+        AIMessage(content="", tool_calls=[{"id": "c1", "name": "t", "args": {}}]),
+        ToolMessage(content="r", tool_call_id="c1"),
+        _held("job-1", "job-2"),
+    ]
+
+    await _model_call(messages, registry)
+
+    registry.report_confirm.assert_awaited_once_with("run-A", ["job-1", "job-2"])
+
+
+@pytest.mark.asyncio
+async def test_model_call_without_held_reports_confirms_nothing():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    registry = MagicMock()
+    registry.report_confirm = AsyncMock()
+
+    await _model_call([_held("job-old"), AIMessage(content="x"), HumanMessage("hi")], registry)
+
+    registry.report_confirm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_confirm_still_makes_the_model_call():
+    registry = MagicMock()
+    registry.report_confirm = AsyncMock(side_effect=RuntimeError("db down"))
+
+    response = await _model_call([_held("job-1")], registry)
+
+    assert response.content == "ok"

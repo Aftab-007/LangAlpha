@@ -10,12 +10,13 @@ import { readRetryNotice } from './autoRetry';
 import { noteLiveRun } from '../latestRun';
 import { isUpstreamHint, type StructuredError } from '@/utils/rateLimitError';
 import { applyAnnotationArtifact } from '@/pages/MarketView/stores/chartAnnotationStore';
+import type { ReportSource } from '@/types/api';
 import type { AssistantMessage, ChatMessage } from '@/types/chat';
 import { CREDIT_STOP_ERROR_TYPE } from '@/types/sse';
 import { setStoredThreadId } from '../../hooks/utils/threadStorage';
 import { createAssistantMessage, appendMessage, updateMessage } from '../../hooks/utils/messageHelpers';
 import { turnOf } from '../../components/messageList/turnProjection';
-import { senderProvenance, withLiveReportRow } from '../provenance';
+import { senderProvenance, steeredReportRow, withLiveReportRow } from '../provenance';
 import { stampRunTurn } from './runTurn';
 import type { HtmlWidgetData } from '../../hooks/utils/types';
 import {
@@ -302,13 +303,20 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
     // Subagent steering_delivered events are handled in the isSubagent block below.
     if (eventType === 'steering_delivered' && !isSubagent) {
       const oldAssistantId = assistantMessageId;
+      // A report the turn took in carries `report_source` and no words of the
+      // user's. A delivery of reports alone leaves the user's own steer, and
+      // the boundary its acceptance set, for the delivery that takes it.
+      const delivered = event.messages || [];
+      const takesUserSteer = delivered.some((m) => !m.report_source);
       // Use closure-local snapshot or fall back to the shared ref
       // (steering_accepted only arrives on the secondary POST stream, so
       // the closure-local steeringAtOrder is typically null — the shared
       // ref is set by handleSendSteering on the secondary stream). Read
       // here, not in the updater: both are nulled below, before React runs
       // an updater it did not compute eagerly.
-      const effectiveSteeringAtOrder = steeringAtOrder ?? refs.steeringAtOrderRef?.current ?? null;
+      const effectiveSteeringAtOrder = takesUserSteer
+        ? steeringAtOrder ?? refs.steeringAtOrderRef?.current ?? null
+        : null;
 
       // 1. Roll back old assistant message to the snapshot taken at steering_accepted
       //    time, removing any content that leaked due to stream-mode multiplexing.
@@ -391,43 +399,60 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
           };
         })
       );
-      steeringAtOrder = null;
-      if (refs.steeringAtOrderRef) refs.steeringAtOrderRef.current = null;
+      if (takesUserSteer) {
+        steeringAtOrder = null;
+        if (refs.steeringAtOrderRef) refs.steeringAtOrderRef.current = null;
+      }
 
       // The bubble being steered: every bubble this creates joins its turn,
       // read from the projection because a report-back's bubble has no stamp.
       const steeredId = assistantMessageId;
       // 2. Mark delivered the steers it names, and create the rest from event
       //    data: this view never held them (sent elsewhere), or lost them on
-      //    a reconnect.
+      //    a reconnect. Reports are drawn as their caption rows, ahead of the
+      //    user's words as the model reads them, and claim no steer.
       // The banners those failed steers raised, which no failed steer holds now.
       let deliveredErrors: unknown[] = [];
       let deliveredCopies: ChatMessage[] = [];
       rt.setMessages((prev) => {
         const turnIndex = turnOf(prev, steeredId);
         // A steer of this view's it names gets no copy.
-        const { messages: claimed, unclaimed } = claimDeliveredSteers(prev, event.messages || [], turnIndex);
+        const { messages: claimed, unclaimed } = claimDeliveredSteers(
+          prev, delivered.filter((qMsg) => !qMsg.report_source), turnIndex);
         const errorOf = (m: ChatMessage) => (m as { queueError?: unknown }).queueError;
         deliveredCopies = prev.filter((m, i) => claimed[i] !== m);
         deliveredErrors = deliveredCopies.map(errorOf)
           .filter((e) => !claimed.some((m) => errorOf(m) === e));
-        const steeringMsgs = unclaimed.filter((qMsg) => qMsg.content);
-        if (steeringMsgs.length === 0) return claimed;
-        const newUserMessages: ChatMessage[] = steeringMsgs.map((qMsg) => {
+        const rowOf = (qMsg: Record<string, unknown>): ChatMessage | null => {
+          const timestamp = qMsg.timestamp ? new Date((qMsg.timestamp as number) * 1000) : new Date();
+          const source = qMsg.report_source as ReportSource | undefined;
+          const id = `steering-${source ? 'report' : 'user'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          if (source) return steeredReportRow(source, id, timestamp, turnIndex);
+          if (typeof qMsg.content !== 'string' || !qMsg.content) return null;
           const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
           return {
-            id: `steering-user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            id,
             role: 'user' as const,
-            content: qMsg.content as string,
+            content: qMsg.content,
             contentType: 'text' as const,
-            timestamp: qMsg.timestamp ? new Date((qMsg.timestamp as number) * 1000) : new Date(),
+            timestamp,
             isStreaming: false as const,
             steeringDelivered: true,
             turnIndex,
             ...(provenance ? { provenance } : {}),
           };
-        });
-        return [...claimed, ...newUserMessages];
+        };
+        const rows = (entries: readonly Record<string, unknown>[]) =>
+          entries.map(rowOf).filter((m): m is ChatMessage => m !== null);
+        const reportRows = rows(delivered.filter((qMsg) => qMsg.report_source));
+        const newUserMessages = rows(unclaimed);
+        if (reportRows.length === 0 && newUserMessages.length === 0) return claimed;
+        const firstClaimed = claimed.findIndex((m, i) => m !== prev[i]);
+        if (firstClaimed === -1) return [...claimed, ...reportRows, ...newUserMessages];
+        return [
+          ...claimed.slice(0, firstClaimed), ...reportRows,
+          ...claimed.slice(firstClaimed), ...newUserMessages,
+        ];
       });
       if (deliveredErrors.length > 0) rt.setMessageError((prev) => (deliveredErrors.includes(prev) ? null : prev));
       // The server holds each of them now, so a later send of its text is new.

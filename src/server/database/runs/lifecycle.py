@@ -27,7 +27,7 @@ from src.server.database.runs import subagent_runs as sr_db
 from src.server.database.runs.outbox import (
     build_finalize_jobs_from_run_row,
     enqueue_hooks,
-    release_deferred_jobs,
+    release_deferred_report_backs,
 )
 from src.server.contracts.status import TERMINAL_STATUSES
 from src.server.database.provenance import MAIN_PROVENANCE_LANE
@@ -754,23 +754,25 @@ async def finalize_run(
                         conn, run_id=run_id, thread_id=thread_id, jobs=jobs
                     )
 
-                # Deferred task report-backs wait for exactly this event: a
-                # dead-turn finalize (completed, error, or cancelled) proves
-                # no pending HITL checkpoint can collide with their synthetic
-                # POST. Interrupted keeps them parked — the checkpoint is
-                # live and a POST would collide with it; an interrupted
-                # parent that later errors or cancels releases here, so a
-                # parked job can never be stranded. Same transaction as the
-                # terminal CAS, so release and successor hooks commit
-                # together.
+                # Deferred report-backs (a task's, an analyst's) wait for
+                # exactly this event: a dead-turn finalize (completed, error,
+                # or cancelled) proves no pending HITL checkpoint can collide
+                # with their synthetic POST, and no live turn is left to take
+                # them in as a steer. Interrupted keeps them parked: the
+                # checkpoint is live and a POST would collide with it, and
+                # the turn that resumes it takes them in as a steer. An
+                # interrupted turn that later errors or cancels releases
+                # here, so a parked job can never be stranded. Same
+                # transaction as the terminal CAS, so release and successor
+                # hooks commit together.
                 if final_status in ("completed", "error", "cancelled"):
-                    released = await release_deferred_jobs(
-                        conn, thread_id, "task_report_back"
+                    released = await release_deferred_report_backs(
+                        conn, thread_id
                     )
                     if released:
                         logger.info(
                             f"[turn_lifecycle] released {released} deferred "
-                            f"task_report_back job(s) for thread={thread_id}"
+                            f"report-back job(s) for thread={thread_id}"
                         )
 
                 if conn.info.transaction_status == psycopg.pq.TransactionStatus.INERROR:

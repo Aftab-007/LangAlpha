@@ -213,6 +213,10 @@ class ShareRedaction:
         # event names the user on each message, so the owner's ids go at every
         # depth. sandbox_state is server-side runtime state.
         data = without_keys(data, _OWNER_ID_KEYS)
+        if event_type == "steering_delivered":
+            # A report a live turn took in names its source as a report
+            # turn's query metadata does; a share keeps neither.
+            data = without_keys(data, {"report_source"})
         data.pop("sandbox_state", None)
         if event_type in _ERROR_TEXT_EVENTS:
             data.pop("error", None)

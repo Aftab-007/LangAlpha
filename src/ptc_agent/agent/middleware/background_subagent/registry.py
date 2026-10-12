@@ -210,6 +210,18 @@ class BackgroundTaskRegistry:
         self.usage_biller: (
             Callable[[str, UsageTake], Awaitable[None]] | None
         ) = None
+        # (thread_id, run_id) -> [{content, report_source, job_id}],
+        # server-injected: holds the reports owed to the thread (a task's, an
+        # analyst's) that a live turn can take in as a steer, and hands them
+        # over; (run_id, job_ids) closes the held ones once the model step
+        # reading them has begun. None in CLI/tests, where a ledger-less task
+        # is announced after the stream.
+        self.report_inbox: (
+            Callable[[str, str | None], Awaitable[list[dict[str, Any]]]] | None
+        ) = None
+        self.report_confirm: (
+            Callable[[str, list[str]], Awaitable[None]] | None
+        ) = None
 
     async def mark_result_delivered(self, task: BackgroundTask) -> None:
         """Stamp the durable result_delivered_at on the run's ledger row —

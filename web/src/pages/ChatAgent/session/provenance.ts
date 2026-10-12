@@ -105,3 +105,30 @@ export function withLiveReportRow(
   };
   return [...messages.slice(0, at), row, ...messages.slice(at)];
 }
+
+/**
+ * A report a live turn took in as a steer, drawn as a report-back's row is: the
+ * caption alone, in the turn it landed in. Delivered steering, so it opens no
+ * turn and offers no edit. Null without a source (a share drops it), which
+ * leaves it out as a share leaves out a report-back's row.
+ */
+export function steeredReportRow(
+  source: ReportSource | undefined,
+  id: string,
+  timestamp: Date,
+  turnIndex?: number,
+): UserMessage | null {
+  const provenance = reportRowProvenance(source);
+  if (!provenance) return null;
+  return {
+    id,
+    role: 'user',
+    content: '',
+    contentType: 'text',
+    timestamp,
+    isStreaming: false,
+    provenance,
+    steeringDelivered: true,
+    ...(turnIndex !== undefined ? { turnIndex } : {}),
+  };
+}

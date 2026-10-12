@@ -7,6 +7,7 @@ import type {
   OrderStatus,
   OrderSummary,
 } from './orders';
+import type { ReportSource } from './api';
 
 /**
  * `error_type` on a task's terminal frame when the credit gate stopped it,
@@ -253,6 +254,9 @@ export interface SteeringDeliveredEvent extends BaseSSEEvent {
     timestamp?: number;
     /** The surface it was sent from, as on a turn's query. */
     platform?: string;
+    /** On a report the turn took in instead of the user's words: what it
+     *  reports on. Its content is empty; shares drop this key. */
+    report_source?: ReportSource;
   }>;
 }
 

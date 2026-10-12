@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import TYPE_CHECKING
 
 from src.server.services import automation_delivery
 from src.server.services.report_back.flash import leases, pointer, requested_from, wake
@@ -20,6 +21,9 @@ from src.server.services.report_back.flash.keys import (
     flash_watch_key,
     ptc_origin_key,
 )
+
+if TYPE_CHECKING:
+    from src.server.models.chat import AnalystReport
 
 # Same hard-coded logger name request_prep uses — existing log routing keys off it.
 logger = logging.getLogger("src.server.handlers.chat_handler")
@@ -111,6 +115,15 @@ async def execute_report_back(job: dict) -> None:
             f"for {ptc_thread_id} on flash thread {flash_thread_id} (no re-dispatch)"
         )
     else:
+        # A live turn on the thread takes the report in as a steer before its
+        # next model call (``report_back.steer``), and a POST into an
+        # interrupted one would discard its pending HITL checkpoint. Both
+        # park the job until the thread's next dead-turn finalize releases
+        # it (``release_deferred_report_backs``), as a task's report-back
+        # does.
+        if await _park_while_busy(job_id, attempts, flash_thread_id):
+            return
+
         async def _still_due() -> bool:
             return not await _superseded(
                 cache, job.get("run_id"), ptc_thread_id, flash_thread_id,
@@ -253,6 +266,42 @@ async def execute_report_back(job: dict) -> None:
     )
 
 
+async def _park_while_busy(job_id: str, attempts: int, flash_thread_id: str) -> bool:
+    """Park the claimed job while the thread it reports to is live or
+    interrupted; True when the caller must stop.
+
+    The re-read closes the race where the thread's finalize landed between
+    the status read and the park (its release pass saw no deferred row
+    yet), releasing the job itself.
+    """
+    from src.server.database.pool import get_db_connection
+    from src.server.database.runs import lifecycle as tl_db
+    from src.server.database.runs import outbox as outbox_db
+    from src.server.services.hook_outbox import MAX_ATTEMPTS, HookOutboxDrainer
+
+    busy = ("interrupted", "in_progress")
+    latest = await tl_db.get_latest_attempt(flash_thread_id)
+    if not latest or latest.get("status") not in busy:
+        return False
+    parked = await outbox_db.defer_claimed_job(
+        job_id, attempts=attempts, max_attempts=MAX_ATTEMPTS
+    )
+    logger.info(
+        f"[FLASH_REPORT_BACK] Parked job {job_id} while thread "
+        f"{flash_thread_id} is {latest.get('status')} (status={parked})"
+    )
+    if parked == "pending":
+        latest = await tl_db.get_latest_attempt(flash_thread_id)
+        if not latest or latest.get("status") not in busy:
+            async with get_db_connection() as conn:
+                await outbox_db.release_deferred_report_backs(conn, flash_thread_id)
+            try:
+                HookOutboxDrainer.get_instance().nudge()
+            except Exception:
+                pass
+    return True
+
+
 async def _await_run_terminal(
     job_id: str,
     attempts: int,
@@ -350,6 +399,32 @@ _OUTCOME_INSTRUCTIONS = {
 }
 
 
+async def report_message(
+    ptc_thread_id: str, origin: dict, final_status: str
+) -> tuple[str, "AnalystReport"]:
+    """What the report says to the agent, as its own turn or as a steer, and
+    the source history labels it with: the message is model-facing and
+    hidden, so the label is all a reader sees."""
+    from src.server.models.chat import AnalystReport
+
+    ptc_workspace_id = origin.get("ptc_workspace_id")
+    ws_name = await _workspace_name(ptc_workspace_id)
+    ws_label = f'the "{ws_name}" workspace' if ws_name else "a workspace"
+    message = (
+        "<system>\n"
+        f"The analysis you dispatched (thread {ptc_thread_id} in {ws_label}) "
+        f"{_OUTCOME_INSTRUCTIONS[final_status]}\n"
+        "</system>"
+    )
+    report_source = AnalystReport(
+        kind="analyst",
+        thread_id=ptc_thread_id,
+        workspace_id=str(ptc_workspace_id) if ptc_workspace_id else None,
+        workspace_name=ws_name,
+    )
+    return message, report_source
+
+
 async def _post_report_back(
     cache,
     flash_thread_id: str,
@@ -372,26 +447,9 @@ async def _post_report_back(
     ``"deleted"`` (caller discards the watch) / ``"lost"`` (caller stops,
     no teardown) / ``"superseded"`` (no turn started, nothing to tear down).
     """
-    from src.server.models.chat import AnalystReport
     from src.server.services.report_back.notify_turn import post_notification_turn
 
-    ptc_workspace_id = origin.get("ptc_workspace_id")
-    ws_name = await _workspace_name(ptc_workspace_id)
-    ws_label = f'the "{ws_name}" workspace' if ws_name else "a workspace"
-    message = (
-        "<system>\n"
-        f"The analysis you dispatched (thread {ptc_thread_id} in {ws_label}) "
-        f"{_OUTCOME_INSTRUCTIONS[final_status]}\n"
-        "</system>"
-    )
-    # The message above is model-facing and hidden; history labels the turn
-    # from this instead.
-    report_source = AnalystReport(
-        kind="analyst",
-        thread_id=ptc_thread_id,
-        workspace_id=str(ptc_workspace_id) if ptc_workspace_id else None,
-        workspace_name=ws_name,
-    )
+    message, report_source = await report_message(ptc_thread_id, origin, final_status)
     body = {
         "messages": [{"role": "user", "content": message}],
         "agent_mode": "flash",
