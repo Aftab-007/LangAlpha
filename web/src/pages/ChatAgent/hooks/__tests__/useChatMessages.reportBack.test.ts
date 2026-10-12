@@ -1517,6 +1517,45 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     expect(mockReconnect.mock.calls[1][1]).toBe('rb-x');
   });
 
+  it('a report row attached live takes the turn its run names, as the reload draws it', async () => {
+    // The view last saw turn 0, and the report-back was admitted to turn 3
+    // after turns it never saw. Counting would put the row on turn 1 while
+    // its reply takes 3 from the frame; the replay names both 3.
+    mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true, report_back_run_id: null, latest_turn_index: 0 }));
+    mockReplay.mockImplementation((_tid: string, onEvent: (e: Record<string, unknown>) => void) => {
+      onEvent({ event: 'user_message', turn_index: 0, content: 'dispatch instruction', role: 'user' });
+      onEvent({ event: 'message_chunk', turn_index: 0, role: 'assistant', agent: 'main', content_type: 'text', content: 'dispatched' });
+      return Promise.resolve();
+    });
+    const watchCalls = captureWatch();
+    const reconnects: CapturedReconnect[] = [];
+    mockReconnect.mockImplementation(hangingReconnect(reconnects));
+
+    const { result } = renderHookWithProviders(() => useChatMessages('ws-rb', 'th-rb'));
+    await waitFor(() => expect(mockWatch).toHaveBeenCalledTimes(1));
+    await settleMountEffect();
+    await act(async () => {
+      void watchCalls[0].cb({ run_id: 'rb-x' });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await waitFor(() => expect(reconnects).toHaveLength(1));
+    // Read while the stream is still open, before anything can redraw the turn.
+    act(() => {
+      reconnects[0].onEvent({
+        event: 'metadata', thread_id: 'th-rb', run_id: 'rb-x', turn_index: 3,
+        report_source: { kind: 'task', task_id: 'k3', display_id: 'Task-k3', failed: false },
+      });
+      reconnects[0].onEvent({ event: 'message_chunk', role: 'assistant', agent: 'main', content_type: 'text', content: 'summary…' });
+      reconnects[0].onEvent({ event: 'caught_up' });
+    });
+
+    const messages = result.current.messages as unknown as Record<string, unknown>[];
+    const row = messages.find((m) => m.id === 'report-rb-x');
+    const reply = messages.find((m) => m.role === 'assistant' && JSON.stringify(m).includes('summary…'));
+    expect(row?.turnIndex).toBe(3);
+    expect(reply?.turnIndex).toBe(3);
+  });
+
   it('an attach that got only the run metadata frame is a zero-content attach, and the retry keeps one report row', async () => {
     // The server sends the run's id frame before the graph starts, so a run
     // slow to its first token can idle the attach out with only that frame.

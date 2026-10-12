@@ -6,7 +6,7 @@
  *
  * Real hook internals; only the api module (the transport) is mocked.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import type { Mock } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { renderHookWithProviders } from '@/test/utils';
@@ -324,6 +324,50 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
     expect(turnOfText(live(hook), 'assistant', 'fresh answer')).toBe(43);
   });
 
+  it('regenerating a turn a refused send shares a count with keeps the question it ran', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    // Refused before admission: the server holds no turn for it.
+    mockSendStream.mockRejectedValueOnce(Object.assign(new Error('Server error 500'), { status: 500 }));
+    await act(async () => {
+      await hook.result.current.handleSendMessage('first try');
+      await flush();
+    });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    await act(async () => {
+      const send = hook.result.current.handleSendMessage('go on');
+      await flush();
+      streams.at(-1)!.emit({ event: 'metadata', thread_id: 'th-1', run_id: 'run-43', turn_index: 43 });
+      streams.at(-1)!.emit(chunk('the answer'));
+      streams.at(-1)!.end();
+      await send;
+    });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    expect(turnOfText(live(hook), 'user', 'first try')).toBe(43);
+    expect(turnOfText(live(hook), 'user', 'go on')).toBe(43);
+
+    mockStatus.mockResolvedValue(threadStatus({ latest_turn_index: 43 }));
+    mockFetchTurns.mockResolvedValue({
+      turns: [{ turn_index: 43, edit_checkpoint_id: 'cp-42', regenerate_checkpoint_id: 'cp-43' }],
+    });
+    const answer = (live(hook) as MessageRecord[]).find((m) => String(m.content ?? '').includes('the answer'));
+    await act(async () => {
+      const regenerate = hook.result.current.handleRegenerate(answer!.id as string);
+      await flush();
+      streams.at(-1)!.emit(chunk('fresh answer'));
+      streams.at(-1)!.end();
+      await regenerate;
+    });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    // The re-run answers the question the turn ran, which stays above it.
+    const messages = live(hook) as MessageRecord[];
+    const fresh = messages.findIndex((m) => String(m.content ?? '').includes('fresh answer'));
+    const asked = messages.slice(0, fresh).findLast((m) => m.role === 'user');
+    expect(asked?.content).toBe('go on');
+    expect(JSON.stringify(messages)).not.toContain('the answer');
+  });
+
   it('steering another tab delivered sits in the turn the reconnect continues', async () => {
     mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-43', latest_turn_index: 43 }));
     mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
@@ -408,5 +452,330 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
       streams[0].end();
       await send;
     });
+  });
+});
+
+/**
+ * Turns this view never saw (another tab, an automation, a channel message, a
+ * report-back) put the server ahead of anything the view can count. The run's
+ * `metadata` frame names the turn admission gave it, and every bubble of the
+ * run takes that one.
+ */
+describe('useChatMessages: a view that missed turns stamps the turn the server admitted', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The view loaded through turn 42; turns 43 and 44 were added elsewhere.
+    mockStatus.mockResolvedValue(threadStatus({ latest_turn_index: 42 }));
+  });
+
+  const admitted = (turn: number) => ({ event: 'metadata', thread_id: 'th-1', run_id: `run-${turn}`, turn_index: turn });
+
+  it('a send lands on the admitted turn, and regenerating it re-runs that turn', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    await act(async () => {
+      const send = hook.result.current.handleSendMessage('go on');
+      await flush();
+      streams[0].emit(admitted(45));
+      streams[0].emit(chunk('fresh answer'));
+      streams[0].end();
+      await send;
+    });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    expect(turnOfText(live(hook), 'user', 'go on')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'fresh answer')).toBe(45);
+
+    mockStatus.mockResolvedValue(threadStatus({ latest_turn_index: 45 }));
+    mockFetchTurns.mockResolvedValue({
+      turns: [{ turn_index: 45, edit_checkpoint_id: 'cp-44', regenerate_checkpoint_id: 'cp-45' }],
+    });
+    const answer = (live(hook) as MessageRecord[]).find((m) => String(m.content ?? '').includes('fresh answer'));
+    await act(async () => {
+      const regenerate = hook.result.current.handleRegenerate(answer!.id as string);
+      await flush();
+      streams.at(-1)!.emit(admitted(45));
+      streams.at(-1)!.emit(chunk('regenerated answer'));
+      streams.at(-1)!.end();
+      await regenerate;
+    });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    expect(mockSendStream.mock.calls.at(-1)![3]).toMatchObject({ checkpointId: 'cp-45', forkFromTurn: 45 });
+
+    // An older backend names no turn: the count carries on from the admitted one.
+    await sendTurn(hook, streams, 'next question', 'next answer');
+    expect(turnOfText(live(hook), 'user', 'next question')).toBe(46);
+  });
+
+  it('a stream that drops after the admitted turn continues on it', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
+    // Resumed past the cursor, so the reconnect replays no metadata of its own.
+    mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
+      onEvent(chunk('part two'));
+      return { disconnected: false, aborted: false };
+    });
+    await act(async () => {
+      const send = hook.result.current.handleSendMessage('go on');
+      await flush();
+      streams[0].emit(admitted(45));
+      streams[0].emit(chunk('part one'));
+      streams[0].end({ disconnected: true });
+      await send;
+    });
+    await waitFor(() => expect(mockReconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    expect(turnOfText(live(hook), 'user', 'go on')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'part one')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'part two')).toBe(45);
+  });
+
+  it('a stream that drops before the admitted turn lands the whole turn on it once a reconnect sees it', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
+    // Nothing reached the cursor, so the reconnect replays the run from its start.
+    mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
+      onEvent(admitted(45));
+      onEvent(chunk('the answer'));
+      return { disconnected: false, aborted: false };
+    });
+    await act(async () => {
+      const send = hook.result.current.handleSendMessage('go on');
+      await flush();
+      // The POST names its run, then drops while the sandbox is still starting.
+      const { onRunIdResolved } = mockSendStream.mock.calls[0][3] as { onRunIdResolved: (rid: string, tid: string) => void };
+      onRunIdResolved('run-45', 'th-1');
+      streams[0].end({ disconnected: true });
+      await send;
+    });
+    await waitFor(() => expect(mockReconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    // The question, the send's bubble and the reconnect's.
+    const projected = projectTurns(live(hook) as MessageRecord[]);
+    const asked = projected.findIndex((p) => p.message.role === 'user' && p.message.content === 'go on');
+    expect(projected.slice(asked).map((p) => [p.message.role, p.turnIndex])).toEqual([
+      ['user', 45], ['assistant', 45], ['assistant', 45],
+    ]);
+    expect(turnOfText(live(hook), 'assistant', 'the answer')).toBe(45);
+  });
+
+  it('steering sent before that drop joins the turn the reconnect sees', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
+    mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
+      onEvent(admitted(45));
+      onEvent(chunk('working'));
+      onEvent({ event: 'steering_delivered', messages: [{ content: 'also cover margins', timestamp: 1_700_000_000 }] });
+      onEvent(chunk('covering margins'));
+      return { disconnected: false, aborted: false };
+    });
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = hook.result.current.handleSendMessage('go on');
+      await flush();
+      const { onRunIdResolved } = mockSendStream.mock.calls[0][3] as { onRunIdResolved: (rid: string, tid: string) => void };
+      onRunIdResolved('run-45', 'th-1');
+    });
+    await act(async () => {
+      void hook.result.current.handleSendMessage('also cover margins');
+      await flush();
+      streams[1].emit({ event: 'steering_accepted', position: 1 });
+      streams[1].end();
+      await flush();
+    });
+    await act(async () => {
+      streams[0].end({ disconnected: true });
+      await send;
+    });
+    await waitFor(() => expect(mockReconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    const projected = projectTurns(live(hook) as MessageRecord[]);
+    const asked = projected.findIndex((p) => p.message.role === 'user' && p.message.content === 'go on');
+    expect(projected.slice(asked).map((p) => p.turnIndex)).toEqual([45, 45, 45, 45, 45]);
+    expect(turnOfText(live(hook), 'user', 'also cover margins')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'covering margins')).toBe(45);
+  });
+
+  it('a steer that failed to send before that drop stays in the turn the reconnect sees', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
+    mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
+      onEvent(admitted(45));
+      onEvent(chunk('working'));
+      return { disconnected: false, aborted: false };
+    });
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = hook.result.current.handleSendMessage('go on');
+      await flush();
+      const { onRunIdResolved } = mockSendStream.mock.calls[0][3] as { onRunIdResolved: (rid: string, tid: string) => void };
+      onRunIdResolved('run-45', 'th-1');
+    });
+    mockSendStream.mockRejectedValueOnce(new Error('Server error 500'));
+    await act(async () => {
+      await hook.result.current.handleSendMessage('also cover margins');
+      await flush();
+    });
+    expect((live(hook) as MessageRecord[]).find((m) => m.content === 'also cover margins')?.queueError).toBeTruthy();
+    await act(async () => {
+      streams[0].end({ disconnected: true });
+      await send;
+    });
+    await waitFor(() => expect(mockReconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    // The turn opens at the question, not at the steer typed into it.
+    expect(turnOfText(live(hook), 'user', 'go on')).toBe(45);
+    expect(turnOfText(live(hook), 'user', 'also cover margins')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'working')).toBe(45);
+  });
+
+  it('a delivered steer before that drop stays in the turn the reconnect sees', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
+    // Resumed past the steer, so the reconnect brings the run's turn and no steer.
+    mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
+      onEvent(admitted(45));
+      onEvent(chunk('covering margins'));
+      return { disconnected: false, aborted: false };
+    });
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = hook.result.current.handleSendMessage('go on');
+      await flush();
+      const { onRunIdResolved } = mockSendStream.mock.calls[0][3] as { onRunIdResolved: (rid: string, tid: string) => void };
+      onRunIdResolved('run-45', 'th-1');
+      streams[0].emit(chunk('working'));
+    });
+    await act(async () => {
+      void hook.result.current.handleSendMessage('also cover margins');
+      await flush();
+      streams[1].emit({ event: 'steering_accepted', position: 1 });
+      streams[1].end();
+      await flush();
+      streams[0].emit({ event: 'steering_delivered', messages: [{ content: 'also cover margins', timestamp: 1_700_000_000 }] });
+      await flush();
+    });
+    expect((live(hook) as MessageRecord[]).find((m) => m.content === 'also cover margins')?.steeringDelivered).toBe(true);
+    await act(async () => {
+      streams[0].end({ disconnected: true });
+      await send;
+    });
+    await waitFor(() => expect(mockReconnect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    expect(turnOfText(live(hook), 'user', 'go on')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'working')).toBe(45);
+    expect(turnOfText(live(hook), 'user', 'also cover margins')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'covering margins')).toBe(45);
+  });
+
+  it('a steering message sent before the run announced its turn joins the admitted turn', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    // Both messages are made in one millisecond, which a fast machine does.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_790_000_000_000);
+    onTestFinished(() => clock.mockRestore());
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = hook.result.current.handleSendMessage('go on');
+      await flush();
+    });
+    // The run is still being admitted (a sandbox starting) when the user steers.
+    await act(async () => {
+      void hook.result.current.handleSendMessage('also cover margins');
+      await flush();
+      streams[1].emit({ event: 'steering_accepted', position: 1 });
+      streams[1].end();
+      await flush();
+    });
+    clock.mockRestore();
+    await act(async () => {
+      streams[0].emit(admitted(45));
+      streams[0].emit(chunk('working'));
+      streams[0].emit({ event: 'steering_delivered', messages: [{ content: 'also cover margins', timestamp: 1_700_000_000 }] });
+      streams[0].emit(chunk('covering margins'));
+      streams[0].end();
+      await send;
+    });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    expect(turnOfText(live(hook), 'user', 'go on')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'working')).toBe(45);
+    expect(turnOfText(live(hook), 'user', 'also cover margins')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'covering margins')).toBe(45);
+  });
+
+  it('a steering message the server opened a new turn for takes the admitted turn', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = hook.result.current.handleSendMessage('go on');
+      await flush();
+      streams[0].emit(admitted(45));
+      streams[0].emit(chunk('working'));
+      await flush();
+    });
+    let steer!: Promise<unknown>;
+    await act(async () => {
+      steer = hook.result.current.handleSendMessage('and then this');
+      await flush();
+      // Another tab's turn 46 ran between the two: this POST opens turn 47.
+      streams[1].emit(admitted(47));
+      streams[1].emit(chunk('demoted answer'));
+      streams[1].end();
+      streams[0].end();
+      await Promise.all([send, steer]);
+    });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    expect(turnOfText(live(hook), 'assistant', 'working')).toBe(45);
+    expect(turnOfText(live(hook), 'user', 'and then this')).toBe(47);
+    expect(turnOfText(live(hook), 'assistant', 'demoted answer')).toBe(47);
+  });
+
+  it('a resumed interrupt lands on the admitted turn', async () => {
+    const hook = await mountOnPage();
+    const streams = captureStreams(mockSendStream);
+    await act(async () => {
+      const send = hook.result.current.handleSendMessage('screen chip names');
+      await flush();
+      streams.at(-1)!.emit(admitted(45));
+      streams.at(-1)!.emit(chunk('checking'));
+      streams.at(-1)!.emit({
+        event: 'interrupt',
+        interrupt_id: 'int-ask',
+        action_requests: [{ type: 'ask_user_question', question: 'Which tickers?', options: [], allow_multiple: false }],
+      });
+      streams.at(-1)!.end();
+      await send;
+    });
+    await waitFor(() => expect(hook.result.current.pendingInterrupt).not.toBeNull());
+
+    // An automation ran turn 46 while the question waited.
+    mockSendHitl.mockImplementation(async (...args: unknown[]) => {
+      const { onEvent } = args[3] as { onEvent: Emit };
+      onEvent(admitted(47));
+      onEvent(chunk('resumed answer'));
+      return { disconnected: false };
+    });
+    await act(async () => {
+      hook.result.current.handleAnswerQuestion('NVDA and AMD', 'int-ask', 'int-ask');
+      await flush();
+    });
+    await waitFor(() => expect(mockSendHitl).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    expect(turnOfText(live(hook), 'assistant', 'checking')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'resumed answer')).toBe(47);
   });
 });

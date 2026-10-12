@@ -94,6 +94,17 @@ class TestMetadataFrameFirst:
         assert data == {"thread_id": "t-1", "run_id": "r-abc", "report_source": source}
 
     @pytest.mark.asyncio
+    async def test_metadata_names_the_admitted_turn(self):
+        """The client stamps a live turn's bubbles from this value: a view
+        that missed turns added elsewhere would otherwise count to the wrong
+        one, and edit, regenerate and feedback would address it."""
+        handler = RunSSEProducer(thread_id="t-1", run_id="r-abc", turn_index=45)
+        chunks = await _collect_stream(handler)
+        event_name, data = _parse_sse(chunks[0])
+        assert event_name == "metadata"
+        assert data == {"thread_id": "t-1", "run_id": "r-abc", "turn_index": 45}
+
+    @pytest.mark.asyncio
     async def test_metadata_frame_is_not_persisted(self):
         """Persisted SSE log must NOT include the metadata frame — it's a
         per-connection identity hand-shake. The accumulator owns persistence,
