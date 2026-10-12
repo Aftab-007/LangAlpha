@@ -135,6 +135,7 @@ vi.mock('../../hooks/useChatMessages', async (importOriginal) => ({
     reconnectIfStaleRun: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
     isOwnRun: () => false,
     getSubagentHistory: vi.fn().mockReturnValue(null),
+    subagentHistoryEntries: {},
     resolveSubagentIdToAgentId: vi.fn((id: string) => id),
     hydrateTaskTranscript: vi.fn().mockResolvedValue(false),
   }),

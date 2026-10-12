@@ -43,5 +43,5 @@ export function useSubagentHistory(
     [t, store, subagentStateRefsRef, threadId],
   );
 
-  return { store, resolveSubagentIdToAgentId, getSubagentHistory, hydrateTaskTranscript: hydrate };
+  return { store, entries: view.entries, resolveSubagentIdToAgentId, getSubagentHistory, hydrateTaskTranscript: hydrate };
 }

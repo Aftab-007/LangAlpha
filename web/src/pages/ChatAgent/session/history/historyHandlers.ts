@@ -599,12 +599,17 @@ export function handleHistorySteeringDelivered({
     steeringBatches: batchId,
   });
 
+  // The reply after a steer starts when the run took it in (epoch seconds),
+  // not when this replay ran: the tray ages a hand-off made here by it.
+  const deliveredAt = typeof event.timestamp === 'number'
+    ? event.timestamp
+    : steeringMessages.reduce<number | null>((at, m) => (typeof m.timestamp === 'number' ? m.timestamp : at), null);
   const assistantMessage: MessageRecord = {
     id: newAssistantId,
     role: 'assistant',
     content: '',
     contentType: 'text',
-    timestamp: new Date(),
+    timestamp: deliveredAt != null ? new Date(deliveredAt * 1000) : new Date(),
     isStreaming: false,
     isHistory: true,
     isSteering: true,

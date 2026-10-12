@@ -8,15 +8,15 @@ import { useLocale } from '@/hooks/useLocale';
 import { mediumTime } from '@/lib/format';
 import { DURATION } from '@/lib/motion';
 import { cn } from '@/lib/utils';
-import { SubagentStatusIcon } from '../taskStatusUi';
-import { DispatchStatusIndicator, LiveSpinner } from '../dispatchStatusUi';
-import { DispatchStatusProvider, useDispatchStatus } from '../../hooks/usePTCDispatchStatus';
+import { DispatchStatusGlyph, DispatchStatusIndicator, LiveSpinner } from '../dispatchStatusUi';
+import type { PTCDispatchStatus } from '../../hooks/usePTCDispatchStatus';
 import { useOpenDispatchedThread, type DispatcherContext } from '../../hooks/useOpenDispatchedThread';
 import type { MarketWatchState } from '../../session/marketWatchEvents';
-import { sidebarAgentRowLabel, type SidebarAgentRow } from '../../session/subagents/subagentStatus';
-import type { ReportBackOwedThread } from '../../utils/api';
+import { isTerminalStatus, sidebarAgentRowLabel, type SubagentTerminalStatus } from '../../session/subagents/subagentStatus';
+import type { RosterTask } from './delegatedWork';
+import type { RosterAnalyst } from './useAnalystRoster';
 import { SHAPE_RUN, SHAPE_STAGGER, liquidRunMs, type TrayFoldPhase } from './useTrayFold';
-import { trayChipCount, type TrayContents } from './useTrayContents';
+import { trayChipCount, trayWorking, type TrayContents, type TrayTasks } from './useTrayContents';
 
 // Solid, not a translucent tint: the transcript scrolls under the tray. The
 // liquid and the dock are the chips' own fill, so a chip, its shape and the
@@ -48,7 +48,7 @@ interface ComposerTrayProps {
  * The tray's chips, above the composer. Each chip that names more than one
  * thing opens a list whose rows jump to it; a chip that names one jumps
  * straight there. The tray stays while a turn runs: what it lists outlives the
- * turn.
+ * turn, and work handed off stays a few turns after it went quiet.
  *
  * While the reader is up in the history the chips fold into the composer, and
  * they run there as liquid: their shapes flow together into one drop that
@@ -94,7 +94,7 @@ export function ComposerTray({
           : { duration: DURATION.exit }}
       >
         {watch && <WatchChip watch={watch} onOpen={onOpenWatch} />}
-        {tasks && <TasksChip rows={tasks} onOpen={onOpenTask} />}
+        {tasks && <TasksChip {...tasks} onOpen={onOpenTask} />}
         {analysts && <AnalystsChip threads={analysts} from={from} />}
         {reportBackLabel && <StatusChip label={reportBackLabel} />}
       </motion.div>
@@ -243,8 +243,7 @@ export function TrayDock({ ref, phase, contents, onOpen }: TrayDockProps) {
   const { t } = useTranslation();
   const label = t('chat.tray.show');
   const folded = phase === 'folded';
-  // Running work: tasks, or a report on its way.
-  const working = !!(contents.tasks || contents.analysts || contents.reportBackLabel);
+  const working = trayWorking(contents);
   return (
     <button
       ref={ref}
@@ -324,16 +323,16 @@ function StatusChip({ label }: { label: string }) {
 
 /**
  * A chip that opens a list, whose rows close it as they open what they name.
- * It mounts only while there is more than one thing to list, so the open state
+ * It mounts only while it stands for more than one thing, so the open state
  * goes with it: a list that shrinks to one while open does not spring back
- * open when a second arrives.
+ * open when a second arrives. It spins while any of them is working.
  */
-function ListChip({ label, heading, children }: { label: string; heading: string; children: ReactNode }) {
+function ListChip({ label, heading, working, children }: { label: string; heading: string; working: boolean; children: ReactNode }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button type="button" className={cn(CHIP_BUTTON, 'group')}>
-          <LiveSpinner />
+          {working && <LiveSpinner />}
           <span>{label}</span>
           <ChevronUp aria-hidden="true" className="h-3 w-3 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
         </button>
@@ -343,26 +342,49 @@ function ListChip({ label, heading, children }: { label: string; heading: string
   );
 }
 
-function TasksChip({ rows, onOpen }: { rows: SidebarAgentRow[]; onOpen: (agentId: string) => void }) {
+/** A settled task in the Analysts' glyphs, so the two lists read alike. */
+const SETTLED_TASK_LOOK: Record<SubagentTerminalStatus, PTCDispatchStatus> = {
+  completed: 'completed',
+  error: 'failed',
+  cancelled: 'stopped',
+};
+
+/**
+ * A roster task's glyph: the spinner only while it runs. A status alone can
+ * read live after the run ended unseen, so a stopped task without a final
+ * status shows none.
+ */
+function TaskGlyph({ row }: { row: RosterTask }) {
+  if (row.running) return <DispatchStatusGlyph status="running" />;
+  return isTerminalStatus(row.status) ? <DispatchStatusGlyph status={SETTLED_TASK_LOOK[row.status]} /> : null;
+}
+
+function TasksChip({ rows, unnamedRunning, onOpen }: TrayTasks & { onOpen: (agentId: string) => void }) {
   const { t } = useTranslation();
 
-  // Running, but nothing the sidebar lists (a workflow's own steps, or rows
-  // not loaded yet).
+  // Running, but nothing the roster names.
   if (rows.length === 0) return <StatusChip label={t('chat.backgroundTasksRunning')} />;
 
-  if (rows.length === 1) {
-    const label = sidebarAgentRowLabel(rows[0]);
+  // A lone row is the chip, unless the chip also spins for a task it cannot name.
+  if (rows.length === 1 && !unnamedRunning) {
+    const [row] = rows;
+    const label = sidebarAgentRowLabel(row);
     return (
-      <button type="button" className={CHIP_BUTTON} title={label} onClick={() => onOpen(rows[0].id)}>
-        <LiveSpinner />
+      <button type="button" className={CHIP_BUTTON} title={label} onClick={() => onOpen(row.id)}>
+        <TaskGlyph row={row} />
         <span className="max-w-64 truncate">{label}</span>
         <ArrowUpRight aria-hidden="true" className="h-3 w-3 shrink-0" />
       </button>
     );
   }
 
+  const running = rows.filter((row) => row.running).length;
   return (
-    <ListChip label={t('chat.tray.backgroundTasks', { count: rows.length })} heading={t('chat.tray.backgroundTasksHeading')}>
+    <ListChip
+      label={running > 0 ? t('chat.tray.tasksRunning', { count: rows.length, running }) : t('chat.tray.tasks', { count: rows.length })}
+      heading={t('chat.tray.tasksHeading')}
+      working={running > 0 || unnamedRunning}
+    >
       {rows.map((row) => {
         const label = sidebarAgentRowLabel(row);
         return (
@@ -370,7 +392,7 @@ function TasksChip({ rows, onOpen }: { rows: SidebarAgentRow[]; onOpen: (agentId
             <PopoverClose asChild>
               <button type="button" className={ROW} onClick={() => onOpen(row.id)}>
                 <span className="flex w-3.5 shrink-0 justify-center">
-                  <SubagentStatusIcon status={row.status} className="h-3 w-3" />
+                  <TaskGlyph row={row} />
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="truncate text-[0.8125rem]" style={{ color: 'var(--color-text-primary)' }} title={label}>
@@ -390,43 +412,44 @@ function TasksChip({ rows, onOpen }: { rows: SidebarAgentRow[]; onOpen: (agentId
   );
 }
 
-function AnalystsChip({ threads, from }: { threads: ReportBackOwedThread[]; from: DispatcherContext | null }) {
+function AnalystsChip({ threads, from }: { threads: RosterAnalyst[]; from: DispatcherContext | null }) {
   const { t } = useTranslation();
   const openDispatchedThread = useOpenDispatchedThread(from);
-  const openThread = (thread: ReportBackOwedThread) => openDispatchedThread(thread.thread_id, thread.workspace_id);
+  const openThread = (thread: RosterAnalyst) => openDispatchedThread(thread.threadId, thread.workspaceId);
 
   if (threads.length === 1) {
     const [thread] = threads;
-    const name = thread.workspace_name || thread.title;
+    const name = thread.workspaceName || thread.title;
+    const label = thread.running
+      ? t('agents.tray.waitingOn', { name: name ?? t('agents.tray.analysts', { count: 1 }) })
+      : (name ?? t('agents.tray.analysts', { count: 1 }));
     return (
       <button type="button" className={CHIP_BUTTON} title={thread.title ?? undefined} onClick={() => openThread(thread)}>
-        <LiveSpinner />
-        <span className="max-w-64 truncate">
-          {name ? t('agents.tray.waitingOn', { name }) : t('agents.tray.waitingOnAnalysts', { count: 1 })}
-        </span>
+        {thread.running ? <LiveSpinner /> : thread.status && <DispatchStatusGlyph status={thread.status} />}
+        <span className="max-w-64 truncate">{label}</span>
         <ArrowUpRight aria-hidden="true" className="h-3 w-3 shrink-0" />
       </button>
     );
   }
 
+  const running = threads.filter((thread) => thread.running).length;
   return (
-    <ListChip label={t('agents.tray.waitingOnAnalysts', { count: threads.length })} heading={t('agents.tray.analystsHeading')}>
-      {/* Status is read only while the list is open, through the same
-          batched read the hand-off cards use. */}
-      <DispatchStatusProvider>
-        {threads.map((thread) => (
-          <li key={thread.thread_id}>
-            <AnalystRow thread={thread} onOpen={() => openThread(thread)} />
-          </li>
-        ))}
-      </DispatchStatusProvider>
+    <ListChip
+      label={running > 0 ? t('agents.tray.analystsRunning', { count: threads.length, running }) : t('agents.tray.analysts', { count: threads.length })}
+      heading={t('agents.tray.analystsHeading')}
+      working={running > 0}
+    >
+      {threads.map((thread) => (
+        <li key={thread.threadId}>
+          <AnalystRow thread={thread} onOpen={() => openThread(thread)} />
+        </li>
+      ))}
     </ListChip>
   );
 }
 
-function AnalystRow({ thread, onOpen }: { thread: ReportBackOwedThread; onOpen: () => void }) {
+function AnalystRow({ thread, onOpen }: { thread: RosterAnalyst; onOpen: () => void }) {
   const { t } = useTranslation();
-  const { status, startedAt } = useDispatchStatus(thread.thread_id, true);
   const title = thread.title || t('nav.untitledThread');
   return (
     <PopoverClose asChild>
@@ -443,13 +466,9 @@ function AnalystRow({ thread, onOpen }: { thread: ReportBackOwedThread; onOpen: 
             {title}
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-            {thread.workspace_name && (
-              <>
-                <span className="truncate">{thread.workspace_name}</span>
-                <span aria-hidden="true">·</span>
-              </>
-            )}
-            <DispatchStatusIndicator status={status} startedAt={startedAt} />
+            {thread.workspaceName && <span className="truncate">{thread.workspaceName}</span>}
+            {thread.workspaceName && thread.status && <span aria-hidden="true">·</span>}
+            {thread.status && <DispatchStatusIndicator status={thread.status} startedAt={thread.startedAt} />}
           </span>
         </span>
         <ArrowUpRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--color-text-quaternary)' }} />

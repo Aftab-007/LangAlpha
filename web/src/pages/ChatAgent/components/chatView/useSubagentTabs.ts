@@ -361,6 +361,8 @@ export function useSubagentTabs({
         taskId: agentId,
         status: s,
         ...(res.error ? { error: res.error } : {}),
+        // It settled unseen: age it from the ledger's time, not this click.
+        ...(typeof res.last_activity_ms === 'number' ? { lastActivityMs: res.last_activity_ms } : {}),
         // Ride along the existing content so the inactive-card guard admits
         // this authoritative terminal update.
         messages: (existing?.messages as SubagentMessage[]) || [],

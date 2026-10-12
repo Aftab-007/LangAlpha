@@ -195,6 +195,9 @@ interface SubagentHistoryEntry {
    *  projection contained — the run-level watermark the mux drain guard
    *  filters against. */
   projectedRunStartedMs?: number;
+  /** When the task's latest run last started, finished or delivered its
+   *  result (epoch ms), as the ledger read it at load. */
+  lastActivityMs?: number;
   /** Reduced workflow-run progress, present only for a workflow run task
    *  (type 'workflow'), rebuilt from replayed workflow_lifecycle events. */
   workflowRun?: import('./subagents/workflowRunState').WorkflowRunState;
@@ -253,6 +256,9 @@ interface SubagentHistoryData {
    *  the projection actually claimed — NOT the ledger's latest run, which
    *  can still be executing and deliberately excluded from the payload. */
   projectedRunStartedMs?: number;
+  /** Read-time stamp: when the latest run last started, finished or
+   *  delivered its result (epoch ms). */
+  lastActivityMs?: number;
 }
 
 /** Refs passed to createStreamEventProcessor and its processEvent closure:

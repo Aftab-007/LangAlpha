@@ -1626,10 +1626,12 @@
     "reportBackPending": "Waiting for PTC Agent to report back",
     "taskReportBackPending": "Waiting for subagent results to report back",
     "tray": {
-      "backgroundTasks_one": "{{count}} background task",
-      "backgroundTasks_other": "{{count}} background tasks",
-      "backgroundTasksHeading": "Running in this thread",
-      "show": "Show what's running"
+      "tasks_one": "{{count}} task",
+      "tasks_other": "{{count}} tasks",
+      "tasksRunning_one": "{{count}} task · {{running}} running",
+      "tasksRunning_other": "{{count}} tasks · {{running}} running",
+      "tasksHeading": "From this thread",
+      "show": "Show this thread's work"
     },
     "provenance": {
       "fromChiefOfStaff": "From Chief of Staff",
@@ -4441,9 +4443,11 @@
     "reportBackPending": "Waiting for the Analyst to report back",
     "tray": {
       "waitingOn": "Waiting on {{name}}",
-      "waitingOnAnalysts_one": "Waiting on {{count}} Analyst",
-      "waitingOnAnalysts_other": "Waiting on {{count}} Analysts",
-      "analystsHeading": "Reporting back to this thread"
+      "analysts_one": "{{count}} Analyst",
+      "analysts_other": "{{count}} Analysts",
+      "analystsRunning_one": "{{count}} Analyst · {{running}} running",
+      "analystsRunning_other": "{{count}} Analysts · {{running}} running",
+      "analystsHeading": "Handed off from this thread"
     },
     "inWorkspace": "In {{workspace}}",
     "workspaceRequired": "Choose a workspace, or All workspaces.",

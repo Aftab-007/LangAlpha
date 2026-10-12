@@ -338,6 +338,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     reconnectIfStaleRun,
     isOwnRun,
     getSubagentHistory,
+    subagentHistoryEntries,
     resolveSubagentIdToAgentId,
     hydrateTaskTranscript,
     sendSubagentInstruction,
@@ -884,12 +885,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // folded dock pours it back out where the reader is, until they scroll on.
   const trayContents = useTrayContents({
     marketWatch,
-    agentRows: sidebarAgentRows,
+    cards,
+    taskHistory: subagentHistoryEntries,
+    messages,
     isLoading,
     hasActiveSubagents,
     reportBackOwed,
     owedThreads: reportBackOwedThreads,
     mode: isHome ? 'home' : isFlashMode ? 'flash' : 'ptc',
+  });
+  // A roster task the page only knows from history or its report has no card
+  // yet: open it the way its inline card would, which loads its transcript,
+  // with the words and status the tray shows rather than a card's defaults.
+  const openTaskFromTray = useStableHandler((agentId: string) => {
+    if (cards[`subagent-${agentId}`]) return handleSelectAgent(agentId);
+    const row = trayContents?.tasks?.rows.find((task) => task.id === agentId);
+    handleOpenSubagentTask({ subagentId: agentId, description: row?.description, status: row?.status });
   });
   const { phase: trayPhase, trayRef, dockRef: trayDockRef, peek: peekTray } = useTrayFold({
     scrolledUp: jumpPill.visible,
@@ -1664,7 +1675,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                         trayRef={trayRef}
                         dockRef={trayDockRef}
                         from={flashContext}
-                        onOpenTask={handleSelectAgent}
+                        onOpenTask={openTaskFromTray}
                         onOpenWatch={handleOpenStatusFromChat}
                       />
                     )}

@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { RouteLeaveGuardContext, type RouteLeaveGuard } from '../../../contexts/RouteLeaveGuardContext';
-import type { SidebarAgentRow } from '../../../session/subagents/subagentStatus';
+import type { RosterTask } from '../delegatedWork';
 import { ComposerTray } from '../ComposerTray';
 import type { TrayContents } from '../useTrayContents';
 
@@ -53,8 +53,8 @@ function renderTray(
   );
 }
 
-function task(id: string, description: string): SidebarAgentRow {
-  return { id, name: `Task-${id}`, description, isMainAgent: false, status: 'active' };
+function task(id: string, description: string, running = true): RosterTask {
+  return { id, name: `Task-${id}`, description, isMainAgent: false, status: running ? 'active' : 'completed', running };
 }
 
 describe('ComposerTray', () => {
@@ -82,8 +82,8 @@ describe('ComposerTray', () => {
 
   it('closes the task list as a row opens its task', () => {
     const onOpenTask = vi.fn();
-    renderTray({ tasks: [task('a', 'Pull filings'), task('b', '')] }, { onOpenTask });
-    fireEvent.click(screen.getByRole('button', { name: /2 background tasks/ }));
+    renderTray({ tasks: [task('a', 'Pull filings'), task('b', '', false)] }, { onOpenTask });
+    fireEvent.click(screen.getByRole('button', { name: /2 tasks · 1 running/ }));
     // A row is named by its task's words, and by its name without them.
     fireEvent.click(screen.getByRole('button', { name: /Pull filings/ }));
     expect(onOpenTask).toHaveBeenCalledWith('a');
@@ -93,7 +93,7 @@ describe('ComposerTray', () => {
   it("asks the leave guard before opening an Analyst's thread", () => {
     const guard = vi.fn<RouteLeaveGuard>();
     renderTray(
-      { analysts: [{ thread_id: 'analyst-1', workspace_id: 'ws-1', workspace_name: 'Semis', title: 'Chip demand' }] },
+      { analysts: [{ threadId: 'analyst-1', workspaceId: 'ws-1', workspaceName: 'Semis', title: 'Chip demand', status: 'running', running: true }] },
       { guard },
     );
     fireEvent.click(screen.getByRole('button', { name: /Semis/ }));
