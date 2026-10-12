@@ -75,14 +75,17 @@ export function senderProvenance(metadata?: SenderMetadata): MessageProvenance |
  * the stream from its start, and history draws the row of a run that was
  * still going, or had just ended, when the page loaded. A row for another run
  * is not this one's, even right above it: a report-back that failed keeps its
- * row. Unstamped, like that bubble: an unstamped user row takes the turn the
- * assistant bubble after it opens.
+ * row. The same frame names the run's turn, which the bubble takes too, so the
+ * row is stamped with it and a reload draws it on the same turn. A backend
+ * that names none leaves both unstamped, and an unstamped user row takes the
+ * turn the assistant bubble after it opens.
  */
 export function withLiveReportRow(
   messages: ChatMessage[],
   runId: string,
   source: ReportSource,
   beforeId: string | null,
+  turnIndex?: number,
 ): ChatMessage[] {
   const provenance = reportRowProvenance(source);
   if (!provenance) return messages;
@@ -98,6 +101,7 @@ export function withLiveReportRow(
     isStreaming: false,
     provenance,
     runId,
+    ...(turnIndex !== undefined ? { turnIndex } : {}),
   };
   return [...messages.slice(0, at), row, ...messages.slice(at)];
 }

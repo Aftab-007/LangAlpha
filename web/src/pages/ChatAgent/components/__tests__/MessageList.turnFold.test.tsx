@@ -102,6 +102,44 @@ describe('turn fold — reading a turn\'s start time', () => {
   });
 });
 
+describe('turn fold — a refused send sharing the turn\'s count', () => {
+  it('heads the answer of the send the turn ran, below its question', () => {
+    // The server refused the first send before admitting it, so the next one
+    // was admitted under the same count: both pairs carry turn 43.
+    const at = (s: number) => new Date(Date.UTC(2026, 8, 21, 15, 4, s));
+    const { container } = renderList([
+      { id: 'u-refused', role: 'user', content: 'first try', contentType: 'text', timestamp: at(0), isStreaming: false, turnIndex: 43 },
+      {
+        id: 'a-refused', role: 'assistant', content: 'refused', contentType: 'text', timestamp: at(1), isStreaming: false,
+        turnIndex: 43, error: 'Server error 500', contentSegments: [{ type: 'text', content: 'refused', order: 0 }],
+        reasoningProcesses: {}, toolCallProcesses: {},
+      },
+      { id: 'u-sent', role: 'user', content: 'go on', contentType: 'text', timestamp: at(30), isStreaming: false, turnIndex: 43 },
+      {
+        id: 'a-sent', role: 'assistant', content: 'answer', contentType: 'text', timestamp: at(32), isStreaming: false,
+        turnIndex: 43, completedAt: at(42).getTime(),
+        contentSegments: [
+          { type: 'tool_call', order: 0, toolCallId: 'tc-0' },
+          { type: 'text', content: 'answer', order: 1 },
+        ],
+        reasoningProcesses: {},
+        toolCallProcesses: {
+          'tc-0': {
+            toolName: 'WebSearch', toolCall: { args: {} },
+            isInProgress: false, isComplete: true, isFailed: false,
+          },
+        },
+      },
+    ]);
+
+    const rows = container.querySelectorAll('[data-turn-fold]');
+    expect(rows).toHaveLength(1);
+    const question = Array.from(container.querySelectorAll('*')).find((el) => el.textContent === 'go on');
+    expect(question).toBeTruthy();
+    expect(question!.compareDocumentPosition(rows[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
 describe('turn fold — a stamp on a bubble the list never paints', () => {
   it('times a steered turn whose continuation settled empty', () => {
     // The agent resumed after steering and produced nothing, so the

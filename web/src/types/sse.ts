@@ -53,6 +53,9 @@ export interface MetadataEvent extends BaseSSEEvent {
   event: 'metadata';
   run_id: string;
   thread_id: string;
+  /** The turn admission gave the run, the value replay names it by. Absent
+   *  from a backend that predates it, where the view counts the turn itself. */
+  turn_index?: number;
 }
 
 export interface ReasoningSignalEvent extends BaseSSEEvent {

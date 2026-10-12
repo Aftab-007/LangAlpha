@@ -97,6 +97,11 @@ describe('withLiveReportRow', () => {
     expect(next[2]).not.toHaveProperty('turnIndex');
   });
 
+  it('stamps the row with the turn its run was admitted to', () => {
+    const next = withLiveReportRow(transcript(), 'run-1', source, 'a-live', 4);
+    expect(next[2]).toMatchObject({ id: 'report-run-1', turnIndex: 4 });
+  });
+
   it('keeps one row when the stream replays from its start', () => {
     const once = withLiveReportRow(transcript(), 'run-1', source, 'a-live');
     expect(withLiveReportRow(once, 'run-1', source, 'a-live')).toBe(once);

@@ -6,7 +6,7 @@ import { MessageBubble } from './messageList/MessageBubble';
 import { TurnFold } from './messageList/TurnFold';
 import { projectMessageContent, visibleProjection } from './messageList/contentProjection';
 import { useMessageActions } from './messageList/MessageActionsContext';
-import { isReportRow, isSteeringUserMessage } from './messageList/messagePredicates';
+import { isReportRow, opensTurn } from './messageList/messagePredicates';
 import { UserBubble } from './messageList/UserBubble';
 import { computeTurnTails, projectTurns } from './messageList/turnProjection';
 import { useLiveMessages, type LiveMessages } from '../session/stream/liveMessages';
@@ -141,9 +141,15 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
         // A steering bubble is projected onto the NEXT turn (it lands after the
         // opener already advanced the counter), and on replay its timestamp is
         // not history time. Only a turn's own initiator can start its clock.
-        if (isSteeringUserMessage(message) || startedAt.has(turnIndex)) continue;
+        if (!opensTurn(message)) continue;
+        // A send refused before admission shares its count with the send
+        // after it, whose turn it is: the row and the clock start over there.
         const ts = epochMs(message.timestamp);
         if (ts !== undefined) startedAt.set(turnIndex, ts);
+        else startedAt.delete(turnIndex);
+        rowPos.delete(turnIndex);
+        firstReplyAt.delete(turnIndex);
+        assistantBubbles.delete(turnIndex);
         continue;
       }
       if (role !== 'assistant') continue;

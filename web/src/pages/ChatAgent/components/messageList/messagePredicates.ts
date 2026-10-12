@@ -14,6 +14,7 @@ export interface MessageLike {
   steering?: unknown;
   steeringDelivered?: unknown;
   isSteering?: unknown;
+  queueError?: unknown;
 }
 
 /**
@@ -25,6 +26,16 @@ export interface MessageLike {
 export function isSteeringUserMessage(message: MessageLike): boolean {
   if (message.role !== 'user') return false;
   return !!message.steeringDelivered || !!message.steering;
+}
+
+/**
+ * The user message a turn starts from. A steer that failed to send is none
+ * either: it was typed into the running turn and stays inside it. A send the
+ * server refused before admitting it keeps the count the next send then takes
+ * too, so a turn can hold two of these, and the later one is the turn's.
+ */
+export function opensTurn(message: MessageLike): boolean {
+  return message.role === 'user' && !isSteeringUserMessage(message) && !message.queueError;
 }
 
 /**

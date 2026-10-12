@@ -147,6 +147,18 @@ describe('useChatMessages: a continued bubble keeps the turn it continues', () =
     expect(turnOfAnswer(result.current.messages, 'and the rest')).toBe(3);
   });
 
+  it('a report-back in a view that missed a turn takes the turn the server admitted', async () => {
+    // A channel message ran turn 3 on this thread; the report-back is turn 4.
+    // The run's own stream names it, so nothing has to be counted.
+    const { result } = await mountWithLiveReportBack([
+      { event: 'metadata', thread_id: 'th-1', run_id: 'rb-run-1', turn_index: 4 },
+      chunk('summary of the task'),
+    ]);
+    await waitFor(() => expect(JSON.stringify(result.current.messages)).toContain('summary of the task'));
+
+    expect(turnOfAnswer(result.current.messages, 'summary of the task')).toBe(4);
+  });
+
   it('a steering message another tab delivered to a report-back sits in the turn it steered', async () => {
     const { result } = await mountWithLiveReportBack([
       chunk('summary so far'),

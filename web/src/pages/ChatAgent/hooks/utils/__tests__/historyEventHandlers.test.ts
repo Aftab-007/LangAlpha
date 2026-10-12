@@ -123,6 +123,60 @@ describe('historyEventHandlers — bubble id determinism', () => {
   });
 });
 
+describe('handleHistoryUserMessage, a copy a dead stream left', () => {
+  const live = (over: Partial<MessageRecord>): MessageRecord => ({
+    role: 'assistant', content: '', isStreaming: false, ...over,
+  } as MessageRecord);
+
+  function replayTurn(prev: MessageRecord[], content: string, turn: number, opts: { tracked?: boolean; streaming?: string } = {}) {
+    const { state, setMessages } = makeStore(prev);
+    const refs = makeRefs();
+    refs.recentlySentTracker = { isRecentlySent: () => opts.tracked ?? true };
+    refs.currentMessageRef.current = opts.streaming ?? null;
+    handleHistoryUserMessage({
+      event: { event: 'user_message', role: 'user', content, turn_index: turn },
+      pairIndex: turn,
+      assistantMessagesByPair: new Map(),
+      pairStateByPair: new Map(),
+      refs,
+      setMessages,
+    });
+    return state;
+  }
+
+  it('gives way to the replay when the reconnect was refused', () => {
+    // A send streamed partway, its reconnect bubble came after, and the
+    // reconnect was refused, so nothing marked either for the replay.
+    const state = replayTurn([
+      live({ id: 'user-1', role: 'user', content: 'go on', turnIndex: 1 }),
+      live({ id: 'assistant-1', content: 'The Nile', turnIndex: 1 }),
+      live({ id: 'assistant-reconnect-1', content: 'The Nile has', turnIndex: 1 }),
+    ], 'go on', 1);
+
+    expect(state.map((m) => m.id)).toEqual(['history-user-1', 'history-assistant-1']);
+  });
+
+  it('keeps a refused send, which holds the same count, with its error', () => {
+    const state = replayTurn([
+      live({ id: 'user-0', role: 'user', content: 'go on', turnIndex: 1 }),
+      live({ id: 'assistant-0', content: '', error: 'refused', turnIndex: 1 } as Partial<MessageRecord>),
+      live({ id: 'user-1', role: 'user', content: 'go on', turnIndex: 1 }),
+      live({ id: 'assistant-1', content: 'The Nile', turnIndex: 1 }),
+    ], 'go on', 1);
+
+    expect(state.map((m) => m.id)).toEqual(['history-user-1', 'history-assistant-1', 'user-0', 'assistant-0']);
+  });
+
+  it('leaves the bubbles of a stream still writing, with the tracker past its window', () => {
+    const state = replayTurn([
+      live({ id: 'user-1', role: 'user', content: 'go on', turnIndex: 1 }),
+      live({ id: 'assistant-1', content: 'The Nile', turnIndex: 1, isStreaming: true }),
+    ], 'go on', 1, { tracked: false, streaming: 'assistant-1' });
+
+    expect(state.map((m) => m.id)).toEqual(['history-user-1', 'history-assistant-1', 'user-1', 'assistant-1']);
+  });
+});
+
 describe('handleHistoryTaskArtifactStatus — born-correct inline card status', () => {
   const cardMsg = (tasks: Record<string, Record<string, unknown>>): MessageRecord => ({
     id: 'history-assistant-0',
