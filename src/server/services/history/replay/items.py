@@ -209,18 +209,23 @@ def _credit_usage_item(
 def _error_item(
     thread_id: str, response: dict[str, Any] | None
 ) -> dict[str, Any] | None:
-    """Reconstruct the terminal ``error`` event from an errored response row."""
+    """Reconstruct the terminal ``error`` event from an errored response row.
+
+    A row with no error text still gets one, its text empty: the event is what
+    marks the turn failed on a reload and offers its Retry, and a failure whose
+    exception had no message (or a row from before errors were stored) is as
+    failed as any other. The client words an empty one.
+    """
     if not response or response.get("status") != "error":
         return None
     errors = response.get("errors")
-    if not errors or not isinstance(errors, list):
-        return None
+    last = errors[-1] if isinstance(errors, list) and errors else ""
     metadata = response.get("metadata") or {}
     data: dict[str, Any] = {
         "thread_id": thread_id,
         # Rows may predate persistence-side sanitization. Scrub again at the
         # trust boundary so historical secrets never reach the replay wire.
-        "error": _sanitize_error_text(str(errors[-1])),
+        "error": _sanitize_error_text(str(last)) if last else "",
         "type": "workflow_error",
     }
     for key in ("error_type", "error_class"):

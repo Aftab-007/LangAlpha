@@ -72,6 +72,7 @@ from .request_prep import (
     apply_fetch_override,
     build_graph_config,
     build_turn_context,
+    turn_start_checkpoint_id,
     read_disk_notice,
     ensure_thread,
     keep_named_model,
@@ -319,7 +320,7 @@ async def astream_ptc_workflow(
             inherits_rules=inherits_rules,
         )
 
-        query_type, fork = _resolve_fork(request=request)
+        query_type, fork = _resolve_fork(request=request, thread_id=thread_id)
         is_checkpoint_replay = bool(request.checkpoint_id and not request.messages)
 
         # Resolve LLM config (pre-resolved by the route handler, fallback for
@@ -694,10 +695,18 @@ async def astream_ptc_workflow(
 
         _mark_phase("graph_build")
 
+        # Read before the handover, which answers a step waiting where the
+        # turn starts, and that is not the newest checkpoint when this is set.
+        base_checkpoint_id = await turn_start_checkpoint_id(
+            thread_id, request, getattr(ptc_graph, "checkpointer", None)
+        )
         cancelled_calls = []
         if prior_thread.msg_type == "flash":
-            cancelled_calls = await hand_over_flash_thread(
-                ptc_graph, thread_id, replay=bool(request.checkpoint_id)
+            cancelled_calls, base_checkpoint_id = await hand_over_flash_thread(
+                ptc_graph,
+                thread_id,
+                replay=bool(request.checkpoint_id),
+                base=base_checkpoint_id,
             )
         elif (
             role == "chief_of_staff"
@@ -705,7 +714,9 @@ async def astream_ptc_workflow(
             and not request.checkpoint_id
         ):
             # A Home thread Flash ran while the all-workspaces agent was off
-            # keeps its type, and may be waiting on a step only Flash has.
+            # keeps its type, and may be waiting on a step only Flash has. A
+            # resume has no base: the route refused one whose pause is off
+            # the branch, so the newest checkpoint is the pause it answers.
             cancelled_calls = await cancel_tool_calls_it_lacks(ptc_graph, thread_id)
 
         if session.sandbox:
@@ -845,6 +856,7 @@ async def astream_ptc_workflow(
             turn_index=run_handle.turn_index,
             surface=turn_surface(request, prior_thread),
             extra_configurable=extra_configurable,
+            base_checkpoint_id=base_checkpoint_id,
         )
         # Propagate run_id to LangGraph via the top-level config key; it
         # lands on ExecutionInfo.run_id and CheckpointMetadata.run_id so

@@ -84,7 +84,7 @@ function turnOfText(messages: unknown[], role: 'user' | 'assistant', text: strin
   const entry = projectTurns(messages as MessageRecord[]).find(
     (p) => p.message.role === role && String(p.message.content ?? '').includes(text),
   );
-  if (!entry) throw new Error(`no ${role} bubble shows ${text}`);
+  if (!entry || entry.turnIndex === null) throw new Error(`no ${role} bubble shows ${text}`);
   return entry.turnIndex;
 }
 
@@ -324,7 +324,7 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
     expect(turnOfText(live(hook), 'assistant', 'fresh answer')).toBe(43);
   });
 
-  it('regenerating a turn a refused send shares a count with keeps the question it ran', async () => {
+  it('regenerating the turn after a refused send keeps the question it ran', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
     // Refused before admission: the server holds no turn for it.
@@ -343,7 +343,9 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
       await send;
     });
     await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
-    expect(turnOfText(live(hook), 'user', 'first try')).toBe(43);
+    // The refused send holds no turn; the send after it ran turn 43.
+    const firstTry = projectTurns(live(hook) as MessageRecord[]).find((p) => p.message.content === 'first try');
+    expect(firstTry?.turnIndex).toBeNull();
     expect(turnOfText(live(hook), 'user', 'go on')).toBe(43);
 
     mockStatus.mockResolvedValue(threadStatus({ latest_turn_index: 43 }));
@@ -459,7 +461,9 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
  * Turns this view never saw (another tab, an automation, a channel message, a
  * report-back) put the server ahead of anything the view can count. The run's
  * `metadata` frame names the turn admission gave it, and every bubble of the
- * run takes that one.
+ * run takes that one. Once the run's stream lets go, the view reloads to show
+ * the turns it missed; each test holds that reload until it has read the
+ * stamps, then lets it through.
  */
 describe('useChatMessages: a view that missed turns stamps the turn the server admitted', () => {
   beforeEach(() => {
@@ -469,21 +473,69 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
   });
 
   const admitted = (turn: number) => ({ event: 'metadata', thread_id: 'th-1', run_id: `run-${turn}`, turn_index: turn });
+  const answerRow = (k: number, content: string) => ({ event: 'message_chunk', turn_index: k, role: 'assistant', agent: 'main', content_type: 'text', content });
+  /** Turn `k` as the server replays it. */
+  const turnRows = (k: number, question: string, ...answers: string[]) => [
+    { event: 'user_message', turn_index: k, content: question, run_id: `run-${k}` },
+    ...answers.map((content) => answerRow(k, content)),
+  ];
+  const missedTurn = (k: number) => turnRows(k, `question ${k}`, `answer ${k}`);
+  const steeredTurn = [
+    ...turnRows(45, 'go on', 'working'),
+    { event: 'steering_delivered', turn_index: 45, messages: [{ content: 'also cover margins', timestamp: 1_700_000_000 }] },
+    answerRow(45, 'covering margins'),
+  ];
+
+  /**
+   * The thread as the server holds it once the view's own turns ran: turns
+   * 40-42, then `turns`. `runEnds` goes in just before the run's last stream
+   * ends, and holds the status read the reload starts with until `release`,
+   * so a test reads the stamps the stream gave before the replay names them.
+   */
+  function serverHolds(...turns: Record<string, unknown>[][]) {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const rows = turns.flat();
+    const latest = Math.max(...rows.map((row) => row.turn_index as number));
+    const page = [...pageOf(40, 42).slice(0, -1), ...rows, { event: 'replay_done', thread_id: 'th-1' }];
+    mockReplay.mockImplementation(async (_tid: string, onEvent: Emit) => {
+      for (const item of page) onEvent(item);
+    });
+    const runEnds = () => mockStatus.mockImplementation(() => released.then(() => threadStatus({ latest_turn_index: latest })));
+    return { runEnds, release };
+  }
+
+  /** Lets through the reload the run asked for, which shows the missed turns. */
+  async function showsMissedTurns(hook: Hook, server: ReturnType<typeof serverHolds>, missed = [43, 44], replays = 2) {
+    await act(async () => {
+      server.release();
+      await flush();
+    });
+    await waitFor(() => expect(mockReplay.mock.calls.length).toBeGreaterThanOrEqual(replays));
+    await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
+    for (const k of missed) expect(turnOfText(live(hook), 'user', `question ${k}`)).toBe(k);
+  }
 
   it('a send lands on the admitted turn, and regenerating it re-runs that turn', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
+    const server = serverHolds(missedTurn(43), missedTurn(44), turnRows(45, 'go on', 'fresh answer'));
     await act(async () => {
       const send = hook.result.current.handleSendMessage('go on');
       await flush();
       streams[0].emit(admitted(45));
       streams[0].emit(chunk('fresh answer'));
+      server.runEnds();
       streams[0].end();
       await send;
     });
     await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
 
     expect(turnOfText(live(hook), 'user', 'go on')).toBe(45);
+    expect(turnOfText(live(hook), 'assistant', 'fresh answer')).toBe(45);
+    await showsMissedTurns(hook, server);
     expect(turnOfText(live(hook), 'assistant', 'fresh answer')).toBe(45);
 
     mockStatus.mockResolvedValue(threadStatus({ latest_turn_index: 45 }));
@@ -510,10 +562,12 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
   it('a stream that drops after the admitted turn continues on it', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
+    const server = serverHolds(missedTurn(43), missedTurn(44), turnRows(45, 'go on', 'part one', 'part two'));
     mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
     // Resumed past the cursor, so the reconnect replays no metadata of its own.
     mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
       onEvent(chunk('part two'));
+      server.runEnds();
       return { disconnected: false, aborted: false };
     });
     await act(async () => {
@@ -530,16 +584,20 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
     expect(turnOfText(live(hook), 'user', 'go on')).toBe(45);
     expect(turnOfText(live(hook), 'assistant', 'part one')).toBe(45);
     expect(turnOfText(live(hook), 'assistant', 'part two')).toBe(45);
+    await showsMissedTurns(hook, server);
+    expect(mockReconnect).toHaveBeenCalledTimes(1);
   });
 
   it('a stream that drops before the admitted turn lands the whole turn on it once a reconnect sees it', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
+    const server = serverHolds(missedTurn(43), missedTurn(44), turnRows(45, 'go on', 'the answer'));
     mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
     // Nothing reached the cursor, so the reconnect replays the run from its start.
     mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
       onEvent(admitted(45));
       onEvent(chunk('the answer'));
+      server.runEnds();
       return { disconnected: false, aborted: false };
     });
     await act(async () => {
@@ -561,17 +619,20 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
       ['user', 45], ['assistant', 45], ['assistant', 45],
     ]);
     expect(turnOfText(live(hook), 'assistant', 'the answer')).toBe(45);
+    await showsMissedTurns(hook, server);
   });
 
   it('steering sent before that drop joins the turn the reconnect sees', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
+    const server = serverHolds(missedTurn(43), missedTurn(44), steeredTurn);
     mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
     mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
       onEvent(admitted(45));
       onEvent(chunk('working'));
       onEvent({ event: 'steering_delivered', messages: [{ content: 'also cover margins', timestamp: 1_700_000_000 }] });
       onEvent(chunk('covering margins'));
+      server.runEnds();
       return { disconnected: false, aborted: false };
     });
     let send!: Promise<unknown>;
@@ -600,15 +661,18 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
     expect(projected.slice(asked).map((p) => p.turnIndex)).toEqual([45, 45, 45, 45, 45]);
     expect(turnOfText(live(hook), 'user', 'also cover margins')).toBe(45);
     expect(turnOfText(live(hook), 'assistant', 'covering margins')).toBe(45);
+    await showsMissedTurns(hook, server);
   });
 
   it('a steer that failed to send before that drop stays in the turn the reconnect sees', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
+    const server = serverHolds(missedTurn(43), missedTurn(44), turnRows(45, 'go on', 'working'));
     mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
     mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
       onEvent(admitted(45));
       onEvent(chunk('working'));
+      server.runEnds();
       return { disconnected: false, aborted: false };
     });
     let send!: Promise<unknown>;
@@ -635,16 +699,19 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
     expect(turnOfText(live(hook), 'user', 'go on')).toBe(45);
     expect(turnOfText(live(hook), 'user', 'also cover margins')).toBe(45);
     expect(turnOfText(live(hook), 'assistant', 'working')).toBe(45);
+    await showsMissedTurns(hook, server);
   });
 
   it('a delivered steer before that drop stays in the turn the reconnect sees', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
+    const server = serverHolds(missedTurn(43), missedTurn(44), steeredTurn);
     mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-45', latest_turn_index: 45 }));
     // Resumed past the steer, so the reconnect brings the run's turn and no steer.
     mockReconnect.mockImplementation(async (_tid: string, _rid: string, _cursor: unknown, onEvent: Emit) => {
       onEvent(admitted(45));
       onEvent(chunk('covering margins'));
+      server.runEnds();
       return { disconnected: false, aborted: false };
     });
     let send!: Promise<unknown>;
@@ -676,11 +743,13 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
     expect(turnOfText(live(hook), 'assistant', 'working')).toBe(45);
     expect(turnOfText(live(hook), 'user', 'also cover margins')).toBe(45);
     expect(turnOfText(live(hook), 'assistant', 'covering margins')).toBe(45);
+    await showsMissedTurns(hook, server);
   });
 
   it('a steering message sent before the run announced its turn joins the admitted turn', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
+    const server = serverHolds(missedTurn(43), missedTurn(44), steeredTurn);
     // Both messages are made in one millisecond, which a fast machine does.
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_790_000_000_000);
     onTestFinished(() => clock.mockRestore());
@@ -703,6 +772,7 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
       streams[0].emit(chunk('working'));
       streams[0].emit({ event: 'steering_delivered', messages: [{ content: 'also cover margins', timestamp: 1_700_000_000 }] });
       streams[0].emit(chunk('covering margins'));
+      server.runEnds();
       streams[0].end();
       await send;
     });
@@ -712,11 +782,16 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
     expect(turnOfText(live(hook), 'assistant', 'working')).toBe(45);
     expect(turnOfText(live(hook), 'user', 'also cover margins')).toBe(45);
     expect(turnOfText(live(hook), 'assistant', 'covering margins')).toBe(45);
+    await showsMissedTurns(hook, server);
   });
 
   it('a steering message the server opened a new turn for takes the admitted turn', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
+    const server = serverHolds(
+      missedTurn(43), missedTurn(44), turnRows(45, 'go on', 'working'),
+      missedTurn(46), turnRows(47, 'and then this', 'demoted answer'),
+    );
     let send!: Promise<unknown>;
     await act(async () => {
       send = hook.result.current.handleSendMessage('go on');
@@ -732,6 +807,7 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
       // Another tab's turn 46 ran between the two: this POST opens turn 47.
       streams[1].emit(admitted(47));
       streams[1].emit(chunk('demoted answer'));
+      server.runEnds();
       streams[1].end();
       streams[0].end();
       await Promise.all([send, steer]);
@@ -741,31 +817,42 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
     expect(turnOfText(live(hook), 'assistant', 'working')).toBe(45);
     expect(turnOfText(live(hook), 'user', 'and then this')).toBe(47);
     expect(turnOfText(live(hook), 'assistant', 'demoted answer')).toBe(47);
+    await showsMissedTurns(hook, server, [43, 44, 46]);
   });
 
   it('a resumed interrupt lands on the admitted turn', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
+    const ask = {
+      event: 'interrupt',
+      interrupt_id: 'int-ask',
+      action_requests: [{ type: 'ask_user_question', question: 'Which tickers?', options: [], allow_multiple: false }],
+    };
+    const askedTurn = turnRows(45, 'screen chip names', 'checking');
+    const asked = serverHolds(missedTurn(43), missedTurn(44), [...askedTurn, { ...ask, turn_index: 45 }]);
     await act(async () => {
       const send = hook.result.current.handleSendMessage('screen chip names');
       await flush();
       streams.at(-1)!.emit(admitted(45));
       streams.at(-1)!.emit(chunk('checking'));
-      streams.at(-1)!.emit({
-        event: 'interrupt',
-        interrupt_id: 'int-ask',
-        action_requests: [{ type: 'ask_user_question', question: 'Which tickers?', options: [], allow_multiple: false }],
-      });
+      streams.at(-1)!.emit(ask);
+      asked.runEnds();
       streams.at(-1)!.end();
       await send;
     });
     await waitFor(() => expect(hook.result.current.pendingInterrupt).not.toBeNull());
+    expect(turnOfText(live(hook), 'assistant', 'checking')).toBe(45);
+    // The question still waits once the reload shows the turns before it.
+    await showsMissedTurns(hook, asked);
+    await waitFor(() => expect(hook.result.current.pendingInterrupt).not.toBeNull());
 
     // An automation ran turn 46 while the question waited.
+    const resumed = serverHolds(missedTurn(43), missedTurn(44), askedTurn, missedTurn(46), [answerRow(47, 'resumed answer')]);
     mockSendHitl.mockImplementation(async (...args: unknown[]) => {
       const { onEvent } = args[3] as { onEvent: Emit };
       onEvent(admitted(47));
       onEvent(chunk('resumed answer'));
+      resumed.runEnds();
       return { disconnected: false };
     });
     await act(async () => {
@@ -775,7 +862,8 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
     await waitFor(() => expect(mockSendHitl).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
 
-    expect(turnOfText(live(hook), 'assistant', 'checking')).toBe(45);
     expect(turnOfText(live(hook), 'assistant', 'resumed answer')).toBe(47);
+    await showsMissedTurns(hook, resumed, [46], 3);
+    expect(turnOfText(live(hook), 'assistant', 'checking')).toBe(45);
   });
 });

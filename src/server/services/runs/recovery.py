@@ -397,7 +397,7 @@ class RecoveryScanner:
     async def _recover_run(
         self, run: Dict[str, Any], run_id: str, thread_id: str
     ) -> bool:
-        status, interrupt_reason, errors, checkpoint_id, stamped = (
+        status, interrupt_reason, errors, newest, stamped = (
             await self._classify(run, run_id, thread_id)
         )
         sse_events, quality = await self._salvage_stream(thread_id, run_id)
@@ -433,7 +433,7 @@ class RecoveryScanner:
                     ]
                 ),
             ),
-            checkpoint_id=checkpoint_id,
+            newest=newest,
             error_frame={
                 "thread_id": thread_id,
                 "content": "the worker running this turn was lost",
@@ -454,21 +454,28 @@ class RecoveryScanner:
     async def _classify(
         self, run: Dict[str, Any], run_id: str, thread_id: str
     ) -> Tuple[
-        str, Optional[str], Optional[List[str]], Optional[str], Dict[str, Any]
+        str,
+        Optional[str],
+        Optional[List[str]],
+        Optional[tl_db.NewestCheckpoint],
+        Dict[str, Any],
     ]:
-        """(status, interrupt_reason, errors, checkpoint_id, metadata) for a
-        dead run.
+        """(status, interrupt_reason, errors, newest, metadata) for a dead
+        run, ``newest`` being the thread's newest checkpoint, which the
+        finalize commits only when this run wrote it.
 
         `interrupted` demands a pending ``__interrupt__`` on a checkpoint
         CREATED BY this run (CheckpointMetadata.run_id, stamped from the
         workflow's graph_config) — a predecessor's stale pending interrupt
         must not lend false resumability to a run that died pre-graph (I8).
         """
-        tip_id: Optional[str] = None
+        newest: Optional[tl_db.NewestCheckpoint] = None
+        newest_read = False
         tip_matches = False
         pending_interrupts: List[Any] = []
         try:
             from src.server.app import setup
+            from src.server.utils.checkpoint_helpers import newest_checkpoint
 
             saver = setup.checkpointer
             cp = (
@@ -481,13 +488,15 @@ class RecoveryScanner:
             if cp is not None:
                 tip_matches = (cp.metadata or {}).get("run_id") == run_id
                 if tip_matches:
-                    tip_id = cp.config["configurable"].get("checkpoint_id")
                     for _task, channel, value in cp.pending_writes or ():
                         if channel != "__interrupt__":
                             continue
                         pending_interrupts.extend(
                             value if isinstance(value, list) else [value]
                         )
+            if saver:
+                newest = await newest_checkpoint(saver, thread_id)
+            newest_read = True
         except Exception:
             logger.error(
                 f"[RecoveryScanner] checkpoint read failed for {thread_id}; "
@@ -495,10 +504,24 @@ class RecoveryScanner:
                 exc_info=True,
             )
 
+        # With no handle, the input stamp comes from the row START wrote, and
+        # as on the owner's path a failed read decides nothing. A stopped run
+        # carries it as a failed one does.
+        from src.server.services.runs.pending_input import (
+            read_untaken_input,
+            untaken_input_stamp,
+        )
+
+        stamp = (
+            untaken_input_stamp(read_untaken_input(run), run_id, newest)
+            if newest_read
+            else {}
+        )
+
         if run.get("cancel_requested_at"):
             # The CAS adopts cancelled from the durable intent regardless;
             # requesting it just keeps the log honest.
-            return "cancelled", None, None, tip_id, {}
+            return "cancelled", None, None, newest, stamp
 
         if pending_interrupts:
             from src.server.contracts.status import (
@@ -514,14 +537,14 @@ class RecoveryScanner:
                 if reason == INTERRUPT_REASON_CREDIT_PAUSE
                 else {}
             )
-            return "interrupted", reason, None, tip_id, stamped
+            return "interrupted", reason, None, newest, stamped
 
         return (
             "error",
             None,
             ["worker_lost: no live executor holds this run's writer fence"],
-            tip_id,
-            {},
+            newest,
+            stamp,
         )
 
     # --------------------------------------------------------------- salvage

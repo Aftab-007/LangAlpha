@@ -10,6 +10,8 @@ call, whether it brings a new message or a stale resume.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -19,7 +21,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, interrupt
 
 from ptc_agent.agent.state import DeltaAgentState
-from src.server.handlers.chat.flash_handover import cancel_tool_calls_it_lacks
+from src.server.handlers.chat.flash_handover import (
+    cancel_tool_calls_it_lacks,
+    hand_over_flash_thread,
+)
 
 CONFIG = {"configurable": {"thread_id": "thread-1"}}
 
@@ -198,3 +203,70 @@ async def test_a_step_under_a_name_the_resuming_agent_has_is_left_waiting():
     await cancel_tool_calls_it_lacks(home, "thread-1")
 
     assert (await home.aget_state(CONFIG)).interrupts
+
+
+@pytest.mark.asyncio
+async def test_a_handover_from_the_threads_base_answers_the_step_there():
+    """After a fork whose run never reached the graph, the turn starts from
+    the base the fork pinned, not the newest checkpoint, which is the turn
+    the fork replaced. The step waiting at the base is the one answered, and
+    the turn starts from that answer, which forks from the base."""
+    saver = InMemorySaver()
+    flash = _agent(
+        saver,
+        _FLASH_TOOLS,
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "manage_workspaces",
+                    "args": {"action": "create"},
+                    "id": "call-ws",
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "ptc_agent",
+                    "args": {"question": "q"},
+                    "id": "call-replaced",
+                    "type": "tool_call",
+                }
+            ],
+        ),
+    )
+    await flash.ainvoke({"messages": [HumanMessage("go", id="h-1")]}, CONFIG)
+    base = (await flash.aget_state(CONFIG)).config["configurable"]["checkpoint_id"]
+    await flash.ainvoke({"messages": [HumanMessage("replaced", id="h-2")]}, CONFIG)
+    replaced = await flash.aget_state(CONFIG)
+    full = _agent(saver, [_quote, _ask], AIMessage(content="answer", id="a-3"))
+
+    with patch(
+        "src.server.database.conversation.promote_flash_thread", AsyncMock()
+    ):
+        cancelled, start = await hand_over_flash_thread(
+            full, "thread-1", replay=False, base=base
+        )
+
+    assert [m.tool_call_id for m in cancelled] == ["call-ws"]
+    assert start not in (None, base)
+    at_start = await full.aget_state(
+        {"configurable": {"thread_id": "thread-1", "checkpoint_id": start}}
+    )
+    assert at_start.parent_config["configurable"]["checkpoint_id"] == base
+    assert not at_start.interrupts
+    # The replaced turn's step is left as it was.
+    assert (await full.aget_state(replaced.config)).interrupts
+
+    out = await full.ainvoke(
+        {"messages": [HumanMessage("next", id="h-3")]},
+        {"configurable": {"thread_id": "thread-1", "checkpoint_id": start}},
+    )
+    assert [m.content for m in out["messages"] if isinstance(m, HumanMessage)] == [
+        "go",
+        "next",
+    ]
+    assert out["messages"][-1].content == "answer"

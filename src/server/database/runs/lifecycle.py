@@ -69,6 +69,19 @@ class RunNotFoundError(TurnLifecycleError):
     """No run row for the given run_id."""
 
 
+class StaleForkError(TurnLifecycleError):
+    """The branch a fork or a HITL answer was validated against is no longer
+    the thread's."""
+
+    def __init__(self, thread_id: str, branch_tip: Optional[str]):
+        self.thread_id = thread_id
+        self.branch_tip = branch_tip
+        super().__init__(
+            f"thread {thread_id} moved off branch tip {branch_tip} before the "
+            "run was admitted"
+        )
+
+
 @dataclass
 class QuerySpec:
     """The user-input row to write in the START txn (None for retries/replays)."""
@@ -86,11 +99,38 @@ class ForkSpec:
     """Edit/regenerate cleanup folded into the START txn (v4 2.4): truncation,
     checkpoint pin, and the new attempt commit or roll back together — a slot
     conflict or duplicate retransmit can no longer leave a half-truncated
-    thread behind."""
+    thread behind.
+
+    ``branch_tip`` is the thread's ``latest_checkpoint_id`` that ``from_turn``
+    was read off (None when the thread had none), so it has no default: a
+    fork that names no tip has nothing for START to check. ``run_horizon``
+    (the newest ``run_seq`` read with that tip) refuses the fork once any run
+    started after the read. With it, ``on_branch`` (whether ``branch_tip`` is
+    on the branch a given pointer names) lets START admit the fork after the
+    pointer moved along the same branch; without both, any move refuses it.
+    ``write_root`` writes a ``checkpoint_id`` no graph wrote (the empty fork
+    root) on START's connection, so it lands with the pin or not at all."""
 
     from_turn: int
     checkpoint_id: str
+    branch_tip: Optional[str]
     preserve_query_at_fork: bool = False
+    run_horizon: Optional[int] = None
+    on_branch: Optional[Callable[[str], Awaitable[bool]]] = None
+    write_root: Optional[Callable[[Any], Awaitable[None]]] = None
+
+
+# Run-row metadata: the checkpoint a fork's START pinned the pointer to.
+FORK_BASE_KEY = "fork_base"
+
+
+@dataclass(frozen=True)
+class NewestCheckpoint:
+    """The thread's newest root checkpoint at finalize, and the run whose graph
+    step wrote it (None when no step names one)."""
+
+    checkpoint_id: str
+    run_id: Optional[str]
 
 
 # The row a finalize hands back: the terminal status plus what the post-CAS
@@ -185,6 +225,107 @@ def _violated_constraint(exc: Exception) -> Optional[str]:
     return getattr(diag, "constraint_name", None) if diag else None
 
 
+async def _run_by_request_key(conn, request_key: str) -> Optional[Dict[str, Any]]:
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            "SELECT * FROM conversation_responses WHERE request_key = %s",
+            (request_key,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def _stale_refusal(
+    conn, thread_id: str, request_key: str, branch_tip: Optional[str]
+) -> TurnLifecycleError:
+    """What START raises when, holding the thread row, it finds the branch moved.
+
+    A retransmit and its first copy both miss the fast probe while neither
+    START has committed, so the retransmit waits on the row and finds the
+    first copy's own move. The key then names that run: a duplicate to
+    reconnect to, as the unique index would report, not a stale request.
+    """
+    existing = await _run_by_request_key(conn, request_key)
+    if existing:
+        return DuplicateRequestError(existing)
+    return StaleForkError(thread_id, branch_tip)
+
+
+async def _run_since_read(conn, thread_id: str, run_horizon: Optional[int]) -> bool:
+    """Whether a run started after ``run_horizon`` was read.
+
+    That run is a turn or fork the client never saw, so it refuses the request
+    whatever it did to the pointer: one that failed before its first
+    checkpoint left the pointer where the request read it. A fork would delete
+    it; a HITL answer would resume a pause it replaced. The caller holds the
+    thread row's lock, so this read sees every START that committed before it.
+    """
+    if run_horizon is None:
+        return False
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM conversation_responses
+                WHERE conversation_thread_id = %s AND run_seq > %s
+            ) AS run_since
+            """,
+            (thread_id, run_horizon),
+        )
+        return (await cur.fetchone())["run_since"]
+
+
+async def _pin_along_branch(conn, thread_id: str, fork: ForkSpec) -> bool:
+    """Pin the fork onto a pointer that moved after its turn was read, when
+    the move only extended the branch the fork was read off.
+
+    A stop's teardown, a compaction or an offload writes on top of the branch
+    without starting a run, so the tip the fork was read off is still under
+    the pointer and the fork's turn still names the same rows. A walk that
+    fails proves nothing, so it refuses like a branch that left.
+    """
+    if fork.run_horizon is None or fork.on_branch is None:
+        return False
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            """
+            SELECT latest_checkpoint_id FROM conversation_threads
+            WHERE conversation_thread_id = %s
+            FOR UPDATE
+            """,
+            (thread_id,),
+        )
+        row = await cur.fetchone()
+        pointer = row["latest_checkpoint_id"] if row else None
+    if pointer is None or await _run_since_read(conn, thread_id, fork.run_horizon):
+        return False
+    try:
+        along = await fork.on_branch(pointer)
+    except Exception:
+        logger.warning(
+            f"[turn_lifecycle] fork branch walk failed thread={thread_id} "
+            f"read_tip={fork.branch_tip} pointer={pointer}",
+            exc_info=True,
+        )
+        return False
+    if not along:
+        return False
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            UPDATE conversation_threads
+            SET latest_checkpoint_id = %s, updated_at = NOW()
+            WHERE conversation_thread_id = %s
+            """,
+            (fork.checkpoint_id, thread_id),
+        )
+    logger.info(
+        f"[turn_lifecycle] fork admitted past a pointer move thread={thread_id} "
+        f"read_tip={fork.branch_tip} pointer={pointer}"
+    )
+    return True
+
+
 async def start_run(
     *,
     run_id: str,
@@ -195,6 +336,7 @@ async def start_run(
     retry_of_run_id: Optional[str] = None,
     query: Optional[QuerySpec] = None,
     fork: Optional[ForkSpec] = None,
+    run_horizon: Optional[int] = None,
     metadata: Optional[Dict[str, Any]] = None,
     created_at: Optional[datetime] = None,
     user_id: Optional[str] = None,
@@ -204,8 +346,11 @@ async def start_run(
     thread projection.
 
     Returns the run row. Raises DuplicateRequestError / RunSlotBusyError /
-    AttemptConflictError — each backed by a DB constraint, so two workers
-    racing the same admission cannot both win regardless of what they read.
+    AttemptConflictError, each backed by a DB constraint, so two workers
+    racing the same admission cannot both win regardless of what they read,
+    and, for a fork, StaleForkError when the branch tip moved. A HITL answer
+    passes the ``run_horizon`` its pause was read at, and StaleForkError
+    refuses it when a run started since.
     ``conn`` pins the transaction to the caller's session (WriterGuard);
     the post-conflict classification reads always use fresh pool reads.
     """
@@ -223,16 +368,43 @@ async def start_run(
                 # race-safe backstop; this just avoids burning a turn_index
                 # (and, on a fork, re-truncating rows the first transmit's
                 # run already rebuilt).
-                async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute(
-                        "SELECT * FROM conversation_responses WHERE request_key = %s",
-                        (request_key,),
-                    )
-                    existing = await cur.fetchone()
-                    if existing:
-                        raise DuplicateRequestError(dict(existing))
+                existing = await _run_by_request_key(conn, request_key)
+                if existing:
+                    raise DuplicateRequestError(existing)
 
                 if fork is not None:
+                    # The fork's turn was read off the branch the thread's
+                    # pointer named, outside this transaction. A turn or fork
+                    # another worker finished since has moved the pointer:
+                    # truncating against the old branch deletes a turn its
+                    # user never saw, or pins an abandoned branch under the
+                    # other fork's rows. Pinning only from the validated tip,
+                    # or from a pointer that move merely extended
+                    # (``_pin_along_branch``), makes that check atomic with the
+                    # truncation, and the row lock holds every other writer of
+                    # the pointer until this transaction ends.
+                    async with conn.cursor() as cur:
+                        await cur.execute(
+                            """
+                            UPDATE conversation_threads
+                            SET latest_checkpoint_id = %s, updated_at = NOW()
+                            WHERE conversation_thread_id = %s
+                              AND latest_checkpoint_id IS NOT DISTINCT FROM %s
+                            """,
+                            (fork.checkpoint_id, thread_id, fork.branch_tip),
+                        )
+                        pinned = cur.rowcount > 0
+                    if pinned:
+                        # The pointer did not move, but a run that failed
+                        # before its first checkpoint leaves it unmoved.
+                        if await _run_since_read(conn, thread_id, fork.run_horizon):
+                            raise await _stale_refusal(
+                                conn, thread_id, request_key, fork.branch_tip
+                            )
+                    elif not await _pin_along_branch(conn, thread_id, fork):
+                        raise await _stale_refusal(
+                            conn, thread_id, request_key, fork.branch_tip
+                        )
                     # Truncation would DELETE any in_progress row at/after the
                     # fork turn — silently freeing the slot under a live run —
                     # so a fork refuses while ANY run is open on the thread.
@@ -262,6 +434,8 @@ async def start_run(
                         raise sr_db.TaskRunSlotBusyError(
                             thread_id, str(live_task["task_id"]), live_task
                         )
+                    if fork.write_root is not None:
+                        await fork.write_root(conn)
                     # An order still waiting for a verdict or a call hangs off
                     # a response row about to be deleted, and nothing settles
                     # it once the row is gone. After the guards, so a refused
@@ -281,21 +455,34 @@ async def start_run(
                     # same transaction so no window exists where a resume can
                     # read an empty latest_run_id.
                     await subagent_repair.repair_task_chains(thread_id, conn=conn)
-                    # update_thread_checkpoint_id swallows failures into
-                    # False; inside this transaction that must abort loudly,
-                    # not commit a truncation with an unpinned checkpoint.
-                    if not await qr_db.update_thread_checkpoint_id(
-                        thread_id, fork.checkpoint_id, conn=conn
-                    ):
-                        raise TurnLifecycleError(
-                            f"fork checkpoint pin failed for thread={thread_id}"
-                        )
                     await tt_db.drop_rewound(thread_id, fork.checkpoint_id, conn=conn)
+                    # The run row is the one record of this pin that outlives a
+                    # run failing before its first step (``pointer_pinned_by_fork``).
+                    metadata = {**(metadata or {}), FORK_BASE_KEY: fork.checkpoint_id}
                     logger.info(
                         f"[turn_lifecycle] fork truncated {deleted} rows from "
                         f"turn>={fork.from_turn} thread={thread_id} "
                         f"checkpoint={fork.checkpoint_id}"
                     )
+                elif run_horizon is not None:
+                    # A HITL answer resumes the newest checkpoint, which the
+                    # route found on the branch outside this transaction. A
+                    # fork admitted since replaced that pause, and one whose
+                    # run failed before its first step left the replaced pause
+                    # newest. START holds no lock that serializes STARTs, so
+                    # the row lock does: it waits out a fork committing now and
+                    # holds off the next until this run's row is in.
+                    async with conn.cursor() as cur:
+                        await cur.execute(
+                            """
+                            SELECT 1 FROM conversation_threads
+                            WHERE conversation_thread_id = %s
+                            FOR UPDATE
+                            """,
+                            (thread_id,),
+                        )
+                    if await _run_since_read(conn, thread_id, run_horizon):
+                        raise await _stale_refusal(conn, thread_id, request_key, None)
 
                 if turn_index is None:
                     turn_index = await allocate_turn_index(conn, thread_id)
@@ -391,7 +578,7 @@ async def finalize_run(
     run_id: str,
     thread_id: str,
     outcome: RunOutcome,
-    checkpoint_id: Optional[str] = None,
+    newest: Optional[NewestCheckpoint] = None,
     usage_writer: Optional[Callable[[Any, str], Awaitable[None]]] = None,
     conn=None,
 ) -> FinalizeResult:
@@ -417,6 +604,8 @@ async def finalize_run(
     The outcome's record lands with the status it describes, so a settled
     row never lacks the facts its replay reads, and its provenance replaces
     the main lane's rows. Subagent lanes are their archive's to write.
+
+    The thread's pointer moves to ``newest`` only when this run wrote it.
     """
     status = outcome.status
     if status not in TERMINAL_STATUSES:
@@ -428,6 +617,13 @@ async def finalize_run(
         else None
     )
     sse_events = outcome.sse_events
+    # A checkpoint the run did not write was there before START. For a fork
+    # whose run died before its first step, that is the abandoned branch's
+    # tip, under the rows START truncated to the fork, so the pointer stays
+    # where START pinned it.
+    commit_checkpoint_id = (
+        newest.checkpoint_id if newest is not None and newest.run_id == run_id else None
+    )
 
     try:
         async with _lifecycle_connection(conn) as conn:
@@ -516,7 +712,10 @@ async def finalize_run(
                 # written. Every helper result is therefore checked, and the
                 # transaction status is verified before commit as a backstop.
                 if not await qr_db.update_thread_status(
-                    thread_id, final_status, checkpoint_id=checkpoint_id, conn=conn
+                    thread_id,
+                    final_status,
+                    checkpoint_id=commit_checkpoint_id,
+                    conn=conn,
                 ):
                     raise RuntimeError(
                         f"thread projection update failed for thread={thread_id}"
@@ -973,14 +1172,43 @@ async def get_run_seqs(run_ids: List[str]) -> Dict[str, int]:
             }
 
 
-async def find_run_by_request_key(request_key: str) -> Optional[Dict[str, Any]]:
+async def pointer_pinned_by_fork(
+    thread_id: str, pointer: str, step_run_id: Optional[str]
+) -> bool:
+    """Whether a fork's START pinned ``pointer`` and replaced the newest step
+    beyond it, the one ``step_run_id`` wrote.
+
+    A step whose run still has a row was not replaced: the fork's own run or
+    a later one wrote it, and it stays the newest. Without a pin, a step
+    naming no run (written before runs were stamped) or a run that never had
+    a row is a turn that ended without moving the pointer, which keeps the
+    newest too.
+    """
     async with pool.get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                "SELECT * FROM conversation_responses WHERE request_key = %s",
-                (request_key,),
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM conversation_responses
+                    WHERE conversation_thread_id = %(thread_id)s
+                      AND metadata->>%(key)s = %(pointer)s
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM conversation_responses
+                    WHERE conversation_response_id = %(step_run_id)s
+                ) AS pinned
+                """,
+                {
+                    "thread_id": thread_id,
+                    "key": FORK_BASE_KEY,
+                    "pointer": pointer,
+                    "step_run_id": normalize_uuid(step_run_id),
+                },
             )
-            row = await cur.fetchone()
-            return dict(row) if row else None
+            return bool((await cur.fetchone())["pinned"])
+
+
+async def find_run_by_request_key(request_key: str) -> Optional[Dict[str, Any]]:
+    async with pool.get_db_connection() as conn:
+        return await _run_by_request_key(conn, request_key)
 
 

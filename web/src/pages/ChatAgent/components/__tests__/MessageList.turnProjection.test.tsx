@@ -280,3 +280,50 @@ describe('MessageList — regenerate lands on the last visible bubble', () => {
     expect(bubble(container, 'u1-steering')?.querySelector('[title="chat.actions.editMessage"]')).toBeNull();
   });
 });
+
+// A send the server refused or never got holds no turn: the next send takes
+// the number the view first gave it, and the two must not share a turn.
+describe('turnProjection — a send the server never stored', () => {
+  const refused: Msg[] = [
+    userMsg('u0', { turnIndex: 0 }),
+    assistant('a0', { turnIndex: 0 }),
+    userMsg('u-refused', { turnIndex: 1, unadmitted: true }),
+    assistant('a-refused', { turnIndex: 1, unadmitted: true, error: true }),
+    userMsg('u1', { turnIndex: 1 }),
+    assistant('a1', { turnIndex: 1 }),
+  ];
+
+  it('gives it no turn and leaves the next send its number', () => {
+    expect(projectTurns(refused as MessageRecord[]).map((p) => p.turnIndex)).toEqual([0, 0, null, null, 1, 1]);
+    expect(newestTurn(refused as MessageRecord[])).toBe(1);
+  });
+
+  it('keeps it out of the turn after it, so regenerate there cuts only that turn', () => {
+    const visible = visibleProjection(projectTurns(refused as MessageRecord[]));
+    expect(computeTurnTails(visible)).toEqual([false, true, false, true, false, true]);
+  });
+});
+
+describe('MessageList — Retry on the newest reply only', () => {
+  const retryBtn = (container: HTMLElement, id: string) =>
+    bubble(container, id)?.querySelector('[title="chat.actions.retry"]') ?? null;
+  const failed = (id: string, turnIndex: number) =>
+    assistant(id, { turnIndex, error: true, content: 'Failed to send message. Please try again.', contentSegments: [] });
+
+  it('offers Retry on the newest failed reply and not on an older one', () => {
+    const { container } = renderList(
+      [userMsg('u0', { turnIndex: 0 }), failed('a0', 0), userMsg('u1', { turnIndex: 1 }), failed('a1', 1)],
+      { onRetry: vi.fn() },
+    );
+    expect(retryBtn(container, 'a0')).toBeNull();
+    expect(retryBtn(container, 'a1')).not.toBeNull();
+  });
+
+  it('offers none when a message was sent after the failed reply', () => {
+    const { container } = renderList(
+      [userMsg('u0', { turnIndex: 0 }), failed('a0', 0), userMsg('u-refused', { turnIndex: 1, unadmitted: true })],
+      { onRetry: vi.fn() },
+    );
+    expect(retryBtn(container, 'a0')).toBeNull();
+  });
+});

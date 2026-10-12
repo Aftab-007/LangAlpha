@@ -480,6 +480,26 @@ export function handleHistoryTextContent({ assistantMessageId, content, finishRe
   return false;
 }
 
+/**
+ * A failed turn replays its error the way the live failure left the reply:
+ * marked failed and, when it holds no text of its own, worded by the error.
+ * Without the mark a reload shows an empty reply with no Retry, though the
+ * turn's status says it failed.
+ */
+export function handleHistoryError({ assistantMessageId, errorText, setMessages }: {
+  assistantMessageId: string;
+  errorText: string;
+  setMessages: SetMessages;
+}): void {
+  setMessages((prev: MessageRecord[]) =>
+    prev.map((msg: MessageRecord) =>
+      msg.id === assistantMessageId
+        ? { ...msg, isStreaming: false, error: true, content: (msg.content as string) || errorText, contentType: 'text' }
+        : msg
+    )
+  );
+}
+
 /** Handles tool_calls events in history replay. */
 export function handleHistoryToolCalls({ assistantMessageId, toolCalls, pairState, setMessages, eventId }: {
   assistantMessageId: string;

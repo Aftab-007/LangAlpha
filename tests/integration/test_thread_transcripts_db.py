@@ -24,11 +24,12 @@ from psycopg.rows import dict_row, tuple_row
 from src.server.database.thread_transcripts import (
     LIVE_FINGERPRINT,
     StoredTranscript,
+    drop_own_past,
     drop_rewound,
     save_stored,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="session")]
 
 # Checkpoint ids sort by the time they were taken.
 CP_OLD = "1f000000-0000-6000-8000-000000000001"
@@ -57,7 +58,7 @@ def _copy(
     )
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def thread(patched_get_db_connection, test_db_pool):
     from src.server.database.conversation import create_thread
     from src.server.database.user import create_user
@@ -267,6 +268,139 @@ async def test_a_fork_drops_the_own_copy_rendered_past_it(thread, test_db_pool, 
     assert await _save(thread, _copy(CP_OLD, inline={"turn-0001.jsonl": b"x"})) is not kept
 
 
+@pytest.mark.parametrize(("live", "kept"), [(True, False), (False, True)], ids=["live", "rendered"])
+async def test_a_fork_drops_a_live_copy_labelled_at_it(thread, test_db_pool, live, kept):
+    """A copy saved live holds the messages past its checkpoint, the turns the
+    fork discards; one rendered there shows only the turns it keeps."""
+    await _save(thread, _copy(CP_OLD, inline={"turn-0002.jsonl": b"so far"}, live=live))
+
+    async with test_db_pool.connection() as conn:
+        await drop_rewound(thread.id, CP_OLD, conn=conn)
+
+    header, _ = await thread.read()
+    assert (header is not None) is kept
+
+
+async def _point(test_db_pool, thread, checkpoint_id: str) -> None:
+    async with test_db_pool.connection() as conn:
+        await conn.execute(
+            "UPDATE conversation_threads SET latest_checkpoint_id = %s "
+            "WHERE conversation_thread_id = %s",
+            (checkpoint_id, thread.id),
+        )
+
+
+async def _admit(thread) -> None:
+    from src.server.database.runs.lifecycle import start_run
+
+    await start_run(
+        run_id=str(uuid.uuid4()),
+        thread_id=thread.id,
+        request_key=str(uuid.uuid4()),
+        metadata={"msg_type": "flash"},
+    )
+
+
+@pytest.mark.parametrize("case", ["idle", "run open", "pointer moved"])
+async def test_a_copy_past_the_pointer_is_dropped_only_while_nothing_can_be_saving_it(
+    thread, test_db_pool, case
+):
+    """Past an idle pointer the copy shows turns a fork replaced. With a run
+    open it may be that run's live save, and a pointer that moved since it
+    was read means a turn landed past it."""
+    await _point(test_db_pool, thread, CP_NEW if case == "pointer moved" else CP_OLD)
+    await _save(thread, _copy(CP_NEW, inline={"turn-0002.jsonl": b"replaced"}))
+    if case == "run open":
+        await _admit(thread)
+
+    dropped = await drop_own_past(thread.id, CP_OLD)
+
+    header, files = await thread.read()
+    assert dropped is (case == "idle")
+    assert (header is None) is (case == "idle")
+    assert ("turn-0002.jsonl" in files) is (case != "idle")
+
+
+async def test_a_run_admitted_during_the_drop_keeps_the_copy_it_saves_live(
+    thread, test_db_pool, test_db_uri, monkeypatch, tuple_rows
+):
+    """The drop waits on the stale copy's row while a run is admitted and its
+    compaction saves over that row live, labelled past the pointer as a live
+    save labels it. That copy is the run's and must survive the drop, which
+    read no run open before the run's START committed."""
+    import psycopg
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from ptc_agent.agent.transcript import TranscriptTarget, Window
+    from src.server.services import transcripts
+
+    monkeypatch.setattr(
+        transcripts,
+        "_target",
+        AsyncMock(return_value=transcripts._Target(thread.workspace_id, thread.user_id, True)),
+    )
+    # The pointer is set, so a live save never asks the checkpointer.
+    monkeypatch.setattr(
+        "src.server.services.history.reader.CheckpointHistoryReader.get_instance",
+        lambda: SimpleNamespace(),
+    )
+
+    async def save_live() -> None:
+        said = [HumanMessage(content="q", id="h-1"), AIMessage(content="so far", id="a-1")]
+        assert await transcripts.save_live(TranscriptTarget(thread.id), said, window=Window())
+
+    await _point(test_db_pool, thread, CP_OLD)
+    await _save(thread, _copy(CP_NEW, inline={"turn-0002.jsonl": b"replaced"}))
+
+    async def blocked_by(probe, pid: int) -> list[int]:
+        rows = await (
+            await probe.execute(
+                "SELECT pid FROM pg_stat_activity WHERE %s = ANY(pg_blocking_pids(pid))",
+                (pid,),
+            )
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    async with (
+        await psycopg.AsyncConnection.connect(test_db_uri) as holder,
+        await psycopg.AsyncConnection.connect(test_db_uri, autocommit=True) as probe,
+    ):
+        # A key-share lock holds the drop's delete at the copy's row and lets
+        # a save update it, so the run can be admitted and save live while
+        # the delete waits.
+        await holder.execute(
+            "SELECT 1 FROM thread_transcripts "
+            "WHERE conversation_thread_id = %s AND prefix = '' FOR KEY SHARE",
+            (thread.id,),
+        )
+        drop = asyncio.create_task(drop_own_past(thread.id, CP_OLD))
+        for _ in range(500):
+            waiting = await blocked_by(probe, holder.info.backend_pid)
+            if waiting:
+                break
+            await asyncio.sleep(0.01)
+        assert len(waiting) == 1, "the drop never reached the copy's row"
+
+        admit = asyncio.create_task(_admit(thread))
+        for _ in range(500):
+            if admit.done() or await blocked_by(probe, waiting[0]):
+                break
+            await asyncio.sleep(0.01)
+        saved = admit.done()
+        if saved:
+            await admit
+            await save_live()
+        await holder.rollback()
+        await drop
+        await admit
+        if not saved:
+            await save_live()
+
+    header, files = await thread.read()
+    assert header is not None and header["fingerprint"] == LIVE_FINGERPRINT
+    assert "turn-0002.jsonl" not in files
+
+
 # -- serving ---------------------------------------------------------------------
 
 
@@ -368,7 +502,7 @@ async def test_a_tasks_copy_lands_only_while_its_run_reads_as_rendered(
 # -- exports overlapping -------------------------------------------------------
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def redis_cache():
     """The cache client on a real Redis at ``REDIS_URL``, or None without one."""
     from src.utils.cache.redis_cache import RedisCacheClient

@@ -31,6 +31,7 @@ import {
   handleHistoryHtmlWidget,
   handleHistorySteeringDelivered,
   handleHistoryTaskArtifactStatus,
+  handleHistoryError,
   isSubagentHistoryEvent,
 } from './historyHandlers';
 import type {
@@ -85,6 +86,9 @@ export async function loadConversationHistory(
   // An older page replays into a transcript of its own, which it adds to
   // rather than rebuilds, and its caller owns what a failure shows.
   const olderPage = deps.beforeTurn !== undefined;
+  // A live frame naming a run while this replay runs saw a run the server
+  // may have started after reading the one this replay names.
+  const liveRunEpoch = rt.latestRunEpochRef.current;
 
   // The todo card shows only the last state, so it is written once, with the
   // transcript and the caller's settle step. Written per event, it showed the
@@ -226,6 +230,15 @@ export async function loadConversationHistory(
         return;
       }
 
+      // The newest page ends naming the thread's newest run, read before the
+      // transcript it follows; a server that names none leaves forks unchecked.
+      if (eventType === 'replay_done') {
+        if ('latest_run_id' in event && rt.latestRunEpochRef.current === liveRunEpoch) {
+          rt.latestRunIdRef.current = typeof event.latest_run_id === 'string' ? event.latest_run_id : null;
+        }
+        return;
+      }
+
       // compaction_chunk is the side channel for LLM output from the
       // compaction middleware (bracketed by context_window summarize
       // start/complete events). Drop here so it never merges into the
@@ -298,10 +311,19 @@ export async function loadConversationHistory(
 
       // An errored turn replays its persisted error event: the fallback
       // model didn't save the turn, so drop any switch suggestion its
-      // model_fallback events set above. (No other replay reconstruction
-      // happens for error events today — deliberately no `return`.)
+      // model_fallback events set above, and mark the turn's reply failed
+      // as the live stream did, which is what offers its Retry.
       if (eventType === 'error' && !isSubagent) {
         rt.setFallbackSuggestion(null);
+        const msgId = currentActivePairIndex !== null
+          ? (assistantMessagesByPair.get(currentActivePairIndex) ?? null) : null;
+        if (msgId) {
+          handleHistoryError({
+            assistantMessageId: msgId,
+            errorText: (event.error || event.message || 'An error occurred while processing your request.') as string,
+            setMessages: setMessagesForHandlers,
+          });
+        }
       }
 
       // Backward compat: handle old token_usage events from history
@@ -946,9 +968,11 @@ export async function loadConversationHistory(
       // fetch", "Load failed" — which we then render in red as if the request
       // were rejected. It was not: the turn is usually still running and the
       // reconnect resumes it from the cursor once the link returns. Say what
-      // actually happened instead of quoting the transport at the user.
+      // actually happened instead of quoting the transport at the user. Online,
+      // the text is a status line or the server's exception, so the view says
+      // it in its own words too.
       rt.setMessageError(
-        isOnline() ? errMsg : i18n.t('chat.offlineHistoryLoad'),
+        isOnline() ? { message: rt.t('chat.historyLoadFailed'), kind: 'notice' } : i18n.t('chat.offlineHistoryLoad'),
       );
     }
     // Set with the flag below, so the render that ends the load says whether

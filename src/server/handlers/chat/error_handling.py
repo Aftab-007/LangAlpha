@@ -206,6 +206,24 @@ def _emit_sse_error(handler, payload: dict) -> str:
     return f"event: error\ndata: {json.dumps(payload)}\n\n"
 
 
+async def _run_named_by_key(request: ChatRequest, log_prefix: str):
+    """The run this request's key already produced, or None, also when the
+    read fails: the refusal it would replace still stands then."""
+    request_key = getattr(request, "request_key", None)
+    if not request_key:
+        return None
+    from src.server.database.runs.lifecycle import find_run_by_request_key
+
+    try:
+        return await find_run_by_request_key(request_key)
+    except Exception:
+        logger.warning(
+            f"[{log_prefix}] request_key recheck failed; keeping the refusal",
+            exc_info=True,
+        )
+        return None
+
+
 async def handle_workflow_error(
     e: Exception,
     thread_id: str,
@@ -246,8 +264,10 @@ async def handle_workflow_error(
         RunSlotBusyError,
         RunCoordinator,
         RunOutcome,
+        StaleForkError,
         protected_finalize,
     )
+    from src.server.services.writer_guard import WriterGuardUnavailable
 
     # The run is the executor's, alive or settled by its own finalize, and
     # this is the reader failing. A failure frame would end a turn that is
@@ -337,6 +357,33 @@ async def handle_workflow_error(
             return False
         return True
 
+    # A refusal before this request's START committed may be its own first
+    # copy, admitted on another worker after this copy's duplicate probe and
+    # now holding the slot, the writer fence or the branch this copy checked.
+    # Its key names that run, so the copy gets the duplicate answer instead.
+    if run_handle is None and (
+        isinstance(
+            e,
+            (
+                RunSlotBusyError,
+                TaskRunSlotBusyError,
+                AttemptConflictError,
+                StaleForkError,
+                qr_db.QueryConflictError,
+                WriterGuardUnavailable,
+            ),
+        )
+        or (
+            isinstance(e, HTTPException)
+            and e.status_code == 409
+            and isinstance(e.detail, dict)
+            and e.detail.get("code") in ADMISSION_CONFLICT_CODES
+        )
+    ):
+        existing = await _run_named_by_key(request, log_prefix)
+        if existing is not None:
+            e = DuplicateRequestError(existing)
+
     # An admission-conflict 409 is a deliberate protocol response (raised
     # in-generator by ``wait_or_steer`` for both the foreground and dispatched
     # paths), not a workflow execution failure. Surface it to the client as an
@@ -373,6 +420,10 @@ async def handle_workflow_error(
             "error_class": type(e).__name__,
             "code": detail["code"],
         }
+        # The run it cancelled stays the thread's latest attempt, which the
+        # client names on its next edit, so the frame names it too.
+        if run_handle is not None:
+            error_payload["run_id"] = run_handle.run_id
         yield _emit_sse_error(handler, error_payload)
         return
 
@@ -422,19 +473,26 @@ async def handle_workflow_error(
     # QueryConflictError is the loser of an unfenced cross-instance race (two
     # servers sharing app tables with the guard disabled): its START rolled
     # back on the differing-content query collision, so it is a protocol 409
-    # like its siblings, never a workflow failure.
+    # like its siblings, never a workflow failure. StaleForkError is the
+    # route's stale_fork refusal arriving late: the branch moved between the
+    # route's check and START, which refused before truncating anything.
     if isinstance(
         e,
         (
             RunSlotBusyError,
             TaskRunSlotBusyError,
             AttemptConflictError,
+            StaleForkError,
             qr_db.QueryConflictError,
         ),
     ):
         await scope.release_slot()
         if isinstance(e, (RunSlotBusyError, TaskRunSlotBusyError)):
             detail = admission_conflict_detail("running")
+        elif isinstance(e, StaleForkError):
+            from src.server.handlers.checkpoint_handler import stale_fork_detail
+
+            detail = stale_fork_detail()
         elif isinstance(e, qr_db.QueryConflictError):
             detail = {
                 "code": "turn_conflict",
@@ -461,8 +519,6 @@ async def handle_workflow_error(
 
     # Pinned-session budget/lock refusal (I2): bounded capacity signal, raised
     # by START before anything durable exists — retryable, nothing to finalize.
-    from src.server.services.writer_guard import WriterGuardUnavailable
-
     if isinstance(e, WriterGuardUnavailable):
         await scope.release_slot()
         error_payload = {
@@ -514,6 +570,9 @@ async def handle_workflow_error(
 
     classification = classify_error(e)
     is_recoverable = classification["is_recoverable"]
+    # A START that committed left this run as the thread's latest attempt,
+    # which the client names on its next edit; a refused one left nothing.
+    run_named = {"run_id": run_handle.run_id} if run_handle is not None else {}
     error_type = classification["error_type"]
 
     if is_recoverable:
@@ -552,6 +611,7 @@ async def handle_workflow_error(
                 "max_retries": MAX_RETRIES,
                 "thread_id": thread_id,
                 "recovery": recovery,
+                **run_named,
             }
             yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
         else:
@@ -587,6 +647,7 @@ async def handle_workflow_error(
                 "retry_count": retry_count,
                 "max_retries": MAX_RETRIES,
                 "recovery": recovery,
+                **run_named,
             }
             yield f"event: retry\ndata: {json.dumps(retry_data)}\n\n"
 
@@ -613,5 +674,6 @@ async def handle_workflow_error(
             "error_type": error_type_label,
             "error_class": type(e).__name__,
             "recovery": recovery,
+            **run_named,
         }
         yield _emit_sse_error(handler, error_payload)

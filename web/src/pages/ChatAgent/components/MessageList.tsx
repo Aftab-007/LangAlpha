@@ -8,7 +8,7 @@ import { projectMessageContent, visibleProjection } from './messageList/contentP
 import { useMessageActions } from './messageList/MessageActionsContext';
 import { isReportRow, opensTurn } from './messageList/messagePredicates';
 import { UserBubble } from './messageList/UserBubble';
-import { computeTurnTails, projectTurns } from './messageList/turnProjection';
+import { computeTurnTails, hasTurn, projectTurns } from './messageList/turnProjection';
 import { useLiveMessages, type LiveMessages } from '../session/stream/liveMessages';
 import type { ChatMessage, MessageProvenance } from '@/types/chat';
 import { turnFilesByTurn } from '../utils/turnFiles';
@@ -87,12 +87,21 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
   const projected = React.useMemo(() => projectTurns(messages), [messages]);
   const visible = React.useMemo(() => visibleProjection(projected, isSubagentView), [projected, isSubagentView]);
   const turnTails = React.useMemo(() => computeTurnTails(visible), [visible]);
+  // The bubbles of the server's turns. A send it never stored is painted
+  // like any other but has no turn to time, fold, rate or list files under.
+  const turned = React.useMemo(() => projected.filter(hasTurn), [projected]);
+  // Retry re-runs the thread's latest attempt and replaces everything from
+  // its reply on, so only a reply nothing was sent after offers it.
+  const latestReplyId = React.useMemo(() => {
+    const last = visible.findLast(({ message }) => message.role !== 'notification')?.message;
+    return last?.role === 'assistant' ? last.id : undefined;
+  }, [visible]);
 
   // The deliverables strip reads the RAW projection: a turn's files are named
   // across its whole span, including a bubble the list never paints.
   const filesByTurn = React.useMemo(
-    () => turnFilesByTurn(projected, folders),
-    [projected, folders],
+    () => turnFilesByTurn(turned, folders),
+    [turned, folders],
   );
 
   // Only the newest turn can still be running. A bubble's own `isStreaming`
@@ -105,11 +114,11 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
   // the running turn's liveness to the one before it.
   const newestTurn = React.useMemo(() => {
     let newest = -1;
-    for (const { message, turnIndex } of projected) {
+    for (const { message, turnIndex } of turned) {
       if ((message.role as string) === 'assistant' && turnIndex > newest) newest = turnIndex;
     }
     return newest;
-  }, [projected]);
+  }, [turned]);
 
   // Both display preferences fold finished turns; only live reasoning differs.
   const turnFolds = React.useMemo(() => {
@@ -127,7 +136,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
     // the raw list, so a turn that ended on one is still timed. Last write
     // wins, which is the latest stamped bubble of the turn.
     const endStamps = new Map<number, MessageRecord>();
-    for (const { message, turnIndex } of projected) {
+    for (const { message, turnIndex } of turned) {
       if ((message.role as string) !== 'assistant') continue;
       if (message.completedAt !== undefined || message.completionObservedAt !== undefined) {
         endStamps.set(turnIndex, message);
@@ -136,14 +145,15 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
 
     for (let i = 0; i < visible.length; i++) {
       const { message, turnIndex } = visible[i];
+      if (turnIndex === null) continue;
       const role = message.role as string;
       if (role === 'user') {
         // A steering bubble is projected onto the NEXT turn (it lands after the
         // opener already advanced the counter), and on replay its timestamp is
         // not history time. Only a turn's own initiator can start its clock.
         if (!opensTurn(message)) continue;
-        // A send refused before admission shares its count with the send
-        // after it, whose turn it is: the row and the clock start over there.
+        // Of two openers on one count the later is the turn's: the row and
+        // the clock start over there.
         const ts = epochMs(message.timestamp);
         if (ts !== undefined) startedAt.set(turnIndex, ts);
         else startedAt.delete(turnIndex);
@@ -175,6 +185,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
       // bubble that can be streaming once the turn has several.
       if (!turnTails[i]) continue;
       const { message, turnIndex } = visible[i];
+      if (turnIndex === null) continue;
       const start = startedAt.get(turnIndex);
       const pos = rowPos.get(turnIndex);
       if (start === undefined || pos === undefined) continue;
@@ -207,7 +218,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
       });
     }
     return folds;
-  }, [visible, projected, turnTails, isLoading, newestTurn, isSubagentView, filesByTurn, onOpenFile, readOnly, allowFiles]);
+  }, [visible, turned, turnTails, isLoading, newestTurn, isSubagentView, filesByTurn, onOpenFile, readOnly, allowFiles]);
 
   // Empty state - show when no messages exist (hidden in subagent view)
   if (messages.length === 0) {
@@ -281,17 +292,18 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
         // A bubble only ever folds when its turn shows the row that unfolds it:
         // a turn with no fold row (no initiating message, nothing foldable yet)
         // keeps the verbose shape rather than hiding prose behind nothing.
-        const info = turnFolds.get(turnIndex);
+        const info = turnIndex === null ? undefined : turnFolds.get(turnIndex);
         const fold: FoldState = !info
           ? 'unfolded'
           : info.isLive
             ? 'live'
-            : expandedTurns.has(turnIndex) ? 'expanded' : info.noAnswer ? 'process' : 'collapsed';
+            : turnIndex !== null && expandedTurns.has(turnIndex) ? 'expanded' : info.noAnswer ? 'process' : 'collapsed';
         const bubbleProps = {
           message,
           contentProjection: projectMessageContent(message, isSubagentView),
           turnIndex,
           isTurnTail: turnTails[i],
+          isLatestReply: message.id === latestReplyId,
           // The fold already decided whether this turn is working, and that
           // decision now includes a background task outliving its stream.
           // Recomputing the older expression here let the bubble call the
@@ -301,8 +313,8 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
           isTurnLive: info
             ? info.isLive
             : (!!isLoading && turnIndex === newestTurn) || !!message.isStreaming,
-          turnFiles: turnTails[i] ? filesByTurn.get(turnIndex) : undefined,
-          feedback: feedbackByTurn?.[turnIndex] ?? null,
+          turnFiles: turnTails[i] && turnIndex !== null ? filesByTurn.get(turnIndex) : undefined,
+          feedback: turnIndex === null ? null : feedbackByTurn?.[turnIndex] ?? null,
           isLoading,
           fold,
           isSubagentView,
@@ -318,7 +330,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
         // the gap between them is the row's own margin, not the list's.
         return (
           <div key={message.id as string}>
-            {info && info.rowPos === i && (
+            {info && turnIndex !== null && info.rowPos === i && (
               /* A row that arrives over a turn already streaming unfolds
                  rather than pushing the reply down a line in one paint. A
                  settled turn's row was there before the reader was. */

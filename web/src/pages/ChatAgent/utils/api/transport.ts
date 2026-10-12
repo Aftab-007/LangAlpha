@@ -211,9 +211,21 @@ export async function postSSEStream(
     signal?: AbortSignal | null;
   },
 ): Promise<{ disconnected: boolean; aborted: boolean; contentLocation: string | null }> {
-  const { onEvent, onRunIdResolved, signal } = opts;
+  const { onRunIdResolved, signal } = opts;
   const authHeaders = await getAuthHeaders();
-  return await streamFetch(
+  // A retransmit that raced past the route's duplicate check is refused in
+  // the stream, by the same answer the route gives as a 409. It reaches the
+  // caller as that 409, so one recovery handles both: the stream's turn is
+  // the copy that arrived, not a failure of this one.
+  let duplicate: Record<string, unknown> | null = null;
+  const onEvent = (event: Record<string, unknown>) => {
+    if (event.event === 'error' && event.code === 'duplicate_request') {
+      duplicate = event;
+      return;
+    }
+    opts.onEvent(event);
+  };
+  const result = await streamFetch(
     path,
     {
       method: 'POST',
@@ -233,4 +245,20 @@ export async function postSSEStream(
         }
       : undefined,
   );
+  if (duplicate && !result.aborted) throw duplicateRequestError(duplicate);
+  return result;
+}
+
+/** The route's 409 for a frame carrying the same refusal. The frame names the
+ * copy's thread as `run_thread_id`, which a first message that minted a second
+ * thread before START refused it tells apart from the thread it streamed on. */
+function duplicateRequestError(frame: Record<string, unknown>): Error & { status: number; errorInfo: Record<string, unknown> } {
+  const message = typeof frame.error === 'string' ? frame.error : '';
+  const errorInfo: Record<string, unknown> = { code: 'duplicate_request', message };
+  if (typeof frame.run_id === 'string' && frame.run_id) {
+    errorInfo.run_id = frame.run_id;
+    errorInfo.run_status = frame.run_status;
+    errorInfo.thread_id = frame.run_thread_id || frame.thread_id;
+  }
+  return Object.assign(new Error(message || 'HTTP error! status: 409'), { status: 409, errorInfo });
 }

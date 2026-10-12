@@ -457,16 +457,65 @@ async def save_stored(
 
 
 async def drop_rewound(thread_id: str, checkpoint_id: str, *, conn) -> None:
-    """Drop the thread's own copy when it was rendered past ``checkpoint_id``,
-    where a fork pins the thread back: it shows the turns the fork discards,
-    and no save at the older checkpoint may replace it. ``conn`` is the
-    fork's transaction, so the copy goes with the turns or not at all."""
+    """Drop the thread's own copy when it shows turns past ``checkpoint_id``,
+    where a fork pins the thread back: rendered past it, or saved live at it,
+    which holds the messages after it. Either shows the turns the fork
+    discards, and no save at the older checkpoint may replace it. ``conn`` is
+    the fork's transaction, so the copy goes with the turns or not at all."""
     async with conn.cursor() as cur:
         await cur.execute(
             "DELETE FROM thread_transcripts "
-            "WHERE conversation_thread_id = %s AND prefix = '' AND checkpoint_id > %s",
-            (thread_id, checkpoint_id),
+            "WHERE conversation_thread_id = %s AND prefix = '' "
+            "AND (checkpoint_id > %s OR (checkpoint_id = %s AND fingerprint = %s))",
+            (thread_id, checkpoint_id, checkpoint_id, LIVE_FINGERPRINT),
         )
+
+
+async def drop_own_past(thread_id: str, checkpoint_id: str) -> bool:
+    """Drop the thread's own copy when it reads as newer than
+    ``checkpoint_id``, while that is still the thread's pointer and no run is
+    open on it, and return whether one was dropped.
+
+    Every writer labels a copy at a pointer it read or at the copy it
+    replaced, and only a fork moves the pointer back, so a copy past an idle
+    pointer shows turns a fork replaced: an export that read them can land
+    after the fork's START dropped the copy, and no render from the older
+    pointer replaces it. One with no label goes too, since the empty fork root
+    renders nothing over it. A run open may have saved one live, and a
+    pointer moved since it was read means a turn landed past it.
+
+    The thread row's lock keeps a run from being admitted between the check
+    and the delete, since every START updates that row before its run row
+    commits. A single statement reads the run rows once, at its start, and
+    can then wait on the copy's row while a run is admitted and saves over it
+    live.
+    """
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                """
+                SELECT 1 FROM conversation_threads
+                WHERE conversation_thread_id = %s AND latest_checkpoint_id = %s
+                FOR NO KEY UPDATE
+                """,
+                (thread_id, checkpoint_id),
+            )
+            if await cur.fetchone() is None:
+                return False
+            cur = await conn.execute(
+                """
+                DELETE FROM thread_transcripts s
+                WHERE s.conversation_thread_id = %s AND s.prefix = ''
+                  AND (s.checkpoint_id IS NULL OR s.checkpoint_id > %s)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM conversation_responses r
+                      WHERE r.conversation_thread_id = s.conversation_thread_id
+                        AND r.status = 'in_progress'
+                  )
+                """,
+                (thread_id, checkpoint_id),
+            )
+            return cur.rowcount > 0
 
 
 async def delete_stored(thread_id: str, prefixes: set[str]) -> None:

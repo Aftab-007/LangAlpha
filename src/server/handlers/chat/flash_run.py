@@ -58,6 +58,7 @@ from .request_prep import (
     apply_fetch_override,
     build_graph_config,
     build_turn_context,
+    turn_start_checkpoint_id,
     ensure_thread,
     keep_named_model,
     init_tracking,
@@ -233,7 +234,7 @@ async def astream_flash_workflow(
             request, prior_thread, user_profile=user_profile
         )
 
-        query_type, fork = _resolve_fork(request=request)
+        query_type, fork = _resolve_fork(request=request, thread_id=thread_id)
         is_checkpoint_replay = bool(request.checkpoint_id and not request.messages)
 
         # Resolve LLM config (pre-resolved by the route handler, fallback for
@@ -516,6 +517,9 @@ async def astream_flash_workflow(
             skill_dirs=skill_dirs,
             run_id=run_id,
             turn_index=run_handle.turn_index,
+            base_checkpoint_id=await turn_start_checkpoint_id(
+                thread_id, request, getattr(flash_graph, "checkpointer", None)
+            ),
         )
         graph_config["run_id"] = run_id
 

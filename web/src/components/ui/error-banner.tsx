@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Info } from 'lucide-react';
 import { UPSTREAM_HINT_I18N_KEY, type ErrorLinkSpec, type StructuredError } from '@/utils/rateLimitError';
 import { parseErrorMessage } from '@/pages/ChatAgent/utils/parseErrorMessage';
 
@@ -46,9 +46,29 @@ export function ErrorLink({ url, label, labelKey, external }: ErrorLinkSpec): Re
   );
 }
 
+/** The quiet line a notice reads as: nothing failed, so no error colors. */
+export function NoticeLine({ message, className, style }: { message: string; className?: string; style?: React.CSSProperties }): React.ReactElement {
+  return (
+    <div
+      className={`flex items-center gap-2 text-xs ${className ?? ''}`}
+      role="status"
+      aria-live="polite"
+      style={{ color: 'var(--color-text-tertiary)', ...style }}
+    >
+      <Info aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 wrap-break-word">{message}</span>
+    </div>
+  );
+}
+
 export function ErrorBanner({ error, className, style }: ErrorBannerProps): React.ReactElement | null {
   const { t } = useTranslation();
   if (!error) return null;
+
+  // Nothing failed: the same quiet row as the thread's other notices.
+  if (typeof error === 'object' && error.kind === 'notice') {
+    return <NoticeLine message={error.message} className={`px-3 py-1.5 ${className ?? ''}`} style={style} />;
+  }
 
   const baseClass = `flex items-start gap-2 px-3 py-2 rounded-md text-sm ${className ?? ''}`;
   const baseStyle: React.CSSProperties = {

@@ -85,4 +85,19 @@ describe('TextMessageContent error routing', () => {
     );
     expect(screen.queryByText('chat.errorInternalHeadline')).not.toBeInTheDocument();
   });
+
+  it('renders a notice as the quiet status line, not an error card', () => {
+    const notice = 'Another reply was still running in this chat, so this message wasn\'t sent. Retry once it finishes.';
+    render(
+      <TextMessageContent
+        content={notice}
+        isStreaming={false}
+        hasError={true}
+        structuredError={{ message: notice, kind: 'notice' }}
+      />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(notice);
+    // parseErrorMessage's headline would title it as a failure.
+    expect(screen.queryByText('Error')).not.toBeInTheDocument();
+  });
 });

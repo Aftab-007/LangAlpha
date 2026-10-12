@@ -8,6 +8,7 @@ import { useTranscriptDisplay } from '@/lib/transcriptDisplay';
 import { parseErrorMessage, type ParsedError } from '../utils/parseErrorMessage';
 import type { OpenFileHandler } from '../utils/fileLocation';
 import { UPSTREAM_HINT_I18N_KEY, type StructuredError } from '@/utils/rateLimitError';
+import { NoticeLine } from '@/components/ui/error-banner';
 
 interface TextMessageContentProps {
   content: string;
@@ -15,7 +16,8 @@ interface TextMessageContentProps {
   hasError: boolean;
   /** When the backend classified the failure (currently ``upstream`` only —
    *  internal errors render at the chat-input banner, not inline), use the
-   *  structured fields instead of re-parsing the raw message text. */
+   *  structured fields instead of re-parsing the raw message text. A
+   *  ``notice`` is a reply the view stopped short of sending, in its words. */
   structuredError?: StructuredError;
   onOpenFile?: OpenFileHandler;
   /** Whether everything that has arrived is on screen. The typewriter trails
@@ -59,6 +61,9 @@ function TextMessageContent({ content, isStreaming, hasError, structuredError, o
   }
 
   if (hasError) {
+    if (structuredError?.kind === 'notice') {
+      return <NoticeLine message={structuredError.message} className="py-1.5" />;
+    }
     if (structuredError?.kind === 'upstream') {
       return <StructuredErrorDisplay err={structuredError} fallbackText={content} />;
     }

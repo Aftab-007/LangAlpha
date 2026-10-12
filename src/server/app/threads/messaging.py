@@ -195,7 +195,9 @@ async def send_new_thread_message(
             )
     if not thread_id:
         thread_id = str(uuid4())
-    return await _handle_send_message(request, auth, thread_id, raw_request)
+    return await _handle_send_message(
+        _client_body(request, raw_request), auth, thread_id, raw_request
+    )
 
 
 @router.post("/{thread_id}/messages")
@@ -206,7 +208,50 @@ async def send_thread_message(
     """
     Send a message to an existing thread. Returns an SSE stream.
     """
-    return await _handle_send_message(request, auth, thread_id, raw_request)
+    return await _handle_send_message(
+        _client_body(request, raw_request), auth, thread_id, raw_request
+    )
+
+
+def _is_service_request(raw_request: Request | None) -> bool:
+    """Whether the server sent ``raw_request`` itself: it carries the service
+    token, or oss mode has no token configured to check, which trusts the
+    self-dispatch."""
+    from src.config.settings import HOST_MODE
+
+    token = _get_service_token()
+    sent = raw_request.headers.get("X-Service-Token", "") if raw_request else ""
+    return service_token_matches(sent, token) or (HOST_MODE == "oss" and not token)
+
+
+# Fields only the server's own requests set. A user's copy would post a system
+# message, label their message as a report-back, or forge a report-back watch's
+# cleanup; ``surface_rules`` is a channel gateway's, whose text rides the
+# operator role on providers with a native channel.
+_SERVER_ONLY_FIELDS = (
+    "query_type",
+    "report_back_ptc_thread_id",
+    "report_source",
+    "origin_flash_thread_id",
+    "origin_dispatch_gen",
+    "automation_delivery",
+    "automation_earlier_runs",
+    "disable_subagents",
+    "surface_rules",
+)
+
+
+def _client_body(request: ChatRequest, raw_request: Request) -> ChatRequest:
+    """``request`` with the server-only fields cleared, unless the server sent it.
+
+    Cleared as the body enters, before the route settles anything: a
+    regenerate of a turn that never started takes the type the turn's row
+    stored, a report-back's ``system``, which a strip after it would clear.
+    """
+    if _is_service_request(raw_request):
+        return request
+    cleared = {name: None for name in _SERVER_ONLY_FIELDS if getattr(request, name)}
+    return request.model_copy(update=cleared) if cleared else request
 
 
 async def _reject_duplicate_request(request_key: str, user_id: str) -> None:
@@ -243,6 +288,32 @@ async def _reject_duplicate_request(request_key: str, user_id: str) -> None:
     raise HTTPException(status_code=409, detail=detail)
 
 
+async def _settle_against_branch(
+    thread_id: str, request: ChatRequest, user_id: str
+) -> ChatRequest:
+    """A fork or HITL answer checked against the thread's branch.
+
+    A retransmit whose first copy started after the duplicate probe finds
+    that copy's run there and reads it as a change its view never saw. Its
+    key names the run, so it gets the duplicate answer, not a refusal.
+    """
+    from src.server.handlers.checkpoint_handler import (
+        settle_fork_request,
+        settle_resume_request,
+    )
+
+    try:
+        if request.fork_from_turn is not None and request.checkpoint_id:
+            return await settle_fork_request(thread_id, request)
+        if request.hitl_response:
+            return await settle_resume_request(thread_id, request)
+        return request
+    except HTTPException as refused:
+        if refused.status_code == 409 and request.request_key:
+            await _reject_duplicate_request(request.request_key, user_id)
+        raise
+
+
 async def _handle_send_message(
     request: ChatRequest, auth: ChatRateLimited, thread_id: str,
     raw_request: Request | None = None,
@@ -250,6 +321,9 @@ async def _handle_send_message(
     retry_of_run_id: str | None = None,
 ):
     """Shared logic for both POST /threads/messages and POST /threads/{id}/messages.
+
+    Those routes pass a body already cleared of the server-only fields
+    (:func:`_client_body`); /retry builds its request from the stored rows.
 
     ``retry_of_run_id`` is retry provenance and route-internal: only the
     /retry route passes it. Whatever the public body carried is overwritten
@@ -325,12 +399,10 @@ async def _handle_send_message(
         # with no INTERNAL_SERVICE_TOKEN configured there is nothing to
         # authenticate against, so the self-dispatch is trusted; a configured
         # token is enforced in every mode. This single is_internal value is
-        # reused by the field strip and both dispatch branches below.
+        # reused by both dispatch branches below.
         _req_token = (raw_request.headers.get("X-Service-Token", "") if raw_request else "")
         _svc_token = _get_service_token()
-        is_internal = service_token_matches(_req_token, _svc_token) or (
-            HOST_MODE == "oss" and not _svc_token
-        )
+        is_internal = _is_service_request(raw_request)
         if (
             not is_internal
             and raw_request
@@ -357,22 +429,9 @@ async def _handle_send_message(
         # A fork deletes rows from the turn it replaces, and that turn is the
         # one its checkpoint forks, not the number the client counted. Every
         # later reader (the truncation, the regenerate's turn, the prior-turn
-        # read) takes it from the request, so it is settled here, once.
-        if request.fork_from_turn is not None and request.checkpoint_id:
-            from src.server.handlers.checkpoint_handler import resolve_fork_turn
-
-            fork_turn = await resolve_fork_turn(
-                thread_id,
-                request.checkpoint_id,
-                regenerate=not request.messages,
-                requested=request.fork_from_turn,
-            )
-            if fork_turn != request.fork_from_turn:
-                logger.warning(
-                    f"[CHAT] fork turn {request.fork_from_turn} from the client "
-                    f"is turn {fork_turn} on the branch thread_id={thread_id}"
-                )
-                request = request.model_copy(update={"fork_from_turn": fork_turn})
+        # read) takes it from the request, so it is settled here, once, with
+        # the branch tip it was read off for START to hold it to.
+        request = await _settle_against_branch(thread_id, request, user_id)
 
         # Resolve workspace_id from thread if not provided
         if not workspace_id and thread_meta:
@@ -490,32 +549,6 @@ async def _handle_send_message(
         if route.role == "chief_of_staff":
             await ensure_home(user_id, workspace)
 
-        # Strip internal-only fields from non-internal requests (prevent
-        # spoofing system messages / forging report-back watch cleanup).
-        if not is_internal:
-            internal_overrides = {}
-            if request.query_type:
-                internal_overrides["query_type"] = None
-            if request.report_back_ptc_thread_id:
-                internal_overrides["report_back_ptc_thread_id"] = None
-            if request.report_source:
-                internal_overrides["report_source"] = None
-            if request.origin_flash_thread_id:
-                internal_overrides["origin_flash_thread_id"] = None
-            if request.origin_dispatch_gen:
-                internal_overrides["origin_dispatch_gen"] = None
-            if request.automation_delivery:
-                internal_overrides["automation_delivery"] = None
-            if request.automation_earlier_runs:
-                internal_overrides["automation_earlier_runs"] = None
-            if request.disable_subagents:
-                internal_overrides["disable_subagents"] = None
-            # A channel gateway's field: the text rides the operator role on
-            # providers with a native channel, so a user's own copy is dropped.
-            if request.surface_rules:
-                internal_overrides["surface_rules"] = None
-            if internal_overrides:
-                request = request.model_copy(update=internal_overrides)
     except BaseException:
         await scope.release_slot()
         raise
@@ -874,7 +907,8 @@ async def replay_thread_messages(
     - message_chunk/tool_* events: projected from checkpoints or emitted from
       stored sse_events, per ``source``
     - snapshot: cursors for the runs replay could not project (newest page only)
-    - replay_done: terminal sentinel
+    - replay_done: terminal sentinel; on the newest page it also names the
+      thread's newest run (``latest_run_id``), read before the transcript
     """
     try:
         rows = await get_replay_thread_data(thread_id)
@@ -944,8 +978,16 @@ async def replay_thread_messages(
                         f"data: {json.dumps(snapshot, ensure_ascii=False, default=str)}\n\n"
                     )
 
+            # The newest page names the thread's newest run as of this read,
+            # which a fork from this view sends back as expected_latest_run_id.
+            done: dict[str, object] = {"thread_id": thread_id}
+            if before_turn is None:
+                latest_run_id = rows.thread.get("latest_run_id")
+                done["latest_run_id"] = (
+                    str(latest_run_id) if latest_run_id is not None else None
+                )
             seq += 1
-            yield f"id: {seq}\nevent: replay_done\ndata: {json.dumps({'thread_id': thread_id}, default=str)}\n\n"
+            yield f"id: {seq}\nevent: replay_done\ndata: {json.dumps(done, default=str)}\n\n"
 
         return StreamingResponse(
             observe_replay_stream(event_generator(), source="private"),
@@ -1256,7 +1298,7 @@ async def retry_thread(
         else:
             # A checkpoint replay carrying the attempt chain (no
             # fork_from_turn: nothing is truncated). A failed regenerate
-            # replays its own fork base, which is no longer the thread's tip.
+            # replays its own fork base, which is not the newest checkpoint.
             explicit_checkpoint_id = (body.checkpoint_id if body else None) or (
                 pending.checkpoint_id if pending else None
             )

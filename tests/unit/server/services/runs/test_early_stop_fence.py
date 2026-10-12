@@ -273,7 +273,7 @@ async def test_the_handle_owns_the_guard_until_finalize_takes_it_over():
     async def _checkpoint_read_hangs(_handle):
         await asyncio.Event().wait()
 
-    with patch.object(coordinator, "_latest_checkpoint_id", new=_checkpoint_read_hangs):
+    with patch.object(coordinator, "_newest_checkpoint", new=_checkpoint_read_hangs):
         settle = asyncio.create_task(
             coordinator.finalize_run(handle, RunOutcome(status="cancelled"))
         )

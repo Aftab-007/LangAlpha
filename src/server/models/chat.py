@@ -6,13 +6,23 @@ that use the ptc-agent library for code execution in Daytona sandboxes.
 """
 
 import copy
+import uuid
 from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator
 
 from src.server.models.additional_context import AdditionalContext
 
 from src.llms.reasoning import ReasoningLevel
+
+
+def _uuid_text(value: str) -> str:
+    # The key is stored in a UUID column, so anything else failed at the
+    # insert as a 500; refused here it is the client's 422.
+    return str(uuid.UUID(value))
+
+
+RequestKey = Annotated[str, AfterValidator(_uuid_text)]
 
 # Roles the chat path can VALIDLY persist into the ``messages`` channel. The
 # chat path writes ``{"role", "content"}`` dicts straight in; under DeltaChannel
@@ -343,7 +353,7 @@ class ChatRequest(BaseModel):
     # (globally unique), so a lost-response resubmit reconnects to the
     # existing run instead of starting a duplicate. Server-minted fallback
     # when omitted (no dedup).
-    request_key: Optional[str] = Field(
+    request_key: Optional[RequestKey] = Field(
         default=None,
         description="Client-generated UUID identifying this logical send; "
         "reuse across retransmits for idempotent delivery.",
@@ -374,6 +384,36 @@ class ChatRequest(BaseModel):
         description="Marks the request as an edit/regenerate fork at checkpoint_id, "
         "naming the turn it replaces. The server reads that turn from the "
         "checkpoint and deletes queries/responses from it onward.",
+    )
+    expected_latest_run_id: Optional[str] = Field(
+        default=None,
+        description="The thread's newest run as this client last saw it: the "
+        "replay's latest_run_id, or a run the client started or joined since. A "
+        "fork is refused (409 stale_fork) when the thread's latest run is a "
+        "different one, so an edit or regenerate from a view that missed a turn "
+        "cannot delete it. Omit to skip the check.",
+    )
+    # Server-stamped: the thread's branch tip when the route read the fork's
+    # turn. Read only for a fork, whose validation always overwrites it, so a
+    # client value never reaches START, which admits the fork only while the
+    # tip still holds this value.
+    fork_branch_tip: Optional[str] = Field(
+        default=None,
+        description="Branch tip the fork was validated against. Server-stamped.",
+    )
+    # Server-stamped beside fork_branch_tip: the newest run_seq read with it.
+    fork_run_horizon: Optional[int] = Field(
+        default=None,
+        description="Newest run sequence read with fork_branch_tip. Server-stamped.",
+    )
+    # Server-stamped: the newest run_seq read before the route found a HITL
+    # answer's pause on the branch. Read only for an answer, whose route always
+    # overwrites it. START refuses the answer if a run started since, so a fork
+    # admitted after that check cannot leave it running on the replaced pause.
+    resume_run_horizon: Optional[int] = Field(
+        default=None,
+        description="Newest run sequence read with the pause a HITL answer "
+        "resumes. Server-stamped.",
     )
 
     # Localization and context

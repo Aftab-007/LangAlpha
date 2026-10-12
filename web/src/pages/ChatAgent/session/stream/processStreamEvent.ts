@@ -5,7 +5,9 @@
  */
 
 import { finalizeAssistantMessage } from './finalizeMessage';
+import { settleStoppedBubble } from './stopBubble';
 import { readRetryNotice } from './autoRetry';
+import { noteLiveRun } from '../latestRun';
 import { isUpstreamHint, type StructuredError } from '@/utils/rateLimitError';
 import { applyAnnotationArtifact } from '@/pages/MarketView/stores/chartAnnotationStore';
 import type { AssistantMessage, ChatMessage } from '@/types/chat';
@@ -25,6 +27,7 @@ import {
   isWorkspaceChangingToolSuccess, mapToolCallIdToAgentId,
 } from '../../hooks/utils/messageFinalizers';
 import { handleContextWindowEvent, withServerTotals } from '../../hooks/utils/contextWindowEvent';
+import { BUSY_REPLY_KEYS, isBusyCode } from '../../hooks/utils/forkRefusal';
 import {
   handleReasoningSignal, handleReasoningContent, handleTextContent,
   handleToolCalls, handleToolCallResult, handleToolCallChunks,
@@ -98,6 +101,9 @@ export interface StreamRouterDeps {
   armReportBack: () => void;
   /** Re-read the user's workspaces after an agent changed one. */
   refreshWorkspaces: () => void;
+  /** Hears the turn the server admitted the run to, before the run's bubbles
+   *  take it, while they still carry the turn the view counted. */
+  onAdmittedTurn?: (bubbleId: string, turnIndex: number) => void;
 }
 
 /**
@@ -201,6 +207,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       metadataSeen = true;
       if (event.run_id) {
         rt.currentRunIdRef.current = event.run_id;
+        noteLiveRun(rt, event.run_id);
         if (event.report_source) {
           const { run_id: runId, report_source: source, turn_index: turn } = event;
           const beforeId = rt.currentMessageRef.current;
@@ -214,6 +221,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         const turn = event.turn_index;
         const runBubbleId = assistantMessageId;
         const runId = typeof event.run_id === 'string' ? event.run_id : undefined;
+        deps.onAdmittedTurn?.(runBubbleId, turn);
         rt.setMessages((prev) => stampRunTurn(prev, runBubbleId, turn, runId));
       }
       // The server writes this only after the run has its sandbox, so any
@@ -242,9 +250,17 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
     // The run's closing frame counts what the thread has used once the run's
     // own usage committed, calls this stream never reported included, so the
     // count replaces the live sum.
+    //
+    // A cancel from anywhere but this tab (another tab, a channel, the API)
+    // ends the run's stream with this frame alone, so the bubble settles as
+    // stopped here, the way a reload shows it. This tab's Stop aborts the read
+    // first and settles the bubble itself.
     if (eventType === 'run_end' && !isSubagent) {
       const counted = event.token_totals;
       if (counted) rt.setTokenUsage((prev) => withServerTotals(prev, counted));
+      if (event.outcome === 'cancelled') {
+        settleStoppedBubble({ assistantMessageId, refs, setMessages: setMessagesForHandlers });
+      }
       return;
     }
 
@@ -546,6 +562,8 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
     // a `retry` there, which only an older server sends, means only this
     // reader broke, and the transport drop that follows reconnects to the run.
     if (eventType === 'retry') {
+      // A run that failed after the server started it is the thread's newest.
+      if (!isSubagent && typeof event.run_id === 'string') noteLiveRun(rt, event.run_id);
       if (!isSubagent && !metadataSeen) {
         deps.clearModelStatus();
         refs.retryNotice = readRetryNotice(event);
@@ -784,10 +802,21 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       // agent: there is nothing to reconnect to, and the reply's Retry sends
       // what the recovery says.
       if (event.recovery) refs.retryNotice = readRetryNotice(event);
+      // One that names its run, a failure or a refusal, came after the server
+      // started that run, which left it the thread's newest.
+      if ((event.recovery || event.error_type === 'admission_conflict') && !isSubagent && typeof event.run_id === 'string') {
+        noteLiveRun(rt, event.run_id);
+      }
+      // A send refused because the chat was busy says so in the view's words,
+      // as a notice: the server's name the CLI's commands, and the reply's
+      // Retry sends the message again.
+      const busyCode = event.error_type === 'admission_conflict' && isBusyCode(event.code) ? event.code : null;
       // Only the frame that ends the server's own retries carries `max_retries`.
-      const errorMessage = typeof event.max_retries === 'number'
-        ? rt.t('chat.autoRetryExhausted')
-        : event.error || event.message || 'An error occurred while processing your request.';
+      const errorMessage = busyCode !== null
+        ? rt.t(BUSY_REPLY_KEYS[busyCode])
+        : typeof event.max_retries === 'number'
+          ? rt.t('chat.autoRetryExhausted')
+          : event.error || event.message || 'An error occurred while processing your request.';
       // Backend (streaming_handler.format_error_event) enriches the event
       // with ``error_kind``, ``status_code`` and ``hints``. We route the
       // display by kind to avoid showing the same error twice:
@@ -811,8 +840,9 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
             }))
             .filter((m) => m.model)
         : undefined;
-      const structured: StructuredError | undefined =
-        kind === 'upstream' || kind === 'internal'
+      const structured: StructuredError | undefined = busyCode !== null
+        ? { message: errorMessage as string, kind: 'notice' }
+        : kind === 'upstream' || kind === 'internal'
           ? {
               message: errorMessage as string,
               kind,

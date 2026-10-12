@@ -493,6 +493,10 @@ export type UserMessage = {
    * and dropped if the user stops the compaction.
    */
   queued?: boolean;
+  /** The server refused this send before it named a run, so it holds no row
+   *  of it: the bubble opens no turn of the server's, and an edit of it goes
+   *  out as a send. */
+  unadmitted?: boolean;
 };
 
 export type AssistantMessage = {
@@ -528,6 +532,9 @@ export type AssistantMessage = {
   // Set when the user hard-stopped this turn (live finalize or history replay
   // of a stopped turn). Drives the per-message "⏹ Stopped" chip.
   stopped?: boolean;
+  /** The reply to a send the server refused before admitting it (see
+   *  UserMessage.unadmitted). */
+  unadmitted?: boolean;
   /** Monotonic counter bumped by every landed reply text chunk or context
    *  notice (`nextArrivalSeq`). The streaming indicator reads it to tell
    *  arriving text from a pause. */

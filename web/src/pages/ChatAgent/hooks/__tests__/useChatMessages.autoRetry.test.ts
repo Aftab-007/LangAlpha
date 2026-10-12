@@ -15,7 +15,7 @@ import type { Mock } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { renderHookWithProviders } from '@/test/utils';
 import { settleMountEffect } from './chatHookHarness';
-import type { AssistantMessage, ChatMessage } from '@/types/chat';
+import type { AssistantMessage, ChatMessage, UserMessage } from '@/types/chat';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k: string) => k }),
@@ -58,8 +58,8 @@ const retryFrame = (retryCount: number, recovery: 'retry' | 'resend' = 'retry') 
   `event: retry\ndata: {"message": "Temporary error occurred, you can retry or resume the turn", "thread_id": "${TID}", "auto_retry": true, "error_type": "timeout_error", "error_class": "RuntimeError", "retry_count": ${retryCount}, "max_retries": 3, "recovery": "${recovery}"}\n\n`;
 const failureFrame = (recovery: 'retry' | 'resend') =>
   `event: error\ndata: {"thread_id": "${TID}", "error": "Workspace ${WS} not found", "type": "workflow_error", "error_type": "workspace_not_found", "error_class": "ValueError", "recovery": "${recovery}"}\n\n`;
-const metadataFrame = (runId: string) =>
-  `id: 1\nevent: metadata\ndata: {"thread_id": "${TID}", "run_id": "${runId}"}\n\n`;
+const metadataFrame = (runId: string, turn?: number) =>
+  `id: 1\nevent: metadata\ndata: {"thread_id": "${TID}", "run_id": "${runId}"${turn === undefined ? '' : `, "turn_index": ${turn}`}}\n\n`;
 const ANSWER = `id: 2\nevent: message_chunk\ndata: {"agent": "main", "role": "assistant", "content": "Recovered answer", "content_type": "text"}\n\n`;
 
 /** A 200 SSE response. `drop` ends the body the way the server's re-raise
@@ -345,6 +345,35 @@ describe('useChatMessages: a turn the server ends with `retry`', () => {
     expect(after).toHaveLength(1);
     expect(after[0].error).toBeFalsy();
     expect(JSON.stringify(after[0])).toContain('Recovered answer');
+  });
+
+  it.each([
+    ['ends on an `error`', () => sse('run-1', [STARTING, failureFrame('resend')], { drop: true }), 0],
+    ['runs out of resends', () => sse('run-1', [STARTING, retryFrame(1, 'resend')], { drop: true }), 3],
+  ])('a send the server never stored that %s takes no turn, so the next send is counted as the server counts it', async (_case, failed, resends) => {
+    onSend = (n) => (n <= resends + 1
+      ? failed()
+      : sse('run-2', [metadataFrame('run-2', 0), ANSWER], { drop: false }));
+
+    const { result } = await mountAndSend();
+    for (const ms of [1000, 2000, 4000, 60_000]) await advance(ms);
+    expect(sendPosts()).toHaveLength(resends + 1);
+    expect(users(result.current.messages)[0]).toMatchObject({ content: QUESTION, unadmitted: true });
+    expect(assistants(result.current.messages)[0]).toMatchObject({ error: true, unadmitted: true });
+
+    // The server holds no turn of the first, so it numbers the next send as
+    // its first turn. Counted the same here, no reload runs, and the question
+    // it never stored stays on screen with its Retry.
+    const replays = mockReplay.mock.calls.length;
+    await act(async () => {
+      await result.current.handleSendMessage('and AMD?');
+    });
+    await advance(1000);
+    expect(mockReplay.mock.calls.length).toBe(replays);
+    expect((users(result.current.messages) as UserMessage[]).map((m) => [m.content, m.turnIndex, !!m.unadmitted])).toEqual([
+      [QUESTION, 0, true],
+      ['and AMD?', 0, false],
+    ]);
   });
 
   it('names the end of the server\'s own retries in the reader\'s language', async () => {

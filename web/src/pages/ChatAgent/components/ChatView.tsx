@@ -310,6 +310,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     messageError,
     returnedSteering,
     clearReturnedSteering,
+    returnedEdit,
+    clearReturnedEdit,
+    editDrafts,
     stopWorkflow,
     stopCompaction,
     pendingInterrupt,
@@ -390,13 +393,23 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // Status tab (useRightPanel). The tray reads the same snapshot for its chip.
   const showWatchChip = (marketWatch?.symbols?.length ?? 0) > 0;
 
-  // Restore steering text to input when agent finishes without consuming it
+  // Steering the agent finished without reading comes back to the composer,
+  // beside whatever was typed there since.
   useEffect(() => {
     if (returnedSteering) {
-      chatInputRef.current?.setValue(returnedSteering);
+      chatInputRef.current?.giveBack(returnedSteering);
       clearReturnedSteering();
     }
   }, [returnedSteering, clearReturnedSteering]);
+
+  // Edit text whose message is gone comes back to the composer, beside
+  // whatever is typed there.
+  useEffect(() => {
+    if (returnedEdit) {
+      chatInputRef.current?.giveBack(returnedEdit);
+      clearReturnedEdit();
+    }
+  }, [returnedEdit, clearReturnedEdit]);
 
   // Read by the unmount cleanup, whose own closure holds a stale thread id
   const readCurrentThreadId = useEffectEvent(() => currentThreadId);
@@ -1003,6 +1016,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     onEditMessage: handleEditMessage,
     onRegenerate: handleRegenerate,
     onRetry: handleRetry,
+    editDrafts,
     onSendMessage: handleSendMessage,
     chatInputRef,
   });
@@ -1679,7 +1693,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                         onOpenWatch={handleOpenStatusFromChat}
                       />
                     )}
-                    {messageError && !isLoading && (
+                    {/* A notice is not about the running turn, so it need not wait for it to end. */}
+                    {messageError && (!isLoading || (typeof messageError === 'object' && messageError.kind === 'notice')) && (
                       <ErrorBanner error={messageError} />
                     )}
                     {!isFlashMode && workspaceRecord?.computer_id && (

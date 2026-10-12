@@ -1681,13 +1681,30 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     // The view missed a turn another tab added: it holds turns 0 and 1, and the
     // report-back is turn 3, which no report row names (an unlabelled one).
     mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true, latest_turn_index: 1 }));
-    mockReplay.mockImplementation((_tid: string, onEvent: (e: Record<string, unknown>) => void) => {
-      for (let turn = 0; turn < 2; turn++) {
-        onEvent({ event: 'user_message', turn_index: turn, content: `question ${turn}`, role: 'user', run_id: `run-${turn}` });
-        onEvent({ event: 'message_chunk', turn_index: turn, role: 'assistant', agent: 'main', content_type: 'text', content: `answer ${turn}` });
-      }
+    const turnRows = (turn: number) => [
+      { event: 'user_message', turn_index: turn, content: `question ${turn}`, role: 'user', run_id: `run-${turn}` },
+      { event: 'message_chunk', turn_index: turn, role: 'assistant', agent: 'main', content_type: 'text', content: `answer ${turn}` },
+    ];
+    const replayOf = (rows: Record<string, unknown>[]) => (_tid: string, onEvent: (e: Record<string, unknown>) => void) => {
+      for (const row of rows) onEvent(row);
       return Promise.resolve();
+    };
+    mockReplay.mockImplementation(replayOf([...turnRows(0), ...turnRows(1)]));
+    // The thread as a reload reads it once the run is over: the other tab's
+    // turn 2 and the report-back's turn 3. Its status read waits until the
+    // test has read what the stream drew.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
     });
+    const runEnds = () => {
+      mockStatus.mockImplementation(() => released.then(() => threadStatus({ latest_turn_index: 3 })));
+      mockReplay.mockImplementation(replayOf([
+        ...turnRows(0), ...turnRows(1), ...turnRows(2),
+        { event: 'user_message', turn_index: 3, content: 'report back', role: 'user', query_type: 'system', report_run_id: 'rb-1' },
+        { event: 'message_chunk', turn_index: 3, role: 'assistant', agent: 'main', content_type: 'text', content: 'the summary' },
+      ]));
+    };
     const watchCalls = captureWatch();
     const { result } = renderHookWithProviders(() => useChatMessages('ws-rb', 'th-rb'));
     await waitFor(() => expect(mockWatch).toHaveBeenCalledTimes(1));
@@ -1708,6 +1725,7 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
       .mockImplementationOnce(async (_tid: string, _rid: string, leid: unknown, onEvent: (e: Record<string, unknown>) => void) => {
         if (leid == null) onEvent(runFrame);
         onEvent({ ...text('the summary'), _eventId: 2 });
+        runEnds();
         onEvent({ ...text('', { finish_reason: 'stop' }), _eventId: 3 });
         return { disconnected: false, aborted: false };
       });
@@ -1726,6 +1744,21 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     // Regenerate reads this turn, which must be the one the server gave the run.
     expect(summary[0].turnIndex).toBe(3);
     expect(result.current.messageError).toBeNull();
+
+    // The frame showed the view missed turn 2, so it reloads once the stream
+    // lets go, and the replay puts the answer on the same turn.
+    await act(async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
+    const reloaded = result.current.messages as unknown as Record<string, unknown>[];
+    expect(reloaded.find((m) => m.role === 'user' && m.content === 'question 2')?.turnIndex).toBe(2);
+    const replayed = reloaded.filter((m) => m.role === 'assistant' && String(m.content ?? '').includes('the summary'));
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0].turnIndex).toBe(3);
+    expect(mockReconnect).toHaveBeenCalledTimes(2);
   });
 
   it('resubscribe catch-up: in-loop /watch recovery reconciles and never tears the watch down', async () => {

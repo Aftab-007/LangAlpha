@@ -82,6 +82,43 @@ async def get_thread_checkpoint_id(conversation_thread_id: str) -> str | None:
         return None
 
 
+@dataclass(frozen=True)
+class ThreadBranchRead:
+    """The thread's commit pointer and its newest run's ``run_seq`` (0 when
+    it has none)."""
+
+    checkpoint_id: Optional[str]
+    run_horizon: int
+
+
+async def get_thread_branch_read(conversation_thread_id: str) -> ThreadBranchRead:
+    """The pointer and the run horizon, read in one snapshot.
+
+    A fork validated against the pointer is admitted after the pointer moved
+    only if no run started after this read. Read apart, a run admitted between
+    the two reads would sit inside the horizon while its branch is missing
+    from the pointer the fork was read off.
+    """
+    async with pool.get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT t.latest_checkpoint_id,
+                       COALESCE((
+                           SELECT max(r.run_seq) FROM conversation_responses r
+                           WHERE r.conversation_thread_id = t.conversation_thread_id
+                       ), 0) AS run_horizon
+                FROM conversation_threads t
+                WHERE t.conversation_thread_id = %s
+                """,
+                (conversation_thread_id,),
+            )
+            row = await cur.fetchone()
+    if row is None:
+        return ThreadBranchRead(None, 0)
+    return ThreadBranchRead(row["latest_checkpoint_id"], int(row["run_horizon"]))
+
+
 # Latest-attempt lifecycle columns joined onto paged thread rows. Ordered by
 # run_seq — the one monotonic run ordering (turn_index is reused by retries
 # and lowered by branch rewinds). Alias prefix `latest_` keeps the row dict

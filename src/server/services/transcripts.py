@@ -358,11 +358,26 @@ async def _render(target: _Target, thread: Behind, stored: dict[str, Any]) -> bo
     the tasks rendered are. One agent is read, rendered and saved at a time,
     so a thread with many long tasks holds one history, not all of them.
     Returns whether every save landed."""
-    from src.server.database.thread_transcripts import delete_stored
+    from src.server.database.thread_transcripts import delete_stored, drop_own_past
     from src.server.services.history.reader import CheckpointHistoryReader
 
     thread_id = thread.thread_id
+    if thread.gone:
+        # First, whatever the own agent's render does: it stands down on an
+        # empty checkpoint, where a first message's edit that failed before
+        # its first step leaves the thread, beside the replaced turns' tasks.
+        await delete_stored(thread_id, thread.gone)
     own = stored.get("")
+    if (
+        own is not None
+        and thread.checkpoint_id is not None
+        and (own.checkpoint_id is None or _newer(own.checkpoint_id, thread.checkpoint_id))
+        and await drop_own_past(thread_id, thread.checkpoint_id)
+    ):
+        # The replaced turns' own copy too: a fork's START drops it, but an
+        # export that read them can land after, and it reads as newer than
+        # the checkpoint the fork pinned, which no render replaces it from.
+        own = None
     if own is not None and _newer(own.checkpoint_id, thread.checkpoint_id):
         return False
     agents = thread.agents
@@ -383,8 +398,6 @@ async def _render(target: _Target, thread: Behind, stored: dict[str, Any]) -> bo
             landed.append(
                 await _render_task(target, thread, task_id, stored.get(prefix), reader)
             )
-    if thread.gone:
-        await delete_stored(thread_id, thread.gone)
     return all(landed)
 
 

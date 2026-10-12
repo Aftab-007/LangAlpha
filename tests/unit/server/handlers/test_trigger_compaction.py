@@ -911,6 +911,10 @@ class TestSessionAcquireIdentity:
                 new_callable=AsyncMock,
                 return_value=graph,
             ),
+            patch(
+                "src.server.handlers.thread_maintenance.turn_base_checkpoint_id",
+                new=AsyncMock(return_value=None),
+            ),
         ):
             await _resolve_graph_and_state(
                 "thread-1",
@@ -963,6 +967,8 @@ class TestTheBackendsFolder:
                 ("src.server.services.workspace_manager.WorkspaceManager.get_instance",
                  MagicMock(return_value=manager)),
                 ("ptc_agent.agent.graph.build_ptc_graph_with_session", AsyncMock(return_value=graph)),
+                ("src.server.handlers.thread_maintenance.turn_base_checkpoint_id",
+                 AsyncMock(return_value=None)),
                 ("src.server.database.workspace_folders.workspace_folder_in_use", hold),
                 ("src.server.database.workspace.get_workspace", read_row),
             ):

@@ -72,3 +72,49 @@ async def test_snapshot_frame_precedes_replay_done(
     assert [fid for fid, _ in frames] == [
         str(i) for i in range(1, len(frames) + 1)
     ]
+
+
+def _done(body: str) -> dict:
+    import json
+
+    for block in body.strip().split("\n\n"):
+        lines = dict(
+            line.split(": ", 1) for line in block.splitlines() if ": " in line
+        )
+        if lines.get("event") == "replay_done":
+            return json.loads(lines["data"])
+    raise AssertionError("no replay_done frame")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("", {"thread_id": THREAD, "latest_run_id": "run-9"}),
+        ("?limit=20", {"thread_id": THREAD, "latest_run_id": "run-9"}),
+        # An older page says nothing of the thread's newest run: its reader
+        # has the newest page's already.
+        ("?limit=20&before_turn=4", {"thread_id": THREAD}),
+    ],
+)
+async def test_replay_done_names_the_newest_run_on_the_newest_page(
+    threads_client, query, expected
+):
+    data = _replay_data()
+    data.thread["latest_run_id"] = "run-9"
+    with (
+        patch(
+            f"{THREADS_MOD}.get_replay_thread_data",
+            new=AsyncMock(return_value=data),
+        ),
+        patch(
+            "src.server.services.history.snapshot.build_thread_snapshot",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        resp = await threads_client.get(
+            f"/api/v1/threads/{THREAD}/messages/replay{query}"
+        )
+
+    assert resp.status_code == 200
+    assert _done(resp.text) == expected

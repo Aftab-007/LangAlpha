@@ -70,8 +70,9 @@ export interface StructuredError {
   /** Rendered in order after the message; the first is the primary action. */
   links?: ErrorLinkSpec[];
   /** ``upstream`` = LLM provider's fault (their 5xx/401/429). ``internal`` =
-   *  our pipeline. Undefined for rate-limit errors built on the client. */
-  kind?: 'upstream' | 'internal';
+   *  our pipeline. Undefined for rate-limit errors built on the client.
+   *  ``notice`` = nothing failed, so it reads as information, not an error. */
+  kind?: 'upstream' | 'internal' | 'notice';
   /** HTTP status from the upstream provider, when known. */
   statusCode?: number;
   /** Bulleted guidance to render under the message. */

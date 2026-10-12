@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -24,6 +24,7 @@ from src.server.services.runs.pending_input import (
 )
 
 GET_QUERY = "src.server.database.conversation.queries.get_query_at_turn"
+REPORT = {"kind": "task", "task_id": "k3x9", "display_id": "Task-k3x9"}
 IMAGE = {
     "type": "image",
     "data": "data:image/png;base64,iVBORw0KGgo=",
@@ -68,7 +69,7 @@ async def test_rerun_takes_the_text_from_the_query_row():
         workspace_id="ws-1",
         run_id="run-1",
         checkpoint_id="cp-other",
-        request_key="rk-2",
+        request_key="9f2c0d1e-7b4a-4c3e-9a51-2d6f8e0b1c47",
         llm_model="model-a",
         additional_context=[IMAGE],
     )
@@ -89,7 +90,53 @@ async def test_rerun_takes_the_text_from_the_query_row():
     assert request.fork_from_turn is None
     assert [c.type for c in request.additional_context] == ["image"]
     assert (request.locale, request.timezone) == ("zh-CN", "Asia/Shanghai")
-    assert (request.request_key, request.llm_model) == ("rk-2", "model-a")
+    assert (request.request_key, request.llm_model) == ("9f2c0d1e-7b4a-4c3e-9a51-2d6f8e0b1c47", "model-a")
+
+
+@pytest.mark.asyncio
+async def test_a_system_turn_reruns_as_a_system_turn():
+    """A report-back's message is the system's, not the user's question."""
+    from src.server.handlers.chat.request_prep import _resolve_fork
+
+    query = {"content": "report back", "type": "system", "metadata": {"report_source": REPORT}}
+    with patch(GET_QUERY, new=AsyncMock(return_value=query)):
+        request = await input_rerun_request(
+            "t-1", _failed_run(), PendingInput(None), workspace_id="ws-1", body=None
+        )
+
+    assert request.query_type == "system"
+    assert _resolve_fork(request=request, thread_id="t-1")[0] == "system"
+    assert request.report_source.task_id == "k3x9"
+
+
+@pytest.mark.asyncio
+async def test_a_regenerated_system_turn_that_never_ran_stays_a_system_turn():
+    from src.server.handlers.chat.request_prep import _resolve_fork
+    from src.server.models.chat import ChatRequest
+    from src.server.services.runs.pending_input import unstarted_regenerate_request
+
+    query = {"content": "report back", "type": "system", "metadata": {"report_source": REPORT}}
+    latest = _failed_run(pending_input={"checkpoint_id": None})
+    regenerate = ChatRequest(messages=[], checkpoint_id="cp-tip", fork_from_turn=4)
+    with patch(GET_QUERY, new=AsyncMock(return_value=query)):
+        request = await unstarted_regenerate_request("t-1", regenerate, 4, latest)
+
+    assert [m.content for m in request.messages] == ["report back"]
+    assert _resolve_fork(request=request, thread_id="t-1")[0] == "system"
+    # The edit replaces the row, and history labels a report-back by it.
+    assert request.report_source.task_id == "k3x9"
+
+
+@pytest.mark.asyncio
+async def test_a_stored_report_that_no_longer_reads_is_dropped():
+    query = {"content": "report back", "type": "system", "metadata": {"report_source": {"kind": "gone"}}}
+    with patch(GET_QUERY, new=AsyncMock(return_value=query)):
+        request = await input_rerun_request(
+            "t-1", _failed_run(), PendingInput(None), workspace_id="ws-1", body=None
+        )
+
+    assert request.query_type == "system"
+    assert request.report_source is None
 
 
 @pytest.mark.asyncio
@@ -352,3 +399,49 @@ async def test_retry_route_reruns_a_pending_input_and_replays_otherwise(
         checkpoint.assert_awaited_once_with("t-1", replays_from)
         assert request.messages == []
         assert request.checkpoint_id == "cp-tip"
+
+
+@pytest.mark.asyncio
+async def test_a_retried_report_back_reaches_its_run_as_one(monkeypatch):
+    """/retry builds its request from the stored rows, so the send handler
+    keeps the type and report a client's body could not set."""
+    from httpx import ASGITransport, AsyncClient
+
+    from src.server.app.threads import messaging
+    from tests.unit.server.app.test_threads_authz import (
+        CALLER,
+        _app_for,
+        _empty_async_gen,
+        _stub_downstream,
+    )
+
+    monkeypatch.setattr("src.config.settings.HOST_MODE", "platform")
+    failed = {
+        **_failed_run(pending_input={"checkpoint_id": None}),
+        "conversation_response_id": "5b0f3f7e-9a51-4c3e-8d7a-2f6c1e0b9a44",
+        "status": "error",
+    }
+    query = {"content": "report back", "type": "system", "metadata": {"report_source": REPORT}}
+    workflow = MagicMock(return_value=_empty_async_gen())
+    with (
+        _stub_downstream(owner_id=CALLER),
+        patch("src.server.handlers.chat.astream_ptc_workflow", workflow),
+        patch.object(messaging.auth_api, "require_thread_owner", new=AsyncMock()),
+        patch(
+            "src.server.database.runs.lifecycle.get_latest_attempt",
+            new=AsyncMock(return_value=failed),
+        ),
+        patch(GET_QUERY, new=AsyncMock(return_value=query)),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=_app_for(CALLER)), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/api/v1/threads/tid-mine/retry",
+                json={"workspace_id": "ws-placeholder"},
+            )
+
+    assert resp.status_code == 200
+    request = workflow.call_args.kwargs["request"]
+    assert request.query_type == "system"
+    assert request.report_source.task_id == "k3x9"

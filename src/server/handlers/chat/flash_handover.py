@@ -26,29 +26,34 @@ _CANCELLED = (
 
 
 async def hand_over_flash_thread(
-    graph: Any, thread_id: str, *, replay: bool
-) -> list[ToolMessage]:
+    graph: Any, thread_id: str, *, replay: bool, base: str | None = None
+) -> tuple[list[ToolMessage], str | None]:
     """Cancel what Flash left waiting, then mark the thread the full agent's.
 
     Best effort, and in that order: a failure leaves the thread Flash's, so the
     next turn tries again, and a turn with a new message drops the waiting step
     anyway. A replay forks from an earlier checkpoint, so the latest one's
-    waiting step is not this turn's to answer. Returns the cancelled results,
-    which the turn streams (see ``_cancel_tool_calls``).
+    waiting step is not this turn's to answer; a turn that starts from
+    ``base`` (``turn_start_checkpoint_id``) answers the one there. Returns the
+    cancelled results, which the turn streams (see ``_cancel_tool_calls``), and
+    the checkpoint the turn starts from: ``base``, or the answers written on it.
     """
     from src.server.database.conversation import promote_flash_thread
 
     cancelled: list[ToolMessage] = []
+    start = base
     try:
         if not replay:
-            cancelled = await _cancel_tool_calls(graph, thread_id, _tool_names(graph))
+            cancelled, start = await _cancel_tool_calls(
+                graph, thread_id, _tool_names(graph), base
+            )
         await promote_flash_thread(thread_id)
     except Exception:
         logger.warning(
             f"[PTC_CHAT] Flash thread handover failed: thread_id={thread_id}",
             exc_info=True,
         )
-    return cancelled
+    return cancelled, start
 
 
 async def cancel_tool_calls_it_lacks(graph: Any, thread_id: str) -> list[ToolMessage]:
@@ -59,7 +64,8 @@ async def cancel_tool_calls_it_lacks(graph: Any, thread_id: str) -> list[ToolMes
     results, which the turn streams (see ``_cancel_tool_calls``).
     """
     try:
-        return await _cancel_tool_calls(graph, thread_id, _tool_names(graph))
+        cancelled, _ = await _cancel_tool_calls(graph, thread_id, _tool_names(graph))
+        return cancelled
     except Exception:
         logger.warning(
             f"[CHAT] Cancelling another agent's waiting step failed: "
@@ -78,23 +84,32 @@ def _tool_names(graph: Any) -> frozenset[str]:
 
 
 async def _cancel_tool_calls(
-    graph: Any, thread_id: str, tool_names: Collection[str]
-) -> list[ToolMessage]:
-    """Answer every call of a waiting step the graph cannot resume.
+    graph: Any,
+    thread_id: str,
+    tool_names: Collection[str],
+    base: str | None = None,
+) -> tuple[list[ToolMessage], str | None]:
+    """Answer every call of a step waiting at ``base``, or at the newest
+    checkpoint, that the graph cannot resume.
 
     Returns the cancellations, which the turn streams itself: the update lands
     before its stream opens, so the graph never emits them, and a card waiting
     on one would never settle. The finished results already streamed when
-    their calls returned.
+    their calls returned. Also returns ``base``, or the update when it was
+    written on ``base``, since it forks from there and is not the newest.
     """
     config = {"configurable": {"thread_id": thread_id}}
+    if base is not None:
+        # The root namespace too: a saver need not fill it in when it loads a
+        # named checkpoint, and the update is saved under the loaded config.
+        config["configurable"].update(checkpoint_ns="", checkpoint_id=base)
     state = await graph.aget_state(config)
     if not state.interrupts:
-        return []
+        return [], base
     messages = state.values.get("messages") or []
     last_ai = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
     if last_ai is None or not last_ai.tool_calls:
-        return []
+        return [], base
     # A call that finished beside the waiting one is still a pending write of
     # the step, which an update drops, so its result is carried over.
     finished = [
@@ -111,7 +126,7 @@ async def _cancel_tool_calls(
     # By name, as the resume runs a call: the agents share some names (a
     # question, the workspace tool), and each resumes those itself.
     if all(call["name"] in tool_names for call in unanswered):
-        return []
+        return [], base
     # The update ends the step, so every call still waiting in it is answered,
     # or the next model call finds one without a result.
     cancelled = [
@@ -123,7 +138,7 @@ async def _cancel_tool_calls(
         )
         for call in unanswered
     ]
-    await graph.aupdate_state(
+    written = await graph.aupdate_state(
         config,
         {"messages": ensure_message_ids([*finished, *cancelled])},
         as_node="tools",
@@ -132,7 +147,9 @@ async def _cancel_tool_calls(
         f"[CHAT] Cancelled {len(cancelled)} tool call(s) another agent left "
         f"waiting: thread_id={thread_id}"
     )
-    return cancelled
+    return cancelled, (
+        None if base is None else written["configurable"]["checkpoint_id"]
+    )
 
 
 def _as_list(value: Any) -> list:

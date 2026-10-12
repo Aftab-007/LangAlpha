@@ -16,6 +16,7 @@ from src.server.handlers.cancellation import cancellation_as_http
 from src.server.utils.checkpoint_helpers import (
     build_checkpoint_config,
     get_checkpointer,
+    turn_base_checkpoint_id,
     update_at_commit,
 )
 
@@ -101,10 +102,13 @@ async def _resolve_graph_and_state(
         on_signed_url=_set_cached_signed_url,
     )
 
-    # State with timeout
+    # State with timeout, read where the next turn would start, so the write
+    # lands on the thread's pointer rather than on a branch a fork abandoned.
+    base_checkpoint_id = await turn_base_checkpoint_id(checkpointer, thread_id)
     try:
         state = await asyncio.wait_for(
-            graph.aget_state(build_checkpoint_config(thread_id)), timeout=10.0
+            graph.aget_state(build_checkpoint_config(thread_id, base_checkpoint_id)),
+            timeout=10.0,
         )
     except asyncio.TimeoutError:
         logger.error(f"aget_state timed out for thread {thread_id} during {verb}")

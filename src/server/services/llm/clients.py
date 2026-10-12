@@ -521,12 +521,20 @@ async def resolve_model_client(
     # Platform fallback — only for SYSTEM-catalog models. Reached when OAuth and
     # BYOK both miss.
     if allow_platform_fallback and source == ModelSource.SYSTEM:
-        from src.llms.llm import create_llm
+        from src.llms.llm import MissingProviderKeyError, create_llm
 
-        client = create_llm(
-            model_name, reasoning_effort=reasoning_effort, cache_key=cache_key,
-            **_tier_kwargs(service_tier, entry.get("provider")),
-        )
+        try:
+            client = create_llm(
+                model_name, reasoning_effort=reasoning_effort, cache_key=cache_key,
+                **_tier_kwargs(service_tier, entry.get("provider")),
+            )
+        except MissingProviderKeyError as exc:
+            # Built eagerly only because an effort was asked for. Without a
+            # key the turn takes the lazy path a turn with no effort takes,
+            # and fails there as a run the user can see and retry, not as a
+            # 500 before it starts.
+            logger.warning("[CHAT] No platform client for %s: %s", model_name, exc)
+            return ResolvedClient(None, source, CredentialSource.NONE)
         return ResolvedClient(client, source, CredentialSource.PLATFORM)
 
     return ResolvedClient(None, source, CredentialSource.NONE)

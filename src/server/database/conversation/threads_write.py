@@ -343,32 +343,6 @@ async def promote_flash_thread(conversation_thread_id: str) -> bool:
             return cur.rowcount > 0
 
 
-async def update_thread_checkpoint_id(
-    conversation_thread_id: str, checkpoint_id: str, conn=None
-) -> bool:
-    """Update the latest checkpoint ID for a thread without changing status."""
-    try:
-        sql = """
-            UPDATE conversation_threads
-            SET latest_checkpoint_id = %s, updated_at = NOW()
-            WHERE conversation_thread_id = %s
-        """
-        params = (checkpoint_id, conversation_thread_id)
-
-        if conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, params)
-                return True
-        else:
-            async with pool.get_db_connection() as conn:
-                async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute(sql, params)
-                    return True
-    except Exception as e:
-        logger.error(f"Error updating thread checkpoint_id: {e}")
-        return False
-
-
 async def advance_thread_checkpoint_id(
     conversation_thread_id: str,
     *,
@@ -571,7 +545,11 @@ async def truncate_thread_from_turn(
         # Explicit transaction required (autocommit is ON by default)
         async with conn.transaction():
             async with conn.cursor() as cur:
-                # Always delete all responses at fork turn and beyond
+                # Always delete all responses at fork turn and beyond. The only
+                # per-turn delete of run rows, which turn_base_checkpoint_id
+                # relies on: under a fork's pin it reads a newest step whose run
+                # has no row as one the fork replaced, so a delete for any other
+                # reason would start the next turn behind that step.
                 await cur.execute(
                     """
                     DELETE FROM conversation_responses

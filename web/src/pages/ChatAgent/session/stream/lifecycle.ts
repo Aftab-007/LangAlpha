@@ -8,6 +8,7 @@
 
 import { finalizeAssistantMessage } from './finalizeMessage';
 import type { StreamEventProcessor } from './processStreamEvent';
+import { noteLiveRun } from '../latestRun';
 import {
   reconnectToWorkflowStream, getWorkflowStatus, getReportBackStatus,
   type ReportBackStatusResponse,
@@ -179,6 +180,7 @@ export const reconnectToStream = async (
   // (zero live events → content only appears on a later refetch). The
   // mid-stream disconnect path omits both and keeps its in-progress cursor.
   if (runId !== undefined) rt.currentRunIdRef.current = runId;
+  if (runId) noteLiveRun(rt, runId);
   if (resetCursor) rt.lastEventIdRef.current = null;
 
   console.log('[Reconnect] Starting reconnection for thread:', tid);
@@ -617,7 +619,11 @@ export const reconnectToStream = async (
       console.log('[Reconnect] Workflow no longer available (', status, '), cleaning up');
     } else {
       console.error('[Reconnect] Error during reconnection:', err);
-      rt.setMessageError((err as Error).message || 'Failed to reconnect to stream');
+      // The error's own text is the transport's or a status line, which says
+      // nothing the user can act on. A refused credential is the one failure
+      // a sign-in fixes.
+      const signedOut = status === 401 || status === 403;
+      rt.setMessageError({ message: rt.t(signedOut ? 'chat.reconnectSignedOut' : 'chat.reconnectFailed'), kind: 'notice' });
     }
   } finally {
     // Stop the idle watchdog (no-op when it already fired or was never armed).
