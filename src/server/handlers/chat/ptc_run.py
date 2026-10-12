@@ -858,6 +858,7 @@ async def astream_ptc_workflow(
             tool_tracker=tool_tracker,
             agent_config=config,
             report_source=query_metadata.get("report_source"),
+            turn_index=run_handle.turn_index,
         )
 
         # Track steering messages injected mid-workflow for post-completion backfill

@@ -123,6 +123,8 @@ class RunSSEProducer:
         merged_stream_chunk_max_bytes: int = MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT,
         agent_config: Optional[Any] = None,
         report_source: Optional[Dict[str, Any]] = None,
+        *,
+        turn_index: Optional[int] = None,
     ):
         """Initialize the workflow stream handler.
 
@@ -139,10 +141,15 @@ class RunSSEProducer:
         ``report_source`` rides the same frame on a report-back turn: a
         client that attaches to the run live has no user message to label,
         so it draws the report's row from this.
+
+        ``turn_index`` is the turn admission gave the run, announced on the
+        same frame: a view that missed turns added elsewhere cannot count its
+        way to it, and replay already names every turn by this value.
         """
         self.thread_id = thread_id
         self.run_id = run_id
         self.report_source = report_source
+        self.turn_index = turn_index
         self.token_callback = token_callback
         self.tool_tracker = tool_tracker
         self.workflow_timeout = workflow_timeout or WORKFLOW_TIMEOUT
@@ -324,6 +331,8 @@ class RunSSEProducer:
                 "thread_id": self.thread_id,
                 "run_id": self.run_id,
             }
+            if self.turn_index is not None:
+                metadata["turn_index"] = self.turn_index
             if self.report_source:
                 metadata["report_source"] = self.report_source
             yield self._format_sse_event("metadata", metadata, accumulate=False)
