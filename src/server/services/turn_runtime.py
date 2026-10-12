@@ -150,7 +150,7 @@ async def _flash_row(user_id: str) -> Dict[str, Any]:
 
 async def home_enabled(user_id: str) -> bool:
     """Whether work outside a workspace runs in the user's Home rather than on Flash."""
-    # A deployment that never turned the flag on pays no preferences read.
+    # A deployment that turned the flag off pays no preferences read.
     if not is_feature_enabled_system(ALL_WORKSPACES_AGENT):
         return False
     from src.server.services.features import user_feature_enabled

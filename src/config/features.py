@@ -94,9 +94,9 @@ FEATURES: dict[str, FeatureSpec] = {
             "behavior and pricing may change."
         ),
     ),
-    # Off in the catalog, as it needs a sandbox provider Flash does not: a
-    # deployment turns it on in config.yaml, and then it reaches every user
-    # who has not turned it off.
+    # On for every user who has not turned it off. It runs on the user's
+    # computer, so a deployment with no sandbox provider turns it off in
+    # config.yaml and keeps Flash.
     "all_workspaces_agent": FeatureSpec(
         key="all_workspaces_agent",
         label="Chief of Staff",
@@ -105,7 +105,7 @@ FEATURES: dict[str, FeatureSpec] = {
             "computer, in a Home folder of its own, built to coordinate your "
             "workspaces and hand tasks to the analyst in each."
         ),
-        enabled=False,
+        enabled=True,
         gate=FeatureGate.OPT_OUT,
         tradeoffs=(
             "Every chat carries extra context about your recent workspaces and "
