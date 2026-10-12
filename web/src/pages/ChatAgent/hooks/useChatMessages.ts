@@ -29,7 +29,7 @@ import { buildRateLimitError, type ErrorLinkSpec, type StructuredError } from '@
 import { getStoredThreadId, setStoredThreadId } from './utils/threadStorage';
 import { type SubagentTokenUsage, ZERO_USAGE } from '../utils/tokenUsage';
 import { computeSteeringBoundary } from '../session/stream/steeringRollback';
-import { isSteeringUserMessage } from '../components/messageList/messagePredicates';
+import { isSteeringUserMessage, opensTurn } from '../components/messageList/messagePredicates';
 import { newestTurn, projectTurns } from '../components/messageList/turnProjection';
 import { bumpThreadNavOrder } from './useNavigationData';
 import { invalidateNewWorkspace } from './workspaceRowActions';
@@ -2637,10 +2637,12 @@ export function useChatMessages(
     // only one regenerate: the whole turn re-runs from its input checkpoint,
     // without the mid-run steering. Normalize truncation back to the turn's
     // first assistant bubble so the stale halves and the steering bubbles leave
-    // the transcript together with the re-run.
+    // the transcript together with the re-run. Not past the message the turn
+    // runs from: a refused send's bubbles above it can share the turn's count.
     let truncateIndex = msgIndex;
     for (let i = msgIndex - 1; i >= 0; i--) {
       const { message, turnIndex: turn } = projected[i];
+      if (opensTurn(message)) break;
       if (message.role !== 'assistant') continue;
       if (turn !== turnIndex) break;
       truncateIndex = i;

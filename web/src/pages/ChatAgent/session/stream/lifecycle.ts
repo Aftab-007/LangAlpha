@@ -200,10 +200,10 @@ export const reconnectToStream = async (
           return [...prev.slice(0, -1), createAssistantMessage(assistantMessageId, turnOf(prev, lastMsg.id))];
         }
       }
-      // A run attached fresh (a report-back) stays unstamped: it is a turn the
-      // transcript has not shown, which the count after the last stamp names.
-      // So a bubble continuing one has no stamp to copy and takes its turn
-      // from the projection.
+      // A run attached fresh (a report-back) starts unstamped: it is a turn the
+      // transcript has not shown, which the count after the last stamp names
+      // until the run's metadata frame names it. So a bubble continuing one may
+      // have no stamp to copy and takes its turn from the projection.
       const turnIndex = continuedId ? turnOf(prev, continuedId) : undefined;
       return appendMessage(prev, createAssistantMessage(assistantMessageId, turnIndex));
     });

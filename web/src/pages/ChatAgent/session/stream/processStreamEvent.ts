@@ -14,6 +14,7 @@ import { setStoredThreadId } from '../../hooks/utils/threadStorage';
 import { createAssistantMessage, appendMessage, updateMessage } from '../../hooks/utils/messageHelpers';
 import { turnOf } from '../../components/messageList/turnProjection';
 import { senderProvenance, withLiveReportRow } from '../provenance';
+import { stampRunTurn } from './runTurn';
 import type { HtmlWidgetData } from '../../hooks/utils/types';
 import {
   ZERO_USAGE, extractTokenUsageDelta, accumulateTokenUsage,
@@ -160,10 +161,18 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       if (event.run_id) {
         rt.currentRunIdRef.current = event.run_id;
         if (event.report_source) {
-          const { run_id: runId, report_source: source } = event;
+          const { run_id: runId, report_source: source, turn_index: turn } = event;
           const beforeId = rt.currentMessageRef.current;
-          rt.setMessages((prev) => withLiveReportRow(prev, runId, source, beforeId));
+          rt.setMessages((prev) => withLiveReportRow(prev, runId, source, beforeId, turn));
         }
+      }
+      // The turn admission gave the run, which a view that missed turns added
+      // elsewhere cannot count to. An older backend names none, and the count
+      // the bubbles were created with stands.
+      if (typeof event.turn_index === 'number') {
+        const turn = event.turn_index;
+        const runBubbleId = assistantMessageId;
+        rt.setMessages((prev) => stampRunTurn(prev, runBubbleId, turn));
       }
       // The server writes this only after the run has its sandbox, so any
       // folder move that acquisition made is already on the row.
