@@ -71,7 +71,11 @@ export interface StreamRouterDeps {
  * stops on an interrupt, so the caller finalizes the bubble as paused rather
  * than completed.
  */
-export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouterDeps, assistantMessageId: string, refs: StreamProcessorRefs, getTaskIdFromEvent: (event: SSEEvent) => string | null, wasInterruptedRef: { current: boolean } | null = null) => {
+/** Routes a stream's events, and names the bubble it writes to now: a steer
+ * moves it onto a continuation, which the stream's owner must settle too. */
+export type StreamEventProcessor = ((event: SSEEvent) => void) & { currentBubble: () => string };
+
+export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouterDeps, assistantMessageId: string, refs: StreamProcessorRefs, getTaskIdFromEvent: (event: SSEEvent) => string | null, wasInterruptedRef: { current: boolean } | null = null): StreamEventProcessor => {
   const reconnectOrigin = refs.isReconnect === true;
   const setMessagesForHandlers = rt.setMessages as unknown as (
     updater: (prev: Record<string, unknown>[]) => Record<string, unknown>[]
@@ -1066,7 +1070,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
   const processEvent = (event: SSEEvent): void =>
     dispatchWithReplayStamp(refs, reconnectOrigin, event, dispatch);
 
-  return processEvent;
+  return Object.assign(processEvent, { currentBubble: () => assistantMessageId });
 };
 
 /**

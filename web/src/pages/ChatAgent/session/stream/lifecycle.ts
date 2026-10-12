@@ -7,6 +7,7 @@
  */
 
 import { finalizeAssistantMessage } from './finalizeMessage';
+import type { StreamEventProcessor } from './processStreamEvent';
 import {
   reconnectToWorkflowStream, getWorkflowStatus, getReportBackStatus,
   type ReportBackStatusResponse,
@@ -47,7 +48,7 @@ export interface RecoveryDeps {
     assistantMessageId: string,
     refs: StreamProcessorRefs,
     wasInterruptedRef: { current: boolean },
-  ) => (event: SSEEvent) => void;
+  ) => StreamEventProcessor;
   buildStreamRefs: (o?: {
     isNewConversation?: boolean;
     isReconnect?: boolean;
@@ -178,15 +179,22 @@ export const reconnectToStream = async (
     for (const info of stripList) info.assistantMessageId = assistantMessageId;
   }
 
+  // The bubble a dropped stream left: the same run continues on the new one,
+  // and so does the model call the drop cut off, finish included.
+  const continuedId = runId === undefined ? rt.currentMessageRef.current : null;
   {
-    // The bubble a dropped stream left: the same run continues on the new one.
-    const continuedId = runId === undefined ? rt.currentMessageRef.current : null;
     // Replace trailing empty history assistant message (created by history replay for the
     // in-progress pair) to avoid a duplicate bubble. If the last message is a non-empty
     // history assistant or something else, just append normally. A bubble carrying its
     // run's end (the replay's settle time, or a finished stream's) closed a settled run,
     // never the one attaching: it is a turn of its own, however empty it ended.
-    rt.setMessages((prev) => {
+    rt.setMessages((current) => {
+      // Nothing will finish its call here, so it stops streaming now, as a
+      // steered bubble does when its turn moves on. The turn end is stamped
+      // when the run ends.
+      const prev = continuedId
+        ? updateMessage(current, continuedId, (m) => (m.role === 'assistant' && m.isStreaming ? { ...m, isStreaming: false } : m))
+        : current;
       if (prev.length > 0) {
         const lastMsg = prev[prev.length - 1];
         if (
@@ -215,6 +223,14 @@ export const reconnectToStream = async (
 
   const wasInterruptedRef = { current: false };
   const baseProcessEvent = deps.createProcessor(assistantMessageId, refs, wasInterruptedRef);
+  // The bubbles this reader wrote to, read when it ends: its own, the one it
+  // continues, and the continuation a steer moved it onto. They are the ones
+  // it settles, and no other stream's.
+  const ownBubbles = () => {
+    const ids = new Set([assistantMessageId, baseProcessEvent.currentBubble()]);
+    if (continuedId !== null) ids.add(continuedId);
+    return ids;
+  };
 
   // Register the reconnect reader on mainStreamAbortRef so a user stop aborts
   // it. Without this, stopWorkflow's abort is a no-op during a reconnect: the
@@ -406,9 +422,14 @@ export const reconnectToStream = async (
       throw new Error('Reconnection stream disconnected');
     }
 
-    // Mark message as complete
+    // Mark this reader's bubbles complete. A steer's continuation is the
+    // turn's tail; failing that, a reconnect that brings no more text leaves
+    // its own bubble empty, and once the cleanup below drops it, the bubble it
+    // continues is.
+    const end = wasInterruptedRef.current ? 'paused' : 'completed';
+    const settled = ownBubbles();
     rt.setMessages((prev) =>
-      updateMessage(prev, assistantMessageId, (msg) => finalizeAssistantMessage(msg, wasInterruptedRef.current ? 'paused' : 'completed'))
+      prev.map((msg) => (settled.has(msg.id) ? finalizeAssistantMessage(msg, end) : msg)),
     );
     deps.markTranscriptPersisted();
 
@@ -459,6 +480,18 @@ export const reconnectToStream = async (
     if ((err as Error)?.name === 'AbortError' || rt.wasStoppedRef.current) {
       return;
     }
+    // The stream failed, which says nothing of the run: a failure the run
+    // reported arrived as an `error` event and settled the bubble already. So
+    // this reader's bubbles stop without a turn end, as a reconnect given up
+    // on does, and the error, if any, is the banner's.
+    const settled = ownBubbles();
+    rt.setMessages((prev) =>
+      prev.map((m) =>
+        m.role === 'assistant' && m.isStreaming && settled.has(m.id)
+          ? finalizeAssistantMessage(m, 'disconnected')
+          : m,
+      ),
+    );
     // 404/410 = workflow no longer available, not a real error
     const status = (err as Error).message?.match(/status:\s*(\d+)/)?.[1];
     if (status === '404' || status === '410') {
@@ -516,7 +549,7 @@ export const reconnectToStream = async (
       !rt.wasStoppedRef.current &&
       (!abortController.signal.aborted || idleClosed)
     ) {
-      cleanupAfterStreamEnd(rt, deps, assistantMessageId);
+      cleanupAfterStreamEnd(rt, deps, ownBubbles());
     } else if (stillActive && wasInterruptedRef.current) {
       // A stream that ends on a question or an approval card skips the
       // cleanup, and the server sends no wake for an interrupted summary. The
@@ -739,12 +772,13 @@ export const attemptReconnectAfterDisconnect = async (
 
 /**
  * Shared cleanup logic for all stream-end paths (send, reconnect, HITL resume).
- * Resets loading/streaming state, finalizes subagents, and auto-completes todos.
+ * Resets loading/streaming state, finalizes subagents, and auto-completes todos
+ * on the bubbles the stream wrote to: a reconnect writes to several.
  */
 export const cleanupAfterStreamEnd = (
   rt: RecoveryRuntime,
   deps: RecoveryDeps,
-  assistantMessageId: string,
+  bubbles: string | Iterable<string>,
 ) => {
   rt.setIsLoading(false);
   rt.setWorkspaceStarting(false);
@@ -767,7 +801,8 @@ export const cleanupAfterStreamEnd = (
 
   // Finalize pending todos as stale
   if (deps.finalizePendingTodos) deps.finalizePendingTodos();
-  rt.setMessages((prev) => finalizeTodoListProcessesInMessages(prev, assistantMessageId));
+  const ids = typeof bubbles === 'string' ? [bubbles] : [...bubbles];
+  rt.setMessages((prev) => ids.reduce((next, id) => finalizeTodoListProcessesInMessages(next, id), prev));
 
   // The server measures the machine's disk when a turn ends, onto the
   // computer row; nothing else re-reads that row while the page is open.
