@@ -294,7 +294,9 @@ The registered scheme carries two kinds of link, told apart before any window is
   goes, decided before the load, because `navigate` never passes through
   `will-navigate`. An edition with no console ignores it rather than handing a
   provider's code to `/callback`. Pages detect it as `integration-login` in the
-  bridge's `capabilities`.
+  bridge's `capabilities`, which only an edition that can finish the login advertises
+  (main passes `--langalpha-integration-login=1` when there is a console; the OSS
+  edition has none, so it passes the switch empty and the list is empty).
 
 A launch that a link started opens only that link's window. `attach` delivers the queued
 link before the entry opens, and opening the entry as well would cover it, or load

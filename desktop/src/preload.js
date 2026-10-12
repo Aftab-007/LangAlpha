@@ -58,10 +58,13 @@ contextBridge.exposeInMainWorld('langalphaDesktop', {
    *   browser that finished the login can hand the provider's answer back
    *   rather than redeem it itself.
    *
-   * A static list, and deliberately not a channel: nothing on it hands the page
-   * a way to drive anything.
+   *   Present only in an edition that has a console to finish the login on;
+   *   one with no platform origin drops the link, so it leaves this out.
+   *
+   * A list fixed when the window opens, and deliberately not a channel: nothing
+   * on it hands the page a way to drive anything.
    */
-  capabilities: Object.freeze(['integration-login']),
+  capabilities: Object.freeze(flag('integration-login') === '1' ? ['integration-login'] : []),
 
   /**
    * Tell the shell which theme the page settled on, so the window background

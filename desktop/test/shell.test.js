@@ -2025,12 +2025,30 @@ describe('which window an integration login lands in', () => {
 // page learns what this shell can do. Run for real rather than read, because
 // what matters is the value the page receives.
 describe('the bridge says what the shell can do', () => {
-  test('a frozen list naming integration-login', () => {
-    const bridge = loadPreload().langalphaDesktop
+  test('a frozen list naming integration-login when the edition can finish it', () => {
+    const bridge = loadPreload(['--langalpha-integration-login=1']).langalphaDesktop
     assert.ok(Array.isArray(bridge.capabilities))
     assert.ok(Object.isFrozen(bridge.capabilities))
     assert.ok(bridge.capabilities.includes('integration-login'))
     for (const entry of bridge.capabilities) assert.equal(typeof entry, 'string')
+  })
+
+  test('a frozen empty list when the edition has no console to finish it on', () => {
+    const bridge = loadPreload().langalphaDesktop
+    assert.deepEqual(bridge.capabilities, [])
+    assert.ok(Object.isFrozen(bridge.capabilities))
+  })
+
+  test('each edition\'s windows carry the switch that matches its console', () => {
+    const argsOf = (opts) => {
+      const { main } = loadShell(opts)
+      main.openLaunchWindows()
+      return windows[0].options.webPreferences.additionalArguments
+    }
+    assert.ok(argsOf({ edition: 'oss', serverUrl: 'http://localhost:5173' })
+      .includes('--langalpha-integration-login='))
+    cleanup()
+    assert.ok(argsOf({ edition: 'saas' }).includes('--langalpha-integration-login=1'))
   })
 
   // Nothing auth-related is exposed to the page, and a capability is a word
@@ -2686,6 +2704,11 @@ describe('the deep-link scheme contract holds across the two processes', () => {
   test('the switch main writes is the one preload parses', () => {
     assert.match(read('src/main.js'), /`--langalpha-shell-scheme=\$\{config\.scheme\}`/)
     assert.match(read('src/preload.js'), /scheme: flag\('shell-scheme'\)/)
+  })
+
+  test('the integration-login switch main writes is the one preload parses', () => {
+    assert.match(read('src/main.js'), /`--langalpha-integration-login=\$\{origins\.platformOrigin\(\) \? '1' : ''\}`/)
+    assert.match(read('src/preload.js'), /flag\('integration-login'\) === '1'/)
   })
 
   test('the web app knows every scheme an edition can register', () => {

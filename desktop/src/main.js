@@ -423,6 +423,9 @@ function shellArgs({ chromeHidden }) {
     // editions install side by side, and an email link marked for the wrong one
     // opens the other build, or nothing.
     `--langalpha-shell-scheme=${config.scheme}`,
+    // Whether this build has a console to finish an integration login on. An
+    // edition with no platform origin drops that link, so it must not say it can.
+    `--langalpha-integration-login=${origins.platformOrigin() ? '1' : ''}`,
   ]
 }
 

@@ -243,16 +243,19 @@ function loadEntryWith(buildConfig) {
  * `location` to decide whether it is on the outage page, so a remote page is
  * stood in for while it runs.
  */
-function loadPreload() {
+function loadPreload(argv = []) {
   const file = path.join(SRC, 'preload.js')
   delete require.cache[file]
   for (const key of Object.keys(exposed)) delete exposed[key]
   const had = Object.prototype.hasOwnProperty.call(globalThis, 'location')
   const saved = globalThis.location
   globalThis.location = { protocol: 'https:' }
+  const savedArgv = process.argv
+  process.argv = [...savedArgv, ...argv]
   try {
     require(file)
   } finally {
+    process.argv = savedArgv
     if (had) globalThis.location = saved
     else delete globalThis.location
   }
