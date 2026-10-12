@@ -1084,6 +1084,14 @@ async def get_dispatches_liveness(
                 # A card opened mid-run times the run from here, not from
                 # when the card mounted.
                 "run_started_at": row["run_started_at"] if live else None,
+                # When the thread's latest turn started or settled, whoever
+                # sent it: how long the thread has been quiet.
+                "last_activity_at": row["last_activity_at"],
+                # Null until the thread is named; a view falls back to the
+                # question it was handed.
+                "title": row["title"],
+                # Current, where a hand-off recorded the name at the time.
+                "workspace_name": row["workspace_name"],
             }
         )
 

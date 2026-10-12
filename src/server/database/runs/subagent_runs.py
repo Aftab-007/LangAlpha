@@ -709,12 +709,14 @@ async def get_task_run_statuses(task_run_ids: List[str]) -> Dict[str, str]:
 async def get_latest_run_details(
     thread_id: str, task_ids: List[str]
 ) -> Dict[str, Dict[str, Any]]:
-    """task_id -> {status, error, error_type} for tasks that HAVE a ledgered run.
+    """task_id -> {status, error, error_type, last_activity_at} for tasks that
+    HAVE a ledgered run.
 
     ``error`` is the human-readable ``failure->>'error'`` message, present for
     any terminal that settled with a failure payload; ``error_type`` is the
     machine spelling stored beside it, and it is what separates a stop the
-    user can act on from one they cannot. Same anchoring as
+    user can act on from one they cannot. ``last_activity_at`` is the latest
+    of the run's start, finish and result delivery. Same anchoring as
     :func:`get_latest_run_statuses`; absent task_ids are pre-ledger /
     shadow-damaged and left to the caller.
     """
@@ -727,7 +729,9 @@ async def get_latest_run_details(
                 SELECT t.task_id,
                        r.status,
                        r.failure->>'error' AS error,
-                       r.failure->>'error_type' AS error_type
+                       r.failure->>'error_type' AS error_type,
+                       GREATEST(r.started_at, r.finalized_at, r.result_delivered_at)
+                           AS last_activity_at
                 FROM subagent_tasks t
                 JOIN subagent_runs r ON r.task_run_id = t.latest_run_id
                 WHERE t.thread_id = %s AND t.task_id = ANY(%s)
@@ -740,6 +744,7 @@ async def get_latest_run_details(
                     "status": str(r["status"]),
                     "error": r["error"],
                     "error_type": r["error_type"],
+                    "last_activity_at": r["last_activity_at"],
                 }
                 for r in rows
             }

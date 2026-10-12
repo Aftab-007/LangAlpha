@@ -896,7 +896,19 @@ async def get_latest_attempts_for_threads(
                     cr.conversation_thread_id, cr.conversation_response_id,
                     cr.status, cr.cancel_requested_at,
                     cr.interrupt_reason, cr.run_seq,
-                    cr.created_at AS run_started_at
+                    cr.created_at AS run_started_at,
+                    -- A run settled before usage_settled_at existed falls
+                    -- back to its start plus measured duration, as replay's
+                    -- run_completed_at does.
+                    GREATEST(
+                        cr.created_at,
+                        COALESCE(
+                            cr.usage_settled_at,
+                            cr.created_at + cr.execution_time * INTERVAL '1 second'
+                        )
+                    ) AS last_activity_at,
+                    NULLIF(ct.title, '') AS title,
+                    w.name AS workspace_name
                 FROM conversation_responses cr
                 JOIN conversation_threads ct
                     ON ct.conversation_thread_id = cr.conversation_thread_id
