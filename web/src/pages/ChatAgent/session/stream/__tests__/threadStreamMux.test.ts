@@ -72,16 +72,18 @@ const runEnd = (rid: string, lane: string, entry: string, outcome: string) =>
 
 function makeSink() {
   const events: Array<Record<string, unknown>> = [];
+  const opens: string[] = [];
   const closures: Array<{ taskId: string; outcome: string | null }> = [];
   const resyncs = { count: 0 };
   const sink: ThreadMuxSink = {
     onTaskEvent: (ev) => events.push(ev),
+    onTaskRunOpened: (taskId) => opens.push(taskId),
     onTaskRunClosed: (taskId, outcome) => closures.push({ taskId, outcome }),
     onResyncRequired: () => {
       resyncs.count += 1;
     },
   };
-  return { sink, events, closures, resyncs };
+  return { sink, events, opens, closures, resyncs };
 }
 
 async function connected(atLeast: number): Promise<Conn> {
@@ -127,6 +129,22 @@ describe('ThreadStreamMux (v2 contract client)', () => {
     c.push(chanClose('r1', 'terminal'));
     expect(closures).toEqual([{ taskId: 't1', outcome: 'completed' }]);
     expect(mux.openTaskIds().size).toBe(0);
+    mux.detach();
+  });
+
+  it('reports a running task run opening, never a settled drain or the main lane', async () => {
+    // Stream end reads the open channels once; a task the mux admits after
+    // that read reaches the sink only through this edge.
+    const tid = freshThread();
+    const { sink, opens } = makeSink();
+    const mux = getThreadMux(tid);
+    mux.attach(sink);
+    const c = await connected(1);
+    c.push(chanOpen('rM', 'main'));
+    c.push(chanOpen('rA', 'task:t1', 'drain', 1000));
+    c.push(chanOpen('rB', 'task:t2', 'replay', 2000));
+    c.push(chanOpen('rC', 'task:t3', 'resume', 3000));
+    expect(opens).toEqual(['t2', 't3']);
     mux.detach();
   });
 
@@ -276,6 +294,7 @@ describe('ThreadStreamMux (v2 contract client)', () => {
         }
         events.push(ev);
       },
+      onTaskRunOpened: () => {},
       onTaskRunClosed: (taskId, outcome) => closures.push({ taskId, outcome }),
     };
     const mux = getThreadMux(tid);
@@ -321,6 +340,7 @@ describe('ThreadStreamMux (v2 contract client)', () => {
           throw new Error('reducer bug');
         }
       },
+      onTaskRunOpened: () => {},
       onTaskRunClosed: () => {},
       onResyncRequired: () => {
         resyncs.count += 1;

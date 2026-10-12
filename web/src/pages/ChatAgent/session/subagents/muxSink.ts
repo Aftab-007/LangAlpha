@@ -133,6 +133,13 @@ export function createSubagentMuxController(rt: SubagentRuntime, deps: SubagentM
       }
       rt.subagentProcessEventRef.current?.(ev as SSEEvent);
     },
+    onTaskRunOpened: () => {
+      // The main turn's stream end reads the open channels once. A reconnect
+      // whose backlog holds both a spawn and the turn's end reads them before
+      // the mux that spawn started has admitted the task, so the channel's
+      // own open raises the flag. Mid-turn the tray reads the running cards.
+      if (!rt.isStreamingRef.current) rt.setHasActiveSubagents(true);
+    },
     onTaskRunClosed: (shortTaskId, outcome) => {
       // Positive closure from the run ledger: honor the real terminal
       // outcome — cancelled, error, and interrupted (a failure for tasks;

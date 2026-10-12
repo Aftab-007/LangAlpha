@@ -29,6 +29,9 @@ export interface ThreadMuxSink {
   /** A task-lane content frame, shaped like a v1 SSE event object
    * (`event`, `agent`, `_eventId`, …) for the hook's dispatch switchboard. */
   onTaskEvent: (event: SSEEventObj) => void;
+  /** A channel opened for a task run that is still executing (`replay` or
+   * `resume`; a `drain` channel carries a settled run's backlog). */
+  onTaskRunOpened: (taskId: string) => void;
   /** The task's current run reached terminal (run_end or ledger-row truth)
    * and no other run of the task is open. Fires only from server-side
    * closure — never from detach or socket loss. */
@@ -393,6 +396,14 @@ export class ThreadStreamMux {
       chan.drain = data.mode === 'drain';
       if (typeof data.started === 'number') chan.startedAt = data.started;
       this.beginReplay(chan);
+      const taskId = taskIdFromLane(chan.lane);
+      if (taskId && !chan.drain) {
+        try {
+          this.sink?.onTaskRunOpened(taskId);
+        } catch (e) {
+          console.warn(`[mux:${this.threadId}] onTaskRunOpened threw for ${taskId}`, e);
+        }
+      }
       return;
     }
     if (event === 'chan_caught_up') {
