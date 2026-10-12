@@ -16,7 +16,7 @@
  * `loadConversationHistory` can clean up cleanly.
  */
 import { describe, it, expect } from 'vitest';
-import { handleHistoryUserMessage, handleHistoryTaskArtifactStatus } from '../historyEventHandlers';
+import { handleHistorySteeringDelivered, handleHistoryUserMessage, handleHistoryTaskArtifactStatus } from '../historyEventHandlers';
 import type { MessageRecord } from '../types';
 
 /** setMessages that applies the updater against a mutable backing array. */
@@ -184,5 +184,32 @@ describe('handleHistoryTaskArtifactStatus — born-correct inline card status', 
     const tasks = state[0].subagentTasks as Record<string, Record<string, unknown>>;
     expect(tasks.tc1.status).toBe('running'); // init card carries no resumeTargetId
     expect(tasks.tc2.status).toBe('completed');
+  });
+});
+
+describe('handleHistorySteeringDelivered — reply time', () => {
+  function replyAfterSteer(event: Record<string, unknown>): MessageRecord {
+    const { state, setMessages } = makeStore([]);
+    handleHistorySteeringDelivered({
+      event: { event: 'steering_delivered', turn_index: 2, ...event },
+      pairIndex: 2,
+      assistantMessagesByPair: new Map(),
+      pairStateByPair: new Map(),
+      refs: { newMessagesStartIndexRef: { current: 0 } },
+      setMessages,
+    });
+    return state.find((m) => m.role === 'assistant')!;
+  }
+
+  // The tray ages work handed off in this reply by its time, so a replay
+  // must not make it look new.
+  it('starts when the run took the steer in, not when the replay ran', () => {
+    const reply = replyAfterSteer({ timestamp: 1_700_000_100, messages: [{ content: 'go', timestamp: 1_700_000_000 }] });
+    expect((reply.timestamp as Date).getTime()).toBe(1_700_000_100_000);
+  });
+
+  it('falls back to the steer sent last when the delivery has no time', () => {
+    const reply = replyAfterSteer({ messages: [{ content: 'a', timestamp: 1_700_000_000 }, { content: 'b', timestamp: 1_700_000_050 }] });
+    expect((reply.timestamp as Date).getTime()).toBe(1_700_000_050_000);
   });
 });
