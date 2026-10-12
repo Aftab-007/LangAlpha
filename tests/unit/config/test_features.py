@@ -43,11 +43,11 @@ def test_scratchpad_is_cataloged_enabled_opt_in():
     assert spec.tradeoffs
 
 
-def test_all_workspaces_agent_is_cataloged_off_and_opt_out():
+def test_all_workspaces_agent_is_cataloged_on_and_opt_out():
     """Every turn outside a workspace reads the flag by this key, and one the
     catalog lacks fails them all."""
     spec = FEATURES[ALL_WORKSPACES_AGENT]
-    assert spec.enabled is False
+    assert spec.enabled is True
     assert spec.gate is FeatureGate.OPT_OUT
 
 
