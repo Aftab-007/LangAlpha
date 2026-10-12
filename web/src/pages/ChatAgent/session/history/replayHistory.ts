@@ -15,7 +15,7 @@ import type { AssistantMessage } from '@/types/chat';
 import { replayThreadHistory } from '../../utils/api';
 import { setStoredThreadId } from '../../hooks/utils/threadStorage';
 import { updateMessage } from '../../hooks/utils/messageHelpers';
-import type { HtmlWidgetData } from '../../hooks/utils/types';
+import type { HtmlWidgetData, MessageRecord } from '../../hooks/utils/types';
 import {
   buildModelFallbackSegment, appendNotificationSegmentOnce, mapToolCallIdToAgentId,
 } from '../../hooks/utils/messageFinalizers';
@@ -41,6 +41,14 @@ import { projectHistoryInterrupt } from '../interrupts/fromHistoryEvent';
 import type { HistoryRuntime } from '../runtime';
 import type { HistoryPageInfo, LoadedHistoryPage } from './olderPages';
 import { applyHistoryToolResult, markSteeredResumeCards, settleResumedInterrupts } from './resumeSettlement';
+
+/** A bubble the replay opened for a turn that nothing has written to. */
+function isEmptyStub(m: MessageRecord): boolean {
+  const filled = (v: unknown) => !!v && Object.keys(v as object).length > 0;
+  return m.role === 'assistant' && !!m.isHistory && !m.content
+    && !filled(m.contentSegments) && !filled(m.toolCallProcesses) && !filled(m.reasoningProcesses)
+    && m.completedAt === undefined;
+}
 
 export interface ReplayHistoryDeps {
   /** Fold a model-fallback replay event into the fallback banner state. */
@@ -112,7 +120,15 @@ export async function loadConversationHistory(
     // otherwise stale ids would suppress cards this replay legitimately renders.
     // An older page starts from the ids the newer pages rendered.
     if (!olderPage) rt.renderedInterruptIdsRef.current.clear();
-    rt.setMessages((prev) => prev.filter((m) => !m.isHistory));
+    // The old bubbles go when the replay's first rows arrive, not before the
+    // request: a replay that fails then leaves the transcript it found, under
+    // the load-failed state, rather than an empty thread.
+    let stripped = false;
+    const stripHistory = () => {
+      if (stripped) return;
+      stripped = true;
+      rt.setMessages((prev) => prev.filter((m) => !m.isHistory));
+    };
 
     // Fresh attach (refresh or thread switch): clear the live-stream cursor so
     // the subsequent reconnect replays the run's stream from the start. We
@@ -150,6 +166,9 @@ export async function loadConversationHistory(
     // list alone can't cover the post-finalize/pre-ack outbox window, and a
     // wake-queued id attaches without ever consulting /status.
     const replayedRunIds: string[] = [];
+    // The turn of the latest stub without a run id, a run still going, which
+    // the replay gives an empty bubble for its attach to take over.
+    let runningTurn: number | null = null;
 
     // When each replayed turn's run settled, keyed by turn. Applied after the
     // dispatch loop rather than on arrival: the settle time belongs to the
@@ -180,6 +199,7 @@ export async function loadConversationHistory(
     const carryEvents: SSEEvent[] = [];
     try {
       const onEvent = (_rawEvent: Record<string, unknown>): void => {
+      stripHistory();
       // Cast to SSEEvent for type-safe field access within this callback
       const event = _rawEvent as SSEEvent;
       const eventType = event.event;
@@ -361,6 +381,9 @@ export async function loadConversationHistory(
       if (eventType === 'user_message' && hasPairIndex) {
         if (typeof event.run_id === 'string' && event.run_id) {
           replayedRunIds.push(event.run_id);
+          runningTurn = null;
+        } else {
+          runningTurn = event.turn_index!;
         }
         if (typeof event.run_completed_at === 'string') {
           const settledAt = Date.parse(event.run_completed_at);
@@ -817,6 +840,7 @@ export async function loadConversationHistory(
       const result = await replayThreadHistory(threadIdToUse, onEvent, {
         limit: deps.limit, beforeTurn: deps.beforeTurn, signal: deps.signal,
       });
+      stripHistory();
       // An older page that did not arrive whole is no page.
       if (olderPage && result?.aborted) return false;
       if (olderPage && result?.disconnected) throw new Error('History page interrupted');
@@ -839,6 +863,7 @@ export async function loadConversationHistory(
       if ((replayError as Error).message && (replayError as Error).message.includes('404')) {
         // Thread not found (404) is expected for brand-new threads — skip silently.
         // Don't set error message for 404 - it's expected for new threads
+        stripHistory();
       } else {
         throw replayError; // Re-throw other errors
       }
@@ -848,6 +873,24 @@ export async function loadConversationHistory(
     // the watermark the reactivation staleness check compares against.
     rt.lastRenderedTurnIndexRef.current = maxReplayedTurnIndex;
     rt.replayedRunIdsRef.current = replayedRunIds;
+
+    // An attach that opened while the replay was in flight already stands for
+    // the running turn, below the empty bubble the replay gave it. A stream
+    // whose own count names another turn is not that run.
+    const stubId = runningTurn !== null && runningTurn === maxReplayedTurnIndex
+      ? assistantMessagesByPair.get(runningTurn) : undefined;
+    const liveId = rt.currentMessageRef.current;
+    if (!olderPage && stubId && liveId && stubId !== liveId) {
+      const turn = runningTurn;
+      rt.setMessages((prev) => {
+        const live = prev.find((m) => m.id === liveId);
+        const at = prev.findIndex((m) => m.id === stubId);
+        if (!live || live.role !== 'assistant' || live.isHistory || at === -1 || !isEmptyStub(prev[at])) return prev;
+        if (live.turnIndex !== undefined && live.turnIndex !== turn) return prev;
+        if (at < rt.newMessagesStartIndexRef.current) rt.newMessagesStartIndexRef.current -= 1;
+        return prev.filter((_, i) => i !== at);
+      });
+    }
 
     // Post-process: stamp each settled turn's end on the bubble that closes it.
     // Paired with the initiating user bubble's timestamp (the query's

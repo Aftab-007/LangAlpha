@@ -6,6 +6,7 @@
 import { isToolResultFailure, toolNameOf } from '../subagents/subagentStatus';
 import { ownerOfToolCall } from '../toolCallOwner';
 import { isTaskAgentId } from '../../utils/agentId';
+import { opensTurn } from '../../components/messageList/messagePredicates';
 import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subagents/taskSegmentBuilder';
 import { reportRowProvenance, senderProvenance, type SenderMetadata } from '../provenance';
 import type { ReportSource } from '@/types/api';
@@ -52,6 +53,50 @@ export function isSubagentHistoryEvent(event: HistoryEvent | null | undefined): 
   return isTaskAgentId(event?.agent);
 }
 
+/**
+ * Takes out the copy of a replayed turn that a stream left on screen without
+ * marking it the replay's to replace: the reconnect was refused outright, or a
+ * newer turn took the session first. With no stream writing the turn, the
+ * replay's copy is the one to keep, and a run still going is streamed again
+ * from its start onto the replay's empty bubble, which is then the tail.
+ *
+ * The copy is the turn's opener with the replayed text and turn, and the
+ * replies and delivered steers under it, all of which the replay redraws. A
+ * send refused before admission is no copy: it keeps the count the next send
+ * takes too, so the turn's own opener is the later one, and the refused
+ * question and its error stay where they are. Nor is a steer refused or not
+ * yet delivered: the server never stored the one, and may have handed the
+ * other back unread.
+ */
+function dropLiveCopy(
+  prev: MessageRecord[],
+  content: string,
+  pairIndex: number,
+  insertIndex: number,
+): { rest: MessageRecord[]; removedAbove: number } {
+  let opener = -1;
+  for (let i = prev.length - 1; i >= 0; i--) {
+    const m = prev[i];
+    if (
+      m.role === 'user' && !m.isHistory && !m.queued && opensTurn(m)
+      && m.turnIndex === pairIndex && String(m.content ?? '').trim() === content
+    ) {
+      opener = i;
+      break;
+    }
+  }
+  if (opener === -1) return { rest: prev, removedAbove: 0 };
+  const drop = new Set<number>([opener]);
+  for (let i = opener + 1; i < prev.length; i++) {
+    const m = prev[i];
+    if (m.role === 'user' && opensTurn(m)) break;
+    if ((m.role === 'assistant' || m.steeringDelivered) && !m.isHistory && m.turnIndex === pairIndex) drop.add(i);
+  }
+  let removedAbove = 0;
+  for (const i of drop) if (i < insertIndex) removedAbove++;
+  return { rest: prev.filter((_, i) => !drop.has(i)), removedAbove };
+}
+
 /** Handles user_message events from history replay. */
 export function handleHistoryUserMessage({
   event,
@@ -80,36 +125,34 @@ export function handleHistoryUserMessage({
   // Check if this message was recently sent (to avoid duplicates)
   const isDuplicate = messageContent && recentlySentTracker.isRecentlySent(messageContent);
 
-  if (isDuplicate) {
-    // Check if we're currently streaming a message
-    if (currentMessageRef.current) {
-      // Initialize pair state for history replay to work correctly
-      if (!pairStateByPair.has(pairIndex)) {
-        pairStateByPair.set(pairIndex, {
-          contentOrderCounter: 0,
-          reasoningId: null,
-          toolCallId: null,
-          steeringBatches: 0,
-        });
-      }
-      // Map turn_index to the streaming assistant message ID
-      const liveId = currentMessageRef.current;
-      assistantMessagesByPair.set(pairIndex, liveId);
-      // The live turn was counted on the client; the replay names it. Every
-      // live bubble that count stamped moves with it: the reply, its user
-      // bubble (the turn's only one, as the replay's is dropped) and any
-      // steering stamped from the reply.
-      setMessages((prev: MessageRecord[]) => {
-        const counted = prev.find((m) => m.id === liveId)?.turnIndex;
-        return prev.map((m) =>
-          m.id === liveId || (!m.isHistory && counted !== undefined && m.turnIndex === counted)
-            ? { ...m, turnIndex: pairIndex }
-            : m,
-        );
+  // A turn a stream is still writing keeps its live bubbles, and the replay
+  // maps onto them. Any other copy on screen gives way to the replay's below.
+  if (isDuplicate && currentMessageRef.current) {
+    // Initialize pair state for history replay to work correctly
+    if (!pairStateByPair.has(pairIndex)) {
+      pairStateByPair.set(pairIndex, {
+        contentOrderCounter: 0,
+        reasoningId: null,
+        toolCallId: null,
+        steeringBatches: 0,
       });
-      return true;
     }
-    // If no active streaming, we'll create assistant message below
+    // Map turn_index to the streaming assistant message ID
+    const liveId = currentMessageRef.current;
+    assistantMessagesByPair.set(pairIndex, liveId);
+    // The live turn was counted on the client; the replay names it. Every
+    // live bubble that count stamped moves with it: the reply, its user
+    // bubble (the turn's only one, as the replay's is dropped) and any
+    // steering stamped from the reply.
+    setMessages((prev: MessageRecord[]) => {
+      const counted = prev.find((m) => m.id === liveId)?.turnIndex;
+      return prev.map((m) =>
+        m.id === liveId || (!m.isHistory && counted !== undefined && m.turnIndex === counted)
+          ? { ...m, turnIndex: pairIndex }
+          : m,
+      );
+    });
+    return true;
   } else {
     // Initialize state for this pair
     pairStateByPair.set(pairIndex, {
@@ -174,13 +217,19 @@ export function handleHistoryUserMessage({
       // through the reload, which keeps live rows; this row, which knows its
       // turn, replaces it. Live rows sit past the insert point, so it holds.
       const runId = userMessage.runId;
+      // A stream writing now may be writing this turn, with the tracker past
+      // its window: its bubbles are not the replay's to take.
+      const streaming = !!currentMessageRef.current;
       setMessages((prev: MessageRecord[]) => {
         const kept = runId ? prev.filter((m) => m.isHistory || m.runId !== runId) : prev;
-        const insertIndex = newMessagesStartIndexRef.current;
+        const { rest, removedAbove } = streaming
+          ? { rest: kept, removedAbove: 0 }
+          : dropLiveCopy(kept, messageContent, pairIndex, newMessagesStartIndexRef.current);
+        const insertIndex = newMessagesStartIndexRef.current - removedAbove;
         const newMessages = [
-          ...kept.slice(0, insertIndex),
+          ...rest.slice(0, insertIndex),
           userMessage,
-          ...kept.slice(insertIndex),
+          ...rest.slice(insertIndex),
         ];
         newMessagesStartIndexRef.current = insertIndex + 1;
         return newMessages;

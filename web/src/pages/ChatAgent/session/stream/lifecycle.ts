@@ -794,6 +794,14 @@ export const attemptReconnectAfterDisconnect = async (
       // The turn moved on without this one ending, so nothing else settles
       // what its reconnects were writing. A stop already did, in stopWorkflow.
       settleOwned();
+      // They stop where the link dropped, and the run went on server-side, so
+      // the turn is reloaded whole once the newer turn's stream lets go, or at
+      // once if it already has. A view that has left the thread has nothing
+      // to reload.
+      if (rt.threadIdRef.current === tid) {
+        if (rt.isStreamingRef.current) rt.pendingMuxResyncRef.current = true;
+        else rt.setReloadTrigger((n) => n + 1);
+      }
       // Same spinner rule as below: the turn that superseded us owns its own.
       if (rt.isReconnectingOwnerRef.current === null) rt.setIsReconnecting(false);
       return true;
@@ -953,6 +961,11 @@ export const attemptReconnectAfterDisconnect = async (
   if (!rendered && rt.currentRunIdRef.current === latchedRunId) rt.currentRunIdRef.current = null;
 
   cleanupAfterStreamEnd(rt, deps, owned);
+  // The reload rebuilds the turn from the server, from its checkpoint once the
+  // run is over and from the run's stream while it is not, so the bubbles on
+  // screen would be a second copy. The replay clears only bubbles marked as
+  // its own, which a stream that ends marks too.
+  deps.markTranscriptPersisted();
   // Reload conversation to show complete response after failed reconnection
   rt.setReloadTrigger((n) => n + 1);
 };
