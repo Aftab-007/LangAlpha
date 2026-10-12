@@ -9,12 +9,15 @@
  * frame is the run's first, so those bubbles are still the transcript's tail:
  * the one the stream writes to and any a dropped stream left it to continue,
  * the message that opened it, and any steering the user sent while the run
- * was being admitted.
+ * was being admitted. A steer also names the run it was sent to, and takes
+ * that run's turn wherever it sits: a reload places one it kept by the turn
+ * its status counts live, and without that count leaves it under the count
+ * the view had when it was sent.
  */
 import type { ChatMessage } from '@/types/chat';
 import { opensTurn } from '../../components/messageList/messagePredicates';
 
-export function stampRunTurn(messages: ChatMessage[], assistantId: string, turnIndex: number): ChatMessage[] {
+export function stampRunTurn(messages: ChatMessage[], assistantId: string, turnIndex: number, runId?: string): ChatMessage[] {
   const at = messages.findIndex((m) => m.id === assistantId);
   const bubble = messages[at];
   if (!bubble || bubble.role !== 'assistant') return messages;
@@ -39,10 +42,13 @@ export function stampRunTurn(messages: ChatMessage[], assistantId: string, turnI
 
   let changed = false;
   const next = messages.map((m, i) => {
-    if (i < from || m.role === 'notification') return m;
-    // A parked message is a placeholder: the send it becomes counts afresh.
-    if (m.role === 'user' && m.queued) return m;
-    if (i !== at && m.turnIndex !== counted) return m;
+    if (m.role === 'notification') return m;
+    if (!(runId && m.role === 'user' && m.steeredRunId === runId)) {
+      if (i < from) return m;
+      // A parked message is a placeholder: the send it becomes counts afresh.
+      if (m.role === 'user' && m.queued) return m;
+      if (i !== at && m.turnIndex !== counted) return m;
+    }
     if (m.turnIndex === turnIndex) return m;
     changed = true;
     return { ...m, turnIndex };

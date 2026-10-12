@@ -45,6 +45,43 @@ import { projectLiveInterrupt } from '../interrupts/fromLiveEvent';
 import type { StreamRuntime } from '../runtime';
 import { preapprovedReportBack } from '../../utils/preapprovedCards';
 
+/**
+ * Marks delivered the steers of the steered turn that a delivery names. The
+ * server delivers a steer only to the run it was sent to, and hands back at
+ * that run's end any it did not deliver, so a steer another turn holds, or one
+ * the server has yet to queue, is not this delivery's. Each text claims the
+ * oldest steer still waiting with it, then the oldest failed with no refusal:
+ * the server may have taken that one and lost only the POST's answer, so the
+ * run delivering it is that answer. A refused steer was never queued, so no
+ * delivery is its. Returns the entries no steer claimed too: one batch can
+ * carry steers sent from another tab or a channel beside this view's own.
+ */
+function claimDeliveredSteers(
+  messages: ChatMessage[],
+  delivered: readonly Record<string, unknown>[],
+  turn: number | undefined,
+): { messages: ChatMessage[]; unclaimed: Record<string, unknown>[] } {
+  const unclaimed = [...delivered];
+  const texts = unclaimed.map((q) => String(q.content ?? '').trim());
+  let next = messages;
+  for (const waiting of [true, false]) {
+    for (let i = 0; i < next.length && texts.length > 0; i++) {
+      const m = next[i] as ChatMessage & { queueError?: unknown };
+      if (m.role !== 'user' || (turn !== undefined && m.turnIndex !== turn)) continue;
+      if (waiting ? !m.steering : (m.isHistory || !m.queueError || m.queueRefused || m.steeringDelivered)) continue;
+      const at = texts.indexOf(String(m.content ?? '').trim());
+      if (at === -1) continue;
+      texts.splice(at, 1);
+      unclaimed.splice(at, 1);
+      const claimed: typeof m = { ...m, steering: false, steeringDelivered: true };
+      delete claimed.queueError;
+      if (next === messages) next = [...messages];
+      next[i] = claimed;
+    }
+  }
+  return { messages: next, unclaimed };
+}
+
 export interface StreamRouterDeps {
   /** Fold a model-fallback event into the fallback banner state. */
   applyFallbackSuggestion: (event: Record<string, unknown>) => void;
@@ -176,7 +213,8 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       if (typeof event.turn_index === 'number') {
         const turn = event.turn_index;
         const runBubbleId = assistantMessageId;
-        rt.setMessages((prev) => stampRunTurn(prev, runBubbleId, turn));
+        const runId = typeof event.run_id === 'string' ? event.run_id : undefined;
+        rt.setMessages((prev) => stampRunTurn(prev, runBubbleId, turn, runId));
       }
       // The server writes this only after the run has its sandbox, so any
       // folder move that acquisition made is already on the row.
@@ -343,20 +381,20 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       // The bubble being steered: every bubble this creates joins its turn,
       // read from the projection because a report-back's bubble has no stamp.
       const steeredId = assistantMessageId;
-      // 2. Mark steering user messages as delivered, OR create them from event
-      //    data if none exist (reconnect scenario — in-memory state was lost).
+      // 2. Mark delivered the steers it names, and create the rest from event
+      //    data: this view never held them (sent elsewhere), or lost them on
+      //    a reconnect.
+      // The banners those failed steers raised, which no failed steer holds now.
+      let deliveredErrors: unknown[] = [];
       rt.setMessages((prev) => {
-        const hasSteeringMessages = prev.some((msg) => 'steering' in msg && msg.steering);
-        if (hasSteeringMessages) {
-          // Live path: mark existing steering messages as delivered
-          return prev.map((msg) =>
-            'steering' in msg && msg.steering ? { ...msg, steering: false, steeringDelivered: true } : msg
-          );
-        }
-        // Reconnect path: create user bubbles from event payload
-        const steeringMsgs = (event.messages || []).filter((qMsg) => qMsg.content);
-        if (steeringMsgs.length === 0) return prev;
         const turnIndex = turnOf(prev, steeredId);
+        // A steer of this view's it names gets no copy.
+        const { messages: claimed, unclaimed } = claimDeliveredSteers(prev, event.messages || [], turnIndex);
+        const errorOf = (m: ChatMessage) => (m as { queueError?: unknown }).queueError;
+        deliveredErrors = prev.filter((m, i) => claimed[i] !== m).map(errorOf)
+          .filter((e) => !claimed.some((m) => errorOf(m) === e));
+        const steeringMsgs = unclaimed.filter((qMsg) => qMsg.content);
+        if (steeringMsgs.length === 0) return claimed;
         const newUserMessages: ChatMessage[] = steeringMsgs.map((qMsg) => {
           const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
           return {
@@ -371,8 +409,9 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
             ...(provenance ? { provenance } : {}),
           };
         });
-        return [...prev, ...newUserMessages];
+        return [...claimed, ...newUserMessages];
       });
+      if (deliveredErrors.length > 0) rt.setMessageError((prev) => (deliveredErrors.includes(prev) ? null : prev));
 
       // 3. Create new assistant message placeholder (steering continuation — not a new backend turn).
       //    Random suffix: the turn's first bubble uses the same Date.now() scheme,

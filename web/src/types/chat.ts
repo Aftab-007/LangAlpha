@@ -475,6 +475,17 @@ export type UserMessage = {
   runId?: string;
   steeringDelivered?: boolean;
   steering?: boolean;
+  /** On a steer, the run it was sent to. The view stamps a steer's turn from
+   *  its own count, which may be behind; replay names a settled run's turn, so
+   *  a reload places the steer by this. */
+  steeredRunId?: string;
+  /**
+   * On a failed steer, whether the server answered its POST with a refusal (a
+   * 4xx). The server sends one before it queues a steer, so no delivery can be
+   * this steer's. A failure with no such answer may have come after the
+   * server took it.
+   */
+  queueRefused?: boolean;
   /**
    * Set while this message is parked during an in-progress compaction (the
    * backend 409s a POST mid-compaction). Rendered as a shimmer bubble like a

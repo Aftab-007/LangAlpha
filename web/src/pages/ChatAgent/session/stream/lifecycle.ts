@@ -52,6 +52,13 @@ const retryAfterOf = (err: unknown): number | null => {
   return status === 429 && retryAfter ? retryAfter * 1000 : null;
 };
 
+/** A steer a reload left on screen, still queued or failed: the replay has no
+ *  copy of either. */
+const isKeptSteer = (m: { role: string; isHistory?: boolean }): boolean => {
+  const steer = m as { steering?: boolean; queueError?: unknown };
+  return m.role === 'user' && !m.isHistory && (!!steer.steering || !!steer.queueError);
+};
+
 export interface ReconnectOptions {
   activeTasks?: string[];
   runId?: string | null;
@@ -111,7 +118,8 @@ export interface RecoveryDeps {
   isSettledTask: (taskId: string) => boolean;
   attachSubagentMux: (tid: string, processEvent: (event: SSEEvent) => void, snapshotAtMs?: number) => void;
   muxOpenTaskIds: () => Set<string>;
-  markTranscriptPersisted: () => void;
+  /** `keepQueued` leaves out steers still queued in a run that may go on. */
+  markTranscriptPersisted: (opts?: { keepQueued?: boolean }) => void;
   clearModelStatus: () => void;
   finalizePendingTodos: (() => void) | null;
   /** Re-read the machine rows after a turn on a machine; null where there is none (flash). */
@@ -248,8 +256,13 @@ export const reconnectToStream = async (
       const prev = continuedId
         ? updateMessage(current, continuedId, (m) => (m.role === 'assistant' && m.isStreaming ? { ...m, isStreaming: false } : m))
         : current;
-      if (prev.length > 0) {
-        const lastMsg = prev[prev.length - 1];
+      // A steer the reload kept, still queued or with its answer lost, sits
+      // below that bubble, as it did below the turn's writes before the
+      // reload: the attach takes the bubble over all the same.
+      let tail = prev.length - 1;
+      while (tail >= 0 && isKeptSteer(prev[tail])) tail--;
+      if (tail >= 0) {
+        const lastMsg = prev[tail];
         if (
           lastMsg.role === 'assistant' &&
           lastMsg.isHistory &&
@@ -258,7 +271,7 @@ export const reconnectToStream = async (
           lastMsg.completedAt === undefined &&
           lastMsg.completionObservedAt === undefined
         ) {
-          return [...prev.slice(0, -1), createAssistantMessage(assistantMessageId, turnOf(prev, lastMsg.id))];
+          return [...prev.slice(0, tail), createAssistantMessage(assistantMessageId, turnOf(prev, lastMsg.id)), ...prev.slice(tail + 1)];
         }
       }
       // A run attached fresh (a report-back) starts unstamped: it is a turn the
@@ -825,6 +838,9 @@ export const attemptReconnectAfterDisconnect = async (
   let askedDelay: number | null = null;
   // A tab resume cut the last attempt's reader, so the next opens at once.
   let resumed = false;
+  // Whether the run is known to be over. A loop that runs out of attempts or
+  // of offline wait does not know it.
+  let runOver = false;
 
   while (attempt < RETRY_ATTEMPTS) {
     if (!tid || tid === '__default__') break;
@@ -864,6 +880,7 @@ export const attemptReconnectAfterDisconnect = async (
       const status = await getWorkflowStatus(tid);
       if (!status.can_reconnect) {
         console.log('[Reconnect] Workflow no longer reconnectable, cleaning up');
+        runOver = true;
         break;
       }
 
@@ -882,6 +899,7 @@ export const attemptReconnectAfterDisconnect = async (
         status.run_id !== rt.currentRunIdRef.current
       ) {
         console.log('[Reconnect] Thread moved to run', status.run_id, '; reloading instead of resuming', rt.currentRunIdRef.current);
+        runOver = true;
         break;
       }
 
@@ -905,7 +923,10 @@ export const attemptReconnectAfterDisconnect = async (
         for (const id of drop.bubbles) owned.add(id);
         rendered ||= drop.received;
         // The run ended while the link was down: the give-up reloads it whole.
-        if (drop.gone) break;
+        if (drop.gone) {
+          runOver = true;
+          break;
+        }
         // A turn that took over while this reader ran owns the spinner.
         if (abandoned()) return;
         askedDelay = drop.retryAfterMs;
@@ -964,8 +985,10 @@ export const attemptReconnectAfterDisconnect = async (
   // The reload rebuilds the turn from the server, from its checkpoint once the
   // run is over and from the run's stream while it is not, so the bubbles on
   // screen would be a second copy. The replay clears only bubbles marked as
-  // its own, which a stream that ends marks too.
-  deps.markTranscriptPersisted();
+  // its own, which a stream that ends marks too. Not a steer still queued in a
+  // run that may go on: no replay has it until the run delivers it or hands it
+  // back, which the reload's attach shows.
+  deps.markTranscriptPersisted({ keepQueued: !runOver });
   // Reload conversation to show complete response after failed reconnection
   rt.setReloadTrigger((n) => n + 1);
 };

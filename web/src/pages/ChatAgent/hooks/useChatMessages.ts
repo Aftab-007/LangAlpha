@@ -26,6 +26,7 @@ import { useReportBackWatch } from './useReportBackWatch';
 import { useChatFeedback } from './useChatFeedback';
 import { toast } from '@/components/ui/use-toast';
 import { buildRateLimitError, type ErrorLinkSpec, type StructuredError } from '@/utils/rateLimitError';
+import { isClientError } from '../utils/api/errors';
 import { getStoredThreadId, setStoredThreadId } from './utils/threadStorage';
 import { type SubagentTokenUsage, ZERO_USAGE } from '../utils/tokenUsage';
 import { computeSteeringBoundary } from '../session/stream/steeringRollback';
@@ -307,6 +308,14 @@ export function useChatMessages(
   // trigger while streaming runs the load effect's cleanup (detaching the mux)
   // and then bails on the streaming guard — losing the reload.
   const pendingMuxResyncRef = useRef(false);
+  // Steers whose POST has not answered. One sent as the run ended comes back
+  // as a new turn that streams its own run, so a load waits for it as for a
+  // stream: attaching to that run first would read it twice.
+  const steersInFlightRef = useRef(0);
+  // A refused steer's banner, for a load to show again once it has cleared
+  // it: the first load to succeed after the refusal shows it, unless a turn
+  // sent or a thread opened since has moved the session on.
+  const refusalAfterReloadRef = useRef<{ epoch: number; banner: string | StructuredError } | null>(null);
   // The reloadTrigger the load effect last ran for, so a bail can tell a
   // reload request from a thread change.
   const reloadSeenRef = useRef(0);
@@ -423,10 +432,14 @@ export function useChatMessages(
   // render their twins (duplicated transcript). Failed sends never reach a
   // success finalize, so their (unpersisted) bubbles deliberately stay
   // unmarked and survive reloads.
-  const markTranscriptPersisted = useCallback(() => {
+  const markTranscriptPersisted = useCallback(({ keepQueued = false }: { keepQueued?: boolean } = {}) => {
+    // A steer the server refused inside the turn was never stored either, nor
+    // yet one still queued in a run that may go on.
+    const persisted = (m: ChatMessage) => !m.isHistory && !(m as { queueError?: unknown }).queueError
+      && !(keepQueued && (m as { steering?: boolean }).steering);
     setMessages((prev) =>
-      prev.some((m) => !m.isHistory)
-        ? prev.map((m) => (m.isHistory ? m : { ...m, isHistory: true }))
+      prev.some(persisted)
+        ? prev.map((m) => (persisted(m) ? { ...m, isHistory: true } : m))
         : prev,
     );
     // The recently-sent dedup exists to keep a replay from twinning an
@@ -921,8 +934,9 @@ export function useChatMessages(
     }
     // Skip while streaming (prevents race condition when thread ID changes
     // during streaming). A reload asked for meanwhile runs when the stream
-    // releases, since the stream shows only its own run.
-    if (isStreamingRef.current) {
+    // releases, since the stream shows only its own run, and one asked for
+    // while a steer waits on its answer runs once that answer settles.
+    if (isStreamingRef.current || (reloadAsked && steersInFlightRef.current > 0)) {
       if (reloadAsked) pendingMuxResyncRef.current = true;
       return;
     }
@@ -991,12 +1005,37 @@ export function useChatMessages(
       // legitimately 'cancelled' card.
       const settleEndedRun = (ok: boolean) => {
         if (cancelled || sessionEpochRef.current !== sessionEpochAtStart) return;
+        // A steer a give-up kept queued, in a run that ended without the
+        // replay delivering it, is queued no more. No stream of this view was
+        // there for the run's hand-back, and the server hands such a steer
+        // back at the end of the thread's next run.
+        if (ok && !status.can_reconnect && status.status !== 'error') {
+          const queued = new Set(liveMessages.get()
+            .filter((m) => m.role === 'user' && !m.isHistory && (m as { steering?: boolean }).steering)
+            .map((m) => m.id));
+          if (queued.size > 0) setMessages((prev) => prev.filter((m) => !queued.has(m.id)));
+        }
         if (onlineRetryEpochRef.current !== onlineEpochAtStart && (!ok || status.status === 'error')) return;
         if (status.can_reconnect || historyHasUnresolvedInterruptRef.current) return;
         if ((status.active_tasks || []).some((t) => !isSettledTask(t))) return;
         if (finalizePendingTodos) finalizePendingTodos();
         setMessages((prev) => finalizeTodoListProcessesInMessages(prev));
       };
+      // A steer a reload kept was stamped from this view's count when it was
+      // sent, which may have been behind. The replay names no run for a live
+      // turn, so the status does: the turn of the run it names live is the
+      // newest it counts, and the replay places the steer under it. Forward
+      // only: this view's stamp is never ahead of the run, and the status's
+      // count can itself be behind, by a turn admitted with no question of
+      // its own.
+      const liveRun = status.can_reconnect ? status.run_id : null;
+      const liveTurn = status.latest_turn_index;
+      if (liveRun && typeof liveTurn === 'number') {
+        const behind = (m: ChatMessage): m is UserMessage => (
+          m.role === 'user' && !m.isHistory && m.steeredRunId === liveRun && (m.turnIndex ?? -1) < liveTurn
+        );
+        setMessages((prev) => (prev.some(behind) ? prev.map((m) => (behind(m) ? { ...m, turnIndex: liveTurn } : m)) : prev));
+      }
       const loadOk = await loadConversationHistory(settleEndedRun, status.latest_turn_index);
 
       if (cancelled || turnTookOver()) return;
@@ -1010,6 +1049,12 @@ export function useChatMessages(
       // eventual real load that supersedes it.
       if (loadOk) {
         historyLoadedKeyRef.current = loadKey;
+        const refused = refusalAfterReloadRef.current;
+        refusalAfterReloadRef.current = null;
+        // Only while a steer still holds it: one the replay delivered is gone.
+        if (refused?.epoch === sessionEpochAtStart && liveMessages.get().some((m) => (m as { queueError?: unknown }).queueError === refused.banner)) {
+          setMessageError(refused.banner);
+        }
         // The replay rendered every persisted turn, so this load's recents slice
         // is now ON SCREEN. Record it BEFORE arming the watch below, or the
         // recent-runs catch-up would re-attach each run as a duplicate turn.
@@ -1491,6 +1536,48 @@ export function useChatMessages(
   /** Live event routing lives in session/stream/processStreamEvent; the
    * hook binds the runtime + cross-lane callbacks per stream start. */
 
+  // The banner a refused send or steer shows, and whether it is the server's
+  // own answer to act on (a quota denial, a provider or access link). Under
+  // one of those a failed bubble would read as a second, unrelated fault.
+  const refusalBanner = (err: unknown): { banner: string | StructuredError; answered: boolean } => {
+    const errObj = err as Record<string, unknown>;
+    if (errObj.status === 429) {
+      const info = (errObj.rateLimitInfo || {}) as Record<string, unknown>;
+      const platformUrl = (import.meta.env.VITE_PLATFORM_URL as string | undefined) || '/account';
+      return { banner: buildRateLimitError(info, platformUrl), answered: true };
+    }
+    // Build structured error with link when backend provides one
+    // (byok_key_required, oauth_required, 403, ...).
+    const errorInfo = errObj.errorInfo as Record<string, unknown> | undefined;
+    if (errorInfo?.link) {
+      // Backend scrubbed stale model names from the user's saved
+      // preferences — invalidate our cached copy so the selector and
+      // Settings page re-render with the server's (cleaned) state.
+      // Without this, the frontend keeps sending the removed model
+      // name as request_model on every retry.
+      if (errorInfo.type === 'model_removed') {
+        queryClient.invalidateQueries({ queryKey: queryKeys.user.preferences() });
+      }
+      return {
+        banner: {
+          message: (errorInfo.message as string) || (err as Error).message || 'An error occurred.',
+          links: [errorInfo.link as ErrorLinkSpec],
+        },
+        answered: true,
+      };
+    }
+    if (errObj.status === 403) {
+      return {
+        banner: {
+          message: (err as Error).message || 'Access denied.',
+          links: [{ url: '/setup/method', label: 'Configure providers' }],
+        },
+        answered: true,
+      };
+    }
+    return { banner: (err as Error).message || 'Failed to send message', answered: false };
+  };
+
   /**
    * Handles sending a message while the agent is already streaming (steering).
    * The backend will accept it for injection before the next LLM call.
@@ -1513,6 +1600,7 @@ export function useChatMessages(
     const userMessage: ChatMessage = {
       ...createUserMessage(message, steeredTurn, attachmentMeta as AttachmentMeta[] | null, widgetSnapshots ?? null, chartSelections ?? null),
       steering: true,
+      ...(currentRunIdRef.current ? { steeredRunId: currentRunIdRef.current } : {}),
     };
     recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
     setMessages((prev) => appendMessage(prev,userMessage));
@@ -1548,6 +1636,7 @@ export function useChatMessages(
           if (msg.role !== 'user') return msg;
           const next: UserMessage & { queuePosition?: unknown; queueError?: unknown } = { ...msg, turnIndex: demotedTurn };
           delete next.steering;
+          delete next.steeredRunId;
           delete next.queuePosition;
           delete next.queueError;
           return next;
@@ -1577,6 +1666,7 @@ export function useChatMessages(
     // route through handleSendMessage once loading clears) reuses the key and
     // dedups against the accepted run.
     const requestKey = requestKeyRef.current.take(`send|${threadId}|${message}`);
+    steersInFlightRef.current += 1;
     try {
       // Send to same endpoint — backend will auto-accept steering and return steering_accepted SSE
       const result = await sendChatMessageStream(message, workspaceId, threadId, {
@@ -1673,6 +1763,8 @@ export function useChatMessages(
           setMessages((prev) =>
             updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, demotedInterruptedRef.current ? 'paused' : 'completed'))
           );
+          // The run it became ended like a send's, and replay holds it now.
+          markTranscriptPersisted();
           if (!demotedInterruptedRef.current) {
             cleanupAfterStreamEnd(finalId);
           }
@@ -1700,14 +1792,43 @@ export function useChatMessages(
         setIsLoading(false);
         return;
       }
-      // Update user message to show steering failure
+      // The server sends a refusal (a 4xx) before it queues a steer. It holds
+      // the status line of a steer it takes until the stream's first frame,
+      // so a failure in between reads as a 5xx or as no answer, and a
+      // delivery the run already made was the answer this POST lost. A
+      // delivery marks the steers whose text it names, so one that marked a
+      // refused steer was another with its text.
+      const refused = isClientError(err);
+      if (!refused && liveMessages.get().some((m) => m.id === userMessage.id && (m as { steeringDelivered?: boolean }).steeringDelivered)) return;
+      // Shown as a refused send's is. A load clears the banner as it starts,
+      // so the refusal is carried past the next one: a reload may be waiting
+      // on this answer, or asked for and yet to run.
+      const banner = refusalBanner(err).banner;
+      refusalAfterReloadRef.current = { epoch: sessionEpochRef.current, banner };
+      // Update user message to show steering failure. A stream end or a
+      // give-up while it was out may have marked it persisted, but the server
+      // never stored it, so a reload must leave it with its error. The error
+      // is the banner, so a delivery that proves the server took the steer
+      // after all clears that banner and no other.
       setMessages((prev) =>
         updateMessage(prev,userMessage.id as string, (msg) => ({
           ...msg,
           steering: false,
-          queueError: (err as Error).message || 'Failed to send steering',
+          steeringDelivered: false,
+          isHistory: false,
+          queueError: banner,
+          queueRefused: refused,
         }))
       );
+      setMessageError(banner);
+    } finally {
+      steersInFlightRef.current -= 1;
+      // A load deferred to this answer runs now, unless a stream it started
+      // holds it until that stream lets go.
+      if (steersInFlightRef.current === 0 && pendingMuxResyncRef.current && !isStreamingRef.current) {
+        pendingMuxResyncRef.current = false;
+        setReloadTrigger((n) => n + 1);
+      }
     }
   };
 
@@ -1957,52 +2078,22 @@ export function useChatMessages(
             wasDisconnected = true;
             return;
           }
-          // Handle rate limit (429) — show limit message and remove optimistic assistant message
-          const errObj = err as Record<string, unknown>;
-          if (errObj.status === 429) {
-            const info = (errObj.rateLimitInfo || {}) as Record<string, unknown>;
-            const platformUrl = (import.meta.env.VITE_PLATFORM_URL as string | undefined) || '/account';
-            const structured = buildRateLimitError(info, platformUrl);
-            setMessageError(structured);
+          if ((err as Record<string, unknown>).status !== 429) console.error('Error sending message:', err);
+          const { banner, answered } = refusalBanner(err);
+          setMessageError(banner);
+          if (answered) {
+            // When a banner with a CTA renders, drop the optimistic assistant
+            // bubble so the transcript stays clean, as the `internal` SSE
+            // error does. A content-less "Failed to send message" bubble
+            // under the banner looks broken.
             setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
           } else {
-            console.error('Error sending message:', err);
-            // Build structured error with link when backend provides one
-            // (byok_key_required, oauth_required, 403, ...). When a banner
-            // with a CTA renders, drop the optimistic assistant bubble so
-            // the transcript stays clean — matches the 429 pattern and the
-            // `internal` SSE error pattern. Leaving a content-less "Failed
-            // to send message" bubble under the banner looks broken.
-            const errorInfo = errObj.errorInfo as Record<string, unknown> | undefined;
-            if (errorInfo?.link) {
-              // Backend scrubbed stale model names from the user's saved
-              // preferences — invalidate our cached copy so the selector and
-              // Settings page re-render with the server's (cleaned) state.
-              // Without this, the frontend keeps sending the removed model
-              // name as request_model on every retry.
-              if (errorInfo.type === 'model_removed') {
-                queryClient.invalidateQueries({ queryKey: queryKeys.user.preferences() });
-              }
-              setMessageError({
-                message: (errorInfo.message as string) || (err as Error).message || 'An error occurred.',
-                links: [errorInfo.link as ErrorLinkSpec],
-              });
-              setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
-            } else if (errObj.status === 403) {
-              setMessageError({
-                message: (err as Error).message || 'Access denied.',
-                links: [{ url: '/setup/method', label: 'Configure providers' }],
-              });
-              setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
-            } else {
-              setMessageError((err as Error).message || 'Failed to send message');
-              setMessages((prev) =>
-                updateMessage(prev, assistantMessageId, (msg) => ({
-                  ...finalizeAssistantMessage(msg, 'failed'),
-                  content: msg.content || 'Failed to send message. Please try again.',
-                }))
-              );
-            }
+            setMessages((prev) =>
+              updateMessage(prev, assistantMessageId, (msg) => ({
+                ...finalizeAssistantMessage(msg, 'failed'),
+                content: msg.content || 'Failed to send message. Please try again.',
+              }))
+            );
           }
         } finally {
           // Skip cleanup on a user stop — stopWorkflow owns the teardown and a

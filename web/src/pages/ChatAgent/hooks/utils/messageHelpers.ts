@@ -16,9 +16,9 @@ import type { ChartSelectionSnapshot } from '@/pages/MarketView/stores/chartSele
 // Re-export types for consumers
 export type { ChatMessage, AssistantMessage, UserMessage, NotificationMessage, NotificationVariant };
 
-// Module-level sequence counter to avoid ID collisions when multiple
-// notifications are created within the same millisecond.
-let _notifSeq = 0;
+// Keeps ids made within the same millisecond apart: a message is updated by
+// id, so two sharing one are both updated.
+let _idSeq = 0;
 
 export interface AttachmentMeta {
   file: File;
@@ -39,7 +39,7 @@ export function createUserMessage(
   chartSelections: ChartSelectionSnapshot[] | null = null,
 ): UserMessage {
   const msg: UserMessage = {
-    id: `user-${Date.now()}`,
+    id: `user-${Date.now()}-${_idSeq++}`,
     role: 'user',
     content: message,
     contentType: 'text',
@@ -116,7 +116,7 @@ export function createNotificationMessage(
   detail?: string,
 ): NotificationMessage {
   return {
-    id: `notification-${Date.now()}-${_notifSeq++}`,
+    id: `notification-${Date.now()}-${_idSeq++}`,
     role: 'notification',
     content: text,
     variant,

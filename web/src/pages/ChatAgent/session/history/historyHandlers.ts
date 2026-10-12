@@ -97,6 +97,11 @@ function dropLiveCopy(
   return { rest: prev.filter((_, i) => !drop.has(i)), removedAbove };
 }
 
+/** A steer refused inside a turn before this one, which the reload kept. */
+function refusedBefore(m: MessageRecord, turn: number): boolean {
+  return m.role === 'user' && !m.isHistory && !!m.queueError && typeof m.turnIndex === 'number' && m.turnIndex < turn;
+}
+
 /** Handles user_message events from history replay. */
 export function handleHistoryUserMessage({
   event,
@@ -119,6 +124,28 @@ export function handleHistoryUserMessage({
   if (assistantMessagesByPair.has(pairIndex)) {
     return false;
   }
+
+  // A steer sent before its run named the turn was stamped from this view's
+  // count, which may have been behind. The replay names the run's turn here,
+  // ahead of the delivery that finds the steer by it.
+  const runId = typeof event.run_id === 'string' ? event.run_id : null;
+  if (runId) {
+    setMessages((prev: MessageRecord[]) => (
+      prev.some((m) => !m.isHistory && m.steeredRunId === runId && m.turnIndex !== pairIndex)
+        ? prev.map((m) => (!m.isHistory && m.steeredRunId === runId ? { ...m, turnIndex: pairIndex } : m))
+        : prev
+    ));
+  }
+
+  // The replay draws every turn ahead of the bubbles it kept, so a steer
+  // refused in an earlier turn, which only this view holds, would sink below
+  // the newest. Stepping past it leaves it under the turn it was sent in.
+  setMessages((prev: MessageRecord[]) => {
+    let at = newMessagesStartIndexRef.current;
+    while (at < prev.length && refusedBefore(prev[at], pairIndex)) at++;
+    newMessagesStartIndexRef.current = at;
+    return prev;
+  });
 
   const messageContent = (event.content || '').trim();
 
@@ -629,8 +656,21 @@ export function handleHistorySteeringDelivered({
     const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
     if (provenance) userMessage.provenance = provenance;
     setMessages((prev: MessageRecord[]) => {
-      const idx = newMessagesStartIndexRef.current;
-      const next = [...prev.slice(0, idx), userMessage, ...prev.slice(idx)];
+      // A steer whose POST lost its answer after the server took it stays on
+      // screen as failed until a delivery says otherwise, and one still
+      // pending when its stream died stays pending. This is that delivery.
+      // The run's queue delivers steers in the order it took them, so of two
+      // copies this is the older. A failed copy counts only when none is
+      // pending, as on the live stream, and never a refused one: the server
+      // refuses a steer before it queues it.
+      const text = String(qMsg.content).trim();
+      const copy = (m: MessageRecord) => m.role === 'user' && !m.isHistory
+        && m.turnIndex === pairIndex && String(m.content ?? '').trim() === text;
+      let lost = prev.findIndex((m) => copy(m) && !!m.steering);
+      if (lost === -1) lost = prev.findIndex((m) => copy(m) && !!m.queueError && !m.queueRefused);
+      const rest = lost === -1 ? prev : prev.filter((_, i) => i !== lost);
+      const idx = newMessagesStartIndexRef.current - (lost !== -1 && lost < newMessagesStartIndexRef.current ? 1 : 0);
+      const next = [...rest.slice(0, idx), userMessage, ...rest.slice(idx)];
       newMessagesStartIndexRef.current = idx + 1;
       return next;
     });
