@@ -118,8 +118,10 @@ def _resolve_links(
 
     A link to a directory mirrors that subtree under the link's own path,
     which is how a package publishes the same skills under two vendor
-    directories. Mirrored bytes count against the uncompressed cap like any
-    other member, so a link cannot be used to multiply a tree past it.
+    directories. Mirrored bytes count against the uncompressed cap and
+    mirrored entries against the member cap, like any other member, so a link
+    cannot be used to multiply a tree past either: a chain of directory links
+    doubles at every level, and empty files cost no bytes.
     """
     unresolved: list[tuple[str, str]] = []
     budget = MAX_UNCOMPRESSED_BYTES - sum(len(b) for b in files.values())
@@ -146,6 +148,12 @@ def _resolve_links(
         if not payload:
             unresolved.append((path, links[path]))
             continue
+        if len(files) + len(payload) > MAX_MEMBERS:
+            raise _fatal(
+                f"archive has more than {MAX_MEMBERS} members once its links "
+                "are resolved",
+                code="too_many_members",
+            )
         budget -= sum(len(b) for b in payload.values())
         if budget < 0:
             raise _fatal(

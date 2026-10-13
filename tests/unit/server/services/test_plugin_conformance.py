@@ -1141,6 +1141,25 @@ class TestArchiveLinks:
             validate_package(raw)
         assert any(d.code == "too_large" for d in exc.value.diagnostics)
 
+    def test_mirrored_entries_count_against_the_member_cap(self):
+        """Two links per level to the level below double the tree each time,
+        so sixteen levels of a few hundred bytes would be 131k files, none of
+        them costing a byte against the size cap."""
+        links = {
+            f"d{k:02d}/{side}": (f"../d{k - 1:02d}", False)
+            for k in range(1, 17)
+            for side in "ab"
+        }
+        raw = tar_with_links(
+            {"plugin.json": self.MANIFEST, "d00/f": b""}, links
+        )
+        assert len(raw) < 64 * 1024
+        with pytest.raises(PluginFatal) as exc:
+            validate_package(raw)
+        assert any(
+            d.code == "too_many_members" for d in exc.value.diagnostics
+        )
+
 
 class TestSchemaMessages:
     """What a package author reads when the canonical schema refuses.
