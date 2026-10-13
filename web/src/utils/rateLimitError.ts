@@ -18,7 +18,7 @@ export interface RateLimitErrorInfo {
 
 /** Hints the backend emits for upstream provider failures — each maps to an
  *  i18n-bound bullet the user sees ("check your API key", etc.). Keep in sync
- *  with the ``hints`` list in ``sse_producer.format_error_event``. */
+ *  with the ``hints`` list in ``stream_errors.error_event_data``. */
 export type UpstreamErrorHint =
   | 'api_key'
   | 'model_access'

@@ -817,7 +817,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         : typeof event.max_retries === 'number'
           ? rt.t('chat.autoRetryExhausted')
           : event.error || event.message || 'An error occurred while processing your request.';
-      // Backend (streaming_handler.format_error_event) enriches the event
+      // Backend (stream_errors.error_event_data) enriches the event
       // with ``error_kind``, ``status_code`` and ``hints``. We route the
       // display by kind to avoid showing the same error twice:
       //   - upstream → inline card on the failed assistant turn (part of

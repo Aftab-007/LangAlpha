@@ -9,6 +9,7 @@ import copy
 from typing import Any, Dict, List
 
 from src.config.settings import get_merged_chunk_max_bytes
+from src.utils.stream_coalescing import same_message_stream, tool_chunk_pair
 
 MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT = get_merged_chunk_max_bytes()
 
@@ -51,13 +52,7 @@ class StreamEventAccumulator:
         if not isinstance(prev_data, dict):
             return False
 
-        if incoming.get("content_type") == "reasoning_signal":
-            return False
-        if prev_data.get("content_type") == "reasoning_signal":
-            return False
-
-        merge_keys = ("thread_id", "agent", "id", "role", "content_type", "phase")
-        if any(prev_data.get(k) != incoming.get(k) for k in merge_keys):
+        if not same_message_stream(prev_data, incoming):
             return False
 
         prev_content = prev_data.get("content") or ""
@@ -79,22 +74,13 @@ class StreamEventAccumulator:
         if not isinstance(prev_data, dict):
             return False
 
-        merge_keys = ("thread_id", "agent", "id")
-        if any(prev_data.get(k) != incoming.get(k) for k in merge_keys):
+        pair = tool_chunk_pair(prev_data, incoming)
+        if pair is None:
             return False
+        prev_chunk, incoming_chunk = pair
 
-        prev_chunks = prev_data.get("tool_call_chunks")
-        incoming_chunks = incoming.get("tool_call_chunks")
-        if not (isinstance(prev_chunks, list) and isinstance(incoming_chunks, list)):
-            return False
-        if len(prev_chunks) != 1 or len(incoming_chunks) != 1:
-            return False
-
-        prev_chunk = prev_chunks[0]
-        incoming_chunk = incoming_chunks[0]
-        if not (isinstance(prev_chunk, dict) and isinstance(incoming_chunk, dict)):
-            return False
-
+        # Stricter than the live coalescer, which also joins id-less pieces
+        # into the call that named them.
         prev_call_id = prev_chunk.get("id")
         incoming_call_id = incoming_chunk.get("id")
         if prev_call_id is not None or incoming_call_id is not None:

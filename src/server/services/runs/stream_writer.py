@@ -15,6 +15,7 @@ from src.utils.cache.stream_append import (
     StreamAppendError,
     stream_append_with_retry,
 )
+from src.utils.cache.stream_quota import StreamQuota
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,8 @@ class TransportLostError(RuntimeError):
 
 
 class StreamQuotaExceededError(TransportLostError):
-    """The run produced more events than its replay archive may hold.
+    """The run produced more events, or more bytes, than its replay archive
+    may hold.
 
     A subtype so dashboards can tell a runaway run from a sick Redis: both
     finalize the run, but only one of them is an infrastructure problem.
@@ -60,7 +62,11 @@ class StreamQuotaExceededError(TransportLostError):
 
 
 async def buffer_event(
-    thread_id: str, run_id: str, event: str, *, max_stored_messages: int
+    thread_id: str,
+    run_id: str,
+    event: str,
+    *,
+    quota: StreamQuota,
 ) -> None:
     """Append a workflow event to the per-run Redis Stream.
 
@@ -68,6 +74,9 @@ async def buffer_event(
     replay archive and any attached consumer silently diverge from what
     the model actually produced, so the run must finalize
     ``failed(transport_lost)`` instead of completing with holes.
+
+    ``quota`` is the run's budget, charged here; the caller keeps it,
+    because this module holds no per-run state.
     """
     key = (thread_id, run_id)
     try:
@@ -94,17 +103,33 @@ async def buffer_event(
             "archive would silently diverge"
         )
 
+    # Charged before the write, so a frame that would break the budget never
+    # reaches Redis and the cap bounds what the stream holds.
+    breach = quota.charge(event_id, len(event.encode("utf-8")), label=str(key))
+    if breach == "events":
+        raise StreamQuotaExceededError(
+            f"transport_lost: stream quota exceeded for {key} "
+            f"({event_id}/{quota.max_events} events); finalizing "
+            "instead of silently trimming the replay head"
+        )
+    if breach == "bytes":
+        raise StreamQuotaExceededError(
+            f"transport_lost: stream byte quota exceeded for {key} "
+            f"({quota.bytes}/{quota.max_bytes} bytes); finalizing "
+            "instead of growing a stream nothing can evict"
+        )
+
     # Retention contract: active streams carry NO TTL — a quiet-but-alive run
     # must never lose its stream mid-run. The attach-grace TTL is stamped once,
     # at terminal, by ``append_run_end_event``. MAXLEN is a 2x backstop only:
-    # the quota check below finalizes the run before FIFO trim could ever touch
+    # the quota check above finalizes the run before FIFO trim could ever touch
     # the head, so a served replay never has a silent hole.
     try:
         await stream_append_with_retry(
             cache,
             stream_key(thread_id, run_id),
             event_id=event_id,
-            max_size=max_stored_messages * 2,
+            max_size=quota.maxlen,
             stream_event=event,
             label=str(key),
         )
@@ -114,24 +139,6 @@ async def buffer_event(
         raise TransportLostError(str(exc)) from exc
 
     logger.debug(f"[EventBuffer] Buffered event to Redis: {key} (id={event_id})")
-
-    # The frame's own id is the event count: it is assigned sequentially from 1
-    # per run, and it counts every event the run emitted — including any the
-    # buffer never saw — so gating on it can only ever fire early.
-    if event_id > max_stored_messages:
-        raise StreamQuotaExceededError(
-            f"transport_lost: stream quota exceeded for {key} "
-            f"({event_id}/{max_stored_messages} events); finalizing "
-            "instead of silently trimming the replay head"
-        )
-
-    capacity_threshold = int(max_stored_messages * 0.9)
-    if event_id >= capacity_threshold and (event_id - capacity_threshold) % 1000 == 0:
-        logger.warning(
-            f"[EventBuffer] Buffer near quota for {key}: "
-            f"{event_id}/{max_stored_messages} events. "
-            "At quota the run finalizes error(transport_lost)."
-        )
 
 
 async def append_run_end_event(

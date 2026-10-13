@@ -48,6 +48,7 @@ from ptc_agent.agent.middleware import (
     SteeringMiddleware,
     SubagentSteeringMiddleware,
     ReasoningCompatibilityMiddleware,
+    StreamHeartbeatMiddleware,
 )
 from ptc_agent.agent.middleware.compaction.notes import (
     NotesDueMiddleware,
@@ -779,6 +780,7 @@ class PTCAgent:
                 *shared_middleware,
                 subagent_skill_middleware,
                 image_capture,
+                StreamHeartbeatMiddleware(),
                 compaction,
                 *model_resilience,
                 multimodal_strip,
@@ -940,6 +942,7 @@ class PTCAgent:
                 skill_loader_middleware,
                 *main_only_middleware,
                 image_capture,
+                StreamHeartbeatMiddleware(),
                 main_compaction,
                 *model_resilience,
                 multimodal_strip,

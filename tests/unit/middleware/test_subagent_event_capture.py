@@ -147,10 +147,10 @@ async def test_record_carries_run_stamp(monkeypatch) -> None:
     )
     spilled: list[dict] = []
 
-    async def _capture(t, record):
-        spilled.append(record)
+    async def _capture(t, records):
+        spilled.extend(records)
 
-    monkeypatch.setattr(registry, "_spill_record_to_redis", _capture)
+    monkeypatch.setattr(registry, "_spill_records_to_redis", _capture)
 
     await registry.append_captured_event(task.tool_call_id, _event(0))
     task.spawned_run_id = "run-2"
@@ -452,7 +452,7 @@ async def test_redis_spill_v2_timeout_not_landed_trips_circuit(monkeypatch) -> N
 
 @pytest.mark.asyncio
 async def test_redis_spill_circuit_breaker_short_circuits(monkeypatch) -> None:
-    """Once ``redis_write_failed`` is set, ``_spill_record_to_redis`` returns
+    """Once ``redis_write_failed`` is set, ``_spill_records_to_redis`` returns
     immediately on every subsequent append for that task — no cache fetch,
     no pipeline call."""
     fake_cache = MagicMock()
@@ -673,9 +673,10 @@ async def test_sentinel_writes_xadd_no_seq_bump(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_quota_breach_opens_the_spill_circuit(monkeypatch) -> None:
-    """A write that lands PAST the per-agent quota flips redis_write_failed —
-    the abort loop + terminal escalation then finalize error(transport_lost)
-    instead of the 2x MAXLEN backstop silently trimming the served head.
+    """A record PAST the per-agent quota is refused before it is written and
+    flips redis_write_failed — the abort loop + terminal escalation then
+    finalize error(transport_lost) instead of the 2x MAXLEN backstop silently
+    trimming the served head.
 
     The gate reads the record's own seq now that the counter hash is gone; the
     seq is assigned by the same append that writes the frame, so it counts at
@@ -703,10 +704,11 @@ async def test_quota_breach_opens_the_spill_circuit(monkeypatch) -> None:
 
     await registry.append_captured_event(task.tool_call_id, _event(1))
     assert task.redis_write_failed is True
+    assert fake_cache.pipelined_event_buffer.await_count == 0
 
     # Circuit open: further appends never reach the pipeline.
     await registry.append_captured_event(task.tool_call_id, _event(2))
-    assert fake_cache.pipelined_event_buffer.await_count == 1
+    assert fake_cache.pipelined_event_buffer.await_count == 0
 
 
 @pytest.mark.asyncio

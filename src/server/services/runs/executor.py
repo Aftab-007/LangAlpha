@@ -30,6 +30,7 @@ from src.config.settings import (
     get_cleanup_interval,
     is_intermediate_storage_enabled,
     get_max_stored_messages_per_agent,
+    get_max_stream_bytes_per_run,
     get_event_storage_backend,
     get_redis_ttl_workflow_events,
     get_shutdown_timeout,
@@ -47,6 +48,7 @@ from src.server.services.runs.finalization import FinalizeVerdict
 from src.server.services.runs.stream_writer import TransportLostError
 from src.server.services.runs.teardown import StopTeardown
 from src.server.dependencies.usage_limits import release_burst_slot
+from src.utils.cache.stream_quota import StreamQuota
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,10 @@ class LocalRunExecution:
 
     graph: Optional[Any] = None
 
+    # The run's event stream budget, made at its first append. Only the run's
+    # own consume loop charges it, one awaited append at a time.
+    stream_quota: Optional[StreamQuota] = None
+
 
 # Type alias for the key used throughout the manager.
 TaskKey = tuple[str, str]
@@ -134,6 +140,7 @@ class LocalRunExecutor:
         self.cleanup_interval = get_cleanup_interval()
         self.enable_storage = is_intermediate_storage_enabled()
         self.max_stored_messages = get_max_stored_messages_per_agent()
+        self.max_stream_bytes = get_max_stream_bytes_per_run()
 
         self.event_storage_backend = get_event_storage_backend()
         self.redis_event_ttl = get_redis_ttl_workflow_events()
@@ -829,15 +836,20 @@ class LocalRunExecutor:
         """
         key = (thread_id, run_id)
         async with self.task_lock:
-            if key not in self.executions:
-                return
+            info = self.executions.get(key)
+        if info is None:
+            return
 
         if self.event_storage_backend != "redis":
             return  # memory backend: no stream transport to lose
 
+        if info.stream_quota is None:
+            info.stream_quota = StreamQuota(
+                max_events=self.max_stored_messages,
+                max_bytes=self.max_stream_bytes,
+            )
         await stream_writer.buffer_event(
-            thread_id, run_id, event,
-            max_stored_messages=self.max_stored_messages,
+            thread_id, run_id, event, quota=info.stream_quota
         )
 
     async def append_run_end_event(
