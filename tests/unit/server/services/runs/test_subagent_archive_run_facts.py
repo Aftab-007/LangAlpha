@@ -21,10 +21,15 @@ _URL_A = "https://cdn.example.com/a.png"
 _URL_B = "https://cdn.example.com/b.png"
 
 
-def _text(agent: str | None, content: str) -> dict:
+def _text(agent: str | None, content: str, message_id: str | None = None) -> dict:
     return {
         "event": "message_chunk",
-        "data": {"agent": agent, "content_type": "text", "content": content},
+        "data": {
+            "agent": agent,
+            "id": message_id,
+            "content_type": "text",
+            "content": content,
+        },
     }
 
 
@@ -65,6 +70,21 @@ async def test_each_lane_records_only_the_images_it_referenced():
         ("thread-1", "resp-1", "k2", {_B: _URL_B}),
     ]
     reader.append_ui_record.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_reference_split_across_streamed_pieces_is_recorded():
+    """A message streams in pieces that can split a reference anywhere;
+    pieces of different messages never join into one."""
+    events = [
+        _text("task:k1", "see ![a](/home/wor", "m1"),
+        _text("task:k1", "kspace/a.png) and ![b](/home/", "m1"),
+        _text("task:k1", "workspace/b.png)", "m2"),
+    ]
+
+    _, record, _ = await _persist(events, {_A: _URL_A, _B: _URL_B})
+
+    record.assert_awaited_once_with("thread-1", "resp-1", "k1", {_A: _URL_A})
 
 
 @pytest.mark.asyncio

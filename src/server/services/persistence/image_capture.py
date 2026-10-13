@@ -26,18 +26,23 @@ logger = logging.getLogger(__name__)
 
 
 def sandbox_image_paths(events: list[dict]) -> set[str]:
-    """Every sandbox image path the events' text references."""
-    image_paths: set[str] = set()
+    """Every sandbox image path the events' text references.
+
+    A message's text streams in pieces that can split a reference anywhere,
+    so each message's pieces are joined before they are read.
+    """
+    texts: dict[tuple, list[str]] = {}
     for evt in events:
         if evt.get("event") != "message_chunk":
             continue
-        data = evt.get("data", {})
-        if data.get("content_type") != "text":
+        data = evt.get("data") or {}
+        content = data.get("content")
+        if data.get("content_type") != "text" or not isinstance(content, str):
             continue
-        content = data.get("content", "")
-        if not isinstance(content, str):
-            continue
-        for match in IMAGE_MD_RE.finditer(content):
+        texts.setdefault((data.get("agent"), data.get("id")), []).append(content)
+    image_paths: set[str] = set()
+    for pieces in texts.values():
+        for match in IMAGE_MD_RE.finditer("".join(pieces)):
             if is_sandbox_image_path(match.group(2)):
                 image_paths.add(match.group(2))
     return image_paths
