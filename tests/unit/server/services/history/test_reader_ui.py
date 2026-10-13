@@ -209,6 +209,48 @@ async def test_append_ui_record_anchors_to_the_tip_it_read(monkeypatch):
     assert written.parent_config["configurable"]["checkpoint_id"] == stale_id
 
 
+async def test_append_ui_record_reads_and_writes_through_the_given_saver(monkeypatch):
+    # A run's record goes through the run's saver, its writer guard's session
+    # when fenced, so a lost lock fails the append. The reader's pooled saver
+    # sees neither the tip read nor the write.
+    pooled, run_saver = InMemorySaver(), InMemorySaver()
+    await _run_turns(_echo_graph(run_saver), 1)
+    reader = CheckpointHistoryReader(pooled)
+    for method in ("aget_tuple", "aput", "aput_writes"):
+        monkeypatch.setattr(
+            pooled, method, AsyncMock(side_effect=AssertionError(f"pooled {method}"))
+        )
+    advance = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "src.server.database.conversation.threads_write."
+        "advance_thread_checkpoint_id",
+        advance,
+    )
+    root_cfg = {"configurable": {"thread_id": THREAD}}
+    tip_id = (await run_saver.aget_tuple(root_cfg)).config["configurable"][
+        "checkpoint_id"
+    ]
+
+    await reader.append_ui_record(
+        THREAD,
+        "image_capture",
+        {"path_to_url": {"a.png": "https://x/a"}},
+        checkpointer=run_saver,
+    )
+
+    written = await run_saver.aget_tuple(root_cfg)
+    assert written.parent_config["configurable"]["checkpoint_id"] == tip_id
+    assert [r["name"] for r in written.checkpoint["channel_values"]["ui"]] == [
+        "image_capture"
+    ]
+    assert advance.await_args.kwargs == {
+        "from_checkpoint_id": tip_id,
+        "to_checkpoint_id": written.config["configurable"]["checkpoint_id"],
+    }
+    # Callers without a run saver keep the pooled one.
+    assert reader._updater.checkpointer is pooled
+
+
 async def test_task_ui_snapshot_readable_through_reader():
     # Cross-layer contract: the workflow driver persists its terminal ui
     # snapshot middleware-side (through the run's own checkpointer, so the

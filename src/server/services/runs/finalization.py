@@ -204,12 +204,13 @@ async def assemble_finalize_artifacts(
         per_call_records = None
         tool_usage = None
 
-    # Pre-finalize artifact hook (sandbox image capture → storage URL
-    # rewrite) must run before sse_events are archived.
+    # Pre-finalize artifact hook: the sandbox images the turn's saved text
+    # still names, captured while the sandbox is the turn's.
     artifact_hook = metadata.get("artifact_hook")
-    if status == "completed" and artifact_hook and sse_events:
+    image_paths = getattr(handler, "saved_image_paths", None)
+    if status == "completed" and artifact_hook and image_paths:
         try:
-            await artifact_hook(sse_events)
+            await artifact_hook(image_paths)
         except Exception:
             logger.warning(
                 f"[Finalize] artifact hook failed for {key}",

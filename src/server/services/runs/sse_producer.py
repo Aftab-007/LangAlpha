@@ -15,6 +15,9 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, cast
 import json_repair
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
+from langgraph.types import Overwrite
+
+from ptc_agent.agent.middleware.image_capture import collect_sandbox_paths
 
 from src.server.utils.content_normalizer import (
     normalize_text_content,
@@ -175,8 +178,12 @@ class RunSSEProducer:
         # How long the main agent thought, for replay.
         self._reasoning = ReasoningDurations()
         # The main agent's provenance records as emitted, for the finalize to
-        # write without reading them back out of the event archive.
+        # write.
         self.provenance_events: List[Dict[str, Any]] = []
+        # The sandbox image paths each message the main graph saved still
+        # names, by message id: a later write of the message replaces its
+        # entry.
+        self._saved_image_paths: Dict[str, Set[str]] = {}
 
         # Track reasoning block index per agent to detect block transitions
         # When index changes (e.g., 0→1), a separator (\n\n) is needed between blocks
@@ -682,6 +689,7 @@ class RunSSEProducer:
                 if stream_mode == "updates":
                     if not agent_from_stream and isinstance(event_data, dict):
                         self._reasoning.node_updated(event_data)
+                        self._note_saved_images(event_data)
                     continue
 
                 # Process message chunks (stream_mode="messages")
@@ -1585,6 +1593,27 @@ class RunSSEProducer:
                 if not is_compaction:
                     self._reasoning.closed(message_id, data["elapsed_ms"])
         return self._build_sse_event(event_type, data)
+
+    def _note_saved_images(self, update: dict) -> None:
+        for output in update.values():
+            if not isinstance(output, dict):
+                continue
+            messages = output.get("messages")
+            if isinstance(messages, Overwrite):
+                continue  # the window trim, restating earlier turns' messages
+            if not isinstance(messages, (list, tuple)):
+                messages = [messages]
+            for message in messages:
+                if isinstance(message, AIMessage) and message.id:
+                    self._saved_image_paths[message.id] = collect_sandbox_paths(
+                        [message]
+                    )
+
+    @property
+    def saved_image_paths(self) -> Set[str]:
+        """The sandbox images the main agent's saved messages name, which
+        the model-time capture left as paths."""
+        return set().union(*self._saved_image_paths.values())
 
     def record(self, stop_events: Optional[List[Dict[str, Any]]] = None) -> ProducerRecord:
         """What the finalize stores beside the status that the checkpoint

@@ -4,7 +4,7 @@
 response to storage URLs *before* the message enters state, so checkpointed
 truth carries durable URLs and replay needs no sandbox or rewrite map. Keys
 are content-addressed (sha256 of the bytes), so any re-capture of the same
-image — including the post-stream sse_events safety net — converges on the
+image, including the late capture when the turn settles, converges on the
 identical URL with no coordination.
 """
 
@@ -116,7 +116,8 @@ def rewrite_image_paths(text: str, url_map: dict[str, str]) -> str:
     return IMAGE_MD_RE.sub(replacer, text)
 
 
-def _collect_sandbox_paths(messages: list[Any]) -> set[str]:
+def collect_sandbox_paths(messages: list[Any]) -> set[str]:
+    """The sandbox image paths the AI messages' text names."""
     paths: set[str] = set()
     for text in _iter_text_segments(messages):
         for match in IMAGE_MD_RE.finditer(text):
@@ -208,7 +209,7 @@ class ImageCaptureMiddleware(AgentMiddleware):
         sandbox = getattr(self._session, "sandbox", None)
         if sandbox is None or not is_storage_enabled():
             return None
-        paths = _collect_sandbox_paths(messages)
+        paths = collect_sandbox_paths(messages)
         if not paths:
             return None
 

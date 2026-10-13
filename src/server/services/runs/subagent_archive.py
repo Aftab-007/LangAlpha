@@ -249,9 +249,8 @@ async def _capture_lane_images(
     thread_id: str,
     workspace_id: str,
 ) -> None:
-    """Hook B: capture the images the lanes reference and rewrite them in the
-    events, recording each lane's path-to-URL map on the runs the turn
-    launched for it.
+    """Hook B: capture the images the lanes reference, recording each lane's
+    path-to-URL map on the runs the turn launched for it.
 
     Not on the thread's checkpoint, as the main turn's capture is: these
     lanes settle after their turn did, and a record appended now would land
@@ -269,10 +268,12 @@ async def _capture_lane_images(
         agent = data.get("agent") if isinstance(data, dict) else None
         if isinstance(agent, str) and agent.startswith("task:"):
             by_task.setdefault(agent.removeprefix("task:"), []).append(event)
-    # Read before the capture: it rewrites the paths it resolves.
     paths = {task_id: sandbox_image_paths(lane) for task_id, lane in by_task.items()}
     path_to_url = await capture_images(
-        events, sandbox, thread_id=thread_id, workspace_id=workspace_id
+        set().union(*paths.values()),
+        sandbox,
+        thread_id=thread_id,
+        workspace_id=workspace_id,
     )
     for task_id, lane_paths in paths.items():
         images = {p: path_to_url[p] for p in lane_paths if p in path_to_url}

@@ -334,28 +334,38 @@ class CheckpointHistoryReader:
         ]
 
     async def append_ui_record(
-        self, thread_id: str, name: str, props: dict[str, Any]
+        self,
+        thread_id: str,
+        name: str,
+        props: dict[str, Any],
+        *,
+        checkpointer: Any = None,
     ) -> None:
         """Append a ``UIMessage``-shaped record to the thread's root ``ui`` channel.
 
+        ``checkpointer`` is the saver of the run the record belongs to, and
+        the tip read and the write both go through it. A fenced run's saver
+        is its writer guard's session, so a run that lost its lock fails the
+        append instead of writing onto a thread whose next turn may have
+        started. Without one, the reader's pooled saver is used.
+
         Skips the write when the thread tip is interrupted: ``aupdate_state``
         attributes the write to this reader graph's node and clears the real
-        agent graph's pending interrupt, silently breaking HITL resume. The
-        record is only a legacy fallback (new turns carry rewritten image
-        paths in the checkpointed message itself), so dropping it on a live
-        interrupt is safe.
+        agent graph's pending interrupt, silently breaking HITL resume. A
+        broken resume costs more than the record, whose loss leaves the
+        turn's late-captured images as paths in replay.
 
-        The image-capture hook runs after the turn finalized, so the append
-        sits beyond the recorded branch tip where the replay walk cannot see
-        it: it is written at the tip read here and the recorded tip
-        CAS-advanced onto it (``update_at_commit``). A concurrent turn or
+        The image-capture hook appends before its run finalizes, and the
+        finalize commits the append with the turn, since the commit reads
+        past update checkpoints. The append is written at the tip read here,
+        and the recorded tip CAS-advanced onto it (``update_at_commit``) for
+        a write that lands after its turn committed. A concurrent turn or
         branch switch that moved the tip first leaves a dead-branch record,
         and a thread with no checkpoint gets none.
         """
+        saver = self._checkpointer if checkpointer is None else checkpointer
         try:
-            tip = await self._checkpointer.aget_tuple(
-                {"configurable": {"thread_id": thread_id}}
-            )
+            tip = await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
         except Exception as e:
             # Fail closed: an unverifiable tip could hide a live interrupt.
             logger.warning(
@@ -384,7 +394,14 @@ class CheckpointHistoryReader:
         built_on = (
             (tip.config.get("configurable") or {}).get("checkpoint_id") if tip else None
         )
-        await update_at_commit(self._updater, thread_id, built_on, {"ui": [record]})
+        # ``update_at_commit`` reads and writes through its graph's saver, so
+        # the one-node graph is rebound to the caller's: a copy, not a recompile.
+        updater = (
+            self._updater
+            if checkpointer is None
+            else self._updater.copy({"checkpointer": checkpointer})
+        )
+        await update_at_commit(updater, thread_id, built_on, {"ui": [record]})
 
     async def aget_state(self, thread_id: str, checkpoint_id: str | None = None):
         """The thread's state at ``checkpoint_id``, or at its latest checkpoint."""

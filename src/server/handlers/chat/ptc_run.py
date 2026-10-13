@@ -171,6 +171,35 @@ async def _resolve_origin_meta(request, thread_id: str) -> dict:
     }
 
 
+def _artifact_hook(
+    session, *, thread_id: str, project: ProjectContext | None, checkpointer
+):
+    """The finalize's pre-terminal hook: upload the sandbox images the turn's
+    saved messages still name and record their URLs on its checkpoint.
+
+    ``checkpointer`` is bound at the run's start rather than read off its
+    handle when the hook fires: it is the saver the turn's graph wrote
+    through, so a hook that outlived the run's guard meets a saver that
+    refuses the write, not the pooled one the handle falls back to.
+    """
+
+    async def capture_artifacts(image_paths):
+        if session and session.sandbox:
+            from src.server.services.persistence.image_capture import (
+                capture_and_record_images,
+            )
+
+            await capture_and_record_images(
+                image_paths,
+                session.sandbox,
+                thread_id=thread_id,
+                project=project,
+                checkpointer=checkpointer,
+            )
+
+    return capture_artifacts
+
+
 async def astream_ptc_workflow(
     request: ChatRequest,
     thread_id: str,
@@ -886,21 +915,14 @@ async def astream_ptc_workflow(
         # already ran there (gated on ``needs_startup``) so steering routed
         # against live state.
 
-        # Pre-finalize artifact hook: capture sandbox images -> upload to
-        # cloud storage -> rewrite storage URLs in the events about to be
-        # archived. Runs inside _finalize_run, before the terminal txn.
-        async def capture_artifacts(sse_events):
-            if session and session.sandbox:
-                from src.server.services.persistence.image_capture import (
-                    capture_and_rewrite_images,
-                )
-
-                await capture_and_rewrite_images(
-                    sse_events,
-                    session.sandbox,
-                    thread_id=thread_id,
-                    project=project,
-                )
+        # Runs inside _finalize_run, before the terminal txn, while the run
+        # still holds its guard.
+        capture_artifacts = _artifact_hook(
+            session,
+            thread_id=thread_id,
+            project=project,
+            checkpointer=run_handle.checkpointer,
+        )
 
         # Post-finalize side effects only (v4): the durable terminal write —
         # response row, usage, projection — already happened in BTM's
