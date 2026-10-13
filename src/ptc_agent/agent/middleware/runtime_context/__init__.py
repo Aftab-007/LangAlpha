@@ -85,6 +85,7 @@ from .turn import (
     SUBAGENTS_ROW_KIND,
     TURN_ROW_KIND,
     TURN_SCHEMA_VERSION,
+    TimeUpToolStopMiddleware,
     TurnContextMiddleware,
 )
 from .turn_context import TurnContext
@@ -130,6 +131,7 @@ __all__ = [
     "SourceRead",
     "Surface",
     "TailEnvelopeMiddleware",
+    "TimeUpToolStopMiddleware",
     "TurnContext",
     "TurnContextMiddleware",
     "advance_epoch",

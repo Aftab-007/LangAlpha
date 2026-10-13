@@ -1,5 +1,6 @@
 """Middleware for providing subagents to an agent via a `Task` tool."""
 
+import time
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Annotated, Any, NotRequired, TypedDict, cast
@@ -26,6 +27,9 @@ from ptc_agent.agent.middleware.background_subagent.middleware import (
     current_background_token_tracker,
     current_background_tool_call_id,
 )
+from ptc_agent.agent.middleware.background_subagent.outcomes import (
+    SubagentTimeLimitError,
+)
 from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTaskRegistry,
     TransportLostError,
@@ -34,11 +38,25 @@ from ptc_agent.agent.middleware.background_subagent.token_forwarder import (
     _SubagentTokenForwarder,
 )
 from ptc_agent.agent.middleware._utils import append_to_system_message
+from ptc_agent.agent.middleware.runtime_context.turn import (
+    TURN_DEADLINE_KEY,
+    TURN_TIME_LIMIT_KEY,
+)
 from ptc_agent.agent.state import DeltaAgentState
 from src.llms.llm import narrow_prompt_cache_key
+from src.utils.concurrency import aclose_within
 from src.utils.stream_coalescing import HEARTBEAT_EVENT_TYPE
 
 logger = structlog.get_logger(__name__)
+
+# How long past its clock a run may go before it is stopped. The ask for its
+# answer and the tool stop come well before the end, so this only lets an
+# answer already being written land.
+SUBAGENT_STOP_GRACE_S = 60.0
+
+# How long a stopped run waits on its graph's cleanup, as the turn's own stop
+# does: LangGraph awaits its cancelled node tasks with no bound.
+SUBAGENT_CLOSE_TIMEOUT_S = 30.0
 
 
 
@@ -246,6 +264,33 @@ def _without_stream_tee(config: dict) -> dict:
     }
 
 
+def _with_own_deadline(config: dict, limit: float | None = None) -> dict:
+    """Give the run its own wall clock in place of the launcher's.
+
+    A subagent outlives the turn that started it, so the turn's deadline does
+    not bound it, and with no step cap nothing else did. It gets the turn's
+    length from its own start, read the same way, and the same wrap-up before
+    the end: one row asking for its answer, then its tools stop. ``limit``
+    shortens it for a run something else kills sooner (a workflow child), so
+    the wrap-up comes before that kill rather than after it.
+    """
+    from src.config.settings import get_workflow_timeout
+
+    configurable = dict(config.get("configurable") or {})
+    configurable.pop(TURN_DEADLINE_KEY, None)
+    configurable.pop(TURN_TIME_LIMIT_KEY, None)
+    bounds = [
+        bound
+        for bound in (get_workflow_timeout(), limit)
+        if bound is not None and bound > 0
+    ]
+    if bounds:
+        clock = min(bounds)
+        configurable[TURN_DEADLINE_KEY] = time.time() + clock
+        configurable[TURN_TIME_LIMIT_KEY] = clock
+    return {**config, "configurable": configurable}
+
+
 @contextmanager
 def _detached_from_launcher() -> Iterator[None]:
     """Run the enclosed subagent as its own run, not a child of its launcher.
@@ -277,6 +322,7 @@ async def arun_subagent_streaming(
     *,
     registry: BackgroundTaskRegistry | None,
     tool_call_id: str | None = None,
+    time_limit: float | None = None,
 ) -> dict:
     """Drive the subagent through ``astream`` with combined ``values``,
     ``messages``, and ``custom`` modes; return the final state.
@@ -291,7 +337,7 @@ async def arun_subagent_streaming(
 
     ``tool_call_id`` identifies the BackgroundTask for event forwarding;
     when omitted it falls back to the ContextVar set by the Task-tool
-    interception path.
+    interception path. ``time_limit`` caps the run's own clock.
     """
     last_state: dict | None = None
     forwarder: _SubagentTokenForwarder | None = None
@@ -314,68 +360,98 @@ async def arun_subagent_streaming(
     # carries checkpoint coordinates (``ensure_config`` then discards the
     # ambient one), the ambient one when it does not, so each is stripped.
     config = _without_stream_tee(config)
+    config = _with_own_deadline(config, time_limit)
+    # The clock's own end, checked on every event: a model call beats about
+    # ten times a second, so a run is stopped within the grace of it unless a
+    # tool runs silent past it, which that tool's own timeout bounds. Checked
+    # here rather than under an ``asyncio.timeout``, whose cancel could land in
+    # this loop's own spill and tear the task's event stream.
+    configurable = config.get("configurable") or {}
+    deadline = configurable.get(TURN_DEADLINE_KEY)
+    stop_at = (
+        deadline + SUBAGENT_STOP_GRACE_S
+        if isinstance(deadline, int | float)
+        else None
+    )
     try:
         with _detached_from_launcher():
-            async for mode, data in subagent.astream(
+            stream = subagent.astream(
                 state, config, stream_mode=["values", "messages", "custom"]
-            ):
-                # Root symmetry (retention contract): once the spill circuit
-                # opens, every further frame widens the hole in the replay
-                # archive — abort the graph instead of completing a run
-                # whose stream is torn.
-                if bg_task is not None and bg_task.redis_write_failed:
-                    raise TransportLostError(
-                        "transport_lost: subagent event spill failed; "
-                        "aborting so the run finalizes instead of "
-                        "completing with a torn stream"
-                    )
-                if bg_task is not None:
-                    try:
-                        await registry.flush_held_delta(bg_task, due_only=True)
-                    except Exception as exc:
-                        logger.debug("Subagent delta flush failed", error=str(exc))
-                # A beat only wakes the flush above.
-                if (
-                    mode == "custom"
-                    and isinstance(data, dict)
-                    and data.get("type") == HEARTBEAT_EVENT_TYPE
-                ):
-                    continue
-                if mode == "values":
-                    last_state = data
-                elif mode == "messages" and forwarder is not None:
-                    # ``messages`` data is ``(message_chunk, metadata)``.
-                    # The metadata carries ``langgraph_node`` which lets the
-                    # forwarder drop tool-internal LLM chunks. Duck-typed (no
-                    # isinstance) so mocks and any future BaseMessage subclasses
-                    # pass.
-                    if isinstance(data, tuple):
-                        # Symmetric guards: production LangGraph emits
-                        # 2-tuples for ``messages`` mode, but defending
-                        # both indices keeps an upstream contract change
-                        # from raising IndexError out of the iterator.
-                        chunk = data[0] if len(data) > 0 else None
-                        chunk_meta = data[1] if len(data) > 1 else None
-                    else:
-                        chunk = data
-                        chunk_meta = None
-                    if chunk is not None and hasattr(chunk, "content"):
+            )
+            try:
+                async for mode, data in stream:
+                    if stop_at is not None and time.time() >= stop_at:
+                        raise SubagentTimeLimitError(
+                            f"Timed out after "
+                            f"{int(configurable.get(TURN_TIME_LIMIT_KEY) or 0)}s"
+                        )
+                    # Root symmetry (retention contract): once the spill circuit
+                    # opens, every further frame widens the hole in the replay
+                    # archive — abort the graph instead of completing a run
+                    # whose stream is torn.
+                    if bg_task is not None and bg_task.redis_write_failed:
+                        raise TransportLostError(
+                            "transport_lost: subagent event spill failed; "
+                            "aborting so the run finalizes instead of "
+                            "completing with a torn stream"
+                        )
+                    if bg_task is not None:
                         try:
-                            await forwarder.forward(chunk, chunk_meta)
+                            await registry.flush_held_delta(bg_task, due_only=True)
                         except Exception as exc:
-                            # Token forwarding must never break the subagent.
+                            logger.debug("Subagent delta flush failed", error=str(exc))
+                    # A beat only wakes the flush above.
+                    if (
+                        mode == "custom"
+                        and isinstance(data, dict)
+                        and data.get("type") == HEARTBEAT_EVENT_TYPE
+                    ):
+                        continue
+                    if mode == "values":
+                        last_state = data
+                    elif mode == "messages" and forwarder is not None:
+                        # ``messages`` data is ``(message_chunk, metadata)``.
+                        # The metadata carries ``langgraph_node`` which lets the
+                        # forwarder drop tool-internal LLM chunks. Duck-typed (no
+                        # isinstance) so mocks and any future BaseMessage subclasses
+                        # pass.
+                        if isinstance(data, tuple):
+                            # Symmetric guards: production LangGraph emits
+                            # 2-tuples for ``messages`` mode, but defending
+                            # both indices keeps an upstream contract change
+                            # from raising IndexError out of the iterator.
+                            chunk = data[0] if len(data) > 0 else None
+                            chunk_meta = data[1] if len(data) > 1 else None
+                        else:
+                            chunk = data
+                            chunk_meta = None
+                        if chunk is not None and hasattr(chunk, "content"):
+                            try:
+                                await forwarder.forward(chunk, chunk_meta)
+                            except Exception as exc:
+                                # Token forwarding must never break the subagent.
+                                logger.debug(
+                                    "Subagent token forwarding failed",
+                                    error=str(exc),
+                                )
+                    elif mode == "custom" and forwarder is not None:
+                        try:
+                            await forwarder.forward_custom(data)
+                        except Exception as exc:
                             logger.debug(
-                                "Subagent token forwarding failed",
+                                "Subagent custom-event forwarding failed",
                                 error=str(exc),
                             )
-                elif mode == "custom" and forwarder is not None:
-                    try:
-                        await forwarder.forward_custom(data)
-                    except Exception as exc:
-                        logger.debug(
-                            "Subagent custom-event forwarding failed",
-                            error=str(exc),
-                        )
+            finally:
+                # Leaving the loop early leaves the graph suspended mid-step,
+                # its model call or tools running on until the garbage
+                # collector closes it. Closed here, within a bound, a stop
+                # ends the work it stops before the run settles.
+                await aclose_within(
+                    stream,
+                    SUBAGENT_CLOSE_TIMEOUT_S,
+                    label=f"the subagent stream for {tool_call_id}",
+                )
     except Exception as exc:
         # Every subagent run is nested, so LangGraph raises an interrupt here
         # instead of ending the stream. Task HITL is unsupported, and this is
@@ -434,9 +510,19 @@ def return_command_with_state_update(result: dict, tool_call_id: str) -> Command
     state_update = {
         k: v for k, v in result.items() if k not in _EXCLUDED_STATE_KEYS
     }
-    # Strip trailing whitespace to prevent API errors with Anthropic
-    message_text = (
-        result["messages"][-1].text.rstrip() if result["messages"][-1].text else ""
+    # The answer is the last thing the subagent said, which is not always the
+    # last message: a run the repeat guard ends on refused calls stops on the
+    # refusal, and handing that back would pass the harness's words off as the
+    # answer. Read the way the durable result is (``resolve_task_result_text``),
+    # so TaskOutput gives the same answer from either. Trailing whitespace is
+    # stripped to prevent API errors with Anthropic.
+    message_text = next(
+        (
+            message.text.rstrip()
+            for message in reversed(result["messages"])
+            if getattr(message, "type", None) == "ai" and message.text.strip()
+        ),
+        "",
     )
     return Command(
         update={

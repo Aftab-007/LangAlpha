@@ -87,6 +87,7 @@ async def run_subagent_graph(
     tool_call_id: str,
     base_configurable: dict[str, Any] | None = None,
     task_run_id: str | None = None,
+    time_limit: float | None = None,
 ) -> Command:
     """Invoke a compiled subagent graph directly and return the result Command.
 
@@ -127,7 +128,12 @@ async def run_subagent_graph(
 
     state = {"messages": [HumanMessage(content=prompt)]}
     result = await arun_subagent_streaming(
-        subagent_graph, state, config, registry=registry, tool_call_id=tool_call_id
+        subagent_graph,
+        state,
+        config,
+        registry=registry,
+        tool_call_id=tool_call_id,
+        time_limit=time_limit,
     )
     return return_command_with_state_update(result, tool_call_id)
 
@@ -144,13 +150,15 @@ async def dispatch_background_subagent(
     owner_task_id: str | None = None,
     tool_call_id: str | None = None,
     base_configurable: dict[str, Any] | None = None,
+    time_limit: float | None = None,
 ) -> BackgroundTask:
     """Register and spawn a background subagent without a Task tool call.
 
     ``run_id`` stamps ``spawned_run_id`` (collector fencing + record run
     stamps); ``owner_task_id`` marks the child as workflow-owned so
     agent-facing aggregation (wait-all, notifications, TaskOutput's
-    all-tasks view) skips it. Raises ``ValueError`` on an unknown
+    all-tasks view) skips it; ``time_limit`` caps the child's own clock at
+    the time its owner gives it. Raises ``ValueError`` on an unknown
     ``subagent_type`` and ``SpawnError`` when admission was rejected
     or the writer could not be spawned.
     """
@@ -218,6 +226,7 @@ async def dispatch_background_subagent(
                 tool_call_id=task.tool_call_id,
                 base_configurable=base_configurable,
                 task_run_id=task.task_run_id,
+                time_limit=time_limit,
             )
 
         await spawn_task_writer(
@@ -279,6 +288,7 @@ class SubagentDispatcher:
         run_id: str | None,
         owner_task_id: str | None = None,
         base_configurable: dict[str, Any] | None = None,
+        time_limit: float | None = None,
     ) -> BackgroundTask:
         return await dispatch_background_subagent(
             self.middleware,
@@ -290,4 +300,5 @@ class SubagentDispatcher:
             run_id=run_id,
             owner_task_id=owner_task_id,
             base_configurable=base_configurable,
+            time_limit=time_limit,
         )

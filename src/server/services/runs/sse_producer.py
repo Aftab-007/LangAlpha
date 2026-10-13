@@ -18,6 +18,11 @@ from langgraph.types import Overwrite
 
 from ptc_agent.agent.middleware.image_capture import collect_sandbox_paths
 
+from ptc_agent.agent.middleware.runtime_context.turn import (
+    TURN_DEADLINE_KEY,
+    TURN_TIME_LIMIT_KEY,
+)
+
 from src.server.utils.content_normalizer import (
     normalize_text_content,
     is_thinking_status_signal,
@@ -411,6 +416,18 @@ class RunSSEProducer:
                     result, "tools", {"langgraph_node": "tools"}
                 ):
                     yield event
+
+            # The agent reads when this stop lands, so it can answer before it
+            # rather than be cut off by it.
+            if self.workflow_timeout > 0:
+                config = {
+                    **config,
+                    "configurable": {
+                        **(config.get("configurable") or {}),
+                        TURN_DEADLINE_KEY: workflow_start_time + self.workflow_timeout,
+                        TURN_TIME_LIMIT_KEY: self.workflow_timeout,
+                    },
+                }
 
             # Create graph stream. durability="sync" awaits each checkpoint
             # put before the next step — necessary but NOT sufficient for

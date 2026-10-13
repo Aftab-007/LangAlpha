@@ -483,6 +483,7 @@ class WorkflowDriver:
                     run_id=self.spec.run_task.spawned_run_id,
                     owner_task_id=self.wf_task_id,
                     base_configurable=self.spec.base_configurable,
+                    time_limit=self._child_time_limit(),
                 )
                 await self._emitter.emit(
                     "child_started",
@@ -537,6 +538,19 @@ class WorkflowDriver:
         )
         await self._write_json(f"children/{seq:03d}.json", run.to_record())
         return run
+
+    def _child_time_limit(self) -> float:
+        """The clock a child starts on: its own cap, or what is left of the
+        run's when that ends first.
+
+        The driver kills a child at whichever comes first, so a child on the
+        turn's longer clock was asked for its answer after it was gone. Read
+        when it is dispatched, past the concurrency gate, since a child that
+        waited there has that much less of the run left.
+        """
+        caps = self.spec.caps
+        started = self._started_at if self._started_at is not None else time.time()
+        return min(caps.child_timeout, caps.run_timeout - (time.time() - started))
 
     async def _await_child(self, run: _ChildRun) -> None:
         """Await one dispatched child and settle how it ended.

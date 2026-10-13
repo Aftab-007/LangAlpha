@@ -45,6 +45,7 @@ from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.agent.middleware.runtime_context import (
     BaselineSources,
     MemoryTierSource,
+    TimeUpToolStopMiddleware,
     TurnContext,
 )
 from ptc_agent.agent.state import DeltaAgentState
@@ -431,7 +432,10 @@ class FlashAgent:
         # middlewares has to sit is on ContextMiddleware;
         # ReasoningCompatibilityMiddleware sits inside model resilience so it
         # sanitizes against the post-fallback model, not the requested one.
+        # The tool stop is outermost, so a call refused in the last minutes of
+        # the turn reaches none of the tool wrappers.
         middleware = [
+            TimeUpToolStopMiddleware(),
             *shared_middleware,
             *main_middleware,
             context.turn,

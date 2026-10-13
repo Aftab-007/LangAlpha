@@ -23,7 +23,9 @@ TerminalStatus = Literal[
 
 Deliberately not the durable ledger's vocabulary: this is one task's local
 view, the ledger's terminal CAS is the durable truth, and ``run_executor``
-maps between them (a timeout, for instance, is a cancel to the ledger). The
+maps between them (a timeout, for instance, is a cancel to the ledger when the
+workflow driver kills a child, and an error when a run outruns its own clock,
+so that one still reports back). The
 ledger's ``interrupted`` has no in-memory counterpart — an interrupt leaves
 the task pending, and ``never_started`` has none either — a run that never
 spawned either has no row or already settled its own as ``error``.

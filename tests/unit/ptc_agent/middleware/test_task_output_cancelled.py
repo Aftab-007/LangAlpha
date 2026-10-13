@@ -20,6 +20,7 @@ from ptc_agent.agent.middleware.background_subagent.registry import (
 )
 from ptc_agent.agent.middleware.background_subagent.outcomes import (
     CREDIT_STOP_ERROR_TYPE,
+    SubagentTimeLimitError,
 )
 from ptc_agent.agent.middleware.background_subagent.tools import (
     _delivered_result_text,
@@ -330,6 +331,28 @@ async def test_an_ordinary_cancel_still_reads_as_unresumable():
 
     assert "cannot be resumed" in result
     assert 'Task(action="resume"' not in result
+
+
+@pytest.mark.asyncio
+async def test_a_run_stopped_at_its_clock_reads_as_a_timeout_from_the_ledger():
+    """The ledger spells a run stopped at its own clock 'error', so without
+    the error type every worker but the one holding the task would call it a
+    failure and suggest the same task again."""
+    run = {
+        "status": "error",
+        "task_run_id": "run-1",
+        "failure": {
+            "error_type": SubagentTimeLimitError.__name__,
+            "error": "Timed out after 120s",
+        },
+    }
+    tool = create_task_output_tool(_ledger_middleware(run))
+
+    result, _ = await tool.coroutine(task_id="k7Xm2p")
+
+    assert "ran past its time limit" in result
+    assert "Narrow the task or split it" in result
+    assert "failed and produced no result" not in result
 
 
 # ---------------------------------------------------------------------------

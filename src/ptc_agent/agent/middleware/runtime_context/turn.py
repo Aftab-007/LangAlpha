@@ -24,17 +24,33 @@ Which rules those are depends on who renders the reply. langalpha has a line of
 its own for the surfaces it draws itself; for any other surface the client that
 posted the turn sends its own text (``ChatRequest.surface_rules``) and that text
 is the paragraph, because the client is what has to display the answer.
+
+This module also owns the turn's end. The server stops a turn at its wall
+clock, and a stop is an error the user reads as nothing found, however much
+the agent had: the agent cannot see the clock, so it cannot plan around it.
+So when the end is near the agent gets one row asking for its answer, and in
+the last minutes its tools stop running, which leaves the next call an answer
+to give. The server's stop stays as the backstop for a call that never
+returns. A subagent outlives the turn that started it, so it runs on a clock
+of its own, set when its run starts. The row rides a hook this middleware
+already runs and the stop is a tool wrapper of its own
+(``TimeUpToolStopMiddleware``), so neither costs an extra step per round.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from langchain.agents.middleware.types import AgentMiddleware
+from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
+from langchain_core.messages import ToolMessage
+from langgraph.config import get_config
+from langgraph.types import Command
 
+from ptc_agent.agent.limits import REFUSAL_KEY
 from ptc_agent.agent.middleware.runtime_context import clock
 from ptc_agent.agent.middleware.runtime_context.durable import (
     DurableUpdate,
@@ -64,13 +80,53 @@ NOTES_DUE_ROW_KIND = "notes_due"
 #: ``update_row.md.j2`` hardcodes the same way.
 NOTES_CHECK_IN_ROW_KIND = "notes_check_in"
 
+#: Row kind of the ask to answer before the turn's time runs out, which
+#: ``update_row.md.j2`` hardcodes the same way.
+TIME_UP_ROW_KIND = "turn_time_up"
+
+#: Row kind that takes back a time-up ask once a later run of the thread is on
+#: a new clock, which ``update_row.md.j2`` hardcodes the same way.
+TIME_UP_WITHDRAWN_ROW_KIND = "turn_time_up_withdrawn"
+
 #: Rows that are no change under the baseline: their writers state them again
 #: once a compaction takes them from view (the notes reminder before the next
-#: summary, the check-in after the next run of tool calls), so a rebuild does
-#: not count them and a summary does not carry them.
+#: summary, the check-in after the next run of tool calls, the time-up ask on
+#: the next call), so a rebuild does not count them and a summary does not
+#: carry them. The withdrawal of a time-up ask answers only that ask, which a
+#: summary does not carry either, so it has nothing to answer once both are
+#: out of view.
 NON_CHANGE_ROW_KINDS = frozenset(
-    {TURN_ROW_KIND, SUBAGENTS_ROW_KIND, NOTES_DUE_ROW_KIND, NOTES_CHECK_IN_ROW_KIND}
+    {
+        TURN_ROW_KIND,
+        SUBAGENTS_ROW_KIND,
+        NOTES_DUE_ROW_KIND,
+        NOTES_CHECK_IN_ROW_KIND,
+        TIME_UP_ROW_KIND,
+        TIME_UP_WITHDRAWN_ROW_KIND,
+    }
 )
+
+#: The configurable key a run's wall-clock end rides under, in epoch seconds:
+#: the server's stop for a turn, ``arun_subagent_streaming``'s for a subagent.
+#: Absent for a run nothing times (a test, thread maintenance).
+TURN_DEADLINE_KEY = "turn_deadline"
+#: The run's whole wall clock in seconds, beside its end.
+TURN_TIME_LIMIT_KEY = "turn_time_limit"
+
+# How long before the end the agent is asked for its answer, and when its tools
+# stop. Tunable: late in a long turn one call of a slow model at a large
+# context has taken over six minutes, so the ask leaves room for two or three.
+# A clock under an hour scales both down, to its last third and sixth, so a run
+# timed in minutes still gets to work before it is asked to finish.
+TIME_UP_ASK_BEFORE = timedelta(minutes=20)
+TIME_UP_TOOLS_STOP_BEFORE = timedelta(minutes=10)
+
+TIME_UP_REFUSAL = (
+    "Not run: this turn is out of time. Answer the user now with what you have, "
+    "say what is left undone, and that they can reply to have you continue."
+)
+#: The ``refusal`` tag on a call the tool stop refused.
+TIME_UP_REFUSAL_TAG = "time_up"
 
 # The key a manual follow-up in an automation's thread states under when it
 # has no surface of its own: the handoff is a rule, and a rule needs a key so
@@ -88,6 +144,61 @@ TURN_SCHEMA_VERSION = 1
 # model can act on; only a real absence is worth a line. Tunable: the threshold
 # is a judgement call, not a measured constant.
 ELAPSED_MIN_GAP = timedelta(minutes=15)
+
+
+def _minutes(span: timedelta) -> str:
+    """``span`` to the nearest minute, never "0 minutes" for time that is left."""
+    n = max(round(span.total_seconds() / 60), 1)
+    return f"{n} minute" if n == 1 else f"{n} minutes"
+
+
+def _run_clock() -> tuple[datetime, timedelta, timedelta] | None:
+    """When this run's time is up, and how long before that the agent is
+    asked to finish and its tools stop; None when nothing times it."""
+    try:
+        configurable = get_config().get("configurable") or {}
+    except RuntimeError:  # outside a runnable context
+        return None
+    end = configurable.get(TURN_DEADLINE_KEY)
+    if not isinstance(end, int | float):
+        return None
+    ask = TIME_UP_ASK_BEFORE
+    limit = configurable.get(TURN_TIME_LIMIT_KEY)
+    if isinstance(limit, int | float) and limit > 0:
+        ask = min(ask, timedelta(seconds=limit) / 3)
+    stop = min(TIME_UP_TOOLS_STOP_BEFORE, ask / 2)
+    return datetime.fromtimestamp(end, tz=UTC), ask, stop
+
+
+class TimeUpToolStopMiddleware(AgentMiddleware):
+    """Refuses every tool call once the run is inside its tool stop.
+
+    It goes outside every other middleware that wraps tool calls, because
+    whatever wraps it has already acted on the call by the time the refusal
+    comes back: the background interceptor has spawned the subagent a refused
+    ``Task`` asked for, the file-op middleware has streamed a refused ``Write``
+    as done, and the repeat guard has counted the call. Out here a refused call
+    reaches none of them. The ``refusal`` tag tells the harness's own refusal
+    from a tool that failed.
+    """
+
+    # Async only, as ``SubagentSwitchMiddleware``'s is: the async agent never
+    # calls the sync hook.
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
+    ) -> ToolMessage | Command:
+        clock = _run_clock()
+        if clock is None or clock[0] - datetime.now(tz=UTC) > clock[2]:
+            return await handler(request)
+        return ToolMessage(
+            content=TIME_UP_REFUSAL,
+            tool_call_id=request.tool_call.get("id"),
+            name=request.tool_call.get("name", ""),
+            status="error",
+            additional_kwargs={REFUSAL_KEY: TIME_UP_REFUSAL_TAG},
+        )
 
 
 class TurnContextMiddleware(AgentMiddleware):
@@ -289,13 +400,60 @@ class TurnContextMiddleware(AgentMiddleware):
         # exception, and every subagent run enters through ``abefore_agent``),
         # so a first model call on an instance that never opened a turn is that
         # resume: the row is written here, after the resumed tool's result.
+        # The resume is also a new run on a new clock, so the call reads the
+        # time-up rows against it as every later call does, rather than acting
+        # on an ask that ran out with the interrupted run.
         if self._opened:
-            return None
-        return await self.abefore_agent(state, runtime, resumed=True)
+            return self._time_up(state)
+        opened = await self.abefore_agent(state, runtime, resumed=True)
+        ending = self._time_up(state)
+        if opened is None or ending is None:
+            return opened or ending
+        return {"messages": [*opened["messages"], *ending["messages"]]}
 
     def before_model(self, state: Any, runtime: Any = None) -> dict[str, Any] | None:
         # Sync fallback: the async agent won't call this but the protocol requires it.
         return None
+
+    # -- the turn's end -------------------------------------------------------
+
+    def _time_up(self, state: Any) -> dict[str, Any] | None:
+        """One ``turn_time_up`` row once the end is near, and again only if a
+        compaction took it from view.
+
+        A row nothing rewrites outlives its clock: the next turn of the thread
+        runs on a new one, while the ask in view still says time is up and the
+        tools have stopped. So the first call of a run whose clock is not the
+        one the last ask in view was about takes the ask back, once.
+        """
+        clock = _run_clock()
+        if clock is None:
+            return None
+        deadline, ask_before, stop_before = clock
+        now = datetime.now(tz=UTC)
+        stamp = deadline.isoformat()
+        if deadline - now > ask_before:
+            return _withdrawn(state, stamp, now)
+        if last_stated(state, TIME_UP_ROW_KIND, "deadline") == stamp:
+            return None
+        left = _minutes(deadline - now)
+        # A long tool call can carry the run past the ask into the stop window,
+        # so the first row may land after the tools have already stopped.
+        if deadline - now <= stop_before:
+            text = f"It ends in {left}, and your tools have stopped running."
+        else:
+            text = (
+                f"It ends in {left}, and your tools stop running "
+                f"{_minutes(stop_before)} before that."
+            )
+        row = DurableUpdate(
+            kind=TIME_UP_ROW_KIND,
+            schema_version=TURN_SCHEMA_VERSION,
+            text=text,
+            provenance={"source": "harness", "deadline": stamp},
+            created_at=now,
+        )
+        return {"messages": [build_update_message(row)]}
 
     # -- rendering ----------------------------------------------------------
 
@@ -405,6 +563,33 @@ class TurnContextMiddleware(AgentMiddleware):
         if self._last_turn_at is None or now - self._last_turn_at < ELAPSED_MIN_GAP:
             return None, 0
         return clock.elapsed_summary(market, self._last_turn_at, now)
+
+
+def _withdrawn(state: Any, stamp: str, now: datetime) -> dict[str, Any] | None:
+    """A ``turn_time_up_withdrawn`` row when the last time-up row in view was
+    about another clock and nothing has taken it back yet."""
+    last = next(
+        (
+            row
+            for row in reversed(rows_in_view(state))
+            if row.kind in (TIME_UP_ROW_KIND, TIME_UP_WITHDRAWN_ROW_KIND)
+        ),
+        None,
+    )
+    if (
+        last is None
+        or last.kind != TIME_UP_ROW_KIND
+        or last.provenance.get("deadline") == stamp
+    ):
+        return None
+    row = DurableUpdate(
+        kind=TIME_UP_WITHDRAWN_ROW_KIND,
+        schema_version=TURN_SCHEMA_VERSION,
+        text="",
+        provenance={"source": "harness", "deadline": stamp},
+        created_at=now,
+    )
+    return {"messages": [build_update_message(row)]}
 
 
 # -- the delivery rules -----------------------------------------------------

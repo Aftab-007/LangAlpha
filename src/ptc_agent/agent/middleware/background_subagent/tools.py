@@ -13,7 +13,10 @@ import structlog
 from langchain_core.tools import StructuredTool
 
 from ptc_agent.agent.limits import pending_read
-from ptc_agent.agent.middleware.background_subagent.outcomes import is_credit_stop
+from ptc_agent.agent.middleware.background_subagent.outcomes import (
+    is_credit_stop,
+    is_time_limit_stop,
+)
 from ptc_agent.agent.middleware.background_subagent.task import bare_task_id
 from src.server.contracts.status import REPORT_BACK_STATUSES
 
@@ -249,6 +252,14 @@ async def _compose_missing_reply(registry, task_id: str, run: dict | None) -> st
     if archived:
         return _archived_reply(task_id, archived)
     failure = run.get("failure") if isinstance(run, dict) else None
+    if is_time_limit_stop(failure):
+        # The local notice's advice, so it does not hang on which worker
+        # answers: a run that outran its clock wants a narrower retry.
+        return (
+            f"Task-{task_id} ran past its time limit and was stopped; no "
+            f"result was produced. Narrow the task or split it before "
+            f"re-dispatching."
+        )
     detail = ""
     if isinstance(failure, dict) and failure.get("error"):
         detail = f" Error: {str(failure['error'])[:300]}"
