@@ -2486,6 +2486,11 @@ class TestJoiningARunningMachine(_Base):
         with ExitStack() as stack:
             for name, new in patches:
                 stack.enter_context(patch.object(manager, name, new=new))
+            stack.enter_context(
+                patch(
+                    f"{_LIFECYCLE}.stamp_running_computer", AsyncMock(return_value=True)
+                )
+            )
             yield
 
     @pytest.mark.asyncio

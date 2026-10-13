@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
@@ -515,7 +516,7 @@ class MachineLifecycleMixin:
         return True
 
     async def _claim_machine_for_stop(
-        self, computer_id: str
+        self, computer_id: str, *, unchanged_since: datetime | None = None
     ) -> Optional[Dict[str, Any]]:
         """Whoever wins running -> stopping owns the teardown; losing is not an error.
 
@@ -539,12 +540,15 @@ class MachineLifecycleMixin:
             )
 
         claimed = await update_computer_status(
-            computer_id, ComputerStatus.STOPPING, expected=ComputerStatus.RUNNING
+            computer_id,
+            ComputerStatus.STOPPING,
+            expected=ComputerStatus.RUNNING,
+            updated_before=unchanged_since,
         )
         if claimed is None:
             logger.info(
-                f"Computer {computer_id} left 'running' while its stop was being "
-                "claimed; leaving the transition to whoever moved it"
+                f"Computer {computer_id} left 'running', or was used, while its "
+                "stop was being claimed; leaving it to whoever moved it"
             )
         return claimed
 

@@ -28,6 +28,7 @@ from src.observability import (
 
 from src.server.database.computer import (
     get_computer,
+    stamp_running_computer,
     try_bind_computer_provider_ref,
     update_computer_activity,
     update_computer_status,
@@ -56,6 +57,10 @@ from src.server.services.workspace_status_pubsub import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class _MachineLeftRunning(Exception):
+    """A stop claimed the machine after the attach read it as running."""
 
 
 class SessionLifecycleMixin:
@@ -278,15 +283,21 @@ class SessionLifecycleMixin:
                         pending_start_wait = True
 
                 elif status == "running":
-                    session, did_init = await self._attach_running_session(
-                        binding,
-                        workspace,
-                        workspace_user_id,
-                        on_state_observed,
-                        _mark,
-                    )
-                    if not did_init:
-                        needs_sync = True
+                    try:
+                        session, did_init = await self._attach_running_session(
+                            binding,
+                            workspace,
+                            workspace_user_id,
+                            on_state_observed,
+                            _mark,
+                        )
+                    except _MachineLeftRunning:
+                        # A stop won the row after it was read here; wait for
+                        # it and start again, as a read of 'stopping' does.
+                        pending_stop_wait = True
+                    else:
+                        if not did_init:
+                            needs_sync = True
 
                 elif status == "stopping":
                     # Settling takes seconds and may need a provider probe, so
@@ -529,11 +540,20 @@ class SessionLifecycleMixin:
         ws_done = await self._wait_for_start_completion(workspace_id)
         wait_status = ws_done["status"]
         if wait_status == "running":
-            async with self._observed_lock(
-                binding.computer_id, "workspace.session.attach"
-            ):
-                session, _ = await self._attach_running_session(
-                    binding, ws_done, workspace_user_id, on_state_observed, mark
+            try:
+                async with self._observed_lock(
+                    binding.computer_id, "workspace.session.attach"
+                ):
+                    session, _ = await self._attach_running_session(
+                        binding, ws_done, workspace_user_id, on_state_observed, mark
+                    )
+            except _MachineLeftRunning:
+                return await self._await_stop_and_retry(
+                    binding,
+                    user_id=user_id,
+                    workspace_user_id=workspace_user_id,
+                    on_state_observed=on_state_observed,
+                    attempt=attempt,
                 )
             return session
         if wait_status == "stopped" and attempt == 0:
@@ -1054,6 +1074,18 @@ class SessionLifecycleMixin:
                 session = self._session_handle(binding, core_config)
 
         if not session._initialized:
+            # The reconnect starts a sandbox its provider stopped, as a start
+            # does, so the idle clock restarts here as it does there. Without
+            # it, a machine opened after a long gap and not yet typed in reads
+            # idle since that gap, and the idle sweep stops it under the user.
+            # Stamped ahead of the reconnect, which can take minutes on an
+            # archived sandbox, and only while the row reads running, so of
+            # this attach and a stop claimed on another worker exactly one goes
+            # ahead. That makes the stamp the fence, so a write that fails
+            # fails the attach before anything is built rather than letting it
+            # reconnect unfenced.
+            if not await stamp_running_computer(computer_id):
+                raise _MachineLeftRunning(computer_id)
             try:
                 await session.initialize(
                     sandbox_id=sandbox_id,
@@ -1463,13 +1495,20 @@ class SessionLifecycleMixin:
             raise
 
     async def _stop_machine(
-        self, computer_id: str, *, workspace_id: str | None = None
+        self,
+        computer_id: str,
+        *,
+        workspace_id: str | None = None,
+        unchanged_since: datetime | None = None,
     ) -> Dict[str, Any]:
         """Stop the machine, which takes every project on it down with it.
 
         The machine's own row is the authority and the CAS is the mutex, so a
         project shadow that lags cannot refuse the stop forever. workspace_id
-        only names the project that asked, for the mirror and the logs."""
+        only names the project that asked, for the mirror and the logs.
+        unchanged_since is the idle sweep's read of the row: a machine opened
+        after that read has been stamped, and is no longer the idle one the
+        sweep judged."""
         async with self._observed_lock(computer_id, "computer.stop"):
             # Stopping one project removes every sibling's sandbox; gate across
             # the machine.
@@ -1484,7 +1523,9 @@ class SessionLifecycleMixin:
             # only disagree with it, and did: the pre-check raised on 'stopping'
             # where the claim answers "nothing to stop", so the idle reaper hit
             # its 3-strike backoff on a machine that needed no work.
-            claimed = await self._claim_machine_for_stop(computer_id)
+            claimed = await self._claim_machine_for_stop(
+                computer_id, unchanged_since=unchanged_since
+            )
             if claimed is None:
                 return await self._stop_result(computer_id, workspace_id)
             binding = self._binding_from_computer(workspace_id or "", claimed)

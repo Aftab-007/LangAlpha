@@ -421,7 +421,9 @@ class WorkspaceEntitlementsMixin:
                 f"(user {user_id}); disabling always-on"
             )
             try:
-                await self.set_computer_always_on(computer_id, False)
+                # The disable writes the row, and the idle loop stops only the
+                # row as it last read it, so it takes this write in too.
+                computer.update(await self.set_computer_always_on(computer_id, False))
             except Exception as e:
                 logger.error(f"Error disabling always-on for {computer_id}: {e}")
                 # Disable failed — keep it exempt this tick rather than reap a

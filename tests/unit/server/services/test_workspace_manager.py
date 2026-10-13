@@ -1741,21 +1741,24 @@ class TestCleanupIdle:
     )
     async def test_an_idle_machine_is_stopped_once(self, mock_computers):
         """The machine is addressed directly, so the count of projects on it
-        cannot turn into a count of stops that would fight each other."""
+        cannot turn into a count of stops that would fight each other. The stop
+        is of the row as the sweep read it: one opened since has been stamped
+        and is no longer the idle machine the sweep judged."""
         computer_id = str(uuid.uuid4())
-        mock_computers.return_value = [
-            _make_computer(
-                computer_id=computer_id,
-                last_activity_at=datetime.now(timezone.utc) - timedelta(hours=2),
-            )
-        ]
+        row = _make_computer(
+            computer_id=computer_id,
+            last_activity_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        )
+        mock_computers.return_value = [row]
 
         wm = WorkspaceManager(_make_config(), idle_timeout=1800)
         with patch.object(wm, "_stop_machine", new_callable=AsyncMock) as mock_stop:
             count = await wm.cleanup_idle_workspaces()
 
         assert count == 1
-        mock_stop.assert_awaited_once_with(computer_id)
+        mock_stop.assert_awaited_once_with(
+            computer_id, unchanged_since=row["updated_at"]
+        )
         mock_computers.assert_awaited_once_with("running", limit=1000, offset=0)
 
     @pytest.mark.asyncio
@@ -1796,7 +1799,9 @@ class TestCleanupIdle:
             call("running", limit=1000, offset=0),
             call("running", limit=1000, offset=1000),
         ]
-        stop.assert_awaited_once_with(str(eligible["computer_id"]))
+        stop.assert_awaited_once_with(
+            str(eligible["computer_id"]), unchanged_since=eligible["updated_at"]
+        )
 
     @pytest.mark.asyncio
     @patch(
@@ -1821,15 +1826,28 @@ class TestCleanupIdle:
         "src.server.services.workspace_manager.get_computers_by_status",
         new_callable=AsyncMock,
     )
-    async def test_a_never_used_machine_is_left_alone(self, mock_computers):
-        mock_computers.return_value = [_make_computer(last_activity_at=None)]
+    @pytest.mark.parametrize(("row_age", "stopped"), [(timedelta(hours=2), 1), (timedelta(0), 0)])
+    async def test_an_unstamped_machine_is_idle_since_its_row_last_changed(
+        self, mock_computers, row_age, stopped
+    ):
+        """Skipping a machine with no stamp left its row 'running' for good once
+        the provider stopped the sandbox, since nothing else moves the row."""
+        computer_id = str(uuid.uuid4())
+        row = _make_computer(
+            computer_id=computer_id,
+            last_activity_at=None,
+            updated_at=datetime.now(timezone.utc) - row_age,
+        )
+        mock_computers.return_value = [row]
 
         wm = WorkspaceManager(_make_config(), idle_timeout=1800)
         with patch.object(wm, "_stop_machine", new_callable=AsyncMock) as mock_stop:
             count = await wm.cleanup_idle_workspaces()
 
-        assert count == 0
-        mock_stop.assert_not_awaited()
+        assert count == stopped
+        assert mock_stop.await_args_list == [
+            call(computer_id, unchanged_since=row["updated_at"])
+        ] * stopped
 
     @pytest.mark.asyncio
     @patch(
@@ -1911,26 +1929,31 @@ class TestCleanupIdle:
         """Always-on is the machine's flag, so losing it clears it on the
         computer and the now-normal machine is reaped in the same tick."""
         computer_id = str(uuid.uuid4())
-        mock_computers.return_value = [
-            _make_computer(
-                computer_id=computer_id,
-                is_always_on=True,
-                last_activity_at=datetime.now(timezone.utc) - timedelta(hours=2),
-            )
-        ]
+        row = _make_computer(
+            computer_id=computer_id,
+            is_always_on=True,
+            last_activity_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            updated_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        )
+        mock_computers.return_value = [row]
         mock_lost.return_value = True
+        # The disable writes the row, which moves updated_at; a stop claimed
+        # against the row as first read would lose to it and wait a tick.
+        disabled = {**row, "is_always_on": False, "updated_at": datetime.now(timezone.utc)}
 
         wm = WorkspaceManager(_make_config(), idle_timeout=1800)
         with (
             patch.object(wm, "_stop_machine", new_callable=AsyncMock) as mock_stop,
             patch.object(
-                wm, "set_computer_always_on", new_callable=AsyncMock
+                wm, "set_computer_always_on", AsyncMock(return_value=disabled)
             ) as mock_disable,
         ):
             count = await wm.cleanup_idle_workspaces()
 
         mock_disable.assert_awaited_once_with(computer_id, False)
-        mock_stop.assert_awaited_once_with(computer_id)
+        mock_stop.assert_awaited_once_with(
+            computer_id, unchanged_since=disabled["updated_at"]
+        )
         assert count == 1
 
     @pytest.mark.asyncio
@@ -1961,7 +1984,7 @@ class TestCleanupIdle:
         with (
             patch.object(wm, "_stop_machine", new_callable=AsyncMock) as mock_stop,
             patch.object(
-                wm, "set_computer_always_on", new_callable=AsyncMock
+                wm, "set_computer_always_on", AsyncMock(return_value={})
             ) as mock_disable,
         ):
             count = await wm.cleanup_idle_workspaces()
@@ -2002,7 +2025,7 @@ class TestCleanupIdle:
         with (
             patch.object(wm, "_stop_machine", new_callable=AsyncMock),
             patch.object(
-                wm, "set_computer_always_on", new_callable=AsyncMock
+                wm, "set_computer_always_on", AsyncMock(return_value={})
             ) as mock_disable,
         ):
             await wm.cleanup_idle_workspaces()
@@ -3104,6 +3127,7 @@ class TestSandboxRecovery:
     @cm_patch("SessionManager")
     @patch(f"{_LIFECYCLE}.update_workspace_status", new_callable=AsyncMock)
     @cm_patch("update_workspace_activity")
+    @patch(f"{_LIFECYCLE}.stamp_running_computer", AsyncMock(return_value=True))
     async def test_running_reconnect_sandbox_gone_recovers(
         self, mock_activity, mock_status, mock_session_mgr, mock_get_ws
     ):
@@ -3327,8 +3351,9 @@ class TestOnStateObservedForwarding:
     @cm_patch("db_get_workspace")
     @cm_patch("SessionManager")
     @cm_patch("update_workspace_activity")
+    @patch(f"{_LIFECYCLE}.stamp_running_computer", new_callable=AsyncMock)
     async def test_running_path_forwards_callback_to_initialize(
-        self, mock_activity, mock_session_mgr, mock_get_ws
+        self, _mock_stamp, mock_activity, mock_session_mgr, mock_get_ws
     ):
         """status=running + no cache → session.initialize(..., on_state_observed=sentinel)."""
         manager = self._make_manager()

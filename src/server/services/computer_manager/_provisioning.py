@@ -18,7 +18,7 @@ from ptc_agent.core.paths import WorkspaceLayout
 from ptc_agent.core.project_context import ProjectContext
 from ptc_agent.core.sandbox import assets as sandbox_assets
 from ptc_agent.core.sandbox.migration import LayoutMigrationError
-from ptc_agent.core.sandbox.runtime import SandboxGoneError
+from ptc_agent.core.sandbox.runtime import RuntimeState, SandboxGoneError
 from ptc_agent.core.session import Session, SessionManager
 
 from src.server.database.computer import (
@@ -811,13 +811,36 @@ class ProvisioningMixin:
                 },
             )
         except Exception as exc:
-            if not self._is_sandbox_gone(exc, binding):
+            if self._is_sandbox_gone(exc, binding):
+                outcome = "already gone; nothing to tear down"
+            elif not delete and await self._sandbox_held_down(sandbox_id, binding):
+                # The provider's own idle stop or archive got there first, and
+                # an archived sandbox refuses a stop as not stoppable. The
+                # session path's stop shrugs this off the same way.
+                outcome = "already down at its provider; nothing to stop"
+            else:
                 raise
             logger.info(
-                f"Detached sandbox {sandbox_id} of computer {computer_id} is "
-                f"already gone; nothing to tear down",
+                f"Detached sandbox {sandbox_id} of computer {computer_id} "
+                f"is {outcome}",
                 extra={"computer_id": computer_id, "sandbox_id": sandbox_id},
             )
+
+    async def _sandbox_held_down(
+        self, sandbox_id: str, binding: ComputerBinding
+    ) -> bool:
+        """Whether the provider holds the sandbox stopped or archived.
+
+        An errored sandbox is not: a stop of it still fails, and the failed
+        stop's reconcile settles the row for the next start to recover it."""
+        try:
+            async with self._detached_runtime(sandbox_id, binding=binding) as runtime:
+                return await runtime.get_state() in (
+                    RuntimeState.STOPPED,
+                    RuntimeState.ARCHIVED,
+                )
+        except Exception:  # noqa: BLE001 - an unreadable state is not down
+            return False
 
     async def _restore_files(
         self,
