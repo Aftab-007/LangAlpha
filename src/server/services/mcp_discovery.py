@@ -40,8 +40,9 @@ logger = logging.getLogger(__name__)
 # server one tool past the cap loses whichever capability it happened to
 # enumerate last. moomoo publishes 88 tools, and the old cap of 64 silently
 # took its entire paper-trading suite along with news, insider and short
-# interest data, none of which anything on screen could explain.
-MAX_TOOLS_PER_SERVER = 128
+# interest data, none of which anything on screen could explain. Alpha Vantage
+# publishes 133, and 128 cost it congressional trading and its own tool index.
+MAX_TOOLS_PER_SERVER = 200
 MAX_SCHEMA_CHARS_PER_SERVER = 400_000
 
 
