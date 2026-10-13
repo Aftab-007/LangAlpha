@@ -54,20 +54,14 @@ async def record_lane_images(
 ) -> None:
     """Record a lane's captured images on the runs the turn launched for it,
     then re-project that turn, whose stored lines were keyed on the facts
-    before these. Best effort: images that fail to land only leave replay
-    showing the sandbox paths.
+    before these.
+
+    Raises on a failed write: once the archive retires the lane's capture
+    stream, this map is the only record of where its images went.
     """
-    try:
-        recorded = await facts_db.append_lane_images(
-            thread_id, response_id, task_id, images
-        )
-    except Exception:
-        logger.warning(
-            f"[subagent_coordinator] lane images not recorded for task "
-            f"{task_id} of run {response_id}",
-            exc_info=True,
-        )
-        return
+    recorded = await facts_db.append_lane_images(
+        thread_id, response_id, task_id, images
+    )
     if recorded:
         _refresh_launching_turn(thread_id, response_id)
 

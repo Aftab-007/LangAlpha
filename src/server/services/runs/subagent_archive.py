@@ -153,17 +153,18 @@ async def persist_collected_events(
     workspace_id: str,
     sandbox=None,
 ) -> bool:
-    """Record the lanes ``events`` hold on the turn: their images, and their
-    provenance for the tool calls each task's checkpoints saved.
+    """Record the lanes ``events`` hold on the turn: where their images were
+    captured to, and their provenance for the tool calls each task's
+    checkpoints saved.
 
-    Returns True once the provenance landed; callers must not retire the
-    Redis capture streams on False, since they are the only remaining source
-    of it.
+    Returns True once both landed; callers must not retire the Redis capture
+    streams on False, since they are the only remaining source of either.
     """
+    images: dict[str, dict[str, str]] = {}
     if sandbox:
         try:
-            await _capture_lane_images(
-                events, sandbox, response_id, thread_id, workspace_id
+            images = await _capture_lane_images(
+                events, sandbox, thread_id, workspace_id
             )
         except Exception:
             logger.warning(
@@ -174,11 +175,14 @@ async def persist_collected_events(
     if not lanes:
         return True
     from src.server.services.history.committed import saved_lane_provenance
+    from src.server.services.subagent_run_coordinator import record_lane_images
 
     # One bounded retry: a transiently failed write must not cost the lanes
-    # their provenance. The write replaces each lane's rows whole, so a
-    # repeat never duplicates them. A failed checkpoint read is no failure
-    # here: that lane's sources are written unchecked.
+    # their images or provenance. Images merge into the runs' facts and
+    # provenance replaces each lane's rows whole, so a repeat never
+    # duplicates them. A failed checkpoint read is no failure here: that
+    # lane's sources are written unchecked. Provenance goes first, so images
+    # that keep failing still leave the lanes their sources.
     for attempt in (1, 2):
         try:
             # A subagent that failed streamed what it fetched in its last
@@ -186,13 +190,17 @@ async def persist_collected_events(
             provenance = await saved_lane_provenance(
                 thread_id, events, log_tag="[SubagentCollector]"
             )
-            if await replace_lane_provenance(response_id, provenance, lanes):
-                logger.info(
-                    f"[SubagentCollector] Recorded {len(provenance)} provenance "
-                    f"entries for {len(lanes)} lanes, response_id={response_id}"
+            if not await replace_lane_provenance(response_id, provenance, lanes):
+                raise RuntimeError(f"no response row for {response_id}")
+            for task_id, lane_images in images.items():
+                await record_lane_images(
+                    thread_id, response_id, task_id, lane_images
                 )
-                return True
-            raise RuntimeError(f"no response row for {response_id}")
+            logger.info(
+                f"[SubagentCollector] Recorded {len(provenance)} provenance "
+                f"entries for {len(lanes)} lanes, response_id={response_id}"
+            )
+            return True
         except Exception as e:
             if attempt == 1:
                 await asyncio.sleep(2.0)
@@ -219,12 +227,11 @@ def _task_lanes(events: list[dict]) -> dict[str, str]:
 async def _capture_lane_images(
     events: list[dict],
     sandbox,
-    response_id: str,
     thread_id: str,
     workspace_id: str,
-) -> None:
-    """Hook B: capture the images the lanes reference, recording each lane's
-    path-to-URL map on the runs the turn launched for it.
+) -> dict[str, dict[str, str]]:
+    """Hook B: capture the images the lanes reference; each lane's
+    path-to-URL map, by task id, for the runs the turn launched for it.
 
     Not on the turn's response row with the main lane's map: these lanes
     settle after that row did.
@@ -233,7 +240,6 @@ async def _capture_lane_images(
         capture_images,
         sandbox_image_paths,
     )
-    from src.server.services.subagent_run_coordinator import record_lane_images
 
     by_task: dict[str, list[dict]] = {}
     for event in events:
@@ -248,10 +254,12 @@ async def _capture_lane_images(
         thread_id=thread_id,
         workspace_id=workspace_id,
     )
+    out: dict[str, dict[str, str]] = {}
     for task_id, lane_paths in paths.items():
         images = {p: path_to_url[p] for p in lane_paths if p in path_to_url}
         if images:
-            await record_lane_images(thread_id, response_id, task_id, images)
+            out[task_id] = images
+    return out
 
 
 @dataclass
