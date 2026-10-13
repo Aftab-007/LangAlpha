@@ -303,9 +303,14 @@ class WorkspaceManager(ComputerManager):
             ):
                 continue
 
-            last_activity = computer.get("last_activity_at")
+            # A machine nothing has stamped, such as one a migration carried
+            # over, has been idle since its row last changed. Skipping it left
+            # the row 'running' for good once the provider stopped the sandbox:
+            # short of the user stopping it, nothing else moves a running row.
+            last_activity = computer.get("last_activity_at") or computer.get(
+                "updated_at"
+            )
             if not last_activity:
-                # Never used, skip
                 continue
 
             # Handle timezone-aware comparison
@@ -331,7 +336,9 @@ class WorkspaceManager(ComputerManager):
             )
 
             try:
-                await self._stop_machine(computer_id)
+                await self._stop_machine(
+                    computer_id, unchanged_since=computer.get("updated_at")
+                )
                 stopped_count += 1
                 if machine is not None:
                     machine.idle_reap_failures = 0

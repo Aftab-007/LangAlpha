@@ -18,6 +18,7 @@ it consults has to be the machine's.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager, contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -382,6 +383,29 @@ class TestStopEntersThroughTheMachine(_Base):
 
         assert row["workspace_id"] == ws_id
         status.assert_not_awaited()
+        manager._detached_sandbox_teardown.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_idle_sweeps_stop_loses_to_a_machine_used_since_its_read(self):
+        """The sweep judged the machine idle from its read of the row. Opening
+        it since stamps the row, which moves updated_at, so the claim loses and
+        the sandbox is left for the next sweep to judge again."""
+        read_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        manager = self._manager()
+        manager._detached_sandbox_teardown = AsyncMock()
+        manager._machine_has_active_tasks = AsyncMock(return_value=False)
+        status = AsyncMock(return_value=None)
+        machine = AsyncMock(return_value=_computer(shadowed=[]))
+        with (
+            patch(f"{_LIFECYCLE}.get_computer", machine),
+            patch(f"{_MACHINES}.get_computer", machine),
+            _patch_stop_status(status),
+        ):
+            await manager._stop_machine(COMPUTER_ID, unchanged_since=read_at)
+
+        status.assert_awaited_once()
+        assert status.await_args.kwargs["expected"] == "running"
+        assert status.await_args.kwargs["updated_before"] == read_at
         manager._detached_sandbox_teardown.assert_not_awaited()
 
     @pytest.mark.asyncio

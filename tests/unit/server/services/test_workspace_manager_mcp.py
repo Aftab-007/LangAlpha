@@ -1214,6 +1214,15 @@ class TestDiscoveryKickSeesCachedSession:
     def teardown_method(self):
         WorkspaceManager.reset_instance()
 
+    @pytest.fixture(autouse=True)
+    def _no_activity_stamp(self):
+        """A cold attach stamps the machine's activity, a DB write."""
+        with patch(
+            "src.server.services.computer_manager._lifecycle.stamp_running_computer",
+            AsyncMock(return_value=True),
+        ):
+            yield
+
     @staticmethod
     def _stub_provisioning(wm):
         """Everything the provision path reaches that is not the kick itself."""

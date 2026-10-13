@@ -890,6 +890,31 @@ async def update_computer_activity(
         return cur.rowcount > 0
 
 
+async def stamp_running_computer(
+    computer_id: str,
+    *,
+    conn=None,
+) -> bool:
+    """Stamp a machine's activity, answering whether it still reads running.
+
+    The stamp and the guard are one write, so of a reconnect and a stop claimed
+    on another worker exactly one wins: a stop first refuses the stamp, and a
+    stamp first moves updated_at under a stop judged on an earlier read. No
+    cooldown, whose skip would read as a stop; a cold attach is rare."""
+    async with _computer_cursor(conn) as cur:
+        await cur.execute(
+            f"""
+            UPDATE computers
+            SET last_activity_at = NOW(), updated_at = NOW()
+            WHERE computer_id = %s
+              AND {FENCE_NOT_DELETED}
+              AND status = 'running'
+            """,
+            (computer_id,),
+        )
+        return cur.rowcount > 0
+
+
 async def rename_computer(
     computer_id: str,
     name: str,

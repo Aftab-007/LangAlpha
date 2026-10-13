@@ -188,6 +188,7 @@ class TestCleanupIdleWorkspacesGuard:
             "user_id": "user-1",
             "is_always_on": False,
             "last_activity_at": datetime.now(timezone.utc) - timedelta(seconds=3600),
+            "updated_at": datetime.now(timezone.utc) - timedelta(seconds=3600),
         }
 
     @pytest.mark.asyncio
@@ -227,12 +228,13 @@ class TestCleanupIdleWorkspacesGuard:
         from src.server.services.workspace_manager import WorkspaceManager
 
         mgr = WorkspaceManager(config=config, idle_timeout=1800)
+        machine = self._idle_machine("comp-idle")
 
         with (
             patch(
                 "src.server.services.workspace_manager.get_computers_by_status",
                 new_callable=AsyncMock,
-                return_value=[self._idle_machine("comp-idle")],
+                return_value=[machine],
             ),
             patch.object(mgr, "_stop_machine", new_callable=AsyncMock) as mock_stop,
             patch(
@@ -246,7 +248,9 @@ class TestCleanupIdleWorkspacesGuard:
             stopped = await mgr.cleanup_idle_workspaces()
 
         assert stopped == 1
-        mock_stop.assert_called_once_with("comp-idle")
+        mock_stop.assert_called_once_with(
+            "comp-idle", unchanged_since=machine["updated_at"]
+        )
 
 
 class TestSessionClosedIsTransient:

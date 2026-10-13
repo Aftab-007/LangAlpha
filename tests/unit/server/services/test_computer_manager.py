@@ -17,7 +17,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 
 from ptc_agent.config.core import FilesystemConfig
-from ptc_agent.core.sandbox.runtime import SandboxTransientError
+from ptc_agent.core.sandbox.runtime import RuntimeState, SandboxTransientError
 from src.server.database.workspace_folders import WorkspaceFolderMoving
 from src.server.services.computer_manager import (
     ComputerBinding,
@@ -1401,6 +1401,59 @@ class TestTearingDownAMachine(_Base):
         )
 
 
+class TestStoppingASandboxTheProviderAlreadyStopped(_Base):
+    """The provider's own idle stop or archive can get to the sandbox first,
+    and an archived sandbox refuses a stop as not stoppable. Failing that stop
+    turned the user's Stop into a 500 and the idle sweep's into an error, for a
+    sandbox already where the stop was taking it."""
+
+    @staticmethod
+    def _manager(state):
+        manager = _make_manager()
+        runtime = MagicMock()
+        runtime.stop = AsyncMock(side_effect=RuntimeError("not in a stoppable state"))
+        runtime.delete = AsyncMock(side_effect=RuntimeError("delete refused"))
+        runtime.get_state = AsyncMock(return_value=state)
+        manager._detached_runtime = _detached(runtime)
+        manager._is_sandbox_gone = MagicMock(return_value=False)
+        return manager
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", [RuntimeState.STOPPED, RuntimeState.ARCHIVED])
+    async def test_a_stop_of_a_sandbox_already_down_succeeds(self, state):
+        await self._manager(state)._detached_sandbox_teardown(
+            "sandbox-abc", delete=False, binding=_make_binding()
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_stop_of_an_errored_sandbox_still_fails(self):
+        """Its failed stop's reconcile settles the row for the next start."""
+        with pytest.raises(RuntimeError, match="not in a stoppable state"):
+            await self._manager(RuntimeState.ERROR)._detached_sandbox_teardown(
+                "sandbox-abc", delete=False, binding=_make_binding()
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_state_it_cannot_read_is_not_down(self):
+        manager = self._manager(RuntimeState.STOPPED)
+        runtime = MagicMock()
+        runtime.stop = AsyncMock(side_effect=RuntimeError("not in a stoppable state"))
+        runtime.get_state = AsyncMock(side_effect=RuntimeError("provider down"))
+        manager._detached_runtime = _detached(runtime)
+
+        with pytest.raises(RuntimeError, match="not in a stoppable state"):
+            await manager._detached_sandbox_teardown(
+                "sandbox-abc", delete=False, binding=_make_binding()
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_delete_is_not_excused_by_the_sandbox_being_stopped(self):
+        with pytest.raises(RuntimeError, match="delete refused"):
+            await self._manager(RuntimeState.ARCHIVED)._detached_sandbox_teardown(
+                "sandbox-abc", delete=True, binding=_make_binding()
+            )
+
+
 # ---------------------------------------------------------------------------
 # Provider addressing
 # ---------------------------------------------------------------------------
@@ -2486,6 +2539,11 @@ class TestJoiningARunningMachine(_Base):
         with ExitStack() as stack:
             for name, new in patches:
                 stack.enter_context(patch.object(manager, name, new=new))
+            stack.enter_context(
+                patch(
+                    f"{_LIFECYCLE}.stamp_running_computer", AsyncMock(return_value=True)
+                )
+            )
             yield
 
     @pytest.mark.asyncio
