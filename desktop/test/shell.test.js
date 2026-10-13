@@ -1653,7 +1653,7 @@ describe('an integration login handed back from the browser', () => {
 
   test('lands on the console callback for that login', () => {
     const { deeplink } = loadShell({ edition: 'saas' })
-    assert.equal(deeplink.isIntegrationLogin(LINK), true)
+    assert.equal(deeplink.isIntegrationReturn(LINK), true)
     assert.equal(deeplink.toIntegrationUrl(LINK), CONSOLE)
     // A cancel or a provider fault comes back the same way and must arrive too:
     // the console's page is what tells the user which one it was.
@@ -1693,7 +1693,7 @@ describe('an integration login handed back from the browser', () => {
     const { deeplink } = loadShell({ edition: 'saas' })
     for (const query of ['code=A&code=B&state=S', 'code=A&state=S&state=T', 'code=A&state=S&x=1&x=2']) {
       const link = `langalpha://integrations/login/slack/callback?${query}`
-      assert.equal(deeplink.isIntegrationLogin(link), true, `${query} should still be recognised`)
+      assert.equal(deeplink.isIntegrationReturn(link), true, `${query} should still be recognised`)
       assert.equal(deeplink.toIntegrationUrl(link), null, query)
     }
   })
@@ -1705,7 +1705,7 @@ describe('an integration login handed back from the browser', () => {
     const { deeplink } = loadShell({ edition: 'saas' })
     for (const name of ['Slack', 'SLACK', '1slack', '-slack', 'sl_ack', 'sl.ack', 'sl%2Fack', 'sl%61ck', 'sl%20ack', '', 'a'.repeat(33)]) {
       const link = `langalpha://integrations/login/${name}/callback?code=C&state=S`
-      assert.equal(deeplink.isIntegrationLogin(link), true, `'${name}' should still be recognised`)
+      assert.equal(deeplink.isIntegrationReturn(link), true, `'${name}' should still be recognised`)
       assert.equal(deeplink.toIntegrationUrl(link), null, `'${name}'`)
     }
     for (const name of ['a', 'a'.repeat(32), 'google-chat', 'x1']) {
@@ -1742,7 +1742,7 @@ describe('an integration login handed back from the browser', () => {
       'langalpha://integrations/other?code=C',
       'langalpha://callback?code=C',
     ]) {
-      assert.equal(deeplink.isIntegrationLogin(link), false, link)
+      assert.equal(deeplink.isIntegrationReturn(link), false, link)
       assert.equal(deeplink.toIntegrationUrl(link), null, link)
       assert.equal(deeplink.toAppUrl(link, 'about:blank'), 'https://app.example.com/callback?code=C', link)
     }
@@ -1759,7 +1759,7 @@ describe('an integration login handed back from the browser', () => {
   test('the other edition\'s scheme is not ours to read', () => {
     const { deeplink } = loadShell({ edition: 'saas' })
     const link = 'langalpha-oss://integrations/login/slack/callback?code=C'
-    assert.equal(deeplink.isIntegrationLogin(link), false)
+    assert.equal(deeplink.isIntegrationReturn(link), false)
     assert.equal(deeplink.toIntegrationUrl(link), null)
   })
 
@@ -1769,7 +1769,7 @@ describe('an integration login handed back from the browser', () => {
   test('the self-hosted build recognises one and has nowhere to send it', () => {
     const { deeplink } = loadShell({ edition: 'oss' })
     const link = 'langalpha-oss://integrations/login/slack/callback?code=C&state=S'
-    assert.equal(deeplink.isIntegrationLogin(link), true)
+    assert.equal(deeplink.isIntegrationReturn(link), true)
     assert.equal(deeplink.toIntegrationUrl(link), null)
   })
 })
@@ -2021,16 +2021,245 @@ describe('which window an integration login lands in', () => {
   })
 })
 
+// The console's installs leave for the provider's page the same way its logins
+// do and come back through the scheme the same way, under `install` rather than
+// `login`, carrying which team was added or why it was not.
+describe('an integration install handed back from the browser', () => {
+  const LINK = 'langalpha://integrations/install/slack/callback?team=T1&team_name=Acme'
+  const CONSOLE = 'https://platform.example.com/integrations/install/slack/callback?team=T1&team_name=Acme'
+
+  test('lands on the console\'s install callback, with each thing an install hands back', () => {
+    const { deeplink } = loadShell({ edition: 'saas' })
+    assert.equal(deeplink.isIntegrationReturn(LINK), true)
+    assert.equal(deeplink.toIntegrationUrl(LINK), CONSOLE)
+    for (const query of ['team=T1', 'team_name=Acme%20Corp', 'error=access_denied', 'team=T1&error=failed']) {
+      assert.equal(
+        deeplink.toIntegrationUrl(`langalpha://integrations/install/slack/callback?${query}`),
+        `https://platform.example.com/integrations/install/slack/callback?${query.replace('%20', '+')}`,
+        query,
+      )
+    }
+    // An install that hands back nothing still lands, so the page can say so.
+    assert.equal(
+      deeplink.toIntegrationUrl('langalpha://integrations/install/slack/callback'),
+      'https://platform.example.com/integrations/install/slack/callback',
+    )
+  })
+
+  test('on the configured console, never on the app or anything the link names', () => {
+    const { deeplink } = loadShell({ edition: 'saas', platformOrigin: 'https://console.example.org' })
+    assert.equal(
+      deeplink.toIntegrationUrl('langalpha://evil.example.com@integrations/install/slack/callback?team=T1'),
+      'https://console.example.org/integrations/install/slack/callback?team=T1',
+    )
+  })
+
+  // Each kind carries its own list. A login's answer is not an install's, so a
+  // code or state riding an install link is not the provider's, and neither is
+  // a team riding a login link.
+  test('carries what an install hands back and nothing else', () => {
+    const { deeplink } = loadShell({ edition: 'saas' })
+    const mapped = new URL(deeplink.toIntegrationUrl(
+      'langalpha://integrations/install/slack/callback?code=C&team=T1&state=S&next=https%3A%2F%2Fevil.example.com&team_name=A%26B&error_description=x&type=magiclink&error=failed#frag',
+    ))
+    assert.deepEqual([...mapped.searchParams], [['team', 'T1'], ['team_name', 'A&B'], ['error', 'failed']])
+    assert.equal(mapped.hash, '')
+    const login = new URL(deeplink.toIntegrationUrl(
+      'langalpha://integrations/login/slack/callback?code=C&team=T1&team_name=Acme&state=S',
+    ))
+    assert.deepEqual([...login.searchParams], [['code', 'C'], ['state', 'S']])
+  })
+
+  test('a repeated parameter refuses the whole link', () => {
+    const { deeplink } = loadShell({ edition: 'saas' })
+    for (const query of ['team=A&team=B', 'team=A&team_name=X&team_name=Y', 'error=failed&error=access_denied', 'team=A&x=1&x=2']) {
+      const link = `langalpha://integrations/install/slack/callback?${query}`
+      assert.equal(deeplink.isIntegrationReturn(link), true, `${query} should still be recognised`)
+      assert.equal(deeplink.toIntegrationUrl(link), null, query)
+    }
+  })
+
+  test('a name outside the pattern is refused', () => {
+    const { deeplink } = loadShell({ edition: 'saas' })
+    for (const name of ['Slack', '1slack', '-slack', 'sl_ack', 'sl.ack', 'sl%2Fack', '', 'a'.repeat(33)]) {
+      const link = `langalpha://integrations/install/${name}/callback?team=T1`
+      assert.equal(deeplink.isIntegrationReturn(link), true, `'${name}' should still be recognised`)
+      assert.equal(deeplink.toIntegrationUrl(link), null, `'${name}'`)
+    }
+    for (const name of ['a', 'a'.repeat(32), 'google-chat']) {
+      assert.equal(
+        deeplink.toIntegrationUrl(`langalpha://integrations/install/${name}/callback?team=T1`),
+        `https://platform.example.com/integrations/install/${name}/callback?team=T1`,
+        name,
+      )
+    }
+  })
+
+  test('any other shape is not one, and keeps going to /callback', () => {
+    const { deeplink } = loadShell({ edition: 'saas' })
+    for (const link of [
+      'langalpha://integrations/install/slack/extra/callback?team=T1',
+      'langalpha://integrations/install/slack/callback/?team=T1',
+      'langalpha://integrations/install/slack?team=T1',
+      'langalpha://integrations/INSTALL/slack/callback?team=T1',
+      'langalpha://integrations/installs/slack/callback?team=T1',
+      'langalpha://integrations/inst%61ll/slack/callback?team=T1',
+      'langalpha://integrations/other/slack/callback?team=T1',
+      'langalpha://integrations/__proto__/slack/callback?team=T1',
+      'langalpha://evil.example.com/integrations/install/slack/callback?team=T1',
+    ]) {
+      assert.equal(deeplink.isIntegrationReturn(link), false, link)
+      assert.equal(deeplink.toIntegrationUrl(link), null, link)
+      assert.equal(deeplink.toAppUrl(link, 'about:blank'), 'https://app.example.com/callback?team=T1', link)
+    }
+  })
+
+  test('the self-hosted build recognises one and has nowhere to send it', () => {
+    const { deeplink } = loadShell({ edition: 'oss' })
+    const link = 'langalpha-oss://integrations/install/slack/callback?team=T1&team_name=Acme'
+    assert.equal(deeplink.isIntegrationReturn(link), true)
+    assert.equal(deeplink.toIntegrationUrl(link), null)
+  })
+})
+
+// The window an install lands in is chosen exactly as a login's is, so these
+// drive the launch and the OS events the same way and check it lands where the
+// install was pressed.
+describe('which window an integration install lands in', () => {
+  const LINK = 'langalpha://integrations/install/slack/callback?team=T1&team_name=Acme'
+  const CONSOLE = 'https://platform.example.com/integrations/install/slack/callback?team=T1&team_name=Acme'
+  const APP = 'https://app.example.com'
+  const INSTALL = 'https://provider.example.com/install?state=S'
+  const openUrl = (url) => emitApp('open-url', { preventDefault() {} }, url)
+  const isAccount = (win) => win.options.title === 'Account'
+  const landedOnCallback = () => windows.some((w) => w.loaded.some((u) => new URL(u).pathname === '/callback'))
+
+  const signedIn = ({ consoleSharesMainWindow }) => {
+    const shell = loadShell({ edition: 'saas' })
+    shell.store.set('reachedApp', true)
+    shell.store.set('appChrome', true)
+    shell.store.set('platformChrome', consoleSharesMainWindow)
+    return shell
+  }
+
+  test('the console shares the main window, so the install finishes there', () => {
+    const { main } = signedIn({ consoleSharesMainWindow: true })
+    main.openLaunchWindows()
+    openUrl(LINK)
+    assert.equal(windows.length, 1)
+    assert.deepEqual(windows[0].loaded, [APP, CONSOLE])
+  })
+
+  test('a console that cannot share it gets its own window, and the app is left alone', () => {
+    const { main } = signedIn({ consoleSharesMainWindow: false })
+    main.openLaunchWindows()
+    openUrl(LINK)
+    assert.equal(windows.length, 2)
+    const [app, account] = windows
+    assert.deepEqual(app.loaded, [APP])
+    assert.ok(isAccount(account))
+    assert.deepEqual(account.loaded, [CONSOLE])
+    assert.equal(focusOrder.at(-1), account)
+  })
+
+  // Both windows show the console, as in the login case: the install lands in
+  // the one whose page sent the user out, whichever that was.
+  const bothShowTheConsole = () => {
+    const shell = signedIn({ consoleSharesMainWindow: false })
+    shell.main.openLaunchWindows()
+    openUrl('langalpha://integrations/login/discord/callback?code=D&state=S')
+    shell.store.set('platformChrome', true)
+    const [app, account] = windows
+    app.loadURL('https://platform.example.com/integrations')
+    const pressIn = (win) => shell.main.openExternallyFrom({ sender: win.webContents }, INSTALL)
+    return { app, account, pressIn }
+  }
+
+  test('an install pressed in the main window finishes there, not in an account window left open', () => {
+    const { app, account, pressIn } = bothShowTheConsole()
+    const before = account.loaded.slice()
+    pressIn(app)
+    emitApp('browser-window-focus', {}, account)
+    openUrl(LINK)
+    assert.equal(windows.length, 2)
+    assert.equal(app.loaded.at(-1), CONSOLE)
+    assert.deepEqual(account.loaded, before)
+    assert.equal(focusOrder.at(-1), app)
+  })
+
+  test('an install pressed in the account window finishes there, though the main window shows the console', () => {
+    const { app, account, pressIn } = bothShowTheConsole()
+    pressIn(account)
+    emitApp('browser-window-focus', {}, app)
+    openUrl(LINK)
+    assert.equal(app.loaded.at(-1), 'https://platform.example.com/integrations')
+    assert.equal(account.loaded.at(-1), CONSOLE)
+    assert.equal(focusOrder.at(-1), account)
+  })
+
+  test('a cold start from the link opens it, and not the entry over it', () => {
+    const { main } = signedIn({ consoleSharesMainWindow: false })
+    openUrl(LINK)
+    main.openLaunchWindows()
+    assert.equal(windows.length, 1)
+    assert.ok(isAccount(windows[0]))
+    assert.deepEqual(windows[0].loaded, [CONSOLE])
+  })
+
+  test('a refused one moves nothing, and never reaches /callback', () => {
+    const { main } = signedIn({ consoleSharesMainWindow: true })
+    main.openLaunchWindows()
+    openUrl('langalpha://integrations/install/slack/callback?team=A&team=B')
+    openUrl('langalpha://integrations/install/Slack/callback?team=T1')
+    assert.equal(windows.length, 1)
+    assert.deepEqual(windows[0].loaded, [APP])
+    assert.equal(landedOnCallback(), false)
+  })
+
+  // No platform origin, so `toIntegrationUrl` is null and the shell ignores the
+  // link, rather than handing it to the app's sign-in callback.
+  test('the self-hosted build ignores one rather than sending it to /callback', () => {
+    const { main } = loadShell({ edition: 'oss', serverUrl: 'http://localhost:5173' })
+    main.openLaunchWindows()
+    const warned = []
+    const realWarn = console.warn
+    console.warn = (...a) => warned.push(a.join(' '))
+    try {
+      openUrl('langalpha-oss://integrations/install/slack/callback?team=T1&team_name=Acme')
+    } finally {
+      console.warn = realWarn
+    }
+    assert.equal(windows.length, 1)
+    assert.deepEqual(windows[0].loaded, ['http://localhost:5173'])
+    assert.equal(landedOnCallback(), false)
+    assert.equal(warned.length, 1)
+    assert.doesNotMatch(warned[0], /T1|Acme/, 'the link\'s answer did not reach the log')
+  })
+})
+
 // The bridge is feature-detected, so what it advertises is the whole of how a
 // page learns what this shell can do. Run for real rather than read, because
 // what matters is the value the page receives.
 describe('the bridge says what the shell can do', () => {
   test('a frozen list naming integration-login when the edition can finish it', () => {
-    const bridge = loadPreload(['--langalpha-integration-login=1']).langalphaDesktop
+    const bridge = loadPreload(['--langalpha-integration-returns=1']).langalphaDesktop
     assert.ok(Array.isArray(bridge.capabilities))
     assert.ok(Object.isFrozen(bridge.capabilities))
     assert.ok(bridge.capabilities.includes('integration-login'))
     for (const entry of bridge.capabilities) assert.equal(typeof entry, 'string')
+  })
+
+  // The install link is finished on the same console as the login link, so an
+  // edition that can finish one can finish the other, and says both or neither.
+  test('integration-install listed exactly when integration-login is', () => {
+    const on = loadPreload(['--langalpha-integration-returns=1']).langalphaDesktop.capabilities
+    assert.ok(on.includes('integration-install'))
+    assert.ok(on.includes('integration-login'))
+    for (const value of ['', '0', 'true']) {
+      const off = loadPreload([`--langalpha-integration-returns=${value}`]).langalphaDesktop.capabilities
+      assert.equal(off.includes('integration-install'), false, `switch '${value}'`)
+      assert.equal(off.includes('integration-login'), false, `switch '${value}'`)
+    }
   })
 
   test('a frozen empty list when the edition has no console to finish it on', () => {
@@ -2046,9 +2275,9 @@ describe('the bridge says what the shell can do', () => {
       return windows[0].options.webPreferences.additionalArguments
     }
     assert.ok(argsOf({ edition: 'oss', serverUrl: 'http://localhost:5173' })
-      .includes('--langalpha-integration-login='))
+      .includes('--langalpha-integration-returns='))
     cleanup()
-    assert.ok(argsOf({ edition: 'saas' }).includes('--langalpha-integration-login=1'))
+    assert.ok(argsOf({ edition: 'saas' }).includes('--langalpha-integration-returns=1'))
   })
 
   // Nothing auth-related is exposed to the page, and a capability is a word
@@ -2706,9 +2935,9 @@ describe('the deep-link scheme contract holds across the two processes', () => {
     assert.match(read('src/preload.js'), /scheme: flag\('shell-scheme'\)/)
   })
 
-  test('the integration-login switch main writes is the one preload parses', () => {
-    assert.match(read('src/main.js'), /`--langalpha-integration-login=\$\{origins\.platformOrigin\(\) \? '1' : ''\}`/)
-    assert.match(read('src/preload.js'), /flag\('integration-login'\) === '1'/)
+  test('the integration-returns switch main writes is the one preload parses', () => {
+    assert.match(read('src/main.js'), /`--langalpha-integration-returns=\$\{origins\.platformOrigin\(\) \? '1' : ''\}`/)
+    assert.match(read('src/preload.js'), /flag\('integration-returns'\) === '1'/)
   })
 
   test('the web app knows every scheme an edition can register', () => {

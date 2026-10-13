@@ -71,28 +71,36 @@ function toAppUrl(raw, currentUrl) {
 }
 
 // ---------------------------------------------------------------------------
-// An integration login, handed back from the browser.
+// An integration login or install, handed back from the browser.
 //
-// The console connects an integration through a sign-in on the provider's own
-// page, which opens in the system browser like every other provider page, and
-// the provider returns to the console's callback in that browser, which does
-// not hold the app's session. So a login started in the app is not redeemed
-// there: that page hands its query back through the scheme, and the shell opens
-// the same callback page on the console's origin in its own window, where the
-// console finishes it.
+// The console connects an integration through the provider's own page: a
+// sign-in, or an install that adds the app to one of the user's teams there.
+// That page opens in the system browser like every other provider page, and the
+// provider returns to the console's callback in that browser, which does not
+// hold the app's session. So a login or install started in the app is not
+// finished there: that page hands its query back through the scheme, and the
+// shell opens the same callback page on the console's origin in its own
+// window, where the console finishes it.
 //
 // The one link whose host and path are read at all, and they still do not
 // choose where it goes. The shape is matched whole, the origin is always the
-// configured console, and the path is rebuilt from a name that can only be
-// lowercase letters, digits and hyphens.
+// configured console, and the path is rebuilt from a kind named in `RETURNS`
+// and a name that can only be lowercase letters, digits and hyphens.
 // ---------------------------------------------------------------------------
 
-const LOGIN_HOST = 'integrations'
-const LOGIN_PATH = /^\/login\/([^/]*)\/callback$/
-const LOGIN_NAME = /^[a-z][a-z0-9-]{0,31}$/
-// What a provider sends back and nothing else. The console's callback page
-// reads these, and anything the link adds beyond them is not the provider's.
-const LOGIN_PARAMS = new Set(['code', 'state', 'error', 'error_description'])
+const RETURN_HOST = 'integrations'
+const RETURN_PATH = /^\/([^/]*)\/([^/]*)\/callback$/
+const RETURN_NAME = /^[a-z][a-z0-9-]{0,31}$/
+// Each kind of return, and what it carries and nothing else. The console's
+// callback page reads these, and anything the link adds beyond them is not the
+// provider's.
+const RETURNS = new Map([
+  // What a provider sends back from a sign-in.
+  ['login', new Set(['code', 'state', 'error', 'error_description'])],
+  // Which team an install added the app to and what it is called, or why it
+  // did not.
+  ['install', new Set(['team', 'team_name', 'error'])],
+])
 
 function parseOurs(raw) {
   try {
@@ -103,26 +111,27 @@ function parseOurs(raw) {
   }
 }
 
-/** The name segment of a link addressed to an integration login, or null for any other link. */
-function loginSegment(parsed) {
-  if (!parsed || parsed.host !== LOGIN_HOST) return null
-  const match = LOGIN_PATH.exec(parsed.pathname)
-  return match ? match[1] : null
+/** The kind and name of a link addressed to an integration return, or null for any other link. */
+function returnSegments(parsed) {
+  if (!parsed || parsed.host !== RETURN_HOST) return null
+  const match = RETURN_PATH.exec(parsed.pathname)
+  return match && RETURNS.has(match[1]) ? { kind: match[1], name: match[2] } : null
 }
 
 /**
- * Is this link addressed to an integration login? Asked before `toAppUrl`,
- * because the answer decides the window as well as the URL, and because such a
- * link must never fall through to `/callback`: that route would try to redeem
- * the provider's code as a sign-in.
+ * Is this link addressed to an integration login or install? Asked before
+ * `toAppUrl`, because the answer decides the window as well as the URL, and
+ * because such a link must never fall through to `/callback`: that route would
+ * try to redeem it as a sign-in.
  */
-function isIntegrationLogin(raw) {
-  return loginSegment(parseOurs(raw)) !== null
+function isIntegrationReturn(raw) {
+  return returnSegments(parseOurs(raw)) !== null
 }
 
 /**
- * Turn `langalpha://integrations/login/<name>/callback?code=…&state=…` into the
- * console's `/integrations/login/<name>/callback` with the same answer.
+ * Turn `langalpha://integrations/<kind>/<name>/callback?…` into the console's
+ * `/integrations/<kind>/<name>/callback` with the same answer, where the kind
+ * is `login` or `install`.
  *
  * Null means the link goes nowhere: an edition with no console has no page to
  * finish it on, a name outside the pattern is not one the console mints, and a
@@ -131,16 +140,18 @@ function isIntegrationLogin(raw) {
  */
 function toIntegrationUrl(raw) {
   const parsed = parseOurs(raw)
-  const name = loginSegment(parsed)
+  const segments = returnSegments(parsed)
   const platform = origins.platformOrigin()
-  if (!platform || name === null || !LOGIN_NAME.test(name)) return null
+  if (!platform || segments === null || !RETURN_NAME.test(segments.name)) return null
 
   const names = [...parsed.searchParams.keys()]
   if (names.length !== new Set(names).size) return null
 
-  const target = new URL(`/integrations/login/${name}/callback`, platform)
+  const { kind, name } = segments
+  const carried = RETURNS.get(kind)
+  const target = new URL(`/integrations/${kind}/${name}/callback`, platform)
   for (const [key, value] of parsed.searchParams) {
-    if (LOGIN_PARAMS.has(key)) target.searchParams.set(key, value)
+    if (carried.has(key)) target.searchParams.set(key, value)
   }
   return target.toString()
 }
@@ -181,4 +192,4 @@ function init() {
   accept(fromArgv(process.argv))
 }
 
-module.exports = { SCHEME, init, attach, toAppUrl, fromArgv, isIntegrationLogin, toIntegrationUrl }
+module.exports = { SCHEME, init, attach, toAppUrl, fromArgv, isIntegrationReturn, toIntegrationUrl }
