@@ -8,8 +8,6 @@ from psycopg.rows import dict_row
 
 from src.server.database import pool
 from src.server.database.conversation import _sql
-from src.server.database.replay_facts import DROP_LEGACY_SQL
-from src.server.utils.pg_sanitize import SafeJson
 
 logger = logging.getLogger(__name__)
 
@@ -100,51 +98,6 @@ async def replace_lane_provenance(
                 lanes=lanes,
             )
             return True
-
-
-async def append_sse_event(
-    conversation_thread_id: str,
-    event: Dict[str, Any],
-    conn=None,
-) -> bool:
-    """Atomically append one SSE event to the thread's latest response blob.
-
-    A server-side ``sse_events || event`` JSONB concat scoped to the most-recent
-    response (by run_seq — the one monotonic run ordering; turn_index is reused
-    by retries and lowered by branch rewinds). Avoids reading the whole blob
-    into Python and rewriting it, and is race-free against concurrent appenders
-    (the read-modify-write it replaces is not). Returns True when a row was
-    updated, False when the thread has no response row yet.
-    """
-    sql = f"""
-        UPDATE conversation_responses
-        SET sse_events = COALESCE(sse_events, '[]'::jsonb) || %s::jsonb,
-            {DROP_LEGACY_SQL}
-        WHERE conversation_response_id = (
-            SELECT conversation_response_id
-            FROM conversation_responses
-            WHERE conversation_thread_id = %s
-            ORDER BY run_seq DESC
-            LIMIT 1
-        )
-    """
-    params = (SafeJson([event]), conversation_thread_id)
-    try:
-        if conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                updated = cur.rowcount > 0
-        else:
-            async with pool.get_db_connection() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute(sql, params)
-                    updated = cur.rowcount > 0
-
-        return updated
-
-    except Exception as e:
-        logger.error(f"Error appending sse_event: {e}")
-        raise
 
 
 async def get_responses_for_thread(

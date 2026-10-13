@@ -60,7 +60,6 @@ from src.server.database.conversation.queries import (
     get_queries_for_thread,
 )
 from src.server.database.conversation.responses import (
-    append_sse_event,
     get_recent_responses_for_thread,
     get_responses_for_thread,
     _sse_has_provenance,
@@ -82,7 +81,6 @@ from src.server.database.conversation.replay_rows import (
 # Legacy façade: symbols extracted into submodules stay importable from the
 # package root. New code should import the owning submodule directly.
 __all__ = [
-    "append_sse_event",
     "calculate_next_thread_index",
     "create_query",
     "create_thread",

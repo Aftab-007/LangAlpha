@@ -543,7 +543,6 @@ class TestMarkCancelledUserLabeling:
         mod = "src.server.services.runs.executor"
         with patch(f"{fin}.get_token_usage_from_callback", return_value=(None, [])), \
              patch(f"{fin}.get_tool_usage_from_handler", return_value={}), \
-             patch(f"{fin}.get_sse_events_from_handler", return_value=[]), \
              patch(f"{fin}.calculate_execution_time", return_value=1.0), \
              patch(f"{mod}.release_burst_slot", new_callable=AsyncMock), \
              patch("src.server.services.runs.coordinator.RunCoordinator") as mock_coord_cls:
@@ -632,7 +631,6 @@ class TestFailedRunRecordsItsModelCall:
         mod = "src.server.services.runs.executor"
         with patch(f"{fin}.get_token_usage_from_callback", return_value=(None, [])), \
              patch(f"{fin}.get_tool_usage_from_handler", return_value={}), \
-             patch(f"{fin}.get_sse_events_from_handler", return_value=[]), \
              patch(f"{fin}.calculate_execution_time", return_value=1.0), \
              patch(f"{mod}.release_burst_slot", new_callable=AsyncMock), \
              patch("src.server.services.runs.coordinator.RunCoordinator") as coord_cls:
@@ -692,7 +690,6 @@ class TestThrownFinalizeLeavesEntryRunning:
         mod = "src.server.services.runs.executor"
         with patch(f"{fin}.get_token_usage_from_callback", return_value=(None, [])), \
              patch(f"{fin}.get_tool_usage_from_handler", return_value={}), \
-             patch(f"{fin}.get_sse_events_from_handler", return_value=[]), \
              patch(f"{fin}.calculate_execution_time", return_value=1.0), \
              patch(f"{mod}.release_burst_slot", new_callable=AsyncMock), \
              patch("src.server.services.runs.coordinator.RunCoordinator") as coord_cls:
@@ -1052,10 +1049,10 @@ class TestStopTeardownOrdering:
 
 
 # ---------------------------------------------------------------------------
-# Drain closes open subagent reasoning blocks (replay zombie fix)
+# The stop drain takes a lane whole or not at all
 # ---------------------------------------------------------------------------
 
-class TestDrainReasoningClose:
+class TestStopDrainSnapshot:
 
     def _task(self, task_id: str, count: int) -> BackgroundTask:
         # No writer handles: the drain withholds tasks whose writers are alive.
@@ -1071,91 +1068,9 @@ class TestDrainReasoningClose:
         return task
 
     @pytest.mark.asyncio
-    async def test_open_reasoning_block_gets_synthetic_close(self):
-        """A subagent killed mid-reasoning (start with no complete) gets a
-        synthetic reasoning_signal 'complete' — matching its own agent+id —
-        before the stopped close, so replay isn't stuck 'thinking'."""
-        btm = _make_btm()
-        records = [
-            {"event": "message_chunk", "data": {
-                "agent": "task:abc", "id": "m1",
-                "content": "start", "content_type": "reasoning_signal"},
-             "run": "run-1"},
-        ]
-
-        async def fake_iter(thread_id, task):
-            for r in records:
-                yield r
-
-        with patch(
-            "src.server.services.runs.teardown.iter_subagent_events_full",
-            side_effect=fake_iter,
-        ):
-            merged = await btm._drain_killed_subagent_events(
-                "t-x", [self._task("abc", 1)]
-            )
-
-        completes = [
-            e for e in merged
-            if e["data"].get("content_type") == "reasoning_signal"
-            and e["data"].get("content") == "complete"
-        ]
-        assert len(completes) == 1
-        assert completes[0]["data"]["agent"] == "task:abc"
-        assert completes[0]["data"]["id"] == "m1"
-        # The synthetic complete precedes the finish_reason 'stopped' close.
-        idx_complete = next(
-            i for i, e in enumerate(merged)
-            if e["data"].get("content") == "complete"
-        )
-        idx_stop = next(
-            i for i, e in enumerate(merged)
-            if e["data"].get("finish_reason") == "stopped"
-        )
-        assert idx_complete < idx_stop
-
-    @pytest.mark.asyncio
-    async def test_already_completed_reasoning_not_double_closed(self):
-        """A subagent whose reasoning block already closed gets no extra
-        synthetic complete appended."""
-        btm = _make_btm()
-        records = [
-            {"event": "message_chunk", "data": {
-                "agent": "task:abc", "id": "m1",
-                "content": "start", "content_type": "reasoning_signal"},
-             "run": "run-1"},
-            {"event": "message_chunk", "data": {
-                "agent": "task:abc", "id": "m1",
-                "content": "complete", "content_type": "reasoning_signal"},
-             "run": "run-1"},
-        ]
-
-        async def fake_iter(thread_id, task):
-            for r in records:
-                yield r
-
-        with patch(
-            "src.server.services.runs.teardown.iter_subagent_events_full",
-            side_effect=fake_iter,
-        ):
-            merged = await btm._drain_killed_subagent_events(
-                "t-x", [self._task("abc", 2)]
-            )
-
-        completes = [
-            e for e in merged
-            if e["data"].get("content_type") == "reasoning_signal"
-            and e["data"].get("content") == "complete"
-        ]
-        # Only the original complete survives — no synthetic duplicate.
-        assert len(completes) == 1
-
-    @pytest.mark.asyncio
-    async def test_no_recovered_events_skips_synthetic_close(self):
-        """A task with captured events whose XRANGE recovered nothing gets NO
-        synthetic rows: a transcript-class row is the replay cache gate's
-        archive evidence, and a bare close would vouch for a snapshot that
-        isn't there. The lane stays uncacheable instead."""
+    async def test_no_recovered_events_carry_nothing(self):
+        """A task with captured events whose XRANGE recovered nothing is
+        withheld; its capture stream stays for the archive."""
         btm = _make_btm()
 
         async def empty_iter(thread_id, task):
@@ -1175,9 +1090,9 @@ class TestDrainReasoningClose:
     @pytest.mark.asyncio
     async def test_partial_recovery_withholds_snapshot(self):
         """A truncated read (fewer records than attempted appends — torn
-        spill prefix, mid-stream trim) is as unsafe as zero: persisting the
-        prefix would clear the replay cache gate and cache an incomplete
-        snapshot. The whole task is withheld, closes included."""
+        spill prefix, mid-stream trim) is as unsafe as zero: recording the
+        prefix would record part of the lane as all of it. The whole task
+        is withheld."""
         btm = _make_btm()
         records = [
             {"event": "message_chunk", "data": {

@@ -1,10 +1,6 @@
 """
-Tests for the run SSE producer (src/server/services/runs/sse_producer.py), its
-event archive (event_archive.py) and its error classification (stream_errors.py).
-
-Covers:
-- StreamEventAccumulator: accumulation, merging, max buffer size
-- RunSSEProducer: SSE event formatting, keepalive, error events
+Tests for the run SSE producer (src/server/services/runs/sse_producer.py) and
+its error classification (stream_errors.py).
 """
 
 import asyncio
@@ -12,215 +8,6 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# StreamEventAccumulator
-# ---------------------------------------------------------------------------
-
-
-class TestStreamEventAccumulator:
-    """Tests for the StreamEventAccumulator class."""
-
-    def _make_accumulator(self, max_bytes=16 * 1024):
-        from src.server.services.runs.event_archive import StreamEventAccumulator
-
-        return StreamEventAccumulator(max_merged_bytes=max_bytes)
-
-    # -- basic add / get --
-
-    def test_add_first_event_stores_it(self):
-        acc = self._make_accumulator()
-        acc.add("message_chunk", {"content": "hello", "thread_id": "t1"})
-        events = acc.get_events()
-        assert len(events) == 1
-        assert events[0]["event"] == "message_chunk"
-        assert events[0]["data"]["content"] == "hello"
-
-    def test_add_non_dict_data_is_ignored(self):
-        acc = self._make_accumulator()
-        acc.add("message_chunk", "not a dict")  # type: ignore[arg-type]
-        assert acc.get_events() == []
-
-    def test_different_event_types_are_not_merged(self):
-        acc = self._make_accumulator()
-        acc.add("message_chunk", {"content": "a", "thread_id": "t1"})
-        acc.add("tool_calls", {"tool_calls": []})
-        events = acc.get_events()
-        assert len(events) == 2
-        assert events[0]["event"] == "message_chunk"
-        assert events[1]["event"] == "tool_calls"
-
-    # -- message_chunk merging --
-
-    def test_merge_consecutive_message_chunks(self):
-        acc = self._make_accumulator()
-        base = {
-            "thread_id": "t1",
-            "agent": "main",
-            "id": "msg-1",
-            "role": "assistant",
-            "content_type": "text",
-        }
-        acc.add("message_chunk", {**base, "content": "Hello"})
-        acc.add("message_chunk", {**base, "content": " world"})
-        events = acc.get_events()
-        assert len(events) == 1
-        assert events[0]["data"]["content"] == "Hello world"
-
-    def test_no_merge_when_content_type_is_reasoning_signal(self):
-        acc = self._make_accumulator()
-        base = {
-            "thread_id": "t1",
-            "agent": "main",
-            "id": "msg-1",
-            "role": "assistant",
-        }
-        acc.add("message_chunk", {**base, "content": "first", "content_type": "text"})
-        acc.add(
-            "message_chunk",
-            {**base, "content": "start", "content_type": "reasoning_signal"},
-        )
-        events = acc.get_events()
-        assert len(events) == 2
-
-    def test_no_merge_when_merge_keys_differ(self):
-        acc = self._make_accumulator()
-        base = {
-            "thread_id": "t1",
-            "id": "msg-1",
-            "role": "assistant",
-            "content_type": "text",
-        }
-        acc.add("message_chunk", {**base, "agent": "main", "content": "a"})
-        acc.add("message_chunk", {**base, "agent": "task:abc", "content": "b"})
-        events = acc.get_events()
-        assert len(events) == 2
-
-    def test_no_merge_across_phases(self):
-        """Commentary and the final answer are separate blocks upstream; fusing
-        them into one persisted chunk would erase the boundary."""
-        acc = self._make_accumulator()
-        base = {
-            "thread_id": "t1",
-            "agent": "main",
-            "id": "msg-1",
-            "role": "assistant",
-            "content_type": "text",
-        }
-        acc.add("message_chunk", {**base, "content": "thinking out loud", "phase": "commentary"})
-        acc.add("message_chunk", {**base, "content": "the answer", "phase": "final_answer"})
-        events = acc.get_events()
-        assert len(events) == 2
-
-    def test_merge_within_one_phase(self):
-        acc = self._make_accumulator()
-        base = {
-            "thread_id": "t1",
-            "agent": "main",
-            "id": "msg-1",
-            "role": "assistant",
-            "content_type": "text",
-            "phase": "final_answer",
-        }
-        acc.add("message_chunk", {**base, "content": "Hello"})
-        acc.add("message_chunk", {**base, "content": " world"})
-        events = acc.get_events()
-        assert len(events) == 1
-        assert events[0]["data"]["content"] == "Hello world"
-        assert events[0]["data"]["phase"] == "final_answer"
-
-    def test_merge_respects_max_bytes(self):
-        acc = self._make_accumulator(max_bytes=10)
-        base = {
-            "thread_id": "t1",
-            "agent": "main",
-            "id": "msg-1",
-            "role": "assistant",
-            "content_type": "text",
-        }
-        acc.add("message_chunk", {**base, "content": "12345"})
-        # Adding 6 more bytes exceeds 10, so should not merge
-        acc.add("message_chunk", {**base, "content": "678901"})
-        events = acc.get_events()
-        assert len(events) == 2
-
-    def test_merge_propagates_finish_reason(self):
-        acc = self._make_accumulator()
-        base = {
-            "thread_id": "t1",
-            "agent": "main",
-            "id": "msg-1",
-            "role": "assistant",
-            "content_type": "text",
-        }
-        acc.add("message_chunk", {**base, "content": "Hello"})
-        acc.add("message_chunk", {**base, "content": "", "finish_reason": "stop"})
-        events = acc.get_events()
-        assert len(events) == 1
-        assert events[0]["data"]["finish_reason"] == "stop"
-
-    # -- tool_call_chunks merging --
-
-    def test_merge_consecutive_tool_call_chunks(self):
-        acc = self._make_accumulator()
-        base = {"thread_id": "t1", "agent": "main", "id": "msg-1"}
-        acc.add(
-            "tool_call_chunks",
-            {
-                **base,
-                "tool_call_chunks": [{"id": "call-1", "args": '{"ke', "index": 0}],
-            },
-        )
-        acc.add(
-            "tool_call_chunks",
-            {
-                **base,
-                "tool_call_chunks": [{"id": "call-1", "args": 'y": "val"}', "index": 0}],
-            },
-        )
-        events = acc.get_events()
-        assert len(events) == 1
-        merged_args = events[0]["data"]["tool_call_chunks"][0]["args"]
-        assert merged_args == '{"key": "val"}'
-
-    def test_tool_call_chunks_no_merge_different_ids(self):
-        acc = self._make_accumulator()
-        base = {"thread_id": "t1", "agent": "main", "id": "msg-1"}
-        acc.add(
-            "tool_call_chunks",
-            {**base, "tool_call_chunks": [{"id": "call-1", "args": "a", "index": 0}]},
-        )
-        acc.add(
-            "tool_call_chunks",
-            {**base, "tool_call_chunks": [{"id": "call-2", "args": "b", "index": 1}]},
-        )
-        events = acc.get_events()
-        assert len(events) == 2
-
-    def test_tool_call_chunks_no_merge_when_exceeds_max_bytes(self):
-        acc = self._make_accumulator(max_bytes=5)
-        base = {"thread_id": "t1", "agent": "main", "id": "msg-1"}
-        acc.add(
-            "tool_call_chunks",
-            {**base, "tool_call_chunks": [{"id": "call-1", "args": "abc", "index": 0}]},
-        )
-        acc.add(
-            "tool_call_chunks",
-            {**base, "tool_call_chunks": [{"id": "call-1", "args": "defgh", "index": 0}]},
-        )
-        events = acc.get_events()
-        assert len(events) == 2
-
-    # -- get_events returns deep copy --
-
-    def test_get_events_returns_deep_copy(self):
-        acc = self._make_accumulator()
-        acc.add("message_chunk", {"content": "hello"})
-        events1 = acc.get_events()
-        events1[0]["data"]["content"] = "mutated"
-        events2 = acc.get_events()
-        assert events2[0]["data"]["content"] == "hello"
-
 
 # ---------------------------------------------------------------------------
 # RunSSEProducer — SSE formatting helpers
@@ -285,21 +72,6 @@ class TestRunSSEProducerFormatting:
         parsed = json.loads(payload)
         assert parsed["artifact"]["close"] is None
         assert parsed["artifact"]["series"] == [1.0, None]
-
-    def test_format_sse_event_accumulates_by_default(self):
-        handler = self._make_handler()
-        handler._format_sse_event("message_chunk", {"content": "hello"})
-        events = handler.get_sse_events()
-        assert events is not None
-        assert len(events) == 1
-
-    def test_format_sse_event_skip_accumulate(self):
-        handler = self._make_handler()
-        handler._format_sse_event(
-            "message_chunk", {"content": "skip"}, accumulate=False
-        )
-        events = handler.get_sse_events()
-        assert events is None  # No events accumulated
 
     def test_build_error_event(self):
         handler = self._make_handler(thread_id="err-thread")
@@ -1224,158 +996,6 @@ class TestTextPhasePassthrough:
 
 
 # ---------------------------------------------------------------------------
-# Stop-point reconciliation (decision 1b / T3-A): finalize_stopped_events
-# ---------------------------------------------------------------------------
-
-
-class TestFinalizeStoppedEvents:
-    """A user stop must close every open streaming structure so replay shows
-    partial fragments marked 'stopped' instead of live-looking zombies."""
-
-    def _handler(self, thread_id="t-stop"):
-        from src.server.services.runs.sse_producer import RunSSEProducer
-
-        return RunSSEProducer(thread_id=thread_id, run_id="r-stop")
-
-    def _events(self, handler):
-        return handler.get_sse_events() or []
-
-    def test_mid_reasoning_gets_reasoning_complete(self):
-        handler = self._handler()
-        # Simulate an open reasoning block on the main agent.
-        handler.reasoning_active.add("agent")
-        handler._open_message_ids["agent"] = "msg-1"
-
-        out = handler.finalize_stopped_events()
-
-        # A reasoning_signal:"complete" was appended for the open block.
-        assert any(
-            e["event"] in ("message_chunk", "compaction_chunk")
-            and e["data"].get("content_type") == "reasoning_signal"
-            and e["data"].get("content") == "complete"
-            for e in out
-        )
-        # Reasoning state cleared.
-        assert not handler.reasoning_active
-
-    def test_mid_tool_args_gets_terminal_close(self):
-        handler = self._handler()
-        # Simulate an in-flight Anthropic tool-call stream.
-        handler.anthropic_tool_call_state[("agent", 0)] = {
-            "name": "execute_code",
-            "id": "call-1",
-            "args_accumulated": '{"code": "import pa',
-        }
-        handler._open_message_ids["agent"] = "msg-tool"
-
-        out = handler.finalize_stopped_events()
-
-        assert any(
-            e["event"] == "tool_call_chunks"
-            and e["data"].get("finish_reason") == "stopped"
-            for e in out
-        )
-        assert not handler.anthropic_tool_call_state
-
-    def test_same_agent_in_both_tool_states_closes_once(self):
-        """A mid-turn provider fallback can leave the same agent in both the
-        Response-API and Anthropic tool-call dicts; the stop must emit exactly
-        one tool-call close for that agent, not two."""
-        handler = self._handler()
-        handler.function_call_state[("agent", 0)] = {"name": "execute_code", "id": "c1"}
-        handler.anthropic_tool_call_state[("agent", 1)] = {"name": "execute_code", "id": "c2"}
-        handler._open_message_ids["agent"] = "msg-tool"
-
-        out = handler.finalize_stopped_events()
-
-        tool_closes = [
-            e
-            for e in out
-            if e["event"] == "tool_call_chunks"
-            and e["data"].get("agent") == "agent"
-            and e["data"].get("finish_reason") == "stopped"
-        ]
-        assert len(tool_closes) == 1
-        assert not handler.function_call_state
-        assert not handler.anthropic_tool_call_state
-
-    def test_mid_artifact_gets_stopped_status(self):
-        handler = self._handler()
-        # Simulate an in-progress artifact.
-        handler._open_artifacts["art-1"] = {
-            "artifact_type": "chart",
-            "artifact_id": "art-1",
-            "agent": "agent",
-            "status": "in_progress",
-            "payload": {},
-        }
-
-        out = handler.finalize_stopped_events()
-
-        assert any(
-            e["event"] == "artifact"
-            and e["data"].get("artifact_id") == "art-1"
-            and e["data"].get("status") == "stopped"
-            for e in out
-        )
-        assert not handler._open_artifacts
-
-    def test_open_message_gets_finish_reason_stopped(self):
-        handler = self._handler()
-        handler._open_message_ids["agent"] = "msg-open"
-
-        out = handler.finalize_stopped_events()
-
-        assert any(
-            e["event"] == "message_chunk"
-            and e["data"].get("id") == "msg-open"
-            and e["data"].get("finish_reason") == "stopped"
-            for e in out
-        )
-        assert not handler._open_message_ids
-
-    def test_clean_boundary_appends_no_synthetic_events(self):
-        """Negative case: nothing open ⇒ no synthetic close events."""
-        handler = self._handler()
-        # A clean, already-closed message with a terminal finish_reason.
-        handler._format_sse_event(
-            "message_chunk",
-            {
-                "thread_id": "t-stop",
-                "agent": "agent",
-                "id": "msg-done",
-                "role": "assistant",
-                "content": "done.",
-                "finish_reason": "stop",
-            },
-        )
-        before = self._events(handler)
-
-        out = handler.finalize_stopped_events()
-
-        # No new events were appended.
-        assert len(out) == len(before)
-        assert not any(
-            e["data"].get("finish_reason") == "stopped" for e in out
-        )
-
-    def test_idempotent_double_stop_no_duplicate_closes(self):
-        """The stop-finalized marker prevents duplicate synthetic closes on a
-        second stop / handler re-entry."""
-        handler = self._handler()
-        handler.reasoning_active.add("agent")
-        handler._open_message_ids["agent"] = "msg-1"
-
-        first = handler.finalize_stopped_events()
-        first_len = len(first)
-
-        second = handler.finalize_stopped_events()
-
-        assert len(second) == first_len
-        assert handler._stop_finalized is True
-
-
-# ---------------------------------------------------------------------------
 # Compaction admission-guard wiring
 # ---------------------------------------------------------------------------
 
@@ -1547,7 +1167,7 @@ class TestModelResilienceEvents:
         return None
 
     @pytest.mark.asyncio
-    async def test_model_retry_emitted_but_not_persisted(self):
+    async def test_model_retry_emitted(self):
         handler = self._make_handler()
         chunks = await self._collect(
             handler,
@@ -1575,12 +1195,9 @@ class TestModelResilienceEvents:
         # Main-stream events pin "main" (empty namespace + no langgraph_node
         # in the middleware payload would otherwise hit the "agent" fallback).
         assert data["agent"] == "main"
-        # Transient: never persisted to the SSE event log
-        persisted = handler.get_sse_events() or []
-        assert "model_retry" not in [e["event"] for e in persisted]
 
     @pytest.mark.asyncio
-    async def test_model_fallback_emitted_and_persisted(self):
+    async def test_model_fallback_emitted(self):
         handler = self._make_handler()
         chunks = await self._collect(
             handler,
@@ -1603,9 +1220,6 @@ class TestModelResilienceEvents:
         assert data["from_is_primary"] is True
         assert data["attempts_on_from"] == 1
         assert data["agent"] == "main"
-        # Persisted so the transcript note survives history replay
-        persisted = handler.get_sse_events() or []
-        assert "model_fallback" in [e["event"] for e in persisted]
 
     @pytest.mark.asyncio
     async def test_model_fallback_ui_record_unwraps_to_legacy_shape(self):
@@ -1639,8 +1253,6 @@ class TestModelResilienceEvents:
         assert "secret" not in data["error"]
         # No artifact event leaks from the generic ui passthrough
         assert self._find_event(chunks, "artifact") is None
-        persisted = handler.get_sse_events() or []
-        assert "model_fallback" in [e["event"] for e in persisted]
 
     @pytest.mark.asyncio
     async def test_subagent_namespace_attributed(self):

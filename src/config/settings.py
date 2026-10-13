@@ -509,10 +509,6 @@ def get_max_workflow_retries() -> int:
     return get_infrastructure_config().background_execution.max_workflow_retries
 
 
-def get_merged_chunk_max_bytes() -> int:
-    return get_infrastructure_config().background_execution.merged_chunk_max_bytes
-
-
 def get_redis_ttl_workflow_events() -> int:
     return get_infrastructure_config().redis.ttl.workflow_events
 

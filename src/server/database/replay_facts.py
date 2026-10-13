@@ -17,12 +17,6 @@ from src.server.utils.pg_sanitize import SafeJson
 
 LEGACY_KEY = "legacy"
 
-# Legacy facts derived from a row's stored events stand in for them on
-# replay, so a write to the events takes the facts away in the same
-# statement: the row replays from its events until the backfill derives the
-# facts again.
-DROP_LEGACY_SQL = f"replay_facts = replay_facts - '{LEGACY_KEY}'"
-
 # The version a row's legacy facts were resolved at, as text.
 LEGACY_VERSION_SQL = f"replay_facts #>> '{{{LEGACY_KEY},v}}'"
 

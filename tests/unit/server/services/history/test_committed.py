@@ -1,6 +1,8 @@
 """A turn's committed text is read from its stored slice only while replay
 would serve that slice: cut on the branch the thread now ends in, by the code
-running now. Any other turn is projected first, as its settle would have."""
+running now. Any other turn is projected first, as its settle would have, and
+one the projection leaves for the thread's claims pass is read straight from
+its checkpoints."""
 
 from __future__ import annotations
 
@@ -33,11 +35,14 @@ def _row(text: str, *, tail: str = "tail-1") -> StoredSlice:
 class _Reader:
     serde = _SERDE
 
-    def __init__(self, anchors):
+    def __init__(self, anchors, turns=(), read_error=None):
         self.aget_turn_anchors = AsyncMock(return_value=(anchors, "tip"))
+        self.aget_turn_slices = AsyncMock(
+            return_value=list(turns), side_effect=read_error
+        )
 
 
-def _branch(stored, *, anchors=(_ANCHOR,), persisted=(1,)):
+def _branch(stored, *, anchors=(_ANCHOR,), persisted=(1,), turns=(), read_error=None):
     """The thread's pointer, its branch, and its stored slices (a list is
     one read after another)."""
     reads = stored if isinstance(stored, list) else [stored]
@@ -50,7 +55,7 @@ def _branch(stored, *, anchors=(_ANCHOR,), persisted=(1,)):
         patch.object(
             committed.CheckpointHistoryReader,
             "get_instance",
-            return_value=_Reader(list(anchors)),
+            return_value=_Reader(list(anchors), turns, read_error),
         ),
         patch.object(committed.slices_db, "get_turn_slices", AsyncMock(side_effect=reads)),
     )
@@ -76,8 +81,23 @@ async def test_a_slice_cut_on_another_branch_is_projected_again_first():
     refresh.assert_awaited_once_with("t-1", {"r-1"}, claims_pass=False)
 
 
-async def test_a_turn_still_without_a_slice_is_left_to_the_caller():
-    pointer, reader, rows = _branch([{}, {}])
+async def test_a_turn_still_without_a_slice_is_read_from_its_checkpoints():
+    # Its lanes wait on the claims pass, which its main lane never needs.
+    turn = slices.TurnSlice(
+        anchor=_ANCHOR,
+        messages=[
+            HumanMessage(content="q", id="h1"),
+            AIMessage(content="from the checkpoints", id="a1"),
+        ],
+    )
+    pointer, reader, rows = _branch([{}, {}], turns=[turn])
+    with pointer, reader, rows, patch(_REFRESH, AsyncMock()):
+        texts = await committed.committed_texts("t-1", {"r-1": 1})
+    assert texts == {"r-1": "from the checkpoints"}
+
+
+async def test_a_turn_whose_checkpoints_cannot_be_read_is_left_to_the_caller():
+    pointer, reader, rows = _branch([{}, {}], read_error=RuntimeError("pool closed"))
     with pointer, reader, rows, patch(_REFRESH, AsyncMock()):
         assert await committed.committed_texts("t-1", {"r-1": 1}) == {}
 

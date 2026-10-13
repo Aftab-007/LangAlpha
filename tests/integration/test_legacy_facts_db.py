@@ -2,9 +2,8 @@
 
 A backfill write races the run's own writers, so only a real database can show
 that it keeps the keys they set, lands only on the row version it derived
-from, is not repeated, and that a later write to the stored events takes the
-facts away again; and that a backfilled row's events are left out of the
-replay read. The checkpoint side is the unit suites' mocked reader: the rows
+from, and is not repeated; and that a backfilled row's events are left out of
+the replay read. The checkpoint side is the unit suites' mocked reader: the rows
 are what is under test here.
 """
 
@@ -190,12 +189,16 @@ async def test_a_turn_without_a_boundary_is_marked_only_when_it_stored_nothing(
 
 
 async def test_a_row_written_meanwhile_is_left_for_the_next_run(turn, monkeypatch):
-    from src.server.database.conversation.responses import append_sse_event
-
     real_write = backfill._write_facts
 
     async def after_a_live_append(rows):
-        await append_sse_event(turn.thread_id, LATER)
+        # An older server's append during a cutover, which moves the row.
+        await turn.sql(
+            "UPDATE conversation_responses "
+            "SET sse_events = COALESCE(sse_events, '[]'::jsonb) || %s::jsonb "
+            "WHERE conversation_thread_id = %s AND turn_index = 0",
+            (_json([LATER]), turn.thread_id),
+        )
         return await real_write(rows)
 
     monkeypatch.setattr(backfill, "_write_facts", after_a_live_append)
@@ -230,19 +233,6 @@ async def test_facts_that_would_replay_differently_are_never_written(turn, monke
     assert mismatched == [f"{turn.thread_id} turn 0"]
     assert (stats["turns/mismatch"], stats["turns/written"]) == (1, 0)
     assert (await turn.row())["replay_facts"] == RUN_FACTS
-    assert set(await backfill._pending_rows(turn.thread_id)) == {0}
-
-
-async def test_a_write_to_the_stored_events_takes_the_facts_away(turn):
-    from src.server.database.conversation.responses import append_sse_event
-
-    await _backfill(turn.thread_id)
-    assert "legacy" in (await turn.row())["replay_facts"]
-
-    assert await append_sse_event(turn.thread_id, LATER)
-
-    facts = (await turn.row())["replay_facts"]
-    assert facts == RUN_FACTS
     assert set(await backfill._pending_rows(turn.thread_id)) == {0}
 
 

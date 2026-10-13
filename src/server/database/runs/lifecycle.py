@@ -136,7 +136,7 @@ class NewestCheckpoint:
 
 
 # The row a finalize hands back: the terminal status plus what the post-CAS
-# effects read (outbox jobs, the transcript export). Never sse_events: a long
+# effects read (outbox jobs, the transcript export). Never sse_events: an older
 # turn's archive runs to tens of MB, and decoding it holds the event loop.
 _FINALIZE_ROW_COLUMNS = """
     conversation_response_id, conversation_thread_id, turn_index, run_seq,
@@ -156,8 +156,8 @@ class ProducerRecord:
 
     ``provenance`` is every provenance record the stream held: the main
     lane's, plus the task lanes a stop drained. ``reasoning_ms`` is None when
-    nothing timed the main agent's thinking (a recovered run), so the row's
-    facts stay unset and replay takes the durations from its stored events.
+    nothing could time the main agent's thinking (a recovered run whose
+    stream or checkpoint could not be read), so the row's facts stay unset.
     """
 
     provenance: List[Dict[str, Any]] = field(default_factory=list)
@@ -174,7 +174,6 @@ class RunOutcome:
     warnings: Optional[List[str]] = None
     errors: Optional[List[str]] = None
     execution_time: Optional[float] = None
-    sse_events: Optional[List[Dict[str, Any]]] = None
     per_call_records: Optional[list] = None
     tool_usage: Optional[Dict[str, int]] = None
     # None for a run with no stream to keep apart (one that never started).
@@ -625,7 +624,6 @@ async def finalize_run(
         if record.reasoning_ms is not None
         else None
     )
-    sse_events = outcome.sse_events
     # A checkpoint the run did not write was there before START. For a fork
     # whose run died before its first step, that is the abandoned branch's
     # tip, under the rows START truncated to the fork, so the pointer stays
@@ -672,17 +670,6 @@ async def finalize_run(
                             -- never here — a tail-draining child keeps counting
                             -- on its own row after this parent settles.
                             usage_settled_at = NOW(),
-                            -- Merge, never replace: mid-run appenders
-                            -- (append_sse_event, e.g. manual compact/offload
-                            -- context_window persists) may have durably written
-                            -- to the open row already. The events bind once,
-                            -- since every bind encodes them on the event loop;
-                            -- jsonb || NULL is NULL, so a finalize without
-                            -- events leaves the column as it was.
-                            sse_events = COALESCE(
-                                COALESCE(sse_events, '[]'::jsonb) || %s::jsonb,
-                                sse_events
-                            ),
                             replay_facts = COALESCE(%s::jsonb, replay_facts)
                         WHERE conversation_response_id = %s AND status = 'in_progress'
                         RETURNING """
@@ -695,7 +682,6 @@ async def finalize_run(
                             outcome.warnings or [],
                             outcome.errors or [],
                             outcome.execution_time,
-                            SafeJson(sse_events) if sse_events else None,
                             SafeJson(replay_facts) if replay_facts else None,
                             run_id,
                         ),
@@ -876,8 +862,8 @@ async def get_run_brief(conn, run_id: str) -> Optional[Dict[str, Any]]:
     """A run's id, thread, request key and status, read on ``conn``.
 
     For a read inside START's transaction: on its own connection it waits on
-    no pool slot while START holds the thread's locks, and it leaves out the
-    archived ``sse_events`` that ``get_run`` loads.
+    no pool slot while START holds the thread's locks, and it leaves out an
+    older row's archived ``sse_events`` that ``get_run`` loads.
     """
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
@@ -896,8 +882,9 @@ async def get_run_brief(conn, run_id: str) -> Optional[Dict[str, Any]]:
 async def get_run_ending(run_id: str) -> Optional[Dict[str, Any]]:
     """A run's status and metadata, with the workspace and user it ran for.
 
-    Narrow on purpose: ``get_run`` loads the archived ``sse_events`` too,
-    which a billing read on the resume path has no use for.
+    Narrow on purpose: ``get_run`` loads an older row's archived
+    ``sse_events`` too, which a billing read on the resume path has no use
+    for.
     """
     run_id = normalize_uuid(run_id)
     if run_id is None:

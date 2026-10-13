@@ -45,10 +45,11 @@ UNSAVED_RESULT_ENDINGS = frozenset({"cancelled", "error"})
 async def committed_texts(thread_id: str, turns: Mapping[str, Any]) -> dict[str, str]:
     """The main agent's text in each of ``turns`` (response id to turn
     index), cut from the turn's stored slice, which a turn without one has
-    projected first, as its settle would have. A response left out has no
-    slice to read (no checkpoint boundary, a turn waiting on the thread's
-    claims pass, a failed read), so its stored events are the caller's to
-    read."""
+    projected first, as its settle would have. A turn whose lanes wait on the
+    thread's claims pass is read straight from its checkpoints instead: the
+    pass places subagent launches, which its main lane never needs. A
+    response left out has no checkpoint boundary or its read failed, so its
+    stored events are the caller's to read."""
     from src.server.services.history.replay.refresh import refresh_thread
 
     anchors = await _anchors(thread_id, turns)
@@ -61,6 +62,8 @@ async def committed_texts(thread_id: str, turns: Mapping[str, Any]) -> dict[str,
                 thread_id, {rid: anchors[rid] for rid in missing}
             )
         )
+    if unread := {rid: a for rid, a in anchors.items() if rid not in texts}:
+        texts.update(await _checkpoint_texts(thread_id, unread))
     return texts
 
 
@@ -103,8 +106,28 @@ async def _slice_texts(
     except Exception:
         logger.warning("turn slice read failed; using stored events", exc_info=True)
         return {}
+    return _span_texts(thread_id, slices.stored_spans(serde, anchors, rows))
+
+
+async def _checkpoint_texts(
+    thread_id: str, anchors: Mapping[str, TurnAnchor]
+) -> dict[str, str]:
+    """Main-lane text by response id, cut from each turn's checkpoints."""
+    try:
+        turns = await CheckpointHistoryReader.get_instance().aget_turn_slices(
+            thread_id, list(anchors.values())
+        )
+    except Exception:
+        logger.warning("turn read failed; using stored events", exc_info=True)
+        return {}
+    return _span_texts(thread_id, dict(zip(anchors, turns)))
+
+
+def _span_texts(
+    thread_id: str, spans: Mapping[str, slices.SpanDelta]
+) -> dict[str, str]:
     out: dict[str, str] = {}
-    for response_id, span in slices.stored_spans(serde, anchors, rows).items():
+    for response_id, span in spans.items():
         try:
             items = history_events_to_sse(
                 messages_to_history_events(span.messages), thread_id=thread_id

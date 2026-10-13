@@ -22,7 +22,6 @@ from src.server.database.runs.lifecycle import ProducerRecord, RunOutcome
 from src.server.services.runs.stream_errors import model_call_failure
 from src.server.utils.persistence_utils import (
     calculate_execution_time,
-    get_sse_events_from_handler,
     get_token_usage_from_callback,
     get_tool_usage_from_handler,
 )
@@ -128,9 +127,8 @@ async def assemble_finalize_artifacts(
     stop_events: Optional[list[dict]] = None,
     exc: Optional[BaseException] = None,
 ) -> RunOutcome:
-    """Build everything the finalize CAS writes: usage records, the
-    (possibly stop-reconciled) sse_events, the persist metadata and the
-    producer's record.
+    """Build everything the finalize CAS writes: usage records, the persist
+    metadata and the producer's record.
 
     ``stop_events`` are the subagent events a stop teardown drained from the
     tasks its kill evicted, which the caller passes only for a cancelled run.
@@ -139,28 +137,6 @@ async def assemble_finalize_artifacts(
     thread_id = key[0]
     _, per_call_records = get_token_usage_from_callback(metadata, phase, thread_id)
     tool_usage = get_tool_usage_from_handler(metadata, phase, thread_id)
-
-    # User-pressed Stop reconciles the transcript (close open reasoning /
-    # tool-call / artifact structures) so replay doesn't render zombies;
-    # system cancels leave raw events untouched.
-    sse_events = None
-    if (
-        status == "cancelled"
-        and cancelled_by_user
-        and handler is not None
-        and hasattr(handler, "finalize_stopped_events")
-    ):
-        try:
-            sse_events = handler.finalize_stopped_events()
-        except Exception as recon_err:
-            logger.warning(
-                f"[Finalize] finalize_stopped_events failed "
-                f"for {key}: {recon_err}"
-            )
-    if sse_events is None:
-        sse_events = get_sse_events_from_handler(metadata, phase, thread_id)
-    if stop_events:
-        sse_events = (sse_events or []) + stop_events
 
     persist_metadata = {
         "msg_type": metadata.get("msg_type"),
@@ -183,10 +159,9 @@ async def assemble_finalize_artifacts(
                 ),
             )
         )
-    # The pause's own words, which settling the run's automation relays, so
-    # that reader never has to open the turn's event archive for them. A
-    # pause without words is stamped null: the interrupts that classified it
-    # are the ones the archive holds, so it has none either.
+    # The pause's own words, which settling the run's automation relays. A
+    # pause without words is stamped null, so settling knows there is
+    # nothing to relay.
     if interrupt_reason == INTERRUPT_REASON_CREDIT_PAUSE:
         persist_metadata["credit_pause_message"] = pause_message
     # Steering inputs archive on the owning response (v4 identity model:
@@ -222,7 +197,6 @@ async def assemble_finalize_artifacts(
         metadata=persist_metadata,
         errors=[error] if error else None,
         execution_time=execution_time,
-        sse_events=sse_events,
         per_call_records=per_call_records,
         tool_usage=tool_usage,
         record=_producer_record(key, handler, stop_events),

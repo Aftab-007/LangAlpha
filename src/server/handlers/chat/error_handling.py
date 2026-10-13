@@ -340,7 +340,6 @@ async def handle_workflow_error(
                         metadata={**persist_metadata, **extra_metadata},
                         errors=[error_msg],
                         execution_time=time.time() - start_time,
-                        sse_events=handler.get_sse_events() if handler else None,
                         per_call_records=records,
                         tool_usage=tools,
                     ),
