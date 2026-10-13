@@ -2024,6 +2024,11 @@ class TestReturnToAllowlist:
             # Leading slash then backslash: browsers normalize '\' to '/', so
             # '/\evil.test' becomes protocol-relative '//evil.test' — off-app.
             "/\\evil.test",
+            # urlsplit and browsers drop tab, CR and LF, which would turn
+            # each of these protocol-relative after the check passed it.
+            "/\t/evil.test",
+            "/\n/evil.test",
+            "/\r/evil.test",
         ],
     )
     def test_off_allowlist_values_fall_back_to_the_default(self, value):
@@ -2083,6 +2088,22 @@ class TestReturnToAllowlist:
         redirect = await _callback(started, code=None, error="access_denied")
 
         assert redirect.startswith(f"{DEFAULT_RETURN_TO}?mcp_error=denied")
+
+
+class TestDiscoveryHopLog:
+    @pytest.mark.asyncio
+    async def test_a_failed_hop_is_logged_by_its_host(self, monkeypatch, caplog):
+        url = "https://mcp.example.test/mcp?api_key=sk-live-in-the-query"
+
+        async def _fails(client, method, target, **kw):
+            raise RuntimeError(f"connection reset fetching {target}")
+
+        monkeypatch.setattr(connect, "pinned_request", _fails)
+        with caplog.at_level("INFO", logger=connect.__name__):
+            assert await connect._try_hop(None, url) is None
+
+        assert "mcp.example.test" in caplog.text
+        assert "sk-live-in-the-query" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

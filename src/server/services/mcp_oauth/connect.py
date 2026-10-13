@@ -236,7 +236,11 @@ async def _try_hop(client, url: str) -> httpx2.Response | None:
             _scrub_url(str(e), url), request_sent=e.request_sent
         ) from None
     except Exception as e:
-        logger.info("[mcp_oauth] discovery hop %s failed: %s", url, e)
+        # Host only: the row's URL may carry a credential in its query.
+        logger.info(
+            "[mcp_oauth] discovery hop to %s failed: %s",
+            _scrub_url(url, url), _scrub_url(str(e), url),
+        )
         return None
 
 
