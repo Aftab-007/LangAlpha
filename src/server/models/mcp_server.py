@@ -847,10 +847,11 @@ class CatalogServer(BaseModel):
     # a row nothing has ever reached: both leave ``probe`` null, and only this
     # says which.
     probe_kicked_at: Optional[datetime] = None
-    # Set only when the server's handshake named a mark we can reach. A path on
-    # this origin, never the server's own URL: resolving it here means one fetch
-    # for everyone instead of every settings-page render telling a third party
-    # who is looking, which is the same reason the brokerage marks are proxied.
+    # The mark the server's handshake named, else the mark of the plugin that
+    # installed it. A path on this origin, never the server's own URL: resolving
+    # it here means one fetch for everyone instead of every settings-page render
+    # telling a third party who is looking, which is the same reason the
+    # brokerage marks are proxied.
     icon_url: Optional[str] = None
     # Whether any tool on this row resolves to a path that binds directly, and
     # so whether the row can reach Flash at all: Flash has no sandbox, and a
@@ -918,9 +919,9 @@ class BuiltinServer(BaseModel):
     description: str = ""
     transport: str = "stdio"
     enabled: bool
-    # As on ``CatalogServer``: a path on this origin, present only when the
-    # server's handshake named a mark. Ours draw their bundle's mark instead,
-    # so in practice this fills in for a self-hoster's own additions.
+    # As on ``CatalogServer``: the handshake's mark, else the brand a wrapper
+    # bundle wraps. Absent for our own bundles' servers, whose mark the
+    # frontend already holds.
     icon_url: Optional[str] = None
     # The bundle that ships this server, and whether that bundle is switched
     # on — the same provenance pair a catalog row carries for its plugin, so

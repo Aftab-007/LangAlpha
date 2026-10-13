@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 # and the icon cap is also what keeps a cached mark small enough to sit in
 # Redis as base64.
 MAX_ICON_BYTES = 256 * 1024
+# A mark kept inline rides in the plugin's manifest, which every listing reads.
+MAX_INLINE_ICON_BYTES = 64 * 1024
 MAX_PAGE_BYTES = 1_048_576
 DEADLINE_SECONDS = 12.0
 _MAX_REDIRECTS = 3
@@ -181,6 +183,24 @@ def _pixels(data: bytes, content_type: str) -> int | None:
             best = max(best, min(data[off] or 256, data[off + 1] or 256))
         return best or None
     return None
+
+
+def inline_icon(data: bytes) -> str | None:
+    """``data`` as a ``data:`` URI this module will resolve, if it is a mark.
+
+    For a mark a plugin package carries as a file: an installed plugin keeps
+    its manifest and not its files, so the bytes are kept inline, and the
+    checks a fetched mark passes run now, while the package can still be told.
+    """
+    if len(data) > MAX_INLINE_ICON_BYTES:
+        return None
+    content_type = _sniff(data)
+    if content_type is None:
+        return None
+    pixels = _pixels(data, content_type)
+    if pixels is not None and pixels < MIN_PIXELS:
+        return None
+    return f"data:{content_type};base64,{base64.b64encode(data).decode('ascii')}"
 
 
 def _declared_icons(html: str, base_url: str) -> list[str]:

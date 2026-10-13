@@ -56,6 +56,21 @@ PUBLIC_APP_URL: str = (os.getenv("PUBLIC_APP_URL", "") or SERVER_BASE_URL).rstri
 # every server advertising a registration_endpoint uses.
 MCP_CLIENT_METADATA_URL: str = os.getenv("MCP_CLIENT_METADATA_URL", "")
 
+# The catalog the Plugins page's Discover tab lists: a forge repository whose
+# marketplace.json indexes the plugins it offers. Which catalog a deployment
+# offers its users is that deployment's choice, so none is assumed: unset,
+# Discover is off and the rest of the Plugins page works the same. Any URL a
+# plugin install accepts works, so a /tree/<ref> form pins a branch; a private
+# catalog also needs PLUGIN_MARKETPLACE_TOKEN.
+PLUGIN_MARKETPLACE_URL: str = os.getenv("PLUGIN_MARKETPLACE_URL", "")
+
+# A read-only GitHub token, so a team can point Discover at its own private
+# catalog. Sent to api.github.com only, only when fetching the marketplace's
+# own repository (the listing, and installs and updates from it), and never
+# along a redirect: services/plugins/fetch.py's _first_hop is the one place
+# that reads it.
+PLUGIN_MARKETPLACE_TOKEN: str = os.getenv("PLUGIN_MARKETPLACE_TOKEN", "")
+
 # Internal base URL the server-side PDF renderer (headless Chromium) loads
 # workspace HTML from. Must be the server's own loopback listen address so
 # Chromium fetches bytes from this process, not the public ingress.
