@@ -42,6 +42,7 @@ import { projectHistoryInterrupt } from '../interrupts/fromHistoryEvent';
 import type { HistoryRuntime } from '../runtime';
 import type { HistoryPageInfo, LoadedHistoryPage } from './olderPages';
 import { applyHistoryToolResult, markSteeredResumeCards, settleResumedInterrupts } from './resumeSettlement';
+import { readStreamFailure } from '../stream/streamFailure';
 
 /** A bubble the replay opened for a turn that nothing has written to. */
 function isEmptyStub(m: MessageRecord): boolean {
@@ -318,9 +319,14 @@ export async function loadConversationHistory(
         const msgId = currentActivePairIndex !== null
           ? (assistantMessagesByPair.get(currentActivePairIndex) ?? null) : null;
         if (msgId) {
+          // A failure the server classified carries only the text it chose to
+          // show, none for its own (internal) faults; an older row's raw text
+          // is all an unclassified one has.
+          const text = (event.error || event.message || '') as string;
           handleHistoryError({
             assistantMessageId: msgId,
-            errorText: (event.error || event.message || 'An error occurred while processing your request.') as string,
+            failure: readStreamFailure(event, text)
+              ?? { message: text || 'An error occurred while processing your request.' },
             setMessages: setMessagesForHandlers,
           });
         }

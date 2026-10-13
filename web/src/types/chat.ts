@@ -8,7 +8,7 @@ import type {
   OrderProposal,
   ProvenanceSourceType,
 } from './sse';
-import type { ErrorLinkSpec } from '@/utils/rateLimitError';
+import type { ErrorLinkSpec, StructuredError } from '@/utils/rateLimitError';
 import type { DispatchingAgent } from './api';
 
 // --- Content Segments (discriminated union) ---
@@ -513,6 +513,9 @@ export type AssistantMessage = {
   isHistory?: boolean;
   /** The backend turn this bubble belongs to (see UserMessage.turnIndex). */
   turnIndex?: number;
+  /** The bubble a reconnect's bubble continues: where the same run's stream
+   *  was writing when it dropped (`session/stream/continuedBubbles.ts`). */
+  continues?: string;
   contentSegments: ContentSegment[];
   reasoningProcesses: Record<string, ReasoningProcess>;
   toolCallProcesses: Record<string, ToolCallProcess>;
@@ -533,6 +536,10 @@ export type AssistantMessage = {
   steeringDelivered?: boolean;
   isSteering?: boolean;
   error?: boolean | string;
+  /** Why the turn failed, kept apart from `content` so whatever the turn
+   *  streamed still renders as its reply. Absent when the failure shows in
+   *  the chat input's banner instead. */
+  structuredError?: StructuredError;
   // Set when the user hard-stopped this turn (live finalize or history replay
   // of a stopped turn). Drives the per-message "⏹ Stopped" chip.
   stopped?: boolean;

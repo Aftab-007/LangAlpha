@@ -7,6 +7,7 @@
  */
 
 import { finalizeAssistantMessage } from './finalizeMessage';
+import { holdsContent } from './continuedBubbles';
 import type { StreamEventProcessor } from './processStreamEvent';
 import { noteLiveRun } from '../latestRun';
 import {
@@ -22,7 +23,6 @@ import { finalizeTodoListProcessesInMessages } from '../../hooks/utils/messageFi
 import { stripHistoryInterruptCards } from '../interrupts/buckets';
 import { checkForNewBuild } from '@/lib/staleBuild';
 import { isOnline, waitForOnline } from '@/lib/network';
-import type { AssistantMessage } from '@/types/chat';
 import type { SSEEvent, StreamProcessorRefs } from '../types';
 import type { RecoveryRuntime } from '../runtime';
 
@@ -245,6 +245,12 @@ export const reconnectToStream = async (
   // The bubble a dropped stream left: the same run continues on the new one,
   // and so does the model call the drop cut off, finish included.
   const continuedId = runId === undefined ? rt.currentMessageRef.current : null;
+  // The new bubble names it, so what lands on the turn as a whole, its failure
+  // above all, finds the bubble that holds the turn (continuedBubbles.ts).
+  const reconnectBubble = (turnIndex: number | undefined) => ({
+    ...createAssistantMessage(assistantMessageId, turnIndex),
+    ...(continuedId ? { continues: continuedId } : {}),
+  });
   {
     // Replace trailing empty history assistant message (created by history replay for the
     // in-progress pair) to avoid a duplicate bubble. If the last message is a non-empty
@@ -273,7 +279,7 @@ export const reconnectToStream = async (
           lastMsg.completedAt === undefined &&
           lastMsg.completionObservedAt === undefined
         ) {
-          return [...prev.slice(0, tail), createAssistantMessage(assistantMessageId, turnOf(prev, lastMsg.id)), ...prev.slice(tail + 1)];
+          return [...prev.slice(0, tail), reconnectBubble(turnOf(prev, lastMsg.id)), ...prev.slice(tail + 1)];
         }
       }
       // A run attached fresh (a report-back) starts unstamped: it is a turn the
@@ -281,7 +287,7 @@ export const reconnectToStream = async (
       // until the run's metadata frame names it. So a bubble continuing one may
       // have no stamp to copy and takes its turn from the projection.
       const turnIndex = continuedId ? turnOf(prev, continuedId) : undefined;
-      return appendMessage(prev, createAssistantMessage(assistantMessageId, turnIndex));
+      return appendMessage(prev, reconnectBubble(turnIndex));
     });
     rt.currentMessageRef.current = assistantMessageId;
   }
@@ -634,11 +640,13 @@ export const reconnectToStream = async (
     // this bubble `stopped: true` (with the "⏹ Stopped" chip) but left it
     // content-empty, so removing it here would erase the stop marker. Nor on
     // a drop that delivered something: the next attempt continues this
-    // bubble, stamp and all.
+    // bubble, stamp and all. Nor when it shows how the turn ended, a failure
+    // or a stop from elsewhere, which is then its whole reply: the reconnect
+    // heard nothing else of the run.
     rt.setMessages((prev) => {
       if (rt.wasStoppedRef.current || (dropped && receivedEvent)) return prev;
       const msg = prev.find((m) => m.id === assistantMessageId);
-      if (msg && msg.role === 'assistant' && (!(msg as AssistantMessage).contentSegments || (msg as AssistantMessage).contentSegments.length === 0) && !msg.content) {
+      if (msg && msg.role === 'assistant' && !msg.error && !msg.stopped && !holdsContent(msg)) {
         return prev.filter((m) => m.id !== assistantMessageId);
       }
       return prev;

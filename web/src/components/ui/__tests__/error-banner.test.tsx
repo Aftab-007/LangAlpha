@@ -135,6 +135,14 @@ describe('ErrorBanner', () => {
     consoleErr.mockRestore();
   });
 
+  it('shows an internal failure the server sent no words for as its headline alone', () => {
+    // A run that failed where no error frame could be written for it.
+    const { container } = renderInRouter(<ErrorBanner error={{ message: '', kind: 'internal' }} />);
+    const column = container.querySelector('.flex-col');
+    expect(column?.children).toHaveLength(1);
+    expect(column?.textContent).not.toBe('');
+  });
+
   // Ported from ChatViewErrorBanner.test.tsx (local-copy drift test, deleted):
   // scenarios the ChatView banner relies on that were not covered above.
 

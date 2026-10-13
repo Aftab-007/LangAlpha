@@ -356,7 +356,8 @@ describe('useChatMessages – a fork refused at admission', () => {
     expect(mockRetryStream).toHaveBeenCalledTimes(1);
     expect(mockReplay).toHaveBeenCalledTimes(1);
     expect(texts(result.current.messages, 'user')).toEqual(['question 0', 'question 1', 'question 2']);
-    expect(texts(result.current.messages, 'assistant')).toEqual(['answer 0', 'answer 1', 'answer 2', 'chat.busyRunningSend']);
+    expect(texts(result.current.messages, 'assistant')).toEqual(['answer 0', 'answer 1', 'answer 2', '']);
+    expect(result.current.messages.at(-1)).toMatchObject({ error: true, structuredError: { message: 'chat.busyRunningSend', kind: 'notice' } });
     expect(result.current.messageError).toBeNull();
   });
 });

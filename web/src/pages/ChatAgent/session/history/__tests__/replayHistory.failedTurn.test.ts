@@ -23,9 +23,9 @@ const answered = [
   { event: 'message_chunk', data: { ...CHUNK, turn_index: 0, content_type: 'text', content: 'Hello' } },
   { event: 'message_chunk', data: { ...CHUNK, turn_index: 0, finish_reason: 'stop' } },
 ];
-const failure = (error: string) => ({
+const failure = (error: string, extra: Record<string, unknown> = {}) => ({
   event: 'error',
-  data: { thread_id: 'thread-1', error, type: 'workflow_error', turn_index: 1, response_id: 'resp-1' },
+  data: { thread_id: 'thread-1', error, type: 'workflow_error', turn_index: 1, response_id: 'resp-1', ...extra },
 });
 
 async function replyAfter(items: Array<Record<string, unknown>>, id: string) {
@@ -47,7 +47,8 @@ describe('history replay: a failed turn', () => {
 
     expect(reply.error).toBe(true);
     expect(reply.isStreaming).toBe(false);
-    expect(reply.content).toBe('The provider key is not set');
+    expect(reply.content).toBe('');
+    expect(reply.structuredError).toEqual({ message: 'The provider key is not set' });
   });
 
   it('keeps the text a turn wrote before it failed', async () => {
@@ -60,6 +61,7 @@ describe('history replay: a failed turn', () => {
 
     expect(reply.error).toBe(true);
     expect(reply.content).toBe('Once upon');
+    expect(reply.structuredError).toEqual({ message: 'Provider timed out' });
   });
 
   it('words a failure the server stored no text for', async () => {
@@ -70,7 +72,30 @@ describe('history replay: a failed turn', () => {
     ], 'history-assistant-1');
 
     expect(reply.error).toBe(true);
-    expect(reply.content).toBe('An error occurred while processing your request.');
+    expect(reply.structuredError).toEqual({ message: 'An error occurred while processing your request.' });
+  });
+
+  it('replays a failure the server classified as its own with no words of its own', async () => {
+    const reply = await replyAfter([
+      ...answered,
+      { event: 'user_message', data: { thread_id: 'thread-1', turn_index: 1, content: 'Write a story' } },
+      { event: 'message_chunk', data: { ...CHUNK, turn_index: 1, content_type: 'text', content: 'Once upon' } },
+      failure('', { error_kind: 'internal' }),
+    ], 'history-assistant-1');
+
+    expect(reply.error).toBe(true);
+    expect(reply.content).toBe('Once upon');
+    expect(reply.structuredError).toMatchObject({ message: '', kind: 'internal' });
+  });
+
+  it('replays a provider failure with its status', async () => {
+    const reply = await replyAfter([
+      ...answered,
+      { event: 'user_message', data: { thread_id: 'thread-1', turn_index: 1, content: 'Reply BRAVO' } },
+      failure('Error code: 401 - invalid key', { error_kind: 'upstream', status_code: 401 }),
+    ], 'history-assistant-1');
+
+    expect(reply.structuredError).toMatchObject({ message: 'Error code: 401 - invalid key', kind: 'upstream', statusCode: 401 });
   });
 
   it('leaves the turns that did not fail alone', async () => {
