@@ -89,8 +89,14 @@ def _new_summarization_event(start: State, end: State) -> dict[str, Any] | None:
     return None
 
 
-def _set_growth(start: State, end: State, key: str) -> int:
-    """How many ids ``key``'s set gained between the two states."""
+def _offload_growth(start: State, end: State, key: str, total_key: str) -> int:
+    """How many ids ``key``'s set gained between the two states. A compaction
+    or trim inside the span drops the ids it summarized from the set, so the
+    running total counts instead wherever the end state carries one; a state
+    from before the totals counts by the set."""
+    end_total, start_total = end.get(total_key), start.get(total_key) or 0
+    if isinstance(end_total, int) and end_total >= start_total:
+        return end_total - start_total
     return len(set(end.get(key) or set()) - set(start.get(key) or set()))
 
 
@@ -202,8 +208,12 @@ def delta(start: State, end: State, *, has_input: bool = True) -> SpanDelta:
     return SpanDelta(
         messages=_new_messages(start, end, has_input=has_input),
         new_summarization_event=_new_summarization_event(start, end),
-        newly_offloaded_args=_set_growth(start, end, "_offloaded_tool_call_ids"),
-        newly_offloaded_reads=_set_growth(start, end, "_offloaded_read_result_ids"),
+        newly_offloaded_args=_offload_growth(
+            start, end, "_offloaded_tool_call_ids", "_offloaded_args_total"
+        ),
+        newly_offloaded_reads=_offload_growth(
+            start, end, "_offloaded_read_result_ids", "_offloaded_reads_total"
+        ),
         new_ui_records=_new_ui_records(start, end),
     )
 
