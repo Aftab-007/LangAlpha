@@ -422,8 +422,8 @@ class RecoveryScanner:
                     **stamped,
                 },
                 errors=errors,
-                # The stream is the only record of what the dead run fetched
-                # and how long it thought.
+                # The stream is the only record of what the dead run fetched,
+                # how long it thought, and which fallbacks it streamed.
                 record=record,
             ),
             newest=newest,
@@ -547,13 +547,17 @@ class RecoveryScanner:
     ) -> Tuple[Any, str]:
         """What the dead run streamed that its checkpoints do not keep, and
         how much of its stream was read: the provenance of the tool calls
-        they saved, and how long the main agent thought over the messages
-        they saved.
+        they saved, how long the main agent thought over the messages they
+        saved, and the main agent's fallback notices.
 
-        A run that stopped or failed may have streamed past its last save,
-        and the turn it leaves never shows that. A failed checkpoint read
-        keeps every source, as the finalize does, and no durations, which
-        only a saved message can be keyed by.
+        A run that stopped or failed may have streamed past its last save.
+        The turn it leaves never shows the calls of that step, so their
+        sources are dropped, but its notices are kept as the finalize keeps
+        them: each frame names its ui record, and replay adds those no saved
+        step holds. A frame that names none, from an older server, is left to
+        the checkpoint. A failed checkpoint read keeps every source, as the
+        finalize does, and no durations, which only a saved message can be
+        keyed by.
         """
         from src.server.database.runs.lifecycle import ProducerRecord
         from src.server.services.history.committed import (
@@ -563,6 +567,7 @@ class RecoveryScanner:
         )
         from src.server.services.history.reader import CheckpointHistoryReader
         from src.server.services.runs.reasoning_facts import saved_durations
+        from src.server.services.runs.sse_producer import fallback_from_frame
 
         frames, quality = await self._read_stream(thread_id, run_id)
         if not frames:
@@ -576,6 +581,17 @@ class RecoveryScanner:
             for event_type, data in frames
             if event_type == "provenance"
         ]
+        # Only a stopped or failed run can end on a step that saved nothing.
+        fallbacks = (
+            [
+                record
+                for event_type, data in frames
+                if event_type == "model_fallback"
+                and (record := fallback_from_frame(data)) is not None
+            ]
+            if status in UNSAVED_RESULT_ENDINGS
+            else []
+        )
         try:
             state = await CheckpointHistoryReader.get_instance().aget_run_state(
                 thread_id, run_id
@@ -586,7 +602,10 @@ class RecoveryScanner:
                 f"its provenance is recorded unchecked",
                 exc_info=True,
             )
-            return ProducerRecord(provenance=provenance), quality
+            return (
+                ProducerRecord(provenance=provenance, model_fallbacks=fallbacks),
+                quality,
+            )
         messages = (state.values or {}).get("messages") or () if state else ()
 
         kept = (
@@ -602,7 +621,9 @@ class RecoveryScanner:
             )
         return (
             ProducerRecord(
-                provenance=kept, reasoning_ms=saved_durations(frames, messages)
+                provenance=kept,
+                reasoning_ms=saved_durations(frames, messages),
+                model_fallbacks=fallbacks,
             ),
             quality,
         )

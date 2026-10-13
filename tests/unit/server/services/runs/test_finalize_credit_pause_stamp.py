@@ -442,3 +442,57 @@ async def test_a_record_that_cannot_be_read_never_blocks_the_finalize():
 @pytest.mark.asyncio
 async def test_a_run_without_a_producer_has_no_record():
     assert (await _outcome(None)).record is None
+
+
+# ─── Fallback notices ─────────────────────────────────────────────────
+
+
+def _fallback(record_id, error="boom"):
+    """A model_fallback ui record as push_ui_message streams it."""
+    return {
+        "type": "ui",
+        "id": record_id,
+        "name": "model_fallback",
+        "props": {"from_model": "primary", "to_model": "backup", "error": error},
+        "metadata": {"merge": False, "tags": ["t"], "after_message_id": "m-1"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_record_keeps_the_main_lanes_fallback_notices():
+    handler = await _streamed(
+        ((), "custom", _fallback("fb-main", "boom https://user:sekret@api.example.com")),
+        (("task:k7",), "custom", _fallback("fb-task")),
+    )
+
+    (kept,) = handler.record().model_fallbacks
+    assert kept["id"] == "fb-main"
+    assert kept["name"] == "model_fallback"
+    assert kept["metadata"] == {"after_message_id": "m-1"}
+    assert kept["props"]["to_model"] == "backup"
+    assert "sekret" not in kept["props"]["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("script", "kind", "kept"),
+    [
+        ((), "failed", True),
+        ((), "cancelled", True),
+        ((), "stream_end", False),
+        ((_paused_on(_question()),), "stream_end", False),
+    ],
+    ids=["error", "cancelled", "completed", "interrupted"],
+)
+async def test_only_a_stopped_or_failed_run_records_its_fallback_notices(
+    script, kind, kept
+):
+    # Any other ending committed every step, so its notices are in the
+    # checkpoint already.
+    handler = await _streamed(((), "custom", _fallback("fb-1")), *script)
+
+    outcome = await _outcome(handler, kind)
+
+    assert [r["id"] for r in outcome.record.model_fallbacks] == (
+        ["fb-1"] if kept else []
+    )

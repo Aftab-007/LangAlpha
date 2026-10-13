@@ -7,7 +7,7 @@ digested into the lines epoch (``keys.projection_sources``).
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -97,9 +97,12 @@ def project_turn(
         for q in inputs.queries_by_turn.get(turn_index, [])
     ]
 
+    # A stopped or failed run's last step never committed the fallback
+    # notices it streamed, so its row keeps them.
+    fallbacks = replay_facts.unsaved_fallbacks(response, turn)
     turn_items = projector.with_model_fallbacks(
         thread_id,
-        turn,
+        replace(turn, new_ui_records=[*turn.new_ui_records, *fallbacks]),
         lambda messages: history_events_to_sse(
             messages_to_history_events(messages), thread_id=thread_id
         ),

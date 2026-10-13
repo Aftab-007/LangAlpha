@@ -158,11 +158,14 @@ class ProducerRecord:
     the task lanes a stop drained, less what a stopped or failed run never
     saved. ``reasoning_ms`` is None when nothing could time the main agent's
     thinking (a recovered run whose stream or checkpoint could not be read),
-    so the row's facts stay unset.
+    so the row's facts stay unset. ``model_fallbacks`` are the main lane's
+    fallback ui records as streamed, kept only for a stopped or failed run,
+    whose last step may never have committed its own.
     """
 
     provenance: List[Dict[str, Any]] = field(default_factory=list)
     reasoning_ms: Optional[Dict[str, List[int]]] = None
+    model_fallbacks: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -620,11 +623,11 @@ async def finalize_run(
     if status not in TERMINAL_STATUSES:
         raise ValueError(f"finalize_run: {status!r} is not a terminal status")
     record = outcome.record or ProducerRecord()
-    replay_facts = (
-        {"reasoning_ms": record.reasoning_ms}
-        if record.reasoning_ms is not None
-        else None
-    )
+    replay_facts: Dict[str, Any] = {}
+    if record.reasoning_ms is not None:
+        replay_facts["reasoning_ms"] = record.reasoning_ms
+    if record.model_fallbacks:
+        replay_facts["model_fallbacks"] = record.model_fallbacks
     # A checkpoint the run did not write was there before START. For a fork
     # whose run died before its first step, that is the abandoned branch's
     # tip, under the rows START truncated to the fork, so the pointer stays

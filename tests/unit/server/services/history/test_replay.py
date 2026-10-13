@@ -2961,6 +2961,84 @@ async def test_model_fallback_stored_events_preferred(monkeypatch):
     assert "turn_index" not in stored[1]["data"]
 
 
+def _fallback_record(record_id, after=None):
+    return {
+        "type": "ui",
+        "id": record_id,
+        "name": "model_fallback",
+        "props": {"from_model": "p", "to_model": "f"},
+        "metadata": {"after_message_id": after} if after else {},
+    }
+
+
+def _failed_response(*fallbacks, sse_events=None):
+    return {
+        **_response(0, sse_events=sse_events, status="error"),
+        "errors": ["all models failed"],
+        "replay_facts": {"model_fallbacks": list(fallbacks)},
+    }
+
+
+async def test_model_fallback_a_failed_step_never_saved_replays_from_its_row(
+    monkeypatch,
+):
+    # The failing step's ui record never committed: the row's copy lands
+    # after everything the turn saved, whatever message it named, and before
+    # the terminal error.
+    turn = _turn(0, [AIMessage(content="first", id="ai-1")])
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(
+        thread_rows(
+            [_query(0)], {0: _failed_response(_fallback_record("fb-1", "unsaved"))}
+        ),
+    )
+    assert [i["event"] for i in items] == [
+        "user_message",
+        "message_chunk",
+        "model_fallback",
+        "error",
+    ]
+    assert items[2]["data"]["to_model"] == "f"
+
+
+async def test_model_fallback_saved_and_on_the_row_replays_once(monkeypatch):
+    saved = _fallback_record("fb-1")
+    turn = _turn(0, [AIMessage(content="ok", id="ai-1")], new_ui_records=[saved])
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _failed_response(saved)}),
+    )
+    assert [i["event"] for i in items] == [
+        "user_message",
+        "model_fallback",
+        "message_chunk",
+        "error",
+    ]
+
+
+async def test_model_fallback_of_a_failed_legacy_turn_replays_its_stored_copy(
+    monkeypatch,
+):
+    stored = [
+        {"event": "message_chunk", "data": {"agent": "main", "id": "ai-1", "role": "assistant", "content": "first", "content_type": "text"}},
+        {"event": "model_fallback", "data": {"agent": "main", "from_model": "p", "to_model": "f", "position": "stored"}},
+    ]
+    response = {
+        **_response(0, sse_events=stored, status="error"),
+        "errors": ["all models failed"],
+    }
+    turn = _turn(0, [AIMessage(content="first", id="ai-1")])
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(thread_rows([_query(0)], {0: response}))
+    assert [i["event"] for i in items] == [
+        "user_message",
+        "message_chunk",
+        "model_fallback",
+        "error",
+    ]
+    assert items[2]["data"]["position"] == "stored"
+
+
 async def test_resumed_run_segments_attribute_to_their_launch_turns(monkeypatch):
     # A task namespace holds one segment per run; each launch claims the
     # segment whose boundary opener equals its artifact prompt. A launch

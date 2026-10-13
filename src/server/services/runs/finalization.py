@@ -215,7 +215,10 @@ async def _producer_record(
         return None
     try:
         record = handler.record(stop_events)
-        if status in UNSAVED_RESULT_ENDINGS and record.provenance:
+        if status not in UNSAVED_RESULT_ENDINGS:
+            # Every step of a run that ended otherwise committed its notices.
+            return replace(record, model_fallbacks=[])
+        if record.provenance:
             record = replace(
                 record, provenance=await _saved_provenance(key, record.provenance)
             )

@@ -1255,6 +1255,32 @@ class TestModelResilienceEvents:
         assert self._find_event(chunks, "artifact") is None
 
     @pytest.mark.asyncio
+    async def test_a_main_lane_fallback_names_its_ui_record(self):
+        # Recovery rebuilds the record from the frame when the worker dies
+        # before the step that pushed it saves.
+        record = {
+            "type": "ui",
+            "id": "ui-abc123",
+            "name": "model_fallback",
+            "props": {"from_model": "primary-model", "to_model": "fallback-a"},
+            "metadata": {"merge": False, "tags": ["t"], "after_message_id": "m-1"},
+        }
+
+        main = self._find_event(
+            await self._collect(self._make_handler(), [record]), "model_fallback"
+        )
+        task = self._find_event(
+            await self._collect(
+                self._make_handler(), [record], namespace=("task-ns-uuid",)
+            ),
+            "model_fallback",
+        )
+
+        assert (main["fallback_id"], main["after_message_id"]) == ("ui-abc123", "m-1")
+        assert "tags" not in main
+        assert not {"fallback_id", "after_message_id"} & task.keys()
+
+    @pytest.mark.asyncio
     async def test_subagent_namespace_attributed(self):
         handler = self._make_handler()
         chunks = await self._collect(

@@ -7,6 +7,9 @@ turn it leaves never shows, so those sources are dropped. An interrupted
 run's finished calls are committed by its resume, so it keeps them all, and a
 source no tool call read (market watch) is always kept. With no stream
 nothing is recorded; with no checkpoint to check against, every source is.
+
+A stopped or failed run's fallback notices are kept as its finalize keeps
+them, rebuilt from the main lane's frames that name their ui record.
 """
 
 import json
@@ -17,6 +20,7 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from src.server.services.runs.recovery import RecoveryScanner
+from src.server.services.runs.sse_producer import RunSSEProducer
 
 THREAD, RUN = "t-lost", "r-lost"
 
@@ -298,3 +302,85 @@ async def test_a_lost_run_is_finalized_with_its_saved_messages_durations():
     assert outcome.status == "error"
     assert outcome.record.reasoning_ms == {"ai-1": [291], "ai-2": [117]}
     assert [e["data"]["tool_call_id"] for e in outcome.record.provenance] == ["tc-1"]
+
+
+# ─── Fallback notices ─────────────────────────────────────────────────
+
+
+class _Graph:
+    """Streams each ``(namespace, mode, payload)`` step to the producer."""
+
+    def __init__(self, *steps):
+        self._steps = steps
+
+    def astream(
+        self, _input_state, config=None, stream_mode=None, subgraphs=None,
+        durability=None,
+    ):
+        async def _gen():
+            for step in self._steps:
+                yield step
+
+        return _gen()
+
+
+async def _streamed_fallback():
+    """A producer that streamed one main-lane notice, and the stream it left."""
+    handler = RunSSEProducer(thread_id=THREAD, run_id=RUN)
+    notice = {
+        "type": "ui",
+        "id": "fb-main",
+        "name": "model_fallback",
+        "props": {
+            "from_model": "primary",
+            "to_model": "backup",
+            "from_is_primary": True,
+            "error": "429 at https://user:sekret@api.example.com/v1",
+            "status_code": 429,
+            "attempts_on_from": 3,
+        },
+        "metadata": {"merge": False, "tags": ["t"], "after_message_id": "ai-2"},
+    }
+    frames = [
+        frame
+        async for frame in handler.stream_workflow(
+            _Graph(((), "custom", notice)), input_state={}, config={}
+        )
+    ]
+    entries = [
+        (f"{100 + i}-0".encode(), {b"event": frame.encode()})
+        for i, frame in enumerate(frames)
+    ]
+    return handler, entries
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "kept"),
+    [("error", True), ("cancelled", True), ("interrupted", False)],
+)
+async def test_a_stopped_or_failed_runs_notices_are_kept_as_its_finalize_keeps_them(
+    status, kept
+):
+    # Skipped: another lane's notice, which its own run keeps, and a frame
+    # an older server streamed, which names no record replay could match.
+    handler, streamed = await _streamed_fallback()
+    skipped = [
+        (
+            b"200-0",
+            _wire(
+                "model_fallback",
+                {"agent": "task:k7", "fallback_id": "fb-task", "to_model": "b"},
+            ),
+        ),
+        (b"201-0", _wire("model_fallback", {"agent": "main", "to_model": "b"})),
+    ]
+
+    record, _ = await _salvage(
+        streamed + skipped, _reader(_SAVED_STATE), status=status
+    )
+
+    finalized = handler.record().model_fallbacks
+    assert [r["id"] for r in finalized] == ["fb-main"]
+    assert "sekret" not in json.dumps(finalized)
+    assert record.model_fallbacks == (finalized if kept else [])

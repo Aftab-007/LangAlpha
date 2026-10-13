@@ -114,6 +114,46 @@ def _parse_tool_args(
     return None, err_repr, err_window
 
 
+def _fallback_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """A model_fallback ui record as its response row keeps it. Metadata is
+    cut to the anchor replay reads, since the rest is run context the row
+    has no use for, and the error is scrubbed before it is stored."""
+    props = dict(record.get("props") or {})
+    if isinstance(props.get("error"), str):
+        props["error"] = _sanitize_error_text(props["error"])
+    after = (record.get("metadata") or {}).get("after_message_id")
+    return {
+        "type": "ui",
+        "id": record.get("id"),
+        "name": record.get("name"),
+        "props": props,
+        "metadata": {"after_message_id": after} if after else {},
+    }
+
+
+def fallback_from_frame(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The record a main-lane model_fallback frame names, as
+    ``_fallback_record`` keeps it, so recovery keeps a dead run's notices as
+    its finalize would. None for a frame that names none, another lane's or
+    an older server's, whose notice replay could not tell from a saved one."""
+    from src.server.services.history.projector import MODEL_FALLBACK_FIELDS
+
+    if data.get("agent") != "main" or not data.get("fallback_id"):
+        return None
+    return _fallback_record(
+        {
+            "id": data["fallback_id"],
+            "name": "model_fallback",
+            "props": {
+                key: data[key]
+                for key in (*MODEL_FALLBACK_FIELDS, "error")
+                if key in data
+            },
+            "metadata": {"after_message_id": data.get("after_message_id")},
+        }
+    )
+
+
 class RunSSEProducer:
     """LangGraph workflow SSE producer with reasoning lifecycle tracking, tool-call dedup, and content normalisation."""
 
@@ -174,6 +214,9 @@ class RunSSEProducer:
         # The main agent's provenance records as emitted, for the finalize to
         # write.
         self.provenance_events: List[Dict[str, Any]] = []
+        # The main agent's model_fallback ui records as emitted: a step that
+        # fails or is stopped after one never commits it.
+        self._model_fallbacks: List[Dict[str, Any]] = []
         # The sandbox image paths each message the main graph saved still
         # names, by message id: a later write of the message replaces its
         # entry.
@@ -538,10 +581,20 @@ class RunSSEProducer:
                         # (push_ui_message dual-writes the custom stream + the
                         # checkpointed ui channel); unwrap to the legacy wire
                         # shape so the resilience branch below handles it.
+                        fallback_ref: Dict[str, Any] = {}
                         if (
                             event_type == "ui"
                             and event_data.get("name") == "model_fallback"
                         ):
+                            if not agent_from_stream:
+                                kept = _fallback_record(event_data)
+                                self._model_fallbacks.append(kept)
+                                # Names the record, so recovery can keep a
+                                # notice whose step died with the worker.
+                                fallback_ref = {
+                                    "fallback_id": kept["id"],
+                                    **kept["metadata"],
+                                }
                             event_type = "model_fallback"
                             event_data = event_data.get("props") or {}
 
@@ -583,6 +636,7 @@ class RunSSEProducer:
                                 resilience_data["error"] = _sanitize_error_text(
                                     error_text
                                 )
+                            resilience_data.update(fallback_ref)
                             yield self._build_sse_event(event_type, resilience_data)
                             continue
 
@@ -1564,6 +1618,7 @@ class RunSSEProducer:
                 if isinstance(e, dict) and e.get("event") == "provenance"
             ],
             reasoning_ms=self._reasoning.as_facts(),
+            model_fallbacks=list(self._model_fallbacks),
         )
 
     def _format_sse_event(self, event_type: str, data: dict[str, Any]) -> str:

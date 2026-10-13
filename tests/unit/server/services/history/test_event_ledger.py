@@ -44,7 +44,10 @@ CHECKPOINT_PROJECTED = {
     # is the `context_window` ui record its own state write carries
     "steering_delivered",
     "interrupt",
-    "model_fallback",  # ui-channel record pushed by ModelResilienceMiddleware
+    "model_fallback",  # ui-channel record pushed by ModelResilienceMiddleware;
+    # a stopped or failed run's last step never commits its own, which the
+    # response row's replay_facts keep (recovery rebuilds them from the
+    # frames of a run whose worker died)
     "workflow_lifecycle",  # ui-channel `workflow_run` snapshot upserted by
     # the workflow driver at terminal; frames re-emitted verbatim on replay
 }

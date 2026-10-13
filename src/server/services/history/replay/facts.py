@@ -1,12 +1,13 @@
 """Replay facts: what a settled run shows on replay that its checkpoint does not keep.
 
-A run's row carries them in ``replay_facts``: how long the main agent thought
-over each message it committed (``reasoning_ms``, on the turn's response row),
-the URL each sandbox image a subagent run referenced was captured to
-(``images``), and the steering a subagent run handed back unread
-(``steering_returned``), both on the run's ``subagent_runs`` row. A row
-settled before the column existed has none, and replay keeps reading what it
-needs from the turn's stored events.
+A run's row carries them in ``replay_facts``. The turn's response row holds
+how long the main agent thought over each message it committed
+(``reasoning_ms``) and the fallback notices a stopped or failed run streamed
+(``model_fallbacks``). A subagent run's ``subagent_runs`` row holds the URL
+each sandbox image it referenced was captured to (``images``) and the
+steering it handed back unread (``steering_returned``). A row settled before
+the column existed has none, and replay keeps reading what it needs from the
+turn's stored events.
 
 Run facts are learned after the run settles, so they can change a turn whose
 lines are already stored: they are read with the thread's other replay rows,
@@ -20,6 +21,7 @@ from typing import Any, Required, TypedDict
 
 from ptc_agent.agent.middleware.image_capture import IMAGE_MD_RE
 from src.server.services.history.replay.lanes import MAIN_LANE, agent_lane
+from src.server.services.history.slices import SpanDelta
 
 
 class ResponseFacts(TypedDict, total=False):
@@ -28,6 +30,8 @@ class ResponseFacts(TypedDict, total=False):
 
     # Message id -> the ms of each thinking block the live stream timed.
     reasoning_ms: dict[str, list[int]]
+    # A stopped or failed run's model_fallback ui records, as streamed.
+    model_fallbacks: list[dict[str, Any]]
 
 
 class ReturnedSteering(TypedDict, total=False):
@@ -117,6 +121,28 @@ def apply_reasoning_durations(
         timed = [ms for ms in spans if isinstance(ms, int) and not isinstance(ms, bool)]
         if timed:
             data["elapsed_ms"] = sum(timed)
+
+
+# --------------------------------------------------------- model fallbacks
+
+
+def unsaved_fallbacks(
+    response: dict[str, Any] | None, span: SpanDelta
+) -> list[dict[str, Any]]:
+    """The row's fallback notices the span's ui records lack, after the
+    span's last message: they fired in the run's last step, which committed
+    nothing past it."""
+    facts = (response or {}).get("replay_facts")
+    records = facts.get("model_fallbacks") if isinstance(facts, dict) else None
+    if not isinstance(records, list):
+        return []
+    saved = {r.get("id") for r in span.new_ui_records}
+    after = {"after_message_id": span.messages[-1].id} if span.messages else {}
+    return [
+        {**r, "metadata": after}
+        for r in records
+        if isinstance(r, dict) and r.get("id") not in saved
+    ]
 
 
 # --------------------------------------------------------------- run lanes
