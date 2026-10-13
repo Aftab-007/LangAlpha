@@ -26,7 +26,7 @@ vi.mock('../utils/threadStorage', () => ({
 
 vi.mock('../../utils/api', async () => (await import('./chatHookHarness')).apiMockModule());
 
-import { getWorkflowStatus, reconnectToWorkflowStream, replayThreadHistory, sendChatMessageStream } from '../../utils/api';
+import { getWorkflowStatus, reconnectToWorkflowStream, replayThreadHistory, sendChatMessageStream, sendRetryStream } from '../../utils/api';
 import { useChatMessages } from '../useChatMessages';
 import type { MessageRecord } from '../utils/types';
 import type { StructuredError } from '@/utils/rateLimitError';
@@ -35,6 +35,7 @@ const mockStatus = getWorkflowStatus as Mock;
 const mockReconnect = reconnectToWorkflowStream as Mock;
 const mockReplay = replayThreadHistory as Mock;
 const mockSendStream = sendChatMessageStream as Mock;
+const mockRetryStream = sendRetryStream as Mock;
 
 type Emit = (e: Record<string, unknown>) => void;
 
@@ -1779,6 +1780,455 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
       expect(steer).toMatchObject({ steeringDelivered: true, turnIndex: 2 });
       expect(steer.queueError).toBeUndefined();
       await step(() => attach.end());
+    },
+  );
+
+  /** The server's answer to a copy of a send it already took under the same key,
+   *  `steered` when that copy went into a running turn as a steer. */
+  const duplicateOf = (runId: string, runStatus = 'in_progress', steered = false) => {
+    const message = 'This request was already accepted; reconnect to the existing run instead of resending.';
+    return Object.assign(new Error(message), {
+      status: 409,
+      errorInfo: {
+        code: 'duplicate_request', message, thread_id: 'th-1', run_id: runId, run_status: runStatus,
+        ...(steered ? { steered: true } : {}),
+      },
+    });
+  };
+  const keyOf = (call: number) => (mockSendStream.mock.calls[call][3] as { requestKey: string | null }).requestKey;
+  const lostAnswer = () => mockSendStream.mockImplementationOnce(async () => {
+    throw new TypeError('Failed to fetch');
+  });
+
+  it('a steer sent again after its POST lost the answer shows once, waiting for the run to deliver it', async () => {
+    const hook = await mount();
+    const turn = runningTurn('run-1', 1, 'the answer');
+    lostAnswer();
+    mockSendStream.mockImplementationOnce(async () => {
+      throw duplicateOf('run-1', 'in_progress', true);
+    });
+    await step(() => void hook.result.current.handleSendMessage('go on'));
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    expect(steerCopies(hook)).toMatchObject([{ queueError: 'Failed to send message' }]);
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+
+    // The same send, under the key the server already took.
+    expect(keyOf(2)).toBe(keyOf(1));
+    const [steer, ...extra] = steerCopies(hook);
+    expect(extra).toEqual([]);
+    expect(steer.steering).toBe(true);
+    expect(steer.queueError).toBeUndefined();
+    expect(hook.result.current.messageError).toBeNull();
+
+    await step(() => turn.deliver());
+    await step(() => turn.finish());
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    const [delivered, ...more] = steerCopies(hook);
+    expect(more).toEqual([]);
+    expect(delivered.steeringDelivered).toBe(true);
+    expect(delivered.queueError).toBeUndefined();
+    expect(hook.result.current.messageError).toBeNull();
+  });
+
+  it('a steer sent again that the run delivers before the server answers it as a copy shows once, delivered', async () => {
+    const hook = await mount();
+    const turn = runningTurn('run-1', 1, 'the answer');
+    lostAnswer();
+    let answer: () => void = () => {};
+    mockSendStream.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      answer = () => reject(duplicateOf('run-1', 'in_progress', true));
+    }));
+    await step(() => void hook.result.current.handleSendMessage('go on'));
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    await step(() => turn.deliver());
+    await step(() => answer());
+
+    const [steer, ...extra] = steerCopies(hook);
+    expect(extra).toEqual([]);
+    expect(steer.steeringDelivered).toBe(true);
+    expect(steer.queueError).toBeUndefined();
+    expect(hook.result.current.messageError).toBeNull();
+    await step(() => turn.finish());
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    expect(steerCopies(hook)).toHaveLength(1);
+  });
+
+  it('a steer sent again after the run delivered an earlier send of its text keeps its own key', async () => {
+    const hook = await mount();
+    let emit: Emit = () => {};
+    const turn = runningTurn('run-1', 1, 'the answer', (onEvent) => {
+      emit = onEvent;
+    });
+    const yes = { event: 'steering_delivered', messages: [{ content: 'yes', timestamp: 1_700_000_000 }] };
+    await step(() => void hook.result.current.handleSendMessage('go on'));
+    type Accepting = { onEvent: Emit; onRunIdResolved: (id: string) => void };
+    mockSendStream.mockImplementationOnce(async (_msg: string, _ws: string, _tid: string | null, { onEvent, onRunIdResolved }: Accepting) => {
+      onRunIdResolved('run-1');
+      onEvent({ event: 'steering_accepted', thread_id: 'th-1', content: 'yes', position: 1 });
+      return { disconnected: false };
+    });
+    await step(() => void hook.result.current.handleSendMessage('yes'));
+    let lose: () => void = () => {};
+    mockSendStream.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      lose = () => reject(new TypeError('Failed to fetch'));
+    }));
+    await step(() => void hook.result.current.handleSendMessage('yes'));
+    // The run delivers the first yes while the second one's POST is out, and
+    // the second one's answer is lost.
+    await step(() => emit({ ...yes, _eventId: 3 }));
+    await step(() => lose());
+    mockSendStream.mockImplementationOnce(async () => {
+      throw duplicateOf('run-1', 'in_progress', true);
+    });
+    await step(() => void hook.result.current.handleSendMessage('yes'));
+
+    // A retransmit of the second yes, which the server already holds.
+    expect(keyOf(3)).toBe(keyOf(2));
+    expect(keyOf(2)).not.toBe(keyOf(1));
+    await step(() => emit({ ...yes, _eventId: 4 }));
+    const yeses = (hook.result.current.liveMessages.get() as MessageRecord[]).filter((m) => m.role === 'user' && m.content === 'yes');
+    expect(yeses).toMatchObject([{ steeringDelivered: true }, { steeringDelivered: true }]);
+    expect(hook.result.current.messageError).toBeNull();
+    await step(() => turn.finish());
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+  });
+
+  type Accepting = { onEvent: Emit; onRunIdResolved: (id: string) => void };
+
+  it.each(['answers it as a copy', 'takes it'] as const)(
+    'a steer sent while another waits for its answer keeps its key when the server %s',
+    async (answered) => {
+      const hook = await mount();
+      const turn = runningTurn('run-1', 1, 'the answer');
+      if (answered === 'answers it as a copy') lostAnswer();
+      let answer: () => void = () => {};
+      mockSendStream.mockImplementationOnce((_msg: string, _ws: string, _tid: string | null, { onEvent, onRunIdResolved }: Accepting) =>
+        new Promise((resolve, reject) => {
+          answer = answered === 'answers it as a copy'
+            ? () => reject(duplicateOf('run-1', 'in_progress', true))
+            : () => {
+              onRunIdResolved('run-1');
+              onEvent({ event: 'steering_accepted', thread_id: 'th-1', content: 'also this', position: 1 });
+              resolve({ disconnected: false });
+            };
+        }));
+      await step(() => void hook.result.current.handleSendMessage('go on'));
+      await step(() => void hook.result.current.handleSendMessage('also this'));
+      if (answered === 'answers it as a copy') await step(() => void hook.result.current.handleSendMessage('also this'));
+      // Another message while that answer is out: the server takes it, and its answer is lost.
+      lostAnswer();
+      await step(() => void hook.result.current.handleSendMessage('and that'));
+      const other = mockSendStream.mock.calls.length - 1;
+      await step(() => answer());
+      mockSendStream.mockImplementationOnce(async () => {
+        throw duplicateOf('run-1', 'in_progress', true);
+      });
+      await step(() => void hook.result.current.handleSendMessage('and that'));
+
+      // A retransmit of the other message, under the key the server holds it by.
+      expect(keyOf(other + 1)).toBe(keyOf(other));
+      expect(keyOf(other)).not.toBe(keyOf(1));
+      const others = (hook.result.current.liveMessages.get() as MessageRecord[]).filter((m) => m.role === 'user' && m.content === 'and that');
+      expect(others).toMatchObject([{ steering: true }]);
+      await step(() => turn.finish());
+      await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    },
+  );
+
+  it.each(['after', 'before'] as const)(
+    'a steer sent again keeps the key its lost answer went out under, though another steer went out %s that answer was lost',
+    async (when) => {
+      const hook = await mount();
+      const turn = runningTurn('run-1', 1, 'the answer');
+      let loseA: () => void = () => {};
+      mockSendStream.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        loseA = () => reject(new TypeError('Failed to fetch'));
+      }));
+      mockSendStream.mockImplementationOnce(async (_msg: string, _ws: string, _tid: string | null, { onEvent, onRunIdResolved }: Accepting) => {
+        onRunIdResolved('run-1');
+        onEvent({ event: 'steering_accepted', thread_id: 'th-1', content: 'and that', position: 2 });
+        return { disconnected: false };
+      });
+      mockSendStream.mockImplementationOnce(async () => {
+        throw duplicateOf('run-1', 'in_progress', true);
+      });
+      await step(() => void hook.result.current.handleSendMessage('go on'));
+      await step(() => void hook.result.current.handleSendMessage('also this'));
+      if (when === 'after') await step(() => loseA());
+      await step(() => void hook.result.current.handleSendMessage('and that'));
+      if (when === 'before') await step(() => loseA());
+      expect(steerCopies(hook)).toMatchObject([{ queueError: 'Failed to send message' }]);
+      await step(() => void hook.result.current.handleSendMessage('also this'));
+
+      // The same send, under the key the server queued it by, which the
+      // other steer did not take over.
+      expect(keyOf(3)).toBe(keyOf(1));
+      expect(keyOf(2)).not.toBe(keyOf(1));
+      const [steer, ...extra] = steerCopies(hook);
+      expect(extra).toEqual([]);
+      expect(steer).toMatchObject({ steering: true });
+      expect(steer.queueError).toBeUndefined();
+      expect(hook.result.current.messageError).toBeNull();
+      await step(() => turn.finish());
+      await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    },
+  );
+
+  it('a steer sent again whose copy the run delivered before the server answered leaves a new send of its text that failed', async () => {
+    const hook = await mount();
+    let emit: Emit = () => {};
+    const turn = runningTurn('run-1', 1, 'the answer', (onEvent) => {
+      emit = onEvent;
+    });
+    lostAnswer();
+    let answer: () => void = () => {};
+    mockSendStream.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      answer = () => reject(duplicateOf('run-1', 'in_progress', true));
+    }));
+    await step(() => void hook.result.current.handleSendMessage('go on'));
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    await step(() => emit({ ...steered, _eventId: 3 }));
+    // The same words again, a new message, whose POST never reaches the server.
+    lostAnswer();
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    expect(keyOf(3)).not.toBe(keyOf(1));
+    await step(() => answer());
+
+    // The copies of the delivered send show it once; the new one is still failed.
+    expect(steerCopies(hook)).toMatchObject([
+      { steeringDelivered: true, requestKey: keyOf(1) },
+      { queueError: 'Failed to send message', requestKey: keyOf(3) },
+    ]);
+    expect(hook.result.current.messageError).toBe('Failed to send message');
+    // Sent again, it goes under its own key, which the server never took.
+    mockSendStream.mockImplementationOnce(async (_msg: string, _ws: string, _tid: string | null, { onEvent, onRunIdResolved }: Accepting) => {
+      onRunIdResolved('run-1');
+      onEvent({ event: 'steering_accepted', thread_id: 'th-1', content: 'also this', position: 1 });
+      return { disconnected: false };
+    });
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    expect(keyOf(4)).toBe(keyOf(3));
+    await step(() => turn.finish());
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+  });
+
+  /**
+   * Sends "go on" and loses the answer of the POST that started run-1 with it,
+   * then catches up with that run as a view does once it finds it running:
+   * the reload draws the question and the reconnect follows the turn.
+   */
+  async function lostSendThenCaughtUp(hook: Hook) {
+    lostAnswer();
+    await step(() => void hook.result.current.handleSendMessage('go on'));
+    const attach = { end: () => {} };
+    mockStatus.mockResolvedValue(running());
+    mockReplay.mockImplementation(async (_tid: string, onEvent: Emit) => {
+      onEvent({ event: 'user_message', turn_index: 0, content: 'question 0', run_id: 'run-0' });
+      onEvent({ ...chunk('answer 0'), turn_index: 0 });
+      onEvent({ event: 'user_message', turn_index: 1, content: 'go on', run_id: 'run-1' });
+      onEvent({ event: 'replay_done', thread_id: 'th-1' });
+    });
+    mockReconnect.mockImplementation((_tid: string, _rid: string, _cursor: unknown, onEvent: Emit, signal: AbortSignal) =>
+      new Promise((resolve) => {
+        onEvent({ event: 'metadata', thread_id: 'th-1', run_id: 'run-1', turn_index: 1, _eventId: 1 });
+        onEvent({ ...chunk('the answer'), _eventId: 2 });
+        onEvent({ event: 'caught_up' });
+        attach.end = () => {
+          onEvent({ ...chunk('', { finish_reason: 'stop' }), _eventId: 3 });
+          resolve({ disconnected: false, aborted: false });
+        };
+        signal.addEventListener('abort', () => resolve({ disconnected: false, aborted: true }), { once: true });
+      }));
+    await act(async () => {
+      await hook.result.current.reconnectIfStaleRun();
+    });
+    await waitFor(() => expect(mockReconnect).toHaveBeenCalled());
+    await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
+    expect(hook.result.current.isLoading).toBe(true);
+    return attach;
+  }
+
+  const questions = (hook: Hook) => (hook.result.current.liveMessages.get() as MessageRecord[]).filter(
+    (m) => m.role === 'user' && m.content === 'go on',
+  );
+
+  it('a send again of a message whose lost copy started the turn on screen shows once, as that turn\'s question', async () => {
+    const hook = await mount();
+    const attach = await lostSendThenCaughtUp(hook);
+    expect(questions(hook)).toHaveLength(1);
+    mockSendStream.mockImplementationOnce(async () => {
+      throw duplicateOf('run-1');
+    });
+    await step(() => void hook.result.current.handleSendMessage('go on'));
+
+    // The same send, under the key the server started the turn with.
+    expect(keyOf(1)).toBe(keyOf(0));
+    const [question, ...extra] = questions(hook);
+    expect(extra).toEqual([]);
+    expect(question.steering).toBeFalsy();
+    expect(hook.result.current.messageError).toBeNull();
+    // Settled: the same text sent now is a new message.
+    mockSendStream.mockImplementationOnce(async (_msg: string, _ws: string, _tid: string | null, { onEvent }: { onEvent: Emit }) => {
+      onEvent({ event: 'steering_accepted', thread_id: 'th-1', content: 'go on', position: 1 });
+      return { disconnected: false };
+    });
+    await step(() => void hook.result.current.handleSendMessage('go on'));
+    expect(keyOf(2)).toBeTruthy();
+    expect(keyOf(2)).not.toBe(keyOf(1));
+    await step(() => attach.end());
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+  });
+
+  it('a send again whose lost copy started a turn this view does not show goes, and a reload shows that turn', async () => {
+    const hook = await mount();
+    const attach = await lostSendThenCaughtUp(hook);
+    mockSendStream.mockImplementationOnce(async () => {
+      throw duplicateOf('run-2');
+    });
+    await step(() => void hook.result.current.handleSendMessage('go on'));
+
+    expect(keyOf(1)).toBe(keyOf(0));
+    expect(questions(hook)).toMatchObject([{ isHistory: true }]);
+    expect(questions(hook)[0].steering).toBeFalsy();
+    expect(hook.result.current.messageError).toBeNull();
+    const replays = mockReplay.mock.calls.length;
+    await step(() => attach.end());
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(replays + 1));
+  });
+
+  it.each(['while the run goes on', 'after it ends'] as const)(
+    'the same text sent %s, once the run delivered the copy whose answer was lost, is a new send',
+    async (when) => {
+      const hook = await mount();
+      const turn = runningTurn('run-1', 1, 'the answer');
+      lostAnswer();
+      await step(() => void hook.result.current.handleSendMessage('go on'));
+      await step(() => void hook.result.current.handleSendMessage('also this'));
+      await step(() => turn.deliver());
+      expect(steerCopies(hook)).toMatchObject([{ steeringDelivered: true }]);
+      if (when === 'after it ends') {
+        await step(() => turn.finish());
+        await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+        runningTurn('run-2', 2, 'the next answer');
+      } else {
+        mockSendStream.mockImplementationOnce(async (_msg: string, _ws: string, _tid: string | null, { onEvent }: { onEvent: Emit }) => {
+          onEvent({ event: 'steering_accepted', thread_id: 'th-1', content: 'also this', position: 1 });
+          return { disconnected: false };
+        });
+      }
+
+      await step(() => void hook.result.current.handleSendMessage('also this'));
+      expect(keyOf(2)).toBeTruthy();
+      expect(keyOf(2)).not.toBe(keyOf(1));
+    },
+  );
+
+  it('the same text sent after a reload showed the run delivered the copy whose answer was lost is a new send', async () => {
+    const hook = await mount();
+    const turn = runningTurn('run-1', 1, 'the answer');
+    lostAnswer();
+    await step(() => void hook.result.current.handleSendMessage('go on'));
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    // The run ends without this view seeing it deliver the steer.
+    await step(() => turn.finish());
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    expect(steerCopies(hook)).toMatchObject([{ queueError: 'Failed to send message' }]);
+
+    mockStatus.mockResolvedValue(threadStatus({ can_reconnect: false, status: 'completed', latest_turn_index: 2 }));
+    mockReplay.mockImplementation(steeredTurnThenAnother);
+    await act(async () => {
+      await hook.result.current.reconnectIfStaleRun();
+    });
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
+    expect(steerCopies(hook)).toMatchObject([{ steeringDelivered: true }]);
+
+    runningTurn('run-3', 3, 'the next answer');
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    expect(keyOf(2)).toBeTruthy();
+    expect(keyOf(2)).not.toBe(keyOf(1));
+  });
+
+  /** Sends "also this" on the idle view and loses the answer of a copy the
+   *  server put into another turn, then sends it again the way `how` says. */
+  async function sendSteeredCopyAgain(hook: Hook, how: 'sent again' | 'retried', runStatus: string) {
+    lostAnswer();
+    mockSendStream.mockImplementationOnce(async () => {
+      throw duplicateOf('run-1', runStatus, true);
+    });
+    await step(() => void hook.result.current.handleSendMessage('also this'));
+    expect(steerCopies(hook)).toHaveLength(1);
+    if (how === 'sent again') await step(() => void hook.result.current.handleSendMessage('also this'));
+    else await step(() => void hook.result.current.handleRetry());
+    // The same send, under the key the server already took.
+    expect(keyOf(1)).toBe(keyOf(0));
+  }
+
+  const failedReplies = (hook: Hook) => (hook.result.current.liveMessages.get() as MessageRecord[]).filter(
+    (m) => m.role === 'assistant' && (m.error || /Failed to/.test(String(m.content ?? ''))),
+  );
+
+  it.each(['sent again', 'retried'] as const)(
+    'a send %s after its copy went into a running turn as a steer shows once, and that turn delivers it',
+    async (how) => {
+      const hook = await mount();
+      // The turn that took the copy, which this view did not start or follow.
+      mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'run-1', latest_turn_index: 1 }));
+      mockReplay.mockImplementation(async (_tid: string, onEvent: Emit) => {
+        onEvent({ event: 'user_message', turn_index: 0, content: 'question 0', run_id: 'run-0' });
+        onEvent({ ...chunk('answer 0'), turn_index: 0 });
+        onEvent({ event: 'user_message', turn_index: 1, content: 'from another tab', run_id: 'run-1' });
+        onEvent({ event: 'replay_done', thread_id: 'th-1' });
+      });
+      mockReconnect.mockImplementation(endsAfter([
+        { event: 'metadata', thread_id: 'th-1', run_id: 'run-1', turn_index: 1, _eventId: 1 },
+        { ...chunk('its answer'), _eventId: 2 },
+        { ...steered, _eventId: 3 },
+        { ...chunk('', { finish_reason: 'stop' }), _eventId: 4 },
+      ]));
+
+      await sendSteeredCopyAgain(hook, how, 'in_progress');
+
+      await waitFor(() => expect(mockReconnect).toHaveBeenCalled());
+      await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+      const [steer, ...extra] = steerCopies(hook);
+      expect(extra).toEqual([]);
+      expect(steer.steeringDelivered).toBe(true);
+      expect(failedReplies(hook)).toEqual([]);
+      expect(hook.result.current.messageError).toBeNull();
+      // The view followed no stream of that turn, so a reload showed it.
+      expect(mockReplay).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(['sent again', 'retried'] as const)(
+    'a send %s after its copy went into a turn that then failed is not that turn\'s retry, and shows once',
+    async (how) => {
+      const hook = await mount();
+      mockStatus.mockResolvedValue(threadStatus({ can_reconnect: false, status: 'error', latest_turn_index: 1 }));
+      mockReplay.mockImplementation(async (_tid: string, onEvent: Emit) => {
+        onEvent({ event: 'user_message', turn_index: 0, content: 'question 0', run_id: 'run-0' });
+        onEvent({ ...chunk('answer 0'), turn_index: 0 });
+        onEvent({ event: 'user_message', turn_index: 1, content: 'from another tab', run_id: 'run-1' });
+        onEvent({ ...chunk('its answer'), turn_index: 1 });
+        onEvent({ ...steered, turn_index: 1 });
+        onEvent({ event: 'error', turn_index: 1, error: 'worker lost' });
+        onEvent({ event: 'replay_done', thread_id: 'th-1' });
+      });
+
+      await sendSteeredCopyAgain(hook, how, 'error');
+
+      expect(mockRetryStream).not.toHaveBeenCalled();
+      await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
+      expect(mockRetryStream).not.toHaveBeenCalled();
+      expect(mockSendStream).toHaveBeenCalledTimes(2);
+      const [steer, ...extra] = steerCopies(hook);
+      expect(extra).toEqual([]);
+      expect(steer).toMatchObject({ steeringDelivered: true, isHistory: true });
+      expect(hook.result.current.messageError).toBeNull();
     },
   );
 });

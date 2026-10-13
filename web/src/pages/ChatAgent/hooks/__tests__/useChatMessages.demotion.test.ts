@@ -226,4 +226,152 @@ describe('useChatMessages — handleSendSteering demotion path', () => {
       await steeringSend.catch(() => undefined);
     });
   });
+
+  it('a demoted send the server failed to start outlives a reload, and its Retry sends it again under its key', async () => {
+    const firstHang = deferred<{ disconnected: boolean }>();
+    const steerAnswer = deferred<void>();
+    mockSendStream.mockImplementation(
+      async (
+        _msg: string,
+        _ws: string,
+        _tid: string | null,
+        { onEvent }: { onEvent: OnEvent },
+      ) => {
+        const call = mockSendStream.mock.calls.length;
+        if (call === 1) {
+          onEvent({ event: 'thread_id', thread_id: 'thread-demote-2' });
+          return firstHang.promise;
+        }
+        if (call === 2) {
+          // The running turn ends while the steer waits for admission, so the
+          // thread is idle when it lands, and the START it opens fails before
+          // the run exists.
+          await steerAnswer.promise;
+          onEvent({
+            event: 'error',
+            thread_id: 'thread-demote-2',
+            error: 'start failed',
+            error_type: 'workflow_error',
+            recovery: 'resend',
+          });
+          return { disconnected: false };
+        }
+        onEvent({ event: 'metadata', thread_id: 'thread-demote-2', run_id: 'run-resent' });
+        return { disconnected: false };
+      },
+    );
+
+    const { result } = renderHookWithProviders(() => useChatMessages('ws-demote'));
+    let firstSend: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      firstSend = result.current.handleSendMessage('first turn');
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(true));
+    let steeringSend: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      steeringSend = result.current.handleSendMessage('follow-up steering');
+      await Promise.resolve();
+    });
+    firstHang.resolve({ disconnected: false });
+    await act(async () => {
+      await firstSend.catch(() => undefined);
+    });
+    steerAnswer.resolve();
+    await act(async () => {
+      await steeringSend;
+    });
+
+    // Nothing on the server holds it, so a reload, which keeps only what is
+    // not history, must keep both bubbles.
+    const followUp = result.current.messages.find(
+      (m): m is UserMessage => m.role === 'user' && m.content === 'follow-up steering',
+    );
+    expect(followUp).toMatchObject({ unadmitted: true });
+    expect(followUp?.isHistory).toBeFalsy();
+    const failed = result.current.messages.filter((m): m is AssistantMessage => m.role === 'assistant').at(-1);
+    expect(failed).toMatchObject({ error: true, unadmitted: true });
+    expect(failed?.isHistory).toBeFalsy();
+
+    await act(async () => {
+      await result.current.handleRetry();
+    });
+
+    const steerKey = (mockSendStream.mock.calls[1][3] as { requestKey: string }).requestKey;
+    expect(mockSendStream).toHaveBeenCalledTimes(3);
+    expect(mockSendStream.mock.calls[2][0]).toBe('follow-up steering');
+    expect((mockSendStream.mock.calls[2][3] as { requestKey: string }).requestKey).toBe(steerKey);
+  });
+  it('a demoted send whose resends the server never starts either keeps its message through a reload', async () => {
+    const firstHang = deferred<{ disconnected: boolean }>();
+    const steerAnswer = deferred<void>();
+    const notStarted = (onEvent: OnEvent) => onEvent({
+      event: 'retry',
+      thread_id: 'thread-demote-3',
+      auto_retry: true,
+      error_type: 'timeout_error',
+      retry_count: 1,
+      max_retries: 3,
+      recovery: 'resend',
+    });
+    mockSendStream.mockImplementation(
+      async (
+        _msg: string,
+        _ws: string,
+        _tid: string | null,
+        { onEvent }: { onEvent: OnEvent },
+      ) => {
+        const call = mockSendStream.mock.calls.length;
+        if (call === 1) {
+          onEvent({ event: 'thread_id', thread_id: 'thread-demote-3' });
+          return firstHang.promise;
+        }
+        if (call === 2) await steerAnswer.promise;
+        notStarted(onEvent);
+        return { disconnected: false };
+      },
+    );
+
+    const { result } = renderHookWithProviders(() => useChatMessages('ws-demote'));
+    let firstSend: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      firstSend = result.current.handleSendMessage('first turn');
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(true));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let steeringSend: Promise<unknown> = Promise.resolve();
+      await act(async () => {
+        steeringSend = result.current.handleSendMessage('follow-up steering');
+        await Promise.resolve();
+      });
+      firstHang.resolve({ disconnected: false });
+      await act(async () => {
+        await firstSend.catch(() => undefined);
+      });
+      steerAnswer.resolve();
+      await act(async () => {
+        await steeringSend;
+      });
+      for (const ms of [1000, 2000, 4000, 60_000]) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(ms);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The steer and its three resends, none of which the server started.
+    expect(mockSendStream).toHaveBeenCalledTimes(5);
+    const followUp = result.current.messages.find(
+      (m): m is UserMessage => m.role === 'user' && m.content === 'follow-up steering',
+    );
+    expect(followUp).toMatchObject({ unadmitted: true });
+    expect(followUp?.isHistory).toBeFalsy();
+    const failed = result.current.messages.filter((m): m is AssistantMessage => m.role === 'assistant').at(-1);
+    expect(failed).toMatchObject({ error: true, unadmitted: true });
+    expect(failed?.isHistory).toBeFalsy();
+  });
 });
