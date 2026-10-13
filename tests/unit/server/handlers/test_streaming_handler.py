@@ -1132,6 +1132,123 @@ class TestCompactionWindowGuard:
         assert handler._compaction_active is True
 
 
+class _InFlightGraph:
+    """LangGraph stand-in with a model call in flight while it streams.
+
+    Its stream cancels and awaits the call on close, as LangGraph's does, and
+    the call finishing uncancelled is what would land a usage record after
+    the run's finalize had already read the tracker. With ``release`` set, the
+    call's cancellation waits on it under a shield, as a tool's cleanup does.
+    """
+
+    def __init__(self, release: asyncio.Event | None = None):
+        self.call: asyncio.Task | None = None
+        self.closed = False
+        self.release = release
+
+    def astream(
+        self, _input_state, config=None, stream_mode=None, subgraphs=None,
+        durability=None,
+    ):
+        async def _call():
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                if self.release is not None:
+                    await asyncio.shield(self.release.wait())
+                raise
+
+        async def _gen():
+            self.call = asyncio.ensure_future(_call())
+            try:
+                while True:
+                    yield ((), "custom", {"type": "context_window", "action": "offload"})
+                    await asyncio.sleep(0.01)
+            finally:
+                self.call.cancel()
+                await asyncio.gather(self.call, return_exceptions=True)
+                self.closed = True
+
+        return _gen()
+
+
+def _orchestrated(graph):
+    """The PTC shape: the real orchestrator around the graph."""
+    from ptc_agent.agent.middleware.background_subagent.orchestrator import (
+        BackgroundSubagentOrchestrator,
+    )
+
+    return BackgroundSubagentOrchestrator(graph, MagicMock())
+
+
+_SHAPES = pytest.mark.parametrize(
+    "shape", [lambda g: g, _orchestrated], ids=["bare graph", "orchestrated"]
+)
+
+
+class TestGraphStreamClosedOnExit:
+    """Every way out of the producer cancels the graph's work in flight
+    before its caller, the executor about to finalize, regains control, with
+    the orchestrator between them as in a PTC turn."""
+
+    def _make_handler(self, **kwargs):
+        from src.server.services.runs.sse_producer import RunSSEProducer
+
+        return RunSSEProducer(thread_id="t-close", run_id="r-close", **kwargs)
+
+    @_SHAPES
+    @pytest.mark.asyncio
+    async def test_time_limit_cancels_the_call_in_flight(self, shape):
+        from src.server.services.runs.sse_producer import TurnTimeLimitError
+
+        graph = _InFlightGraph()
+        handler = self._make_handler(workflow_timeout=0.05)
+        with pytest.raises(TurnTimeLimitError):
+            async for _ in handler.stream_workflow(shape(graph), {}, {"configurable": {}}):
+                pass
+        assert graph.closed
+        assert graph.call.cancelled()
+
+    @_SHAPES
+    @pytest.mark.asyncio
+    async def test_consumer_close_cancels_the_call_in_flight(self, shape):
+        graph = _InFlightGraph()
+        frames = self._make_handler().stream_workflow(
+            shape(graph), {}, {"configurable": {}}
+        )
+        await anext(frames)  # metadata
+        await anext(frames)
+        # The executor's response to a lost transport.
+        await frames.aclose()
+        assert graph.closed
+        assert graph.call.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_a_close_that_hangs_is_left_running_past_its_bound(
+        self, monkeypatch
+    ):
+        from src.server.services.runs import sse_producer
+        from src.server.services.runs.sse_producer import TurnTimeLimitError
+
+        monkeypatch.setattr(sse_producer, "GRAPH_CLOSE_TIMEOUT_S", 0.05)
+        release = asyncio.Event()
+        graph = _InFlightGraph(release)
+        handler = self._make_handler(workflow_timeout=0.05)
+        with pytest.raises(TurnTimeLimitError):
+            async for _ in handler.stream_workflow(
+                _orchestrated(graph), {}, {"configurable": {}}
+            ):
+                pass
+        # The run's ending reached its caller with the close still going.
+        assert not graph.closed
+        release.set()
+        for _ in range(100):
+            if graph.closed:
+                break
+            await asyncio.sleep(0.01)
+        assert graph.closed and graph.call.cancelled()
+
+
 # ---------------------------------------------------------------------------
 # Model resilience events (model_retry / model_fallback + error trace)
 # ---------------------------------------------------------------------------
@@ -1406,6 +1523,48 @@ class TestErrorEventResilienceTrace:
             "provider_status",
             "try_another_model",
         ]
+
+
+class _SlowGraph:
+    """A graph whose stream outlasts a tiny wall clock."""
+
+    def astream(self, _input_state, config=None, **_kwargs):
+        async def _gen():
+            while True:
+                yield ((), "custom", {"type": "context_window", "action": "offload"})
+                await asyncio.sleep(0.01)
+
+        return _gen()
+
+
+class TestTimeLimitStop:
+    @pytest.mark.asyncio
+    async def test_stop_sends_its_own_frame_and_logs_no_traceback(self, caplog):
+        """The wall clock is a planned stop: one ``timeout_error`` frame, and a
+        warning rather than a traceback that reads as a crash."""
+        from src.server.services.runs.sse_producer import (
+            RunSSEProducer,
+            TurnTimeLimitError,
+        )
+
+        handler = RunSSEProducer(
+            thread_id="t-limit", run_id="r-limit", workflow_timeout=0.05
+        )
+        frames = []
+        with caplog.at_level("WARNING", logger="src.server.services.runs.sse_producer"):
+            with pytest.raises(TurnTimeLimitError):
+                async for frame in handler.stream_workflow(
+                    _SlowGraph(), {}, {"configurable": {}}
+                ):
+                    frames.append(frame)
+        errors = [f for f in frames if "event: error" in f]
+        assert len(errors) == 1 and '"timeout_error"' in errors[0]
+        producer_records = [
+            r for r in caplog.records
+            if r.name == "src.server.services.runs.sse_producer"
+        ]
+        assert any("time limit" in r.getMessage() for r in producer_records)
+        assert not any(r.exc_info for r in producer_records)
 
 
 class TestSanitizeErrorText:

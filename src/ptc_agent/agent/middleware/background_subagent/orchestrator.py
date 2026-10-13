@@ -5,6 +5,7 @@ re-invocation when background subagent tasks complete.
 """
 
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from typing import Any
 
 import structlog
@@ -218,11 +219,15 @@ class BackgroundSubagentOrchestrator:
         while iteration < self.max_iterations:
             iteration += 1
 
-            # Stream the agent with all parameters - agent turn ends after streaming
-            async for event in self.agent.astream(
-                current_state, config, **stream_kwargs
-            ):
-                yield event
+            # Stream the agent with all parameters - agent turn ends after streaming.
+            # Closing this stream must close the agent's too, and in this task:
+            # a bare ``async for`` leaves it to the garbage collector, so its
+            # model calls and tools would outlive the close the caller awaits.
+            async with aclosing(
+                self.agent.astream(current_state, config, **stream_kwargs)
+            ) as events:
+                async for event in events:
+                    yield event
 
             # After first iteration, strip checkpoint_id so subsequent
             # aupdate_state/astream calls use the latest checkpoint.

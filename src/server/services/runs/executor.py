@@ -45,7 +45,6 @@ from src.server.services.runs import (
     teardown,
 )
 from src.server.services.runs.finalization import FinalizeVerdict
-from src.server.services.runs.stream_writer import TransportLostError
 from src.server.services.runs.teardown import StopTeardown
 from src.server.dependencies.usage_limits import release_burst_slot
 from src.utils.cache.stream_quota import StreamQuota
@@ -646,23 +645,29 @@ class LocalRunExecutor:
         key = (thread_id, run_id)
         try:
             async def consume_workflow(wf_gen):
-                async for event in wf_gen:
-                    if cancel_event.is_set():
-                        with suppress(Exception):
-                            await wf_gen.aclose()
-                        raise asyncio.CancelledError("Explicitly cancelled by user")
+                try:
+                    async for event in wf_gen:
+                        if cancel_event.is_set():
+                            raise asyncio.CancelledError("Explicitly cancelled by user")
 
-                    if self.enable_storage:
-                        try:
-                            await self._buffer_event_redis(thread_id, run_id, event)
-                        except TransportLostError:
-                            # Fatal (I6): stop the graph at this event boundary
-                            # so the failure handler finalizes
+                        if self.enable_storage:
+                            # A TransportLostError is fatal (I6): the close
+                            # below stops the graph at this event boundary, so
+                            # the failure handler finalizes
                             # failed(transport_lost) instead of the run
                             # completing with holes in its archive.
-                            with suppress(Exception):
-                                await wf_gen.aclose()
-                            raise
+                            await self._buffer_event_redis(thread_id, run_id, event)
+                finally:
+                    # Every way out closes the stream before the handlers below
+                    # flush or finalize, a stop cancelling this task mid-write
+                    # included: left open, the graph's model calls and tools
+                    # would run on until the garbage collector reached it. A
+                    # stop landing inside the graph has already unwound it, and
+                    # this is then a no-op.
+                    aclose = getattr(wf_gen, "aclose", None)
+                    if aclose is not None:
+                        with suppress(Exception):
+                            await aclose()
 
             inner_task = asyncio.create_task(consume_workflow(workflow_generator))
 
@@ -766,10 +771,19 @@ class LocalRunExecutor:
             raise
 
         except Exception as e:
-            logger.error(
-                f"[LocalRunExecutor] Workflow {key} failed: {e}",
-                exc_info=True
-            )
+            from src.server.services.runs.sse_producer import TurnTimeLimitError
+
+            if isinstance(e, TurnTimeLimitError):
+                # Planned, so no traceback: it would only show the producer's
+                # own raise, and read as a crash in the logs.
+                logger.warning(
+                    f"[LocalRunExecutor] Workflow {key} reached its time limit: {e}"
+                )
+            else:
+                logger.error(
+                    f"[LocalRunExecutor] Workflow {key} failed: {e}",
+                    exc_info=True
+                )
             await self._finalize_run(
                 thread_id, run_id, kind="failed", error=str(e), exc=e
             )

@@ -586,14 +586,18 @@ async def run_with_credit_gate(
     ``gate=None`` the stream passes through untouched (the OSS shape).
     """
     if gate is None:
-        async for event in stream:
-            yield event
+        async with contextlib.aclosing(stream):
+            async for event in stream:
+                yield event
         return
     token = current_credit_gate.set(gate)
     await gate.start()
     try:
-        async for event in stream:
-            yield event
+        # Closed before the lane, so the turn's work has stopped by the time
+        # the gate flushes its spend and leaves the lease.
+        async with contextlib.aclosing(stream):
+            async for event in stream:
+                yield event
     finally:
         # A generator finalized from a task other than the one that started it
         # cannot reset the token; teardown must still run, or the lease and

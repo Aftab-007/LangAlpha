@@ -24,7 +24,7 @@ import logging
 import re
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Sequence
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass, field
 from hashlib import sha1
 from typing import TYPE_CHECKING, Any, Mapping
@@ -353,8 +353,9 @@ class DirectMCPBinding:
         unaffected.
         """
         if not self._clients:
-            async for event in stream:
-                yield event
+            async with aclosing(stream):
+                async for event in stream:
+                    yield event
             return
         async with AsyncExitStack() as stack:
 
@@ -380,8 +381,11 @@ class DirectMCPBinding:
             # server behind it and the waits add up across the whole set, so a
             # turn that would never call those tools still looks hung.
             await asyncio.gather(*(_open(s, c) for s, c in self._clients))
-            async for event in stream:
-                yield event
+            # Closed inside the sessions, so a tool cancelled by the close
+            # still finds its session open while it unwinds.
+            async with aclosing(stream):
+                async for event in stream:
+                    yield event
 
 
 async def prepare_direct_mcp_tools(

@@ -35,6 +35,7 @@ from src.server.services.runs.credit_usage import build_credit_usage_data
 from src.server.services.runs.reasoning_facts import ReasoningDurations
 from src.server.services.runs.stream_errors import error_event_data
 from src.server.utils.text_phase import TextPhaseTracker
+from src.utils.concurrency import aclose_within
 from src.utils.stream_coalescing import (
     HEARTBEAT_EVENT_TYPE,
     DeltaCoalescer,
@@ -58,6 +59,19 @@ logger = logging.getLogger(__name__)
 sse_logger = logging.getLogger("sse_events")
 
 WORKFLOW_TIMEOUT = get_workflow_timeout()  # seconds
+
+# 30s: enough for model calls and tools to cancel, and short of the two minutes
+# a tool's cleanup can retry against a sick sandbox while the finalize waits.
+GRAPH_CLOSE_TIMEOUT_S = 30.0
+
+
+class TurnTimeLimitError(asyncio.TimeoutError):
+    """The turn reached its wall clock. Its own error frame has gone out by the
+    time this is raised, so the generic one is not sent after it: that one
+    reads as an internal failure, which the client shows as a banner in place
+    of the turn and its answer."""
+
+
 SSE_EVENT_LOG_ENABLED = is_sse_event_log_enabled()
 
 DEFAULT_TOKEN_THRESHOLD = 120000
@@ -396,6 +410,7 @@ class RunSSEProducer:
             "chat.turn.stream",
             attributes={"thread_id_hash": (self.thread_id or "")[:16]},
         )
+        graph_stream = None
         try:
             # First event of every stream: ``metadata`` payload announcing
             # the canonical run_id for this turn. Mirrors the
@@ -488,7 +503,7 @@ class RunSSEProducer:
                             f"[TIMEOUT_ERROR] thread_id={self.thread_id} "
                             f"exceeded timeout of {self.workflow_timeout}s"
                         )
-                        raise asyncio.TimeoutError(
+                        raise TurnTimeLimitError(
                             f"Workflow exceeded timeout of {self.workflow_timeout} seconds"
                         )
 
@@ -866,10 +881,18 @@ class RunSSEProducer:
             # Don't yield error event - this is expected behavior
             raise
         except Exception as e:
-            logger.exception(f"Error in stream generator for thread_id={self.thread_id}: {e}")
+            if isinstance(e, TurnTimeLimitError):
+                # A planned stop the [TIMEOUT_ERROR] line has already named;
+                # its traceback is only this generator's own raise.
+                logger.warning(
+                    f"Turn stopped at its time limit for thread_id={self.thread_id}: {e}"
+                )
+            else:
+                logger.exception(f"Error in stream generator for thread_id={self.thread_id}: {e}")
             _stream_span.record_exception(e)
             _stream_span.set_status(Status(StatusCode.ERROR))
-            yield self._build_error_event(str(e), exc=e)
+            if not isinstance(e, TurnTimeLimitError):
+                yield self._build_error_event(str(e), exc=e)
             raise  # Re-raise so the run executor finalizes as failed
         finally:
             # Safety net: if the stream ends (timeout / error / CancelledError /
@@ -894,6 +917,22 @@ class RunSSEProducer:
             if timeout_warning_sent:
                 _stream_span.set_attribute("timeout_warning", True)
             _stream_span.end()
+            # Leaving the loop does not close the graph's stream, and until it
+            # closes, the model calls and tools in flight keep running. Left to
+            # the garbage collector, a turn stopped at its time limit ran on
+            # past its finalize, and a model call finishing then was spent with
+            # no usage recorded. Closing it here cancels and awaits them before
+            # the run's ending reaches the executor, within a bound, since
+            # LangGraph waits on its cancelled tasks without one. Last, so a
+            # cancel landing mid-close skips nothing above.
+            await aclose_within(
+                graph_stream,
+                GRAPH_CLOSE_TIMEOUT_S,
+                label=(
+                    f"the graph stream for thread_id={self.thread_id} "
+                    f"run_id={self.run_id}"
+                ),
+            )
 
     async def _verify_interrupt_durable(self, graph) -> bool:
         """True iff the checkpoint tip carries a pending __interrupt__ matching
