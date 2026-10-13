@@ -382,20 +382,11 @@ async def _workspace_name(workspace_id: str | None) -> str | None:
 # reading as completed: the job nacks, and once dead its compensation tears
 # the pair down with an error wake.
 _OUTCOME_INSTRUCTIONS = {
-    "completed": (
-        "has completed. Use agent_output to retrieve and summarize the results "
-        "for the user."
-    ),
+    "completed": "has completed.",
     "cancelled": (
-        "was stopped before it finished. Use agent_output to see how far it "
-        "got, then tell the user it was stopped and what, if anything, it "
-        "produced. Do not present partial work as finished."
+        "was stopped before it finished. Do not present partial work as finished."
     ),
-    "error": (
-        "failed before it finished. Use agent_output to see how far it got, "
-        "then tell the user it failed. Do not present its work as finished; "
-        "offer to hand it off again if they still need it."
-    ),
+    "error": "failed before it finished. Do not present its work as finished.",
 }
 
 

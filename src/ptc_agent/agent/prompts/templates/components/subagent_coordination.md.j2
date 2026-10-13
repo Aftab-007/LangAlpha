@@ -62,7 +62,7 @@ Save your findings to async_frameworks/comparison.md""",
 
 ## Parallel Execution
 
-Launch up to {{ max_concurrent_task_units | default(3) }} independent tasks in a single response. A completion notification reaches you even after your turn has ended, so ending a turn with tasks still in flight is safe.
+Launch up to {{ max_concurrent_task_units | default(3) }} independent tasks in a single response. You are notified as each one finishes.
 {% if guidance | default("detailed") == "detailed" %}
 
 ```
@@ -91,6 +91,8 @@ Task(description="Add chart to analysis", prompt="Create a matplotlib bar chart.
 ## Processing Results
 
 Embed any visualization a sub-agent produced rather than describing it: `![Chart](<task_name>/charts/chart.png)`.
+
+If a task failed, tell the user and do not present its work as done. Re-dispatch it only if they still need the work.
 {% if guidance | default("detailed") == "detailed" %}
 
 Combine findings from several sub-agents into one cohesive response rather than relaying them one at a time.

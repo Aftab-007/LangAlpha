@@ -1,7 +1,7 @@
 """Background subagent management tools.
 
 This module provides tools for the main agent to interact with background
-subagents: waiting for results and checking progress.
+subagents: reading results and checking progress.
 """
 
 from __future__ import annotations
@@ -11,13 +11,9 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from langchain_core.tools import StructuredTool
-from langgraph.config import get_config
 
-# Module-attribute binding to keep utils.build_message_checker the single patch
-# point shared with orchestrator.py.
-from ptc_agent.agent.middleware.background_subagent import utils
 from ptc_agent.agent.middleware.background_subagent.outcomes import is_credit_stop
-from ptc_agent.agent.middleware.background_subagent.utils import config_own_run_id
+from ptc_agent.agent.middleware.background_subagent.task import bare_task_id
 from src.server.contracts.status import REPORT_BACK_STATUSES
 
 if TYPE_CHECKING:
@@ -34,7 +30,6 @@ TASK_OUTPUT_DESCRIPTION = """Get the output of a background subagent task, or an
 
 Args:
     task_id: A specific task's ID, e.g. "k7Xm2p". Omit to see every task.
-    timeout: Seconds to block waiting for completion. Default 0, return now.
 
 Returns:
     The task's result once it has completed, or its progress so far."""
@@ -124,7 +119,7 @@ def _sync_task_completion(task: BackgroundTask) -> None:
     task.adopt_writer_outcome(task.asyncio_task)
 
 
-async def _delivered_result_text(registry, task, result=None) -> str:
+async def _delivered_result_text(registry, task) -> str:
     """Text handed to the model for a completed task.
 
     Durable-first: the subagent's answer checkpointed under ``task:{id}`` is
@@ -132,7 +127,7 @@ async def _delivered_result_text(registry, task, result=None) -> str:
     reads); the in-memory handler result is the fallback (CLI, failures, or
     a checkpoint that isn't readable yet).
     """
-    result = task.result if result is None else result
+    result = task.result
     success, _ = extract_result_content(result)
     if success:
         resolved = await registry.resolve_result_text(
@@ -143,7 +138,7 @@ async def _delivered_result_text(registry, task, result=None) -> str:
     return _format_result(result)
 
 
-async def _settled_reply(registry, task: BackgroundTask, result=None) -> str:
+async def _settled_reply(registry, task: BackgroundTask) -> str:
     """A settled task as a single-task reply.
 
     The rule every settled render shares: a stopped or never-started task has
@@ -154,7 +149,7 @@ async def _settled_reply(registry, task: BackgroundTask, result=None) -> str:
     notice = _terminal_notice(task)
     if notice is not None:
         return notice
-    body = await _delivered_result_text(registry, task, result)
+    body = await _delivered_result_text(registry, task)
     # Named, not hardcoded "completed": a task that settled with terminal_status
     # 'error' reaches here (only stop/timeout/never-started have notices), and
     # announcing its error text as finished work is the one thing that must not
@@ -165,13 +160,13 @@ async def _settled_reply(registry, task: BackgroundTask, result=None) -> str:
     )
 
 
-async def _settled_entry(registry, task: BackgroundTask, result=None) -> str:
+async def _settled_entry(registry, task: BackgroundTask) -> str:
     """A settled task as one entry in an aggregate listing — same rule as
     ``_settled_reply``, list shape, and the outcome named in the heading."""
     notice = _terminal_notice(task)
     if notice is not None:
         return notice
-    body = await _delivered_result_text(registry, task, result)
+    body = await _delivered_result_text(registry, task)
     return (
         f"### {task.display_id} ({task.subagent_type}) - {_settled_label(task)}\n"
         f"{body}"
@@ -202,7 +197,7 @@ async def _compose_missing_reply(registry, task_id: str, run: dict | None) -> st
     if status == "in_progress":
         return (
             f"Task-{task_id} is still running (owned by another turn or "
-            f"worker). Check again with TaskOutput(task_id=\"{task_id}\")."
+            "worker). You will be notified when it finishes."
         )
     if status in (None, "completed"):
         # Run-scoped: an archived result belongs to the run that wrote it, and
@@ -350,35 +345,23 @@ async def _resolve_task_reply(
 
 
 def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> StructuredTool:
-    """Create tool to get background task output.
+    """Create the TaskOutput tool.
 
-    This tool allows the main agent to get the output of background subagents.
-    If the task is still running, it shows progress. If completed, it returns
-    the cached result. When timeout > 0, blocks until task(s) complete with
-    user-message-interruption support.
-
-    Args:
-        middleware: The BackgroundSubagentMiddleware instance
-
-    Returns:
-        A StructuredTool for getting task output
+    It answers with what is known now: a finished task's result reaches the
+    agent on its own, mid-turn as a steer or as a new turn once the turn ends.
     """
 
-    async def task_output(
-        task_id: str | None = None,
-        timeout: float = 0,
-    ) -> str:
+    async def task_output(task_id: str | None = None) -> str:
         """Get background task output.
 
         Args:
             task_id: Task ID (e.g., 'k7Xm2p') or None for all
-            timeout: Max seconds to wait (0 = non-blocking, default)
 
         Returns:
             Result if completed, progress if still running
         """
         registry = middleware.registry
-        blocking = timeout > 0
+        task_id = bare_task_id(task_id)
 
         if task_id is not None:
             task = await registry.get_by_task_id(task_id)
@@ -398,43 +381,7 @@ def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> Structu
             if resolved is not None:
                 return resolved[1]
 
-            # Settled already — answer now regardless of timeout
             if task.completed:
-                task.result_seen = True
-                await registry.mark_result_delivered(task)
-                return await _settled_reply(registry, task)
-
-            if not blocking:
-                return _format_task_progress(task)
-
-            # Blocking: wait for this specific task
-            logger.info(
-                "Waiting for specific task",
-                task_id=task_id,
-                timeout=timeout,
-            )
-            cfg = get_config()
-            thread_id = cfg.get("configurable", {}).get("thread_id")
-            checker = await utils.build_message_checker(
-                thread_id, own_run_id=config_own_run_id(cfg)
-            )
-            result = await registry.wait_for_specific(
-                task_id, timeout, message_checker=checker
-            )
-            task = await registry.get_by_task_id(task_id)
-
-            if task:
-                task.last_checked_at = time.time()
-                if isinstance(result, dict) and result.get("status") == "interrupted":
-                    return (
-                        f"Wait interrupted: new user steering received. "
-                        f"**{task.display_id}** ({task.subagent_type}) still running in background."
-                    )
-                if isinstance(result, dict) and result.get("status") == "timeout":
-                    return (
-                        f"**{task.display_id}** ({task.subagent_type}) still running "
-                        f"(waited {timeout}s, task continues in background)"
-                    )
                 # Marked seen even when the reply is a stop notice: that
                 # notice IS this task's delivery, and without it the
                 # orchestrator's settled-but-unseen sweep announces the task
@@ -442,153 +389,55 @@ def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> Structu
                 # reported.
                 task.result_seen = True
                 await registry.mark_result_delivered(task)
-                return await _settled_reply(registry, task, result)
-            return await _missing_task_reply(registry, task_id)
+                return await _settled_reply(registry, task)
+
+            return _format_task_progress(task)
 
         # --- All tasks ---
 
-        if not blocking:
-            # Non-blocking: show current state of all tasks. Workflow-owned
-            # children are hidden from the aggregate view (their results
-            # belong to the driver) but remain individually addressable via
-            # TaskOutput(task_id=...) as the drill-in escape hatch.
-            all_tasks = await registry.get_turn_visible_tasks()
-            if not all_tasks:
-                return "No background tasks have been assigned yet."
+        # Workflow-owned children are hidden from the aggregate view (their
+        # results belong to the driver) but remain individually addressable
+        # via TaskOutput(task_id=...) as the drill-in escape hatch.
+        all_tasks = await registry.get_turn_visible_tasks()
+        if not all_tasks:
+            return "No background tasks have been assigned yet."
 
-            now = time.time()
-            # Reconcile each task against the durable ledger before counting or
-            # formatting — a stale cross-worker shell must not be counted/shown as
-            # running when the ledger already settled it (Codex: counts must
-            # precede formatting, or the header disagrees with the body).
-            resolved_by_tcid: dict[str, tuple[bool, str]] = {}
-            for task in all_tasks:
-                _sync_task_completion(task)
-                task.last_checked_at = now
-                resolved = await _resolve_task_reply(registry, task)
-                if resolved is not None:
-                    resolved_by_tcid[task.tool_call_id] = resolved
-
-            def _is_pending(t: BackgroundTask) -> bool:
-                r = resolved_by_tcid.get(t.tool_call_id)
-                return (not r[0]) if r is not None else (not t.completed)
-
-            pending_count = sum(1 for t in all_tasks if _is_pending(t))
-            completed_count = len(all_tasks) - pending_count
-
-            output = (
-                f"**Background Tasks** ({len(all_tasks)} total: "
-                f"{completed_count} completed, {pending_count} running)\n\n"
-            )
-
-            for task in sorted(all_tasks, key=lambda t: t.task_id):
-                resolved = resolved_by_tcid.get(task.tool_call_id)
-                if resolved is not None:
-                    output += resolved[1] + "\n\n"
-                elif task.completed:
-                    task.result_seen = True
-                    await registry.mark_result_delivered(task)
-                    output += await _settled_entry(registry, task) + "\n\n"
-                else:
-                    output += _format_task_progress(task) + "\n"
-
-            return output
-
-        # Blocking: wait for all tasks. Reconcile cross-worker/terminal shells
-        # against the durable ledger FIRST — wait_for_all only awaits tasks with
-        # a live local handle, so a stale shell the ledger already settled would
-        # be invisible here (Codex: else a false "No background tasks were
-        # pending."). Terminal ledger rows count as completed; a run in_progress
-        # on another worker counts as still-running.
-        logger.info("Waiting for all background tasks", timeout=timeout)
-        ledger_resolved: dict[str, tuple[bool, str]] = {}
-        for task in await registry.get_turn_visible_tasks():
+        now = time.time()
+        # Reconcile each task against the durable ledger before counting or
+        # formatting — a stale cross-worker shell must not be counted/shown as
+        # running when the ledger already settled it (Codex: counts must
+        # precede formatting, or the header disagrees with the body).
+        resolved_by_tcid: dict[str, tuple[bool, str]] = {}
+        for task in all_tasks:
+            _sync_task_completion(task)
+            task.last_checked_at = now
             resolved = await _resolve_task_reply(registry, task)
             if resolved is not None:
-                ledger_resolved[task.tool_call_id] = resolved
-        ledger_body = "".join(reply + "\n\n" for _, reply in ledger_resolved.values())
-        ledger_terminal = sum(1 for is_term, _ in ledger_resolved.values() if is_term)
+                resolved_by_tcid[task.tool_call_id] = resolved
 
-        cfg = get_config()
-        thread_id = cfg.get("configurable", {}).get("thread_id")
-        checker = await utils.build_message_checker(
-            thread_id, own_run_id=config_own_run_id(cfg)
+        def _is_pending(t: BackgroundTask) -> bool:
+            r = resolved_by_tcid.get(t.tool_call_id)
+            return (not r[0]) if r is not None else (not t.completed)
+
+        pending_count = sum(1 for t in all_tasks if _is_pending(t))
+        completed_count = len(all_tasks) - pending_count
+
+        output = (
+            f"**Background Tasks** ({len(all_tasks)} total: "
+            f"{completed_count} completed, {pending_count} running)\n\n"
         )
-        results = await registry.wait_for_all(timeout=timeout, message_checker=checker)
-        # A task the ledger already resolved must not also be reported from a
-        # stale live-looking handle wait_for_all may have returned.
-        results = {
-            tcid: r for tcid, r in results.items() if tcid not in ledger_resolved
-        }
 
-        if not results and not ledger_resolved:
-            return "No background tasks were pending."
+        for task in sorted(all_tasks, key=lambda t: t.task_id):
+            resolved = resolved_by_tcid.get(task.tool_call_id)
+            if resolved is not None:
+                output += resolved[1] + "\n\n"
+            elif task.completed:
+                task.result_seen = True
+                await registry.mark_result_delivered(task)
+                output += await _settled_entry(registry, task) + "\n\n"
+            else:
+                output += _format_task_progress(task) + "\n"
 
-        # Check for interruption
-        any_interrupted = any(
-            isinstance(r, dict) and r.get("status") == "interrupted"
-            for r in results.values()
-        )
-        if any_interrupted:
-            still_running = [
-                registry.get_by_tool_call_id(tcid)
-                for tcid, r in results.items()
-                if isinstance(r, dict) and r.get("status") == "interrupted"
-            ]
-            running_names = ", ".join(f"**{t.display_id}**" for t in still_running if t)
-            completed_parts = []
-            for tcid, r in results.items():
-                t = registry.get_by_tool_call_id(tcid)
-                if t and not (isinstance(r, dict) and r.get("status") == "interrupted"):
-                    t.result_seen = True
-                    await registry.mark_result_delivered(t)
-                    completed_parts.append(
-                        await _settled_entry(registry, t, r) + "\n"
-                    )
-            output = (
-                f"Wait interrupted: new user steering received. "
-                f"Still running in background: {running_names}.\n\n"
-            )
-            if completed_parts:
-                output += "\n".join(completed_parts)
-            if ledger_body:
-                output += "\n\n" + ledger_body
-            return output
-
-        # Count completed vs still running (local waits + ledger-resolved shells)
-        local_completed = sum(
-            1
-            for r in results.values()
-            if not (isinstance(r, dict) and r.get("status") == "timeout")
-        )
-        completed_count = local_completed + ledger_terminal
-        total = len(results) + len(ledger_resolved)
-        running_count = total - completed_count
-
-        if running_count == 0:
-            output = f"All {total} background task(s) completed:\n\n"
-        elif completed_count == 0:
-            output = f"All {total} background task(s) still running (waited {timeout}s):\n\n"
-        else:
-            output = f"Background tasks: {completed_count} completed, {running_count} still running:\n\n"
-
-        for tcid, result in results.items():
-            task = registry.get_by_tool_call_id(tcid)
-            if task:
-                is_running = (
-                    isinstance(result, dict) and result.get("status") == "timeout"
-                )
-                if is_running:
-                    output += (
-                        f"### {task.display_id} ({task.subagent_type}) - "
-                        "still running\n\n"
-                    )
-                else:
-                    task.result_seen = True
-                    await registry.mark_result_delivered(task)
-                    output += await _settled_entry(registry, task, result) + "\n\n"
-        if ledger_body:
-            output += ledger_body
         return output
 
     return StructuredTool.from_function(

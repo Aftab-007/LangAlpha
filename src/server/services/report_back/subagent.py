@@ -181,39 +181,20 @@ def _task_report(payload: dict) -> "TaskReport":
 def _build_notification_message(
     report: "TaskReport", subagent_type: str | None, *, steered: bool = False
 ) -> str:
-    """The report's content, as its own turn or as a steer into a live one:
-    announce the run's outcome and direct the agent to TaskOutput, which
-    serves the result — or the failure detail — from the durable ledger. A
-    failed run must never be announced as finished work: the agent would
-    report a deliverable that does not exist."""
-    display_id = report.display_id
-    subagent_type = subagent_type or "subagent"
-    description = report.description or ""
+    """The report's content, as its own turn or as a steer into a live one.
+
+    Only the event. Reading the result is the Task description's to say and
+    never passing a failure off as finished work the system prompt's, so the
+    report does not restate either. It need not say the result is unseen
+    either: once TaskOutput serves a result, its report is dropped."""
     when = "while you were working" if steered else "after your previous turn ended"
-    if report.failed:
-        headline = (
-            f"Background subagent {display_id} ({subagent_type}) FAILED "
-            f"{when}, and you have not seen the failure. "
-            f"Retrieve the error details and report the failure to the user "
-            f"honestly — do not claim its work exists. Re-dispatch only if "
-            f"the user still needs the work."
-        )
-        call_to_action = "to see the failure details."
-    else:
-        headline = (
-            f"Background subagent {display_id} ({subagent_type}) finished "
-            f"{when}, and you have not seen its "
-            f"result. Retrieve it and report the outcome to the user "
-            f"(integrate it with your prior work where relevant)."
-        )
-        call_to_action = "to see the result."
+    outcome = "FAILED" if report.failed else "finished"
     return (
         "<system>\n"
-        f"{headline}\n"
-        f"Task description: {description}\n"
+        f"Background subagent {report.display_id} ({subagent_type or 'subagent'}) "
+        f"{outcome} {when}.\n"
+        f"Task description: {report.description or ''}\n"
         "</system>"
-        f"\n\nCall `TaskOutput(task_id=\"{report.task_id}\")` "
-        f"{call_to_action}"
     )
 
 

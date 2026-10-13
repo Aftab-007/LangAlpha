@@ -35,6 +35,22 @@ _TERMINAL_STATUSES = frozenset(
     ("completed", "error", "cancelled", "timeout", "never_started")
 )
 
+def bare_task_id(task_id: str | None) -> str | None:
+    """The task id the agent means, from either name it is shown.
+
+    Launch results and reports name a task by its display id
+    (``Task-k7Xm2p``), so that is what the agent passes back as often as the
+    bare id. A minted id is six characters, so none is long enough to carry
+    the prefix itself.
+    """
+    if task_id is None:
+        return None
+    task_id = task_id.strip()
+    if task_id.startswith("Task-") and len(task_id) > 6:
+        return task_id[len("Task-"):]
+    return task_id
+
+
 WORKFLOW_SUBAGENT_TYPE = "workflow"
 """The ``subagent_type`` a workflow run's task carries.
 

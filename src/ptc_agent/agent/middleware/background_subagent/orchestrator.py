@@ -15,7 +15,7 @@ from ptc_agent.agent.middleware.background_subagent.middleware import (
     BackgroundSubagentMiddleware,
 )
 # Module-attribute binding (not a direct symbol import) so a single patch of
-# utils.build_message_checker governs every caller — tools.py binds the same way.
+# utils.build_message_checker governs every caller.
 from ptc_agent.agent.middleware.background_subagent import utils
 from ptc_agent.agent.middleware.background_subagent.utils import config_own_run_id
 from ptc_agent.agent.transcript.classify import ORCHESTRATOR_SOURCE, STEERING_TRIGGER

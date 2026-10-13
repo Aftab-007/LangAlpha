@@ -199,13 +199,8 @@ def _run_started_reply(
         f"- Workflow: {workflow_name}\n"
         "- Status: Running in background\n"
         f"- Run files: {base_rel}/\n\n"
-        "You can:\n"
-        "- Continue with other work\n"
-        f'- Use `TaskOutput(task_id="{run_task.task_id}")` for progress '
-        "or the final result\n"
-        f'- Use `TaskOutput(task_id="{run_task.task_id}", timeout=120)` '
-        "to wait for completion\n"
-        f"- Read per-child records from {base_rel}/children/"
+        "You will be notified when it finishes. "
+        f"Per-child records are in {base_rel}/children/."
     )
     return _reply_with_artifact(
         run_task,
@@ -380,7 +375,7 @@ def create_run_workflow_tool(
                     f"{len(active_ids)} workflow run(s) already active "
                     f"({running}); the per-thread cap is "
                     f"{caps.max_runs_per_thread}. "
-                    "Wait for one to finish or cancel it first."
+                    "Start this run once one finishes, or cancel one first."
                 )
 
             # A workflow run task is a turn-lifecycle run like any Task spawn,
@@ -487,9 +482,7 @@ def create_run_workflow_tool(
             return _reply_with_artifact(
                 existing,
                 f"Workflow run already active: **{existing.display_id}** "
-                f"({meta.name}). Use "
-                f'`TaskOutput(task_id="{existing.task_id}")` for progress '
-                "or the final result.",
+                f"({meta.name}). You will be notified when it finishes.",
                 workflow_name=meta.name,
                 description=launch_description,
                 tool_call_id=tool_call_id,

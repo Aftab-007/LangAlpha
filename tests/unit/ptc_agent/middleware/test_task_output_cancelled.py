@@ -15,7 +15,6 @@ import pytest
 from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTaskRegistry,
 )
-from ptc_agent.agent.middleware.background_subagent import tools as tools_module
 from ptc_agent.agent.middleware.background_subagent.outcomes import (
     CREDIT_STOP_ERROR_TYPE,
 )
@@ -48,6 +47,21 @@ async def test_missing_task_recovers_from_durable_archive():
     assert "Paris is the capital." in result
     assert "recovered from the durable archive" in result
     assert "cancelled" not in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_the_display_id_reads_the_same_task_as_the_bare_id():
+    """Launch results and reports name a task ``Task-<id>``, and the agent
+    passes that name back. Read as a literal id it matches nothing, and the
+    agent is told the outcome was never recorded."""
+    middleware = _middleware("Paris is the capital.")
+    tool = create_task_output_tool(middleware)
+
+    result = await tool.coroutine(task_id="Task-k7Xm2p")
+
+    middleware.registry.get_by_task_id.assert_awaited_once_with("k7Xm2p")
+    assert "Paris is the capital." in result
+    assert "Task-Task-" not in result
 
 
 @pytest.mark.asyncio
@@ -148,47 +162,33 @@ async def test_a_failed_run_with_no_archive_still_reports_failure():
 
 
 @pytest.mark.asyncio
-async def test_a_stopped_task_counts_as_delivered(monkeypatch):
+async def test_a_stopped_task_counts_as_delivered():
     """The stop notice IS the delivery. Left unmarked, the task stays
     completed-but-unseen and the orchestrator announces it as finished work,
     so the agent reports the same stop a second time — that pass reads the
     ledger, which is not the turn that saw the stop."""
+    # A stop stamps the task and builds its payload in one step
+    # (``BackgroundTask.mark_cancelled``), so the task arrives settled.
     task = SimpleNamespace(
         task_id="k7Xm2p",
         display_id="Task-k7Xm2p",
         subagent_type="workflow",
-        completed=False,
-        terminal_status=None,
+        completed=True,
+        terminal_status="cancelled",
         asyncio_task=None,
-        result=None,
+        result={"success": False, "status": "cancelled", "error": "Cancelled"},
         result_seen=False,
         last_checked_at=0.0,
     )
 
-    async def _stopped_mid_wait(*_args, **_kwargs):
-        # A stop stamps the task and builds its payload in one step
-        # (``BackgroundTask.mark_cancelled``), so a wait can only report a
-        # stop for a task already settled as cancelled.
-        task.completed = True
-        task.terminal_status = "cancelled"
-        task.result = {"success": False, "status": "cancelled", "error": "Cancelled"}
-        return task.result
-
     registry = MagicMock()
     registry.run_ledger = None
     registry.get_by_task_id = AsyncMock(return_value=task)
-    registry.wait_for_specific = AsyncMock(side_effect=_stopped_mid_wait)
     registry.mark_result_delivered = AsyncMock()
     middleware = MagicMock()
     middleware.registry = registry
-    monkeypatch.setattr(tools_module, "get_config", lambda: {"configurable": {}})
-    monkeypatch.setattr(
-        tools_module.utils, "build_message_checker", AsyncMock(return_value=None)
-    )
 
-    reply = await create_task_output_tool(middleware).coroutine(
-        task_id="k7Xm2p", timeout=5
-    )
+    reply = await create_task_output_tool(middleware).coroutine(task_id="k7Xm2p")
 
     assert "was stopped by the user" in reply
     assert task.result_seen is True

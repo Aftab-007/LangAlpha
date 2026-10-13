@@ -54,11 +54,20 @@ class TestTaskReport:
 
 
 class TestBuildNotificationMessage:
-    def test_directs_to_taskoutput(self):
+    def test_carries_only_the_event(self):
         msg = _build_notification_message(_task_report(_payload()), "research")
-        assert 'TaskOutput(task_id="abc123")' in msg
-        assert "Retrieve it" in msg
-        assert "look things up" in msg
+        assert msg == (
+            "<system>\n"
+            "Background subagent Task-abc123 (research) finished after your "
+            "previous turn ended.\n"
+            "Task description: look things up\n"
+            "</system>"
+        )
+
+    def test_a_failure_taken_in_mid_turn_says_so(self):
+        report = _task_report(_payload(final_status="error"))
+        msg = _build_notification_message(report, "research", steered=True)
+        assert "Task-abc123 (research) FAILED while you were working." in msg
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +313,7 @@ def _job() -> dict:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_posts_taskoutput_pointer_turn():
+async def test_dispatch_posts_the_report_as_its_own_turn():
     posted: list[dict] = []
 
     async def _post(*, thread_id, body, **kwargs):
@@ -338,7 +347,7 @@ async def test_dispatch_posts_taskoutput_pointer_turn():
 
     assert len(posted) == 1
     content = posted[0]["messages"][0]["content"]
-    assert 'TaskOutput(task_id="abc123")' in content
+    assert "Task-abc123 (research) finished after your previous turn ended." in content
     # The message is hidden, so history labels the turn from this.
     assert posted[0]["report_source"] == {
         "kind": "task",
