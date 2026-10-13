@@ -26,6 +26,7 @@ from src.config.settings import (
     get_langsmith_tags,
     get_locale_config,
 )
+from src.observability.langsmith_tracer import with_run_tracer
 from src.server.database import conversation as qr_db
 from src.server.database.conversation.threads_write import remember_thread_llm_model
 from src.server.services.llm.thread_model import NamedModel
@@ -915,9 +916,10 @@ def build_graph_config(
     if checkpoint_id:
         graph_config["configurable"]["checkpoint_id"] = checkpoint_id
 
-    # Token tracking callback. LangSmith tracing is handled by the SDK's
-    # ambient auto-tracer activated via LANGSMITH_TRACING env var.
     if token_callback:
         graph_config["callbacks"] = [token_callback]
 
-    return graph_config
+    # LANGSMITH_TRACING switches tracing on. The turn names its own tracer
+    # because the one langchain_core would build holds the turn's whole run
+    # tree until the turn ends.
+    return with_run_tracer(graph_config)

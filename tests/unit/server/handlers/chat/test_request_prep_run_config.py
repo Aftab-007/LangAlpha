@@ -372,6 +372,29 @@ class TestBuildGraphConfig:
         config = self._build(token_callback=None)
         assert "callbacks" not in config
 
+    @pytest.mark.parametrize("token_callback", [MagicMock(), None])
+    def test_traced_turn_names_a_tracer_that_drops_its_tree(self, token_callback):
+        """A turn has no step cap, so the tracer langchain_core would build
+        holds a tree that grows for as long as the turn runs."""
+        from langsmith.run_helpers import tracing_context
+
+        from src.observability.langsmith_tracer import NonRetainingTracer
+
+        with tracing_context(enabled=True, client=MagicMock()):
+            config = self._build(token_callback=token_callback)
+
+        *rest, tracer = config["callbacks"]
+        assert rest == ([token_callback] if token_callback else [])
+        assert type(tracer) is NonRetainingTracer
+
+    def test_untraced_turn_names_no_tracer(self):
+        from langsmith.run_helpers import tracing_context
+
+        cb = MagicMock()
+        with tracing_context(enabled=False):
+            config = self._build(token_callback=cb)
+        assert config["callbacks"] == [cb]
+
     def test_extra_configurable_merged(self):
         config = self._build(extra_configurable={"custom_flag": True})
         assert config["configurable"]["custom_flag"] is True

@@ -212,6 +212,7 @@ async def _run_flash_agent(prompt: str, user_id: str | None = None) -> str:
     from langchain_core.messages import HumanMessage
 
     from ptc_agent.agent.flash.graph import build_flash_graph
+    from src.observability.langsmith_tracer import with_run_tracer
     from src.server.app import setup
 
     agent_config = setup.agent_config
@@ -236,7 +237,9 @@ async def _run_flash_agent(prompt: str, user_id: str | None = None) -> str:
     # A scheduled job has no workspace for a chart drawing to land in.
     graph = build_flash_graph(config=config, chart_annotation=False)
     input_state = {"messages": [HumanMessage(content=prompt)]}
-    result = await graph.ainvoke(input_state)
+    # A flash run has no step cap, so it names a tracer that does not hold
+    # its run tree, as a chat turn does.
+    result = await graph.ainvoke(input_state, with_run_tracer({}))
 
     # Extract text from the last AI message
     messages = result.get("messages", [])

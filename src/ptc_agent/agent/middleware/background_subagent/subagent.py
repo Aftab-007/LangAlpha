@@ -44,6 +44,7 @@ from ptc_agent.agent.middleware.runtime_context.turn import (
 )
 from ptc_agent.agent.state import DeltaAgentState
 from src.llms.llm import narrow_prompt_cache_key
+from src.observability.langsmith_tracer import with_run_tracer
 from src.utils.concurrency import aclose_within
 from src.utils.stream_coalescing import HEARTBEAT_EVENT_TYPE
 
@@ -361,6 +362,10 @@ async def arun_subagent_streaming(
     # ambient one), the ambient one when it does not, so each is stripped.
     config = _without_stream_tee(config)
     config = _with_own_deadline(config, time_limit)
+    # Built here, under the launcher's run, so the subagent's trace nests
+    # where langchain_core's own tracer would put it, without that tracer
+    # holding the subagent's whole tree until it ends.
+    config = with_run_tracer(config)
     # The clock's own end, checked on every event: a model call beats about
     # ten times a second, so a run is stopped within the grace of it unless a
     # tool runs silent past it, which that tool's own timeout bounds. Checked
@@ -686,7 +691,9 @@ def _create_task_tool(
             config["callbacks"] = [bg_tracker]
 
         with _detached_from_launcher():
-            result = subagent.invoke(subagent_state, _without_stream_tee(config))
+            result = subagent.invoke(
+                subagent_state, _without_stream_tee(with_run_tracer(config))
+            )
         if not runtime.tool_call_id:
             value_error_msg = "Tool call ID is required for subagent invocation"
             raise ValueError(value_error_msg)
@@ -748,10 +755,10 @@ def _create_task_tool(
 
         # Start from the parent config for its configurable and tags, minus
         # its callbacks: the run names only its own tracker, and
-        # arun_subagent_streaming detaches it from the launcher. LangSmith
-        # tracing rides on the SDK's ambient auto-tracer
-        # (ContextVar-propagated), so dropping the explicit callbacks list
-        # does not affect coverage.
+        # arun_subagent_streaming detaches it from the launcher and adds its
+        # LangSmith tracer, which nests under the launcher's run through the
+        # SDK's ContextVar, so dropping the explicit callbacks list does not
+        # affect coverage.
         raw_parent_config: dict[str, Any] = dict(get_config())
         parent_config: dict[str, Any] = {
             k: v for k, v in raw_parent_config.items() if k != "callbacks"
