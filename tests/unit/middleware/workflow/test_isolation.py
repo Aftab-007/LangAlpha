@@ -236,7 +236,7 @@ class TestTaskOutputAllTasksOwnerFence:
         )
         tool = _make_output_tool(registry)
 
-        output = await tool.coroutine(task_id=None)
+        output, _ = await tool.coroutine(task_id=None)
 
         assert run.display_id in output
         assert "RUN_SUMMARY" in output
@@ -263,7 +263,7 @@ class TestTaskOutputAllTasksOwnerFence:
         )
         tool = _make_output_tool(registry)
 
-        output = await tool.coroutine(task_id=owned.task_id)
+        output, _ = await tool.coroutine(task_id=owned.task_id)
         assert owned.display_id in output
         assert "CHILD_OUTPUT" in output
 
@@ -280,5 +280,5 @@ class TestTaskOutputAllTasksOwnerFence:
         )
         tool = _make_output_tool(registry)
 
-        output = await tool.coroutine(task_id=None)
+        output, _ = await tool.coroutine(task_id=None)
         assert output == "No background tasks have been assigned yet."

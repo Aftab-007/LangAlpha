@@ -12,6 +12,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from langchain_core.messages import ToolMessage
+
+from ptc_agent.agent.limits import is_pending_read
 from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTaskRegistry,
 )
@@ -42,7 +45,7 @@ def _middleware(resolved: str | None) -> MagicMock:
 async def test_missing_task_recovers_from_durable_archive():
     tool = create_task_output_tool(_middleware("Paris is the capital."))
 
-    result = await tool.coroutine(task_id="k7Xm2p")
+    result, _ = await tool.coroutine(task_id="k7Xm2p")
 
     assert "Paris is the capital." in result
     assert "recovered from the durable archive" in result
@@ -57,7 +60,7 @@ async def test_the_display_id_reads_the_same_task_as_the_bare_id():
     middleware = _middleware("Paris is the capital.")
     tool = create_task_output_tool(middleware)
 
-    result = await tool.coroutine(task_id="Task-k7Xm2p")
+    result, _ = await tool.coroutine(task_id="Task-k7Xm2p")
 
     middleware.registry.get_by_task_id.assert_awaited_once_with("k7Xm2p")
     assert "Paris is the capital." in result
@@ -78,7 +81,7 @@ async def test_missing_task_with_empty_archive_names_no_task():
     agent away from a finished task whose prefixed id missed every lookup."""
     tool = create_task_output_tool(_middleware(None))
 
-    result = await tool.coroutine(task_id="k7Xm2p")
+    result, _ = await tool.coroutine(task_id="k7Xm2p")
 
     assert result == _UNKNOWN_REPLY
 
@@ -97,13 +100,15 @@ async def test_a_prefixed_id_reads_a_completed_task_and_an_unknown_one_reads_onc
     middleware.registry = registry
     tool = create_task_output_tool(middleware)
 
-    found = await tool.coroutine(task_id=f"Task-{task.task_id}")
-    unknown = await tool.coroutine(task_id="Task-k7Xm2p")
+    found, found_mark = await tool.coroutine(task_id=f"Task-{task.task_id}")
+    unknown, unknown_mark = await tool.coroutine(task_id="Task-k7Xm2p")
 
     assert found == (
         f"**Task-{task.task_id}** (research) completed:\n\nParis is the capital."
     )
     assert unknown == _UNKNOWN_REPLY
+    # Neither is work still running, so neither read counts as a poll.
+    assert found_mark is None and unknown_mark is None
 
 
 @pytest.mark.asyncio
@@ -119,7 +124,7 @@ async def test_archive_recovery_is_scoped_to_the_ledgers_latest_run():
     middleware = _middleware("archived text")
     middleware.registry.run_ledger = ledger
 
-    reply = await create_task_output_tool(middleware).coroutine(task_id="k7Xm2p")
+    reply, _ = await create_task_output_tool(middleware).coroutine(task_id="k7Xm2p")
 
     assert "archived text" in reply
     middleware.registry.resolve_result_text.assert_awaited_once_with(
@@ -150,7 +155,7 @@ async def test_a_failed_run_that_archived_a_result_still_reports_it():
         return_value="archived workflow summary"
     )
 
-    reply = await create_task_output_tool(middleware).coroutine(task_id="k7Xm2p")
+    reply, _ = await create_task_output_tool(middleware).coroutine(task_id="k7Xm2p")
 
     assert "archived workflow summary" in reply
     assert "failed and produced no result" not in reply
@@ -181,7 +186,7 @@ async def test_a_failed_run_with_no_archive_still_reports_failure():
     middleware.registry.run_ledger = ledger
     middleware.registry.resolve_archived_result_text = AsyncMock(return_value=None)
 
-    reply = await create_task_output_tool(middleware).coroutine(task_id="k7Xm2p")
+    reply, _ = await create_task_output_tool(middleware).coroutine(task_id="k7Xm2p")
 
     assert "failed and produced no result" in reply
     assert "boom" in reply
@@ -215,7 +220,7 @@ async def test_a_stopped_task_counts_as_delivered():
     middleware = MagicMock()
     middleware.registry = registry
 
-    reply = await create_task_output_tool(middleware).coroutine(task_id="k7Xm2p")
+    reply, _ = await create_task_output_tool(middleware).coroutine(task_id="k7Xm2p")
 
     assert "was stopped by the user" in reply
     assert task.result_seen is True
@@ -302,7 +307,7 @@ async def test_a_credit_stopped_task_reads_as_resumable_from_the_ledger():
     }
     tool = create_task_output_tool(_ledger_middleware(run))
 
-    result = await tool.coroutine(task_id="k7Xm2p")
+    result, _ = await tool.coroutine(task_id="k7Xm2p")
 
     assert "ran out of credits" in result
     assert 'Task(action="resume"' in result
@@ -321,7 +326,72 @@ async def test_an_ordinary_cancel_still_reads_as_unresumable():
     }
     tool = create_task_output_tool(_ledger_middleware(run))
 
-    result = await tool.coroutine(task_id="k7Xm2p")
+    result, _ = await tool.coroutine(task_id="k7Xm2p")
 
     assert "cannot be resumed" in result
     assert 'Task(action="resume"' not in result
+
+
+# ---------------------------------------------------------------------------
+# Pending reads: how the loop guard tells a poll of live work from progress
+# ---------------------------------------------------------------------------
+
+
+def _read(tool, task_id=None) -> ToolMessage:
+    call = {"name": "TaskOutput", "args": {"task_id": task_id}, "id": "c1", "type": "tool_call"}
+    return tool.ainvoke(call)
+
+
+@pytest.mark.asyncio
+async def test_a_read_of_a_running_task_is_marked_pending_and_its_text_is_unchanged():
+    registry = BackgroundTaskRegistry(thread_id="")
+    task = await registry.register(
+        tool_call_id="tc-1", description="d", prompt="p", subagent_type="research"
+    )
+    middleware = MagicMock()
+    middleware.registry = registry
+    tool = create_task_output_tool(middleware)
+
+    running = await _read(tool, task.task_id)
+
+    assert is_pending_read(running)
+    # The mark is on the artifact alone: what the model reads is unchanged.
+    assert running.content.startswith(f"### {task.display_id}: research")
+    assert "pending" not in running.content
+
+    task.result = {"success": True, "result": "Paris is the capital."}
+    task.terminal_status = "completed"
+    assert not is_pending_read(await _read(tool, task.task_id))
+
+
+@pytest.mark.asyncio
+async def test_the_listing_is_pending_while_any_task_runs():
+    registry = BackgroundTaskRegistry(thread_id="")
+    done = await registry.register(
+        tool_call_id="tc-1", description="d", prompt="p", subagent_type="research"
+    )
+    done.result = {"success": True, "result": "Paris is the capital."}
+    done.terminal_status = "completed"
+    live = await registry.register(
+        tool_call_id="tc-2", description="d", prompt="p", subagent_type="research"
+    )
+    middleware = MagicMock()
+    middleware.registry = registry
+    tool = create_task_output_tool(middleware)
+
+    assert is_pending_read(await _read(tool))
+
+    live.result = {"success": True, "result": "Lyon is not."}
+    live.terminal_status = "completed"
+    assert not is_pending_read(await _read(tool))
+
+
+@pytest.mark.asyncio
+async def test_a_task_the_ledger_shows_in_progress_is_pending_on_another_worker():
+    """On every worker but the one holding the task, the ledger answers."""
+    running = _ledger_middleware({"status": "in_progress", "task_run_id": "run-1"})
+    finished = _ledger_middleware({"status": "completed", "task_run_id": "run-1"})
+    finished.registry.resolve_result_text = AsyncMock(return_value="done")
+
+    assert is_pending_read(await _read(create_task_output_tool(running), "k7Xm2p"))
+    assert not is_pending_read(await _read(create_task_output_tool(finished), "k7Xm2p"))

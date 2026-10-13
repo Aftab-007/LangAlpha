@@ -87,13 +87,17 @@ def decline_routing_command(
     )
 
 
-def success_command(data: dict[str, Any], tool_call_id: str) -> Command:
+def success_command(
+    data: dict[str, Any], tool_call_id: str, artifact: dict[str, Any] | None = None
+) -> Command:
     """Return a Command with JSON-serialized success data."""
     return Command(
         update={
             "messages": [
                 ToolMessage(
-                    content=json.dumps(data), tool_call_id=tool_call_id
+                    content=json.dumps(data),
+                    tool_call_id=tool_call_id,
+                    artifact=artifact,
                 ),
             ],
         }

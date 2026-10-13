@@ -17,6 +17,7 @@ import structlog
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
+from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.agent.middleware.background_subagent.context import (
     current_background_agent_id,
     current_background_token_tracker,
@@ -75,11 +76,6 @@ _DROPPED_CONFIGURABLE_KEYS = frozenset(
     }
 )
 
-# Mirrors the main agent's ``with_config({"recursion_limit": 2000})``, which
-# Task-tool subagents inherit via the parent config.
-_DISPATCH_RECURSION_LIMIT = 2000
-
-
 async def run_subagent_graph(
     subagent_graph: Any,
     *,
@@ -122,7 +118,8 @@ async def run_subagent_graph(
     config: dict[str, Any] = {
         "configurable": configurable,
         "metadata": metadata,
-        "recursion_limit": _DISPATCH_RECURSION_LIMIT,
+        # What Task-tool subagents inherit from the parent config.
+        "recursion_limit": UNBOUNDED_RECURSION_LIMIT,
     }
     tracker = current_background_token_tracker.get(None)
     if tracker is not None:

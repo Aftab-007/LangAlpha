@@ -99,7 +99,6 @@ from src.server.services.runs.admission import (
     begin_run,
     dedup_retransmit_or_raise,
 )
-from src.config.settings import get_ptc_recursion_limit
 
 from .admission_gate import steer_allowed, wait_or_steer
 from .attachments import attach_request_files
@@ -866,7 +865,6 @@ async def astream_ptc_workflow(
             token_callback=token_callback,
             request=request,
             effective_model=effective_model,
-            recursion_limit=get_ptc_recursion_limit(),
             skill_contexts=skill_contexts,
             skill_dirs=skill_dirs,
             run_id=run_id,

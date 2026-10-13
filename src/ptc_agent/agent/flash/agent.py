@@ -26,6 +26,7 @@ from ptc_agent.agent.middleware import (
     ProvenanceMiddleware,
     ReasoningCompatibilityMiddleware,
     StreamHeartbeatMiddleware,
+    RepeatCallGuardMiddleware,
 )
 from ptc_agent.agent.middleware.openai_prompt_caching import (
     OpenAIPromptCachingMiddleware,
@@ -40,6 +41,7 @@ from ptc_agent.agent.middleware.skills.registry import (
     build_effective_skill_registry,
 )
 from ptc_agent.agent.context_stack import build_context_middleware
+from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.agent.middleware.runtime_context import (
     BaselineSources,
     MemoryTierSource,
@@ -287,6 +289,8 @@ class FlashAgent:
         shared_middleware: list[Any] = [
             # Inert unless the server installed a gate state for this run.
             CreditGateMiddleware(),
+            # Ahead of the tool wrappers below, as in the PTC stack.
+            RepeatCallGuardMiddleware(),
             ToolArgumentParsingMiddleware(),
             ToolErrorHandlingMiddleware(),
             leak_detection,
@@ -457,6 +461,6 @@ class FlashAgent:
         agent = create_agent(
             turn.client,
             **create_kwargs,
-        ).with_config({"recursion_limit": 500})
+        ).with_config({"recursion_limit": UNBOUNDED_RECURSION_LIMIT})
 
         return agent

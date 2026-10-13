@@ -269,7 +269,6 @@ class TestTheGraphConfigCarriesRunAndSurface:
                 token_callback=None,
                 request=ChatRequest(),
                 effective_model=None,
-                recursion_limit=100,
                 **kwargs,
             )
         return config["configurable"]

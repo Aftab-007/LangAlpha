@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.config import LLMConfig
 
 PREP = "src.server.handlers.chat.request_prep"
@@ -313,7 +314,6 @@ class TestBuildGraphConfig:
                 platform=None,
             ),
             effective_model="gpt-4o",
-            recursion_limit=100,
         )
         defaults.update(kwargs)
         with (
@@ -323,15 +323,15 @@ class TestBuildGraphConfig:
             return build_graph_config(**defaults)
 
     def test_basic_flash_config(self):
-        config = self._build(mode="flash", recursion_limit=500)
+        config = self._build(mode="flash")
         assert config["configurable"]["agent_mode"] == "flash"
         assert config["configurable"]["thread_id"] == "t-1"
-        assert config["recursion_limit"] == 500
+        assert config["recursion_limit"] == UNBOUNDED_RECURSION_LIMIT
 
     def test_ptc_config(self):
-        config = self._build(mode="ptc", recursion_limit=2000)
+        config = self._build(mode="ptc")
         assert config["configurable"]["agent_mode"] == "ptc"
-        assert config["recursion_limit"] == 2000
+        assert config["recursion_limit"] == UNBOUNDED_RECURSION_LIMIT
 
     def test_checkpoint_id_added(self):
         request = MagicMock(
@@ -399,7 +399,6 @@ class TestBuildGraphConfig:
                     fast_mode=True, platform=None,
                 ),
                 effective_model="claude-sonnet-5",
-                recursion_limit=100,
             )
 
         metadata = config["metadata"]

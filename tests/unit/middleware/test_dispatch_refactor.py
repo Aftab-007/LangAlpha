@@ -7,7 +7,7 @@ invariants:
 
 - ``run_subagent_graph`` builds the same per-task config the Task-tool init
   branch does (``checkpoint_ns=task:{task_id}`` under the parent thread,
-  recursion_limit 2000, subagent_type metadata, checkpoint-position keys
+  the unbounded recursion_limit, subagent_type metadata, checkpoint-position keys
   dropped, background token-tracker callback attached from the ContextVar).
 - ``dispatch_background_subagent`` registers a task carrying
   ``spawned_run_id`` / ``owner_task_id``, spawns its writer through the
@@ -35,6 +35,7 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
+from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.agent.middleware.background_subagent import dispatch as dispatch_mod
 from ptc_agent.agent.middleware.background_subagent import spawn as spawn_mod
 from ptc_agent.agent.middleware.background_subagent.context import (
@@ -174,7 +175,7 @@ async def test_run_subagent_graph_config_invariants():
     assert conf["__pregel_task_id"] == "parent-task"
     assert conf["__pregel_send"] is base["__pregel_send"]
     # Recursion limit + metadata mirror the parent's with_config.
-    assert cfg["recursion_limit"] == 2000
+    assert cfg["recursion_limit"] == UNBOUNDED_RECURSION_LIMIT
     assert cfg["metadata"]["subagent_type"] == "research"
     assert cfg["metadata"]["description"] == ("P" * 250)[:200]
     # Tracker unset -> no callbacks key at all.

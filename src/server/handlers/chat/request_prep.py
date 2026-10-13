@@ -19,6 +19,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 
+from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.agent.middleware.runtime_context import TurnContext, parse_surface
 from src.config.settings import (
     get_langsmith_metadata,
@@ -843,7 +844,6 @@ def build_graph_config(
     token_callback,
     request: ChatRequest,
     effective_model: str | None,
-    recursion_limit: int,
     extra_configurable: dict | None = None,
     skill_contexts: list[dict] | None = None,
     skill_dirs: list[str] | None = None,
@@ -906,7 +906,7 @@ def build_graph_config(
 
     graph_config: dict = {
         "configurable": configurable,
-        "recursion_limit": recursion_limit,
+        "recursion_limit": UNBOUNDED_RECURSION_LIMIT,
         "tags": langsmith_tags,
         "metadata": langsmith_metadata,
     }

@@ -53,14 +53,6 @@ def get_debug_mode() -> bool:
     return get_infrastructure_config().debug
 
 
-def get_ptc_recursion_limit() -> int:
-    return get_infrastructure_config().ptc_recursion_limit
-
-
-def get_flash_recursion_limit() -> int:
-    return get_infrastructure_config().flash_recursion_limit
-
-
 def get_workflow_timeout() -> int:
     """Workflow timeout in seconds."""
     return get_infrastructure_config().workflow_timeout

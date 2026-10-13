@@ -19,6 +19,7 @@ from ptc_agent.agent.backends import SandboxBackend
 from ptc_agent.core.paths import SandboxLayout, WorkspaceLayout
 from ptc_agent.core.project_context import ProjectContext
 from ptc_agent.agent.middleware import SubAgentMiddleware
+from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.agent.main_state import MainAgentState
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
@@ -49,6 +50,7 @@ from ptc_agent.agent.middleware import (
     SubagentSteeringMiddleware,
     ReasoningCompatibilityMiddleware,
     StreamHeartbeatMiddleware,
+    RepeatCallGuardMiddleware,
 )
 from ptc_agent.agent.middleware.compaction.notes import (
     NotesDueMiddleware,
@@ -466,6 +468,9 @@ class PTCAgent:
                 # shared placement gives subagent lanes the same gate. Inert
                 # unless the server installed a gate state for the lane.
                 CreditGateMiddleware(),
+                # Ahead of every tool wrapper below, so a call it refuses as
+                # a repeat reaches none of them.
+                RepeatCallGuardMiddleware(),
                 ToolArgumentParsingMiddleware(),
                 ProtectedPathMiddleware(
                     denied_directories=self.config.filesystem.denied_directories,
@@ -991,7 +996,7 @@ class PTCAgent:
             checkpointer=checkpointer,
             store=store,
             state_schema=MainAgentState,
-        ).with_config({"recursion_limit": 2000})
+        ).with_config({"recursion_limit": UNBOUNDED_RECURSION_LIMIT})
 
         return BackgroundSubagentOrchestrator(
             agent=agent,
