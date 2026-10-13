@@ -21,7 +21,7 @@ from langchain_core.messages import AnyMessage
 from langchain.chat_models import BaseChatModel
 
 from src.config.settings import get_compaction_timeout
-from src.llms import LLM, create_llm, maybe_disable_streaming
+from src.llms import LLM, create_llm
 from src.llms.model_spec import summary_reasoning_effort
 
 from ptc_agent.agent.state import ensure_message_ids
@@ -35,6 +35,7 @@ from ptc_agent.agent.middleware.compaction.summary_request import (
     build_summary_request,
 )
 from ptc_agent.agent.middleware.compaction.summarize import (
+    Progress,
     Summary,
     awrite_summary,
     is_other_model,
@@ -134,20 +135,15 @@ class Summarizer:
     @classmethod
     def for_agent(cls, config: AgentConfig) -> Summarizer:
         """The client ``resolve_compaction_client`` picks, else the named
-        compaction model at the summary level, with streaming off so its
-        chunks never stream as the answer."""
+        compaction model at the summary level."""
         model = resolve_compaction_client(config)
         if model is None:
             name = (config.llm.compaction_name if config.llm else None) or ""
             model = _at_summary_level(name)
-        fallback = _summary_fallback(config)
-        for client in (model, fallback):
-            if client is not None:
-                maybe_disable_streaming(client)
         return cls(
             model,
             config.compaction.token_threshold + _SUMMARY_HEADROOM,
-            fallback=fallback,
+            fallback=_summary_fallback(config),
         )
 
     async def compact(
@@ -163,6 +159,7 @@ class Summarizer:
         thread_id: str | None = None,
         notes_dir: str | None = None,
         window: Window,
+        progress: Progress | None = None,
     ) -> Compaction:
         """Summarize ``view`` before ``cutoff``, ``messages`` being the
         agent's checkpoint list (what ``window`` trimmed of it aside), from
@@ -175,6 +172,7 @@ class Summarizer:
         compaction timeout, so the save counts against it too. The notes in
         ``notes_dir``, the main agent's scratchpad, are listed while the
         summary is written, and the summary names them after its pointer.
+        ``progress`` hears how much of the summary has been written.
         """
         to_summarize, preserved = partition_at_cutoff(view, cutoff)
         started = time.monotonic()
@@ -213,6 +211,7 @@ class Summarizer:
                     window=window,
                 ),
                 budget=remaining,
+                progress=progress,
             )
             notes = await listing
         finally:

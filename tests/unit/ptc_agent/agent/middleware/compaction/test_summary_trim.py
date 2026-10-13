@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     HumanMessage,
     ToolMessage,
     get_buffer_string,
@@ -137,11 +138,11 @@ class _Model:
         self.fails = fails
         self.sent: list = []
 
-    async def ainvoke(self, request):
+    async def astream(self, request, config=None):
         self.sent.append(request)
         if self.fails:
             raise RuntimeError("context length exceeded")
-        return AIMessage("the new summary")
+        yield AIMessageChunk("the new summary")
 
 
 @pytest.mark.asyncio

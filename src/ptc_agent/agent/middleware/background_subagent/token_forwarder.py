@@ -255,6 +255,10 @@ class _SubagentTokenForwarder:
                 },
             }
         elif (event := data.get("type")) in _ALLOWED_CUSTOM_EVENT_TYPES:
+            # Nothing shows a subagent's summary count, and this buffer is
+            # archived.
+            if data.get("action") == "summary_progress":
+                return
             body = {k: v for k, v in data.items() if k != "type"}
             body["agent"] = self.agent_id
         else:

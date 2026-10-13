@@ -81,6 +81,8 @@ interface SSEEvent {
   total_tokens?: number;
   threshold?: number;
   original_message_count?: number;
+  /** About how many tokens a summary being written has written so far. */
+  summary_tokens?: number;
   offloaded_args?: number;
   offloaded_reads?: number;
   /** Discriminator carried by several event families; `order_approval` on an
@@ -169,6 +171,8 @@ interface ContextWindowCallbacks {
   /** A live call adds to the totals; a replayed one is already in them. */
   live: boolean;
   setIsCompacting: ((v: string | false) => void) | null;
+  /** How far the summary being written has got; a live stream's only. */
+  setCompactionTokens?: (tokens: number) => void;
   insertNotification: (text: string, variant?: 'info' | 'success' | 'warning', detail?: string) => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
   offloadBatch: React.MutableRefObject<OffloadBatch>;

@@ -1793,6 +1793,7 @@
       "confirm": "归档"
     },
     "compacting": "正在压缩对话...",
+    "compactingTokens": "已生成 {{value}} tokens",
     "offloading": "正在转存上下文...",
     "compactionStopped": "压缩已停止",
     "queuedSend": "消息已排队 — 压缩完成后将自动发送",

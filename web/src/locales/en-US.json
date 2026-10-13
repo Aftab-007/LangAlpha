@@ -1797,6 +1797,7 @@
       "confirm": "Archive"
     },
     "compacting": "Compacting conversation...",
+    "compactingTokens": "{{value}} tokens written",
     "offloading": "Offloading context...",
     "compactionStopped": "Compaction stopped",
     "queuedSend": "Message queued — sends when compaction finishes",

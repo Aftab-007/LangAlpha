@@ -298,6 +298,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     workspaceStarting,
     isCompacting,
     setIsCompacting,
+    compactionTokens,
     queuedSend,
     isLoadingHistory,
     historyLoadFailed,
@@ -1543,6 +1544,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                         retired={threadModel.retired}
                         workspaceStarting={displayWorkspaceStarting}
                         isCompacting={isCompacting}
+                        compactionTokens={compactionTokens}
                         queuedSend={queuedSend}
                         threadId={feedThreadId}
                         active={isActive}

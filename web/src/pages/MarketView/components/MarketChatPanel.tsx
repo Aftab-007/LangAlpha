@@ -11,6 +11,8 @@ import ChatInput, { type ChatInputHandle } from '@/components/ui/chat-input';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { useWorkspace } from '@/hooks/useWorkspace';
 import { usePreferences } from '@/hooks/usePreferences';
+import { useLocale } from '@/hooks/useLocale';
+import { compactNumber } from '@/lib/format';
 import { readTurnEndScroll } from '@/lib/turnEndScroll';
 import { LiveMessageList } from '../../ChatAgent/components/MessageList';
 import { MessageActionsProvider, type MessageActions } from '../../ChatAgent/components/messageList/MessageActionsContext';
@@ -297,6 +299,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   } = props;
 
   const { t } = useTranslation();
+  const locale = useLocale();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { preferences } = usePreferences();
@@ -444,6 +447,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     workspaceStarting,
     isCompacting,
     setIsCompacting,
+    compactionTokens,
     tokenUsage,
     insertNotification,
     // Feedback thumbs. Send, edit, regenerate and retry come from
@@ -949,6 +953,11 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
                 <Loader size={14} className="text-(--color-accent-primary)" />
               </span>
               <span>{t(isCompacting === 'offload' ? 'chat.offloading' : 'chat.compacting')}</span>
+              {isCompacting === 'summarize' && compactionTokens != null && (
+                <span className="tabular-nums" style={{ color: 'var(--color-text-quaternary)' }}>
+                  {t('chat.compactingTokens', { value: compactNumber(compactionTokens, locale) })}
+                </span>
+              )}
             </div>
           )}
           <ThreadNotices model={threadModel} subagents={threadSubagents} mode={modelMode} />

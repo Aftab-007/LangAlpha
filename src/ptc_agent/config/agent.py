@@ -593,10 +593,9 @@ class AgentConfig(BaseModel):
         """Return the pre-resolved client for a role, or None.
 
         Roles: "compaction", "fetch", "subagent:<name>". Returns a
-        ``.model_copy()`` so role-local mutation (e.g. compaction setting
-        ``streaming=False``) never touches the shared main client. With
-        ``fallback_to_main=True`` and no role client, returns a copy of the
-        main client when one exists.
+        ``.model_copy()`` so role-local mutation never touches the shared
+        main client. With ``fallback_to_main=True`` and no role client,
+        returns a copy of the main client when one exists.
         """
         c = self.subsidiary_llm_clients.get(role)
         if c is not None:
