@@ -331,6 +331,22 @@ class TestConnectorLiteralRedaction:
         assert secrets["mcp:beta:Authorization"] == "Bearer usertoken_9999"
 
     @pytest.mark.asyncio
+    async def test_a_templated_vault_reference_is_not_a_literal(self, monkeypatch):
+        """``Bearer ${vault:K}`` resolves to a vault value already in the set.
+        Collected as a literal, the template text itself became a "secret",
+        and a served file quoting the plugin's own config came back mangled."""
+        self._patch_sources(
+            monkeypatch,
+            catalog_rows=[{
+                "name": "beta",
+                "headers": {"Authorization": "Bearer ${vault:BETA_API_KEY}"},
+                "env": {"API_TOKEN": "${vault:BETA_TOKEN}"},
+            }],
+        )
+
+        assert await get_vault_secrets_for_redaction("u1") == {}
+
+    @pytest.mark.asyncio
     async def test_ordinary_config_values_stay_servable(self, monkeypatch):
         """The false-positive class this filter exists for: a served README
         that says "application/json" must not come back with holes in it."""

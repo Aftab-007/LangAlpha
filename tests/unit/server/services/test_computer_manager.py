@@ -9,6 +9,7 @@ the computer-addressed surface the router codes against.
 
 import asyncio
 import hashlib
+import uuid
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -1594,6 +1595,34 @@ class TestComputerSurface(_Base):
 
     @pytest.mark.asyncio
     @patch(f"{_MACHINES}.get_computer")
+    async def test_wake_waits_out_the_other_workers_start_then_joins(self, mock_get):
+        """A start owned elsewhere is a wait, not a refusal: once the row
+        settles, this worker claims again and reconnects."""
+        manager = _make_manager(start_wait_poll_interval=0)
+        session = _make_session()
+        manager._start_machine = AsyncMock(side_effect=[None, session])
+        mock_get.side_effect = [
+            _make_computer(status="starting"),
+            _make_computer(status="running", provider_ref="sandbox-abc"),
+        ]
+
+        assert await manager.wake_computer("comp-1", user_id="user-1") is session
+        assert manager._start_machine.await_count == 2
+        manager._start_machine.assert_awaited_with("comp-1", user_id="user-1")
+
+    @pytest.mark.asyncio
+    @patch(f"{_MACHINES}.get_computer")
+    async def test_wake_gives_up_when_the_row_never_settles(self, mock_get):
+        manager = _make_manager(start_wait_poll_interval=0, start_wait_timeout=0.05)
+        manager._start_machine = AsyncMock(return_value=None)
+        mock_get.return_value = _make_computer(status="stopping")
+
+        with pytest.raises(RuntimeError, match="did not settle"):
+            await manager.wake_computer("comp-1")
+        assert manager._start_machine.await_count == 1
+
+    @pytest.mark.asyncio
+    @patch(f"{_MACHINES}.get_computer")
     async def test_blocking_start_waits_for_the_other_worker(self, mock_get):
         manager = _make_manager(start_wait_poll_interval=0)
         manager._start_machine = AsyncMock(return_value=None)
@@ -1603,6 +1632,25 @@ class TestComputerSurface(_Base):
 
         assert await manager.start_computer("comp-1") is running
         assert mock_get.await_count == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "settled,error",
+        [
+            (None, "was deleted while starting"),
+            (_make_computer(status="stopped"), "ended start in 'stopped' state"),
+        ],
+    )
+    @patch(f"{_MACHINES}.get_computer")
+    async def test_blocking_start_reports_how_the_other_workers_start_ended(
+        self, mock_get, settled, error
+    ):
+        manager = _make_manager(start_wait_poll_interval=0)
+        manager._start_machine = AsyncMock(return_value=None)
+        mock_get.side_effect = [_make_computer(status="starting"), settled]
+
+        with pytest.raises(RuntimeError, match=error):
+            await manager.start_computer("comp-1")
 
     @pytest.mark.asyncio
     @patch(f"{_MACHINES}.touch_computer_starting")
@@ -1619,6 +1667,127 @@ class TestComputerSurface(_Base):
             await asyncio.wait_for(renewed.wait(), timeout=1)
 
         mock_touch.assert_awaited_with("comp-1")
+
+
+class TestPickForUser(_Base):
+    """Which of a user's computers something of theirs runs on."""
+
+    @pytest.mark.asyncio
+    @patch(f"{_MACHINES}.get_computers_for_user")
+    @patch(f"{_MACHINES}.get_computer_for_workspace")
+    async def test_the_workspaces_own_computer_wins(self, mock_for_ws, mock_for_user):
+        """Owner ids compare as strings, since a row may carry a UUID."""
+        owner = uuid.UUID(int=1)
+        own = _make_computer("comp-ws", status="stopped", user_id=owner)
+        mock_for_ws.return_value = own
+        mock_for_user.return_value = [_make_computer("comp-run", status="running")]
+
+        picked = await _make_manager().pick_for_user(str(owner), workspace_id="ws-a")
+
+        assert picked is own
+        mock_for_ws.assert_awaited_once_with("ws-a")
+        mock_for_user.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch(f"{_MACHINES}.get_computers_for_user")
+    @patch(f"{_MACHINES}.get_computer_for_workspace")
+    async def test_a_workspace_on_another_users_computer_is_ignored(
+        self, mock_for_ws, mock_for_user
+    ):
+        mock_for_ws.return_value = _make_computer(
+            "comp-other", status="running", user_id="user-2"
+        )
+        mine = _make_computer("comp-mine", status="stopped")
+        mock_for_user.return_value = [mine]
+
+        assert await _make_manager().pick_for_user("user-1", workspace_id="ws-a") is mine
+        mock_for_user.assert_awaited_once_with("user-1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rows,expected",
+        [
+            (
+                [
+                    _make_computer("bare", status="stopped"),
+                    _make_computer("built", status="stopped", provider_ref="sb-1"),
+                    _make_computer("up", status="running", provider_ref="sb-2"),
+                ],
+                "up",
+            ),
+            (
+                [
+                    _make_computer("bare", status="stopped"),
+                    _make_computer("built", status="stopped", provider_ref="sb-1"),
+                ],
+                "built",
+            ),
+            (
+                [
+                    _make_computer("bare", status="stopped"),
+                    _make_computer(
+                        "host-down",
+                        status="stopped",
+                        provider_ref="sb-1",
+                        host_unavailable_since="2026-10-01T00:00:00Z",
+                    ),
+                ],
+                "bare",
+            ),
+        ],
+        ids=["running-first", "then-a-sandbox", "then-the-first"],
+    )
+    @patch(f"{_MACHINES}.get_computers_for_user")
+    async def test_preference_among_the_users_computers(
+        self, mock_for_user, rows, expected
+    ):
+        mock_for_user.return_value = rows
+
+        picked = await _make_manager().pick_for_user("user-1")
+
+        assert picked["computer_id"] == expected
+
+    @pytest.mark.asyncio
+    @patch(f"{_MACHINES}.get_computers_for_user")
+    async def test_a_computer_that_would_not_start_is_passed_over(self, mock_for_user):
+        """The same three _start_machine refuses: deleted, error, retiring."""
+        mock_for_user.return_value = [
+            _make_computer("gone", status="deleted", provider_ref="sb-1"),
+            _make_computer("broken", status="error", provider_ref="sb-2"),
+            _make_computer(
+                "retiring",
+                status="running",
+                provider_ref="sb-3",
+                config={"retire_when_empty": True},
+            ),
+            _make_computer("fine", status="stopped"),
+        ]
+
+        picked = await _make_manager().pick_for_user("user-1")
+
+        assert picked["computer_id"] == "fine"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rows",
+        [
+            [],
+            [
+                _make_computer("gone", status="deleted"),
+                _make_computer("broken", status="error"),
+                _make_computer(
+                    "retiring", status="running", config={"retire_when_empty": True}
+                ),
+            ],
+        ],
+        ids=["none", "none-usable"],
+    )
+    @patch(f"{_MACHINES}.get_computers_for_user")
+    @patch(f"{_MACHINES}.get_computer_for_workspace", AsyncMock(return_value=None))
+    async def test_none_when_nothing_would_start(self, mock_for_user, rows):
+        mock_for_user.return_value = rows
+
+        assert await _make_manager().pick_for_user("user-1", workspace_id="ws-a") is None
 
 
 # ---------------------------------------------------------------------------

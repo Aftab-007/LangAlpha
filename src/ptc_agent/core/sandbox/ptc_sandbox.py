@@ -5,7 +5,7 @@ import json
 import secrets
 import shlex
 import time
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
@@ -1543,6 +1543,18 @@ class PTCSandbox:
         self, servers: list[Any]
     ) -> dict[str, dict[str, Any]]:
         return await _mcp_setup.discover_user_mcp_schemas(self, servers)
+
+    async def check_user_mcp_server(
+        self,
+        server: Any,
+        vault: Mapping[str, str],
+        *,
+        budget_s: float,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
+        return await _mcp_setup.check_user_mcp_server(
+            self, server, vault, budget_s=budget_s, deadline=deadline
+        )
 
     async def _start_internal_mcp_servers(self) -> bool | None:
         return await _mcp_setup._start_internal_mcp_servers(self)
