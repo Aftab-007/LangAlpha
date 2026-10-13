@@ -51,10 +51,12 @@ class RunSlotBusyError(TurnLifecycleError):
 
 
 class DuplicateRequestError(TurnLifecycleError):
-    """This request_key already produced a run — the caller retransmitted."""
+    """This request_key already produced a run — the caller retransmitted.
+    ``steered`` when its message went into that run as a steer."""
 
-    def __init__(self, existing_run: Dict[str, Any]):
+    def __init__(self, existing_run: Dict[str, Any], steered: bool = False):
         self.existing_run = existing_run
+        self.steered = steered
         super().__init__(
             f"request_key {existing_run.get('request_key')} already ran as "
             f"run {existing_run.get('conversation_response_id')}"
@@ -340,6 +342,7 @@ async def start_run(
     metadata: Optional[Dict[str, Any]] = None,
     created_at: Optional[datetime] = None,
     user_id: Optional[str] = None,
+    before_commit: Optional[Callable[[Any], Awaitable[None]]] = None,
     conn=None,
 ) -> Dict[str, Any]:
     """The START transaction: fork cleanup + query row + in_progress run row +
@@ -353,6 +356,9 @@ async def start_run(
     refuses it when a run started since.
     ``conn`` pins the transaction to the caller's session (WriterGuard);
     the post-conflict classification reads always use fresh pool reads.
+    ``before_commit`` runs last, while the uncommitted row holds the slot,
+    and gets the transaction's connection, so a read it makes waits on no
+    second pool slot while this transaction holds the thread's locks.
     """
     created_at = created_at or datetime.now(timezone.utc)
     conflict: Optional[str] = None
@@ -534,6 +540,9 @@ async def start_run(
                         """,
                         (thread_id,),
                     )
+
+                if before_commit is not None:
+                    await before_commit(conn)
 
         logger.info(
             f"[turn_lifecycle] START run={run_id} thread={thread_id} "
@@ -859,6 +868,27 @@ async def get_run(run_id: str) -> Optional[Dict[str, Any]]:
             )
             row = await cur.fetchone()
             return dict(row) if row else None
+
+
+async def get_run_brief(conn, run_id: str) -> Optional[Dict[str, Any]]:
+    """A run's id, thread, request key and status, read on ``conn``.
+
+    For a read inside START's transaction: on its own connection it waits on
+    no pool slot while START holds the thread's locks, and it leaves out the
+    archived ``sse_events`` that ``get_run`` loads.
+    """
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            """
+            SELECT conversation_response_id, conversation_thread_id,
+                   request_key, status
+            FROM conversation_responses
+            WHERE conversation_response_id = %s
+            """,
+            (run_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
 
 async def get_run_ending(run_id: str) -> Optional[Dict[str, Any]]:

@@ -3,6 +3,8 @@
 Handles queuing and draining of user steering messages that arrive
 while a workflow is already running. Messages are stored in Redis and consumed by
 SteeringMiddleware (main agent) or SubagentSteeringMiddleware (subagents).
+A thread's queue is kept by ``services.runs.steer_queue``; these entry points
+fail soft on a Redis fault.
 """
 
 import logging
@@ -13,6 +15,8 @@ import uuid
 from fastapi import HTTPException
 
 from src.server.services.background_registry_store import BackgroundRegistryStore
+from src.server.services.runs import steer_queue
+from src.server.services.runs.steer_queue import SteerKeyTaken
 from src.config.settings import get_redis_ttl_steering
 
 # Same hard-coded logger name request_prep uses — existing log routing keys off it.
@@ -43,42 +47,34 @@ async def drain_pending_steerings(thread_id: str) -> list[dict] | None:
 
     Returns the messages so they can be sent back to the client for input restoration.
     """
-    from src.utils.cache.redis_cache import get_cache_client
-
-    cache = get_cache_client()
-    if not cache.enabled or not cache.client:
-        return None
-
     try:
-        key = f"workflow:steering:{thread_id}"
-        # transaction=True (MULTI/EXEC) is load-bearing, not incidental: the
-        # LRANGE+DELETE must be atomic so it can never interleave with a
-        # concurrent ``unsteer_thread`` LREM. That atomicity is what gives
-        # wait_or_steer's reclaim its delivered-XOR-reclaimed guarantee — a
-        # message is returned here or reclaimed there, never both, never lost.
-        pipe = cache.client.pipeline(transaction=True)
-        pipe.lrange(key, 0, -1)
-        pipe.delete(key)
-        results = await pipe.execute()
-
-        raw_messages = results[0]
-        if not raw_messages:
-            return None
-
-        messages = []
-        for raw in raw_messages:
-            try:
-                data = json.loads(
-                    raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                )
-                messages.append(data)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                pass
-
-        return messages or None
+        return await steer_queue.drain(thread_id) or None
     except Exception as e:
         logger.error(f"[CHAT] Failed to drain pending steerings: {e}")
         return None
+
+
+def steer_payload(
+    content: str,
+    user_id: str,
+    *,
+    run_id: str | None = None,
+    platform: str | None = None,
+    request_key: str | None = None,
+) -> str:
+    """The queue entry for a steer, as ``steer_thread`` queues it."""
+    # Half a surrogate pair gets through the request's JSON parser but not
+    # the one the queue's scripts find an entry's key with, and a key they
+    # cannot find leaves its record behind once the entry is gone.
+    content = content.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+    payload = {"content": content, "user_id": user_id, "timestamp": time.time()}
+    if run_id is not None:
+        payload["run_id"] = run_id
+    if platform:
+        payload["platform"] = platform
+    if request_key:
+        payload["request_key"] = request_key
+    return json.dumps(payload)
 
 
 async def steer_thread(
@@ -87,6 +83,7 @@ async def steer_thread(
     user_id: str,
     run_id: str | None = None,
     platform: str | None = None,
+    request_key: str | None = None,
 ) -> dict | None:
     """Steer a running workflow by injecting a user message via Redis.
 
@@ -102,40 +99,34 @@ async def steer_thread(
             died un-drained is returned by the next turn's end-of-run drain
             instead of leaking into its context. None = unstamped.
         platform: The chat app the message came from, which its label names.
+        request_key: The send's idempotency key, claimed for ``run_id`` in
+            the same step that queues the message.
 
     Returns:
         Dict with queue position and the exact queued payload (for a
         possible ``unsteer_thread`` reclaim) if successful, None if
         steering failed
+
+    Raises:
+        SteerKeyTaken: another copy of this send holds the key's claim.
     """
-    from src.utils.cache.redis_cache import get_cache_client
-
-    cache = get_cache_client()
-    if not cache.enabled or not cache.client:
-        return None
-
+    message = steer_payload(
+        content, user_id, run_id=run_id, platform=platform, request_key=request_key
+    )
     try:
-        key = f"workflow:steering:{thread_id}"
-        payload = {"content": content, "user_id": user_id, "timestamp": time.time()}
-        if run_id is not None:
-            payload["run_id"] = run_id
-        if platform:
-            payload["platform"] = platform
-        message = json.dumps(payload)
-        pipe = cache.client.pipeline()
-        pipe.rpush(key, message)
-        pipe.llen(key)
-        pipe.expire(key, get_redis_ttl_steering())
-        results = await pipe.execute()
-        position = results[1]
-        logger.info(
-            f"[CHAT] Steering for running workflow: "
-            f"thread_id={thread_id} position={position}"
-        )
-        return {"position": position, "payload": message}
+        position = await steer_queue.push(thread_id, message, request_key, run_id)
+    except SteerKeyTaken:
+        raise
     except Exception as e:
         logger.error(f"[CHAT] Failed to steer thread: {e}")
         return None
+    if position is None:
+        return None
+    logger.info(
+        f"[CHAT] Steering for running workflow: "
+        f"thread_id={thread_id} position={position}"
+    )
+    return {"position": position, "payload": message}
 
 
 async def unsteer_thread(thread_id: str, payload: str) -> bool:
@@ -145,17 +136,10 @@ async def unsteer_thread(thread_id: str, payload: str) -> bool:
     between the admission snapshot and the push. True means the message was
     still queued (nothing consumed it); False means a drain got it first —
     the caller must then treat the steer as delivered-or-returned, not lost.
+    The record of the key the payload carries goes with it.
     """
-    from src.utils.cache.redis_cache import get_cache_client
-
-    cache = get_cache_client()
-    if not cache.enabled or not cache.client:
-        return False
-
     try:
-        key = f"workflow:steering:{thread_id}"
-        removed = await cache.client.lrem(key, 1, payload)
-        return bool(removed)
+        return await steer_queue.reclaim(thread_id, payload)
     except Exception as e:
         logger.error(f"[CHAT] Failed to unsteer thread: {e}")
         return False
