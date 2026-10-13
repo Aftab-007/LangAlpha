@@ -3329,6 +3329,93 @@ class TestSandboxRecovery:
 # ---------------------------------------------------------------------------
 
 
+class TestAnAttachRestartsTheIdleClock:
+    """Opening a machine whose row reads running reconnects it, which starts a
+    sandbox its provider stopped, so the idle clock restarts as a start's does.
+    Without the stamp, a machine opened and not yet typed in read idle since its
+    last turn, and the idle sweep stopped it under the user. The stamp comes
+    before the reconnect and only while the row reads running, so of the attach
+    and a stop claimed on another worker exactly one goes ahead."""
+
+    def setup_method(self):
+        WorkspaceManager.reset_instance()
+
+    def teardown_method(self):
+        WorkspaceManager.reset_instance()
+
+    @pytest.mark.asyncio
+    @cm_patch("db_get_workspace")
+    @cm_patch("SessionManager")
+    @cm_patch("update_workspace_activity")
+    @patch(f"{_LIFECYCLE}.stamp_running_computer", new_callable=AsyncMock)
+    async def test_a_cold_attach_stamps_the_machine_before_reconnecting(
+        self, mock_stamp, _mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        manager = WorkspaceManager.get_instance(config=_make_config())
+        manager._sync_sandbox_assets = AsyncMock()
+        manager._maybe_migrate_sandbox = AsyncMock(return_value=None)
+        ws_id = str(uuid.uuid4())
+        mock_get_ws.return_value = _make_workspace(workspace_id=ws_id, status="running")
+        session = _make_mock_session(initialized=False)
+        mock_session_mgr.get_session.return_value = session
+        reconnected_at_stamp = []
+
+        def stamp(_computer_id):
+            reconnected_at_stamp.append(session.initialize.await_count)
+            return True
+
+        mock_stamp.side_effect = stamp
+
+        await manager.get_session_for_workspace(ws_id, user_id="user-1")
+
+        session.initialize.assert_awaited_once()
+        mock_stamp.assert_awaited_once_with(_STUB_COMPUTER_ID)
+        assert reconnected_at_stamp == [0]
+
+    @pytest.mark.asyncio
+    @cm_patch("db_get_workspace")
+    @cm_patch("SessionManager")
+    @cm_patch("update_workspace_activity")
+    @patch(f"{_LIFECYCLE}.stamp_running_computer", new_callable=AsyncMock)
+    async def test_an_attach_a_stop_beat_waits_for_it_instead_of_reconnecting(
+        self, mock_stamp, _mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        manager = WorkspaceManager.get_instance(config=_make_config())
+        ws_id = str(uuid.uuid4())
+        mock_get_ws.return_value = _make_workspace(workspace_id=ws_id, status="running")
+        session = _make_mock_session(initialized=False)
+        mock_session_mgr.get_session.return_value = session
+        mock_stamp.return_value = False
+        restarted = _make_mock_session()
+        manager._await_stop_and_retry = AsyncMock(return_value=restarted)
+
+        got = await manager.get_session_for_workspace(ws_id, user_id="user-1")
+
+        session.initialize.assert_not_awaited()
+        manager._await_stop_and_retry.assert_awaited_once()
+        assert got is restarted
+
+    @pytest.mark.asyncio
+    @cm_patch("db_get_workspace")
+    @cm_patch("SessionManager")
+    @cm_patch("update_workspace_activity")
+    @patch(f"{_LIFECYCLE}.stamp_running_computer", new_callable=AsyncMock)
+    async def test_an_attach_whose_stamp_fails_does_not_reconnect_unfenced(
+        self, mock_stamp, _mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        manager = WorkspaceManager.get_instance(config=_make_config())
+        ws_id = str(uuid.uuid4())
+        mock_get_ws.return_value = _make_workspace(workspace_id=ws_id, status="running")
+        session = _make_mock_session(initialized=False)
+        mock_session_mgr.get_session.return_value = session
+        mock_stamp.side_effect = ConnectionError("database unreachable")
+
+        with pytest.raises(ConnectionError):
+            await manager.get_session_for_workspace(ws_id, user_id="user-1")
+
+        session.initialize.assert_not_awaited()
+
+
 class TestOnStateObservedForwarding:
     """Lock in that on_state_observed is passed to session.initialize /
     initialize_lazy at every call site in workspace_manager.py. A typo
