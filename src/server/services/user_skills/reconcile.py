@@ -870,6 +870,16 @@ async def _download_validated(
         validated = await asyncio.to_thread(validate_skill_archive, raw)
     except SkillValidationError as e:
         raise _SyncFailure("validate", str(e), suppress=True) from e
+    if validated.name != name:
+        # The archive is rooted at the declared name, so storing it under this
+        # row would leave the row with no files and extract over the skill
+        # that does carry that name.
+        raise _SyncFailure(
+            "validate",
+            f"SKILL.md declares name {validated.name!r} but the directory "
+            f"is {name!r}; they must match",
+            suppress=True,
+        )
     return validated, tree_hash
 
 

@@ -66,6 +66,21 @@ class SkillCapReached(ValueError):
         self.limit = limit
 
 
+class SkillTriggerTaken(ValueError):
+    """A skill's name or alias would answer to a slash command already taken.
+
+    A ValueError like its siblings. ``code`` says what holds the trigger
+    (``trigger_reserved``: a built-in; ``trigger_taken``: an alias the user
+    gave a built-in; ``trigger_is_command``: another skill's alias, named by
+    ``params["skill"]``), since each has a different thing to rename.
+    """
+
+    def __init__(self, message: str, *, code: str, **params: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.params = params
+
+
 class SkillNotOwned(ValueError):
     """An ``owned_by_plugin`` upsert found the row detached under it.
 
@@ -437,8 +452,11 @@ async def _check_trigger_clash(
     )
     clash = await cur.fetchone()
     if clash is not None:
-        raise ValueError(
-            f"/{name} is already the command of the skill {clash['name']!r}"
+        raise SkillTriggerTaken(
+            f"/{name} is already the command of the skill {clash['name']!r}",
+            code="trigger_is_command",
+            trigger=name,
+            skill=clash["name"],
         )
 
 
@@ -611,8 +629,10 @@ async def upsert_user_skill(
                 # since (set_platform_alias holds this same lock) can't end
                 # up duplicated by this row's name.
                 if name in await _platform_override_values(cur, user_id):
-                    raise ValueError(
-                        f"/{name} is already in use by another skill"
+                    raise SkillTriggerTaken(
+                        f"/{name} is already in use by another skill",
+                        code="trigger_taken",
+                        trigger=name,
                     )
                 command = await _free_command(
                     cur, user_id, name, workspace_id, command
@@ -736,10 +756,13 @@ async def move_user_skill(
     Raises ValueError when the name is taken in the target scope; returns None
     when no row exists in the source scope. Runs under the same per-user
     advisory lock as uploads, so the collision check and the update cannot
-    race a concurrent upsert. Any per-workspace disable of this name in the
-    two workspaces involved is cleared: the move is an explicit statement
-    that the skill is wanted where it now lives (and it was live where it
-    just left).
+    race a concurrent upsert. The move is an explicit statement that the
+    skill is wanted where it now lives, so the per-workspace disables of its
+    name go: in the two workspaces involved for a move between them, and in
+    every workspace of the user for a move onto or off the user tier. Those
+    markers describe the inherited skill, and the move either makes it the
+    one every workspace inherits or leaves none to inherit, where a marker
+    left behind would disable it again once it moves back up.
 
     A plugin-owned row cannot move INTO a workspace; that raises ValueError
     and the route turns it into a 409. Detaching it on the way down was the
@@ -835,8 +858,16 @@ async def move_user_skill(
                 row = _row_to_dict(await cur.fetchone())
                 if row is None:
                     return None
-                for ws in (from_workspace_id, to_workspace_id):
-                    if ws is not None:
+                if from_workspace_id is None or to_workspace_id is None:
+                    await cur.execute(
+                        "DELETE FROM workspace_skill_disables "
+                        "WHERE name = %s AND workspace_id IN ("
+                        "SELECT workspace_id FROM workspaces "
+                        "WHERE user_id = %s)",
+                        (name, user_id),
+                    )
+                else:
+                    for ws in (from_workspace_id, to_workspace_id):
                         await cur.execute(
                             "DELETE FROM workspace_skill_disables "
                             "WHERE workspace_id = %s AND name = %s",
@@ -945,6 +976,7 @@ async def delete_user_skill(
     *,
     workspace_id: str | None = None,
     owned_by_plugin: str | None = None,
+    hand_made: bool = False,
     conn=None,
 ) -> dict[str, Any] | None:
     """Delete a skill row in one scope, returning it so the caller can drop
@@ -952,7 +984,9 @@ async def delete_user_skill(
 
     ``owned_by_plugin`` narrows the delete to a row that plugin still owns, so
     a Customize that detaches it after the caller read ownership is not
-    silently overridden. Same predicate as the catalog's delete.
+    silently overridden. Same predicate as the catalog's delete. ``hand_made``
+    is the other side of it: a row no plugin owns, so an install that takes
+    the name after the caller read it keeps its skill.
     """
     async with get_db_connection(conn) as db:
         async with db.transaction():
@@ -963,10 +997,11 @@ async def delete_user_skill(
                     f"DELETE FROM user_skills WHERE user_id = %s AND name = %s "
                     f"AND workspace_id IS NOT DISTINCT FROM %s "
                     f"AND (%s::uuid IS NULL OR plugin_id = %s::uuid) "
+                    f"AND (NOT %s OR plugin_id IS NULL) "
                     f"RETURNING {_SKILL_COLUMNS}",
                     (
                         user_id, name, workspace_id,
-                        owned_by_plugin, owned_by_plugin,
+                        owned_by_plugin, owned_by_plugin, hand_made,
                     ),
                 )
                 row = _row_to_dict(await cur.fetchone())

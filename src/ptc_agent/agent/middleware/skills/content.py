@@ -87,6 +87,46 @@ class SkillPrefixResult:
     loaded_skill_names: list[str] = field(default_factory=list)  # Skills injected fresh this turn (excludes already-loaded)
 
 
+def resolve_skill_dir(
+    skill_name: str,
+    skill_dirs: Optional[list[str]] = None,
+    mode: SkillMode | None = None,
+    *,
+    registry: Optional[dict[str, SkillDefinition]] = None,
+) -> Optional[Path]:
+    """The folder a skill's files are read from, or None when it has none.
+
+    One answer for SKILL.md and for the files beside it, so a page listing a
+    skill's references shows the copy whose instructions the agent loads.
+    A user-tier skill lives in exactly one host directory; otherwise the last
+    search directory holding its SKILL.md wins, so an operator's drop-in
+    overrides the shipped copy.
+    """
+    skill = _resolve_skill(skill_name, mode, registry)
+    if not skill:
+        logger.warning(f"Skill '{skill_name}' not found in registry")
+        return None
+    if skill.source_dir:
+        return Path(skill.source_dir) / skill_name
+
+    # No caller-supplied search path: fall back to the same sources, in the
+    # same order, that a caller holding a config would have passed. A caller
+    # that overrode ``user_skills_dir`` has to pass its own list -- this branch
+    # answers for the ones that have no config to read it from.
+    if skill_dirs is None:
+        skill_dirs = [str(d) for d in host_skill_dirs()]
+    found: Optional[Path] = None
+    for skill_dir in skill_dirs:
+        candidate = Path(skill_dir) / skill_name
+        if (candidate / "SKILL.md").exists():
+            found = candidate
+    if found is None:
+        logger.warning(
+            f"SKILL.md not found for skill '{skill_name}' in any skill directory"
+        )
+    return found
+
+
 def load_skill_content(
     skill_name: str,
     skill_dirs: Optional[list[str]] = None,
@@ -95,9 +135,6 @@ def load_skill_content(
     registry: Optional[dict[str, SkillDefinition]] = None,
 ) -> Optional[str]:
     """Load SKILL.md content for a skill from local file system.
-
-    Searches through skill directories to find and load the SKILL.md file
-    for the specified skill.
 
     Args:
         skill_name: Name of the skill (e.g. 'onboarding')
@@ -111,54 +148,18 @@ def load_skill_content(
     Returns:
         Content of SKILL.md as string, or None if not found
     """
-    skill = _resolve_skill(skill_name, mode, registry)
-    if not skill:
-        logger.warning(f"Skill '{skill_name}' not found in registry")
+    skill_dir = resolve_skill_dir(skill_name, skill_dirs, mode, registry=registry)
+    if skill_dir is None:
         return None
-
-    # User-tier skill: its bytes live in exactly one host directory — read it
-    # directly, no search and no Path.cwd() dependence.
-    if skill.source_dir:
-        skill_md_path = Path(skill.source_dir) / skill_name / "SKILL.md"
-        try:
-            return skill_md_path.read_text(encoding="utf-8")
-        except OSError as e:
-            logger.warning(
-                f"Failed to read SKILL.md for '{skill_name}' "
-                f"from {skill_md_path}: {e}"
-            )
-            return None
-
-    # No caller-supplied search path: fall back to the same sources, in the
-    # same order, that a caller holding a config would have passed. A caller
-    # that overrode ``user_skills_dir`` has to pass its own list -- this branch
-    # answers for the ones that have no config to read it from.
-    if skill_dirs is None:
-        skill_dirs = [str(d) for d in host_skill_dirs()]
-
-    # Search for SKILL.md in each directory (last wins)
-    content = None
-
-    for skill_dir in skill_dirs:
-        skill_md_path = Path(skill_dir) / skill_name / "SKILL.md"
-
-        if skill_md_path.exists():
-            try:
-                content = skill_md_path.read_text(encoding="utf-8")
-                logger.debug(
-                    f"Loaded SKILL.md for '{skill_name}' from {skill_md_path}"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to read SKILL.md for '{skill_name}' "
-                    f"from {skill_md_path}: {e}"
-                )
-
-    if content is None:
+    skill_md_path = skill_dir / "SKILL.md"
+    try:
+        content = skill_md_path.read_text(encoding="utf-8")
+    except OSError as e:
         logger.warning(
-            f"SKILL.md not found for skill '{skill_name}' in any skill directory"
+            f"Failed to read SKILL.md for '{skill_name}' from {skill_md_path}: {e}"
         )
-
+        return None
+    logger.debug(f"Loaded SKILL.md for '{skill_name}' from {skill_md_path}")
     return content
 
 
