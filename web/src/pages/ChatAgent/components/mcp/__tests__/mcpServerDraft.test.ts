@@ -7,6 +7,7 @@ import {
   draftDuplicateKeyPath,
   draftHeaderMap,
   draftPayload,
+  draftStandIns,
   draftSuggestedName,
   draftTransport,
   entryChanged,
@@ -308,5 +309,61 @@ describe('mcpServerDraft: what gets checked and what gets sent', () => {
       // Forced on: a header that resolves from the vault is needed to list tools.
       discovery_uses_secrets: true,
     });
+  });
+});
+
+// The stand-in check blocks Save, so it may only fire on a value that cannot
+// be a real one: a hint word inside a path, a host or a name used to lock
+// even a description edit of a connector that held one.
+describe('mcpServerDraft: what blocks a save as an unfilled stand-in', () => {
+  const stdio = (env: Record<string, string>, args: string[] = []) =>
+    initialDraft({
+      name: 'srv',
+      transport: 'stdio',
+      command: 'npx',
+      args,
+      url: null,
+      env_refs: [],
+      header_refs: [],
+      env,
+      headers: {},
+      description: '',
+      instruction: '',
+      tool_exposure_mode: 'summary',
+    });
+
+  it('reads real values that merely carry a hint word as real', () => {
+    const draft = stdio(
+      { TODO_FILE: '/Users/alice/todo.md', ORG: 'YourCompany', APP: 'my-todo-app' },
+      ['-y', 'todo-mcp', '--base-url', 'https://api.todoist.com'],
+    );
+    expect(draftStandIns(draft)).toEqual({ headers: new Set(), env: new Set(), args: new Set() });
+  });
+
+  it('still blocks the unambiguous stand-ins a pasted config brings', () => {
+    const draft = type(
+      JSON.stringify({
+        mcpServers: {
+          srv: {
+            command: 'npx',
+            args: ['-y', 'thing', '--token', 'REPLACE_ME'],
+            env: { A: '<YOUR_API_KEY>', B: 'your-api-key-here', C: 'xxx', D: 'changeme', E: 'us-east-1' },
+          },
+        },
+      }),
+    );
+    const found = draftStandIns(draft);
+    const keys = draft.env.filter((row) => found.env.has(row.id)).map((row) => row.key);
+    expect(keys).toEqual(['A', 'B', 'C', 'D']);
+    expect([...found.args]).toEqual([3]);
+  });
+
+  it('never blocks a value the edited connector already holds', () => {
+    const saved = stdio({ TOKEN: 'REPLACE_ME' }, ['--token', '<token>']);
+    const edited = stdio({ TOKEN: 'REPLACE_ME' }, ['--token', '<token>']);
+    expect(draftStandIns(edited, saved)).toEqual({ headers: new Set(), env: new Set(), args: new Set() });
+    // A stand-in typed into the edit is still one.
+    const typed = envChanged(edited, [...edited.env, { id: nextRowId(), key: 'NEW', value: 'your-token' }]);
+    expect(draftStandIns(typed, saved).env.size).toBe(1);
   });
 });

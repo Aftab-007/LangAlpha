@@ -1,13 +1,14 @@
 /**
- * The `?detail=` deep link for the Plugins page detail overlays:
- * `detail=server:NAME | brokerage:NAME | skill:NAME | plugin:NAME`, plus `dws=<workspace_id>`
- * when the row is workspace-scoped. Names cannot contain ':' (validated
+ * The `?detail=` deep link for the Plugins page detail pages:
+ * `detail=server:NAME | brokerage:NAME | skill:NAME | plugin:NAME | catalog:NAME`,
+ * plus `dws=<workspace_id>` when the row is workspace-scoped. `catalog` is a
+ * Discover entry that is not installed; an installed one opens as `plugin`. Names cannot contain ':' (validated
  * server-side), so the first colon splits unambiguously. Each tab renders
  * only its own kind; opening another kind's detail switches the tab in the
  * same navigation.
  */
 
-export type DetailKind = 'server' | 'brokerage' | 'skill' | 'plugin';
+export type DetailKind = 'server' | 'brokerage' | 'skill' | 'plugin' | 'catalog';
 
 export interface DetailRef {
   kind: DetailKind;
@@ -15,7 +16,7 @@ export interface DetailRef {
   workspaceId: string | null;
 }
 
-const KINDS: ReadonlySet<string> = new Set(['server', 'brokerage', 'skill', 'plugin']);
+const KINDS: ReadonlySet<string> = new Set(['server', 'brokerage', 'skill', 'plugin', 'catalog']);
 
 /**
  * The tab that renders each kind. A `?detail=` link that names no tab is
@@ -31,7 +32,23 @@ export const DETAIL_KIND_TAB: Record<DetailKind, string> = {
   brokerage: 'brokerages',
   skill: 'skills',
   plugin: 'plugins',
+  catalog: 'plugins',
 };
+
+/**
+ * Yours or Discover, per section: `?view=discover`. Absent is Yours. The old
+ * Discover tab (`?tab=discover`) reads as Plugins with Discover showing, so
+ * links into it keep landing on the catalog.
+ */
+export const VIEW_PARAM = 'view';
+export type SectionView = 'yours' | 'discover';
+
+export function readView(params: URLSearchParams): SectionView {
+  if (params.get(VIEW_PARAM) === 'discover' || params.get('tab') === 'discover') return 'discover';
+  // A catalog entry only exists in Discover.
+  if (params.get('detail')?.startsWith('catalog:')) return 'discover';
+  return 'yours';
+}
 
 export function parseDetail(params: URLSearchParams): DetailRef | null {
   const raw = params.get('detail');
@@ -57,4 +74,13 @@ export function withDetail(
     if (ref.workspaceId) next.set('dws', ref.workspaceId);
   }
   return next;
+}
+
+/** A link to an item's own page on the Plugins page, from anywhere in the app. */
+export function detailHref(ref: {
+  kind: DetailKind;
+  name: string;
+  workspaceId?: string | null;
+}): string {
+  return `/plugins?${withDetail(new URLSearchParams({ tab: DETAIL_KIND_TAB[ref.kind] }), ref)}`;
 }

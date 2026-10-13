@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { scopeReach } from '../ScopeControl';
+import { readChecklist } from '../ScopeControl';
+
+const scopeReach = (...args: Parameters<typeof readChecklist>) => readChecklist(...args).reach;
 
 /**
  * The badge and a user server's state line both read this, so its branches

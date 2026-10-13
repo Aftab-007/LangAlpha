@@ -117,6 +117,18 @@ export function isValidSecretValue(value: string): boolean {
   return true;
 }
 
+const SCHEME_WORD_RE = /^(?:bearer|basic|token)?$/i;
+
+/**
+ * `value` when it holds nothing but `${vault:NAME}` refs (an auth scheme word
+ * in front is allowed, so `Bearer ${vault:T}` survives), else ''. A ref is
+ * only a name and safe to keep around; anything typed beside one may be a key.
+ */
+export function refsOnlyValue(value: string): string {
+  const rest = value.replace(VAULT_REF_GLOBAL_RE, '');
+  return rest !== value && SCHEME_WORD_RE.test(rest.trim()) ? value : '';
+}
+
 /**
  * Validate a single stdio `arg` string. Embedded `${vault:NAME}` refs ARE legal
  * here (bulk import writes `--flag=${vault:NAME}`). After stripping every

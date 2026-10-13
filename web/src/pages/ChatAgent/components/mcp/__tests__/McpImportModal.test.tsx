@@ -74,32 +74,21 @@ describe('McpImportModal: placeholder credentials', () => {
     expect(sent.mcpServers['fuyao-meta'].headers['X-api-key']).toBe('key-b');
   });
 
-  it('leaves the server the user skipped holding its placeholder', async () => {
+  it('holds Import until every placeholder is answered', async () => {
     const onImport = vi.fn().mockResolvedValue(result(['fuyao_a_share', 'fuyao_meta']));
     render(<McpImportModal onClose={vi.fn()} onImport={onImport} />);
     fireEvent.change(screen.getByTestId('mcp-import-text'), { target: { value: BLOB } });
     fireEvent.click(await screen.findByRole('button', { name: /^next$/i }));
 
-    fireEvent.change(screen.getAllByPlaceholderText(/paste the real value/i)[0], {
-      target: { value: 'key-a' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /^import 2$/i }));
-
+    const importBtn = screen.getByRole('button', { name: /^import 2$/i });
+    expect(importBtn).toBeDisabled();
+    const fields = screen.getAllByPlaceholderText(/paste the real value/i);
+    fireEvent.change(fields[0], { target: { value: 'key-a' } });
+    expect(importBtn).toBeDisabled();
+    fireEvent.change(fields[1], { target: { value: 'key-b' } });
+    expect(importBtn).toBeEnabled();
+    fireEvent.click(importBtn);
     await waitFor(() => expect(onImport).toHaveBeenCalledTimes(1));
-    const sent = onImport.mock.calls[0][0] as { mcpServers: Record<string, { headers: Record<string, string> }> };
-    expect(sent.mcpServers['fuyao-a-share'].headers['X-api-key']).toBe('key-a');
-    expect(sent.mcpServers['fuyao-meta'].headers['X-api-key']).toBe('<your-api-key>');
-  });
-
-  it('imports the placeholder as-is when the field is left blank', async () => {
-    const onImport = vi.fn().mockResolvedValue(result(['fuyao_a_share', 'fuyao_meta']));
-    render(<McpImportModal onClose={vi.fn()} onImport={onImport} />);
-    fireEvent.change(screen.getByTestId('mcp-import-text'), { target: { value: BLOB } });
-    fireEvent.click(await screen.findByRole('button', { name: /^next$/i }));
-    fireEvent.click(screen.getByRole('button', { name: /^import 2$/i }));
-    await waitFor(() => expect(onImport).toHaveBeenCalledTimes(1));
-    const sent = onImport.mock.calls[0][0] as { mcpServers: Record<string, { headers: Record<string, string> }> };
-    expect(sent.mcpServers['fuyao-meta'].headers['X-api-key']).toBe('<your-api-key>');
   });
 
   it('forgets the answers when a different config is pasted over the last one', async () => {
@@ -119,15 +108,19 @@ describe('McpImportModal: placeholder credentials', () => {
     await screen.findByText('acme · X-Token');
 
     // Same server name, same spelling, a different vendor: the field starts
-    // blank, and importing from here sends nothing the user typed for the
-    // config they replaced.
+    // blank and Import is held, so nothing the user typed for the config they
+    // replaced can be sent.
     expect(screen.getByPlaceholderText(/paste the real value/i)).toHaveValue('');
+    expect(screen.getByRole('button', { name: /^import 1$/i })).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText(/paste the real value/i), {
+      target: { value: 'key-b' },
+    });
     fireEvent.click(screen.getByRole('button', { name: /^import 1$/i }));
     await waitFor(() => expect(onImport).toHaveBeenCalledTimes(1));
     const sent = onImport.mock.calls[0][0] as {
       mcpServers: Record<string, { headers: Record<string, string> }>;
     };
-    expect(sent.mcpServers.acme.headers['X-Token']).toBe('<your-api-key>');
+    expect(sent.mcpServers.acme.headers['X-Token']).toBe('key-b');
   });
 
   it('skips the credentials step when nothing is a placeholder', async () => {
@@ -162,5 +155,78 @@ describe('McpImportModal: switching imports on', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^import 1$/i }));
     await screen.findByText(/imported 1 of 1/i);
     expect(screen.queryByTestId('mcp-import-enable-plain')).not.toBeInTheDocument();
+  });
+});
+
+describe('McpImportModal: refused entries', () => {
+  it('shows why a check_failed entry was not saved', async () => {
+    const onImport = vi.fn().mockResolvedValue({
+      results: [
+        {
+          name: 'plain',
+          original_name: 'plain',
+          renamed: false,
+          status: 'check_failed',
+          reason: 'The server did not answer.',
+        },
+      ],
+      created: 0,
+      secrets_created: [],
+      config_version: 2,
+    });
+    render(<McpImportModal onClose={vi.fn()} onImport={onImport} />);
+    fireEvent.change(screen.getByTestId('mcp-import-text'), { target: { value: PLAIN } });
+    fireEvent.click(await screen.findByRole('button', { name: /^import 1$/i }));
+    expect(await screen.findByText('The server did not answer.')).toBeInTheDocument();
+  });
+
+  // With its reason: this dialog closes on Fix, and the form opened with no
+  // word of why it was there.
+  it('hands a refused entry to onFix as it was sent, with its reason, for the add form to open on', async () => {
+    const onImport = vi.fn().mockResolvedValue({
+      results: [
+        { name: 'plain', original_name: 'plain', renamed: false, status: 'check_failed', reason: 'HTTP 404' },
+      ],
+      created: 0,
+      secrets_created: [],
+      config_version: 2,
+    });
+    const onFix = vi.fn();
+    render(<McpImportModal onClose={vi.fn()} onImport={onImport} onFix={onFix} />);
+    fireEvent.change(screen.getByTestId('mcp-import-text'), { target: { value: PLAIN } });
+    fireEvent.click(await screen.findByRole('button', { name: /^import 1$/i }));
+    fireEvent.click(await screen.findByTestId('mcp-import-fix-plain'));
+    expect(onFix).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'plain', transport: 'http', url: 'https://plain.example.com/mcp' }),
+      expect.objectContaining({ message: "The import didn't add this connector: HTTP 404" }),
+    );
+  });
+
+  it('hands a sign_in_required entry to onSignIn as the server it would have been', async () => {
+    const onImport = vi.fn().mockResolvedValue({
+      results: [
+        {
+          name: 'plain',
+          original_name: 'plain',
+          renamed: false,
+          status: 'sign_in_required',
+          url: 'https://plain.example.com/mcp',
+        },
+      ],
+      created: 0,
+      secrets_created: [],
+      config_version: 2,
+    });
+    const onSignIn = vi.fn();
+    render(<McpImportModal onClose={vi.fn()} onImport={onImport} onSignIn={onSignIn} />);
+    fireEvent.change(screen.getByTestId('mcp-import-text'), { target: { value: PLAIN } });
+    fireEvent.click(await screen.findByRole('button', { name: /^import 1$/i }));
+    fireEvent.click(await screen.findByTestId('mcp-import-signin-plain'));
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+    expect(onSignIn.mock.calls[0][0]).toMatchObject({
+      name: 'plain',
+      transport: 'http',
+      url: 'https://plain.example.com/mcp',
+    });
   });
 });

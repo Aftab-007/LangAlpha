@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
+import { useToastInset } from '@/components/ui/use-toast';
 import { BulkScopeMenu, type BulkScopeSpec } from './BulkScopeMenu';
+import './surface/surface.css';
 
 /**
  * The floating action bar of select mode: selected count, per-action buttons
@@ -33,6 +35,7 @@ export function BulkActionBar({
   selectionKey,
   actions,
   scope,
+  note,
   progress,
   onExit,
 }: {
@@ -43,6 +46,9 @@ export function BulkActionBar({
   actions: BulkAction[];
   /** Present = the bar offers the bulk scope menu (Skills and MCP tabs). */
   scope?: BulkScopeSpec;
+  /** Why some of the selection is left out of an action ("2 came with a
+   *  plugin and can't be removed"), said here rather than found out after. */
+  note?: string | null;
   progress: { done: number; total: number } | null;
   onExit: () => void;
 }) {
@@ -57,15 +63,14 @@ export function BulkActionBar({
   const confirming = armed && !armed.disabled ? armed : null;
   const running = progress !== null;
 
+  // Toasts rise above the bar while it is up: a result or a sign-in offer
+  // landing in the bottom corner otherwise sits on the bar's own buttons.
+  const barRef = useRef<HTMLDivElement>(null);
+  useToastInset(barRef);
+
   const exit = (
-    <button
-      type="button"
-      aria-label={t('common.cancel')}
-      onClick={onExit}
-      className="p-1 rounded transition-colors hover:bg-foreground/10"
-      style={{ color: 'var(--color-text-tertiary)' }}
-    >
-      <X className="h-3.5 w-3.5" />
+    <button type="button" aria-label={t('common.cancel')} onClick={onExit} className="bulk-bar-exit">
+      <X className="h-4 w-4" />
     </button>
   );
 
@@ -80,7 +85,9 @@ export function BulkActionBar({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key !== 'Escape') return;
+      // A press something else already answered (the search clearing itself,
+      // a menu closing) is spent: it must not also throw the selection away.
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
       if (confirmingId) setConfirmingId(null);
       // Escape dismisses the bar, and the bar is what renders the progress
       // readout — leaving mid-run means the rest of the fan-out completes with
@@ -93,84 +100,72 @@ export function BulkActionBar({
   }, [confirmingId, onExit, running]);
 
   return (
-    <div
-      className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-3 py-2 rounded-lg"
-      style={{
-        backgroundColor: 'var(--color-bg-elevated)',
-        border: '1px solid var(--color-border-muted)',
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.12)',
-      }}
-      data-testid="bulk-action-bar"
-    >
-      {running ? (
-        <span
-          className="inline-flex items-center gap-2 text-xs"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          <Loader size={14} className="text-current" />
-          {t('plugins.bulk.progress', { done: progress.done, total: progress.total })}
-        </span>
-      ) : count === 0 ? (
-        <>
-          <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-            {t('plugins.bulk.pickRows')}
+    <>
+      {/* Room under the last row where the bar floats (a phone, above the
+          tab bar), so it never sits on the cells it acts on. */}
+      <div className="bulk-bar-spacer" aria-hidden />
+      <div
+        ref={barRef}
+        className="bulk-bar"
+        role="toolbar"
+        aria-label={t('plugins.bulk.barLabel')}
+        data-testid="bulk-action-bar"
+      >
+        {running ? (
+          <span className="bulk-bar-status">
+            <Loader size={14} className="text-current" />
+            {t('plugins.bulk.progress', { done: progress.done, total: progress.total })}
           </span>
-          {exit}
-        </>
-      ) : confirming ? (
-        <>
-          <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-            {confirming.confirmMessage}
-          </span>
-          <button
-            type="button"
-            onClick={() => setConfirmingId(null)}
-            className="px-2 py-1 text-xs rounded hover:bg-foreground/10"
-            style={{ color: 'var(--color-text-tertiary)' }}
-          >
-            {t('common.cancel')}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const action = confirming;
-              setConfirmingId(null);
-              action.run();
-            }}
-            className="px-2 py-1 text-xs rounded"
-            style={{ color: 'var(--color-loss)' }}
-          >
-            {confirming.label}
-          </button>
-        </>
-      ) : (
-        <>
-          <span className="text-xs font-medium" style={{ color: 'var(--color-text-primary)' }}>
-            {t('plugins.bulk.selected', { count })}
-          </span>
-          {actions.map((action) => (
-            <button
-              key={action.id}
-              type="button"
-              disabled={action.disabled}
-              onClick={() => {
-                if (action.confirmMessage) setConfirmingId(action.id);
-                else action.run();
-              }}
-              className="px-2 py-1 text-xs rounded transition-colors hover:bg-foreground/10 disabled:opacity-40 disabled:hover:bg-transparent"
-              style={{
-                color: action.destructive
-                  ? 'var(--color-loss)'
-                  : 'var(--color-text-primary)',
-              }}
-            >
-              {action.label}
-            </button>
-          ))}
-          {scope && <BulkScopeMenu {...scope} />}
-          {exit}
-        </>
-      )}
-    </div>
+        ) : count === 0 ? (
+          <>
+            <span className="bulk-bar-status">{t('plugins.bulk.pickRows')}</span>
+            {exit}
+          </>
+        ) : confirming ? (
+          <>
+            <span className="bulk-bar-status is-ask">{confirming.confirmMessage}</span>
+            <div className="bulk-bar-actions">
+              <button type="button" onClick={() => setConfirmingId(null)} className="bulk-bar-btn">
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const action = confirming;
+                  setConfirmingId(null);
+                  action.run();
+                }}
+                className="bulk-bar-btn is-destructive"
+              >
+                {confirming.label}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="bulk-bar-count">{t('plugins.bulk.selected', { count })}</span>
+            <div className="bulk-bar-actions">
+              {actions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  disabled={action.disabled}
+                  onClick={() => {
+                    if (action.confirmMessage) setConfirmingId(action.id);
+                    else action.run();
+                  }}
+                  className={action.destructive ? 'bulk-bar-btn is-destructive' : 'bulk-bar-btn'}
+                >
+                  {action.label}
+                </button>
+              ))}
+              {scope && <BulkScopeMenu {...scope} />}
+            </div>
+            {exit}
+            {note && <p className="bulk-bar-note">{note}</p>}
+          </>
+        )}
+      </div>
+    </>
   );
 }

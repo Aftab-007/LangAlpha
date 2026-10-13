@@ -22,9 +22,12 @@ import { NativeOnlyNote } from './DesktopDownloadLink';
  * cannot finish was still clickable.
  */
 
-/** Ties a row's connect button to the note saying why it cannot run. */
+/** Ties a row's connect button to the note saying why it cannot run; a
+ *  surface that draws the reason itself names it `${BLOCKED_NOTE_PREFIX}<rowKey>`. */
+export const BLOCKED_NOTE_PREFIX = 'oauth-block-';
+
 function blockedNoteId(rowKey: string): string {
-  return `oauth-block-${rowKey}`;
+  return `${BLOCKED_NOTE_PREFIX}${rowKey}`;
 }
 
 /**
@@ -75,7 +78,7 @@ export function VendorNotes({
         // that is a consequence and not a capability note -- the two sat at
         // the same tertiary grey, so the one with a cost read as the quieter.
         <RowNote icon={AlertTriangle} tone="warning">
-          {t('plugins.brokerages.exclusiveNote')}
+          {t('plugins.brokerages.exclusiveNote', { broker: vendor.label })}
         </RowNote>
       )}
     </>
@@ -115,6 +118,7 @@ export function ConnectButton({
   vendor,
   rowKey,
   emphasis = 'quiet',
+  size = 'sm',
   registryUnavailable = false,
   label,
   testid,
@@ -129,6 +133,9 @@ export function ConnectButton({
   rowKey: string;
   /** `loud` is for the one row whose whole point is that it is not connected. */
   emphasis?: 'quiet' | 'loud';
+  /** `md` is a page's button (a detail callout); `sm` sits in a row; `cell`
+   *  is the trailing action of a surface cell, drawn as one. */
+  size?: 'sm' | 'md' | 'cell';
   /** The registry was asked and did not answer, so the list is carrying the
    *  note this button points at. False while it is merely still in flight. */
   registryUnavailable?: boolean;
@@ -173,29 +180,39 @@ export function ConnectButton({
       data-testid={testid}
       // `px-2 py-1` matches ScopeControl's badge and trigger, which sit
       // immediately beside this at the same size.
-      className={`inline-flex items-center gap-1 px-2 py-1 text-[0.6875rem] rounded-md disabled:opacity-50 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed ${hover}`}
+      className={
+        size === 'cell'
+          ? 'surface-cell-action connect-cell-action'
+          : `inline-flex shrink-0 items-center whitespace-nowrap disabled:opacity-50 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed ${
+              size === 'md'
+                ? 'h-[30px] gap-1.5 px-3 text-[0.78125rem] rounded-lg'
+                : 'gap-1 px-2 py-1 text-[0.6875rem] rounded-md'
+            } ${hover}`
+      }
       style={
         // The same pair the page's own primary CTA uses. Emphasis here is ink
         // against outline, which is the contrast the system is built on; the
         // amber is annotation language, and painting a CTA with it is the one
         // thing DESIGN.md names outright. It also read at about 2.99:1 in light
         // theme on 11px text, because the token that belongs on the accent is a
-        // different one again.
-        emphasis === 'loud'
-          ? {
-              color: 'var(--color-btn-primary-text)',
-              backgroundColor: 'var(--color-btn-primary-bg)',
-            }
-          : {
-              color: 'var(--color-text-primary)',
-              border: '1px solid var(--color-border-muted)',
-            }
+        // different one again. A cell's action is the surface's own outline.
+        size === 'cell'
+          ? undefined
+          : emphasis === 'loud'
+            ? {
+                color: 'var(--color-btn-primary-text)',
+                backgroundColor: 'var(--color-btn-primary-bg)',
+              }
+            : {
+                color: 'var(--color-text-primary)',
+                border: '1px solid var(--color-border-muted)',
+              }
       }
     >
       {connecting ? (
         <Loader size={12} className="text-current" />
-      ) : (
-        <Link2 className="h-3 w-3" />
+      ) : size === 'cell' ? null : (
+        <Link2 className={size === 'md' ? 'h-3.5 w-3.5' : 'h-3 w-3'} />
       )}
       {label ?? (status ? t('plugins.oauth.reconnect') : t('plugins.oauth.connect'))}
     </button>

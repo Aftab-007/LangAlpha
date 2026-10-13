@@ -55,8 +55,7 @@ export function BulkScopeMenu({
           type="button"
           disabled={!anyEligible}
           aria-label={t('plugins.bulk.scopeAria')}
-          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors hover:bg-foreground/10 disabled:opacity-40 disabled:hover:bg-transparent"
-          style={{ color: 'var(--color-text-primary)' }}
+          className="bulk-bar-btn"
         >
           {t('plugins.bulk.scope')}
           <ChevronDown className="h-3 w-3" />

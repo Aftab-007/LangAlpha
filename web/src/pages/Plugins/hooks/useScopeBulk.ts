@@ -24,8 +24,10 @@ export interface ScopeBulkAdapter<T> {
   workspaces: ScopeWorkspace[];
   /** The tab's bulk runner. */
   run: (targets: BulkTarget[]) => void;
-  /** Bulk-target key for a row; it only labels failures. */
+  /** Bulk-target key for a row. */
   key: (row: T) => string;
+  /** What the user calls the row, which a failure is named by. */
+  name: (row: T) => string;
   /**
    * The row's live per-workspace deny markers, or null when the row has no
    * deny checklist at all — a workspace-tier row (it is already in exactly one
@@ -94,6 +96,7 @@ export function useScopeBulk<T>(
     if (plan.length === 0 && !setNew) return null;
     return {
       key: adapter.key(row),
+      name: adapter.name(row),
       run: async () => {
         for (const step of plan) {
           await adapter.setWorkspaceEnabled(row, step.workspaceId, step.enabled);
@@ -106,7 +109,7 @@ export function useScopeBulk<T>(
   function targets(build: (row: T) => (() => Promise<unknown>) | null): BulkTarget[] {
     return rows.flatMap((row) => {
       const run = build(row);
-      return run ? [{ key: adapter.key(row), run }] : [];
+      return run ? [{ key: adapter.key(row), name: adapter.name(row), run }] : [];
     });
   }
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { queryOptions, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../lib/queryKeys';
 import { FAIL_FAST_OFFLINE } from '../lib/network';
@@ -75,8 +75,10 @@ export function invalidateMcpFanout(qc: QueryClient) {
   // Plugin cards list their still-owned components as chips, so deleting or
   // customizing a server changes what the Plugins tab should show. The
   // dependency runs one way only — the plugin fanout already invalidates this
-  // key — so naming it here is what keeps the two tabs from disagreeing.
-  qc.invalidateQueries({ queryKey: queryKeys.plugins.all });
+  // key — so naming it here is what keeps the two tabs from disagreeing. Only
+  // the list: the catalog beside it marks installed from plugin rows, which no
+  // server or key change touches, and each read of it is the whole listing.
+  qc.invalidateQueries({ queryKey: queryKeys.plugins.list() });
 }
 
 // ---------------------------------------------------------------------------
@@ -555,15 +557,29 @@ function optimisticCatalogRow<V extends { name: string }>(
   };
 }
 
+/**
+ * The fan-out for a write that adds rows, settling once the catalog holds them.
+ * Its caller goes straight on to the new row (the "Added" toast's Open, the
+ * just-added mark), and a row the list does not have yet reads as a dead link
+ * and is closed. Only the catalog is waited on: the rest of the radius, the
+ * open form's own check among it, refreshes in its own time.
+ */
+function invalidateForNewRows(qc: QueryClient): Promise<void> {
+  invalidateMcpFanout(qc);
+  // Joins the refetch the fan-out just started rather than starting another.
+  return qc.refetchQueries(
+    { queryKey: queryKeys.mcp.catalog(), exact: true, type: 'active' },
+    { cancelRefetch: false },
+  );
+}
+
 /** Catalog mutations all take the shared radius (`invalidateMcpFanout`). */
 export function useCreateMcpCatalogServer() {
   const queryClient = useQueryClient();
   return useMutation({
     ...FAIL_FAST_OFFLINE,
     mutationFn: (body: McpServerInput) => createMcpCatalogServer(body),
-    onSuccess: () => {
-      invalidateMcpFanout(queryClient);
-    },
+    onSuccess: () => invalidateForNewRows(queryClient),
   });
 }
 
@@ -656,8 +672,8 @@ export function useImportMcpCatalogServers() {
     ...FAIL_FAST_OFFLINE,
     mutationFn: (payload: unknown) => importMcpCatalogServers(payload),
     onSuccess: () => {
-      invalidateMcpFanout(queryClient);
       queryClient.invalidateQueries({ queryKey: queryKeys.userVault.all });
+      return invalidateForNewRows(queryClient);
     },
   });
 }
@@ -686,13 +702,23 @@ export function useRefreshMcpOauthSchemas() {
 
 // --- Brokerage connectors ---
 
+/**
+ * The shipped brokerage registry, as one query: the hook below renders it, and
+ * a connect that has to know which vendor an address belongs to before it can
+ * ask anything awaits the same query rather than reading an unanswered list as
+ * "no vendor".
+ */
+export const brokeragesQuery = queryOptions({
+  queryKey: queryKeys.brokerages.list(),
+  // Read at call time, not when this module loads: every importer of this
+  // file would otherwise touch the API module just by importing it.
+  queryFn: () => getBrokerages(),
+  // What this build ships cannot change under a running page.
+  staleTime: Infinity,
+});
+
 export function useBrokerages() {
-  return useQuery({
-    queryKey: queryKeys.brokerages.list(),
-    queryFn: getBrokerages,
-    // What this build ships cannot change under a running page.
-    staleTime: Infinity,
-  });
+  return useQuery(brokeragesQuery);
 }
 
 export function useToggleBrokerage() {

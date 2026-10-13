@@ -69,12 +69,19 @@ export function formatTimestamp(ts: string | null | undefined, locale: string): 
 const listFormat = perLocale((locale) => new Intl.ListFormat(locale, { type: 'conjunction' }));
 
 /** Names joined as the locale says "A, B and C". A Chinese conjunction is a
- *  word and is spaced from the names beside it (`moomoo 和 Webull`), since the
- *  names are usually Latin; the enumeration comma needs no space. */
+ *  word and is spaced from a Latin name or a number beside it (`moomoo 和
+ *  Webull`), but not from Chinese (`2 个连接器和 2 个技能`), where a space
+ *  reads as a gap; the enumeration comma needs no space. */
 export function formatList(items: readonly string[], locale: string): string {
-  return listFormat(locale)
-    .formatToParts(items)
-    .map((part) => (part.type === 'literal' && /^\p{Script=Han}+$/u.test(part.value) ? ` ${part.value} ` : part.value))
+  const parts = listFormat(locale).formatToParts(items);
+  const han = (ch: string | undefined) => !!ch && /\p{Script=Han}/u.test(ch);
+  return parts
+    .map((part, i) => {
+      if (part.type !== 'literal' || !/^\p{Script=Han}+$/u.test(part.value)) return part.value;
+      const before = han(parts[i - 1]?.value.at(-1)) ? '' : ' ';
+      const after = han(parts[i + 1]?.value.at(0)) ? '' : ' ';
+      return `${before}${part.value}${after}`;
+    })
     .join('');
 }
 

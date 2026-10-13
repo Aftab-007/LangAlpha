@@ -1,419 +1,249 @@
-import { useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AnimatePresence } from '@/lib/framer';
-import { Blocks, BookOpen, Folder, Upload } from 'lucide-react';
+import { Upload } from 'lucide-react';
+import { HeaderButton } from '@/components/mcp/McpPrimitives';
+import { usePlugins } from '@/hooks/usePlugins';
 import { useSkills, useUploadSkill } from '@/hooks/useSkills';
-import { invalidateSkillFanout } from '@/hooks/usePlugins';
-import {
-  ConfirmStrip,
-  HeaderButton,
-  ListError,
-  ListHeader,
-  ListSkeleton,
-} from '@/components/mcp/McpPrimitives';
+import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
 import type { SkillInfo } from '@/pages/ChatAgent/utils/api';
-import { groupBy, matchesFilter } from '../utils/groupOrigins';
-import { withDetail } from '../utils/detailParam';
-import { useAddIntent } from '../hooks/useAddIntent';
-import { useDetailParam } from '../hooks/useDetailParam';
-import { usePluginListSurface } from '../hooks/usePluginListSurface';
-import { useSkillActions, skillRowKey } from '../hooks/useSkillActions';
-import { useSkillBulkActions } from '../hooks/useSkillBulkActions';
-import { useSkillOwners } from '../hooks/useSkillOwners';
-import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
-import { BulkActionBar } from './BulkActionBar';
-import { EmptyState } from './EmptyState';
-import { FilterEmpty } from './FilterEmpty';
-import { GroupDeck } from './GroupDeck';
-import { ListControls } from './ListControls';
-import { PluginSuppressedBadge } from './PluginBadges';
-import { ScopeControl, scopeLocked } from './ScopeControl';
-import { SkillDetail } from './SkillDetail';
-import { SkillRow } from './SkillRow';
-import { SkillUploadModal } from './SkillUploadModal';
-import { rowSelection } from './useBulkSelection';
+import { matchesFilter } from '../utils/groupOrigins';
+import { isBundled, pluginMark } from '../utils/pluginSurface';
 import {
   isEffectivelyEnabled,
-  isPluginOwned,
-  isPluginSuppressed,
+  skillScopeId,
+  skillSections,
+  type PluginSkillGroup,
 } from '../utils/provenance';
+import { skillRowKey } from '../utils/rowKeys';
+import { useAddIntent } from '../hooks/useAddIntent';
+import { useDetailParam } from '../hooks/useDetailParam';
+import { useSectionNav } from '../hooks/useSectionNav';
+import { usePluginListSurface } from '../hooks/usePluginListSurface';
+import { useSkillActions } from '../hooks/useSkillActions';
+import { useSkillBulkActions } from '../hooks/useSkillBulkActions';
+import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
+import { CatalogStart } from './CatalogStart';
+import { EmptyState } from './EmptyState';
+import { PluginListFrame } from './PluginListFrame';
+import { SkillDetail } from './SkillDetail';
+import { SkillUploadModal } from './SkillUploadModal';
+import { CellModeProvider, SectionLink, SurfaceGrid, SurfaceSection } from './surface/Surface';
+import { SkillListCell } from './pluginsPage/SkillListCell';
+import { partialReachText } from './pluginsPage/pluginReach';
+import { sourceLabel } from './pluginsPage/pluginStatus';
+import { useCatalogPlugins } from '../hooks/useCatalogPlugins';
+import './pluginsPage/pluginsPage.css';
 
 /**
- * The Plugins → Skills tab, in the all-scopes inventory shape: platform
- * skills, the user's own uploads, one deck per plugin's skills, then one
- * deck per workspace. Origin groups past a few rows stack into decks; the
- * management list asks for disabled rows too — the slash menu elsewhere
- * reads the enabled-only default, so a row toggled off here disappears
- * there, not here.
+ * Skills → Yours, grouped by who put each skill here: what the user added
+ * (to every workspace, or to one), then one group per plugin that brought
+ * skills, installed packages before the ones that ship with the app. Shipped
+ * groups fold after three rows; their skills are switched off, never removed.
+ *
+ * The list asks for switched-off rows too. The slash menu elsewhere reads the
+ * enabled-only default, so a skill switched off here leaves the menu but stays
+ * listed here.
  */
 
 export function SkillsList() {
   const { t } = useTranslation();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const { data: skills, isLoading, error } = useSkills(null, {
+  const catalogPlugins = useCatalogPlugins();
+  const { openDetail } = useSectionNav();
+  const skillsQuery = useSkills(null, {
     includeDisabled: true,
     allScopes: true,
   });
+  const { data: skills, isLoading } = skillsQuery;
+  const { data: pluginData } = usePlugins();
   const uploadMutation = useUploadSkill();
   const [uploadOpen, setUploadOpen] = useState(false);
-
-  // Bulk delete already excludes plugin-owned rows and the rest of the actions
-  // are enable/disable/scope, so no bulk run here can change plugin identity.
-  const surface = usePluginListSurface({ invalidate: invalidateSkillFanout });
-  const { selection } = surface;
+  // "Edit command" from a cell's menu opens the skill's page with its command
+  // box already open.
+  const [editCommandOf, setEditCommandOf] = useState<string | null>(null);
   const { workspaces: wsOptions, loading: wsLoading, nameById: wsNameById } = useWorkspaceOptions();
   const actions = useSkillActions();
-  const ownerOf = useSkillOwners();
 
   useAddIntent({ skill: () => setUploadOpen(true) });
 
   const allSkills = skills ?? [];
-  const visible = allSkills.filter(
-    (s) =>
-      matchesFilter(surface.filter, s.name, s.description, s.plugin_name) &&
-      surface.matchesState(s.enabled, isPluginSuppressed(s)),
-  );
+  const plugins = pluginData?.plugins ?? [];
 
-  // Grouped by the package that owns the row, not by which tier it lives in:
-  // a shipped bundle and an installed plugin are the same claim on a skill,
-  // and splitting them put four bundles' worth of rows under one anonymous
-  // "Platform skills" heading. What is left there is a skill no package
-  // claims — an operator's own skills root, and nothing in a stock build.
-  const platformSkills = visible.filter(
-    (s) => s.origin === 'platform' && !s.plugin_name,
+  // Nothing of the user's yet, uploaded or from an installed plugin: the
+  // catalog comes first.
+  const fromInstalled = (name: string) =>
+    plugins.some((p) => p.name === name && !isBundled(p));
+  const ownNone = !allSkills.some((s) =>
+    s.plugin_name ? fromInstalled(s.plugin_name) : s.origin === 'user' || s.origin === 'workspace',
   );
-  const ownSkills = visible.filter((s) => s.origin === 'user' && !s.plugin_name);
-  // Shipped bundles sit above the user's own section and installed plugins
-  // below it, the order the Connectors tab keeps, so the two component tabs
-  // read as one inventory. The tier is therefore part of the grouping key: a
-  // package whose skills span both belongs in each section, and keying on the
-  // name alone filed all of them under whichever row happened to come first.
-  const pluginSections = [
-    ...groupBy(
-      visible.filter((s) => s.origin !== 'workspace' && s.plugin_name),
-      (s) => `${s.origin}\u0000${s.plugin_name as string}`,
-    ).entries(),
-  ]
-    .map(([key, rows]) => {
-      const [origin, pluginName] = key.split('\u0000');
-      return { origin, pluginName, rows };
-    })
-    .sort((a, b) => a.pluginName.localeCompare(b.pluginName));
-  const shippedSections = pluginSections.filter((s) => s.origin === 'platform');
-  const installedSections = pluginSections.filter((s) => s.origin !== 'platform');
-  const workspaceSections = [
-    ...groupBy(
-      visible.filter((s) => s.origin === 'workspace'),
-      (s) => s.workspace_id ?? '',
-    ).entries(),
-  ].sort(([a], [b]) => (wsNameById.get(a) ?? '').localeCompare(wsNameById.get(b) ?? ''));
-  const hasDecks =
-    platformSkills.length > 0 || pluginSections.length > 0 || workspaceSections.length > 0;
+  // A skill has no sign-in or key to go wrong, so it never needs attention
+  // and that pill stays hidden here.
+  const list = usePluginListSurface({
+    rows: allSkills,
+    matches: (s, query) => matchesFilter(query, s.name, s.description, s.plugin_name, s.command),
+    key: skillRowKey,
+    name: (s) => s.name,
+    isOn: isEffectivelyEnabled,
+    justAdded: 'skill',
+    startWhen: !!skills && !!pluginData && ownNone,
+  });
+  const { visible } = list;
 
-  // --- Detail overlay (?detail=skill:NAME [&dws=wsid]) ---
   // Names are unique within a scope; `dws` picks the workspace-tier row when
-  // one shadows a same-named user skill.
+  // one shadows a same-named skill of the account.
   const detail = useDetailParam<SkillInfo>(
     'skill',
     (ref) =>
-      allSkills.find(
-        (s) => s.name === ref.name && (s.workspace_id ?? null) === ref.workspaceId,
-      ) ?? null,
+      allSkills.find((s) => s.name === ref.name && (s.workspace_id ?? null) === ref.workspaceId) ??
+      null,
     !isLoading && skills !== undefined,
   );
   const detailSkill = detail.target;
 
-  const bulk = useSkillBulkActions(visible, surface, wsOptions);
-
-  function renderRow(
-    skill: SkillInfo,
-    scopeControl: ReactNode,
-    onDelete?: () => void,
-    inDeck = false,
-  ) {
-    return (
-      <SkillRow
-        key={skillRowKey(skill)}
-        skill={skill}
-        owner={ownerOf(skill)}
-        toggling={actions.togglingName === skillRowKey(skill)}
-        onToggle={(enabled) => actions.toggle(skill, enabled)}
-        onCommandSave={(command) => actions.saveCommand(skill, command)}
-        onDelete={onDelete}
-        onOpen={() => detail.open(skill.name, skill.workspace_id ?? null)}
-        inDeck={inDeck}
-        scopeControl={scopeControl}
-        selection={rowSelection(selection, skillRowKey(skill))}
-      />
-    );
-  }
-
-  /** One origin deck: same shell everywhere, only the identity and the row's
-   *  scope affordances differ. */
-  function renderDeck({
-    id,
-    title,
-    icon,
-    rows,
-    scopeControl,
-    deleteOf,
-    badge,
-    action,
-  }: {
-    id: string;
-    title: string;
-    icon: ComponentType<{ className?: string; style?: CSSProperties }>;
-    rows: SkillInfo[];
-    scopeControl: (skill: SkillInfo) => ReactNode;
-    deleteOf?: (skill: SkillInfo) => (() => void) | undefined;
-    badge?: ReactNode;
-    action?: ReactNode;
-  }) {
-    return (
-      <GroupDeck
-        key={id}
-        id={id}
-        title={title}
-        icon={icon}
-        count={rows.length}
-        enabledCount={rows.filter(isEffectivelyEnabled).length}
-        badge={badge}
-        action={action}
-        forceExpanded={surface.forceExpanded}
-        selection={selection}
-        selectionKeys={rows.map(skillRowKey)}
-      >
-        <AnimatePresence initial={false}>
-          {rows.map((skill) =>
-            renderRow(skill, scopeControl(skill), deleteOf?.(skill), true),
-          )}
-        </AnimatePresence>
-      </GroupDeck>
-    );
-  }
-
-  /** Open the plugin's own card. The deck already knows which one it is, so
-   *  the detail ref carries that name rather than landing on the bare list.
-   *  The overlay open here belongs to this tab, so it goes; every other param
-   *  travels. */
-  function openPluginDetail(name: string) {
-    const next = withDetail(searchParams, {
-      kind: 'plugin',
-      name,
-      workspaceId: null,
-    });
-    next.set('tab', 'plugins');
-    setSearchParams(next, { replace: true });
-  }
-
-  const openPluginAction = (name: string) => (
-    <button
-      type="button"
-      title={t('plugins.groups.openPlugin')}
-      aria-label={t('plugins.groups.openPlugin')}
-      onClick={() => openPluginDetail(name)}
-      className="p-1 rounded transition-colors hover:bg-foreground/10"
-      style={{ color: 'var(--color-text-tertiary)' }}
-    >
-      <Blocks className="h-3.5 w-3.5" />
-    </button>
+  const { own, workspace: oneWorkspace, plugins: pluginGroups, builtIn: operator } = skillSections(
+    visible,
+    plugins,
   );
 
-  const renderPluginDecks = (sections: typeof pluginSections) =>
-    sections.map(({ origin, pluginName, rows }) =>
-        renderDeck({
-          id: `skills:plugin:${origin}:${pluginName}`,
-          title: pluginName,
-          icon: Blocks,
-          rows,
-          badge: <PluginSuppressedBadge row={rows[0]} />,
-          action: openPluginAction(pluginName),
-          scopeControl: (skill) => (
-            <ScopeControl
-              workspaces={wsOptions}
-              loading={wsLoading}
-              scopeWorkspaceId={null}
-              disabledWorkspaceIds={skill.disabled_workspace_ids ?? []}
-              checklistLocked={scopeLocked(skill)}
-              busy={actions.togglingName === skillRowKey(skill)}
-              moveBlockedReason={
-                // A package's skills live at the account tier; moving one
-                // into a workspace would detach it from its owner as a side
-                // effect of a scope change.
-                t('plugins.scope.movePluginBlocked', { plugin: pluginName })
-              }
-              onSetWorkspaceDisabled={(wsId, disabled) =>
-                actions.setWorkspaceDisabled(skill, wsId, disabled)
-              }
-            />
-          ),
-          // `deletable` means "managed through this surface", not "unowned";
-          // a plugin's skill is listed here and comes back deletable. Same
-          // gate as the bulk bar, which refuses them.
-          deleteOf: (skill) =>
-            skill.deletable && !isPluginOwned(skill)
-              ? () => actions.requestDelete(skill.name, null)
-              : undefined,
-        }),
-      );
+  const openPlugin = (name: string) => openDetail({ kind: 'plugin', name });
 
-  if (error) {
+  const bulk = useSkillBulkActions(visible, list, wsOptions);
+  const fold = (rows: SkillInfo[]) => list.fold(3, rows.map((s) => s.name));
+
+  function renderCell(skill: SkillInfo) {
+    const key = skillRowKey(skill);
+    const wsId = skillScopeId(skill);
+    const confirming =
+      !!actions.deleting &&
+      actions.deleting.name === skill.name &&
+      actions.deleting.workspaceId === wsId;
+    // A workspace's own skill names its workspace; an account skill names
+    // its reach when that is not everywhere.
+    const meta =
+      skill.origin === 'workspace'
+        ? (wsNameById.get(skill.workspace_id ?? '') ?? t('plugins.scope.unknownWorkspace'))
+        : wsLoading
+          ? null
+          : partialReachText(t, skill, wsOptions);
     return (
-      <ListError>
-        {(error as { message?: string })?.message || t('mcp.list.loadFailed')}
-      </ListError>
+      <CellModeProvider key={key} value={list.cellMode(skill)}>
+        <SkillListCell
+          skill={skill}
+          meta={meta}
+          toggling={actions.togglingName === key}
+          confirmingRemove={confirming}
+          removing={confirming && actions.deletePending}
+          onOpen={() => {
+            setEditCommandOf(null);
+            detail.open(skill.name, skill.workspace_id ?? null);
+          }}
+          onToggle={(enabled) => void actions.toggle(skill, enabled)}
+          onEditCommand={() => {
+            setEditCommandOf(key);
+            detail.open(skill.name, skill.workspace_id ?? null);
+          }}
+          onRemove={skill.deletable ? () => actions.requestDelete(skill.name, wsId) : undefined}
+          onConfirmRemove={() => void actions.confirmDelete()}
+          onCancelRemove={actions.cancelDelete}
+        />
+      </CellModeProvider>
     );
   }
-  if (isLoading) return <ListSkeleton />;
+
+  function pluginSection(group: PluginSkillGroup): ReactNode {
+    const note = group.plugin
+      ? sourceLabel(t, group.plugin, catalogPlugins)
+      : group.builtIn
+        ? t('plugins.skillsPage.builtIn')
+        : t('plugins.skillsPage.fromCatalog');
+    const off = group.plugin ? !group.plugin.enabled : group.rows[0]?.plugin_enabled === false;
+    return (
+      <SurfaceSection
+        key={group.name}
+        title={
+          group.plugin ? (
+            <span className="pp-group-title">
+              <BrandMark name={group.name} size="xs" {...pluginMark(group.plugin)} />
+              {group.name}
+            </span>
+          ) : (
+            group.name
+          )
+        }
+        count={group.rows.length}
+        note={off ? `${note} · ${t('plugins.skillsPage.pluginOff')}` : note}
+        action={
+          group.plugin ? (
+            <SectionLink onClick={() => openPlugin(group.name)}>{t('plugins.skillsPage.openPlugin')}</SectionLink>
+          ) : undefined
+        }
+      >
+        <SurfaceGrid {...(group.builtIn ? fold(group.rows) : {})}>
+          {group.rows.map(renderCell)}
+        </SurfaceGrid>
+      </SurfaceSection>
+    );
+  }
 
   return (
-    <div className="flex flex-col gap-3">
-      <ListControls
-        filter={surface.filter}
-        onFilterChange={surface.setFilter}
-        stateFilter={surface.stateFilter}
-        onStateFilterChange={surface.setStateFilter}
-        showAttention
-        selecting={selection.selecting}
-        onStartSelect={selection.start}
-        selectDisabled={allSkills.length === 0}
-      />
-
-      {surface.noMatches(visible.length) && (
-        <FilterEmpty
-          noun={t('plugins.filter.nounSkills')}
-          filter={surface.filter}
-          stateFilter={surface.stateFilter}
-          onReset={surface.reset}
-        />
-      )}
-
-      {platformSkills.length > 0 &&
-        renderDeck({
-          id: 'skills:platform',
-          title: t('plugins.skills.platform'),
-          icon: BookOpen,
-          rows: platformSkills,
-          scopeControl: (skill) => (
-            <ScopeControl
-              workspaces={wsOptions}
-              loading={wsLoading}
-              scopeWorkspaceId={null}
-              disabledWorkspaceIds={skill.disabled_workspace_ids ?? []}
-              checklistLocked={scopeLocked(skill)}
-              busy={actions.togglingName === skillRowKey(skill)}
-              onSetWorkspaceDisabled={(wsId, disabled) =>
-                actions.setWorkspaceDisabled(skill, wsId, disabled)
-              }
-            />
-          ),
-        })}
-
-      {renderPluginDecks(shippedSections)}
-
-      {/* Filtered-empty hides the whole section: the top-level noMatches
-          notice already covers it, and a bare header reads as a glitch. */}
-      {surface.keepsSection(ownSkills.length) && (
-      <div className="flex flex-col [&>*+*]:mt-1.5">
-        <ListHeader icon={BookOpen} title={t('plugins.skills.yours')} count={ownSkills.length} />
-        <p className="text-[0.6875rem]" style={{ color: 'var(--color-text-tertiary)' }}>
-          {t('plugins.skills.inheritHint')}
-        </p>
-        {ownSkills.length === 0 ? (
-          <EmptyState
-            compact={hasDecks}
-            message={t('plugins.skills.empty')}
-            action={
-              <HeaderButton
-                variant="primary"
-                icon={Upload}
-                onClick={() => setUploadOpen(true)}
-              >
-                {t('plugins.skills.upload')}
-              </HeaderButton>
-            }
-          />
-        ) : (
-          <AnimatePresence initial={false}>
-            {ownSkills.map((skill) =>
-              renderRow(
-                skill,
-                <ScopeControl
-                  workspaces={wsOptions}
-                  loading={wsLoading}
-                  scopeWorkspaceId={null}
-                  disabledWorkspaceIds={skill.disabled_workspace_ids ?? []}
-                  checklistLocked={scopeLocked(skill)}
-                  busy={
-                    actions.togglingName === skillRowKey(skill) ||
-                    actions.movingName === skillRowKey(skill)
-                  }
-                  onSetWorkspaceDisabled={(wsId, disabled) =>
-                    actions.setWorkspaceDisabled(skill, wsId, disabled)
-                  }
-                  onMove={(toWorkspaceId) => actions.move(skill, toWorkspaceId)}
-                />,
-                () => actions.requestDelete(skill.name, null),
-              ),
+    <>
+      <PluginListFrame
+        list={list}
+        query={skillsQuery}
+        loadFailed={t('plugins.loadFailed.skills')}
+        noun={t('plugins.filter.nounSkills')}
+        catalogScope="skills"
+        bulk={bulk}
+        hidden={!!detailSkill}
+        className="pp-list"
+      >
+        {list.showStart && <CatalogStart scope="skills" onAdd={() => setUploadOpen(true)} />}
+        {/* Always there unnarrowed, as the place an upload lands; the first-run
+            block above already carries the upload, so it says nothing twice. */}
+        {(own.length > 0 || (!list.narrowed && !list.showStart)) && (
+          <SurfaceSection title={t('plugins.skillsPage.addedByYou')} count={own.length || undefined}>
+            {own.length > 0 ? (
+              <SurfaceGrid>{own.map(renderCell)}</SurfaceGrid>
+            ) : (
+              <EmptyState
+                compact
+                message={t('plugins.skillsPage.emptyOwn')}
+                action={
+                  <HeaderButton variant="secondary" icon={Upload} onClick={() => setUploadOpen(true)}>
+                    {t('plugins.addMenu.uploadSkill')}
+                  </HeaderButton>
+                }
+              />
             )}
-          </AnimatePresence>
+          </SurfaceSection>
         )}
-      </div>
-      )}
+        {oneWorkspace.length > 0 && (
+          <SurfaceSection title={t('plugins.skillsPage.oneWorkspace')} count={oneWorkspace.length}>
+            <SurfaceGrid>{oneWorkspace.map(renderCell)}</SurfaceGrid>
+          </SurfaceSection>
+        )}
+        {pluginGroups.map(pluginSection)}
+        {operator.length > 0 && (
+          <SurfaceSection title={t('plugins.skillsPage.builtIn')} count={operator.length}>
+            <SurfaceGrid {...fold(operator)}>
+              {operator.map(renderCell)}
+            </SurfaceGrid>
+          </SurfaceSection>
+        )}
+      </PluginListFrame>
 
-      {renderPluginDecks(installedSections)}
-
-      {workspaceSections.map(([wsId, wsSkills]) =>
-        renderDeck({
-          id: `skills:ws:${wsId}`,
-          title: t('plugins.scope.inWorkspace', {
-            name: wsNameById.get(wsId) ?? t('plugins.scope.unknownWorkspace'),
-          }),
-          icon: Folder,
-          rows: wsSkills,
-          scopeControl: (skill) => (
-            <ScopeControl
-              workspaces={wsOptions}
-              loading={wsLoading}
-              scopeWorkspaceId={wsId}
-              busy={actions.movingName === skillRowKey(skill)}
-              moveToAllBlockedReason={
-                // move_user_skill 409s on the known destination collision, so
-                // don't advertise a move that is guaranteed to fail for a
-                // shadowing row.
-                skill.shadows_inherited ? t('plugins.scope.moveShadowBlocked') : null
-              }
-              onMove={(toWorkspaceId) => actions.move(skill, toWorkspaceId)}
-            />
-          ),
-          deleteOf: (skill) => () => actions.requestDelete(skill.name, wsId),
-        }),
-      )}
-
-      {actions.deleting && (
-        <ConfirmStrip
-          message={t('plugins.skills.deleteConfirm', { skill: actions.deleting.name })}
-          confirmLabel={
-            actions.deletePending
-              ? t('common.loading')
-              : t('plugins.skills.deleteConfirmYes')
-          }
-          cancelLabel={t('plugins.skills.deleteConfirmNo')}
-          pending={actions.deletePending}
-          onConfirm={actions.confirmDelete}
-          onCancel={actions.cancelDelete}
-        />
-      )}
-
-      {selection.selecting && (
-        <BulkActionBar
-          count={bulk.count}
-          selectionKey={bulk.selectionKey}
-          actions={bulk.actions}
-          scope={bulk.scope}
-          progress={surface.progress}
-          onExit={selection.exit}
+      {detailSkill && (
+        <SkillDetail
+          key={skillRowKey(detailSkill)}
+          skill={detailSkill}
+          onClose={detail.close}
+          actions={actions}
+          workspaces={wsOptions}
+          workspacesLoading={wsLoading}
+          workspaceName={wsNameById.get(detailSkill.workspace_id ?? '') ?? null}
+          plugin={plugins.find((p) => p.name === detailSkill.plugin_name) ?? null}
+          startEditingCommand={editCommandOf === skillRowKey(detailSkill)}
+          onOpenPlugin={openPlugin}
         />
       )}
 
@@ -425,19 +255,6 @@ export function SkillsList() {
           />
         )}
       </AnimatePresence>
-
-      <AnimatePresence>
-        {detailSkill && (
-          <SkillDetail
-            key={skillRowKey(detailSkill)}
-            skill={detailSkill}
-            owner={ownerOf(detailSkill)}
-            onClose={detail.close}
-            toggling={actions.togglingName === skillRowKey(detailSkill)}
-            onToggle={(enabled) => actions.toggle(detailSkill, enabled)}
-          />
-        )}
-      </AnimatePresence>
-    </div>
+    </>
   );
 }

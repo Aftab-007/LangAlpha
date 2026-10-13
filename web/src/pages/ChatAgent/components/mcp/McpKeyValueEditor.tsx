@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
+import { McpQuietButton } from './McpQuietButton';
 import { VaultSecretPicker } from './VaultSecretPicker';
 import {
   HEADER_CHOICES,
@@ -45,6 +46,13 @@ export interface HeaderRow {
   customName: string;
   /** The value without its scheme word. */
   inner: string;
+  /**
+   * The pair a saved row holds, sent back as it is while the row still reads
+   * as it did. Reading it into a choice respells it (`authorization: bearer x`
+   * comes out `Authorization: Bearer x`, an empty value as no header), and the
+   * server takes a changed header as a moved server it has to check again.
+   */
+  saved?: { key: string; value: string };
 }
 
 /** Blank-key rows are dropped; an env var set to the empty string is a real
@@ -73,30 +81,56 @@ export function headerRowName(row: HeaderRow): string {
 }
 
 /**
- * The `{name: value}` map these rows send. A row with a name but no value is
- * dropped: a fresh header row already carries `Authorization`, and an empty
- * `Authorization:` is a malformed request, not an absent credential.
+ * The header a row sends, or null. A row with a name but no value sends none:
+ * a fresh header row already carries `Authorization`, and an empty
+ * `Authorization:` is a malformed request, not an absent credential. A saved
+ * row nobody changed goes back exactly as it was saved.
  */
+export function sentHeader(row: HeaderRow): { key: string; value: string } | null {
+  if (row.saved && unchanged(row, row.saved)) return row.saved;
+  const { key, value } = joinHeader(row.choice, row.customName, row.inner);
+  return key.trim() && value !== '' ? { key: key.trim(), value } : null;
+}
+
+/** The `{name: value}` map these rows send. */
 export function headersToMap(rows: HeaderRow[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const row of rows) {
-    const { key, value } = joinHeader(row.choice, row.customName, row.inner);
-    if (!key.trim() || value === '') continue;
-    out[key.trim()] = value;
+    const sent = sentHeader(row);
+    if (sent) out[sent.key] = sent.value;
   }
   return out;
 }
 
+type HeaderFields = Pick<HeaderRow, 'choice' | 'customName' | 'inner'>;
+
+function headerFields(key: string, value: string): HeaderFields {
+  const parts = splitHeader(key, value);
+  return {
+    choice: parts.choice,
+    customName: parts.choice === 'custom' ? parts.name : '',
+    inner: parts.inner,
+  };
+}
+
+function unchanged(row: HeaderRow, saved: { key: string; value: string }): boolean {
+  const read = headerFields(saved.key, saved.value);
+  return row.choice === read.choice && row.customName === read.customName && row.inner === read.inner;
+}
+
+/** Rows for a map typed or pasted in, sent as the rows then read. */
 export function mapToHeaderRows(map: Record<string, string>): HeaderRow[] {
-  return Object.entries(map).map(([key, value]) => {
-    const parts = splitHeader(key, value);
-    return {
-      id: nextRowId(),
-      choice: parts.choice,
-      customName: parts.choice === 'custom' ? parts.name : '',
-      inner: parts.inner,
-    };
-  });
+  return Object.entries(map).map(([key, value]) => ({ id: nextRowId(), ...headerFields(key, value) }));
+}
+
+/** Rows for the headers a saved server holds, each kept to send back as saved
+ *  until it is changed. */
+export function savedHeaderRows(map: Record<string, string>): HeaderRow[] {
+  return Object.entries(map).map(([key, value]) => ({
+    id: nextRowId(),
+    ...headerFields(key, value),
+    saved: { key, value },
+  }));
 }
 
 export function newHeaderRow(): HeaderRow {
@@ -126,15 +160,15 @@ const fieldStyle = {
   border: '1px solid var(--color-border-muted)',
 } as const;
 
-function RemoveRowButton({ onClick }: { onClick: () => void }) {
+function RemoveRowButton({ onClick, label }: { onClick: () => void; label?: string }) {
   const { t } = useTranslation();
   return (
     <button
       type="button"
       onClick={onClick}
-      className="p-1.5 rounded hover:bg-foreground/10 self-start"
+      className="p-1.5 rounded hover:bg-foreground/10 self-start shrink-0"
       style={{ color: 'var(--color-text-tertiary)' }}
-      aria-label={t('mcp.modal.removeEntry')}
+      aria-label={label ?? t('mcp.modal.removeEntry')}
     >
       <Trash2 className="h-3.5 w-3.5" />
     </button>
@@ -143,61 +177,68 @@ function RemoveRowButton({ onClick }: { onClick: () => void }) {
 
 function AddRowButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex items-center gap-1 text-[0.6875rem] self-start"
-      style={{ color: 'var(--color-accent-primary)' }}
-    >
-      <Plus className="h-3 w-3" />
+    <McpQuietButton onClick={onClick} className="self-start" icon={<Plus className="h-3 w-3" />}>
       {label}
-    </button>
+    </McpQuietButton>
   );
 }
+
+const problemStyle = { color: 'var(--color-loss)' } as const;
 
 export function ArgsEditor({
   args,
   onChange,
+  standIns,
 }: {
   args: string[];
   onChange: (args: string[]) => void;
+  /** Positions still holding a placeholder from a pasted config. */
+  standIns?: ReadonlySet<number>;
 }) {
   const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-1.5">
-      {args.map((arg, i) => (
-        <div key={i} className="flex gap-1.5">
-          <input
-            type="text"
-            value={arg}
-            onChange={(e) => onChange(args.map((x, j) => (j === i ? e.target.value : x)))}
-            placeholder={t('mcp.modal.argPlaceholder')}
-            className="flex-1 px-2 py-1 text-xs rounded bg-transparent font-mono"
-            style={fieldStyle}
-          />
-          <button
-            type="button"
-            onClick={() => onChange(args.filter((_, j) => j !== i))}
-            className="p-1.5 rounded hover:bg-foreground/10"
-            style={{ color: 'var(--color-text-tertiary)' }}
-            aria-label={t('mcp.modal.removeArg')}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ))}
+      {args.map((arg, i) => {
+        const flagged = standIns?.has(i) ?? false;
+        return (
+          <div key={i} className="flex flex-col gap-1">
+            <div className="flex gap-1.5">
+              <input
+                type="text"
+                value={arg}
+                onChange={(e) => onChange(args.map((x, j) => (j === i ? e.target.value : x)))}
+                placeholder={t('mcp.modal.argPlaceholder')}
+                aria-invalid={flagged || undefined}
+                className="flex-1 min-w-0 px-2 py-1 text-xs rounded bg-transparent font-mono"
+                style={flagged ? { ...fieldStyle, border: '1px solid var(--color-loss)' } : fieldStyle}
+                data-testid={`mcp-arg-${i}`}
+              />
+              <RemoveRowButton
+                onClick={() => onChange(args.filter((_, j) => j !== i))}
+                label={t('mcp.modal.removeArg')}
+              />
+            </div>
+            {flagged && (
+              <p className="text-[0.6875rem]" style={problemStyle} data-testid={`mcp-arg-problem-${i}`}>
+                {t('mcp.modal.placeholderArg')}
+              </p>
+            )}
+          </div>
+        );
+      })}
       <AddRowButton label={t('mcp.modal.addArg')} onClick={() => onChange([...args, ''])} />
     </div>
   );
 }
 
 interface EditorCommon {
-  secretNames: string[];
-  /** Inline-create into the account vault, where every ref resolves. */
-  createSecret: (body: { name: string; value: string }) => Promise<unknown>;
   keyPlaceholder: string;
-  /** Prefix for the name offered when a typed value is saved to the vault. */
+  /** Prefix for the name offered when a typed value is kept in Secrets. */
   serverName: string;
+  /** Rows (by id) whose value is still a placeholder from a pasted config. */
+  standIns?: ReadonlySet<string>;
+  /** A row's value is final for now: picked, kept, or its field left. */
+  onSettle?: () => void;
 }
 
 export type KeyValueEditorProps =
@@ -211,75 +252,90 @@ export type KeyValueEditorProps =
  */
 export function KeyValueEditor(props: KeyValueEditorProps) {
   const { t } = useTranslation();
-  const { secretNames, createSecret, keyPlaceholder, serverName } = props;
+  const { keyPlaceholder, serverName, standIns, onSettle } = props;
 
   if (props.kind === 'headers') {
     const { rows, onChange } = props;
     const update = (i: number, patch: Partial<HeaderRow>) =>
       onChange(rows.map((x, j) => (j === i ? { ...x, ...patch } : x)));
     return (
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2.5">
         {rows.map((row, i) => {
           const choice = choiceOf(row.choice);
           return (
-            <div key={row.id} className="flex flex-col gap-1">
-              <div className="flex gap-1.5 items-start">
-                <select
-                  value={row.choice}
-                  onChange={(e) =>
-                    update(i, { choice: e.target.value as HeaderChoiceId })
-                  }
-                  aria-label={t('mcp.modal.headerChoiceLabel')}
-                  data-testid={`mcp-header-choice-${i}`}
-                  className={`${fieldClass} w-51 shrink-0`}
-                  style={fieldStyle}
-                >
-                  {HEADER_CHOICES.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.id === 'custom' ? t('mcp.modal.headerCustom') : choiceLabel(c)}
-                    </option>
-                  ))}
-                </select>
-                {row.choice === 'custom' && (
-                  <input
-                    type="text"
-                    value={row.customName}
-                    onChange={(e) => update(i, { customName: e.target.value })}
-                    placeholder={keyPlaceholder}
-                    aria-label={t('mcp.modal.headerCustomPlaceholder')}
-                    data-testid={`mcp-header-name-${i}`}
-                    className={`${fieldClass} w-32 shrink-0`}
-                    style={fieldStyle}
-                  />
-                )}
-                <VaultSecretPicker
-                  value={row.inner}
-                  onChange={(inner) => update(i, { inner })}
-                  secretNames={secretNames}
-                  createSecret={createSecret}
-                  suggestedName={suggestedSecretName(
-                    serverName,
-                    choice.scheme ? choice.scheme.toUpperCase() : headerRowName(row),
-                  )}
-                />
-                <RemoveRowButton onClick={() => onChange(rows.filter((_, j) => j !== i))} />
-              </div>
-              {choice.scheme && (
-                <p
-                  className="text-[0.6875rem] font-mono truncate"
-                  style={{ color: 'var(--color-text-tertiary)' }}
-                  data-testid={`mcp-header-preview-${i}`}
-                >
-                  {t('mcp.modal.headerSends', {
-                    line: headerPreview(row, t('mcp.modal.headerHiddenValue')),
-                  })}
-                </p>
+            <VaultSecretPicker
+              key={row.id}
+              onSettle={onSettle}
+              value={row.inner}
+              onChange={(inner) => update(i, { inner })}
+              label={headerRowName(row) || t('mcp.modal.headerChoiceLabel')}
+              suggestedName={suggestedSecretName(
+                serverName,
+                choice.scheme ? choice.scheme.toUpperCase() : headerRowName(row),
               )}
-            </div>
+              problem={standIns?.has(row.id) ? t('mcp.modal.placeholderValue') : null}
+              lead={
+                <>
+                  <select
+                    value={row.choice}
+                    onChange={(e) => {
+                      update(i, { choice: e.target.value as HeaderChoiceId });
+                      // A different header is a finished choice, not a draft
+                      // the way a half-typed value is.
+                      onSettle?.();
+                    }}
+                    aria-label={t('mcp.modal.headerChoiceLabel')}
+                    data-testid={`mcp-header-choice-${i}`}
+                    className={`${fieldClass} flex-1 sm:flex-none sm:w-51`}
+                    style={fieldStyle}
+                  >
+                    {HEADER_CHOICES.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.id === 'custom' ? t('mcp.modal.headerCustom') : choiceLabel(c)}
+                      </option>
+                    ))}
+                  </select>
+                  {row.choice === 'custom' && (
+                    <input
+                      type="text"
+                      value={row.customName}
+                      onChange={(e) => update(i, { customName: e.target.value })}
+                      onBlur={onSettle}
+                      placeholder={keyPlaceholder}
+                      aria-label={t('mcp.modal.headerCustomPlaceholder')}
+                      data-testid={`mcp-header-name-${i}`}
+                      className={`${fieldClass} flex-1 sm:flex-none sm:w-32`}
+                      style={fieldStyle}
+                    />
+                  )}
+                </>
+              }
+              trail={
+                <RemoveRowButton
+                  onClick={() => {
+                    onChange(rows.filter((_, j) => j !== i));
+                    onSettle?.();
+                  }}
+                />
+              }
+              below={
+                choice.scheme && (
+                  <p
+                    className="text-[0.6875rem] font-mono truncate"
+                    style={{ color: 'var(--color-text-tertiary)' }}
+                    data-testid={`mcp-header-preview-${i}`}
+                  >
+                    {t('mcp.modal.headerSends', {
+                      line: headerPreview(row, t('mcp.modal.headerHiddenValue')),
+                    })}
+                  </p>
+                )
+              }
+            />
           );
         })}
         <AddRowButton
-          label={t('mcp.modal.addEntry')}
+          label={t('mcp.modal.addHeader')}
           onClick={() => onChange([...rows, newHeaderRow()])}
         />
       </div>
@@ -290,29 +346,32 @@ export function KeyValueEditor(props: KeyValueEditorProps) {
   const update = (i: number, patch: Partial<KvRow>) =>
     onChange(rows.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-2.5">
       {rows.map((row, i) => (
-        <div key={row.id} className="flex gap-1.5 items-start">
-          <input
-            type="text"
-            value={row.key}
-            onChange={(e) => update(i, { key: e.target.value })}
-            placeholder={keyPlaceholder}
-            className={`${fieldClass} w-51 shrink-0`}
-            style={fieldStyle}
-          />
-          <VaultSecretPicker
-            value={row.value}
-            onChange={(value) => update(i, { value })}
-            secretNames={secretNames}
-            createSecret={createSecret}
-            suggestedName={suggestedSecretName(serverName, row.key)}
-          />
-          <RemoveRowButton onClick={() => onChange(rows.filter((_, j) => j !== i))} />
-        </div>
+        <VaultSecretPicker
+          key={row.id}
+          onSettle={onSettle}
+          value={row.value}
+          onChange={(value) => update(i, { value })}
+          label={row.key || keyPlaceholder}
+          suggestedName={suggestedSecretName(serverName, row.key)}
+          problem={standIns?.has(row.id) ? t('mcp.modal.placeholderValue') : null}
+          lead={
+            <input
+              type="text"
+              value={row.key}
+              onChange={(e) => update(i, { key: e.target.value })}
+              placeholder={keyPlaceholder}
+              aria-label={t('mcp.modal.envKeyLabel')}
+              className={`${fieldClass} flex-1 sm:flex-none sm:w-51`}
+              style={fieldStyle}
+            />
+          }
+          trail={<RemoveRowButton onClick={() => onChange(rows.filter((_, j) => j !== i))} />}
+        />
       ))}
       <AddRowButton
-        label={t('mcp.modal.addEntry')}
+        label={t('mcp.modal.addEnv')}
         onClick={() => onChange([...rows, { id: nextRowId(), key: '', value: '' }])}
       />
     </div>

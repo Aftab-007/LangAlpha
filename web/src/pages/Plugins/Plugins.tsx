@@ -1,122 +1,119 @@
-import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router';
-import { Trans, useTranslation } from 'react-i18next';
-import { AnimatePresence, motion, useReducedMotion } from '@/lib/framer';
-import { ChevronDown, Plus } from 'lucide-react';
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from '@/components/ui/dropdown-menu';
+import { lazy, Suspense, useRef } from 'react';
+import { Navigate, useSearchParams } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import { useScrollMemory } from '@/lib/scrollMemory';
-import { toast } from '@/components/ui/use-toast';
-import { HeaderButton } from '@/components/mcp/McpPrimitives';
+import { ListSkeleton } from '@/components/mcp/McpPrimitives';
 import { Brokerages } from './components/Brokerages';
+import { DetailPageProvider } from './components/DetailPage';
 import { McpServers } from './components/McpServers';
 import { SkillsList } from './components/SkillsList';
 import { PluginSecrets } from './components/PluginSecrets';
 import { PluginsList } from './components/PluginsList';
 import { WorkspacesLoadNote } from './components/WorkspacesLoadNote';
+import { DiscoverSummary } from './components/discover/DiscoverSummary';
+import { PageHeader } from './components/shell/PageHeader';
+import { PluginsRail } from './components/shell/PluginsRail';
+import { YoursSummary } from './components/shell/YoursSummary';
+import {
+  isCustomize,
+  readSection,
+  readSectionView,
+  SCOPED,
+  SECTION_LABEL_KEYS,
+  type InstallSection,
+  type Section,
+} from './components/shell/sections';
+import { useShellData } from './components/shell/useShellData';
+import { useCatalogOn } from './hooks/useCatalogOn';
 import { ADD_INTENT_TAB, ADD_PARAM, type AddIntent } from './utils/addParam';
-import { DETAIL_KIND_TAB, parseDetail } from './utils/detailParam';
+import { parseDetail, VIEW_PARAM, withDetail, type SectionView } from './utils/detailParam';
+import { SCOPE_TAB, type DiscoverScope } from './utils/marketplace';
 import './Plugins.css';
-import { DURATION, EASE_OUT } from '@/lib/motion';
-import { useToggleBrokerage } from '@/hooks/useMcpServers';
-import { canBeginMcpOAuth } from '@/lib/desktop';
-import { readConnectOutcome } from './connectOutcome';
-import { useConnectReturn } from './connectReturn';
-import { ONBOARDING_CONNECT, ONBOARDING_PARAM } from '@/pages/Onboarding/connect/useStartOnboarding';
-import { DesktopDownloadLink } from './components/DesktopDownloadLink';
+
+// Its own chunk: the catalog is browsed far less often than the page opens.
+const Discover = lazy(() =>
+  import('./components/Discover').then((m) => ({ default: m.Discover })),
+);
 
 /**
- * /plugins — user-level MCP servers, skills and the user vault. An enabled
- * server or skill here reaches every workspace of the user; OAuth-connected
- * servers are bound into sandboxes through the egress relay (credentials
- * never leave the host).
+ * /plugins — the account's plugins, connectors (MCP servers), skills,
+ * brokerages and vault. An enabled server or skill here reaches every
+ * workspace of the user; OAuth-connected servers are bound into sandboxes
+ * through the egress relay (credentials never leave the host).
  *
- * Also the landing route of the OAuth connect flow: the backend callback
- * redirects here with `?mcp_connected=<server>` or `?mcp_error=<reason>&server=`
- * — surfaced as a toast, then stripped from the URL.
+ * A rail of sections beside one content column. The URL is the whole state:
+ * `?tab=` the section, `?view=discover` the catalog side of a Customize
+ * section, `?q=` the header search, `?detail=` an item's page.
+ *
+ * Also where a sign-in that failed or was cancelled puts the user back (the
+ * entry's page, the install wizard, the connector form), as the app shell's
+ * `ConnectLandingHost` decides on reading the OAuth callback's landing.
  */
 
-const TABS = ['plugins', 'brokerages', 'mcp', 'skills', 'secrets'] as const;
-type Tab = (typeof TABS)[number];
-// Tabs whose rows carry a per-workspace scope control.
-const SCOPED_TABS: ReadonlySet<Tab> = new Set(['brokerages', 'mcp', 'skills']);
+const DISCOVER_SCOPE = Object.fromEntries(
+  Object.entries(SCOPE_TAB).map(([scope, tab]) => [tab, scope]),
+) as Record<InstallSection, DiscoverScope>;
 
-/**
- * The custom payload is the slide direction and nothing else: +1 for a tab to
- * the right, -1 to the left, 0 for a swap that does not slide at all. A zero
- * collapses every variant onto the centred one, so there is one number to read
- * rather than three flags to combine.
- */
-const TAB_CONTENT = {
-  enter: (dir: number) => ({ opacity: dir ? 0 : 1, x: 16 * dir }),
-  center: { opacity: 1, x: 0 },
-  exit: (dir: number) => ({
-    opacity: dir ? 0 : 1,
-    x: -12 * dir,
-    transition: { duration: dir ? DURATION.exit : 0, ease: EASE_OUT },
-  }),
-};
+/** Where a link into Discover lands on a server with no catalog: the same
+ *  section's own list, keeping the search and any detail but a catalog
+ *  entry's, which only Discover has. */
+function withoutDiscover(params: URLSearchParams, section: Section): URLSearchParams {
+  const next =
+    parseDetail(params)?.kind === 'catalog' ? withDetail(params, null) : new URLSearchParams(params);
+  next.set('tab', section);
+  next.delete(VIEW_PARAM);
+  return next;
+}
 
-// Explicit key map (not a template literal) so the i18n parity test can see
-// every tab label -- it reads bare `plugins.` literals, and a template would
-// leave five tab labels free to drift out of one catalog unnoticed.
-const TAB_LABEL_KEYS: Record<Tab, string> = {
-  plugins: 'plugins.tabs.plugins',
-  brokerages: 'plugins.tabs.brokerages',
-  mcp: 'plugins.tabs.mcp',
-  skills: 'plugins.tabs.skills',
-  secrets: 'plugins.tabs.secrets',
-};
-
-/** Old deep links: /connectors?tab=servers → the mcp tab. */
-function resolveTab(param: string | null | undefined): Tab | null {
-  if (param === 'servers') return 'mcp';
-  return TABS.includes(param as Tab) ? (param as Tab) : null;
+function SectionBody({ section, view }: { section: Section; view: SectionView }) {
+  if (view === 'discover' && isCustomize(section)) {
+    return (
+      <Suspense fallback={<ListSkeleton />}>
+        <Discover scope={DISCOVER_SCOPE[section]} />
+      </Suspense>
+    );
+  }
+  switch (section) {
+    case 'plugins':
+      return <PluginsList />;
+    case 'mcp':
+      return <McpServers />;
+    case 'skills':
+      return <SkillsList />;
+    case 'brokerages':
+      return <Brokerages />;
+    case 'secrets':
+      return <PluginSecrets />;
+  }
 }
 
 function Plugins() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { t } = useTranslation();
-  const reducedMotion = useReducedMotion();
+  const shell = useShellData();
+  const catalogOn = useCatalogOn();
 
-  // The URL is the tab state, not a mirror of it: derived, so back/forward
+  // The URL is the page state, not a mirror of it: derived, so back/forward
   // needs no sync effect and cannot briefly disagree with the address bar.
-  // A `?detail=` with no tab names its tab through its kind.
-  const detailRef = parseDetail(searchParams);
-  const activeTab: Tab =
-    resolveTab(searchParams.get('tab')) ??
-    resolveTab(detailRef && DETAIL_KIND_TAB[detailRef.kind]) ??
-    'plugins';
+  // A link into Discover on a server with no catalog is the one rewrite: the
+  // page reads it as the section's own list at once, and the address follows.
+  const section = readSection(searchParams);
+  const strayDiscover =
+    catalogOn === false && readSectionView(searchParams, section) === 'discover';
+  const shown = strayDiscover ? withoutDiscover(searchParams, section) : searchParams;
+  const detailRef = parseDetail(shown);
+  const view = readSectionView(shown, section);
+  const query = searchParams.get('q') ?? '';
+  const sectionLabel = t(SECTION_LABEL_KEYS[section]);
+
+  // Each section and view keeps its own place, so a short page is not opened
+  // halfway down because the long one before it was.
   const pageRef = useRef<HTMLDivElement>(null);
-  useScrollMemory(pageRef, 'page:plugins');
+  useScrollMemory(pageRef, `page:plugins:${section}:${view}`);
 
-  // A switch carrying an Add intent or a detail ref is on its way to a dialog,
-  // and content sliding under a backdrop that is fading in reads as a flicker,
-  // so it swaps at once. Read off the URL rather than latched at the click: a
-  // click on the tab already showing changes no URL, so a latch set there was
-  // never cleared and the next Add or deep link slid anyway.
-  const instant = searchParams.has(ADD_PARAM) || !!detailRef;
-  // Content moves the way the underline does: a tab to the right slides
-  // the new content in from the right, the old one out to the left.
-  const prevTabRef = useRef(activeTab);
-  const dir =
-    reducedMotion || instant
-      ? 0
-      : Math.sign(TABS.indexOf(activeTab) - TABS.indexOf(prevTabRef.current));
-  useEffect(() => {
-    prevTabRef.current = activeTab;
-  }, [activeTab]);
-
-  const handleTabChange = (tab: Tab) => {
-    setSearchParams({ tab }, { replace: true });
-  };
-
-  // The one Add entry point for the whole page: name the tab and the intent in
-  // one navigation, and let that tab's list act on the intent and strip it.
+  // The one Add entry point for the whole page: name the section and the
+  // intent in one navigation, and let that section's list act on the intent
+  // and strip it.
   const requestAdd = (intent: AddIntent) => {
     setSearchParams(
       { tab: ADD_INTENT_TAB[intent], [ADD_PARAM]: intent },
@@ -124,177 +121,68 @@ function Plugins() {
     );
   };
 
-  // Reached only from the return path, where the lifecycle's own rollback can
-  // no longer run. Held here rather than in the brokerages tab because this is
-  // where the landing is read, and the tab may not even be the one on screen.
-  const standDownMutation = useToggleBrokerage();
+  const setView = (next: SectionView) => {
+    const params = withDetail(searchParams, null);
+    // The legacy Discover tab names the view itself; it becomes Plugins.
+    if (params.get('tab') === 'discover') params.set('tab', 'plugins');
+    if (!params.get('tab')) params.set('tab', section);
+    if (next === 'discover') params.set(VIEW_PARAM, 'discover');
+    else params.delete(VIEW_PARAM);
+    setSearchParams(params, { replace: true });
+  };
 
-  // The other way back from a vendor's sign-in page: no callback at all. A
-  // provider that refuses our redirect_uri renders its own page and never
-  // redirects, so the only return is the Back button — and the toast below is
-  // the only thing that explains why nothing happened.
-  // A connect started from the onboarding sheet returns here with the sheet
-  // reopening over the page, and the landing is the sheet's to read: it decides
-  // whether the chat opens. Read once, as the landing itself is.
-  const [sheetOwnsLanding] = useState(
-    () => new URLSearchParams(window.location.search).get(ONBOARDING_PARAM) === ONBOARDING_CONNECT,
-  );
-  useConnectReturn({
-    onAbandoned: (server) => {
-      toast({
-        variant: 'destructive',
-        title: t('plugins.oauth.abandonedTitle'),
-        description: canBeginMcpOAuth() ? (
-          t('plugins.oauth.abandonedDesc', { server })
-        ) : (
-          <Trans
-            i18nKey="plugins.oauth.abandonedDescNeedsDesktop"
-            values={{ server }}
-            // Not `link`: the Trans parser reads that as the void HTML
-            // element and drops the words inside it.
-            components={{ download: <DesktopDownloadLink /> }}
-          />
-        ),
-      });
-    },
-    // Silent on purpose, the same way the in-page rollback is: the refusal is
-    // already on screen and is the one thing the user can act on, and a second
-    // toast about the tidying would bury it. A failure here leaves the row
-    // switched on and visible, with its own switch.
-    onStandDown: (server) => {
-      void standDownMutation.mutateAsync({ name: server, enabled: false }).catch(() => {});
-    },
-  }, !sheetOwnsLanding);
-
-  // OAuth callback landing: toast the outcome once, then strip the params so a
-  // refresh doesn't re-announce it.
-  const callbackHandled = useRef(false);
-  useEffect(() => {
-    if (callbackHandled.current || sheetOwnsLanding) return;
-    const outcome = readConnectOutcome(searchParams);
-    if (!outcome) return;
-    callbackHandled.current = true;
-    if (outcome.kind === 'connected') {
-      toast({
-        title: t('plugins.oauth.connectedTitle'),
-        description: outcome.server
-          ? t('plugins.oauth.connectedDesc', { server: outcome.server })
-          : t('plugins.oauth.connectedDescAnon'),
-      });
-    } else {
-      const reason = t(outcome.reasonKey);
-      toast({
-        variant: 'destructive',
-        title: t('plugins.oauth.callbackErrorTitle'),
-        description: outcome.server ? `${outcome.server}: ${reason}` : reason,
-      });
-    }
-    const next = new URLSearchParams(searchParams);
-    next.delete('mcp_connected');
-    next.delete('mcp_error');
-    next.delete('server');
-    setSearchParams(next, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  const setQuery = (next: string) => {
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev);
+        if (next) params.set('q', next);
+        else params.delete('q');
+        return params;
+      },
+      { replace: true },
+    );
+  };
 
   return (
     <div className="plugins-page">
+      {strayDiscover && <Navigate replace to={`?${shown.toString()}`} />}
       {/* Doubles as the window titlebar in the desktop shell; inert
-          elsewhere. Above the scroll port rather than inside it, so it stays
-          put once the page is scrolled. */}
+          elsewhere. Above the rail and the scroll port rather than inside
+          them, so it stays put once the page is scrolled. */}
       <div className="chrome-drag-strip" aria-hidden="true" />
-      <div ref={pageRef} className="plugins-scroll">
-        <div className="plugins-container">
-          <div className="flex items-start justify-between gap-3 mb-6">
-            <div className="min-w-0">
-              <h2 className="text-xl font-semibold mb-1" style={{ color: 'var(--color-text-primary)' }}>
-                {t('plugins.title')}
-              </h2>
-              <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>
-                {t('plugins.description')}
-              </p>
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <HeaderButton
-                  variant="primary"
-                  icon={Plus}
-                  className="transition-opacity hover:opacity-90 shrink-0"
-                >
-                  {t('plugins.addMenu.add')}
-                  <ChevronDown className="h-3 w-3" />
-                </HeaderButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => requestAdd('plugin')}>
-                  {t('plugins.addMenu.installPlugin')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => requestAdd('server')}>
-                  {t('plugins.addMenu.addServer')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => requestAdd('import')}>
-                  {t('plugins.addMenu.importServers')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => requestAdd('skill')}>
-                  {t('plugins.addMenu.uploadSkill')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+      <div className="plugins-body">
+        <PluginsRail section={section} detail={detailRef} data={shell} />
+        <div ref={pageRef} className="plugins-scroll">
+          <div className="plugins-column">
+            {!detailRef && (
+              <PageHeader
+                section={section}
+                view={view}
+                summary={
+                  view === 'discover' && isCustomize(section) ? (
+                    <div className="plugins-summary">
+                      <DiscoverSummary scope={DISCOVER_SCOPE[section]} />
+                    </div>
+                  ) : (
+                    <YoursSummary section={section} data={shell} />
+                  )
+                }
+                query={query}
+                hasCatalog={catalogOn === true}
+                onViewChange={setView}
+                onQueryChange={setQuery}
+                onAdd={requestAdd}
+              />
+            )}
+            <DetailPageProvider value={{ section: sectionLabel }}>
+              {/* Keyed so a section switch swaps at once with a short fade
+                  rather than sliding: the rail already says where you went. */}
+              <div key={`${section}:${view}`} className="plugins-content">
+                {SCOPED.has(section) && <WorkspacesLoadNote />}
+                <SectionBody section={section} view={view} />
+              </div>
+            </DetailPageProvider>
           </div>
-          <div className="flex gap-2 mb-6 border-b overflow-x-auto plugins-tab-bar clips-focus-ring" style={{ borderColor: 'var(--color-border-muted)' }}>
-            {TABS.map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => handleTabChange(tab)}
-                className="relative px-4 py-2 text-sm font-medium whitespace-nowrap shrink-0 transition-colors"
-                style={{
-                  color: activeTab === tab ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
-                }}
-              >
-                {t(TAB_LABEL_KEYS[tab])}
-                {activeTab === tab && (
-                  <motion.span
-                    layoutId="plugins-tab-underline"
-                    aria-hidden
-                    className="absolute inset-x-1 bottom-0 h-0.5 rounded-full"
-                    style={{ backgroundColor: 'var(--color-accent-primary)' }}
-                    transition={
-                      reducedMotion
-                        ? { duration: 0 }
-                        : { type: 'spring', stiffness: 500, damping: 40 }
-                    }
-                  />
-                )}
-              </button>
-            ))}
-          </div>
-
-          {/* The old content leaves before the new one mounts (mode wait),
-              so the column never holds both and doubles its height. */}
-          <AnimatePresence initial={false} mode="wait" custom={dir}>
-            <motion.div
-              key={activeTab}
-              className="plugins-content"
-              custom={dir}
-              variants={TAB_CONTENT}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={
-                dir
-                  ? { duration: DURATION.enter, ease: EASE_OUT, opacity: { duration: DURATION.fold } }
-                  : { duration: 0 }
-              }
-            >
-              {SCOPED_TABS.has(activeTab) && <WorkspacesLoadNote />}
-              {activeTab === 'plugins' && <PluginsList />}
-              {activeTab === 'brokerages' && <Brokerages />}
-              {activeTab === 'mcp' && <McpServers />}
-              {activeTab === 'skills' && <SkillsList />}
-              {activeTab === 'secrets' && <PluginSecrets />}
-            </motion.div>
-          </AnimatePresence>
         </div>
       </div>
     </div>
