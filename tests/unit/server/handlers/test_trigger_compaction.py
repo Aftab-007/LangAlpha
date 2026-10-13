@@ -116,8 +116,6 @@ def _stub_resolve_graph_and_state():
     return _stub
 
 
-async def _noop_persist(*args, **kwargs):
-    return None
 
 
 RUNNER_GET_INSTANCE = (
@@ -175,7 +173,6 @@ async def test_manual_compact_uses_user_compaction_model(base_config):
     with (
         patch("src.server.app.setup.agent_config", base_config),
         patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-        patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
         patch(
             "ptc_agent.agent.middleware.compaction.compact_messages",
             new=compact_mock,
@@ -237,7 +234,6 @@ async def _compact_on_thread_model(base_config, resolve_stub, msg_type="ptc"):
     with (
         patch("src.server.app.setup.agent_config", base_config),
         patch(f"{HANDLER}._resolve_graph_and_state", new=_stub_resolve_graph_and_state()),
-        patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
         patch("ptc_agent.agent.middleware.compaction.compact_messages", new=compact_mock),
         patch("src.server.database.api_keys.is_byok_active", new_callable=AsyncMock, return_value=False),
         patch(
@@ -307,7 +303,6 @@ async def test_manual_compact_without_user_id_uses_base_config(base_config):
     with (
         patch("src.server.app.setup.agent_config", base_config),
         patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-        patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
         patch(
             "ptc_agent.agent.middleware.compaction.compact_messages",
             new=compact_mock,
@@ -337,7 +332,6 @@ async def test_resolve_failure_falls_back_to_base_config(base_config):
     with (
         patch("src.server.app.setup.agent_config", base_config),
         patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-        patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
         patch(
             "ptc_agent.agent.middleware.compaction.compact_messages",
             new=compact_mock,
@@ -382,7 +376,6 @@ async def test_manual_compact_summarizes_with_the_subsidiary_oauth_client(base_c
     with (
         patch("src.server.app.setup.agent_config", base_config),
         patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-        patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
         patch(
             "ptc_agent.agent.middleware.compaction.compact_messages",
             new=compact_mock,
@@ -429,7 +422,6 @@ async def test_manual_compact_without_a_role_client_runs_the_turns_model():
     with (
         patch("src.server.app.setup.agent_config", base_config),
         patch(f"{HANDLER}._resolve_graph_and_state", new=_stub_resolve_graph_and_state()),
-        patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
         patch(
             "ptc_agent.agent.middleware.compaction.compact_messages",
             new=compact_mock,
@@ -472,7 +464,6 @@ async def test_manual_compact_resets_the_token_cache_and_prunes_dead_offloads(ba
     with (
         patch("src.server.app.setup.agent_config", base_config),
         patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-        patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
         patch(
             "ptc_agent.agent.middleware.compaction.compact_messages",
             new=compact_mock,
@@ -485,6 +476,200 @@ async def test_manual_compact_resets_the_token_cache_and_prunes_dead_offloads(ba
     assert update["_cached_input_tokens"] == update["_cached_output_tokens"] == 0
     assert update["_offloaded_tool_call_ids"] == {"w-kept"}
     assert update["_offloaded_read_result_ids"] == set()
+
+
+@pytest.mark.asyncio
+async def test_manual_compact_writes_its_marker_naming_the_summary(base_config):
+    """Replay finds the marker in the same checkpoint write that installed the
+    summary, naming that summary so the turn does not also show it as a
+    compaction of its own, and reads its text from it."""
+    from src.server.handlers.thread_maintenance import trigger_compaction
+
+    stub_resolve = _stub_resolve_graph_and_state()
+    compact_mock = AsyncMock(return_value=_compaction())
+
+    with (
+        patch("src.server.app.setup.agent_config", base_config),
+        patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
+        patch(
+            "ptc_agent.agent.middleware.compaction.compact_messages",
+            new=compact_mock,
+        ),
+    ):
+        result = await trigger_compaction("thread-1", keep_messages=5)
+
+    assert stub_resolve.graph.aupdate_state.await_count == 1
+    update = stub_resolve.graph.aupdate_state.await_args.args[1]
+    (marker,) = update["ui"]
+    assert marker["name"] == "context_window"
+    assert marker["id"].startswith("ui-")
+    assert marker["metadata"] == {"summary_message_id": "s"}
+    assert marker["props"] == {
+        "action": "summarize",
+        "signal": "complete",
+        "original_message_count": 2,
+        "new_message_count": result["new_message_count"],
+        "summary_length": 2,
+        "source": "model",
+    }
+
+
+READER_GET_INSTANCE = (
+    "src.server.services.history.reader.CheckpointHistoryReader.get_instance"
+)
+
+
+def _turn_reader(summary_before=None, *, error=None):
+    """The latest turn starts at ``cp-in``, holding ``summary_before``."""
+    from types import SimpleNamespace
+
+    from src.server.services.history.reader import TurnAnchor
+
+    reader = MagicMock()
+    reader.aget_turn_anchors = AsyncMock(
+        side_effect=error,
+        return_value=(
+            [
+                TurnAnchor(
+                    turn_ordinal=0, input_checkpoint_id="cp-in", tail_checkpoint_id="cp-tail"
+                )
+            ],
+            "cp-tail",
+        ),
+    )
+    reader.aget_state = AsyncMock(
+        return_value=SimpleNamespace(
+            values={
+                "_summarization_event": (
+                    {"summary_message": summary_before, "cutoff_index": 1}
+                    if summary_before is not None
+                    else None
+                )
+            }
+        )
+    )
+    return reader
+
+
+async def _compact_after(base_config, values, reader):
+    """Compact a thread whose commit pointer holds ``values``; the update."""
+    from src.server.handlers.thread_maintenance import trigger_compaction
+
+    stub_resolve = _stub_resolve_graph_and_state()
+    stub_resolve.state.values = values
+    stub_resolve.state.config = {"configurable": {"checkpoint_id": "cp-tail"}}
+    with (
+        patch("src.server.app.setup.agent_config", base_config),
+        patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
+        patch(
+            "ptc_agent.agent.middleware.compaction.compact_messages",
+            new=AsyncMock(return_value=_compaction()),
+        ),
+        patch(READER_GET_INSTANCE, return_value=reader),
+    ):
+        await trigger_compaction("thread-1", keep_messages=5)
+    return stub_resolve.graph.aupdate_state.await_args.args[1]
+
+
+def _agent_summary():
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+
+    return build_summary_message("the turn's own", None, original_message_count=30)
+
+
+@pytest.mark.asyncio
+async def test_a_compact_right_after_a_turn_keeps_the_summary_the_turn_wrote(base_config):
+    """The compact's write becomes the end of the turn it follows, so the
+    summary the agent wrote during that turn rides on the compact's marker."""
+    own = _agent_summary()
+    reader = _turn_reader(summary_before=None)
+
+    update = await _compact_after(
+        base_config,
+        {"_summarization_event": {"summary_message": own, "cutoff_index": 7}},
+        reader,
+    )
+
+    (marker,) = update["ui"]
+    assert marker["metadata"]["summary_message_id"] == "s"
+    assert marker["metadata"]["replaced_summary"] == {
+        "id": own.id,
+        "action": "summarize",
+        "signal": "complete",
+        "summary_length": len("the turn's own"),
+        "summary_text": "the turn's own",
+        "original_message_count": 30,
+        "source": "model",
+    }
+    reader.aget_turn_anchors.assert_awaited_once_with("thread-1", "cp-tail")
+    reader.aget_state.assert_awaited_once_with("thread-1", "cp-in")
+
+
+@pytest.mark.asyncio
+async def test_a_second_compact_keeps_the_summary_the_first_installed(base_config):
+    """Two compacts after the same turn: the second's write ends the turn's
+    span, so the first's summary rides on the second's marker."""
+    from src.server.services.history.projector import context_window_record
+
+    first = _agent_summary()
+    values = {
+        "_summarization_event": {"summary_message": first, "cutoff_index": 7},
+        "ui": [context_window_record({"action": "summarize"}, summary_message_id=first.id)],
+    }
+
+    update = await _compact_after(base_config, values, _turn_reader(summary_before=None))
+
+    (marker,) = update["ui"]
+    assert marker["metadata"]["replaced_summary"]["id"] == first.id
+    assert marker["metadata"]["replaced_summary"]["summary_text"] == "the turn's own"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("written_by", ["an_earlier_turn", "unreadable"])
+async def test_a_summary_from_before_the_turn_is_not_copied(base_config, written_by):
+    summary = _agent_summary()
+    values = {"_summarization_event": {"summary_message": summary, "cutoff_index": 7}}
+    if written_by == "an_earlier_turn":
+        reader = _turn_reader(summary_before=summary)
+    else:
+        reader = _turn_reader(error=RuntimeError("pool closed"))
+
+    update = await _compact_after(base_config, values, reader)
+
+    (marker,) = update["ui"]
+    assert marker["metadata"] == {"summary_message_id": "s"}
+
+
+@pytest.mark.asyncio
+async def test_manual_offload_writes_its_marker_with_the_ids(base_config):
+    from src.server.handlers.thread_maintenance import trigger_offload
+
+    stub_resolve = _stub_resolve_graph_and_state()
+    stub_resolve.state.values = {}
+    offload_mock = AsyncMock(return_value=({"w1", "w2"}, {"r1"}))
+
+    with (
+        patch("src.server.app.setup.agent_config", base_config),
+        patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
+        patch(
+            "ptc_agent.agent.middleware.compaction.offload_tool_args",
+            new=offload_mock,
+        ),
+    ):
+        await trigger_offload("thread-1")
+
+    assert stub_resolve.graph.aupdate_state.await_count == 1
+    update = stub_resolve.graph.aupdate_state.await_args.args[1]
+    assert update["_offloaded_tool_call_ids"] == {"w1", "w2"}
+    (marker,) = update["ui"]
+    assert marker["name"] == "context_window"
+    assert marker["metadata"] == {}
+    assert marker["props"] == {
+        "action": "offload",
+        "signal": "complete",
+        "offloaded_args": 2,
+        "offloaded_reads": 1,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -628,7 +813,6 @@ class TestMutationFence:
         with (
             patch("src.server.app.setup.agent_config", base_config),
             patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-            patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
             patch(
                 "ptc_agent.agent.middleware.compaction.compact_messages",
                 new=compact_mock,
@@ -653,7 +837,6 @@ class TestMutationFence:
         with (
             patch("src.server.app.setup.agent_config", base_config),
             patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-            patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
             patch(
                 "ptc_agent.agent.middleware.compaction.offload_tool_args",
                 new=offload_mock,
@@ -680,7 +863,6 @@ class TestMutationFence:
         with (
             patch("src.server.app.setup.agent_config", base_config),
             patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-            patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
             patch(
                 "ptc_agent.agent.middleware.compaction.offload_tool_args",
                 new=offload_mock,
@@ -708,7 +890,6 @@ class TestMutationFence:
                 f"{HANDLER}._resolve_graph_and_state",
                 new=_stub_resolve_graph_and_state(),
             ),
-            patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
             patch(
                 "ptc_agent.agent.middleware.compaction.compact_messages",
                 new=compact_mock,
@@ -743,7 +924,6 @@ class TestMutationFence:
                 f"{HANDLER}._resolve_graph_and_state",
                 new=_stub_resolve_graph_and_state(),
             ),
-            patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
             patch(
                 "ptc_agent.agent.middleware.compaction.compact_messages",
                 new=compact_mock,
@@ -778,7 +958,6 @@ class TestMutationFence:
                 f"{HANDLER}._resolve_graph_and_state",
                 new=_stub_resolve_graph_and_state(),
             ),
-            patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
             patch(
                 "ptc_agent.agent.middleware.compaction.offload_tool_args",
                 new=offload_mock,

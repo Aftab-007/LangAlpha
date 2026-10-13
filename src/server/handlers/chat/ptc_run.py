@@ -171,6 +171,22 @@ async def _resolve_origin_meta(request, thread_id: str) -> dict:
     }
 
 
+def _artifact_hook(session, *, thread_id: str, project: ProjectContext | None):
+    """The finalize's pre-terminal hook: upload the sandbox images the turn's
+    saved messages still name, returning each one's URL for its row."""
+
+    async def capture_artifacts(image_paths) -> dict[str, str]:
+        if not (session and session.sandbox):
+            return {}
+        from src.server.services.persistence.image_capture import capture_images
+
+        return await capture_images(
+            image_paths, session.sandbox, thread_id, project=project
+        )
+
+    return capture_artifacts
+
+
 async def astream_ptc_workflow(
     request: ChatRequest,
     thread_id: str,
@@ -886,21 +902,11 @@ async def astream_ptc_workflow(
         # already ran there (gated on ``needs_startup``) so steering routed
         # against live state.
 
-        # Pre-finalize artifact hook: capture sandbox images -> upload to
-        # cloud storage -> rewrite storage URLs in the events about to be
-        # archived. Runs inside _finalize_run, before the terminal txn.
-        async def capture_artifacts(sse_events):
-            if session and session.sandbox:
-                from src.server.services.persistence.image_capture import (
-                    capture_and_rewrite_images,
-                )
-
-                await capture_and_rewrite_images(
-                    sse_events,
-                    session.sandbox,
-                    thread_id=thread_id,
-                    project=project,
-                )
+        # Runs inside _finalize_run, before the terminal txn that records
+        # what it captured.
+        capture_artifacts = _artifact_hook(
+            session, thread_id=thread_id, project=project
+        )
 
         # Post-finalize side effects only (v4): the durable terminal write —
         # response row, usage, projection — already happened in BTM's

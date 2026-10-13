@@ -6,7 +6,6 @@ handles timeouts. Keepalives are emitted by the SSE consumer (stream_from_log).
 """
 
 import asyncio
-import copy
 import json
 import logging
 import time
@@ -15,6 +14,9 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple, cast
 import json_repair
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
+from langgraph.types import Overwrite
+
+from ptc_agent.agent.middleware.image_capture import collect_sandbox_paths
 
 from src.server.utils.content_normalizer import (
     normalize_text_content,
@@ -25,10 +27,6 @@ from src.server.contracts.status import classify_interrupts
 from src.server.database.provenance import MAIN_PROVENANCE_LANE
 from src.server.database.runs.lifecycle import ProducerRecord
 from src.server.services.runs.credit_usage import build_credit_usage_data
-from src.server.services.runs.event_archive import (
-    MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT,
-    StreamEventAccumulator,
-)
 from src.server.services.runs.reasoning_facts import ReasoningDurations
 from src.server.services.runs.stream_errors import error_event_data
 from src.server.utils.text_phase import TextPhaseTracker
@@ -116,6 +114,46 @@ def _parse_tool_args(
     return None, err_repr, err_window
 
 
+def _fallback_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """A model_fallback ui record as its response row keeps it. Metadata is
+    cut to the anchor replay reads, since the rest is run context the row
+    has no use for, and the error is scrubbed before it is stored."""
+    props = dict(record.get("props") or {})
+    if isinstance(props.get("error"), str):
+        props["error"] = _sanitize_error_text(props["error"])
+    after = (record.get("metadata") or {}).get("after_message_id")
+    return {
+        "type": "ui",
+        "id": record.get("id"),
+        "name": record.get("name"),
+        "props": props,
+        "metadata": {"after_message_id": after} if after else {},
+    }
+
+
+def fallback_from_frame(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The record a main-lane model_fallback frame names, as
+    ``_fallback_record`` keeps it, so recovery keeps a dead run's notices as
+    its finalize would. None for a frame that names none, another lane's or
+    an older server's, whose notice replay could not tell from a saved one."""
+    from src.server.services.history.projector import MODEL_FALLBACK_FIELDS
+
+    if data.get("agent") != "main" or not data.get("fallback_id"):
+        return None
+    return _fallback_record(
+        {
+            "id": data["fallback_id"],
+            "name": "model_fallback",
+            "props": {
+                key: data[key]
+                for key in (*MODEL_FALLBACK_FIELDS, "error")
+                if key in data
+            },
+            "metadata": {"after_message_id": data.get("after_message_id")},
+        }
+    )
+
+
 class RunSSEProducer:
     """LangGraph workflow SSE producer with reasoning lifecycle tracking, tool-call dedup, and content normalisation."""
 
@@ -126,7 +164,6 @@ class RunSSEProducer:
         token_callback: Optional[Any] = None,
         tool_tracker: Optional[Any] = None,
         workflow_timeout: Optional[int] = None,
-        merged_stream_chunk_max_bytes: int = MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT,
         agent_config: Optional[Any] = None,
         report_source: Optional[Dict[str, Any]] = None,
         *,
@@ -175,8 +212,15 @@ class RunSSEProducer:
         # How long the main agent thought, for replay.
         self._reasoning = ReasoningDurations()
         # The main agent's provenance records as emitted, for the finalize to
-        # write without reading them back out of the event archive.
+        # write.
         self.provenance_events: List[Dict[str, Any]] = []
+        # The main agent's model_fallback ui records as emitted: a step that
+        # fails or is stopped after one never commits it.
+        self._model_fallbacks: List[Dict[str, Any]] = []
+        # The sandbox image paths each message the main graph saved still
+        # names, by message id: a later write of the message replaces its
+        # entry.
+        self._saved_image_paths: Dict[str, Set[str]] = {}
 
         # Track reasoning block index per agent to detect block transitions
         # When index changes (e.g., 0→1), a separator (\n\n) is needed between blocks
@@ -202,11 +246,6 @@ class RunSSEProducer:
 
         # Event sequence numbering for reconnection support
         self.event_sequence: int = 0
-
-        # Accumulate merged streaming chunks for persistence
-        self._stream_event_accumulator = StreamEventAccumulator(
-            max_merged_bytes=merged_stream_chunk_max_bytes
-        )
 
         # Track steering messages injected mid-workflow (for query backfill)
         self.injected_steerings: list[dict] = []
@@ -251,18 +290,6 @@ class RunSSEProducer:
         self.interrupt_reason: Optional[str] = None
         # A credit pause's denial, which the finalize stamps on the row.
         self.pause_message: Optional[str] = None
-
-        # ---- Stop reconciliation state (decision T3-A) -------------------
-        # Open artifacts whose last-emitted status was not terminal. Keyed by
-        # artifact_id → the last artifact event payload. Closed out on stop.
-        self._open_artifacts: dict[str, dict] = {}
-        # Per-message id of the most recent open assistant message that has not
-        # yet emitted a finish_reason — used to synthesize a "stopped" close.
-        # Maps agent → message_id of the in-flight message.
-        self._open_message_ids: dict[str, str] = {}
-        # Idempotency guard: once stop reconciliation has run, re-entry / a
-        # second stop must not append synthetic closes again.
-        self._stop_finalized: bool = False
 
     def _open_compaction_window(self, ns_key: tuple) -> None:
         """Track a newly-opened compaction window. The FIRST window on this
@@ -313,7 +340,7 @@ class RunSSEProducer:
         Frames pass through the coalescer and are numbered as they leave it,
         so joined deltas keep the ids contiguous. A close that cannot yield
         (stop, cancel, a transport quota) loses at most the held delta from
-        the live stream; the event archive saw every piece when it was built.
+        the live stream; replay projects the turn from its checkpoint.
 
         A frame is serialized where it is built, so one that cannot be fails
         inside the body's own handling: an error frame and a failed run, or a
@@ -377,7 +404,7 @@ class RunSSEProducer:
                 metadata["turn_index"] = self.turn_index
             if self.report_source:
                 metadata["report_source"] = self.report_source
-            yield self._build_sse_event("metadata", metadata, accumulate=False)
+            yield self._build_sse_event("metadata", metadata)
 
             for result in settled_results or ():
                 async for event in self._process_message_chunk(
@@ -514,13 +541,7 @@ class RunSSEProducer:
                                 f"[CONTEXT_WINDOW] Emitting {action}/{signal} "
                                 f"(thread_id={self.thread_id})"
                             )
-                            # A summary's running count is live only, like
-                            # ``model_retry``: a reload shows the summary.
-                            yield self._build_sse_event(
-                                "context_window",
-                                cw_data,
-                                accumulate=action != "summary_progress",
-                            )
+                            yield self._build_sse_event("context_window", cw_data)
                             continue
 
                         # Handle provenance records (data the agent accessed).
@@ -560,17 +581,26 @@ class RunSSEProducer:
                         # (push_ui_message dual-writes the custom stream + the
                         # checkpointed ui channel); unwrap to the legacy wire
                         # shape so the resilience branch below handles it.
+                        fallback_ref: Dict[str, Any] = {}
                         if (
                             event_type == "ui"
                             and event_data.get("name") == "model_fallback"
                         ):
+                            if not agent_from_stream:
+                                kept = _fallback_record(event_data)
+                                self._model_fallbacks.append(kept)
+                                # Names the record, so recovery can keep a
+                                # notice whose step died with the worker.
+                                fallback_ref = {
+                                    "fallback_id": kept["id"],
+                                    **kept["metadata"],
+                                }
                             event_type = "model_fallback"
                             event_data = event_data.get("props") or {}
 
                         # Handle model resilience progress (retry / fallback).
-                        # ``model_retry`` is transient — live + reconnect only
-                        # (accumulate=False, like ``metadata``); ``model_fallback``
-                        # is persisted so the transcript note survives replay.
+                        # ``model_retry`` is live + reconnect only; replay shows
+                        # ``model_fallback`` from its checkpointed ui record.
                         if event_type in ("model_retry", "model_fallback"):
                             # Same attribution contract as provenance events
                             # (a detached subagent's never reach this producer):
@@ -606,11 +636,8 @@ class RunSSEProducer:
                                 resilience_data["error"] = _sanitize_error_text(
                                     error_text
                                 )
-                            yield self._build_sse_event(
-                                event_type,
-                                resilience_data,
-                                accumulate=(event_type == "model_fallback"),
-                            )
+                            resilience_data.update(fallback_ref)
+                            yield self._build_sse_event(event_type, resilience_data)
                             continue
 
                         # Official langgraph.graph.ui messages (push_ui_message
@@ -627,15 +654,14 @@ class RunSSEProducer:
                                 "status": None,
                                 "payload": event_data.get("props", {}),
                             }
-                            self._track_artifact_state(ui_artifact_event)
                             yield self._build_sse_event("artifact", ui_artifact_event)
                             continue
 
                         # Live market-watch stamp notification. Transient like
-                        # ``metadata``/``model_retry`` (accumulate=False): the
-                        # durable watchlist re-seeds the chip on replay via
-                        # GET /{thread}/market-watch, so this must not persist —
-                        # see tests/.../history/test_event_ledger.py LIVE_ONLY.
+                        # ``metadata``/``model_retry``: the durable watchlist
+                        # re-seeds the chip on replay via
+                        # GET /{thread}/market-watch (see
+                        # tests/.../history/test_event_ledger.py LIVE_ONLY).
                         if event_type == "market_watch_update":
                             yield self._build_sse_event(
                                 "market_watch_update",
@@ -645,7 +671,6 @@ class RunSSEProducer:
                                     "content": event_data.get("content", ""),
                                     "timestamp": event_data.get("timestamp"),
                                 },
-                                accumulate=False,
                             )
                             continue
 
@@ -671,7 +696,6 @@ class RunSSEProducer:
                                 f"[ARTIFACT_CUSTOM] Emitting {artifact_type} artifact "
                                 f"(agent={agent_name}, status={artifact_event.get('status')})"
                             )
-                            self._track_artifact_state(artifact_event)
                             yield self._build_sse_event("artifact", artifact_event)
                     continue
 
@@ -682,6 +706,7 @@ class RunSSEProducer:
                 if stream_mode == "updates":
                     if not agent_from_stream and isinstance(event_data, dict):
                         self._reasoning.node_updated(event_data)
+                        self._note_saved_images(event_data)
                     continue
 
                 # Process message chunks (stream_mode="messages")
@@ -1403,8 +1428,6 @@ class RunSSEProducer:
                         )
 
             event_stream_message["finish_reason"] = finish_reason
-            # Message reached a terminal finish — no longer an open structure.
-            self._open_message_ids.pop(agent_name, None)
         else:
             # Log when response_metadata exists but no finish reason is found
             # This helps debug cases where completion signals might be missing
@@ -1496,31 +1519,7 @@ class RunSSEProducer:
                 if has_content:
                     if is_chunk and event_stream_message.get("content"):
                         self._streamed_content_ids.add(message_id)
-                    # Track an open assistant message (content but no terminal
-                    # finish_reason) so a stop can synthesize its close.
-                    if (
-                        event_stream_message.get("content")
-                        and not event_stream_message.get("finish_reason")
-                        and content_type != "reasoning_signal"
-                    ):
-                        self._open_message_ids[agent_name] = message_id
                     yield self._build_sse_event(chunk_event_type, event_stream_message)
-
-    def _track_artifact_state(self, artifact_event: dict) -> None:
-        """Track open/closed artifact state for stop reconciliation.
-
-        An artifact is "open" until it emits a terminal status. Keyed by
-        artifact_id so a later terminal status closes the same entry.
-        """
-        artifact_id = artifact_event.get("artifact_id")
-        if not artifact_id:
-            return
-        status = (artifact_event.get("status") or "").lower()
-        terminal = {"completed", "complete", "error", "failed", "cancelled", "stopped"}
-        if status in terminal:
-            self._open_artifacts.pop(artifact_id, None)
-        else:
-            self._open_artifacts[artifact_id] = copy.deepcopy(artifact_event)
 
     def _filter_tool_calls(self, tool_calls: list) -> list:
         """Remove tool calls with empty names or already-seen IDs."""
@@ -1586,6 +1585,27 @@ class RunSSEProducer:
                     self._reasoning.closed(message_id, data["elapsed_ms"])
         return self._build_sse_event(event_type, data)
 
+    def _note_saved_images(self, update: dict) -> None:
+        for output in update.values():
+            if not isinstance(output, dict):
+                continue
+            messages = output.get("messages")
+            if isinstance(messages, Overwrite):
+                continue  # the window trim, restating earlier turns' messages
+            if not isinstance(messages, (list, tuple)):
+                messages = [messages]
+            for message in messages:
+                if isinstance(message, AIMessage) and message.id:
+                    self._saved_image_paths[message.id] = collect_sandbox_paths(
+                        [message]
+                    )
+
+    @property
+    def saved_image_paths(self) -> Set[str]:
+        """The sandbox images the main agent's saved messages name, which
+        the model-time capture left as paths."""
+        return set().union(*self._saved_image_paths.values())
+
     def record(self, stop_events: Optional[List[Dict[str, Any]]] = None) -> ProducerRecord:
         """What the finalize stores beside the status that the checkpoint
         does not keep. ``stop_events`` are the lanes a stop drained, whose
@@ -1598,34 +1618,19 @@ class RunSSEProducer:
                 if isinstance(e, dict) and e.get("event") == "provenance"
             ],
             reasoning_ms=self._reasoning.as_facts(),
+            model_fallbacks=list(self._model_fallbacks),
         )
 
-    def _format_sse_event(self, event_type: str, data: dict[str, Any], *, accumulate: bool = True) -> str:
+    def _format_sse_event(self, event_type: str, data: dict[str, Any]) -> str:
         """Build and number one frame in a single step, for callers outside
         the stream (``stream_workflow`` numbers through its coalescer)."""
-        return self._number_sse_event(
-            self._build_sse_event(event_type, data, accumulate=accumulate)
-        )
+        return self._number_sse_event(self._build_sse_event(event_type, data))
 
-    def _build_sse_event(
-        self, event_type: str, data: dict[str, Any], *, accumulate: bool = True
-    ) -> StreamFrame:
-        """Build a frame and record it in the event archive, before numbering.
-
-        The archive sees each piece here, so it keeps every delta even when
-        the live stream loses a held one. ``accumulate=False``
-        keeps transient frames (``metadata``, ``model_retry``) out of it.
-        """
+    def _build_sse_event(self, event_type: str, data: dict[str, Any]) -> StreamFrame:
+        """Build a frame, before numbering."""
         # Remove empty content to reduce payload size
         if data.get("content") == "":
             data.pop("content")
-
-        # Accumulate merged events for persistence (never break streaming)
-        if accumulate:
-            try:
-                self._stream_event_accumulator.add(event_type, data)
-            except Exception as e:
-                logger.debug(f"[RunSSEProducer] Failed to accumulate stream event: {e}")
 
         frame = StreamFrame(event_type, data)
         if delta_piece(frame) is not None:
@@ -1688,97 +1693,6 @@ class RunSSEProducer:
             "credit_usage",
             build_credit_usage_data(thread_id, token_usage, total_credits),
         )
-
-    def get_sse_events(self) -> Optional[List[Dict[str, Any]]]:
-        """Return merged SSE events for persistence."""
-        events = self._stream_event_accumulator.get_events()
-        return events or None
-
-    def finalize_stopped_events(self) -> Optional[List[Dict[str, Any]]]:
-        """Close all open streaming structures at a user-stop point (decision T3-A).
-
-        A mid-step stop leaves the persisted ``sse_events`` with open blocks: a
-        reasoning block stuck "thinking", a tool call frozen mid-arguments, an
-        artifact mid-progress, a message without a finish_reason. Append
-        synthetic close events so replay renders the partial fragment marked
-        "stopped" instead of a live-looking zombie.
-
-        Idempotent: a per-handler ``_stop_finalized`` marker makes a second call
-        (double-stop / handler re-entry) a no-op. Returns the reconciled merged
-        events (same shape as ``get_sse_events``).
-        """
-        if self._stop_finalized:
-            return self.get_sse_events()
-        self._stop_finalized = True
-
-        try:
-            # 1. Close every open reasoning block.
-            for agent_name in list(self.reasoning_active):
-                msg_id = self._open_message_ids.get(agent_name) or f"{agent_name}:stopped"
-                self._build_reasoning_signal(agent_name, msg_id, "complete")
-            self.reasoning_active.clear()
-
-            # 2. Close any in-flight tool-call streaming state with a terminal
-            #    "stopped" close. Cover both Response API and Anthropic states.
-            #    An agent uses one LLM format per call, but a mid-turn provider
-            #    fallback can leave state in both dicts — dedup by agent so the
-            #    stop emits exactly one tool-call close per agent, not two.
-            closed_tool_agents: set = set()
-            for state_key in list(self.function_call_state.keys()) + list(
-                self.anthropic_tool_call_state.keys()
-            ):
-                agent_name = state_key[0]
-                if agent_name in closed_tool_agents:
-                    continue
-                closed_tool_agents.add(agent_name)
-                # The `id` here is the open *message* id, not the tool-call id —
-                # intentional. The frontend ignores both `id` and `finish_reason`
-                # on a tool_call_chunks event (handleToolCallChunks only iterates
-                # the `tool_call_chunks` array, absent here → no-op). The preparing
-                # shimmer actually clears off the step-4 message_chunk
-                # finish_reason:"stopped" below (matched by message id). This close
-                # event just keeps the persisted transcript internally consistent.
-                self._build_sse_event(
-                    "tool_call_chunks",
-                    {
-                        "thread_id": self.thread_id,
-                        "agent": agent_name,
-                        "id": self._open_message_ids.get(agent_name)
-                        or f"{agent_name}:stopped",
-                        "role": "assistant",
-                        "finish_reason": "stopped",
-                    },
-                )
-            self.function_call_state.clear()
-            self.anthropic_tool_call_state.clear()
-
-            # 3. Close any open artifacts with a terminal "stopped" status.
-            for artifact_id, artifact_event in list(self._open_artifacts.items()):
-                closed = copy.deepcopy(artifact_event)
-                closed["status"] = "stopped"
-                self._build_sse_event("artifact", closed)
-            self._open_artifacts.clear()
-
-            # 4. Close every open assistant message with finish_reason "stopped".
-            for agent_name, msg_id in list(self._open_message_ids.items()):
-                self._build_sse_event(
-                    "message_chunk",
-                    {
-                        "thread_id": self.thread_id,
-                        "agent": agent_name,
-                        "id": msg_id,
-                        "role": "assistant",
-                        "finish_reason": "stopped",
-                    },
-                )
-            self._open_message_ids.clear()
-        except Exception as e:
-            logger.warning(
-                f"[RunSSEProducer] finalize_stopped_events failed: {e}",
-                exc_info=True,
-            )
-
-        return self.get_sse_events()
 
     def _resolve_token_threshold(self) -> int:
         return resolve_token_threshold(self.agent_config)

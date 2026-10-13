@@ -99,3 +99,38 @@ def test_a_resume_that_trimmed_the_window_keeps_its_new_messages():
         _state(*dropped, *kept), _state(*stamped, *new), has_input=False
     )
     assert [m.id for m in got] == [m.id for m in new]
+
+
+def test_a_compaction_in_the_span_keeps_the_offloads_it_summarized():
+    # The turn offloaded two calls and then compacted them away: the sets
+    # end as they started, and the running totals still count both.
+    from src.server.services.history.slices import delta
+
+    start = {
+        "messages": [],
+        "_offloaded_tool_call_ids": {"old"},
+        "_offloaded_args_total": 1,
+        "_offloaded_read_result_ids": set(),
+    }
+    end = {
+        "messages": [],
+        "_offloaded_tool_call_ids": {"old"},
+        "_offloaded_args_total": 3,
+        "_offloaded_read_result_ids": {"r-1"},
+        "_offloaded_reads_total": 1,
+    }
+
+    span = delta(start, end)
+
+    assert (span.newly_offloaded_args, span.newly_offloaded_reads) == (2, 1)
+
+
+def test_states_from_before_the_totals_count_by_the_sets():
+    from src.server.services.history.slices import delta
+
+    span = delta(
+        {"messages": [], "_offloaded_tool_call_ids": {"a"}},
+        {"messages": [], "_offloaded_tool_call_ids": {"a", "b", "c"}},
+    )
+
+    assert span.newly_offloaded_args == 2

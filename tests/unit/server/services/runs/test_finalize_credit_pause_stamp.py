@@ -9,9 +9,10 @@ cannot be read costs the row its facts, never its finalize.
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import ToolMessage
 from langgraph.types import Interrupt
 
 from src.server.contracts.status import (
@@ -184,8 +185,8 @@ async def test_a_handler_less_credit_pause_stamps_its_denial():
 
 async def _recovered_outcome(*requests, salvaged=None):
     """The outcome the scanner finalizes a dead run with, its tip checkpoint
-    pending ``requests`` as one interrupt and its stream salvaged as
-    ``salvaged``."""
+    pending ``requests`` as one interrupt and ``salvaged`` the record its
+    stream kept."""
     tip = SimpleNamespace(
         metadata={"run_id": _KEY[1]},
         config={"configurable": {"checkpoint_id": "cp-tip"}},
@@ -195,7 +196,9 @@ async def _recovered_outcome(*requests, salvaged=None):
     finalize = AsyncMock(return_value=SimpleNamespace(applied=True, run={}))
     coordinator = SimpleNamespace(finalize_detached_run=finalize)
     scanner = RecoveryScanner()
-    scanner._salvage_stream = AsyncMock(return_value=(salvaged, "empty_stream"))
+    scanner._salvage = AsyncMock(
+        return_value=(salvaged or ProducerRecord(provenance=[]), "salvaged")
+    )
     with (
         patch("src.server.app.setup.checkpointer", saver),
         patch(
@@ -206,6 +209,7 @@ async def _recovered_outcome(*requests, salvaged=None):
         await scanner._recover_run({}, _KEY[1], _KEY[0])
     outcome = finalize.await_args.args[2]
     assert outcome.status == "interrupted"
+    scanner._salvage.assert_awaited_once_with(_KEY[0], _KEY[1], "interrupted")
     return outcome
 
 
@@ -230,19 +234,17 @@ async def test_a_recovered_pause_is_stamped_only_when_it_is_a_credit_pause():
 
 
 @pytest.mark.asyncio
-async def test_a_recovered_run_records_its_salvaged_provenance_but_no_durations():
-    # Nothing timed the dead run's thinking, so its row keeps no reasoning
-    # facts and replay reads the durations off the salvaged events instead.
+async def test_a_recovered_run_records_what_its_stream_salvaged():
     found = {
         "event": "provenance",
         "data": {"agent": "main", "source_type": "web", "identifier": "https://a.test"},
     }
-    chunk = {"event": "message_chunk", "data": {"agent": "main", "content": "x"}}
+    salvaged = ProducerRecord(provenance=[found], reasoning_ms={"ai-1": [291]})
 
-    outcome = await _recovered_outcome(_question(), salvaged=[chunk, found])
+    outcome = await _recovered_outcome(_question(), salvaged=salvaged)
 
-    assert outcome.record == ProducerRecord(provenance=[found], reasoning_ms=None)
-    assert (await _recovered_outcome(_question())).record == ProducerRecord()
+    assert outcome.record == salvaged
+    assert outcome.metadata["recovery_quality"] == "salvaged"
 
 
 # ─── classify_interrupts: the pause's words ──────────────────────────
@@ -347,10 +349,15 @@ def test_the_stamp_is_read_only_for_a_credit_pause():
 # ─── The producer's record ────────────────────────────────────────────
 
 
-def _provenance(agent, identifier):
+def _provenance(agent, identifier, tool_call_id=None):
     return {
         "event": "provenance",
-        "data": {"source_type": "web_search", "identifier": identifier, "agent": agent},
+        "data": {
+            "source_type": "web_search",
+            "identifier": identifier,
+            "agent": agent,
+            "tool_call_id": tool_call_id,
+        },
     }
 
 
@@ -364,19 +371,41 @@ async def test_the_outcome_carries_the_record_with_the_stop_drains_provenance():
                 "type": "provenance",
                 "source_type": "web_search",
                 "identifier": "https://example.test/a",
+                "tool_call_id": "call-a",
                 "agent": None,
             },
         )
     )
     main = handler.provenance_events
     assert [e["data"]["agent"] for e in main] == ["main"]
-    drained = _provenance("task:k7", "https://example.test/b")
-
-    outcome = await _outcome(
-        handler,
-        "cancelled",
-        stop_events=[{"event": "message_chunk", "data": {}}, drained, "not an event"],
+    drained = _provenance("task:k7", "https://example.test/b", "call-b")
+    # Both fetches' results were saved, the main agent's by the run and the
+    # subagent's by its task.
+    reader = MagicMock()
+    reader.aget_run_state = AsyncMock(
+        return_value=SimpleNamespace(
+            values={"messages": [ToolMessage(content="a", tool_call_id="call-a")]}
+        )
     )
+    reader.aget_task_history = AsyncMock(
+        return_value=SimpleNamespace(
+            messages=[ToolMessage(content="b", tool_call_id="call-b")]
+        )
+    )
+
+    with patch(
+        "src.server.services.history.reader.CheckpointHistoryReader.get_instance",
+        return_value=reader,
+    ):
+        outcome = await _outcome(
+            handler,
+            "cancelled",
+            stop_events=[
+                {"event": "message_chunk", "data": {}},
+                drained,
+                "not an event",
+            ],
+        )
 
     assert outcome.record == ProducerRecord(
         provenance=[*main, drained], reasoning_ms={}
@@ -413,3 +442,57 @@ async def test_a_record_that_cannot_be_read_never_blocks_the_finalize():
 @pytest.mark.asyncio
 async def test_a_run_without_a_producer_has_no_record():
     assert (await _outcome(None)).record is None
+
+
+# ─── Fallback notices ─────────────────────────────────────────────────
+
+
+def _fallback(record_id, error="boom"):
+    """A model_fallback ui record as push_ui_message streams it."""
+    return {
+        "type": "ui",
+        "id": record_id,
+        "name": "model_fallback",
+        "props": {"from_model": "primary", "to_model": "backup", "error": error},
+        "metadata": {"merge": False, "tags": ["t"], "after_message_id": "m-1"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_record_keeps_the_main_lanes_fallback_notices():
+    handler = await _streamed(
+        ((), "custom", _fallback("fb-main", "boom https://user:sekret@api.example.com")),
+        (("task:k7",), "custom", _fallback("fb-task")),
+    )
+
+    (kept,) = handler.record().model_fallbacks
+    assert kept["id"] == "fb-main"
+    assert kept["name"] == "model_fallback"
+    assert kept["metadata"] == {"after_message_id": "m-1"}
+    assert kept["props"]["to_model"] == "backup"
+    assert "sekret" not in kept["props"]["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("script", "kind", "kept"),
+    [
+        ((), "failed", True),
+        ((), "cancelled", True),
+        ((), "stream_end", False),
+        ((_paused_on(_question()),), "stream_end", False),
+    ],
+    ids=["error", "cancelled", "completed", "interrupted"],
+)
+async def test_only_a_stopped_or_failed_run_records_its_fallback_notices(
+    script, kind, kept
+):
+    # Any other ending committed every step, so its notices are in the
+    # checkpoint already.
+    handler = await _streamed(((), "custom", _fallback("fb-1")), *script)
+
+    outcome = await _outcome(handler, kind)
+
+    assert [r["id"] for r in outcome.record.model_fallbacks] == (
+        ["fb-1"] if kept else []
+    )

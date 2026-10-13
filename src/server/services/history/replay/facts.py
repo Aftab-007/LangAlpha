@@ -1,12 +1,16 @@
 """Replay facts: what a settled run shows on replay that its checkpoint does not keep.
 
-A run's row carries them in ``replay_facts``: how long the main agent thought
-over each message it committed (``reasoning_ms``, on the turn's response row),
-the URL each sandbox image a subagent run referenced was captured to
-(``images``), and the steering a subagent run handed back unread
-(``steering_returned``), both on the run's ``subagent_runs`` row. A row
-settled before the column existed has none, and replay keeps reading what it
-needs from the turn's stored events.
+A run's row carries them in ``replay_facts``. The turn's response row holds
+how long the main agent thought over each message it committed
+(``reasoning_ms``), the fallback notices a stopped or failed run streamed
+(``model_fallbacks``), and the URL each sandbox image its saved text still
+named at its end was captured to (``images``). A subagent run's
+``subagent_runs`` row holds the URL each sandbox image it referenced was
+captured to (``images``) and the steering it handed back unread
+(``steering_returned``). A row settled before the column existed has none,
+and replay keeps reading what it needs from the turn's stored events; a turn
+settled before its row held its images keeps them in an ``image_capture`` ui
+record on its checkpoint.
 
 Run facts are learned after the run settles, so they can change a turn whose
 lines are already stored: they are read with the thread's other replay rows,
@@ -20,6 +24,7 @@ from typing import Any, Required, TypedDict
 
 from ptc_agent.agent.middleware.image_capture import IMAGE_MD_RE
 from src.server.services.history.replay.lanes import MAIN_LANE, agent_lane
+from src.server.services.history.slices import SpanDelta
 
 
 class ResponseFacts(TypedDict, total=False):
@@ -28,6 +33,10 @@ class ResponseFacts(TypedDict, total=False):
 
     # Message id -> the ms of each thinking block the live stream timed.
     reasoning_ms: dict[str, list[int]]
+    # A stopped or failed run's model_fallback ui records, as streamed.
+    model_fallbacks: list[dict[str, Any]]
+    # Sandbox image path -> the URL it was captured to as the run ended.
+    images: dict[str, str]
 
 
 class ReturnedSteering(TypedDict, total=False):
@@ -119,7 +128,37 @@ def apply_reasoning_durations(
             data["elapsed_ms"] = sum(timed)
 
 
-# --------------------------------------------------------------- run lanes
+# --------------------------------------------------------- model fallbacks
+
+
+def unsaved_fallbacks(
+    response: dict[str, Any] | None, span: SpanDelta
+) -> list[dict[str, Any]]:
+    """The row's fallback notices the span's ui records lack, after the
+    span's last message: they fired in the run's last step, which committed
+    nothing past it."""
+    facts = (response or {}).get("replay_facts")
+    records = facts.get("model_fallbacks") if isinstance(facts, dict) else None
+    if not isinstance(records, list):
+        return []
+    saved = {r.get("id") for r in span.new_ui_records}
+    after = {"after_message_id": span.messages[-1].id} if span.messages else {}
+    return [
+        {**r, "metadata": after}
+        for r in records
+        if isinstance(r, dict) and r.get("id") not in saved
+    ]
+
+
+# ------------------------------------------------------------------ images
+
+
+def images_of(facts: Any) -> dict[str, str]:
+    """A row's captured image URLs by sandbox path, or none."""
+    images = facts.get("images") if isinstance(facts, dict) else None
+    if not isinstance(images, dict):
+        return {}
+    return {str(k): str(v) for k, v in images.items() if k and v}
 
 
 def apply_image_url_map(
@@ -147,6 +186,9 @@ def apply_image_url_map(
     return turn_items
 
 
+# --------------------------------------------------------------- run lanes
+
+
 def apply_run_facts(
     run_items: list[dict[str, Any]],
     facts: SubagentRunFacts | None,
@@ -163,11 +205,7 @@ def apply_run_facts(
     """
     if not facts:
         return run_items
-    images = facts.get("images")
-    if isinstance(images, dict):
-        apply_image_url_map(
-            run_items, {str(k): str(v) for k, v in images.items() if k and v}
-        )
+    apply_image_url_map(run_items, images_of(facts))
     returned = facts.get("steering_returned")
     if isinstance(returned, list) and returned:
         run_items = _place_returned_steering(

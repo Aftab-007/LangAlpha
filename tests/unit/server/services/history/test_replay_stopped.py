@@ -45,7 +45,8 @@ def _main_chunk(message_id, content_type, content, **extra):
 
 
 def _stop_close(message_id):
-    """The close finalize_stopped_events writes for the message open at stop."""
+    """The close an older row's stored events hold for the message open at
+    stop."""
     return {
         "event": "message_chunk",
         "data": {

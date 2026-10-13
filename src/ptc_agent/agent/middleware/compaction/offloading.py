@@ -59,8 +59,9 @@ def recorded_offloads(state: Mapping[str, Any]) -> Offloads:
 
 def record_offloads(state: Mapping[str, Any], args: set[str], reads: set[str]) -> dict[str, Any]:
     """The state update adding ``args`` and ``reads`` to what ``state`` has
-    recorded. A set with nothing to add is left out: each write is a new
-    checkpoint blob, and they live as long as the thread.
+    recorded, and counting them in each set's running total, which outlives
+    the ids a compaction later drops. A set with nothing to add is left out:
+    each write is a new checkpoint blob, and they live as long as the thread.
 
     New cuts also drop the cached token counts, which measured the view
     before them: left in place, the next call would compact a context the
@@ -68,13 +69,21 @@ def record_offloads(state: Mapping[str, Any], args: set[str], reads: set[str]) -
     """
     known_args, known_reads = recorded_offloads(state)
     update: dict[str, Any] = {}
-    if args:
-        update["_offloaded_tool_call_ids"] = known_args | args
-    if reads:
-        update["_offloaded_read_result_ids"] = known_reads | reads
+    for ids, known, key, total_key in (
+        (args, known_args, "_offloaded_tool_call_ids", "_offloaded_args_total"),
+        (reads, known_reads, "_offloaded_read_result_ids", "_offloaded_reads_total"),
+    ):
+        if ids:
+            update[key] = known | ids
+            update[total_key] = _total(state, total_key) + len(ids - known)
     if update:
         update["_cached_input_tokens"] = update["_cached_output_tokens"] = 0
     return update
+
+
+def _total(state: Mapping[str, Any], key: str) -> int:
+    value = state.get(key)
+    return value if isinstance(value, int) else 0
 
 
 def select_offloads(

@@ -1,12 +1,12 @@
-"""A subagent's captured-event archive: read back from Redis, written to the turn.
+"""A subagent's captured-event archive: read back from Redis, recorded on the turn.
 
 The per-task capture stream is written by the agent-side spill and read back
-here once, post-terminal, to rebuild the subagent's history; the collected
-events then land in the turn's ``sse_events``. Separated from the collection
-lifecycle because both halves carry their own failure contract: an archive
-that cannot be read to the end is refused whole, never served as a prefix, and
-the capture streams stay the transcript's copy until every event replayed from
-them has been written.
+here once, post-terminal; what the turn keeps of it is each lane's provenance
+and the images its text references. Separated from the collection lifecycle
+because both halves carry their own failure contract: an archive that cannot
+be read to the end is refused whole, never served as a prefix, and the
+capture streams stay the only copy until every lane replayed from them has
+been recorded.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any, AsyncIterator
 from ptc_agent.agent.middleware.background_subagent.redis_stream import (
     task_stream_key,
 )
-from src.server.database.conversation.responses import replace_agent_events
+from src.server.database.conversation.responses import replace_lane_provenance
 from src.utils.cache.redis_cache import get_cache_client
 
 logger = logging.getLogger(__name__)
@@ -153,70 +153,93 @@ async def persist_collected_events(
     workspace_id: str,
     sandbox=None,
 ) -> bool:
-    """Write subagent events into the turn's sse_events, replacing their agents' rows.
+    """Record the lanes ``events`` hold on the turn: where their images were
+    captured to, and their provenance for the tool calls each task's
+    checkpoints saved.
 
-    Returns True once the write landed; callers must not retire the Redis
-    capture streams on False, since they are the only remaining source of the
-    captured transcript.
+    Returns True once both landed; callers must not retire the Redis capture
+    streams on False, since they are the only remaining source of either.
     """
+    images: dict[str, dict[str, str]] = {}
     if sandbox:
         try:
-            await _capture_lane_images(
-                events, sandbox, response_id, thread_id, workspace_id
+            images = await _capture_lane_images(
+                events, sandbox, thread_id, workspace_id
             )
         except Exception:
             logger.warning(
                 "[IMAGE_CAPTURE] Hook B failed", exc_info=True,
             )
 
-    # One bounded retry: the replay cache gate holds the turn uncacheable
-    # until these rows land, so a transiently failed write must not leave
-    # the turn rebuilding on every read for its lifetime. Each attempt runs
-    # in one row-locked transaction: concurrent atomic appends
-    # (compact/offload context_window) serialize on the lock instead of being
-    # erased, and any rows the turn itself saved for these agents give way to
-    # the full capture rather than duplicate it.
+    lanes = _task_lanes(events)
+    if not lanes:
+        return True
+    from src.server.services.history.committed import saved_lane_provenance
+    from src.server.services.subagent_run_coordinator import record_lane_images
+
+    # One bounded retry: a transiently failed write must not cost the lanes
+    # their images or provenance. Images merge into the runs' facts and
+    # provenance replaces each lane's rows whole, so a repeat never
+    # duplicates them. A failed checkpoint read is no failure here: that
+    # lane's sources are written unchecked. Provenance goes first, so images
+    # that keep failing still leave the lanes their sources.
     for attempt in (1, 2):
         try:
-            if await replace_agent_events(response_id, events):
-                logger.info(
-                    f"[SubagentCollector] Updated sse_events for "
-                    f"response_id={response_id} (+{len(events)} events)"
+            # A subagent that failed streamed what it fetched in its last
+            # step, which its transcript never shows.
+            provenance = await saved_lane_provenance(
+                thread_id, events, log_tag="[SubagentCollector]"
+            )
+            if not await replace_lane_provenance(response_id, provenance, lanes):
+                raise RuntimeError(f"no response row for {response_id}")
+            for task_id, lane_images in images.items():
+                await record_lane_images(
+                    thread_id, response_id, task_id, lane_images
                 )
-                return True
-            raise RuntimeError(f"no response row for {response_id}")
+            logger.info(
+                f"[SubagentCollector] Recorded {len(provenance)} provenance "
+                f"entries for {len(lanes)} lanes, response_id={response_id}"
+            )
+            return True
         except Exception as e:
             if attempt == 1:
                 await asyncio.sleep(2.0)
                 continue
             logger.error(
-                f"[SubagentCollector] Failed to update sse_events "
+                f"[SubagentCollector] Failed to record lanes for "
                 f"response_id={response_id}: {e}",
                 exc_info=True,
             )
     return False
 
 
+def _task_lanes(events: list[dict]) -> dict[str, str]:
+    """Each ``task:{id}`` lane the events name, to its task id."""
+    lanes: dict[str, str] = {}
+    for event in events:
+        data = event.get("data")
+        agent = data.get("agent") if isinstance(data, dict) else None
+        if isinstance(agent, str) and agent.startswith("task:"):
+            lanes[agent] = agent.removeprefix("task:")
+    return lanes
+
+
 async def _capture_lane_images(
     events: list[dict],
     sandbox,
-    response_id: str,
     thread_id: str,
     workspace_id: str,
-) -> None:
-    """Hook B: capture the images the lanes reference and rewrite them in the
-    events, recording each lane's path-to-URL map on the runs the turn
-    launched for it.
+) -> dict[str, dict[str, str]]:
+    """Hook B: capture the images the lanes reference; each lane's
+    path-to-URL map, by task id, for the runs the turn launched for it.
 
-    Not on the thread's checkpoint, as the main turn's capture is: these
-    lanes settle after their turn did, and a record appended now would land
-    on whatever turn is newest, after the stored projection of this one.
+    Not on the turn's response row with the main lane's map: these lanes
+    settle after that row did.
     """
     from src.server.services.persistence.image_capture import (
         capture_images,
         sandbox_image_paths,
     )
-    from src.server.services.subagent_run_coordinator import record_lane_images
 
     by_task: dict[str, list[dict]] = {}
     for event in events:
@@ -224,15 +247,19 @@ async def _capture_lane_images(
         agent = data.get("agent") if isinstance(data, dict) else None
         if isinstance(agent, str) and agent.startswith("task:"):
             by_task.setdefault(agent.removeprefix("task:"), []).append(event)
-    # Read before the capture: it rewrites the paths it resolves.
     paths = {task_id: sandbox_image_paths(lane) for task_id, lane in by_task.items()}
     path_to_url = await capture_images(
-        events, sandbox, thread_id=thread_id, workspace_id=workspace_id
+        set().union(*paths.values()),
+        sandbox,
+        thread_id=thread_id,
+        workspace_id=workspace_id,
     )
+    out: dict[str, dict[str, str]] = {}
     for task_id, lane_paths in paths.items():
         images = {p: path_to_url[p] for p in lane_paths if p in path_to_url}
         if images:
-            await record_lane_images(thread_id, response_id, task_id, images)
+            out[task_id] = images
+    return out
 
 
 @dataclass

@@ -9,9 +9,10 @@ table, no locks.
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Optional
 
+from ptc_agent.agent.middleware.image_capture import CAPTURE_TIMEOUT_SECONDS
 from src.config.settings import get_checkpoint_flush_timeout
 from src.server.contracts.status import (
     INTERRUPT_REASON_CREDIT_PAUSE,
@@ -22,7 +23,6 @@ from src.server.database.runs.lifecycle import ProducerRecord, RunOutcome
 from src.server.services.runs.stream_errors import model_call_failure
 from src.server.utils.persistence_utils import (
     calculate_execution_time,
-    get_sse_events_from_handler,
     get_token_usage_from_callback,
     get_tool_usage_from_handler,
 )
@@ -128,9 +128,8 @@ async def assemble_finalize_artifacts(
     stop_events: Optional[list[dict]] = None,
     exc: Optional[BaseException] = None,
 ) -> RunOutcome:
-    """Build everything the finalize CAS writes: usage records, the
-    (possibly stop-reconciled) sse_events, the persist metadata and the
-    producer's record.
+    """Build everything the finalize CAS writes: usage records, the persist
+    metadata and the producer's record.
 
     ``stop_events`` are the subagent events a stop teardown drained from the
     tasks its kill evicted, which the caller passes only for a cancelled run.
@@ -139,28 +138,6 @@ async def assemble_finalize_artifacts(
     thread_id = key[0]
     _, per_call_records = get_token_usage_from_callback(metadata, phase, thread_id)
     tool_usage = get_tool_usage_from_handler(metadata, phase, thread_id)
-
-    # User-pressed Stop reconciles the transcript (close open reasoning /
-    # tool-call / artifact structures) so replay doesn't render zombies;
-    # system cancels leave raw events untouched.
-    sse_events = None
-    if (
-        status == "cancelled"
-        and cancelled_by_user
-        and handler is not None
-        and hasattr(handler, "finalize_stopped_events")
-    ):
-        try:
-            sse_events = handler.finalize_stopped_events()
-        except Exception as recon_err:
-            logger.warning(
-                f"[Finalize] finalize_stopped_events failed "
-                f"for {key}: {recon_err}"
-            )
-    if sse_events is None:
-        sse_events = get_sse_events_from_handler(metadata, phase, thread_id)
-    if stop_events:
-        sse_events = (sse_events or []) + stop_events
 
     persist_metadata = {
         "msg_type": metadata.get("msg_type"),
@@ -183,10 +160,9 @@ async def assemble_finalize_artifacts(
                 ),
             )
         )
-    # The pause's own words, which settling the run's automation relays, so
-    # that reader never has to open the turn's event archive for them. A
-    # pause without words is stamped null: the interrupts that classified it
-    # are the ones the archive holds, so it has none either.
+    # The pause's own words, which settling the run's automation relays. A
+    # pause without words is stamped null, so settling knows there is
+    # nothing to relay.
     if interrupt_reason == INTERRUPT_REASON_CREDIT_PAUSE:
         persist_metadata["credit_pause_message"] = pause_message
     # Steering inputs archive on the owning response (v4 identity model:
@@ -204,41 +180,88 @@ async def assemble_finalize_artifacts(
         per_call_records = None
         tool_usage = None
 
-    # Pre-finalize artifact hook (sandbox image capture → storage URL
-    # rewrite) must run before sse_events are archived.
-    artifact_hook = metadata.get("artifact_hook")
-    if status == "completed" and artifact_hook and sse_events:
-        try:
-            await artifact_hook(sse_events)
-        except Exception:
-            logger.warning(
-                f"[Finalize] artifact hook failed for {key}",
-                exc_info=True,
-            )
     return RunOutcome(
         status=status,
         interrupt_reason=interrupt_reason,
         metadata=persist_metadata,
         errors=[error] if error else None,
         execution_time=execution_time,
-        sse_events=sse_events,
         per_call_records=per_call_records,
         tool_usage=tool_usage,
-        record=_producer_record(key, handler, stop_events),
+        record=await _producer_record(key, handler, stop_events, status),
+        images=await _late_images(key, metadata, handler),
     )
 
 
-def _producer_record(key: tuple, handler, stop_events) -> Optional[ProducerRecord]:
+async def _late_images(key: tuple, metadata: dict, handler) -> dict[str, str]:
+    """The URLs of the sandbox images the run's saved text still names,
+    which the model-time capture left as paths. Captured on every ending,
+    since a stopped, failed or paused run kept its earlier steps' text, and
+    bounded like that capture: a run whose sandbox died must still settle."""
+    artifact_hook = metadata.get("artifact_hook")
+    image_paths = getattr(handler, "saved_image_paths", None)
+    if not (artifact_hook and image_paths):
+        return {}
+    try:
+        return await asyncio.wait_for(
+            artifact_hook(image_paths), CAPTURE_TIMEOUT_SECONDS
+        )
+    except Exception:
+        logger.warning(
+            f"[Finalize] late image capture failed for {key}; left as paths",
+            exc_info=True,
+        )
+        return {}
+
+
+async def _producer_record(
+    key: tuple, handler, stop_events, status: str
+) -> Optional[ProducerRecord]:
     """The producer's record, or None when it cannot be read: a raise here
     would leave the row in_progress, where a missing record only costs the
     row its replay facts."""
+    from src.server.services.history.committed import UNSAVED_RESULT_ENDINGS
+
     if handler is None:
         return None
     try:
-        return handler.record(stop_events)
+        record = handler.record(stop_events)
+        if status not in UNSAVED_RESULT_ENDINGS:
+            # Every step of a run that ended otherwise committed its notices.
+            return replace(record, model_fallbacks=[])
+        if record.provenance:
+            record = replace(
+                record, provenance=await _saved_provenance(key, record.provenance)
+            )
+        return record
     except Exception:
         logger.warning(f"[Finalize] producer record unavailable for {key}", exc_info=True)
         return None
+
+
+async def _saved_provenance(key: tuple, provenance: list[dict]) -> list[dict]:
+    """A stopped or failed run's provenance for the tool calls its
+    checkpoints saved. The stop can land after one of a step's parallel calls
+    streamed its sources and before the step saved its result, which the
+    turn then never shows. Reads that outlast the flush timeout keep them
+    all, as a lane whose read fails does."""
+    from src.server.services.history.committed import saved_lane_provenance
+
+    thread_id, run_id = key
+    try:
+        return await asyncio.wait_for(
+            saved_lane_provenance(
+                thread_id, provenance, run_id=run_id, log_tag="[Finalize]"
+            ),
+            timeout=get_checkpoint_flush_timeout(),
+        )
+    except Exception:
+        logger.error(
+            f"[Finalize] checkpoint reads failed for {key}; its provenance is "
+            f"recorded unchecked",
+            exc_info=True,
+        )
+        return provenance
 
 
 async def drive_finalize_cas(

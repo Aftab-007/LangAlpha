@@ -277,8 +277,9 @@ async def seed_response(patched_get_db_connection):
 
     The terminal-immutability trigger rejects INSERTs with a terminal
     status, so seeding inserts ``in_progress`` and finalizes with an
-    UPDATE — the same shape production takes through the lifecycle API,
-    including the ``SafeJson`` bind that strips NULs.
+    UPDATE, the same shape production takes through the lifecycle API.
+    ``sse_events`` seeds an older row's stored events, which only servers
+    before the checkpoint-only replay wrote.
     """
     from src.server.utils.pg_sanitize import SafeJson
 

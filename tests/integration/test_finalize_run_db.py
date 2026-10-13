@@ -1,17 +1,15 @@
 """finalize_run against real Postgres.
 
-The finalize merges its events onto whatever mid-run appenders wrote, writes
-the run's replay facts with its status, and rewrites the main lane's
-provenance from the lane's own record, so only a real database can show that
-an append queued on the row lock reaches the archive, that a subagent lane's
-records survive, and that a lost CAS writes nothing.
+The finalize writes the run's replay facts with its status and rewrites the
+main lane's provenance from the lane's own record, so only a real database
+can show that a subagent lane's records survive, that a lost CAS writes
+nothing, and that an older server's events on the row are left as they were.
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
 import uuid
-from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -31,7 +29,6 @@ ROW_KEYS = {
 }
 
 CHUNK = {"event": "message_chunk", "data": {"agent": "ptc", "content": "m"}}
-COMPACT = {"event": "context_window", "data": {"agent": "ptc", "action": "compact"}}
 
 
 def _provenance(url: str) -> dict:
@@ -100,35 +97,16 @@ async def _provenance_ids(conn, run_id: str) -> list[str]:
     return [r["identifier"] for r in await cur.fetchall()]
 
 
-async def test_events_merge_onto_mid_run_appends_and_encode_once(open_run, db_conn):
-    from src.server.database.conversation import append_sse_event
-    from src.server.utils import pg_sanitize
-
+async def test_finalize_writes_no_events(open_run, db_conn):
     thread_id, run_id = open_run
-    early = _provenance("https://early.example")
-    assert await append_sse_event(thread_id, early)
     events = [CHUNK, _provenance("https://final.example")]
 
-    encodes = []
-    real_dumps = pg_sanitize._safe_dumps
-
-    def counting_dumps(value):
-        if value is events:
-            encodes.append(value)
-        return real_dumps(value)
-
-    with patch.object(pg_sanitize, "_safe_dumps", counting_dumps):
-        result = await _finalize(
-            run_id, thread_id, "completed", sse_events=events, record=_record(*events)
-        )
+    result = await _finalize(run_id, thread_id, "completed", record=_record(*events))
 
     assert result.applied
     assert set(result.run) == ROW_KEYS
     assert result.run["status"] == "completed"
-    assert len(encodes) == 1
-    assert await _sse_events(db_conn, run_id) == [early, *events]
-    # The lane's own record, not the merged archive: no mid-run writer
-    # appends provenance, so the archive holds nothing the record lacks.
+    assert await _sse_events(db_conn, run_id) is None
     assert await _provenance_ids(db_conn, run_id) == ["https://final.example"]
     # The outbox jobs are built from the returned row alone.
     cur = await db_conn.execute(
@@ -138,75 +116,38 @@ async def test_events_merge_onto_mid_run_appends_and_encode_once(open_run, db_co
     assert (await cur.fetchone())["payload"]["run_seq"] == result.run["run_seq"]
 
 
-async def test_append_queued_on_the_row_lock_reaches_the_archive(
-    open_run, db_conn, test_db_pool
-):
-    from src.server.database.conversation import append_sse_event
-
+async def test_an_older_servers_events_are_left_as_they_were(open_run, db_conn):
+    """During a cutover an older server can still append to a row this one
+    settles; its events stay, and the provenance is the lane's own record."""
     thread_id, run_id = open_run
-    late = _provenance("https://late.example")
+    appended = [{"event": "context_window", "data": {"action": "summarize"}}]
+    await db_conn.execute(
+        "UPDATE conversation_responses SET sse_events = %s::jsonb "
+        "WHERE conversation_response_id = %s",
+        (json.dumps(appended), run_id),
+    )
 
-    async with test_db_pool.connection() as holder:
-        async with holder.transaction():
-            assert await append_sse_event(thread_id, late, conn=holder)
-            finalize = asyncio.create_task(
-                _finalize(
-                    run_id,
-                    thread_id,
-                    "completed",
-                    sse_events=[CHUNK],
-                    record=_record(CHUNK),
-                )
-            )
-            await asyncio.sleep(0.2)
-            assert not finalize.done()  # queued behind the appender's row lock
-    assert (await finalize).applied
+    record = _record(_provenance("https://final.example"))
+    assert (await _finalize(run_id, thread_id, "cancelled", record=record)).applied
 
-    assert await _sse_events(db_conn, run_id) == [late, CHUNK]
-    # Provenance is the lane's own record, which the finalize carried.
-    assert await _provenance_ids(db_conn, run_id) == []
+    assert await _sse_events(db_conn, run_id) == appended
+    assert await _provenance_ids(db_conn, run_id) == ["https://final.example"]
 
 
 async def test_lost_cas_writes_nothing_and_returns_the_survivor(open_run, db_conn):
     thread_id, run_id = open_run
-    won_events = [CHUNK, _provenance("https://won.example")]
-    first = await _finalize(
-        run_id, thread_id, "completed", sse_events=won_events, record=_record(*won_events)
-    )
+    won = _record(_provenance("https://won.example"))
+    first = await _finalize(run_id, thread_id, "completed", record=won)
     assert first.applied
 
-    lost_events = [COMPACT, _provenance("https://lost.example")]
-    second = await _finalize(
-        run_id,
-        thread_id,
-        "error",
-        errors=["late"],
-        sse_events=lost_events,
-        record=_record(*lost_events),
-    )
+    lost = _record(_provenance("https://lost.example"))
+    second = await _finalize(run_id, thread_id, "error", errors=["late"], record=lost)
 
     assert not second.applied
     assert set(second.run) == ROW_KEYS
     assert second.run["status"] == "completed"
-    assert await _sse_events(db_conn, run_id) == won_events
+    assert await _sse_events(db_conn, run_id) is None
     assert await _provenance_ids(db_conn, run_id) == ["https://won.example"]
-
-
-@pytest.mark.parametrize("appended", [None, COMPACT], ids=["empty", "mid-run-append"])
-async def test_finalize_without_events_keeps_the_column(open_run, db_conn, appended):
-    from src.server.database.conversation import append_sse_event
-
-    thread_id, run_id = open_run
-    if appended is not None:
-        assert await append_sse_event(thread_id, appended)
-
-    result = await _finalize(run_id, thread_id, "cancelled")
-
-    assert result.applied
-    assert await _sse_events(db_conn, run_id) == (
-        [appended] if appended is not None else None
-    )
-    assert await _provenance_ids(db_conn, run_id) == []
 
 
 async def _replay_facts(conn, run_id: str):
@@ -227,7 +168,6 @@ async def test_replay_facts_land_with_the_status_and_survive_a_lost_cas(
         run_id,
         thread_id,
         "completed",
-        sse_events=[CHUNK],
         record=_record(reasoning_ms=durations),
     )
     assert first.applied
@@ -244,12 +184,23 @@ async def test_replay_facts_land_with_the_status_and_survive_a_lost_cas(
     assert await _replay_facts(db_conn, run_id) == {"reasoning_ms": durations}
 
 
+async def test_a_stopped_runs_late_captured_images_land_in_its_facts(
+    open_run, db_conn
+):
+    """Every ending keeps the images its saved text still named, not only a
+    completed one."""
+    thread_id, run_id = open_run
+    images = {"charts/a.png": "https://cdn.example/a.png"}
+    assert (await _finalize(run_id, thread_id, "cancelled", images=images)).applied
+    assert await _replay_facts(db_conn, run_id) == {"images": images}
+
+
 @pytest.mark.parametrize("recovered", [False, True], ids=["fail-open", "recovery"])
 async def test_finalize_without_facts_leaves_the_column_null(
     open_run, db_conn, recovered
 ):
-    """Recovery and fail-open settles hold no producer: their turns replay
-    reasoning durations from the stored events, as a legacy turn does."""
+    """Recovery and fail-open settles hold no producer that timed the
+    reasoning, so their rows keep no durations."""
     thread_id, run_id = open_run
     record = _record(CHUNK) if recovered else None
     assert (await _finalize(run_id, thread_id, "cancelled", record=record)).applied
@@ -259,7 +210,7 @@ async def test_finalize_without_facts_leaves_the_column_null(
 async def test_main_lane_provenance_leaves_subagent_lanes(open_run, db_conn):
     """A subagent's archive writes its lane before the parent settles; the
     finalize rewrites only the main lane."""
-    from src.server.database.conversation.responses import replace_agent_events
+    from src.server.database.conversation.responses import replace_lane_provenance
 
     thread_id, run_id = open_run
     task_record = {
@@ -270,7 +221,7 @@ async def test_main_lane_provenance_leaves_subagent_lanes(open_run, db_conn):
             "identifier": "https://task.example",
         },
     }
-    assert await replace_agent_events(run_id, [task_record])
+    assert await replace_lane_provenance(run_id, [task_record], {"task:abc": "abc"})
     assert await _provenance_ids(db_conn, run_id) == ["https://task.example"]
 
     main_record = {
@@ -285,7 +236,6 @@ async def test_main_lane_provenance_leaves_subagent_lanes(open_run, db_conn):
         run_id,
         thread_id,
         "completed",
-        sse_events=[CHUNK, main_record],
         record=_record(main_record),
     )
     assert result.applied

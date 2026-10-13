@@ -696,7 +696,7 @@ class LocalRunExecutor:
         #     3. cancel_run_tasks(force=True,        # kill this run's subagents,
         #          claim_for=run_id)                 #   claiming the settled ones
         #     4. drain killed-subagent events        # bounded (~stop_drain_timeout)
-        #     5. _finalize_run(kind="cancelled")     # persist merged sse_events + run_end frame,
+        #     5. _finalize_run(kind="cancelled")     # record provenance + run_end frame,
         #                                            #   bill the claim if the user stopped it
         #     6. raise
         #
@@ -993,7 +993,7 @@ class LocalRunExecutor:
         ) = await finalization.classify_outcome(
             kind, handler=handler, graph=graph, thread_id=thread_id, error=error
         )
-        # The stop drain's events the finalize archives, copied: a teardown a
+        # The stop drain's events the finalize records, copied: a teardown a
         # second cancel left draining still appends after the CAS, and the
         # lanes it adds then are archived once their writers settle instead.
         carried_events = list(stop.events) if stop and status == "cancelled" else []

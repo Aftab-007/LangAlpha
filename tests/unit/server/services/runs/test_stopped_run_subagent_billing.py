@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager, contextmanager, suppress
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import ToolMessage
 
 from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTaskRegistry,
@@ -28,12 +30,14 @@ from src.server.services.runs.executor import (
     LocalRunExecutor,
     LocalRunStatus,
 )
+from src.server.services.runs.sse_producer import RunSSEProducer
 from src.server.services.runs.teardown import StopTeardown
 
 USAGE_SERVICE = "src.server.services.persistence.usage.UsagePersistenceService"
 REGISTRY = "ptc_agent.agent.middleware.background_subagent.registry"
 COORDINATOR = "src.server.services.runs.coordinator.RunCoordinator"
 FINALIZATION = "src.server.services.runs.finalization"
+READER = "src.server.services.history.reader.CheckpointHistoryReader"
 COLLECTION = "src.server.services.runs.subagent_collection"
 TEARDOWN = "src.server.services.runs.teardown"
 
@@ -138,12 +142,28 @@ def _lanes(events: list[dict]) -> set[str]:
 
 
 async def _capture_stream(_thread_id, task):
-    """A capture stream holding one record of the round that spawned the task."""
+    """A capture stream holding one record of the round that spawned the task,
+    from a tool call its checkpoint saved (``_saved_fetches``)."""
     yield {
-        "event": "message_chunk",
-        "data": {"agent": f"task:{task.task_id}", "content": "x"},
+        "event": "provenance",
+        "data": {
+            "agent": f"task:{task.task_id}",
+            "identifier": "https://x.example",
+            "tool_call_id": f"fetch-{task.task_id}",
+        },
         "run": task.spawned_run_id,
     }
+
+
+def _saved_fetches():
+    """Every task's checkpoint holding the result of its one fetch."""
+    reader = MagicMock()
+    reader.aget_task_history = AsyncMock(
+        side_effect=lambda _thread, task_id: SimpleNamespace(
+            messages=[ToolMessage(content="page", tool_call_id=f"fetch-{task_id}")]
+        )
+    )
+    return reader
 
 
 @contextmanager
@@ -199,6 +219,7 @@ def _run(
             "user_id": "user-1",
             "is_byok": False,
             "run_handle": MagicMock(guard=None),
+            "handler": RunSSEProducer(thread_id=THREAD, run_id=RUN),
         },
     )
     btm.executions[(THREAD, RUN)] = info
@@ -210,7 +231,7 @@ def _run(
     else:
         async def cas(_handle, outcome, **_kwargs):
             if archive is not None and finalize.applied:
-                archive.append(("finalize", _lanes(outcome.sse_events)))
+                archive.append(("finalize", _lanes(outcome.record.provenance)))
             return finalize
 
         coordinator.finalize_run = AsyncMock(side_effect=cas)
@@ -220,8 +241,8 @@ def _run(
          patch(f"{COORDINATOR}.get_instance", return_value=coordinator), \
          patch(f"{FINALIZATION}.get_token_usage_from_callback", return_value=(None, [])), \
          patch(f"{FINALIZATION}.get_tool_usage_from_handler", return_value={}), \
-         patch(f"{FINALIZATION}.get_sse_events_from_handler", return_value=[]), \
          patch(f"{FINALIZATION}.calculate_execution_time", return_value=1.0), \
+         patch(f"{READER}.get_instance", return_value=_saved_fetches()), \
          _archive_writes(btm, archive):
         yield info
 
@@ -384,7 +405,7 @@ async def _stopped(btm: LocalRunExecutor, registry, archive: list):
 class TestEveryEndingWithoutACollectorArchivesItsLanes:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("ending, at_finalize, after", [
-        # The teardown's drain carries both lanes into the CAS.
+        # The teardown's drain carries both lanes' provenance into the CAS.
         pytest.param("user_stop", {"finished", "live"}, set(), id="user_stop"),
         pytest.param("shutdown", {"finished", "live"}, set(), id="shutdown"),
         # No teardown ran, so the lanes are archived after the CAS.

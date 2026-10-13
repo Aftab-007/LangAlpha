@@ -64,7 +64,8 @@ def stored_subagents_allowed(value_sql: str, workspace_id_sql: str) -> str:
 # re-read their rows whole by id (``get_replay_responses``), so a cached open
 # never moves the stored events, or the legacy facts backfilled from them, of
 # its whole history over the wire. A row read without ``sse_events`` has them
-# still to read.
+# still to read. Only older rows hold stored events; a new row leaves the
+# column null.
 _LIGHT_RESPONSE_COLUMNS = (
     "conversation_response_id, conversation_thread_id, turn_index, status, "
     "interrupt_reason, metadata, warnings, errors, execution_time, created_at, "
@@ -81,8 +82,7 @@ _RESPONSE_COLUMNS = f"{_LIGHT_RESPONSE_COLUMNS}, sse_events, replay_facts"
 #
 # ``xmin`` rides along for the replay projection cache, which fingerprints a
 # turn's table-sourced inputs: every one of them lives on this row, and any
-# UPDATE (the archive drain rewriting sse_events, an atomic context_window
-# append) writes a new tuple version. It is a tuple-header read, so it costs
+# UPDATE (the finalize, a backfill of its facts) writes a new tuple version. It is a tuple-header read, so it costs
 # nothing — and a subquery cannot expose it, which is why it belongs here
 # rather than at the replay call site.
 def settled_attempts(columns: str, thread: str = "%s") -> str:

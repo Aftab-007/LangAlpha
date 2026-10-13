@@ -122,9 +122,6 @@ class BackgroundExecutionConfig(BaseModel):
     max_workflow_retries: int = Field(
         default=3, description="Max transient-error retry count for workflow execution"
     )
-    merged_chunk_max_bytes: int = Field(
-        default=16384, description="Max bytes for merged SSE event chunks before split"
-    )
 
 
 class RedisTTLConfig(BaseModel):

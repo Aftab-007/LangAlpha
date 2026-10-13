@@ -222,8 +222,7 @@ async def test_stop_drain_snapshots_the_resumed_round():
     ):
         merged = await drain_killed_subagent_events(THREAD_ID, [task])
 
-    assert [e["data"].get("content") for e in merged[:3]] == ["c0", "c1", "c2"]
-    assert merged[-1]["data"]["finish_reason"] == "stopped"
+    assert [e["data"].get("content") for e in merged] == ["c0", "c1", "c2"]
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,7 @@
 """The run stream joins streamed deltas before numbering them.
 
-Pins the producer seam: frames are built (and accumulated for persistence) one
-per piece, then held and joined, and numbered only as they leave, so ids stay
-contiguous whatever was joined.
+Pins the producer seam: frames are built one per piece, then held and joined,
+and numbered only as they leave, so ids stay contiguous whatever was joined.
 """
 
 from __future__ import annotations
@@ -201,7 +200,7 @@ async def test_the_window_is_checked_on_events_that_emit_nothing(clock) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_close_loses_the_hold_live_but_not_from_the_persisted_copy() -> None:
+async def test_a_close_loses_only_the_held_delta_live() -> None:
     producer = _producer()
     stream = producer.stream_workflow(
         _Graph(_steps(_msg("one"), _msg("two", msg_id="m2"), _msg(" more", msg_id="m2"))),
@@ -212,8 +211,6 @@ async def test_a_close_loses_the_hold_live_but_not_from_the_persisted_copy() -> 
     # "two" started another message, which released "one" and is held now.
     await stream.aclose()
     assert [data.get("content") for _, _, data in live] == [None, "one"]
-    persisted = producer.get_sse_events()
-    assert [e["data"]["content"] for e in persisted] == ["one", "two"]
 
 
 @pytest.mark.asyncio

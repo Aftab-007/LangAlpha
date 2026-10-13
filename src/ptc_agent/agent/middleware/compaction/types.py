@@ -98,6 +98,11 @@ class CompactionState(AgentState):
     ]
     _offloaded_tool_call_ids: Annotated[NotRequired[set[str]], PrivateStateAttr]
     _offloaded_read_result_ids: Annotated[NotRequired[set[str]], PrivateStateAttr]
+    #: How many ids each set has ever gained. A compaction or trim drops the
+    #: ids it summarized from the sets but never from these, so what a span
+    #: of checkpoints offloaded is what these grew by across it.
+    _offloaded_args_total: Annotated[NotRequired[int], PrivateStateAttr]
+    _offloaded_reads_total: Annotated[NotRequired[int], PrivateStateAttr]
     _cached_input_tokens: Annotated[NotRequired[int], PrivateStateAttr]
     _cached_output_tokens: Annotated[NotRequired[int], PrivateStateAttr]
     _last_model_response_at: Annotated[NotRequired[float], PrivateStateAttr]

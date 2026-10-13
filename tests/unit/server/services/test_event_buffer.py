@@ -73,9 +73,8 @@ class TestBufferEventRedisHappyPath:
 
         assert mock_cache.pipelined_event_buffer.await_count == 1
         call = mock_cache.pipelined_event_buffer.await_args
-        # Stream-only, and no meta hash: persistence comes from
-        # StreamEventAccumulator, and the counter it used to keep was read by
-        # nobody.
+        # Stream-only, and no meta hash: the counter it used to keep was read
+        # by nobody.
         assert call.args[0] == "workflow:stream:thread-1:run-1"
         assert "meta_key" not in call.kwargs
         assert call.kwargs["event_id"] == 42

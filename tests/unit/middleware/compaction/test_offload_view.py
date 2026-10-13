@@ -293,3 +293,18 @@ def test_legacy_merged_id_sets_only_hit_their_own_tool():
     assert out["tr0"].content.startswith("... [this tool call's read result")
     assert TURN_FILE in out["a0"].tool_calls[0]["args"]["content"]
     assert out["a0"].tool_calls[1]["args"] == {"file_path": "same.py"}
+
+
+def test_recorded_offloads_count_each_id_once_in_the_totals():
+    from ptc_agent.agent.middleware.compaction.offloading import record_offloads
+
+    state = {
+        "_offloaded_tool_call_ids": {"a"},
+        "_offloaded_args_total": 4,
+    }
+
+    update = record_offloads(state, {"a", "b"}, {"r"})
+
+    assert update["_offloaded_tool_call_ids"] == {"a", "b"}
+    assert update["_offloaded_args_total"] == 5
+    assert update["_offloaded_reads_total"] == 1

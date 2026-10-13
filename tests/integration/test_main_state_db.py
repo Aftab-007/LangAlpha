@@ -1,8 +1,8 @@
 """The main agent's private fields survive a write through another graph, on
 the Postgres saver, which keeps a primitive channel value inside the
 checkpoint row: a graph that leaves such a field undeclared writes the next
-checkpoint without it. The writers are the history reader's ui-record append
-and a manual compaction, whose build leaves the subagent switch out.
+checkpoint without it. The writer is a manual compaction, whose build leaves
+the subagent switch out.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from langsmith import tracing_context
 from ptc_agent.agent.main_state import MainAgentState
 from ptc_agent.agent.state import DeltaAgentState
 from src.server.database.conversation import threads_write
-from src.server.services.history.reader import CheckpointHistoryReader
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -80,20 +79,6 @@ async def test_a_graph_without_them_erases_them(test_db_pool) -> None:
     await _seeded(saver)
     await _graph(DeltaAgentState, saver).aupdate_state(_config(), {"ui": []})
     assert await _kept(saver) == dict.fromkeys(KEPT)
-
-
-async def test_a_ui_record_append_keeps_them(test_db_pool, monkeypatch) -> None:
-    saver = AsyncPostgresSaver(test_db_pool)
-    await _seeded(saver)
-
-    async def advance(thread_id, *, from_checkpoint_id, to_checkpoint_id):
-        return True
-
-    monkeypatch.setattr(threads_write, "advance_thread_checkpoint_id", advance)
-    await CheckpointHistoryReader(saver).append_ui_record(THREAD, "image_map", {"a": "b"})
-    state = await _graph(MainAgentState, saver).aget_state(_config())
-    assert [r["name"] for r in state.values["ui"]] == ["image_map"]
-    assert await _kept(saver) == KEPT
 
 
 async def test_a_manual_compaction_keeps_them(test_db_pool, monkeypatch) -> None:

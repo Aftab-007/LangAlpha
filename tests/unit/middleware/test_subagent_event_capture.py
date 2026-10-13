@@ -22,7 +22,6 @@ import pytest
 import redis.exceptions as redis_exceptions
 from langchain_core.messages import ToolMessage
 
-from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from src.utils.cache import stream_append
@@ -506,7 +505,7 @@ async def test_redis_spill_uses_durable_persistence_cap(monkeypatch) -> None:
     not expire mid-run; the attach-grace TTL is stamped at terminal) and a
     2x MAXLEN backstop over the quota — FIFO trim must never engage before
     the quota check opens the circuit, or early events would silently
-    truncate and corrupt ``conversation_responses.sse_events``.
+    drop out of the lane's archive.
     """
     fake_cache = MagicMock()
     fake_cache.enabled = True

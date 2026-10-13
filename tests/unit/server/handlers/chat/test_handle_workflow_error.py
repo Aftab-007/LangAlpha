@@ -66,7 +66,6 @@ def _scope(run_handle=None):
 def _handler():
     handler = MagicMock()
     handler.get_tool_usage.return_value = None
-    handler.get_sse_events.return_value = None
     handler._format_sse_event.side_effect = (
         lambda ev, data: f"event: {ev}\ndata: {data}\n\n"
     )

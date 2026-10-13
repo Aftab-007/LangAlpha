@@ -120,8 +120,16 @@ def _namespace_items(
 
 def _run_items(thread_id: str, run: SpanDelta, agent: str) -> list[dict[str, Any]]:
     out = projector.context_signal_items(thread_id, run, agent=agent)
-    out.extend(projector.model_fallback_items(thread_id, run, agent=agent))
-    out.extend(_namespace_items(run.messages, thread_id=thread_id, agent=agent))
+    out.extend(
+        projector.with_model_fallbacks(
+            thread_id,
+            run,
+            lambda messages: _namespace_items(
+                messages, thread_id=thread_id, agent=agent
+            ),
+            agent=agent,
+        )
+    )
     return out
 
 

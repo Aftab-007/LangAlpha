@@ -784,3 +784,66 @@ async def test_task_runs_slice_by_their_own_boundaries():
     # The namespace tip alone has lost the first run entirely.
     tip = await reader.aget_task_history(THREAD, "tsk1")
     assert "sub-ai-1" not in [m.id for m in tip.messages]
+
+
+async def test_task_history_leaves_out_results_a_failed_step_left_pending():
+    """One of a step's parallel calls finished and the other failed, so the
+    finished result is only a pending write. LangGraph applies a pending
+    write only for a task of the reading graph, and the reader's graph has
+    none of the subagent's, so it reads what replay shows: the subagent
+    archive keeps a lane's sources by this read."""
+    from langchain_core.messages import ToolMessage
+
+    saver = InMemorySaver()
+
+    def agent(_state):
+        return {
+            "messages": [
+                AIMessage(
+                    content="",
+                    id="sub-ai-1",
+                    tool_calls=[
+                        {"name": "fetch", "args": {}, "id": "tc-a"},
+                        {"name": "fetch", "args": {}, "id": "tc-b"},
+                    ],
+                )
+            ]
+        }
+
+    def finished(_state):
+        return {
+            "messages": [ToolMessage(content="page", tool_call_id="tc-a", id="tm-a")]
+        }
+
+    def failed(_state):
+        raise RuntimeError("fetch failed")
+
+    sub_graph = (
+        StateGraph(MainAgentState)
+        .add_node("agent", agent)
+        .add_node("finished", finished)
+        .add_node("failed", failed)
+        .add_edge(START, "agent")
+        .add_edge("agent", "finished")
+        .add_edge("agent", "failed")
+        .compile(checkpointer=saver)
+    )
+    config = {
+        "configurable": {
+            "thread_id": THREAD,
+            "checkpoint_ns": "task:tsk1",
+            CONFIG_KEY_TASK_ID: "parent-task",
+        }
+    }
+    with pytest.raises(RuntimeError, match="fetch failed"):
+        await sub_graph.ainvoke(
+            {"messages": [HumanMessage(content="sub prompt", id="sub-h-1")]}, config
+        )
+
+    tip = await saver.aget_tuple(
+        {"configurable": {"thread_id": THREAD, "checkpoint_ns": "task:tsk1"}}
+    )
+    pending = [v for _, channel, v in tip.pending_writes if channel == "messages"]
+    assert "tm-a" in [m.id for batch in pending for m in batch]
+    history = await CheckpointHistoryReader(saver).aget_task_history(THREAD, "tsk1")
+    assert [m.id for m in history.messages] == ["sub-h-1", "sub-ai-1"]

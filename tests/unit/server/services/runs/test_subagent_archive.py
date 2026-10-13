@@ -422,12 +422,12 @@ async def test_retire_without_a_run_id_stamps_nothing_extra():
 @pytest.mark.asyncio
 async def test_persist_reports_a_write_that_never_lands(monkeypatch) -> None:
     """Both attempts failing returns False, so callers keep the capture
-    streams: after a failed write they are the transcript's only copy."""
+    streams: after a failed write they are the lanes' only copy."""
     from src.server.services.runs import subagent_archive
 
     monkeypatch.setattr(
         subagent_archive,
-        "replace_agent_events",
+        "replace_lane_provenance",
         AsyncMock(side_effect=RuntimeError("db down")),
     )
     monkeypatch.setattr(subagent_archive.asyncio, "sleep", AsyncMock())

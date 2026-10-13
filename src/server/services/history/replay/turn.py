@@ -7,7 +7,7 @@ digested into the lines epoch (``keys.projection_sources``).
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -26,7 +26,8 @@ from src.server.services.history.replay import stored_merge
 from src.server.services.history.slices import TurnSlice
 from src.server.services.runs.sse_producer import resolve_token_threshold
 
-# The ui record image capture persists a turn's path -> URL map in.
+# The ui record a turn settled before its row held its images keeps its
+# path -> URL map in.
 IMAGE_CAPTURE_UI_NAME = "image_capture"
 
 
@@ -97,28 +98,36 @@ def project_turn(
         for q in inputs.queries_by_turn.get(turn_index, [])
     ]
 
-    turn_items = history_events_to_sse(
-        messages_to_history_events(turn.messages), thread_id=thread_id
+    # A stopped or failed run's last step never committed the fallback
+    # notices it streamed, so its row keeps them.
+    fallbacks = replay_facts.unsaved_fallbacks(response, turn)
+    turn_items = projector.with_model_fallbacks(
+        thread_id,
+        replace(turn, new_ui_records=[*turn.new_ui_records, *fallbacks]),
+        lambda messages: history_events_to_sse(
+            messages_to_history_events(messages), thread_id=thread_id
+        ),
     )
     # Compaction signals (offload counts, the summarize event) live in
     # private state keys, not the messages channel — re-emit them at the
     # head of the turn they landed in (live they fire before the first
-    # post-compaction model call). Fallback notices follow the same
-    # head placement: live they fire before the succeeding model's chunks.
-    turn_items[:0] = projector.context_signal_items(
-        thread_id, turn
-    ) + projector.model_fallback_items(thread_id, turn)
+    # post-compaction model call).
+    turn_items[:0] = projector.context_signal_items(thread_id, turn)
     durations = replay_facts.reasoning_durations(response)
     if durations is not None:
         replay_facts.apply_reasoning_durations(turn_items, durations)
     task_items, sealed, watermarks = lane.project(turn, settled_at(response))
     turn_items.extend(task_items)
-    # Legacy path→URL records belong to the turn whose state delta contains
-    # them. A thread-global map is incorrect when a sandbox filename is
-    # reused later: last-write-wins would rewrite the older turn's image to
-    # the newer content-addressed object.
+    # A turn's image map is its own: its row's, or the ui record in its state
+    # delta for a turn settled before its row held one. A thread-global map is
+    # incorrect when a sandbox filename is reused later: last-write-wins would
+    # rewrite the older turn's image to the newer content-addressed object.
     replay_facts.apply_image_url_map(
-        turn_items, _collect_image_url_map(turn.new_ui_records)
+        turn_items,
+        {
+            **_collect_image_url_map(turn.new_ui_records),
+            **replay_facts.images_of((response or {}).get("replay_facts")),
+        },
     )
     # Table-sourced synthesis rides ahead of the merge: a turn with stored
     # events drops these copies and replays the stored ones instead (the
@@ -151,6 +160,11 @@ def project_turn(
     turn_items = legacy.apply_turn(turn_items, task_items, facts)
     if placed is not None:
         placed(turn_items)
+    # A compact or offload the user ran after the turn follows everything the
+    # turn streamed, where its stored copy placed it. Its record is in the
+    # checkpoint alone, so a turn whose stored events the merge prefers keeps
+    # it too.
+    turn_items.extend(projector.manual_context_window_items(thread_id, turn))
 
     _fill_token_thresholds(turn_items)
     # Terminal error: never in stored events (persisted before it is

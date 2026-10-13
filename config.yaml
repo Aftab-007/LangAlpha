@@ -134,7 +134,6 @@ background_execution:
   wait_for_persistence_timeout: 30      # Max seconds callers block waiting for persistence
   stop_drain_timeout: 4.0               # Max seconds to drain killed-subagent events before teardown sentinel. MUST stay above redis.pool_timeout (2.0) plus a real paged XRANGE: a shorter deadline is spent queueing for a cache connection under contention, so the drain reports a timeout having issued no read at all and the run finalizes without its subagent archive
   max_workflow_retries: 3               # Max transient-error retry count
-  merged_chunk_max_bytes: 16384         # Max bytes for merged SSE event chunks (16 KB)
 
 
 # =============================================================================

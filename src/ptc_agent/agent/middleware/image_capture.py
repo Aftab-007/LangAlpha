@@ -4,7 +4,7 @@
 response to storage URLs *before* the message enters state, so checkpointed
 truth carries durable URLs and replay needs no sandbox or rewrite map. Keys
 are content-addressed (sha256 of the bytes), so any re-capture of the same
-image — including the post-stream sse_events safety net — converges on the
+image, including the late capture when the turn settles, converges on the
 identical URL with no coordination.
 """
 
@@ -37,10 +37,11 @@ IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"}
 IMAGE_MD_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 # Capture rides the live turn-completion path (paths are rewritten pre-commit so
-# checkpointed truth carries durable URLs). Bound it so a hung sandbox or storage
-# backend can't stall the turn — on timeout the paths are left in place and the
-# idempotent post-stream capture (same content-addressed keys) recovers them.
-_CAPTURE_TIMEOUT_SECONDS = 30.0
+# checkpointed truth carries durable URLs), and the late capture rides the
+# run's finalize. Both are bounded so a hung sandbox or storage backend can't
+# stall the turn: a path the model-time capture leaves in place is retried
+# late, at the same content-addressed keys.
+CAPTURE_TIMEOUT_SECONDS = 30.0
 
 
 def is_sandbox_image_path(path: str) -> bool:
@@ -116,7 +117,8 @@ def rewrite_image_paths(text: str, url_map: dict[str, str]) -> str:
     return IMAGE_MD_RE.sub(replacer, text)
 
 
-def _collect_sandbox_paths(messages: list[Any]) -> set[str]:
+def collect_sandbox_paths(messages: list[Any]) -> set[str]:
+    """The sandbox image paths the AI messages' text names."""
     paths: set[str] = set()
     for text in _iter_text_segments(messages):
         for match in IMAGE_MD_RE.finditer(text):
@@ -185,12 +187,12 @@ class ImageCaptureMiddleware(AgentMiddleware):
         response = await handler(request)
         try:
             result = await asyncio.wait_for(
-                self._arewrite(response.result), _CAPTURE_TIMEOUT_SECONDS
+                self._arewrite(response.result), CAPTURE_TIMEOUT_SECONDS
             )
         except TimeoutError:
             logger.warning(
                 "[ImageCapture] capture exceeded %ss; sandbox paths left in place",
-                _CAPTURE_TIMEOUT_SECONDS,
+                CAPTURE_TIMEOUT_SECONDS,
             )
             return response
         except Exception:
@@ -208,7 +210,7 @@ class ImageCaptureMiddleware(AgentMiddleware):
         sandbox = getattr(self._session, "sandbox", None)
         if sandbox is None or not is_storage_enabled():
             return None
-        paths = _collect_sandbox_paths(messages)
+        paths = collect_sandbox_paths(messages)
         if not paths:
             return None
 

@@ -2,7 +2,7 @@
 
 Owns the deterministic sequence a user stop triggers: flush the LangGraph
 checkpoint, cancel the stopped run's orphan collectors, kill and claim its
-subagents, and drain their captured events for the finalize to persist.
+subagents, and drain their captured events for the finalize to record.
 Executor-local state (the task table, the orphan-collector registry) stays
 in ``LocalRunExecutor`` and is lent in via arguments.
 """
@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 class StopTeardown:
     """What a stop teardown hands its run's finalize, filled in place.
 
-    ``events`` are the killed subagents' drained events, archived if the run
-    ends cancelled. ``claimed`` are the settled subagents the kill claimed
+    ``events`` are the killed subagents' drained events, whose provenance the
+    finalize records if the run ends cancelled. ``claimed`` are the settled subagents the kill claimed
     before evicting them with their usage: the teardown runs before anyone
     knows whether the user or the system ended the run, and only the finalize
     decides whether that usage is billed. The run holds this before the
@@ -196,12 +196,12 @@ async def drain_killed_subagent_events(
 async def killed_lane(
     thread_id: str, task, *, owner: str | None = None
 ) -> list[dict]:
-    """A killed subagent's captured events, closed for replay, or ``[]``.
+    """A killed subagent's captured events, or ``[]``.
 
-    Reads the task's Redis capture stream via ``iter_subagent_events_full``
-    and appends a synthetic "stopped" close. ``owner`` fences the read
-    against a resume the way the collector's replay is fenced: a task whose
-    claim leaves ``owner`` mid-read belongs to the resuming run's archive.
+    Reads the task's Redis capture stream via ``iter_subagent_events_full``.
+    ``owner`` fences the read against a resume the way the collector's replay
+    is fenced: a task whose claim leaves ``owner`` mid-read belongs to the
+    resuming run's archive.
     """
     if owner is not None and task.collector_response_id != owner:
         return []
@@ -219,11 +219,6 @@ async def killed_lane(
             f"{getattr(task, 'task_id', '?')}; withholding snapshot"
         )
         return []
-    # Track reasoning blocks left open at the kill point so we can close
-    # them, mirroring the main agent's finalize_stopped_events. Keyed by
-    # the subagent's own (agent, message id) so the synthetic close
-    # matches the unpaired start exactly.
-    open_reasoning: dict[tuple[str, str], None] = {}
     task_events: list[dict] = []
     run_id = getattr(task, "spawned_run_id", None)
     # Always the stamped arm in practice: both callers take only
@@ -241,15 +236,7 @@ async def killed_lane(
             if record.get("run") not in allowed:
                 continue  # another round's record (cross-worker resume)
             eligible += 1
-            enriched = record_to_persist_event(record, thread_id)
-            task_events.append(enriched)
-            data = enriched.get("data") or {}
-            if data.get("content_type") == "reasoning_signal":
-                rk = (data.get("agent", ""), data.get("id", ""))
-                if data.get("content") == "start":
-                    open_reasoning[rk] = None
-                elif data.get("content") == "complete":
-                    open_reasoning.pop(rk, None)
+            task_events.append(record_to_persist_event(record, thread_id))
     except SubagentArchiveReadError as exc:
         logger.warning(
             f"[StopTeardown] Archive read failed for task "
@@ -260,45 +247,13 @@ async def killed_lane(
         # Mismatch against this round's attempted appends (XRANGE
         # failure reads as zero rows; a torn spill leaves a prefix;
         # foreign-epoch records never count): append none of it. A
-        # transcript-class row is the replay cache gate's archive
-        # evidence — a partial snapshot would clear the gate and
-        # cache the loss. The lane stays uncacheable
-        # (rebuild-per-read) and the capture stream keeps its
-        # terminal-retention TTL as the last complete-able copy.
+        # partial snapshot would record part of the lane as all of it;
+        # the capture stream keeps its terminal-retention TTL as the last
+        # complete-able copy.
         logger.warning(
             f"[StopTeardown] Incomplete recovery for task "
             f"{getattr(task, 'task_id', '?')} (recovered={eligible}, "
             f"expected={expected}); withholding snapshot"
         )
         return []
-    # Close any reasoning block still open when the subagent was killed,
-    # else replay renders the card stuck "thinking" indefinitely.
-    for r_agent, r_id in open_reasoning:
-        task_events.append(
-            {
-                "event": "message_chunk",
-                "data": {
-                    "thread_id": thread_id,
-                    "agent": r_agent,
-                    "id": r_id,
-                    "role": "assistant",
-                    "content": "complete",
-                    "content_type": "reasoning_signal",
-                },
-            }
-        )
-    # Mark the killed subagent's stream "stopped" for replay.
-    agent_id = f"task:{getattr(task, 'task_id', '')}"
-    task_events.append(
-        {
-            "event": "message_chunk",
-            "data": {
-                "thread_id": thread_id,
-                "agent": agent_id,
-                "id": f"{agent_id}:stopped",
-                "role": "assistant",
-                "finish_reason": "stopped",
-            },
-        }
-    )
     return task_events

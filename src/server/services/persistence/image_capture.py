@@ -1,9 +1,11 @@
-"""Post-stream safety net: capture sandbox images referenced in SSE events.
+"""Late image capture: sandbox images a turn's text still names at its end.
 
-``ImageCaptureMiddleware`` rewrites checkpointed messages at model time; the
-streamed sse_events still carry sandbox paths, so this hook rewrites them at
-persistence time. Keys are content-addressed (shared helpers), so both passes
-converge on identical URLs — re-uploads are idempotent PUTs of the same bytes.
+``ImageCaptureMiddleware`` rewrites checkpointed messages at model time and
+leaves a path in place when its capture fails or times out. The main turn's
+leftovers are captured as its run ends and their URLs recorded on its
+response row; a subagent lane's, from its captured events, onto its runs. Keys
+are content-addressed (shared helpers), so every pass converges on identical
+URLs and re-uploads are idempotent PUTs of the same bytes.
 
 No-op when storage is disabled (storage.provider = "none").
 """
@@ -16,117 +18,58 @@ from ptc_agent.agent.middleware.image_capture import (
     IMAGE_MD_RE,
     capture_sandbox_images,
     is_sandbox_image_path,
-    rewrite_image_paths,
 )
 from src.utils.storage import is_storage_enabled
 
 logger = logging.getLogger(__name__)
 
 
-def sandbox_image_paths(sse_events: list[dict]) -> set[str]:
-    """Every sandbox image path the events' text references."""
-    image_paths: set[str] = set()
-    for evt in sse_events:
+def sandbox_image_paths(events: list[dict]) -> set[str]:
+    """Every sandbox image path the events' text references.
+
+    A message's text streams in pieces that can split a reference anywhere,
+    so each message's pieces are joined before they are read.
+    """
+    texts: dict[tuple, list[str]] = {}
+    for evt in events:
         if evt.get("event") != "message_chunk":
             continue
-        data = evt.get("data", {})
-        if data.get("content_type") != "text":
+        data = evt.get("data") or {}
+        content = data.get("content")
+        if data.get("content_type") != "text" or not isinstance(content, str):
             continue
-        content = data.get("content", "")
-        if not isinstance(content, str):
-            continue
-        for match in IMAGE_MD_RE.finditer(content):
+        texts.setdefault((data.get("agent"), data.get("id")), []).append(content)
+    image_paths: set[str] = set()
+    for pieces in texts.values():
+        for match in IMAGE_MD_RE.finditer("".join(pieces)):
             if is_sandbox_image_path(match.group(2)):
                 image_paths.add(match.group(2))
     return image_paths
 
 
 async def capture_images(
-    sse_events: list[dict],
+    image_paths: set[str],
     sandbox,
     thread_id: str = "",
     *,
     project: ProjectContext | None = None,
     workspace_id: str | None = None,
 ) -> dict[str, str]:
-    """Upload the sandbox images the events reference and rewrite them in
-    place, returning each captured path's URL.
+    """Upload ``image_paths`` from the sandbox, returning each captured
+    path's URL.
 
     Empty if storage is disabled. Non-fatal: logs warnings on failure,
     never raises.
     """
-    if not is_storage_enabled() or not sse_events:
+    if not is_storage_enabled() or not image_paths:
         return {}
-
-    image_paths = sandbox_image_paths(sse_events)
-    if not image_paths:
-        return {}
-
     if project is None and workspace_id:
-        path_to_url = await _capture_from_held_folder(
+        return await _capture_from_held_folder(
             sandbox, image_paths, thread_id, workspace_id
         )
-    else:
-        path_to_url = await capture_sandbox_images(
-            sandbox, image_paths, thread_id, project=project
-        )
-    if not path_to_url:
-        return {}
-
-    for evt in sse_events:
-        if evt.get("event") != "message_chunk":
-            continue
-        data = evt.get("data", {})
-        if data.get("content_type") != "text":
-            continue
-        content = data.get("content", "")
-        if content:
-            data["content"] = rewrite_image_paths(content, path_to_url)
-    return path_to_url
-
-
-async def capture_and_rewrite_images(
-    sse_events: list[dict],
-    sandbox,
-    thread_id: str = "",
-    *,
-    project: ProjectContext | None = None,
-    workspace_id: str | None = None,
-) -> int:
-    """``capture_images``, plus the captured map recorded on the thread's
-    checkpoint for replay. Returns the number of images captured.
-
-    For the main turn only, whose checkpoint is still its own when this
-    runs. A subagent's archive lands after its turn settled, so its map goes
-    to the run's replay facts instead (``subagent_archive``).
-    """
-    path_to_url = await capture_images(
-        sse_events,
-        sandbox,
-        thread_id,
-        project=project,
-        workspace_id=workspace_id,
+    return await capture_sandbox_images(
+        sandbox, image_paths, thread_id, project=project
     )
-    if not path_to_url:
-        return 0
-
-    # Persist the path→URL map as a ui record so checkpoint-sourced replay of
-    # pre-middleware turns can resolve sandbox image paths without the
-    # (long-gone) sandbox. New turns don't need it — the middleware rewrites
-    # the checkpointed message itself — but the record is harmless and keeps
-    # this hook a complete fallback while it remains in place.
-    if thread_id:
-        try:
-            from src.server.services.history.reader import CheckpointHistoryReader
-            from src.server.services.history.replay.turn import IMAGE_CAPTURE_UI_NAME
-
-            await CheckpointHistoryReader.get_instance().append_ui_record(
-                thread_id, IMAGE_CAPTURE_UI_NAME, {"path_to_url": path_to_url}
-            )
-        except Exception as e:
-            logger.warning(f"[IMAGE_CAPTURE] Failed to persist ui record: {e}")
-
-    return len(path_to_url)
 
 
 async def _capture_from_held_folder(

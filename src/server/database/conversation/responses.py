@@ -1,4 +1,4 @@
-"""conversation_responses: SSE-event patches, provenance sync, and per-thread readers."""
+"""conversation_responses: provenance sync and per-thread readers."""
 
 import logging
 from collections.abc import Collection
@@ -8,8 +8,6 @@ from psycopg.rows import dict_row
 
 from src.server.database import pool
 from src.server.database.conversation import _sql
-from src.server.database.replay_facts import DROP_LEGACY_SQL
-from src.server.utils.pg_sanitize import SafeJson, safe_jsonb_array
 
 logger = logging.getLogger(__name__)
 
@@ -62,133 +60,44 @@ async def _sync_provenance_for_response(
     )
 
 
-def _event_agents(events: List[Dict[str, Any]]) -> frozenset[str]:
-    """The agents whose rows ``events`` replace: each string ``data.agent``.
-
-    Matches the filter in ``_REPLACE_AGENT_EVENTS_SQL``, which compares only
-    strings: an event with no agent, or a non-string one, names no rows, so a
-    batch can never strip the turn's agentless rows.
-    """
-    agents = set()
-    for event in events:
-        data = event.get("data")
-        agent = data.get("agent") if isinstance(data, dict) else None
-        if isinstance(agent, str):
-            agents.add(agent)
-    return frozenset(agents)
-
-
-# One statement, so the row lock it takes orders it against append_sse_event:
-# under READ COMMITTED a waiting UPDATE re-reads the newest row. The strip is
-# one jsonpath filter over the stored array, so the kept rows are never
-# unnested or sorted, and the blob never leaves Postgres.
-_REPLACE_AGENT_EVENTS_SQL = f"""
-    UPDATE conversation_responses
-    SET sse_events = jsonb_path_query_array(
-            COALESCE(sse_events, '[]'::jsonb),
-            '$[*] ? (!exists(@.data.agent ? (@ == $drop[*])))',
-            jsonb_build_object('drop', %(drop)s::text[])
-        ) || %(append)s::jsonb,
-        {DROP_LEGACY_SQL}
-    WHERE conversation_response_id = %(id)s
-    RETURNING conversation_thread_id, turn_index
-"""
-
-
-async def replace_agent_events(
+async def replace_lane_provenance(
     conversation_response_id: str,
     events: List[Dict[str, Any]],
+    lanes: Collection[str],
 ) -> bool:
-    """Replace the rows of every agent ``events`` names with ``events``, atomically.
+    """Rewrite ``lanes``' provenance on a response from ``events``.
 
-    A concurrent ``append_sse_event`` waits on the row lock the UPDATE takes
-    and lands on the new value instead of being erased by it. Only ``events``
-    are encoded here: the stored array is filtered in Postgres. Returns False
-    when the row is missing.
+    ``events`` hold each lane's whole record, so a lane they name no
+    provenance for loses its rows; other lanes keep theirs. Raises on a
+    failed write, so the caller can retry it; returns False when the row is
+    missing.
     """
-    appended = await safe_jsonb_array(events)
-    agents = _event_agents(events)
     async with pool.get_db_connection() as conn:
         async with conn.transaction():
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
-                    _REPLACE_AGENT_EVENTS_SQL,
-                    {
-                        "id": conversation_response_id,
-                        "drop": sorted(agents),
-                        "append": appended,
-                    },
+                    "SELECT conversation_thread_id, turn_index "
+                    "FROM conversation_responses WHERE conversation_response_id = %s",
+                    (conversation_response_id,),
                 )
-                urow = await cur.fetchone()
-            if urow is None:
+                row = await cur.fetchone()
+            if row is None:
                 logger.warning(
-                    f"[conversation_db] replace_agent_events: no row found for "
+                    f"[conversation_db] replace_lane_provenance: no row found for "
                     f"response_id={conversation_response_id}"
                 )
                 return False
-            # The batch is the whole record of every lane it names, so those
-            # lanes' provenance is rewritten from it in the same transaction,
-            # and a lane it empties loses its rows with them. Other lanes keep
-            # theirs: the main lane is written when the run settles.
             await _sync_provenance_for_response(
                 conn,
                 conversation_response_id=conversation_response_id,
-                conversation_thread_id=str(urow["conversation_thread_id"]),
-                turn_index=urow["turn_index"],
+                conversation_thread_id=str(row["conversation_thread_id"]),
+                turn_index=row["turn_index"],
                 sse_events=events,
+                strict=True,
                 appended_only=False,
-                lanes=agents,
-            )
-            logger.info(
-                f"[conversation_db] replace_agent_events response_id="
-                f"{conversation_response_id} appended={len(events)}"
+                lanes=lanes,
             )
             return True
-
-
-async def append_sse_event(
-    conversation_thread_id: str,
-    event: Dict[str, Any],
-    conn=None,
-) -> bool:
-    """Atomically append one SSE event to the thread's latest response blob.
-
-    A server-side ``sse_events || event`` JSONB concat scoped to the most-recent
-    response (by run_seq — the one monotonic run ordering; turn_index is reused
-    by retries and lowered by branch rewinds). Avoids reading the whole blob
-    into Python and rewriting it, and is race-free against concurrent appenders
-    (the read-modify-write it replaces is not). Returns True when a row was
-    updated, False when the thread has no response row yet.
-    """
-    sql = f"""
-        UPDATE conversation_responses
-        SET sse_events = COALESCE(sse_events, '[]'::jsonb) || %s::jsonb,
-            {DROP_LEGACY_SQL}
-        WHERE conversation_response_id = (
-            SELECT conversation_response_id
-            FROM conversation_responses
-            WHERE conversation_thread_id = %s
-            ORDER BY run_seq DESC
-            LIMIT 1
-        )
-    """
-    params = (SafeJson([event]), conversation_thread_id)
-    try:
-        if conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                updated = cur.rowcount > 0
-        else:
-            async with pool.get_db_connection() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute(sql, params)
-                    updated = cur.rowcount > 0
-
-        return updated
-
-    except Exception as e:
-        logger.error(f"Error appending sse_event: {e}")
-        raise
 
 
 async def get_responses_for_thread(

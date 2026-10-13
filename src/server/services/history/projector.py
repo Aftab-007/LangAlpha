@@ -15,6 +15,8 @@ replay endpoint from persisted sources, not synthesized here.
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -250,22 +252,8 @@ def _project_human_message(message: HumanMessage, agent: str) -> list[HistoryEve
         return [HistoryEvent("steering-delivered", agent, message.id, dict(payload))]
 
     if kind == "summarization":
-        stamped = kwargs.get("summarize_complete") or {}
-        summary_text = parse_summary_message(message)
         return [
-            HistoryEvent(
-                "context-window",
-                agent,
-                message.id,
-                {
-                    "action": "summarize",
-                    "signal": "complete",
-                    "summary_length": stamped.get("summary_length", len(summary_text)),
-                    "summary_text": summary_text,
-                    "original_message_count": stamped.get("original_message_count", 0),
-                    **({"source": stamped["source"]} if "source" in stamped else {}),
-                },
-            )
+            HistoryEvent("context-window", agent, message.id, summarize_payload(message))
         ]
 
     if agent != MAIN_AGENT:
@@ -533,6 +521,134 @@ MODEL_FALLBACK_FIELDS = (
     "attempts_on_from",
 )
 
+# A manual compact or offload: a marker the action writes in the same state
+# write that applies it. That write is the tail of the turn it followed, so
+# the record lands in that turn's span.
+CONTEXT_WINDOW_UI_NAME = "context_window"
+
+# What the marker shows, as the endpoint returned it to the live client.
+CONTEXT_WINDOW_FIELDS = (
+    "action",
+    "signal",
+    "original_message_count",
+    "new_message_count",
+    "summary_length",
+    "summary_text",
+    "source",
+    "offloaded_args",
+    "offloaded_reads",
+)
+
+# The lane a manual marker has always been filed under.
+MANUAL_CONTEXT_WINDOW_AGENT = "agent"
+
+
+def summarize_payload(message: HumanMessage) -> dict[str, Any]:
+    """The summarize signal a compaction's summary message replays as."""
+    stamped = (message.additional_kwargs or {}).get("summarize_complete") or {}
+    summary_text = parse_summary_message(message)
+    return {
+        "action": "summarize",
+        "signal": "complete",
+        "summary_length": stamped.get("summary_length", len(summary_text)),
+        "summary_text": summary_text,
+        "original_message_count": stamped.get("original_message_count", 0),
+        **({"source": stamped["source"]} if "source" in stamped else {}),
+    }
+
+
+def context_window_record(
+    props: dict[str, Any],
+    *,
+    summary_message_id: str | None = None,
+    replaced: HumanMessage | None = None,
+) -> dict[str, Any]:
+    """The ``ui`` record of one manual compact or offload.
+
+    A compact names the summary it installed, so the turn's projection can
+    tell that summary from one the agent wrote during the turn. When it
+    replaces one the agent wrote during the turn it follows (``replaced``),
+    it keeps that summary's signal: the turn shows the summary its span ends
+    on, which is now the compact's.
+    """
+    metadata: dict[str, Any] = {}
+    if summary_message_id:
+        metadata["summary_message_id"] = summary_message_id
+    if replaced is not None:
+        metadata["replaced_summary"] = {
+            "id": replaced.id,
+            **summarize_payload(replaced),
+        }
+    return {
+        "type": "ui",
+        "id": f"ui-{uuid.uuid4().hex[:12]}",
+        "name": CONTEXT_WINDOW_UI_NAME,
+        "props": props,
+        "metadata": metadata,
+    }
+
+
+def manual_summary_ids(records: Iterable[Any]) -> set[str]:
+    """The summaries the user's compacts among ``records`` installed."""
+    return {
+        summary_id
+        for r in records
+        if isinstance(r, dict)
+        and r.get("name") == CONTEXT_WINDOW_UI_NAME
+        and (summary_id := (r.get("metadata") or {}).get("summary_message_id"))
+    }
+
+
+def _manual_context_records(turn: SpanDelta) -> list[dict[str, Any]]:
+    return [
+        r for r in turn.new_ui_records if r.get("name") == CONTEXT_WINDOW_UI_NAME
+    ]
+
+
+def manual_context_window_items(
+    thread_id: str, turn: SpanDelta
+) -> list[dict[str, Any]]:
+    """Project the compacts and offloads a user ran after ``turn``.
+
+    A compact's text is read from its summary: the one the span ends on, or
+    one a later compact in the span replaced, which that compact's record
+    keeps. The records stay small, since the ``ui`` channel keeps every one
+    in each checkpoint.
+    """
+    records = _manual_context_records(turn)
+    texts = _summary_texts(turn, records)
+    items: list[dict[str, Any]] = []
+    for record in records:
+        props = record.get("props") or {}
+        data: dict[str, Any] = {
+            "thread_id": thread_id,
+            "agent": MANUAL_CONTEXT_WINDOW_AGENT,
+        }
+        for key in CONTEXT_WINDOW_FIELDS:
+            if key in props:
+                data[key] = props[key]
+        summary_id = (record.get("metadata") or {}).get("summary_message_id")
+        if summary_id in texts:
+            data.setdefault("summary_text", texts[summary_id])
+        items.append({"event": "context_window", "data": data})
+    return items
+
+
+def _summary_texts(
+    turn: SpanDelta, records: list[dict[str, Any]]
+) -> dict[str, str]:
+    texts = {
+        replaced["id"]: replaced["summary_text"]
+        for r in records
+        if isinstance(replaced := (r.get("metadata") or {}).get("replaced_summary"), dict)
+        and "summary_text" in replaced
+    }
+    event = turn.new_summarization_event
+    message = event.get("summary_message") if isinstance(event, dict) else None
+    if isinstance(message, HumanMessage) and message.id:
+        texts[message.id] = parse_summary_message(message)
+    return texts
+
 
 def context_signal_items(
     thread_id: str, turn: SpanDelta, *, agent: str = MAIN_AGENT
@@ -542,14 +658,20 @@ def context_signal_items(
     Offload counts become one aggregated event per kind (live may batch them
     across several firings); the summarize event projects through its summary
     message, which carries ``lc_source=summarization`` (+ stamped fields on
-    new threads).
+    new threads). What a manual compact or offload changed after the turn is
+    left to its own marker (``manual_context_window_items``); a summary the
+    agent wrote during the turn and a compact then replaced comes off the
+    compact's record.
     """
+    manual = _manual_context_records(turn)
+    manual_summaries = manual_summary_ids(manual)
     events: list[HistoryEvent] = []
     for count, kind, field_name in (
         (turn.newly_offloaded_args, "args", "offloaded_args"),
         (turn.newly_offloaded_reads, "reads", "offloaded_reads"),
     ):
-        if count:
+        count -= sum(_count_prop(r, field_name) for r in manual)
+        if count > 0:
             events.append(
                 HistoryEvent(
                     "context-window",
@@ -566,9 +688,29 @@ def context_signal_items(
     summarization_event = turn.new_summarization_event
     if summarization_event is not None:
         message = summarization_event.get("summary_message")
-        if isinstance(message, HumanMessage):
+        if isinstance(message, HumanMessage) and message.id not in manual_summaries:
             events.extend(messages_to_history_events([message], agent=agent))
+        else:
+            events.extend(_replaced_summaries(manual, manual_summaries, agent))
     return history_events_to_sse(events, thread_id=thread_id)
+
+
+def _replaced_summaries(
+    manual: list[dict[str, Any]], manual_summaries: set[str], agent: str
+) -> list[HistoryEvent]:
+    events: list[HistoryEvent] = []
+    for record in manual:
+        replaced = (record.get("metadata") or {}).get("replaced_summary")
+        if not isinstance(replaced, dict) or replaced.get("id") in manual_summaries:
+            continue
+        payload = {k: v for k, v in replaced.items() if k != "id"}
+        events.append(HistoryEvent("context-window", agent, replaced.get("id"), payload))
+    return events
+
+
+def _count_prop(record: dict[str, Any], key: str) -> int:
+    value = (record.get("props") or {}).get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 WORKFLOW_RUN_UI_NAME = "workflow_run"
@@ -674,7 +816,50 @@ def model_fallback_items(
     that never reach the checkpointed ``ui`` channel. ``agent`` identifies the
     namespace being projected (main or ``task:{id}``).
     """
-    items: list[dict[str, Any]] = []
+    return [item for _, item in _model_fallbacks(thread_id, turn, agent)]
+
+
+def with_model_fallbacks(
+    thread_id: str,
+    turn: SpanDelta,
+    project: Callable[[list[AnyMessage]], list[dict[str, Any]]],
+    *,
+    agent: str = MAIN_AGENT,
+) -> list[dict[str, Any]]:
+    """``project(turn.messages)`` with the turn's model_fallback notices where
+    they fired live: after the items of the message the falling-back call
+    followed, which is as many items as projecting the messages up to it
+    gives. A record that names no message of the span opens the turn."""
+    ids = [message.id for message in turn.messages]
+
+    def position(after: str | None) -> int:
+        if not after or after not in ids:
+            return 0
+        return len(project(turn.messages[: ids.index(after) + 1]))
+
+    placed = sorted(
+        (
+            (position(after), item)
+            for after, item in _model_fallbacks(thread_id, turn, agent)
+        ),
+        key=lambda p: p[0],
+    )
+    items = project(turn.messages)
+    out: list[dict[str, Any]] = []
+    done = 0
+    for at, item in placed:
+        out.extend(items[done:at])
+        out.append(item)
+        done = at
+    out.extend(items[done:])
+    return out
+
+
+def _model_fallbacks(
+    thread_id: str, turn: SpanDelta, agent: str
+) -> list[tuple[str | None, dict[str, Any]]]:
+    """Each fallback notice, with the id of the message its call followed."""
+    out: list[tuple[str | None, dict[str, Any]]] = []
     for record in turn.new_ui_records:
         if record.get("name") != MODEL_FALLBACK_UI_NAME:
             continue
@@ -686,5 +871,6 @@ def model_fallback_items(
         error_text = props.get("error")
         if isinstance(error_text, str):
             data["error"] = _sanitize_error_text(error_text)
-        items.append({"event": "model_fallback", "data": data})
-    return items
+        after = (record.get("metadata") or {}).get("after_message_id")
+        out.append((after, {"event": "model_fallback", "data": data}))
+    return out

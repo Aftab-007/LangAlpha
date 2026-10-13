@@ -241,7 +241,6 @@ class TestHandleWorkflowErrorHTTPException:
     def _handler():
         handler = MagicMock()
         handler.get_tool_usage = MagicMock(return_value=None)
-        handler.get_sse_events = MagicMock(return_value=None)
         handler._format_sse_event = MagicMock(
             side_effect=lambda ev, data: f"event: {ev}\ndata: {data}\n\n"
         )

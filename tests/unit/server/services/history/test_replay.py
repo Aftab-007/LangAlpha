@@ -219,6 +219,207 @@ async def test_summarization_event_reemitted_at_turn_head(monkeypatch):
     ]
 
 
+def _manual_markers(summary_message):
+    """A manual offload, then a manual compact, as the endpoints write them."""
+    from src.server.services.history.projector import context_window_record
+
+    offload = context_window_record(
+        {"action": "offload", "signal": "complete", "offloaded_args": 2, "offloaded_reads": 0}
+    )
+    compact = context_window_record(
+        {
+            "action": "summarize",
+            "signal": "complete",
+            "original_message_count": 9,
+            "new_message_count": 5,
+            "summary_length": 23,
+            "source": "model",
+        },
+        summary_message_id=summary_message.id,
+    )
+    return [offload, compact]
+
+
+async def test_manual_compact_and_offload_close_the_turn_they_followed(monkeypatch):
+    # The endpoints write their state into the span of the turn they followed,
+    # beside a ui record each. The turn shows the records where the live
+    # client showed them, after everything it streamed, and not the state
+    # they changed as compaction at its head.
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+
+    summary_message = build_summary_message(
+        "earlier turns condensed", None, original_message_count=9
+    )
+    turn = _turn(
+        0,
+        [AIMessage(content="answer", id="ai-0")],
+        new_ui_records=_manual_markers(summary_message),
+    )
+    turn.new_summarization_event = {"summary_message": summary_message, "cutoff_index": 4}
+    turn.newly_offloaded_args = 2
+    turns = [turn, _turn(1, [AIMessage(content="next", id="ai-1")])]
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=turns))
+    response = _response(0) | {"sse_events": None}
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0), _query(1)], {0: response, 1: _response(1)}),
+    )
+
+    turn0 = [i for i in items if i["data"].get("turn_index") == 0]
+    assert [i["event"] for i in turn0] == [
+        "user_message",
+        "message_chunk",
+        "context_window",
+        "context_window",
+    ]
+    offload, compact = turn0[2]["data"], turn0[3]["data"]
+    assert offload["agent"] == compact["agent"] == "agent"
+    assert offload["action"] == "offload"
+    assert offload["offloaded_args"] == 2
+    assert offload["offloaded_reads"] == 0
+    assert "kind" not in offload
+    assert compact["action"] == "summarize"
+    assert compact["summary_text"] == "earlier turns condensed"
+    assert compact["original_message_count"] == 9
+    assert compact["new_message_count"] == 5
+    assert compact["source"] == "model"
+    assert not [
+        i for i in items
+        if i["event"] == "context_window" and i["data"].get("turn_index") == 1
+    ]
+
+
+async def test_manual_offload_leaves_the_turns_own_compaction_at_its_head(monkeypatch):
+    # The turn compacted and offloaded on its own before the user offloaded
+    # more after it: the turn's own signals stay at its head, net of the ids
+    # the manual offload added.
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+
+    own_summary = build_summary_message("the turn's own", None, original_message_count=30)
+    offload, _ = _manual_markers(own_summary)
+    turn = _turn(0, [AIMessage(content="answer", id="ai-0")], new_ui_records=[offload])
+    turn.new_summarization_event = {"summary_message": own_summary, "cutoff_index": 12}
+    turn.newly_offloaded_args = 5
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _response(0) | {"sse_events": None}}),
+    )
+
+    signals = [
+        (i["data"]["action"], i["data"]["agent"], i["data"].get("offloaded_args"))
+        for i in items
+        if i["event"] == "context_window"
+    ]
+    assert signals == [
+        ("offload", "main", 3),
+        ("summarize", "main", None),
+        ("offload", "agent", 2),
+    ]
+    assert items[-1]["event"] == "context_window"
+
+
+async def test_a_compact_right_after_the_turn_keeps_the_summary_the_turn_wrote(
+    monkeypatch,
+):
+    # The agent compacted during the turn and the user compacted right after
+    # it, so the turn's span ends on the user's summary. The agent's still
+    # shows at the turn's head, off the compact's record, and the compact
+    # closes the turn as before.
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+    from src.server.services.history.projector import context_window_record
+
+    own_summary = build_summary_message("the turn's own", None, original_message_count=30)
+    manual_summary = build_summary_message("condensed", None, original_message_count=9)
+    compact = context_window_record(
+        {"action": "summarize", "signal": "complete"},
+        summary_message_id=manual_summary.id,
+        replaced=own_summary,
+    )
+    turn = _turn(0, [AIMessage(content="answer", id="ai-0")], new_ui_records=[compact])
+    turn.new_summarization_event = {"summary_message": manual_summary, "cutoff_index": 4}
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _response(0) | {"sse_events": None}}),
+    )
+
+    signals = [
+        (i["data"]["agent"], i["data"]["summary_text"], i["data"].get("original_message_count"))
+        for i in items
+        if i["event"] == "context_window"
+    ]
+    assert signals == [("main", "the turn's own", 30), ("agent", "condensed", None)]
+    assert [i["event"] for i in items][:3] == [
+        "user_message",
+        "context_window",
+        "message_chunk",
+    ]
+
+
+async def test_a_second_compact_does_not_show_the_first_as_the_turns_own(monkeypatch):
+    # Both compacts followed the same turn, so its span ends on the second's
+    # summary; the first's text comes off the second's record.
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+    from src.server.services.history.projector import context_window_record
+
+    first = build_summary_message("first", None, original_message_count=9)
+    second = build_summary_message("second", None, original_message_count=6)
+    records = [
+        context_window_record(
+            {"action": "summarize"},
+            summary_message_id=first.id,
+        ),
+        context_window_record(
+            {"action": "summarize"},
+            summary_message_id=second.id,
+            replaced=first,
+        ),
+    ]
+    turn = _turn(0, [AIMessage(content="answer", id="ai-0")], new_ui_records=records)
+    turn.new_summarization_event = {"summary_message": second, "cutoff_index": 2}
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _response(0) | {"sse_events": None}}),
+    )
+
+    assert [
+        (i["data"]["agent"], i["data"]["summary_text"])
+        for i in items
+        if i["event"] == "context_window"
+    ] == [("agent", "first"), ("agent", "second")]
+
+
+async def test_manual_marker_survives_the_stored_events_merge(monkeypatch):
+    # A row written before the column stopped is replayed from its stored
+    # events, which drop projected context_window rows. A compact run after
+    # it is in the checkpoint alone, so it still closes the turn, once.
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+
+    summary_message = build_summary_message("condensed", None, original_message_count=9)
+    _, compact = _manual_markers(summary_message)
+    turn = _turn(0, [AIMessage(content="answer", id="ai-0")], new_ui_records=[compact])
+    turn.new_summarization_event = {"summary_message": summary_message, "cutoff_index": 4}
+    stored = [
+        {
+            "event": "message_chunk",
+            "data": {
+                "agent": "main",
+                "id": "ai-0",
+                "role": "assistant",
+                "content": "answer",
+                "content_type": "text",
+            },
+        }
+    ]
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _response(0, sse_events=stored)}),
+    )
+
+    markers = [i for i in items if i["event"] == "context_window"]
+    assert len(markers) == 1
+    assert markers[0]["data"]["summary_text"] == "condensed"
+    assert items[-1] is markers[0]
+
+
 async def test_completed_turn_without_boundary_unavailable(monkeypatch):
     # A completed response always persists its boundary pointer first — a
     # completed row the checkpoints can't pair means they can't cover the
@@ -653,6 +854,40 @@ async def test_image_maps_are_scoped_to_their_turn(monkeypatch):
 
     items = await build_checkpoint_replay_items(
         thread_rows([_query(0), _query(1, content="next")], {0: _response(0), 1: _response(1)}),
+    )
+
+    chunks = [i["data"]["content"] for i in items if i["event"] == "message_chunk"]
+    assert chunks == ["![old](https://cdn/old.png)", "![new](https://cdn/new.png)"]
+
+
+async def test_image_map_applied_from_the_rows_replay_facts(monkeypatch):
+    """A turn's late-captured images are on its row, whatever its ending; a
+    turn settled before that keeps resolving through its ui record."""
+    legacy = {
+        "type": "ui",
+        "id": "ui-old",
+        "name": "image_capture",
+        "props": {"path_to_url": {"work/old.png": "https://cdn/old.png"}},
+    }
+    history = ThreadHistory(
+        thread_id=THREAD,
+        turns=[
+            _turn(
+                0,
+                [AIMessage(content="![old](work/old.png)", id="ai-old")],
+                new_ui_records=[legacy],
+            ),
+            _turn(1, [AIMessage(content="![new](work/new.png)", id="ai-new")]),
+        ],
+    )
+    _mock_reader(monkeypatch, history)
+    failed = {
+        **_response(1, status="error"),
+        "replay_facts": {"images": {"work/new.png": "https://cdn/new.png"}},
+    }
+
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0), _query(1, content="next")], {0: _response(0), 1: failed}),
     )
 
     chunks = [i["data"]["content"] for i in items if i["event"] == "message_chunk"]
@@ -2758,6 +2993,84 @@ async def test_model_fallback_stored_events_preferred(monkeypatch):
     # The passthrough insert copies the stored event's data — enrichment must
     # not mutate the pristine source row.
     assert "turn_index" not in stored[1]["data"]
+
+
+def _fallback_record(record_id, after=None):
+    return {
+        "type": "ui",
+        "id": record_id,
+        "name": "model_fallback",
+        "props": {"from_model": "p", "to_model": "f"},
+        "metadata": {"after_message_id": after} if after else {},
+    }
+
+
+def _failed_response(*fallbacks, sse_events=None):
+    return {
+        **_response(0, sse_events=sse_events, status="error"),
+        "errors": ["all models failed"],
+        "replay_facts": {"model_fallbacks": list(fallbacks)},
+    }
+
+
+async def test_model_fallback_a_failed_step_never_saved_replays_from_its_row(
+    monkeypatch,
+):
+    # The failing step's ui record never committed: the row's copy lands
+    # after everything the turn saved, whatever message it named, and before
+    # the terminal error.
+    turn = _turn(0, [AIMessage(content="first", id="ai-1")])
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(
+        thread_rows(
+            [_query(0)], {0: _failed_response(_fallback_record("fb-1", "unsaved"))}
+        ),
+    )
+    assert [i["event"] for i in items] == [
+        "user_message",
+        "message_chunk",
+        "model_fallback",
+        "error",
+    ]
+    assert items[2]["data"]["to_model"] == "f"
+
+
+async def test_model_fallback_saved_and_on_the_row_replays_once(monkeypatch):
+    saved = _fallback_record("fb-1")
+    turn = _turn(0, [AIMessage(content="ok", id="ai-1")], new_ui_records=[saved])
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _failed_response(saved)}),
+    )
+    assert [i["event"] for i in items] == [
+        "user_message",
+        "model_fallback",
+        "message_chunk",
+        "error",
+    ]
+
+
+async def test_model_fallback_of_a_failed_legacy_turn_replays_its_stored_copy(
+    monkeypatch,
+):
+    stored = [
+        {"event": "message_chunk", "data": {"agent": "main", "id": "ai-1", "role": "assistant", "content": "first", "content_type": "text"}},
+        {"event": "model_fallback", "data": {"agent": "main", "from_model": "p", "to_model": "f", "position": "stored"}},
+    ]
+    response = {
+        **_response(0, sse_events=stored, status="error"),
+        "errors": ["all models failed"],
+    }
+    turn = _turn(0, [AIMessage(content="first", id="ai-1")])
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    items = await build_checkpoint_replay_items(thread_rows([_query(0)], {0: response}))
+    assert [i["event"] for i in items] == [
+        "user_message",
+        "message_chunk",
+        "model_fallback",
+        "error",
+    ]
+    assert items[2]["data"]["position"] == "stored"
 
 
 async def test_resumed_run_segments_attribute_to_their_launch_turns(monkeypatch):
