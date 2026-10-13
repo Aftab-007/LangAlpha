@@ -484,7 +484,7 @@ def validate_package(
     PluginAmbiguous when the archive holds several plugins and ``subdir``
     doesn't settle which one.
     """
-    tree, archive_diags = extract_plugin_archive(raw)
+    tree, archive_diags = extract_plugin_archive(raw, subdir=subdir)
     plugin = select_plugin_files(tree, subdir=subdir, name_hint=name_hint)
     files, entry_plans, extension = plugin.files, plugin.entry_plans, plugin.extension
     # A marketplace repo's other plugins are not this install's business, so
