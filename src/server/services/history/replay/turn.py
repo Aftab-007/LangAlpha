@@ -151,6 +151,11 @@ def project_turn(
     turn_items = legacy.apply_turn(turn_items, task_items, facts)
     if placed is not None:
         placed(turn_items)
+    # A compact or offload the user ran after the turn follows everything the
+    # turn streamed, where its stored copy placed it. Its record is in the
+    # checkpoint alone, so a turn whose stored events the merge prefers keeps
+    # it too.
+    turn_items.extend(projector.manual_context_window_items(thread_id, turn))
 
     _fill_token_thresholds(turn_items)
     # Terminal error: never in stored events (persisted before it is

@@ -40,7 +40,8 @@ CHECKPOINT_PROJECTED = {
     "tool_calls",
     "tool_call_result",
     "artifact",
-    "context_window",
+    "context_window",  # compaction state deltas; a manual compact or offload
+    # is the `context_window` ui record its own state write carries
     "steering_delivered",
     "interrupt",
     "model_fallback",  # ui-channel record pushed by ModelResilienceMiddleware

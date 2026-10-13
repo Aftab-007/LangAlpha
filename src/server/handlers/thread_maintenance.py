@@ -1,9 +1,9 @@
 """Thread maintenance — compact and offload under the exclusive thread guard.
 
 Both mutations resolve the thread's graph and checkpoint state, run the
-operation with a cross-worker stop key, and persist the resulting
-context_window event. Cancel dispatch and status reads live in
-services/cancel_dispatch.py and services/thread_status.py.
+operation with a cross-worker stop key, and write its result together with
+the ``context_window`` marker replay shows for it. Cancel dispatch and status
+reads live in services/cancel_dispatch.py and services/thread_status.py.
 """
 
 import asyncio
@@ -13,6 +13,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import HTTPException
 
 from src.server.handlers.cancellation import cancellation_as_http
+from src.server.services.history.projector import context_window_record
 from src.server.utils.checkpoint_helpers import (
     build_checkpoint_config,
     get_checkpointer,
@@ -178,6 +179,51 @@ async def _update_graph_state(
         )
 
 
+async def _summary_since_the_turn(thread_id: str, state):
+    """The summary written since the thread's latest turn started, which a
+    compact now is about to replace, or None.
+
+    Replay reads a turn's summaries from the state its span ends on, and the
+    compact's write becomes that end, so without a copy on the compact's
+    marker the turn would lose the one the agent wrote during it, or the one
+    an earlier compact after it installed. A summary from before the turn
+    shows where it was written. A failed read keeps no copy.
+    """
+    from langchain_core.messages import HumanMessage
+
+    from src.server.services.history.reader import CheckpointHistoryReader
+
+    values = state.values or {}
+    event = values.get("_summarization_event")
+    message = event.get("summary_message") if isinstance(event, dict) else None
+    if not isinstance(message, HumanMessage) or not message.id:
+        return None
+    built_on = ((state.config or {}).get("configurable") or {}).get("checkpoint_id")
+    try:
+        reader = CheckpointHistoryReader.get_instance()
+        anchors, _ = await asyncio.wait_for(
+            reader.aget_turn_anchors(thread_id, built_on), timeout=10.0
+        )
+        if not anchors:
+            return None
+        before = await asyncio.wait_for(
+            reader.aget_state(thread_id, anchors[-1].input_checkpoint_id),
+            timeout=10.0,
+        )
+    except Exception:
+        logger.warning(
+            f"[compact] thread {thread_id}: could not read the latest turn's "
+            f"start; a summary it wrote is not kept on the marker",
+            exc_info=True,
+        )
+        return None
+    prior = ((before.values or {}) if before else {}).get("_summarization_event")
+    prior_message = prior.get("summary_message") if isinstance(prior, dict) else None
+    if getattr(prior_message, "id", None) == message.id:
+        return None
+    return message
+
+
 @asynccontextmanager
 async def _hold_thread_mutation(thread_id: str, verb: str):
     """Hold the exclusive-T mutation fence for a manual /compact|/offload|
@@ -302,14 +348,6 @@ async def trigger_compaction(
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
 
-            await _update_graph_state(
-                graph,
-                state,
-                compaction.update(state.values),
-                thread_id,
-                "compact",
-            )
-
             # The view that was compacted, as automatic compaction counts it,
             # not every message the checkpoint has kept since the thread began.
             original_count = compaction.original_count
@@ -318,26 +356,32 @@ async def trigger_compaction(
             summary_length = len(summary_text)
             summary_source = compaction.summary.source
 
-            logger.info(
-                f"Manual compaction completed for thread {thread_id}: "
-                f"{original_count} -> {new_message_count} messages"
-            )
-
-            # Persist context_window event to last response for replay.
-            # Action value "summarize" preserved as SSE wire protocol.
-            # summary_text is stored so the history-replay view can show the
-            # collapsible "View summary" panel just like the live-stream path.
-            await _persist_context_window_event(
-                thread_id,
+            # The marker rides the write that installs the summary. Action
+            # "summarize" is the wire protocol's. Replay reads the text for
+            # the "View summary" panel from the summary the marker names.
+            marker = context_window_record(
                 {
                     "action": "summarize",
                     "signal": "complete",
                     "original_message_count": original_count,
                     "new_message_count": new_message_count,
                     "summary_length": summary_length,
-                    "summary_text": summary_text,
                     "source": summary_source,
                 },
+                summary_message_id=compaction.event["summary_message"].id,
+                replaced=await _summary_since_the_turn(thread_id, state),
+            )
+            await _update_graph_state(
+                graph,
+                state,
+                {**compaction.update(state.values), "ui": [marker]},
+                thread_id,
+                "compact",
+            )
+
+            logger.info(
+                f"Manual compaction completed for thread {thread_id}: "
+                f"{original_count} -> {new_message_count} messages"
             )
 
             return {
@@ -420,11 +464,24 @@ async def trigger_offload(thread_id: str, *, user_id: str | None = None) -> dict
             # Ids only, never messages: the checkpoint keeps every message and
             # the middleware applies the recorded ids on every call. Unlike
             # the automatic pass, this one does not wait for an idle turn: the
-            # user asked for it now.
+            # user asked for it now. The marker rides the same write.
+            marker = context_window_record(
+                {
+                    "action": "offload",
+                    "signal": "complete",
+                    "offloaded_args": offloaded_args,
+                    "offloaded_reads": offloaded_reads,
+                }
+            )
             await _update_graph_state(
                 graph,
                 state,
-                record_offloads(state.values, offloaded_arg_ids, offloaded_read_ids),
+                {
+                    **record_offloads(
+                        state.values, offloaded_arg_ids, offloaded_read_ids
+                    ),
+                    "ui": [marker],
+                },
                 thread_id,
                 "offload",
             )
@@ -432,17 +489,6 @@ async def trigger_offload(thread_id: str, *, user_id: str | None = None) -> dict
             logger.info(
                 f"Manual offload completed for thread {thread_id}: "
                 f"{offloaded_args} tool args, {offloaded_reads} read results"
-            )
-
-            # Persist context_window event to last response for replay
-            await _persist_context_window_event(
-                thread_id,
-                {
-                    "action": "offload",
-                    "signal": "complete",
-                    "offloaded_args": offloaded_args,
-                    "offloaded_reads": offloaded_reads,
-                },
             )
 
             return {
@@ -464,35 +510,3 @@ async def trigger_offload(thread_id: str, *, user_id: str | None = None) -> dict
             status_code=500, detail=f"Failed to trigger offload: {str(e)}"
         )
 
-
-async def _persist_context_window_event(thread_id: str, data: dict) -> None:
-    """Append a context_window SSE event to the latest response's sse_events for replay.
-
-    Best-effort: logs warnings on failure but never raises. Uses a server-side
-    JSONB append so we never read or rewrite the whole sse_events blob per model
-    call (the old read-modify-write also clobbered concurrent appends).
-    """
-    try:
-        from src.server.database.conversation import append_sse_event
-
-        cw_event = {
-            "event": "context_window",
-            "data": {
-                "thread_id": thread_id,
-                "agent": "agent",
-                **data,
-            },
-        }
-        updated = await append_sse_event(thread_id, cw_event)
-        if not updated:
-            logger.debug(
-                f"No responses found for thread {thread_id}, skipping context_window persist"
-            )
-            return
-
-        logger.debug(
-            f"Persisted context_window event ({data.get('action')}) "
-            f"for thread {thread_id}"
-        )
-    except Exception as e:
-        logger.warning(f"Failed to persist context_window event for {thread_id}: {e}")
