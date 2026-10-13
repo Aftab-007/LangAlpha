@@ -1,6 +1,6 @@
 # Chat Apps
 
-This page applies when you have `send_message` and `list_message_targets`: the user has connected chat apps such as Slack, Discord, Telegram or iMessage, and you can message them there.
+This page applies when you have `send_message` and `list_message_targets`: the user has connected chat apps such as Slack, Discord, Telegram, iMessage or Feishu, and you can message them there.
 
 ## Which rules apply
 
@@ -28,21 +28,22 @@ In a chat the user sees what you send, not your updates between tool calls.
 
 ## What each app shows
 
-| What you write | Slack | Discord | Telegram | iMessage |
-|---|---|---|---|---|
-| Headings | Shown, all one size | `#`, `##` and `###` only | Shown | Marks removed |
-| Bold, italic, strikethrough | Shown | Shown, plus underline and spoilers | Shown | Marks removed |
-| Lists | Shown, plus task lists | Shown | Shown | Bullets kept as • |
-| Code blocks | Shown, with the language | Shown, with the language | Shown | Fence removed, code kept |
-| Tables | Shown; keep to a few columns and attach a wide one | Turned into a code block, hard to read on a phone | Shown; monospace text in the fallback | Labelled lines, a block per row |
-| `[text](url)` links | Shown | Shown | Shown | Becomes `text (url)` |
-| Math | Not rendered | Not rendered | Shown; as written in the fallback | As written |
-| One message holds | 12,000 characters, then it is split | 2,000 characters, then it is split | A send's 20,000 characters (4,096 in the fallback); a long list or table splits sooner | 2,000 characters a bubble, at most 3 bubbles |
-| Files | 20 MB each | 10 together, 20 MB each or the server's lower limit | Photos (PNG, JPEG, GIF, WebP) up to 10 MB show as photos; other files go as documents, up to 20 MB | 10 MB each, 25 MB in all; larger ones, up to 20 MB, go as links |
-| `reply: true` | No effect | Works in server channels | Works in groups | Works in group chats |
+| What you write | Slack | Discord | Telegram | iMessage | Feishu |
+|---|---|---|---|---|---|
+| Headings | Shown, all one size | `#`, `##` and `###` only | Shown | Marks removed | Shown |
+| Bold, italic, strikethrough | Shown | Shown, plus underline and spoilers | Shown | Marks removed | Shown |
+| Lists | Shown, plus task lists | Shown | Shown | Bullets kept as • | Shown |
+| Code blocks | Shown, with the language | Shown, with the language | Shown | Fence removed, code kept | Shown, with the language |
+| Tables | Shown; keep to a few columns and attach a wide one | Turned into a code block, hard to read on a phone | Shown; monospace text in the fallback | Labelled lines, a block per row | Shown; at most 5 in one card |
+| `[text](url)` links | Shown | Shown | Shown | Becomes `text (url)` | Shown |
+| Math | Not rendered | Not rendered | Shown; as written in the fallback | As written | Not rendered |
+| One message holds | 12,000 characters, then it is split | 2,000 characters, then it is split | A send's 20,000 characters (4,096 in the fallback); a long list or table splits sooner | 2,000 characters a bubble, at most 3 bubbles | About 28 KB a card (some 9,000 Chinese characters), then it is split; tables split it sooner |
+| Files | 20 MB each | 10 together, 20 MB each or the server's lower limit | Photos (PNG, JPEG, GIF, WebP) up to 10 MB show as photos; other files go as documents, up to 20 MB | 10 MB each, 25 MB in all; larger ones, up to 20 MB, go as links | Images (PNG, JPEG, GIF, WebP, BMP, TIFF) up to 10 MB show as images; other files go as files, up to 20 MB |
+| `reply: true` | No effect | Works in server channels | Works in groups | Works in group chats | No effect |
 
 - **Slack**: an image written in Markdown shows as a link, not a picture. Write links as `[text](url)`.
 - **Discord**: underline is `__text__` and a spoiler is `||text||`. Mentions you write don't notify anyone.
 - **Telegram**: a dollar sign before a digit is shown as money, not math. If Telegram refuses the rich format, the message is resent as simpler text: 4,096 characters, tables as monospace text, math as written. Prefer short messages.
 - **iMessage**: plain text only. Write plain sentences and short lists, and write URLs out in full. Keep it to one message: several in a row read as spam and can get the line filtered.
+- **Feishu**: each message is a card. An image written in Markdown with a public web address shows as a picture in it.
 - **Every app**: a workspace path written as a link does not open in a chat. Attach the file.
