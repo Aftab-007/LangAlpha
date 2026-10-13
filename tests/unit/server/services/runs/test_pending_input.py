@@ -310,16 +310,30 @@ async def test_a_start_whose_commit_was_not_acknowledged_leaves_its_run_to_the_t
 
 
 @pytest.mark.asyncio
-async def test_a_start_cancelled_awaiting_its_commit_is_settled_detached():
-    """A cancel lands again on every await of the cancelled request, so a
-    detached task finds the run whose COMMIT went through and settles it,
-    rather than leaving it to fence the thread until recovery."""
+@pytest.mark.parametrize("acknowledged", [True, False], ids=["committed", "ack-lost"])
+async def test_a_start_whose_request_is_cancelled_commits_and_is_settled_stopped(
+    acknowledged,
+):
+    """A keyed START's check may have taken its message back from the steer
+    queue, and only the commit keeps it from there, so a client leaving
+    mid-START does not cut START short. Its run is settled as stopped once
+    START is done, and the thread's admission waits for that."""
     scope = admission.RunScope(user_id="u-1", burst_slot_id=None)
-    coordinator = SimpleNamespace(
-        start_run=AsyncMock(side_effect=asyncio.CancelledError),
-        fail_open_run=AsyncMock(),
-    )
-    spawned = []
+    lock = asyncio.Lock()
+    await lock.acquire()
+    scope.hold_admission(lock)
+    in_transaction, commit = asyncio.Event(), asyncio.Event()
+    committed = SimpleNamespace(run_id="run-2")
+
+    async def start_run(**kwargs):
+        in_transaction.set()
+        await commit.wait()
+        if not acknowledged:
+            raise RuntimeError("connection lost in COMMIT")
+        kwargs["on_started"](committed)
+        return committed
+
+    coordinator = SimpleNamespace(start_run=start_run, fail_open_run=AsyncMock())
     row = {
         "status": "in_progress",
         "turn_index": 5,
@@ -333,18 +347,31 @@ async def test_a_start_cancelled_awaiting_its_commit_is_settled_detached():
         "src.server.services.runs.coordinator.RunCoordinator.get_instance",
         return_value=coordinator,
     ), patch(
-        "src.server.services.runs.coordinator.spawn_protected",
-        side_effect=lambda coro, name: spawned.append(coro),
-    ), patch(
         "src.server.database.runs.lifecycle.get_run", new=AsyncMock(return_value=row)
     ):
+        request = asyncio.create_task(_begin(scope))
+        await in_transaction.wait()
+        request.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await _begin(scope)
-        assert scope.owned_run_handle is None
-        await spawned.pop()
+            await request
+        scope.release_admission()  # the turn's own release, in its finally
+        assert lock.locked()
+        coordinator.fail_open_run.assert_not_awaited()
 
-    (handle, reason), kwargs = coordinator.fail_open_run.await_args
-    assert (handle.run_id, handle.turn_index, kwargs["status"]) == ("run-2", 5, "cancelled")
+        commit.set()
+        for _ in range(100):
+            if not lock.locked():
+                break
+            await asyncio.sleep(0)
+
+    assert not lock.locked()
+    assert scope.owned_run_handle is None
+    (handle, _reason), kwargs = coordinator.fail_open_run.await_args
+    assert kwargs["status"] == "cancelled"
+    if acknowledged:
+        assert handle is committed
+    else:
+        assert (handle.run_id, handle.turn_index) == ("run-2", 5)
 
 
 @pytest.mark.asyncio

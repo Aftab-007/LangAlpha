@@ -136,3 +136,65 @@ async def test_duplicate_own_payloads_all_consumed():
 
     assert result is not None
     assert cache.client.lists.get(_KEY, []) == []
+
+
+@pytest.mark.asyncio
+async def test_the_injected_steer_is_named_after_the_keyed_sends_it_carries():
+    """A resend of a send whose run died before saving the step that
+    injected it is answered from that run's checkpoint, by this id."""
+    from ptc_agent.agent.middleware.steering import carries_steer_key
+
+    keyed = [
+        "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
+        "6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b",
+    ]
+    cache = FakeCache()
+    cache.client.lists[_KEY] = [
+        json.dumps({"content": "one", "run_id": "run-A", "request_key": keyed[0]}),
+        _payload("keyless", "run-A"),
+        json.dumps({"content": "two", "run_id": "run-A", "request_key": keyed[1]}),
+    ]
+
+    (msg,) = (await _run(cache, _config("run-A")))["messages"]
+
+    assert [carries_steer_key(msg, k) for k in keyed] == [True, True]
+    assert not carries_steer_key(msg, "0f8fad5b-d9cb-469f-a165-70867728950e")
+
+
+@pytest.mark.asyncio
+async def test_a_send_injected_again_under_its_key_is_a_message_of_its_own():
+    """Once its record expired, a send under the same key can be accepted and
+    injected again. The reducer replaces a message whose id it holds, so a
+    shared id would overwrite the earlier steer where it stands, ahead of
+    the answer that followed it."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from ptc_agent.agent.middleware.steering import carries_steer_key
+    from ptc_agent.agent.state import messages_delta_reducer
+
+    key = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed"
+    entry = json.dumps({"content": "again", "run_id": "run-A", "request_key": key})
+    injected = []
+    for _ in range(2):
+        cache = FakeCache()
+        cache.client.lists[_KEY] = [entry]
+        (msg,) = (await _run(cache, _config("run-A")))["messages"]
+        injected.append(msg)
+
+    state = messages_delta_reducer([HumanMessage("question", id="q")], [[injected[0]]])
+    state = messages_delta_reducer(state, [[AIMessage("answer", id="a")]])
+    state = messages_delta_reducer(state, [[injected[1]]])
+
+    assert [m.id for m in state] == ["q", injected[0].id, "a", injected[1].id]
+    assert all(carries_steer_key(m, key) for m in injected)
+
+
+@pytest.mark.asyncio
+async def test_a_steer_with_no_keyed_send_keeps_an_ordinary_id():
+    cache = FakeCache()
+    cache.client.lists[_KEY] = [_payload("keyless", "run-A")]
+
+    (msg,) = (await _run(cache, _config("run-A")))["messages"]
+
+    assert msg.id is None
+

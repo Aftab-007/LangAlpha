@@ -73,6 +73,29 @@ async def test_steer_thread_stamps_the_chat_app(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_drain_frees_the_keys_of_the_steers_it_returns(monkeypatch):
+    """A returned steer reached no run, so a resend of its key is a new send;
+    a steer a run already took keeps its key's record."""
+    from src.server.handlers.chat.steering import drain_pending_steerings, steer_thread
+    from src.server.services.runs.steer_queue import steer_records_key
+
+    cache = FakeCache()
+    monkeypatch.setattr(CACHE, lambda: cache)
+    taken = await steer_thread(
+        "t-1", "taken", "u-1", run_id="run-live", request_key="k-taken"
+    )
+    await cache.client.lrem(KEY, 1, taken["payload"])
+    await steer_thread(
+        "t-1", "hello", "u-1", run_id="run-live", request_key="k-returned"
+    )
+
+    returned = await drain_pending_steerings("t-1")
+
+    assert [m["request_key"] for m in returned] == ["k-returned"]
+    assert cache.client.hashes[steer_records_key("t-1")] == {"k-taken": "run-live"}
+
+
+@pytest.mark.asyncio
 async def test_unsteer_reclaims_the_just_queued_payload(monkeypatch):
     from src.server.handlers.chat.steering import steer_thread, unsteer_thread
 
@@ -139,7 +162,7 @@ async def test_unsteer_false_on_redis_error(monkeypatch):
     async def _boom(*_args):
         raise ConnectionError("redis down")
 
-    cache.client.lrem = _boom
+    cache.client.eval = _boom
     monkeypatch.setattr(CACHE, lambda: cache)
 
     assert await unsteer_thread("t-1", "whatever") is False

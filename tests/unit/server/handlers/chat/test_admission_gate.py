@@ -6,6 +6,10 @@ Covers:
 - admission_conflict_detail: the single wording source for admission 409s
 """
 
+import asyncio
+import contextlib
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -215,7 +219,12 @@ class TestWaitOrSteer:
         # Stamped with the live run so the middleware's own-run filter
         # delivers it (v4 2.4c), and with the chat app its label names.
         mock_steer.assert_awaited_once_with(
-            "t-1", "hello", "u-1", run_id="run-live", platform="telegram"
+            "t-1",
+            "hello",
+            "u-1",
+            run_id="run-live",
+            platform="telegram",
+            request_key=None,
         )
         # No wait helper exists anymore — admission decided immediately.
         manager.wait_for_admission.assert_awaited_once()
@@ -366,6 +375,265 @@ class TestWaitOrSteer:
         assert exc_info.value.status_code == 409
         assert exc_info.value.detail["code"] == "running"
         mock_steer.assert_not_awaited()
+
+
+_KEY = "8c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5"
+_FIND_KEY = "src.server.database.runs.lifecycle.find_run_by_request_key"
+_GET_RUN = "src.server.database.runs.lifecycle.get_run"
+_CACHE = "src.utils.cache.redis_cache.get_cache_client"
+_QUEUE = "workflow:steering:t-1"
+_LIVE_RUN = {**_LIVE_ROW, "conversation_thread_id": "t-1", "status": "in_progress"}
+
+
+class _CancelledOnceTheSteerLeaves:
+    """The fake client, with ``task`` cancelled at its first Redis call after
+    the steer left the queue, as a client disconnect does to a request."""
+
+    def __init__(self, client, task=None):
+        self._client = client
+        self.task = task
+        self._queued = bool(client.lists.get(_QUEUE))
+        self._fired = False
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if name == "pipeline" or not callable(attr):
+            return attr
+
+        async def call(*args, **kwargs):
+            queued = bool(self._client.lists.get(_QUEUE))
+            self._queued = self._queued or queued
+            if (
+                self._queued
+                and not queued
+                and not self._fired
+                and asyncio.current_task() is self.task
+            ):
+                self._fired = True
+                raise asyncio.CancelledError
+            return await attr(*args, **kwargs)
+
+        return call
+
+
+class TestKeyedSendSteersOnce:
+    """A keyed send reaches the conversation once, whichever way its first
+    copy went in: as a turn of its own or as a steer into a running one."""
+
+    @pytest.fixture(autouse=True)
+    def ledger(self):
+        with (
+            patch(
+                "src.server.database.runs.lifecycle.get_active_run",
+                new_callable=AsyncMock,
+                return_value=_LIVE_ROW,
+            ) as slot,
+            patch(_FIND_KEY, new_callable=AsyncMock, return_value=None) as find,
+            patch(_GET_RUN, new_callable=AsyncMock, return_value=_LIVE_RUN),
+        ):
+            yield SimpleNamespace(slot=slot, find=find)
+
+    @pytest.fixture
+    def cache(self, monkeypatch):
+        from .redis_fakes import FakeCache
+
+        cache = FakeCache()
+        monkeypatch.setattr(_CACHE, lambda: cache)
+        return cache
+
+    @staticmethod
+    def _admitting(state="running"):
+        manager = AsyncMock()
+        manager.wait_for_admission = AsyncMock(
+            return_value=(state, _LIVE_ROW if state == "running" else None)
+        )
+        return manager
+
+    @staticmethod
+    async def _send(state="running"):
+        from src.server.handlers.chat.admission_gate import wait_or_steer
+
+        return await wait_or_steer(
+            TestKeyedSendSteersOnce._admitting(state),
+            "t-1",
+            "hello",
+            "u-1",
+            request_key=_KEY,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_copy_whose_first_copy_started_past_its_probe_is_not_steered(
+        self, ledger, cache
+    ):
+        """The first copy's START committed between this copy's duplicate
+        probe and its admission read, so the run it sees running is its own."""
+        from src.server.database.runs.lifecycle import DuplicateRequestError
+
+        first_copy = {**_LIVE_ROW, "conversation_thread_id": "t-1"}
+        ledger.find.return_value = first_copy
+
+        with pytest.raises(DuplicateRequestError) as dup:
+            await self._send()
+
+        assert dup.value.existing_run is first_copy
+        assert cache.client.lists == {}
+
+    @pytest.mark.asyncio
+    async def test_a_resend_of_a_steered_send_names_the_turn_that_took_it(
+        self, cache
+    ):
+        from src.server.database.runs.lifecycle import DuplicateRequestError
+
+        ready, event = await self._send()
+        assert (ready, "steering_accepted" in event) == (False, True)
+
+        with pytest.raises(DuplicateRequestError) as dup:
+            await self._send()
+
+        assert dup.value.existing_run is _LIVE_RUN
+        assert len(cache.client.lists[_QUEUE]) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "named", [_LIVE_RUN, None], ids=["steered", "reclaimed-since"]
+    )
+    async def test_a_claim_lost_after_the_recheck_steers_nothing(self, cache, named):
+        """Another copy claimed the key between the recheck and the claim.
+        Its steer is the duplicate's answer; a claim whose steer was since
+        reclaimed for a turn leaves the refusal to recheck the key again."""
+        from fastapi import HTTPException
+
+        from src.server.database.runs.lifecycle import DuplicateRequestError
+        from src.server.services.runs.steer_queue import steer_records_key
+        from src.server.services.runs.admission import KeyedRun
+
+        cache.client.hashes[steer_records_key("t-1")] = {_KEY: "run-live"}
+        lookups = AsyncMock(
+            side_effect=[None, named and KeyedRun(named, steered=True)]
+        )
+        with (
+            patch("src.server.services.runs.admission.run_named_by_key", lookups),
+            pytest.raises(DuplicateRequestError if named else HTTPException) as err,
+        ):
+            await self._send()
+
+        if named is None:
+            assert err.value.detail["code"] == "running"
+        assert cache.client.lists == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("after", ["idle", "next-turn"])
+    async def test_a_copy_that_meets_a_steer_its_turn_never_read_carries_it(
+        self, ledger, cache, after
+    ):
+        """The other copy steered into a turn that ended before reading it,
+        after this copy's recheck, and may have answered accepted, so this one
+        carries the message: it moves it into the next turn, or starts a turn
+        whose START takes it back."""
+        from src.server.handlers.chat.steering import steer_thread, unsteer_thread
+        from src.server.services.runs import steer_queue
+
+        other = {}
+        push = cache.client.eval
+
+        async def other_copy_pushes_first(script, numkeys, *args):
+            if script is steer_queue._STEER_LUA and not other:
+                cache.client.eval = push
+                other.update(await steer_thread(
+                    "t-1", "hello", "u-1", run_id="run-live", request_key=_KEY
+                ))
+            return await push(script, numkeys, *args)
+
+        cache.client.eval = other_copy_pushes_first
+        next_turn = {**_LIVE_ROW, "conversation_response_id": "run-next"}
+        ledger.slot.return_value = None if after == "idle" else next_turn
+        ended = {**_LIVE_RUN, "status": "completed"}
+
+        with patch(_GET_RUN, new_callable=AsyncMock, return_value=ended):
+            answer = await self._send()
+
+        records = cache.client.hashes[steer_queue.steer_records_key("t-1")]
+        if after == "idle":
+            # Left queued for this copy's START, which a client leaving
+            # cannot cut short between the take-back and the commit.
+            assert answer == (True, None)
+            assert cache.client.lists[_QUEUE] == [other["payload"]]
+            assert records == {_KEY: "run-live"}
+            return
+        assert answer[0] is False and "steering_accepted" in answer[1]
+        [queued] = cache.client.lists[_QUEUE]
+        assert json.loads(queued)["run_id"] == "run-next"
+        assert records == {_KEY: "run-next"}
+        # The other copy's check after its push finds nothing to reclaim.
+        assert await unsteer_thread("t-1", other["payload"]) is False
+
+    @pytest.mark.asyncio
+    async def test_a_copy_whose_claim_could_not_be_written_is_refused(self, cache):
+        """Passing it would queue a steer no later copy can see, which the
+        next copy would then steer again."""
+        from fastapi import HTTPException
+
+        failed = []
+
+        def failing_once(method):
+            async def call(*args, **kwargs):
+                if not failed and any(":key" in str(a) for a in args):
+                    failed.append(True)
+                    raise ConnectionError("redis down")
+                return await method(*args, **kwargs)
+
+            return call
+
+        for name in ("set", "eval"):
+            if hasattr(cache.client, name):
+                setattr(cache.client, name, failing_once(getattr(cache.client, name)))
+
+        with pytest.raises(HTTPException) as refused:
+            await self._send()
+        assert refused.value.detail["code"] == "running"
+        assert cache.client.lists.get(_QUEUE, []) == []
+
+        ready, event = await self._send()
+        assert (ready, "steering_accepted" in event) == (False, True)
+        assert len(cache.client.lists[_QUEUE]) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_steer_reclaimed_for_a_turn_frees_its_key(self, ledger, cache):
+        """The turn it was steered into had ended, so it starts as a turn of
+        its own, whose row is what holds the key from here on."""
+        from src.server.services.runs.steer_queue import steer_records_key
+
+        ledger.slot.return_value = None
+
+        assert await self._send() == (True, None)
+        assert cache.client.lists[_QUEUE] == []
+        assert cache.client.hashes[steer_records_key("t-1")] == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["reclaim", "drain"])
+    async def test_a_cancel_after_the_steer_left_the_queue_strands_no_claim(
+        self, ledger, cache, path
+    ):
+        """A disconnect cancels the request at its next await, and a cancel
+        is no Exception. A claim left behind would answer the resend with a
+        turn that never saw the message."""
+        from src.server.handlers.chat.steering import drain_pending_steerings
+
+        if path == "reclaim":
+            # The turn ended between the admission read and the push.
+            ledger.slot.return_value = None
+            client = cache.client = _CancelledOnceTheSteerLeaves(cache.client)
+            first = asyncio.create_task(self._send())
+        else:
+            await self._send()
+            client = cache.client = _CancelledOnceTheSteerLeaves(cache.client)
+            first = asyncio.create_task(drain_pending_steerings("t-1"))
+        client.task = first
+        with contextlib.suppress(asyncio.CancelledError):
+            await first
+
+        assert client._client.lists.get(_QUEUE, []) == []
+        assert await self._send(state="fresh") == (True, None)
 
 
 # ---------------------------------------------------------------------------
