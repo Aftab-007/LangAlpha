@@ -1,4 +1,4 @@
-"""What a settled turn's main agent said, for a tool reading another thread.
+"""What a turn's checkpoints committed, for readers outside replay.
 
 The secretary's ``agent_output`` reads a thread's newest turns while its own
 turn waits. A turn's stored slice serves it while the slice is the turn's on
@@ -6,13 +6,20 @@ the current branch, by the rule replay applies (``slices.stored_spans``);
 only a turn without one waits for its projection. Replay's stored lines would
 serve the same text, but checking them reads every row of the thread, which
 costs this path several times what the slice read does.
+
+A lane whose stream outlived its checkpoints (a worker lost mid-turn, a
+subagent that failed) keeps the provenance of only the tool calls whose
+results were saved: what replay shows of the lane is what the checkpoints
+hold, and a source no saved result came from is one nothing shown ever read.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Collection, Iterable, Mapping
 from typing import Any
+
+from langchain_core.messages import ToolMessage
 
 from src.server.database.conversation import turn_slices as slices_db
 from src.server.database.conversation.replay_rows import get_branch_pointer
@@ -26,6 +33,13 @@ from src.server.services.history.replay.errors import CheckpointReplayUnavailabl
 from src.server.utils.checkpoint_helpers import CheckpointBranchTipNotFound
 
 logger = logging.getLogger(__name__)
+
+# The endings that can leave a streamed result unsaved: a step stopped or
+# failed after some of its tool calls finished keeps their results only as
+# pending writes, which the thread's next input discards. A completed run
+# saved everything it streamed, and an interrupted run's finished calls are
+# committed by its resume.
+UNSAVED_RESULT_ENDINGS = frozenset({"cancelled", "error"})
 
 
 async def committed_texts(thread_id: str, turns: Mapping[str, Any]) -> dict[str, str]:
@@ -112,3 +126,45 @@ async def _slice_texts(
             and d["content"]
         )
     return out
+
+
+def saved_tool_calls(messages: Iterable[Any]) -> frozenset[str]:
+    """The tool calls whose results ``messages`` hold."""
+    return frozenset(
+        m.tool_call_id
+        for m in messages
+        if isinstance(m, ToolMessage) and isinstance(m.tool_call_id, str)
+    )
+
+
+def saved_provenance(
+    events: Iterable[dict[str, Any]], saved: Collection[str]
+) -> list[dict[str, Any]]:
+    """The ``provenance`` events of the tool calls in ``saved``."""
+    kept: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict) or event.get("event") != "provenance":
+            continue
+        data = event.get("data")
+        source = data if isinstance(data, dict) else event
+        if source.get("tool_call_id") in saved:
+            kept.append(event)
+    return kept
+
+
+async def run_saved_tool_calls(thread_id: str, run_id: str) -> frozenset[str]:
+    """The tool calls whose results ``run_id``'s newest checkpoint holds."""
+    state = await CheckpointHistoryReader.get_instance().aget_run_state(
+        thread_id, run_id
+    )
+    if state is None:
+        return frozenset()
+    return saved_tool_calls((state.values or {}).get("messages") or ())
+
+
+async def task_saved_tool_calls(thread_id: str, task_id: str) -> frozenset[str]:
+    """The tool calls whose results the task's newest checkpoint holds."""
+    history = await CheckpointHistoryReader.get_instance().aget_task_history(
+        thread_id, task_id
+    )
+    return saved_tool_calls(history.messages)

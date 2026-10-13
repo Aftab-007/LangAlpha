@@ -5,10 +5,11 @@ root) advisory lock is acquirable, and an owner holds that lock from before
 START to after finalize — classifies them exactly as the owner would have
 (durable cancel intent → cancelled; a durable run-matching ``__interrupt__``
 at the checkpoint tip → interrupted; anything else → error worker_lost),
-salvages the run's Redis stream into the sse_events archive, and finalizes
-through the same CAS as every other path. Concurrent scanners on sibling
-workers are safe without leadership: the lock probe serializes them per run
-and the CAS is single-winner regardless.
+keeps what its Redis stream holds for what its checkpoints saved (the saved
+tool calls' provenance, the saved messages' reasoning durations), and
+finalizes through the same CAS as every other path. Concurrent scanners on
+sibling workers are safe without leadership: the lock probe serializes them
+per run and the CAS is single-winner regardless.
 
 Runs periodically only when the WriterGuard fence is active. Without the
 fence there is no liveness oracle, so scanning is startup-only (this
@@ -31,8 +32,8 @@ from src.server.database.runs import lifecycle as tl_db
 logger = logging.getLogger(__name__)
 
 # Salvage reads at most this many stream entries; a run that produced more
-# archives a truncated prefix (recovery_quality says so) rather than letting
-# one huge dead run stall the scan.
+# keeps a truncated prefix's provenance (recovery_quality says so) rather than
+# letting one huge dead run stall the scan.
 SALVAGE_MAX_EVENTS = 5000
 
 # Graceful-stop grace period: a scan pass in flight gets this long to finish
@@ -400,9 +401,8 @@ class RecoveryScanner:
         status, interrupt_reason, errors, newest, stamped = (
             await self._classify(run, run_id, thread_id)
         )
-        sse_events, quality = await self._salvage_stream(thread_id, run_id)
+        record, quality = await self._salvage(thread_id, run_id, status)
 
-        from src.server.database.runs.lifecycle import ProducerRecord
         from src.server.services.runs.coordinator import RunCoordinator, RunOutcome
 
         # The funnel owns the entire post-CAS tail — projection refresh,
@@ -422,16 +422,9 @@ class RecoveryScanner:
                     **stamped,
                 },
                 errors=errors,
-                sse_events=sse_events,
-                # The salvage is the only record of the dead stream. Nothing
-                # timed its thinking, so replay reads that from the events.
-                record=ProducerRecord(
-                    provenance=[
-                        e
-                        for e in sse_events or ()
-                        if isinstance(e, dict) and e.get("event") == "provenance"
-                    ]
-                ),
+                # The stream is the only record of what the dead run fetched
+                # and how long it thought.
+                record=record,
             ),
             newest=newest,
             error_frame={
@@ -531,7 +524,7 @@ class RecoveryScanner:
 
             reason, pause_message = classify_interrupts(pending_interrupts)
             # Stamped as the owner's finalize stamps it, so settling the
-            # run's automation never needs the salvaged archive for it.
+            # run's automation reads it off the run's row either way.
             stamped = (
                 {"credit_pause_message": pause_message}
                 if reason == INTERRUPT_REASON_CREDIT_PAUSE
@@ -549,23 +542,82 @@ class RecoveryScanner:
 
     # --------------------------------------------------------------- salvage
 
-    async def _salvage_stream(
-        self, thread_id: str, run_id: str
-    ) -> Tuple[Optional[List[Dict[str, Any]]], str]:
-        """Parse the run's Redis stream into the persisted sse_events shape.
+    async def _salvage(
+        self, thread_id: str, run_id: str, status: str
+    ) -> Tuple[Any, str]:
+        """What the dead run streamed that its checkpoints do not keep, and
+        how much of its stream was read: the provenance of the tool calls
+        they saved, and how long the main agent thought over the messages
+        they saved.
 
-        Best-effort archive (I7): the dead run's events would otherwise
-        evaporate at stream TTL. Uses the same accumulator as live
-        persistence so chunk merging matches owner-persisted turns.
+        A run that stopped or failed may have streamed past its last save,
+        and the turn it leaves never shows that. A failed checkpoint read
+        keeps every source, as the finalize does, and no durations, which
+        only a saved message can be keyed by.
         """
+        from src.server.database.runs.lifecycle import ProducerRecord
+        from src.server.services.history.committed import (
+            UNSAVED_RESULT_ENDINGS,
+            saved_provenance,
+            saved_tool_calls,
+        )
+        from src.server.services.history.reader import CheckpointHistoryReader
+        from src.server.services.runs.reasoning_facts import saved_durations
+
+        frames, quality = await self._read_stream(thread_id, run_id)
+        if not frames:
+            logger.info(
+                f"[RecoveryScanner] no stream to salvage for run {run_id} "
+                f"({quality}); nothing recorded"
+            )
+            return ProducerRecord(provenance=[]), quality
+        provenance = [
+            {"event": "provenance", "data": data}
+            for event_type, data in frames
+            if event_type == "provenance"
+        ]
         try:
-            from src.server.services.runs.event_archive import StreamEventAccumulator
+            state = await CheckpointHistoryReader.get_instance().aget_run_state(
+                thread_id, run_id
+            )
+        except Exception:
+            logger.error(
+                f"[RecoveryScanner] checkpoint read failed for run {run_id}; "
+                f"its provenance is recorded unchecked",
+                exc_info=True,
+            )
+            return ProducerRecord(provenance=provenance), quality
+        messages = (state.values or {}).get("messages") or () if state else ()
+
+        kept = (
+            saved_provenance(provenance, saved_tool_calls(messages))
+            if status in UNSAVED_RESULT_ENDINGS
+            else provenance
+        )
+        if len(kept) < len(provenance):
+            logger.info(
+                f"[RecoveryScanner] run {run_id}: kept {len(kept)} of "
+                f"{len(provenance)} provenance entries, the rest from tool "
+                f"calls it never saved"
+            )
+        return (
+            ProducerRecord(
+                provenance=kept, reasoning_ms=saved_durations(frames, messages)
+            ),
+            quality,
+        )
+
+    async def _read_stream(
+        self, thread_id: str, run_id: str
+    ) -> Tuple[List[Tuple[str, Dict[str, Any]]], str]:
+        """The run's parsed Redis stream frames, and its salvage quality."""
+        try:
             from src.server.services.runs.stream_writer import stream_key
             from src.utils.cache.redis_cache import get_cache_client
 
             cache = get_cache_client()
             if not (cache.enabled and cache.client):
-                return None, "redis_unavailable"
+                return [], "redis_unavailable"
             # +1 proves truncation instead of inferring it from an exact
             # SALVAGE_MAX_EVENTS-length stream.
             entries = await cache.client.xrange(
@@ -576,36 +628,33 @@ class RecoveryScanner:
                 f"[RecoveryScanner] stream salvage read failed for {run_id}",
                 exc_info=True,
             )
-            return None, "redis_unavailable"
+            return [], "redis_unavailable"
 
         if not entries:
-            return None, "empty_stream"
+            return [], "empty_stream"
         truncated = len(entries) > SALVAGE_MAX_EVENTS
         if truncated:
             entries = entries[:SALVAGE_MAX_EVENTS]
 
-        acc = StreamEventAccumulator()
-        parsed = 0
+        frames = []
         for _entry_id, fields in entries:
             wire = fields.get(b"event") or fields.get("event")
             frame = self._parse_wire_frame(wire)
             if frame is not None:
-                acc.add(frame[0], frame[1])
-                parsed += 1
-        events = acc.get_events()
-        if not events:
-            return None, "unparseable_stream"
+                frames.append(frame)
+        if not frames:
+            return [], "unparseable_stream"
         if truncated:
             quality = "salvaged_truncated"
-        elif parsed != len(entries):
+        elif len(frames) != len(entries):
             quality = "salvaged_partial"
         else:
             quality = "salvaged"
         logger.info(
-            f"[RecoveryScanner] salvaged {parsed}/{len(entries)} stream "
+            f"[RecoveryScanner] read {len(frames)}/{len(entries)} stream "
             f"entries for run {run_id}"
         )
-        return events, quality
+        return frames, quality
 
     @staticmethod
     def _parse_wire_frame(wire: Any) -> Optional[Tuple[str, Dict[str, Any]]]:

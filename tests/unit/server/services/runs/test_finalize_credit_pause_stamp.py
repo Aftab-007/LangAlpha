@@ -184,8 +184,8 @@ async def test_a_handler_less_credit_pause_stamps_its_denial():
 
 async def _recovered_outcome(*requests, salvaged=None):
     """The outcome the scanner finalizes a dead run with, its tip checkpoint
-    pending ``requests`` as one interrupt and its stream salvaged as
-    ``salvaged``."""
+    pending ``requests`` as one interrupt and ``salvaged`` the record its
+    stream kept."""
     tip = SimpleNamespace(
         metadata={"run_id": _KEY[1]},
         config={"configurable": {"checkpoint_id": "cp-tip"}},
@@ -195,7 +195,9 @@ async def _recovered_outcome(*requests, salvaged=None):
     finalize = AsyncMock(return_value=SimpleNamespace(applied=True, run={}))
     coordinator = SimpleNamespace(finalize_detached_run=finalize)
     scanner = RecoveryScanner()
-    scanner._salvage_stream = AsyncMock(return_value=(salvaged, "empty_stream"))
+    scanner._salvage = AsyncMock(
+        return_value=(salvaged or ProducerRecord(provenance=[]), "salvaged")
+    )
     with (
         patch("src.server.app.setup.checkpointer", saver),
         patch(
@@ -206,6 +208,7 @@ async def _recovered_outcome(*requests, salvaged=None):
         await scanner._recover_run({}, _KEY[1], _KEY[0])
     outcome = finalize.await_args.args[2]
     assert outcome.status == "interrupted"
+    scanner._salvage.assert_awaited_once_with(_KEY[0], _KEY[1], "interrupted")
     return outcome
 
 
@@ -230,19 +233,17 @@ async def test_a_recovered_pause_is_stamped_only_when_it_is_a_credit_pause():
 
 
 @pytest.mark.asyncio
-async def test_a_recovered_run_records_its_salvaged_provenance_but_no_durations():
-    # Nothing timed the dead run's thinking, so its row keeps no reasoning
-    # facts and replay reads the durations off the salvaged events instead.
+async def test_a_recovered_run_records_what_its_stream_salvaged():
     found = {
         "event": "provenance",
         "data": {"agent": "main", "source_type": "web", "identifier": "https://a.test"},
     }
-    chunk = {"event": "message_chunk", "data": {"agent": "main", "content": "x"}}
+    salvaged = ProducerRecord(provenance=[found], reasoning_ms={"ai-1": [291]})
 
-    outcome = await _recovered_outcome(_question(), salvaged=[chunk, found])
+    outcome = await _recovered_outcome(_question(), salvaged=salvaged)
 
-    assert outcome.record == ProducerRecord(provenance=[found], reasoning_ms=None)
-    assert (await _recovered_outcome(_question())).record == ProducerRecord()
+    assert outcome.record == salvaged
+    assert outcome.metadata["recovery_quality"] == "salvaged"
 
 
 # ─── classify_interrupts: the pause's words ──────────────────────────
