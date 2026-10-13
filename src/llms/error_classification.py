@@ -45,11 +45,34 @@ def extract_status_code(exc: BaseException) -> int | None:
             return status
 
     for current in _iter_exception_chain(exc):
+        # A timeout never carries a provider status, and its message can carry
+        # numbers that look like one: ``chunks_received=413`` read as a 413
+        # would make a stalled stream look like a payload the provider refused.
+        if isinstance(current, TimeoutError):
+            continue
         match = _STATUS_CODE_RE.search(str(current))
         if match:
             return int(match.group(1))
 
     return None
+
+
+def is_stalled_stream(exc: BaseException) -> bool:
+    """Whether a stream went silent past its chunk bound, before or after its
+    first chunk.
+
+    Duck-typed on the ``chunks_received`` a chunk-timeout error carries, for the
+    same reason as ``is_mid_stream_error``. A stall that has repeated on a fresh
+    connection at the same point is the model's output, not the network, and
+    another identical request stalls there again. One that never sent a chunk
+    counts too: the bound is long enough for a reasoning model's first chunk,
+    so each attempt costs the whole of it.
+    """
+    return any(
+        isinstance(current, TimeoutError)
+        and isinstance(getattr(current, "chunks_received", None), int)
+        for current in _iter_exception_chain(exc)
+    )
 
 
 def is_mid_stream_error(exc: BaseException) -> bool:

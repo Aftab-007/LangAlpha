@@ -312,6 +312,15 @@ class ModelConfig:
 
 _UNSET = object()  # Sentinel to distinguish "no override" from "override to None"
 
+# How long an OpenAI-SDK stream may go without a chunk before the call fails.
+# The SDK's own default is 120s, and a model can be silent that long while it
+# writes one large tool call whose arguments its provider does not stream, so
+# real calls failed at it, and failed again on every retry. 600s matches the
+# read timeout, which keepalive frames reset and so cannot catch this alone.
+# It bounds the wait for the first chunk too, so a timeout is retried once
+# rather than the full count (``is_stalled_stream``).
+STREAM_CHUNK_TIMEOUT_S = 600.0
+
 # Header spellings the first-party codex clients send — codex-rs:
 # session-id/thread-id, opencode/hermes: session_id.
 _CODEX_SESSION_HEADERS = ("session-id", "thread-id", "session_id")
@@ -691,6 +700,7 @@ class LLM:
             "stream_usage": True,
             "max_retries": 5,
             "timeout": 600.0,
+            "stream_chunk_timeout": STREAM_CHUNK_TIMEOUT_S,
         }
         params.update(self._resolve_base_url("base_url"))
 
@@ -751,6 +761,7 @@ class LLM:
             "stream_usage": True,
             "max_retries": 5,
             "timeout": 600.0,
+            "stream_chunk_timeout": STREAM_CHUNK_TIMEOUT_S,
         }
         params.update(self._resolve_base_url("base_url"))
 
@@ -802,6 +813,7 @@ class LLM:
             "stream_usage": True,
             "max_retries": 5,
             "timeout": 600.0,
+            "stream_chunk_timeout": STREAM_CHUNK_TIMEOUT_S,
         }
         params.update(self._resolve_base_url("api_base"))
 
@@ -823,6 +835,7 @@ class LLM:
             "stream_usage": True,
             "max_retries": 5,
             "timeout": 600.0,
+            "stream_chunk_timeout": STREAM_CHUNK_TIMEOUT_S,
         }
         params.update(self._resolve_base_url("base_url"))
 
@@ -842,6 +855,7 @@ class LLM:
             "stream_usage": True,
             "max_retries": 5,
             "timeout": 600.0,
+            "stream_chunk_timeout": STREAM_CHUNK_TIMEOUT_S,
         }
         params.update(self._resolve_base_url("api_base"))
 

@@ -400,12 +400,15 @@ async def arun_subagent_streaming(
                             await registry.flush_held_delta(bg_task, due_only=True)
                         except Exception as exc:
                             logger.debug("Subagent delta flush failed", error=str(exc))
-                    # A beat only wakes the flush above.
+                    # A beat wakes the flush above and tells the orphan
+                    # collector the model call it beats for is still running.
                     if (
                         mode == "custom"
                         and isinstance(data, dict)
                         and data.get("type") == HEARTBEAT_EVENT_TYPE
                     ):
+                        if bg_task is not None:
+                            await registry.note_alive(bg_task)
                         continue
                     if mode == "values":
                         last_state = data

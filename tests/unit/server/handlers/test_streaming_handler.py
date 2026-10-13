@@ -247,6 +247,16 @@ class TestRunSSEProducerFormatting:
         assert info["status_code"] == 429
         assert info["provider_module"] == "httpx"
 
+    def test_classify_stream_exception_reads_no_status_from_a_timeout(self):
+        """A stall's chunk count is not an HTTP status."""
+        from langchain_openai.chat_models._client_utils import StreamChunkTimeoutError
+
+        from src.server.services.runs.stream_errors import classify_stream_exception
+
+        info = classify_stream_exception(StreamChunkTimeoutError(120.0, chunks_received=413))
+        assert info["kind"] == "upstream"
+        assert info["status_code"] is None
+
     def test_format_credit_usage_event(self):
         handler = self._make_handler(thread_id="credit-thread")
         token_usage = {

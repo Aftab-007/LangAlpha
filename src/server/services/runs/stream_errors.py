@@ -156,7 +156,9 @@ def classify_stream_exception(exc: BaseException) -> Dict[str, Any]:
         for prefix in _UPSTREAM_MODULE_PREFIXES:
             if module == prefix or module.startswith(prefix + "."):
                 status = getattr(current, "status_code", None)
-                if not isinstance(status, int):
+                # A timeout's message carries counts, never a status: a
+                # stall's ``chunks_received=413`` is not a refused payload.
+                if not isinstance(status, int) and not isinstance(current, TimeoutError):
                     status = _parse_status_from_message(str(current))
                 return {
                     "kind": "upstream",

@@ -145,6 +145,14 @@ class BackgroundTask:
     OrphanCollector liveness check falls back to ``cur_events > prev_events``
     for tool-only progression, so idle detection still works."""
 
+    alive_at: float = field(default_factory=time.time)
+    """Epoch seconds of the last stream heartbeat, which beats only while a
+    model call runs. The OrphanCollector reads it as progress too: a model
+    can go ``STREAM_CHUNK_TIMEOUT_S`` without a chunk, on each of two
+    attempts, and a task with no event for the collector's idle timeout
+    reads as abandoned and loses the claim that bills it and keeps its
+    events."""
+
     agent_id: str = ""
     """Stable unique identity: '{subagent_type}:{uuid4}'."""
 

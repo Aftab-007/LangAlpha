@@ -582,8 +582,8 @@ async def collect_orphaned_subagent_results(
             f"{idle_timeout}s idle timeout, thread_id={thread_id}"
         )
 
-        last_activity: dict[asyncio.Task, tuple[float, int]] = {
-            at: (t.last_updated_at, t.captured_event_count)
+        last_activity: dict[asyncio.Task, tuple[float, int, float]] = {
+            at: (t.last_updated_at, t.captured_event_count, t.alive_at)
             for at, t in pending.items()
         }
         last_progress_time = time.time()
@@ -613,14 +613,17 @@ async def collect_orphaned_subagent_results(
                 await buf.flush()
             else:
                 for asyncio_task, task in pending.items():
-                    prev_update, prev_events = last_activity.get(
-                        asyncio_task, (0.0, 0)
+                    prev = last_activity.get(asyncio_task, (0.0, 0, 0.0))
+                    # A model call in flight beats without a chunk for as
+                    # long as its stream may stay silent (``alive_at``).
+                    cur = (
+                        task.last_updated_at,
+                        task.captured_event_count,
+                        task.alive_at,
                     )
-                    cur_update = task.last_updated_at
-                    cur_events = task.captured_event_count
-                    if cur_update > prev_update or cur_events > prev_events:
+                    if any(now > then for now, then in zip(cur, prev)):
                         last_progress_time = time.time()
-                        last_activity[asyncio_task] = (cur_update, cur_events)
+                        last_activity[asyncio_task] = cur
 
         if pending:
             for asyncio_task, task in pending.items():
