@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -59,44 +58,11 @@ class ServerMeta(BaseModel):
     # expects through the namespace's ``secrets[]``, which also says where
     # each one binds; the request model refuses this key on a user server.
     vault_blueprints: list[VaultBlueprint] = Field(default_factory=list)
-
-    model_config = {"extra": "forbid"}
-
-
-class SkillMeta(BaseModel):
-    """What a package says about one of its skills, beyond its SKILL.md.
-
-    Keyed by the skill's directory under ``skills/``, which is also its name.
-    Presentation only: the skills are still the directories the package
-    carries, so a key that names none of them describes nothing.
-    """
-
-    #: A vendor's site, resolved to its mark the way the package ``icon`` is,
-    #: or the name of a glyph from the set the web app ships.
+    # The mark this server wears when it is a different brand from its
+    # package's, as a site or the https address of the image itself.
     icon: str | None = None
 
     model_config = {"extra": "forbid"}
-
-
-# Lucide's spelling. A host always has a dot and a glyph name never does, so
-# the dot is the whole discriminator; a value that fits neither names nothing.
-# The length cap is for an uploaded manifest, whose glyph rides every listing.
-_GLYPH_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-_GLYPH_MAX = 64
-
-
-def skill_icon(value: str | None) -> tuple[str | None, str | None]:
-    """``(site, glyph)`` for a declared skill icon. At most one is set.
-
-    An unknown glyph name still comes back: which glyphs exist is the web
-    app's curated set, so the web is what falls back from one.
-    """
-    icon = (value or "").strip()
-    if "." in icon:
-        return icon, None
-    if len(icon) <= _GLYPH_MAX and _GLYPH_RE.fullmatch(icon):
-        return None, icon
-    return None, None
 
 
 def _read_json(path: Path) -> tuple[dict[str, Any] | None, bool]:
@@ -242,27 +208,6 @@ def _server_metas(block: dict[str, Any], bundle: str) -> dict[str, ServerMeta]:
     return metas
 
 
-def skill_metas(bundle: Bundle) -> dict[str, SkillMeta]:
-    """Each skill's declared meta, by the key the manifest used.
-
-    One bad entry costs only itself, as a server's does. The older list form
-    named skills without describing them, so it reads as no metadata.
-    """
-    declared = bundle.namespace.get("skills")
-    if not isinstance(declared, dict):
-        return {}
-    metas: dict[str, SkillMeta] = {}
-    for key, payload in declared.items():
-        try:
-            metas[key] = SkillMeta(**payload)
-        except (TypeError, ValueError) as e:
-            logger.warning(
-                "bundled plugin %s: skill %r has an unusable meta block: %s",
-                bundle.name, key, e,
-            )
-    return metas
-
-
 def _server(
     key: str, entry: dict[str, Any], meta: ServerMeta
 ) -> MCPServerConfig | None:
@@ -373,7 +318,6 @@ def bundled_skill_dirs() -> list[Path]:
 
     A bundle carries its skills as directories rather than as a list, so a
     package that ships one is read the same way whether it arrived in the
-    image or as an upload. The manifest's ``skills`` key only says how the
-    Plugins page draws them.
+    image or as an upload. Nothing reads the manifest's ``skills`` key.
     """
     return [d for p in _bundle_dirs() if (d := p / "skills").is_dir()]

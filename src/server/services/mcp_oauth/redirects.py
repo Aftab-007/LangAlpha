@@ -38,6 +38,10 @@ class CallbackError(StrEnum):
     BLOCKED_ENDPOINT = "blocked_endpoint"
     TOKEN_EXCHANGE_FAILED = "token_exchange_failed"
     SERVER_CHANGED = "server_changed"
+    # A sign-in that was to save its server could not: the server refused the
+    # new token, the name was taken meanwhile, the install failed. The
+    # redirect's ``mcp_detail`` says which, and nothing of the save is left.
+    INSTALL_FAILED = "install_failed"
     INTERNAL = "internal"
 
 # Below this a listener needs root on a POSIX box, so a redirect naming one is

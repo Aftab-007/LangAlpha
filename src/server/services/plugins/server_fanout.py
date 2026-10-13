@@ -6,6 +6,10 @@ hand-pasted ``mcpServers`` blob get the identical per-entry gauntlet
 the same per-entry isolation: one bad entry never aborts the others. Legacy
 sse entries are held back rather than installed — they are probed and
 reported ``upgradable`` for the wizard's consent step.
+
+The caller has already checked every server this writes (``checks``), and a
+row lands only as the server that passed: one whose fields moved since is
+refused at its commit instead of written unchecked.
 """
 
 import asyncio
@@ -26,6 +30,7 @@ from src.server.models.mcp_server import (
 from src.server.models.plugin import ComponentResult, InstallReport
 from src.server.services.mcp_import import catalog_import_scope, run_mcp_import
 from src.server.services.mcp_oauth.discovery import schedule_catalog_discovery
+from src.server.services.plugins.checks import NOT_CHECKED_REASON, CheckedServers
 from src.server.services.plugins.mcp import McpEntryPlan
 
 logger = logging.getLogger(__name__)
@@ -101,8 +106,14 @@ async def fan_out_servers(
     plugin_id: str,
     plans: list[McpEntryPlan],
     report: InstallReport,
+    *,
+    checked: CheckedServers,
 ) -> None:
-    """Create a catalog row per installable plan, reporting every plan."""
+    """Create a catalog row per installable plan, reporting every plan.
+
+    ``checked`` is what the caller's check passed; a server outside it is
+    reported ``error`` and not written.
+    """
     installable = [p for p in plans if p.installable]
     sse_plans = [
         p for p in plans if p.skip_code is None and p.transport == "sse"
@@ -147,6 +158,10 @@ async def fan_out_servers(
         # name: two package keys can normalize to one MCP name (`foo-bar` and
         # `foo_bar`), and whichever of them the import loop rejects is not the
         # one a later plugin update should reconcile this row against.
+        if not checked.approves(server):
+            # Inside the entry's transaction, so the secrets it vaulted roll
+            # back with it.
+            raise ValueError(NOT_CHECKED_REASON)
         await create_catalog_server(
             user_id,
             server.name,
@@ -173,6 +188,8 @@ async def fan_out_servers(
             exists_message=(
                 "a server with this name already exists; left untouched"
             ),
+            # Checked all together before the fan-out lock was taken.
+            check=None,
         ),
     )
 

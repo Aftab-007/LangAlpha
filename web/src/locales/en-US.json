@@ -4095,12 +4095,15 @@
       "toggleFailed": "Could not change this connector"
     },
     "oauth": {
+      "continueInBrowserTitle": "Sign-in opened in your browser",
+      "continueInBrowserDesc": "Finish signing in to \"{{server}}\" there. Nothing is saved until you do.",
       "abandonedDesc": "\"{{server}}\" never came back from the provider's sign-in page.",
       "abandonedDescNeedsDesktop": "\"{{server}}\" never came back from the provider's sign-in page. Some providers only accept desktop apps. Open the LangAlpha desktop app to connect this one. <download>Download the desktop app</download>",
       "abandonedTitle": "Connection did not finish",
       "callbackError": {
         "blocked_endpoint": "The provider asked for a token from an address this app will not call.",
         "denied": "You declined the request at the provider.",
+        "install_failed": "You signed in, but it could not be set up, so nothing was saved. Try again.",
         "internal": "Something went wrong on our side. Try again.",
         "invalid_state": "This connection attempt is no longer valid. Start it again.",
         "issuer_mismatch": "The provider's identity did not match its own configuration, so the connection was stopped.",
@@ -4146,7 +4149,12 @@
       "revoked": "Disconnected",
       "serverMoved": "This server's address changed since this page was loaded. Reload the page, then connect again.",
       "shellOutdatedHint": "This version of the desktop app cannot complete a connection. Update it, or connect from your browser.",
-      "shellOutdatedNote": "Desktop app needs updating"
+      "shellOutdatedNote": "Desktop app needs updating",
+      "signInNeededTitle": "Sign-in needed",
+      "signInToEnable": "\"{{server}}\" needs a sign-in before it can be switched on.",
+      "signIn": "Sign in",
+      "pluginInstalledDesc": "\"{{plugin}}\" is signed in and installed.",
+      "callbackDetail": "Details: {{detail}}"
     },
     "secrets": {
       "title": "Vault",

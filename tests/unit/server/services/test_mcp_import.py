@@ -1,8 +1,9 @@
 """The shared import loop: what one entry costs the entries around it.
 
 Two things travel between entries and both are load-bearing: the name an entry
-reserves only by landing, and the vault ref a literal earns. A literal that is
-really a blank the user has yet to fill must travel nowhere at all.
+holds once the import takes it, and the vault ref a literal earns only by
+landing. A literal that is really a blank the user has yet to fill must travel
+nowhere at all.
 """
 
 from contextlib import asynccontextmanager
@@ -32,7 +33,7 @@ def _no_db():
         yield
 
 
-def _scope(persist, *, existing_names=(), create_secret=None):
+def _scope(persist, *, existing_names=(), create_secret=None, check=None):
     async def _drop(conn, secret):
         return None
 
@@ -45,6 +46,7 @@ def _scope(persist, *, existing_names=(), create_secret=None):
         existing_secret_names=set(),
         create_secret=create_secret or _drop,
         persist=persist,
+        check=check,
     )
 
 
@@ -57,7 +59,7 @@ def _entry(original: str, name: str, **config) -> ParsedMcpServer:
     )
 
 
-async def test_an_entry_that_never_landed_does_not_reserve_its_name():
+async def test_an_entry_that_fails_validation_does_not_hold_its_name():
     landed: list[str] = []
 
     async def persist(conn, server, entry):
@@ -162,3 +164,141 @@ async def test_an_uncoerced_reserved_name_does_not_land():
     assert [r["status"] for r in report.results] == ["invalid", "created"]
     assert "Python keyword" in report.results[0]["error"]
     assert landed == ["match"]
+
+
+async def test_a_scope_that_does_not_check_commits_without_dialling():
+    """The plugin install checks its servers together before it reaches this
+    loop, so its scope carries no checker and nothing here dials again."""
+    landed: list[str] = []
+
+    async def persist(conn, server, entry):
+        landed.append(server.name)
+        return True
+
+    with patch("src.server.services.mcp_validation.check_server") as check:
+        report = await run_mcp_import(
+            [_entry("srv", "srv", transport="http", url="https://api.example.com/mcp")],
+            scope=_scope(persist),
+        )
+
+    assert landed == ["srv"]
+    check.assert_not_called()
+    assert report.created == 1
+
+
+async def test_one_check_sees_every_entry_as_it_would_be_saved():
+    """Each entry is checked with its own literals ahead of the vault, under
+    the ref it would be saved with; an entry the import refuses is not dialled,
+    and only what passed lands."""
+    from unittest.mock import AsyncMock
+
+    from src.server.services.mcp_validation import CheckFailure, Passed
+
+    landed: list[str] = []
+
+    async def persist(conn, server, entry):
+        landed.append(server.name)
+        return True
+
+    def answer(items):
+        return [
+            CheckFailure(server.name, "credential_rejected", "bad key")
+            if server.name == "srv_b"
+            else Passed(server.name)
+            for server, _extras in items
+        ]
+
+    check = AsyncMock(side_effect=answer)
+    report = await run_mcp_import(
+        [
+            _remote("srv_a", "sk-live-9f8e7d6c5b4a3210"),
+            _entry("class", "class", transport="stdio", command="npx"),
+            _remote("srv_b", "sk-live-0a1b2c3d4e5f6789"),
+        ],
+        scope=_scope(persist, check=check),
+    )
+
+    check.assert_awaited_once()
+    (items,) = check.await_args.args
+    assert [(s.name, s.headers, dict(extras)) for s, extras in items] == [
+        (
+            "srv_a",
+            {"X-Api-Key": "${vault:SRV_A_X_API_KEY}"},
+            {"SRV_A_X_API_KEY": "sk-live-9f8e7d6c5b4a3210"},
+        ),
+        (
+            "srv_b",
+            {"X-Api-Key": "${vault:SRV_B_X_API_KEY}"},
+            {"SRV_B_X_API_KEY": "sk-live-0a1b2c3d4e5f6789"},
+        ),
+    ]
+    assert [r["status"] for r in report.results] == ["created", "invalid", "check_failed"]
+    assert landed == ["srv_a"]
+
+
+async def test_only_what_the_account_has_room_for_is_checked():
+    """The check dials out, so a blob of thousands must not become thousands
+    of probes. An entry the import did not take is never checked and never
+    lands, even when one it took fails and leaves its name or room unused."""
+    from unittest.mock import AsyncMock
+
+    from src.server.services.mcp_validation import CheckFailure, Passed
+
+    landed: list[str] = []
+
+    async def persist(conn, server, entry):
+        landed.append(server.name)
+        return True
+
+    def answer(items):
+        return [
+            CheckFailure(server.name, "unreachable", "down")
+            if server.name == "srv_a"
+            else Passed(server.name)
+            for server, _extras in items
+        ]
+
+    check = AsyncMock(side_effect=answer)
+    report = await run_mcp_import(
+        [
+            _remote("srv_a", "sk-live-9f8e7d6c5b4a3210"),
+            _remote("srv_a", "sk-live-0a1b2c3d4e5f6789"),
+            _remote("srv_b", "sk-live-1a2b3c4d5e6f7089"),
+            *(_remote(f"srv_{i}", "sk-live-0f1e2d3c4b5a6978") for i in range(20)),
+        ],
+        scope=_scope(persist, existing_names=[f"held_{i}" for i in range(48)], check=check),
+    )
+
+    (items,) = check.await_args.args
+    assert [server.name for server, _extras in items] == ["srv_a", "srv_b"]
+    assert [r["status"] for r in report.results[:3]] == [
+        "check_failed", "skipped", "created"
+    ]
+    assert {r["status"] for r in report.results[3:]} == {"error"}
+    assert landed == ["srv_b"]
+
+
+async def test_headers_that_are_not_an_object_are_one_invalid_entry():
+    landed: list[str] = []
+
+    async def persist(conn, server, entry):
+        landed.append(server.name)
+        return True
+
+    report = await run_mcp_import(
+        [
+            _entry("good", "good", transport="http", url="https://good.example.com/mcp"),
+            _entry(
+                "bad",
+                "bad",
+                transport="http",
+                url="https://bad.example.com/mcp",
+                headers=["Authorization: Bearer x"],
+            ),
+        ],
+        scope=_scope(persist),
+    )
+
+    assert [r["status"] for r in report.results] == ["created", "invalid"]
+    assert "headers" in report.results[1]["error"]
+    assert landed == ["good"]

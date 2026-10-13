@@ -4054,12 +4054,15 @@
       "toggleFailed": "无法更改此连接器"
     },
     "oauth": {
+      "continueInBrowserTitle": "已在浏览器中打开登录页面",
+      "continueInBrowserDesc": "请在浏览器中完成“{{server}}”的登录，完成前不会保存任何内容。",
       "abandonedDesc": "“{{server}}”未从服务商的登录页面返回。",
       "abandonedDescNeedsDesktop": "“{{server}}”未从服务商的登录页面返回。部分服务商仅接受桌面应用，请使用 LangAlpha 桌面应用连接。<download>下载桌面应用</download>",
       "abandonedTitle": "连接未完成",
       "callbackError": {
         "blocked_endpoint": "服务商要求从本应用不会访问的地址获取令牌。",
         "denied": "你在服务商处拒绝了该请求。",
+        "install_failed": "已登录，但未能完成设置，因此没有保存任何内容。请重试。",
         "internal": "我们这边出现了问题，请重试。",
         "invalid_state": "此次连接请求已失效，请重新发起。",
         "issuer_mismatch": "服务商的身份与其自身配置不符，连接已中止。",
@@ -4105,7 +4108,12 @@
       "revoked": "已断开",
       "serverMoved": "自本页面加载以来，该服务器的地址已更改。请刷新页面后重新连接。",
       "shellOutdatedHint": "当前版本的桌面应用无法完成连接。请更新桌面应用，或在浏览器中连接。",
-      "shellOutdatedNote": "桌面应用需要更新"
+      "shellOutdatedNote": "桌面应用需要更新",
+      "signInNeededTitle": "需要登录",
+      "signInToEnable": "“{{server}}”需要先登录才能开启。",
+      "signIn": "登录",
+      "pluginInstalledDesc": "“{{plugin}}”已登录并安装。",
+      "callbackDetail": "详情：{{detail}}"
     },
     "secrets": {
       "title": "密钥库",

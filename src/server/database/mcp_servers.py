@@ -364,7 +364,12 @@ async def update_catalog_server(
 
 
 async def delete_catalog_server(
-    user_id: str, name: str, *, owned_by_plugin: str | None = None, conn=None
+    user_id: str,
+    name: str,
+    *,
+    owned_by_plugin: str | None = None,
+    row_id: str | None = None,
+    conn=None,
 ) -> bool:
     """Delete a user server by name. Returns True if a row existed.
 
@@ -381,7 +386,9 @@ async def delete_catalog_server(
     Plugin paths pass it because they decided to delete by reading ownership
     earlier: without the predicate, a Customize that detaches the row in the
     window between that read and this write is silently overridden and the
-    user's forked copy is deleted anyway.
+    user's forked copy is deleted anyway. ``row_id`` narrows it to one row:
+    a save taking back the row it created must not reach a same-name row
+    another request made since.
 
     Under ``lock_user_writes``, which ``tombstone_user_server`` takes too, so
     a workspace switching this server off lands before the purge or not at all.
@@ -393,8 +400,9 @@ async def delete_catalog_server(
                 await cur.execute(
                     "DELETE FROM user_mcp_servers WHERE user_id = %s AND name = %s "
                     "AND (%s::uuid IS NULL OR plugin_id = %s::uuid) "
+                    "AND (%s::uuid IS NULL OR user_mcp_server_id = %s::uuid) "
                     "RETURNING enabled",
-                    (user_id, name, owned_by_plugin, owned_by_plugin),
+                    (user_id, name, owned_by_plugin, owned_by_plugin, row_id, row_id),
                 )
                 row = await cur.fetchone()
                 if not row:

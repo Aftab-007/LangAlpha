@@ -1,11 +1,4 @@
-"""The bundles on disk, as the Plugins page and the icon route see them.
-
-``icon_site_for`` is the reason this file exists. It answers an unauthenticated
-route whose only input is a name, and it is safe because it matches that name
-against the bundles actually on disk rather than joining it onto a path. That
-property is stated in a docstring and enforced by one loop; a later refactor to
-``BUNDLES_DIR / name`` would read as a simplification and would be a traversal.
-"""
+"""The bundles on disk, as the Plugins page sees them."""
 
 from __future__ import annotations
 
@@ -18,13 +11,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ptc_agent.config import plugins as bundle_reader
-from src.server.services.plugins.bundled import (
-    component_owners,
-    icon_site_for,
-    list_bundled,
-    skill_icon_site_for,
-    skill_marks,
-)
+from src.server.services.plugins import bundled
+from src.server.services.plugins.bundled import list_bundled, server_icon_source
 
 
 def _write(root: Path, name: str, *, manifest: dict, mcp: dict | None = None) -> Path:
@@ -61,142 +49,38 @@ def bundles_dir(monkeypatch, tmp_path):
     return root
 
 
-class TestIconSiteLookup:
-    def test_a_declared_site_comes_back(self, bundles_dir):
-        _write(bundles_dir, "yfinance", manifest=_manifest("yfinance", icon="finance.yahoo.com"))
-        assert icon_site_for("yfinance") == "finance.yahoo.com"
+class TestTheMark:
+    """A wrapper bundle's mark is published as a handle; ours name none."""
 
-    def test_a_bundle_that_declares_none_answers_none(self, bundles_dir):
+    @pytest.mark.asyncio
+    async def test_only_a_declared_site_is_published(self, bundles_dir):
         _write(bundles_dir, "ours", manifest=_manifest("ours"))
-        assert icon_site_for("ours") is None
+        _write(bundles_dir, "blank", manifest=_manifest("blank", icon="   "))
+        _write(bundles_dir, "wrapper", manifest=_manifest("wrapper", icon="example.test"))
 
-    def test_a_blank_site_is_not_a_site(self, bundles_dir):
-        _write(bundles_dir, "ours", manifest=_manifest("ours", icon="   "))
-        assert icon_site_for("ours") is None
+        async def minted(source):
+            return None if source is None else f"handle:{source}"
 
-    def test_an_unknown_name_answers_none(self, bundles_dir):
-        _write(bundles_dir, "ours", manifest=_manifest("ours", icon="example.test"))
-        assert icon_site_for("nope") is None
+        with patch.object(bundled, "source_icon_url", minted):
+            urls = {i.name: i.icon_url for i in await list_bundled()}
+        assert urls == {"blank": None, "ours": None, "wrapper": "handle:example.test"}
 
-    @pytest.mark.parametrize(
-        "name",
-        ["..", "../outside", "../../outside", "./outside", "/etc", "outside/.."],
-    )
-    def test_a_traversal_never_reaches_a_manifest(self, bundles_dir, tmp_path, name):
-        # A real bundle sitting one level up, so a path join would find it and
-        # the test fails loudly instead of passing on an absent file.
-        _write(tmp_path, "outside", manifest=_manifest("outside", icon="attacker.test"))
-        _write(bundles_dir, "ours", manifest=_manifest("ours", icon="example.test"))
-        assert icon_site_for(name) is None
-
-    def test_the_manifest_name_is_the_key_not_the_directory(self, bundles_dir):
-        # The name the route is reached with is the one the page put in the
-        # href, and the page builds that from the manifest. Keying on the
-        # directory instead served nothing at the only URL that is ever
-        # requested, and matched a name no caller has.
-        _write(
-            bundles_dir, "dir-name",
-            manifest=_manifest("other-name", icon="example.test"),
-        )
-        (info,) = list_bundled()
-        assert info.icon_url == "/api/v1/plugins/other-name/icon"
-        assert icon_site_for("other-name") == "example.test"
-        assert icon_site_for("dir-name") is None
-
-
-class TestSkillMarks:
-    """A skill's tile, as the Skills tab is handed it.
-
-    A site travels as this origin's path, reached by the bundle's manifest
-    name like the package's own mark. The lookup behind that path answers an
-    unauthenticated route with a name and a skill, so it has to match both
-    against what is on disk, never join either onto a path.
-    """
-
-    def _bundle(self, root: Path, directory: str, name: str, **icons: str) -> Path:
-        bundle = _write(
-            root, directory,
-            manifest=_manifest(
-                name, skills={k.replace("_", "-"): {"icon": v} for k, v in icons.items()}
-            ),
-        )
-        for skill in icons:
-            _write_skill(bundle, skill.replace("_", "-"))
-        return bundle
-
-    def test_a_glyph_and_a_site_take_their_own_fields(self, bundles_dir):
-        self._bundle(bundles_dir, "dir-name", "pack", dcf_model="calculator", x_feed="x.com")
-        marks = skill_marks(component_owners().skills)
-        assert marks["dcf-model"].model_dump() == {
-            "icon_url": None, "icon_glyph": "calculator",
-        }
-        assert marks["x-feed"].model_dump() == {
-            "icon_url": "/api/v1/plugins/pack/skills/x-feed/icon", "icon_glyph": None,
-        }
-        assert skill_icon_site_for("pack", "x-feed") == "x.com"
-        # The directory is not the name the page reaches the route with.
-        assert skill_icon_site_for("dir-name", "x-feed") is None
-
-    def test_a_glyph_is_not_a_site(self, bundles_dir):
-        self._bundle(bundles_dir, "pack", "pack", dcf_model="calculator")
-        assert skill_icon_site_for("pack", "dcf-model") is None
-
-    def test_a_skill_with_no_entry_has_no_mark(self, bundles_dir):
-        bundle = self._bundle(bundles_dir, "pack", "pack", dcf_model="calculator")
-        _write_skill(bundle, "plain")
-        assert set(skill_marks(component_owners().skills)) == {"dcf-model"}
-
-    def test_a_key_naming_no_skill_is_never_read(self, bundles_dir):
-        _write(
-            bundles_dir, "pack",
-            manifest=_manifest("pack", skills={"ghost": {"icon": "x.com"}}),
-        )
-        assert skill_marks(component_owners().skills) == {}
-        assert skill_icon_site_for("pack", "ghost") is None
-
-    def test_one_bad_entry_costs_only_itself(self, bundles_dir):
-        bundle = _write(
-            bundles_dir, "pack",
-            manifest=_manifest(
-                "pack",
-                skills={"good": {"icon": "zap"}, "typo": {"icn": "zap"}},
-            ),
-        )
-        _write_skill(bundle, "good")
-        _write_skill(bundle, "typo")
-        assert set(skill_marks(component_owners().skills)) == {"good"}
-
-    def test_the_first_bundle_to_carry_a_skill_draws_it(self, bundles_dir):
-        # The same claim ``component_owners`` keeps, so the tile and the deck
-        # the row sits in name one package.
-        self._bundle(bundles_dir, "a", "first", shared="zap")
-        self._bundle(bundles_dir, "b", "second", shared="x.com")
-        assert skill_marks(component_owners().skills)["shared"].icon_glyph == "zap"
-
-    @pytest.mark.parametrize(
-        "name, skill",
-        [
-            ("..", "x-feed"),
-            ("../outside", "x-feed"),
-            ("pack", "../x-feed"),
-            ("pack", "../../outside/skills/x-feed"),
-            ("pack/skills", "x-feed"),
-        ],
-    )
-    def test_a_traversal_never_reaches_a_manifest(self, bundles_dir, tmp_path, name, skill):
-        self._bundle(tmp_path, "outside", "outside", x_feed="attacker.test")
-        self._bundle(bundles_dir, "pack", "pack", x_feed="x.com")
-        assert skill_icon_site_for(name, skill) is None
+    def test_a_server_wears_the_bundle_mark_only_when_it_is_a_mark(self, bundles_dir):
+        _write(bundles_dir, "site", manifest=_manifest("site", icon="example.test"))
+        _write(bundles_dir, "junk", manifest=_manifest("junk", icon="not a site"))
+        assert server_icon_source("site", "any") == "example.test"
+        assert server_icon_source("junk", "any") is None
 
 
 class TestListing:
-    def test_a_bundle_reads_as_a_plugin(self, bundles_dir):
+    @pytest.mark.asyncio
+    async def test_a_bundle_reads_as_a_plugin(self, bundles_dir):
         bundle = _write(
             bundles_dir, "market", manifest=_manifest("market"),
             mcp={"mcpServers": {"price": {"type": "stdio", "command": "uv"}}},
         )
         _write_skill(bundle, "dcf-model")
-        (info,) = list_bundled()
+        (info,) = await list_bundled()
         assert (info.name, info.version, info.source_type) == (
             "market", "1.2.3", "bundled",
         )
@@ -208,12 +92,6 @@ class TestListing:
         assert [(c.kind, c.name) for c in info.components] == [
             ("mcp", "price"), ("skill", "dcf-model"),
         ]
-
-    def test_the_icon_url_appears_only_when_a_site_is_declared(self, bundles_dir):
-        _write(bundles_dir, "ours", manifest=_manifest("ours"))
-        _write(bundles_dir, "wrapper", manifest=_manifest("wrapper", icon="example.test"))
-        urls = {i.name: i.icon_url for i in list_bundled()}
-        assert urls == {"ours": None, "wrapper": "/api/v1/plugins/wrapper/icon"}
 
     def test_the_skill_directories_are_the_skills(self, bundles_dir):
         # A manifest claim is not one of them. The directory is the whole
@@ -232,16 +110,18 @@ class TestListing:
         (bundle / "skills" / "no-skill-md").mkdir()
         assert component_owners().skills == {"alpha": "ours", "beta": "ours"}
 
-    def test_a_nameless_manifest_is_skipped_not_fatal(self, bundles_dir):
+    @pytest.mark.asyncio
+    async def test_a_nameless_manifest_is_skipped_not_fatal(self, bundles_dir):
         _write(bundles_dir, "broken", manifest={"description": "no name"})
         _write(bundles_dir, "ours", manifest=_manifest("ours"))
-        assert [i.name for i in list_bundled()] == ["ours"]
+        assert [i.name for i in await list_bundled()] == ["ours"]
 
-    def test_an_unparseable_manifest_is_skipped_not_fatal(self, bundles_dir):
+    @pytest.mark.asyncio
+    async def test_an_unparseable_manifest_is_skipped_not_fatal(self, bundles_dir):
         broken = _write(bundles_dir, "broken", manifest=_manifest("broken"))
         (broken / "plugin.json").write_text("{ not json")
         _write(bundles_dir, "ours", manifest=_manifest("ours"))
-        assert [i.name for i in list_bundled()] == ["ours"]
+        assert [i.name for i in await list_bundled()] == ["ours"]
 
     @pytest.mark.parametrize(
         "bad",
@@ -253,7 +133,8 @@ class TestListing:
             {"description": {"long": "form"}},
         ],
     )
-    def test_a_wrongly_typed_field_costs_the_field_not_the_row(
+    @pytest.mark.asyncio
+    async def test_a_wrongly_typed_field_costs_the_field_not_the_row(
         self, bundles_dir, bad
     ):
         # A shipped plugin.json is read straight off disk -- an uploaded one is
@@ -263,12 +144,12 @@ class TestListing:
         # decoration beats dropping the package the reader came to find.
         _write(bundles_dir, "broken", manifest={**_manifest("broken"), **bad})
         _write(bundles_dir, "ours", manifest=_manifest("ours"))
-        assert {i.name for i in list_bundled()} == {"broken", "ours"}
+        assert {i.name for i in await list_bundled()} == {"broken", "ours"}
 
-    def test_a_missing_directory_is_survivable(self, monkeypatch, tmp_path):
+    @pytest.mark.asyncio
+    async def test_a_missing_directory_is_survivable(self, monkeypatch, tmp_path):
         monkeypatch.setattr(bundle_reader, "BUNDLES_DIR", tmp_path / "gone")
-        assert list_bundled() == []
-        assert icon_site_for("anything") is None
+        assert await list_bundled() == []
 
 
 class TestTheNameIsReservedAgainstInstalls:
@@ -327,8 +208,9 @@ class TestTheShippedBundlesAreIntact:
     reachable from a fixture.
     """
 
-    def test_every_bundle_on_disk_reaches_the_page(self):
-        listed = {info.name for info in list_bundled()}
+    @pytest.mark.asyncio
+    async def test_every_bundle_on_disk_reaches_the_page(self):
+        listed = {info.name for info in await list_bundled()}
         on_disk = {b.name for b in bundle_reader.bundles()}
         assert len(listed) == len(on_disk), (
             f"{len(on_disk) - len(listed)} bundle(s) missing from the listing; "
@@ -377,11 +259,12 @@ class TestBothProjectionsAnswerTheSameQuestions:
         "keywords": ["finance"],
     }
 
-    def test_the_same_manifest_projects_the_same_metadata(self, bundles_dir):
+    @pytest.mark.asyncio
+    async def test_the_same_manifest_projects_the_same_metadata(self, bundles_dir):
         from src.server.models.plugin import plugin_row_to_info
 
         _write(bundles_dir, "same", manifest=self._MANIFEST)
-        (shipped,) = list_bundled()
+        (shipped,) = await list_bundled()
         installed = plugin_row_to_info(
             {
                 "name": "same",
@@ -597,7 +480,8 @@ class TestAComponentLinkAlwaysLandsSomewhere:
     here, and why the filter asks the listing rather than the registry.
     """
 
-    def test_a_skill_the_listing_does_not_carry_is_not_advertised(
+    @pytest.mark.asyncio
+    async def test_a_skill_the_listing_does_not_carry_is_not_advertised(
         self, bundles_dir
     ):
         from src.server.services.plugins.bundled import list_bundled
@@ -608,7 +492,7 @@ class TestAComponentLinkAlwaysLandsSomewhere:
         # In the registry, but hidden: activated programmatically, never a row.
         _write_skill(bundles_dir / "alt", "onboarding")
 
-        listed = {b.name: b for b in list_bundled()}["alt"]
+        listed = {b.name: b for b in await list_bundled()}["alt"]
         names = {c.name for c in listed.components if c.kind == "skill"}
 
         assert names == {"pdf"}

@@ -7,20 +7,21 @@ from disk rather than installed -- nothing fetches them, they occupy none of a
 user's plugin slots, and uninstall has nothing to remove.
 
 A bundle's components are its files: the servers ``mcp.json`` names, and the
-directories under its own ``skills/``. The manifest's ``skills`` block is read
-only to draw a skill the directory already holds, so a package cannot claim a
-skill it does not carry.
+directories under its own ``skills/``. Nothing here reads a skill declaration,
+so a package cannot claim a skill it does not carry.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Mapping
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
-from ptc_agent.config.plugins import Bundle, bundles, skill_icon, skill_metas
-from src.server.models.plugin import PluginComponentRef, PluginInfo, SkillMark
+from ptc_agent.config.plugins import Bundle, bundles
+from src.server.models.plugin import PluginComponentRef, PluginInfo
+from src.server.services.icon_urls import source_icon_url
+from src.server.services.plugins.icons import icon_value
 
 logger = logging.getLogger(__name__)
 
@@ -234,12 +235,19 @@ def enforcement_owners() -> ComponentOwners:
     return setup.bundle_owners or component_owners()
 
 
-def _icon_site(bundle: Bundle) -> str | None:
-    site = bundle.namespace.get("icon")
-    return site if isinstance(site, str) and site.strip() else None
+def _bundle_mark(bundle: Bundle) -> str | None:
+    """The site or image a wrapper bundle names for its mark.
+
+    Ours name none: their logo ships with the frontend, because fetching our
+    own mark from our own site would put a network hop and a cache in front
+    of a file already in the bundle, and fail outright on an air-gapped host.
+    """
+    return icon_value(bundle.namespace.get("icon"))
 
 
-def _info(bundle: Bundle, disabled: Collection[str]) -> PluginInfo | None:
+def _info(
+    bundle: Bundle, disabled: Collection[str], icon_url: str | None
+) -> PluginInfo | None:
     manifest: dict[str, Any] = bundle.manifest
     name = _name(bundle)
     if name is None:
@@ -256,7 +264,7 @@ def _info(bundle: Bundle, disabled: Collection[str]) -> PluginInfo | None:
         source_type=SOURCE_TYPE,
         source_ref=None,
         enabled=name not in disabled,
-        icon_url=f"/api/v1/plugins/{name}/icon" if _icon_site(bundle) else None,
+        icon_url=icon_url,
         repository=_text(manifest.get("repository")),
         license=_text(manifest.get("license")),
         keywords=[
@@ -266,7 +274,7 @@ def _info(bundle: Bundle, disabled: Collection[str]) -> PluginInfo | None:
     )
 
 
-def list_bundled(disabled: Collection[str] = ()) -> list[PluginInfo]:
+async def list_bundled(disabled: Collection[str] = ()) -> list[PluginInfo]:
     """Every bundle under ``plugins/``, name-ordered. Never raises.
 
     ``disabled`` is the caller's own switched-off set; a bundle absent from it
@@ -280,7 +288,7 @@ def list_bundled(disabled: Collection[str] = ()) -> list[PluginInfo]:
     out: list[PluginInfo] = []
     for bundle in bundles():
         try:
-            info = _info(bundle, disabled)
+            info = _info(bundle, disabled, await source_icon_url(_bundle_mark(bundle)))
         except (TypeError, ValueError) as e:  # pydantic's error is a ValueError
             logger.warning("bundled plugin: %s is unusable: %s", bundle.path, e)
             continue
@@ -289,61 +297,15 @@ def list_bundled(disabled: Collection[str] = ()) -> list[PluginInfo]:
     return out
 
 
-def icon_site_for(name: str) -> str | None:
-    """The site a bundle names as the owner of its mark, if it names one.
-
-    Only a wrapper bundle needs this. Ours ship their logo with the frontend,
-    because fetching our own mark from our own marketing site would put a
-    network hop and a cache in front of a file that is already in the bundle,
-    and would fail outright on an air-gapped self-host.
-
-    ``name`` is looked up among the bundles actually on disk and is never
-    joined onto a path: this feeds an unauthenticated route, and a name is the
-    only input it has. ``tests/unit/server/services/test_bundled_plugins.py``
-    holds that property down.
-    """
+def server_icon_source(name: str, server: str) -> str | None:
+    """The mark a server bundle ``name`` ships wears: its own ``icon``, else
+    the bundle's. None for ours, which the frontend draws itself."""
     for bundle in bundles():
         if _name(bundle) == name:
-            return _icon_site(bundle)
-    return None
-
-
-def skill_marks(owners: Mapping[str, str]) -> dict[str, SkillMark]:
-    """Each shipped skill's declared mark, by skill name.
-
-    Read from the bundle ``owners`` credits the skill to (``component_owners``),
-    so the tile and the package the row sits under always name one bundle. A
-    site becomes this origin's path to it rather than the site itself, as a
-    package's mark does.
-    """
-    metas = {name: skill_metas(b) for b in bundles() if (name := _name(b))}
-    marks: dict[str, SkillMark] = {}
-    for skill, owner in owners.items():
-        meta = metas.get(owner, {}).get(skill)
-        site, glyph = skill_icon(meta.icon if meta else None)
-        if site:
-            marks[skill] = SkillMark(
-                icon_url=f"/api/v1/plugins/{owner}/skills/{skill}/icon"
-            )
-        elif glyph:
-            marks[skill] = SkillMark(icon_glyph=glyph)
-    return marks
-
-
-def skill_icon_site_for(name: str, skill: str) -> str | None:
-    """The site a bundle names as the owner of one of its skills' marks.
-
-    Found the way ``icon_site_for`` finds a package's, among the bundles on
-    disk and never joined onto a path, because it feeds the same kind of
-    unauthenticated route. Like ``skill_marks``, it answers only for a skill
-    the bundle carries.
-    """
-    for bundle in bundles():
-        if _name(bundle) == name:
-            meta = skill_metas(bundle).get(skill)
-            if meta is None or skill not in _skill_names(bundle)[0]:
-                return None
-            return skill_icon(meta.icon)[0]
+            servers = bundle.namespace.get("servers")
+            meta = servers.get(server) if isinstance(servers, dict) else None
+            icon = meta.get("icon") if isinstance(meta, dict) else None
+            return icon_value(icon) or _bundle_mark(bundle)
     return None
 
 

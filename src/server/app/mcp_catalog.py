@@ -31,18 +31,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from datetime import UTC, datetime
+from functools import partial
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from pydantic import ValidationError
 
-from src.server.app.mcp_icons import icon_url
-from src.server.database.mcp_oauth import (
-    SERVABLE,
-    ConnectionStatus,
-    get_connection,
-    list_connections,
-)
+from src.server.database.mcp_oauth import SERVABLE, get_connection
 from src.server.database.mcp_servers import (
     MAX_CATALOG_SERVERS_PER_USER,
     create_catalog_server,
@@ -50,15 +43,11 @@ from src.server.database.mcp_servers import (
     get_catalog_server,
     list_catalog_servers,
     list_scope_markers_for_user,
-    set_catalog_server_enabled,
     set_catalog_server_new_workspace_default,
     update_catalog_server,
 )
 from src.server.database.mcp_tool_schemas import get_user_tool_schemas
 from src.server.database.pool import get_db_connection
-from src.server.database.user_vault_secrets import (
-    get_user_secrets_decrypted,
-)
 from src.server.models.mcp_server import (
     BindingInput,
     CatalogServer,
@@ -69,292 +58,26 @@ from src.server.models.mcp_server import (
     ProbeInput,
     ProbeResult,
     catalog_row_to_response,
-    isolation_warnings,
     parse_mcp_servers_payload,
 )
-from src.server.services.mcp_catalog import (
-    apply_catalog_edit,
-    detach_warning,
-    reject_reserved_catalog_name,
+from src.server.services.mcp_catalog import apply_catalog_enabled, detach_warning
+from src.server.services.mcp_catalog_view import (
+    catalog_write_warnings,
+    decorate_row,
+    decorate_rows,
+    snapshot_of,
 )
 from src.server.services.mcp_import import catalog_import_scope, run_mcp_import
-from src.server.services.mcp_oauth.discovery import (
-    SELF_HEAL_INTERVAL_S,
-    RejectedHeaderValue,
-    resolve_header_refs,
-    schedule_catalog_discovery,
-    vault_ref_names,
-)
-from src.server.services.mcp_probe import (
-    bounded_probe,
-    missing_secrets_result,
-    probe_result,
-    rejected_header_result,
-)
+from src.server.services.mcp_oauth.discovery import schedule_catalog_discovery
+from src.server.services.mcp_probe import probe_configured, probe_result
+from src.server.services.mcp_saves import CatalogAdd, ServerEdit, parse_server
+from src.server.services.mcp_validation import check_servers
 from src.server.services.vault_invalidation import after_secrets_changed
 from src.server.utils.api import CurrentUserId, handle_api_exceptions
-from src.server.utils.error_sanitization import validation_error_text
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["MCP Catalog"])
-
-async def oauth_for_server(user_id: str, name: str) -> dict | None:
-    """One row's connection, for a response that is only ever about one row.
-
-    Shaped like a row from the map below rather than handed over as the record
-    it arrives as, so :func:`decorated` has one thing to read. Same swallow as
-    the map too: the connection is decoration here, and losing it must not fail
-    the write that just succeeded.
-    """
-    try:
-        conn = await get_connection(user_id, name)
-    except Exception:
-        logger.warning(
-            "[mcp_catalog] OAuth connection lookup failed for %s/%s", user_id, name,
-            exc_info=True,
-        )
-        return None
-    if conn is None:
-        return None
-    return {
-        "status": conn.status,
-        "server_url": conn.server_url,
-        "granted_capabilities": conn.granted_capabilities,
-    }
-
-
-async def _oauth_by_server(user_id: str) -> dict[str, dict]:
-    """server_name → its connection summary, for decorating catalog responses."""
-    try:
-        return {c["server_name"]: c for c in await list_connections(user_id)}
-    except Exception:
-        logger.warning(
-            "[mcp_catalog] OAuth connection lookup failed for %s", user_id,
-            exc_info=True,
-        )
-        return {}
-
-
-def decorated(row: dict, conn: dict | None, **extra) -> CatalogServer:
-    """A catalog response carrying what its OAuth connection knows.
-
-    One helper for every path that has a connection in hand, because they all
-    answer the same two questions about it, and a caller that reached for only
-    the status is how consent stayed invisible after connecting.
-
-    A connection that can no longer be served reports its status but not its
-    capabilities. The stored keys outlive a revoke, and every reader treats a
-    non-null list as the grant currently in force -- so passing them through
-    drew a disconnected broker still badged as able to place live orders.
-    Withholding them reads as "nothing connected here", which is the truth.
-
-    The choice itself still travels, under its own name. Reconnecting is the
-    only way to change a selection, so the dialog that opens on a needs_reauth
-    or revoked row has to start from what the user last chose; seeding it from
-    the grant instead meant a repair after a token expiry re-proposed every
-    group they had declined. Two fields because they are two questions, and the
-    reader that wanted the wrong one is how this went wrong in both directions.
-    """
-    if conn is None:
-        return catalog_row_to_response(row, **extra)
-    from src.server.services.brokerage_capabilities import (
-        effective_capabilities,
-        vendor_for_url,
-    )
-
-    status = ConnectionStatus(conn["status"])
-    stored = conn["granted_capabilities"]
-    return catalog_row_to_response(
-        row,
-        oauth_status=status,
-        # In force rather than as stored, since every badge reads this: a group
-        # whose requirement was not granted is refused, so it is not drawn.
-        granted_capabilities=(
-            list(effective_capabilities(vendor_for_url(conn.get("server_url")), stored))
-            if status in SERVABLE and stored is not None
-            else None
-        ),
-        remembered_capabilities=stored,
-        **extra,
-    )
-
-
-def _has_direct_tools(row: dict, conn: dict | None, snapshot: dict | None) -> bool:
-    """Whether any tool on this row binds directly, and so reaches Flash.
-
-    Flash has no sandbox, so a row is reachable from it only through a tool on
-    the direct path. Answered from the snapshot the list already holds rather
-    than by asking per row, which is the observer behind every server the user
-    owns that the rows deliberately do not carry.
-
-    Read the same way ``resolve_mcp_config`` plans the row: a servable
-    connection says which vendor's rules apply and what was consented to,
-    while a row without one is judged by its own address, its own headers and
-    consent to nothing. A revoked connection is history rather than a claim on
-    the row, so it falls to that header path. A connection that needs repair
-    answers no on its own; the sync binds no grant for it, so nothing it lists
-    could be called.
-
-    Intersected with what the snapshot actually published, because a plan
-    carries every name the vendor's curation grants whether or not this server
-    published it, while ``build_direct_entries`` can only bind a schema it
-    holds. Reading ``plan.direct`` alone would offer Flash on a connection
-    whose scope toggle saves cleanly and then gives Flash nothing to call.
-    """
-    from src.server.models.mcp_server import probe_ok
-    from src.server.services.brokerage_capabilities import vendor_for_url
-    from src.server.services.egress import fold_tool_name, folded
-    from src.server.services.tool_binding import inputs_from_row, resolve_plan
-
-    status = ConnectionStatus(conn["status"]) if conn is not None else None
-    if status is ConnectionStatus.REVOKED:
-        conn = None
-    elif status is not None and status not in SERVABLE:
-        return False
-    # The flag has to agree with the grant the sync would write, and a header
-    # row's grant hangs on this verdict alone (``grant_scope._probe_ok``): the
-    # no-downgrade upsert keeps the tools and the ok status a refused probe
-    # never took away.
-    if conn is None and not probe_ok(snapshot):
-        return False
-    published = (snapshot or {}).get("tools") or []
-    names = [name for t in published if (name := t.get("name"))]
-    vendor_url = conn.get("server_url") if conn is not None else row.get("url")
-    plan = resolve_plan(
-        vendor_for_url(vendor_url),
-        (conn.get("granted_capabilities") or ()) if conn is not None else (),
-        inputs_from_row(row),
-        candidates=names,
-    )
-    direct = folded(plan.direct)
-    return any(fold_tool_name(n) in direct for n in names)
-
-
-async def _snapshots_by_server(
-    user_id: str, rows: list[dict]
-) -> dict[str, dict]:
-    """server_name → its snapshot under the CURRENT config, whatever its status.
-
-    Hash-gated the way the workspace effective list is (``ToolSnapshotIndex``
-    owns the rule), so a stale config's row is never read. Every status rather
-    than only ``ok``: the probe's failure is a fact the page has to show, and
-    it lives on the same row as the tools would. Callers that want tools check
-    ``ok_snapshot`` themselves. The whole snapshot rather than one derived
-    number, because the tool count, the auth verdict and the server's own
-    identity are facts from the same row.
-
-    Pure decoration: any failure degrades to no snapshots, never a 500.
-    """
-    from src.server.services.mcp_config import user_row_to_server_config
-    from src.server.services.mcp_discovery import ToolSnapshotIndex
-
-    try:
-        schema_rows = await get_user_tool_schemas(user_id)
-    except Exception:
-        logger.warning(
-            "[mcp_catalog] tool-schema lookup failed for %s", user_id,
-            exc_info=True,
-        )
-        return {}
-    index = ToolSnapshotIndex(user_rows=schema_rows)
-    accepted: dict[str, dict] = {}
-    for row in rows:
-        try:
-            snapshot = index.snapshot(user_row_to_server_config(row))
-        except Exception:  # noqa: BLE001 — malformed row: just omit it
-            continue
-        if snapshot is not None:
-            accepted[row["name"]] = snapshot
-    return accepted
-
-
-def _kicked_recently(row: dict) -> bool:
-    """Whether this row's probe clock was stamped inside the self-heal window.
-
-    ``claim_probe_kick`` is still the guard every worker agrees on; this is the
-    cheap pre-check in front of it, so a polling list does not spawn a task per
-    remote row only to be told no.
-    """
-    stamp = row.get("probe_kicked_at")
-    if not stamp:
-        return False
-    try:
-        kicked = datetime.fromisoformat(stamp)
-    except (TypeError, ValueError):
-        return False
-    if kicked.tzinfo is None:
-        kicked = kicked.replace(tzinfo=UTC)
-    return (datetime.now(UTC) - kicked).total_seconds() < SELF_HEAL_INTERVAL_S
-
-
-def _kick_unprobed(user_id: str, rows: list[dict], snapshots: dict[str, dict]) -> None:
-    """Self-heal: a live remote row nothing has probed under its current config
-    gets its probe now.
-
-    Rows from before host-side discovery covered them, rows whose snapshot
-    predates the verdict column, rows whose kick was lost to a restart, and
-    rows whose one probe never reached the server all land here. Only
-    ``unreachable`` is retried: every other verdict is the server's own answer,
-    and only a config or vault change earns a new one.
-    """
-    from src.server.models.mcp_server import snapshot_probe
-
-    for row in rows:
-        # An inert template is never dialled in the background, so a kick from
-        # here would only spend a task and a throttle stamp to be told no by
-        # the discovery pass. Its first probe comes from the switch.
-        if not row.get("enabled") or row.get("plugin_enabled") is False:
-            continue
-        # The host-side probe dials streamable HTTP, so an ``sse`` row has no
-        # path from here at all and keeps its in-sandbox discovery.
-        if row.get("transport") != "http":
-            continue
-        probe = snapshot_probe(snapshots.get(row["name"]))
-        unprobed = (
-            row["name"] not in snapshots
-            or probe is None
-            or probe.verdict == "unreachable"
-        )
-        if unprobed and not _kicked_recently(row):
-            schedule_catalog_discovery(
-                user_id, row["name"], reason="self-heal", throttle=True
-            )
-
-
-async def _oauth_headers_warning(user_id: str, server: McpServerInput) -> str | None:
-    """Warn when configured headers meet a live OAuth connection.
-
-    The two are independently settable, but the OAuth path never sends the
-    configured headers: the probe sends its own, host discovery and the relay
-    send only the OAuth Authorization. Silence would read as pass-through.
-    """
-    if not server.headers:
-        return None
-    try:
-        connection = await get_connection(user_id, server.name)
-    except Exception:
-        logger.warning(
-            "[mcp_catalog] OAuth connection lookup failed for %s", user_id,
-            exc_info=True,
-        )
-        return None
-    if connection is None or connection.status == ConnectionStatus.REVOKED:
-        return None
-    return (
-        "This server is OAuth-connected, so its configured headers are not "
-        "sent: discovery and sandbox tool calls carry only the OAuth "
-        "Authorization header. Disconnect OAuth to use headers instead."
-    )
-
-
-async def catalog_write_warnings(user_id: str, server: McpServerInput) -> list[str] | None:
-    """The write-time nudges for a catalog row: isolation, then dropped headers."""
-    warnings = isolation_warnings(server)
-    if headers_warning := await _oauth_headers_warning(user_id, server):
-        warnings.append(headers_warning)
-    return warnings or None
-
 
 @router.get("/servers")
 @handle_api_exceptions("list MCP catalog servers", logger)
@@ -367,23 +90,7 @@ async def list_servers(
     Not a pure read: a remote row with no verdict gets its probe kicked here
     (stamping ``probe_kicked_at``), throttled per row, so a listing is what
     heals a row whose probe was lost."""
-    rows = await list_catalog_servers(user_id)
-    oauth = await _oauth_by_server(user_id)
-    snapshots = await _snapshots_by_server(user_id, rows)
-    _kick_unprobed(user_id, rows, snapshots)
-    servers = []
-    for r in rows:
-        snapshot = snapshots.get(r["name"])
-        meta = (snapshot or {}).get("observed_meta") or {}
-        servers.append(
-            decorated(
-                r,
-                oauth.get(r["name"]),
-                icon_url=await icon_url(meta.get("server_info")),
-                has_direct_tools=_has_direct_tools(r, oauth.get(r["name"]), snapshot),
-                snapshot=snapshot,
-            )
-        )
+    servers = await decorate_rows(user_id, await list_catalog_servers(user_id))
     if all_scopes:
         markers = await list_scope_markers_for_user(user_id)
         tombstoned: dict[str, list[str]] = {}
@@ -405,17 +112,13 @@ async def list_servers(
 async def create_server(
     user_id: CurrentUserId, body: dict = Body(...)
 ) -> CatalogServer:
-    try:
-        server = McpServerInput(**body)
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=validation_error_text(e))
-    reject_reserved_catalog_name(server.name)
-    try:
-        row = await create_catalog_server(
-            user_id, server.name, **server.to_catalog_fields()
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    save = CatalogAdd(user_id, parse_server(body))
+    await save.refuse()
+    # Nothing is saved that has not answered: a failed check is the response
+    # (422, or 409 when a sign-in is what saves it), and no row is left behind.
+    await save.check()
+    row = await save.write()
+    server = save.server
     # The probe runs now rather than at the user's next turn: the row's tool
     # count and its auth verdict are what the page shows next. Only for a row
     # that landed switched on: the background pass refuses an inert one, so
@@ -468,22 +171,12 @@ async def probe_server(
     before anything is saved.
 
     Declared before ``/servers/{name}`` so the literal path wins the match.
-    Nothing is written: the form shows the verdict and the save that follows
-    schedules the discovery that caches it.
+    Advisory: nothing is written, and the save runs its own check whatever
+    this one said, so the form's verdict is a preview of that answer.
     """
-    names = vault_ref_names(body.headers)
-    # Only the referenced names are decrypted: each row is a full S2K
-    # derivation, and the header-free probe a URL edit fires refers to none.
-    secrets = await get_user_secrets_decrypted(user_id, names) if names else {}
-    try:
-        headers, missing = resolve_header_refs(body.headers, secrets)
-    except RejectedHeaderValue:
-        # The same answer httpx would have produced one layer down, minus the
-        # round trip and minus the value quoted back in the error it raises.
-        return rejected_header_result()
-    if missing:
-        return missing_secrets_result(missing)
-    outcome = await _unless_gone(request, bounded_probe(body.url, headers))
+    outcome = await _unless_gone(
+        request, probe_configured(user_id, body.url, body.headers)
+    )
     return probe_result(outcome, include_tools=True)
 
 
@@ -493,9 +186,7 @@ async def get_server(name: str, user_id: CurrentUserId) -> CatalogServer:
     row = await get_catalog_server(user_id, name)
     if not row:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    oauth = await _oauth_by_server(user_id)
-    snapshot = (await _snapshots_by_server(user_id, [row])).get(name)
-    return decorated(row, oauth.get(name), snapshot=snapshot)
+    return await decorate_row(user_id, row)
 
 
 @router.get("/servers/{name}/tools")
@@ -579,32 +270,17 @@ async def get_server_tools(name: str, user_id: CurrentUserId) -> dict:
 async def update_server(
     name: str, user_id: CurrentUserId, body: dict = Body(...)
 ) -> CatalogServer:
-    try:
-        server = McpServerInput(**body)
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=validation_error_text(e))
-    # The path name is authoritative; a renamed body is rejected to avoid
-    # silently creating a second row under a different key. So an edit never
-    # introduces a name, which is why the sandbox's reserved names are not
-    # checked here: a row saved before its name was reserved stays editable.
-    if server.name != name:
-        raise HTTPException(
-            status_code=409, detail="name in body must match the path name"
-        )
-    # A hand edit forks the row off its plugin; the service owns that decision
-    # along with the consent revoke and the rediscovery kick.
-    edit = await apply_catalog_edit(
-        user_id, name, server.to_catalog_fields(), detach_plugin=True
-    )
-    if edit is None:
-        raise HTTPException(status_code=404, detail="MCP server not found")
+    save = ServerEdit(user_id, name, parse_server(body))
+    await save.refuse()
+    edit = await save.write()
+    server = save.server
     # The snapshot outlives an edit that leaves the discovery fingerprint
     # alone, and the page reads the row it gets back: without it the tool count
     # and the probe verdict blank out on every save that changed nothing about
     # discovery. An edit that DID move the fingerprint misses here, which is
     # the right answer -- the rediscovery the edit schedules owns the refill.
     response = catalog_row_to_response(
-        edit.row, snapshot=(await _snapshots_by_server(user_id, [edit.row])).get(name)
+        edit.row, snapshot=await snapshot_of(user_id, edit.row)
     )
     # After the revoke inside the edit, so one that just severed the connection
     # does not warn about headers it has now made effective.
@@ -622,10 +298,10 @@ async def import_servers(
     """Parse a standard ``{"mcpServers": {...}}`` blob into the user catalog.
 
     Mirrors the workspace import (name coercion, transport mapping, literal
-    credentials auto-extracted into the user's vault) with one deliberate
-    difference: imported rows land ``enabled=false`` (inert templates), so an
-    import never silently changes every workspace's toolset. The UI nudges the
-    user to flip each one live.
+    credentials auto-extracted into the user's vault, every entry checked
+    before it lands) with one deliberate difference: imported rows land
+    ``enabled=false`` (inert templates), so an import never silently changes
+    every workspace's toolset. The UI nudges the user to flip each one live.
     """
     parsed = parse_mcp_servers_payload(body)
     if not parsed:
@@ -656,6 +332,7 @@ async def import_servers(
             existing_names={r["name"] for r in await list_catalog_servers(user_id)},
             persist=persist,
             exists_message="already exists in your Plugins",
+            check=partial(check_servers, user_id),
         ),
     )
 
@@ -679,99 +356,6 @@ async def import_servers(
         "secrets_created": report.secrets_created,
         "config_version": 0,
     }
-
-
-async def _relay_execution_warning(user_id: str, name: str) -> str | None:
-    """A row the relay has to carry runs only through it, and activation is the
-    moment to tell the user their deployment cannot actually run it.
-
-    Two shapes need the warning: an OAuth connection, whose token only the
-    relay spends, and an ``http`` row with a tool on the direct path, which the
-    model reaches by dialing the relay too. The second is read off the row's
-    own binding map rather than its probe verdict: over-warning a row that is
-    failing its probe costs a sentence, while waiting for a verdict would keep
-    the warning from the silent case it exists for, where the sync binds
-    nothing and the tool is gone from both agents.
-    """
-    from src.config.env import EGRESS_RELAY_SECRET
-    from src.server.app import setup
-    from src.server.services.brokerage_capabilities import vendor_for_url
-    from src.server.services.egress.reachability import (
-        effective_relay_base_url,
-        relay_reachability_warning,
-    )
-    from src.server.services.tool_binding import inputs_from_row, resolve_plan
-
-    if setup.agent_config is None:
-        return None
-    connection = await get_connection(user_id, name)
-    # A revoked connection is history, not a claim on the row (the rule the
-    # resolver and the relay apply), so the row is judged by its own binding.
-    if connection is None or connection.status is ConnectionStatus.REVOKED:
-        row = await get_catalog_server(user_id, name)
-        if row is None or row.get("transport") != "http":
-            return None
-        # Planned off the row's own address and consent to nothing, the way
-        # every other reader plans a row that has no connection.
-        plan = resolve_plan(vendor_for_url(row.get("url")), (), inputs_from_row(row))
-        if not plan.direct:
-            return None
-    if not EGRESS_RELAY_SECRET:
-        return (
-            "The egress relay is disabled (EGRESS_RELAY_SECRET is not set), so "
-            "this server's tools cannot run in sandboxes. Set a strong "
-            "EGRESS_RELAY_SECRET in the backend environment and restart."
-        )
-    provider = await _relay_provider_kind(user_id)
-    return relay_reachability_warning(provider, effective_relay_base_url(provider))
-
-
-async def _relay_provider_kind(user_id: str) -> str | None:
-    """Which provider's relay reachability this user's warning is about.
-
-    A user's own machine decides where their sandboxes run, so its kind beats
-    the deployment default; a user with no computer yet gets the default.
-    """
-    from src.server.app import setup
-
-    try:
-        from src.server.database.computer import get_primary_computer
-
-        computer = await get_primary_computer(user_id)
-        if computer and computer.get("kind"):
-            return str(computer["kind"])
-    except Exception as e:
-        logger.debug(f"Could not resolve the user's computer kind: {e}")
-    if setup.agent_config is None:
-        return None
-    return setup.agent_config.sandbox.provider
-
-
-async def apply_catalog_enabled(
-    user_id: str, name: str, enabled: bool
-) -> tuple[dict | None, str | None]:
-    """The one place a *switch* flips a catalog row. Returns the row and
-    whatever the user is owed about it, or ``(None, None)`` if it is gone.
-
-    Every switch routes through here so no caller can end up with half of what
-    another does: the DB layer bumps every workspace's ``mcp_config_version``
-    in the same transaction (next-acquire convergence), and disable also has to
-    bite now rather than at next acquire, which ``revoke_live_grants`` carries
-    the reasoning for.
-
-    The column itself has another writer, the disable an edit does before
-    rewriting a row. It reaches the DB toggle directly and means to: it is not
-    a user flipping a switch, so it owes no relay warning.
-    """
-    from src.server.services.mcp_oauth.lifecycle import revoke_live_grants
-
-    row = await set_catalog_server_enabled(user_id, name, enabled)
-    if row is None:
-        return None, None
-    if enabled:
-        return row, await _relay_execution_warning(user_id, name)
-    await revoke_live_grants(user_id, [name])
-    return row, None
 
 
 def _binding_fields(vendor: str | None, tool: str, inputs) -> dict:
@@ -919,12 +503,10 @@ async def set_binding(
         # And the row's own grants: a header grant is keyed by name and carries
         # no connection, so the rewrite above never reaches one.
         await apply_binding_to_active_header_grants(user_id, name, conn=db)
-    oauth = await _oauth_by_server(user_id)
     # A binding change moves no discovery fingerprint, so the row's snapshot is
     # still its own; dropping it here blanked the tool count and the verdict on
     # every path toggle.
-    snapshot = (await _snapshots_by_server(user_id, [updated])).get(name)
-    return decorated(updated, oauth.get(name), snapshot=snapshot)
+    return await decorate_row(user_id, updated)
 
 
 @router.patch("/servers/{name}/enabled")
@@ -946,8 +528,7 @@ async def set_enabled(
         # blank for the rest of the self-heal window. A toggle flipped twice
         # costs one extra dial at most, and only until a verdict lands: a
         # settled snapshot of any status stops this branch.
-        snapshot = (await _snapshots_by_server(user_id, [row])).get(name)
-        if snapshot is None:
+        if await snapshot_of(user_id, row) is None:
             schedule_catalog_discovery(user_id, name, reason="enable")
     out: dict = {"name": name, "enabled": body.enabled}
     if warning:

@@ -13,9 +13,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.server.models.mcp_server import McpServerInput
 from src.server.models.plugin import InstallReport
 from src.server.services import mcp_import
 from src.server.services.plugins import server_fanout
+from src.server.services.plugins.checks import NOT_CHECKED_REASON, CheckedServers
 from src.server.services.plugins.mcp import McpEntryPlan
 
 pytestmark = pytest.mark.asyncio
@@ -78,10 +80,38 @@ async def test_the_row_is_keyed_by_the_entry_that_landed(created):
     ]
     report = InstallReport()
 
-    await server_fanout.fan_out_servers("u1", "plug", plans, report)
+    checked = CheckedServers.of(
+        [McpServerInput(name="foo_bar", transport="stdio", command="npx")]
+    )
+    await server_fanout.fan_out_servers("u1", "plug", plans, report, checked=checked)
 
     assert [(c.key, c.status) for c in report.components] == [
         ("foo-bar", "invalid"), ("foo_bar", "created")
     ]
     assert created.await_count == 1
     assert created.await_args.kwargs["plugin_server_key"] == "foo_bar"
+
+
+async def test_a_server_its_check_did_not_pass_is_not_written(created):
+    # The check runs before the fan-out lock; a server that reaches the write
+    # in any other shape than the one that passed is refused, not saved.
+    plans = [
+        McpEntryPlan(
+            key="vendor", name="vendor", renamed=False, transport="http",
+            config={
+                "name": "vendor",
+                "transport": "http",
+                "url": "https://example.com/v2/mcp",
+            },
+        ),
+    ]
+    checked = CheckedServers.of(
+        [McpServerInput(name="vendor", transport="http", url="https://example.com/mcp")]
+    )
+    report = InstallReport()
+    await server_fanout.fan_out_servers("u1", "plug", plans, report, checked=checked)
+
+    assert [(c.key, c.status, c.reason) for c in report.components] == [
+        ("vendor", "error", NOT_CHECKED_REASON)
+    ]
+    created.assert_not_awaited()

@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.server.services.plugins import lifecycle
+from src.server.services.plugins.extension import LangalphaExtension
+from src.server.services.plugins.grants import BindGrants
 from src.server.services.plugins.skills import SkillPlan, collect_skills
 
 USER = "test-user-123"
@@ -52,6 +54,8 @@ def _package(
         version="1.0.0",
         manifest={},
         mcp_document=None,
+        mcp_document_invalid=False,
+        extension=LangalphaExtension(),
         entry_plans=[],
         skill_plans=plans,
     )
@@ -72,8 +76,14 @@ def _account(skill_rows: list[dict]):
         patch(M + "bundled_names", return_value=frozenset()),
         patch(M + "plugin_fan_out_lock", lambda _: nullcontext()),
         patch(M + "get_plugin", new=AsyncMock(return_value=None)),
+        patch(M + "list_plugins", new=AsyncMock(return_value=[])),
+        patch(
+            "src.server.services.plugins.gate.resolve_bind_grants",
+            new=AsyncMock(return_value=BindGrants(granted=frozenset())),
+        ),
         patch(M + "list_catalog_servers", new=AsyncMock(return_value=[])),
         patch(M + "list_user_skills", new=AsyncMock(return_value=skill_rows)),
+        patch(M + "get_user_secret_names", new=AsyncMock(return_value=[])),
         patch(M + "create_plugin", new=create),
     ):
         yield create

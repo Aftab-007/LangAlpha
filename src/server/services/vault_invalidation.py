@@ -25,6 +25,7 @@ from src.server.database.mcp_tool_schemas import (
     delete_user_and_workspace_tool_schemas_and_bump,
 )
 from src.server.database.workspace import get_running_workspace_ids_for_user
+from src.server.services.mcp_apply import schedule_proactive_apply
 from src.server.services.mcp_config import user_row_to_server_config
 from src.server.services.workspace_manager import WorkspaceManager
 
@@ -245,12 +246,8 @@ async def _schedule_applies(user_id: str) -> None:
     the vault anyway. Its own failure domain: it must never take the version
     bump down with it."""
     try:
-        # Lazy: the scheduler lives in a router, and a service must not import
-        # an app module at import time.
-        from src.server.app.mcp_servers import _schedule_proactive_apply
-
         for workspace_id in await get_running_workspace_ids_for_user(user_id):
-            _schedule_proactive_apply(workspace_id, user_id)
+            schedule_proactive_apply(workspace_id, user_id)
     except Exception:
         logger.warning(
             f"{_LOG} proactive apply failed for user {user_id}", exc_info=True

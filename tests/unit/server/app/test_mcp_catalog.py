@@ -20,7 +20,11 @@ from httpx import ASGITransport, AsyncClient
 
 from src.server.database.mcp_servers import MAX_CATALOG_SERVERS_PER_USER
 from src.server.services.trading_permission import TRADING_AGREEMENT_VERSION
+from src.server.models.mcp_server import McpServerInput
+from src.server.services.mcp_probe import ProbeOutcome
+from src.server.services.mcp_validation import CheckFailure, SignInNeeded, check_server
 from tests.conftest import create_test_app
+from tests.unit.server.mcp_builders import checks_pass, passing
 
 
 def _row(name="remote_server", **overrides):
@@ -62,6 +66,21 @@ def _probe_kick_always_claimed():
         new=AsyncMock(return_value=datetime.now(UTC)),
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def checks():
+    """Every server these routes write passes its check unless a test says
+    otherwise, on an account with room and no row of its name; the gate itself
+    is pinned in the tests that fail it."""
+    with (
+        checks_pass() as seams,
+        patch(
+            "src.server.services.mcp_catalog.list_catalog_servers",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        yield seams
 
 
 @pytest_asyncio.fixture
@@ -122,7 +141,7 @@ async def test_list_reports_hash_gated_tool_counts(client):
             new=AsyncMock(return_value=rows),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_user_tool_schemas",
+            "src.server.services.mcp_catalog_view.get_user_tool_schemas",
             new=AsyncMock(return_value=schemas),
         ),
     ):
@@ -167,11 +186,11 @@ async def test_all_scopes_lists_the_workspaces_each_server_is_off_in(client):
 async def test_create_happy(client):
     with (
         patch(
-            "src.server.app.mcp_catalog.create_catalog_server",
+            "src.server.services.mcp_saves.create_catalog_server",
             new=AsyncMock(return_value=_row(name="new_server")),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_connection",
+            "src.server.services.mcp_catalog_view.get_connection",
             new=AsyncMock(return_value=None),
         ),
     ):
@@ -199,10 +218,11 @@ async def test_create_kicks_the_probe_only_for_a_row_that_lands_on(
     enable toggle is what earns such a row its first probe.
     """
     from src.server.app import mcp_catalog
+    from src.server.services import mcp_saves
 
     with (
         patch.object(
-            mcp_catalog,
+            mcp_saves,
             "create_catalog_server",
             new=AsyncMock(return_value=_row(name="new_server", enabled=enabled)),
         ),
@@ -227,7 +247,7 @@ async def test_create_kicks_the_probe_only_for_a_row_that_lands_on(
 @pytest.mark.asyncio
 async def test_create_duplicate_409(client):
     with patch(
-        "src.server.app.mcp_catalog.create_catalog_server",
+        "src.server.services.mcp_saves.create_catalog_server",
         new=AsyncMock(side_effect=ValueError("already exists")),
     ):
         resp = await client.post(
@@ -244,7 +264,7 @@ async def test_create_accepts_any_command(client):
     # the agent asks it to.
     for command in ("bash", "docker"):
         with patch(
-            "src.server.app.mcp_catalog.create_catalog_server",
+            "src.server.services.mcp_saves.create_catalog_server",
             new=AsyncMock(side_effect=ValueError("already exists")),
         ):
             resp = await client.post(
@@ -258,7 +278,7 @@ async def test_create_accepts_any_command(client):
 @pytest.mark.asyncio
 async def test_create_over_cap_409(client):
     with patch(
-        "src.server.app.mcp_catalog.create_catalog_server",
+        "src.server.services.mcp_saves.create_catalog_server",
         new=AsyncMock(
             side_effect=ValueError(
                 "Maximum of 50 MCP catalog servers per user reached"
@@ -271,6 +291,237 @@ async def test_create_over_cap_409(client):
         )
     assert resp.status_code == 409
     assert "Maximum of 50" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# The check a new or edited row owes before it is written
+# ---------------------------------------------------------------------------
+
+
+def _fails(verdict="credential_rejected", reason="the server rejected the key", missing=()):
+    async def check(user_id, server, **_kwargs):
+        return CheckFailure(
+            server=server.name,
+            verdict=verdict,
+            reason=reason,
+            missing_secrets=tuple(missing),
+        )
+
+    return check
+
+
+async def _wants_sign_in(user_id, server, **_kwargs):
+    return SignInNeeded(server=server.name, url=server.url or "")
+
+
+_NEW_SERVER = {
+    "name": "new_server",
+    "transport": "http",
+    "url": "https://api.example.com/mcp",
+    "headers": {"Authorization": "${vault:API_KEY}"},
+}
+
+
+@pytest.mark.asyncio
+async def test_create_checks_the_server_as_it_will_be_saved(client, checks):
+    with (
+        patch(
+            "src.server.services.mcp_saves.create_catalog_server",
+            new=AsyncMock(return_value=_row(name="new_server")),
+        ),
+        patch("src.server.services.mcp_catalog_view.get_connection", new=AsyncMock(return_value=None)),
+    ):
+        resp = await client.post("/api/v1/mcp/servers", json=_NEW_SERVER)
+    assert resp.status_code == 201
+    args, kwargs = checks.catalog.await_args
+    assert args == ("test-user-123", McpServerInput(**_NEW_SERVER))
+    # A new row has no sign-in of its own to send, and the Plugins page is in
+    # no workspace, so a command server starts on the user's own computer.
+    assert kwargs == {"workspace_id": None, "bearer": None}
+
+
+@pytest.mark.asyncio
+async def test_create_writes_nothing_when_the_server_fails_its_check(client, checks):
+    checks.catalog.side_effect = _fails()
+    created = AsyncMock()
+    with (
+        patch("src.server.services.mcp_saves.create_catalog_server", new=created),
+        patch("src.server.app.mcp_catalog.schedule_catalog_discovery") as kicked,
+    ):
+        resp = await client.post("/api/v1/mcp/servers", json=_NEW_SERVER)
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == {
+        "code": "mcp_check_failed",
+        "message": "new_server did not pass its check: the server rejected the key",
+        "failures": [
+            {
+                "server": "new_server",
+                "verdict": "credential_rejected",
+                "reason": "the server rejected the key",
+                "missing_secrets": [],
+            }
+        ],
+    }
+    created.assert_not_awaited()
+    kicked.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_leaves_a_server_that_wants_a_sign_in_to_its_callback(client, checks):
+    """A 409 the client answers by starting the sign-in, whose callback saves
+    the row: nothing is written ahead of it."""
+    checks.catalog.side_effect = _wants_sign_in
+    created = AsyncMock()
+    with patch("src.server.services.mcp_saves.create_catalog_server", new=created):
+        resp = await client.post(
+            "/api/v1/mcp/servers",
+            json={"name": "new_server", "transport": "http", "url": "https://api.example.com/mcp"},
+        )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "code": "mcp_sign_in_required",
+        "message": "Sign in to the server to add it.",
+        "servers": [{"server": "new_server", "url": "https://api.example.com/mcp"}],
+    }
+    created.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows, detail",
+    [
+        (
+            [_row(name="new_server")],
+            "A server named 'new_server' already exists on your account. "
+            "Choose another name.",
+        ),
+        (
+            [_row(name=f"s{i}") for i in range(MAX_CATALOG_SERVERS_PER_USER)],
+            f"Maximum of {MAX_CATALOG_SERVERS_PER_USER} MCP catalog servers per user reached",
+        ),
+    ],
+)
+async def test_create_refuses_a_taken_name_or_a_full_account_before_dialling(
+    client, checks, rows, detail
+):
+    """The insert would refuse both anyway; asking first keeps the user from
+    waiting on a server whose answer would be thrown away."""
+    created = AsyncMock()
+    with (
+        patch(
+            "src.server.services.mcp_catalog.list_catalog_servers",
+            new=AsyncMock(return_value=rows),
+        ),
+        patch("src.server.services.mcp_saves.create_catalog_server", new=created),
+    ):
+        resp = await client.post("/api/v1/mcp/servers", json=_NEW_SERVER)
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == detail
+    checks.catalog.assert_not_awaited()
+    created.assert_not_awaited()
+
+
+_STORED = {
+    "name": "remote_server",
+    "transport": "http",
+    "url": "https://api.example.com/mcp",
+    "headers": STORED_HEADERS,
+}
+
+
+def _edit_patches(*, prior=None, update=None, toggle=None):
+    stack = ExitStack()
+    stack.enter_context(
+        patch(
+            "src.server.services.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=prior if prior is not None else _row()),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "src.server.services.mcp_catalog.update_catalog_server",
+            new=update or AsyncMock(return_value=_row()),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "src.server.services.mcp_catalog.set_catalog_server_enabled",
+            new=toggle or AsyncMock(),
+        )
+    )
+    for target in (
+        "src.server.services.mcp_catalog_view.get_connection",
+        "src.server.database.mcp_oauth.get_connection",
+    ):
+        stack.enter_context(patch(target, new=AsyncMock(return_value=None)))
+    return stack
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "edit, checked",
+    [
+        ({"description": "reworded"}, False),
+        ({"tool_exposure_mode": "detailed"}, False),
+        ({"url": "https://api.example.com/v2/mcp"}, True),
+        ({"headers": {"Authorization": "${vault:OTHER_KEY}"}}, True),
+        # Dropping a header changes what the server is sent as much as adding one.
+        ({"headers": {}}, True),
+    ],
+)
+async def test_update_checks_only_an_edit_that_moves_how_the_server_is_reached(
+    client, checks, edit, checked
+):
+    """Rewording a description cannot break a server, and dialling a vendor
+    to save one would make every prose edit wait on the network."""
+    with _edit_patches():
+        resp = await client.put(
+            "/api/v1/mcp/servers/remote_server", json={**_STORED, **edit}
+        )
+    assert resp.status_code == 200
+    assert checks.catalog.await_count == (1 if checked else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "check, status, code",
+    [
+        (_fails("unreachable", "server answered HTTP 400 to the MCP handshake"), 422, "mcp_check_failed"),
+        (_wants_sign_in, 409, "mcp_sign_in_required"),
+    ],
+)
+async def test_update_writes_nothing_when_the_edit_fails_its_check(
+    client, checks, check, status, code
+):
+    """Nothing the edit owes runs either: a plugin row switched off at its
+    plugin keeps its state rather than being forked for an edit that never
+    landed."""
+    checks.catalog.side_effect = check
+    update = AsyncMock()
+    toggle = AsyncMock()
+    prior = _row(plugin_id="p-1", plugin_name="acme", plugin_enabled=False)
+    with _edit_patches(prior=prior, update=update, toggle=toggle):
+        resp = await client.put(
+            "/api/v1/mcp/servers/remote_server",
+            json={**_STORED, "url": "https://moved.example.com/mcp"},
+        )
+    assert resp.status_code == status
+    assert resp.json()["detail"]["code"] == code
+    update.assert_not_awaited()
+    toggle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_checks_a_connected_server_with_its_own_sign_in(client, checks):
+    """A signed-in server answers its listing only with its token, so an edit
+    to its headers is checked as the running server will be called."""
+    checks.bearer.return_value = "access-token"
+    body = {**_STORED, "headers": {"X-Tenant": "acme"}}
+    with _edit_patches():
+        resp = await client.put("/api/v1/mcp/servers/remote_server", json=body)
+    assert resp.status_code == 200
+    assert checks.bearer.await_args.args == ("test-user-123", McpServerInput(**body))
+    assert checks.catalog.await_args.kwargs["bearer"] == "access-token"
 
 
 @pytest.mark.asyncio
@@ -321,7 +572,7 @@ async def test_update_response_echoes_the_written_maps(client):
             new=AsyncMock(return_value=_row()),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_connection",
+            "src.server.services.mcp_catalog_view.get_connection",
             new=AsyncMock(return_value=None),
         ),
         patch(
@@ -368,7 +619,7 @@ async def test_update_name_mismatch_409(client):
 @pytest.mark.asyncio
 async def test_create_refuses_a_name_the_sandbox_reserves(client, name, reason):
     create = AsyncMock()
-    with patch("src.server.app.mcp_catalog.create_catalog_server", new=create):
+    with patch("src.server.services.mcp_saves.create_catalog_server", new=create):
         resp = await client.post(
             "/api/v1/mcp/servers",
             json={"name": name, "transport": "stdio", "command": "npx"},
@@ -382,11 +633,11 @@ async def test_create_refuses_a_name_the_sandbox_reserves(client, name, reason):
 async def test_create_accepts_a_soft_keyword(client):
     with (
         patch(
-            "src.server.app.mcp_catalog.create_catalog_server",
+            "src.server.services.mcp_saves.create_catalog_server",
             new=AsyncMock(return_value=_row(name="match")),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_connection",
+            "src.server.services.mcp_catalog_view.get_connection",
             new=AsyncMock(return_value=None),
         ),
     ):
@@ -409,7 +660,7 @@ async def test_update_keeps_a_name_the_sandbox_reserves(client):
             new=AsyncMock(return_value=_row(name="class")),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_connection",
+            "src.server.services.mcp_catalog_view.get_connection",
             new=AsyncMock(return_value=None),
         ),
         patch(
@@ -599,7 +850,7 @@ async def test_update_warns_when_headers_meet_oauth(client, status, warned):
             new=AsyncMock(return_value=_row()),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_connection",
+            "src.server.services.mcp_catalog_view.get_connection",
             new=AsyncMock(return_value=connection),
         ),
         # The consent-move check reads through its own late import.
@@ -639,7 +890,7 @@ async def test_update_without_headers_never_warns(client):
             "src.server.services.mcp_catalog.get_catalog_server",
             new=AsyncMock(return_value=_row()),
         ),
-        patch("src.server.app.mcp_catalog.get_connection", new=lookup),
+        patch("src.server.services.mcp_catalog_view.get_connection", new=lookup),
         patch("src.server.database.mcp_oauth.get_connection", new=AsyncMock(
             return_value=connection
         )),
@@ -700,7 +951,7 @@ async def test_update_rediscovers_when_fingerprint_moves_and_consent_stays(clien
             new=AsyncMock(return_value=_row(headers={"X-New": "1"})),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_connection",
+            "src.server.services.mcp_catalog_view.get_connection",
             new=AsyncMock(return_value=connection),
         ),
         patch(
@@ -747,7 +998,7 @@ async def test_update_skips_rediscovery_when_fingerprint_is_unchanged(client):
             new=AsyncMock(return_value=_row(description="edited")),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_connection",
+            "src.server.services.mcp_catalog_view.get_connection",
             new=AsyncMock(return_value=connection),
         ),
         patch(
@@ -836,7 +1087,7 @@ async def test_update_rediscovery_swallows_an_unusable_connection(client):
             new=AsyncMock(return_value=_row(headers={"X-New": "1"})),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_connection",
+            "src.server.services.mcp_catalog_view.get_connection",
             new=AsyncMock(return_value=connection),
         ),
         patch(
@@ -882,11 +1133,11 @@ async def test_create_warns_when_recreate_lands_on_a_live_connection(client):
     )
     with (
         patch(
-            "src.server.app.mcp_catalog.create_catalog_server",
+            "src.server.services.mcp_saves.create_catalog_server",
             new=AsyncMock(return_value=_row(name="remote_server")),
         ),
         patch(
-            "src.server.app.mcp_catalog.get_connection",
+            "src.server.services.mcp_catalog_view.get_connection",
             new=AsyncMock(return_value=connection),
         ),
     ):
@@ -960,8 +1211,13 @@ async def _toggle_patches(*, connection, row=None):
     row = {"name": "remote_server", "transport": "http", "enabled": True} if row is None else row
     revoke = AsyncMock()
     with (
+        # The row an enable reads to ask whether it lacks a sign-in.
         patch(
-            "src.server.app.mcp_catalog.set_catalog_server_enabled",
+            "src.server.services.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=row),
+        ),
+        patch(
+            "src.server.services.mcp_catalog.set_catalog_server_enabled",
             new=AsyncMock(return_value=row),
         ),
         # Patched at the source modules: the revoke lives in
@@ -976,7 +1232,7 @@ async def _toggle_patches(*, connection, row=None):
             new=revoke,
         ),
         patch(
-            "src.server.app.mcp_catalog._relay_execution_warning",
+            "src.server.services.mcp_catalog._relay_execution_warning",
             new=AsyncMock(return_value=None),
         ),
     ):
@@ -1038,6 +1294,82 @@ async def test_enable_kicks_the_probe_an_inert_row_never_got(client):
     assert sched.call_args_list == [
         call("test-user-123", "remote_server", reason="enable")
     ]
+
+
+_SIGN_IN = {
+    "code": "mcp_sign_in_required",
+    "message": "Sign in to the server to switch it on.",
+    "servers": [{"server": "remote_server", "url": "https://api.example.com/mcp"}],
+}
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_lacks_its_sign_in_is_not_switched_on(client, checks):
+    """On without its connection, the agent is handed a server every call to
+    which fails; the 409 is the one a save answers with, so the client starts
+    the sign-in the same way."""
+    row = _row(enabled=False)
+    checks.sign_in.return_value = SignInNeeded(server="remote_server", url=row["url"])
+    toggled = AsyncMock()
+    with (
+        patch("src.server.services.mcp_catalog.get_catalog_server", new=AsyncMock(return_value=row)),
+        patch("src.server.services.mcp_catalog.set_catalog_server_enabled", new=toggled),
+        patch("src.server.app.mcp_catalog.schedule_catalog_discovery") as kicked,
+    ):
+        resp = await client.patch(
+            "/api/v1/mcp/servers/remote_server/enabled", json={"enabled": True}
+        )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == _SIGN_IN
+    checks.sign_in.assert_awaited_once_with("test-user-123", row)
+    toggled.assert_not_awaited()
+    kicked.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_switching_off_never_asks_for_a_sign_in(client, checks):
+    checks.sign_in.return_value = SignInNeeded(server="remote_server", url="https://api.example.com/mcp")
+    async with _toggle_patches(connection=None, row=_row(enabled=False)):
+        resp = await client.patch(
+            "/api/v1/mcp/servers/remote_server/enabled", json={"enabled": False}
+        )
+    assert resp.status_code == 200
+    checks.sign_in.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_switch_on_a_server_that_is_gone_is_a_404(client, checks):
+    toggled = AsyncMock()
+    with (
+        patch("src.server.services.mcp_catalog.get_catalog_server", new=AsyncMock(return_value=None)),
+        patch("src.server.services.mcp_catalog.set_catalog_server_enabled", new=toggled),
+    ):
+        resp = await client.patch(
+            "/api/v1/mcp/servers/remote_server/enabled", json={"enabled": True}
+        )
+    assert resp.status_code == 404
+    checks.sign_in.assert_not_awaited()
+    toggled.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_configured_brokerage_without_its_connection_asks_for_one(client, checks):
+    """A row whose connection is gone answers the same 409 as one never made,
+    naming the row's own address."""
+    stored = _row(name="robinhood", url="https://agent.robinhood.com/mcp/trading", enabled=False)
+    checks.sign_in.return_value = SignInNeeded(server="robinhood", url=stored["url"])
+    toggled = AsyncMock()
+    with (
+        patch("src.server.app.mcp_brokerages.get_catalog_server", new=AsyncMock(return_value=stored)),
+        patch("src.server.services.mcp_catalog.get_catalog_server", new=AsyncMock(return_value=stored)),
+        patch("src.server.services.mcp_catalog.set_catalog_server_enabled", new=toggled),
+    ):
+        resp = await client.patch(
+            "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
+        )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["servers"] == [{"server": "robinhood", "url": stored["url"]}]
+    toggled.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1183,6 +1515,208 @@ async def test_import_without_created_secrets_skips_convergence(client, _import_
 
 
 @pytest.mark.asyncio
+async def test_import_saves_only_the_entries_that_pass_their_check(client, _import_txn, checks):
+    """Each entry is reported on its own: a broken one is not created and its
+    key is not stored, one that needs a sign-in says so, and the rest land."""
+
+    async def answer(user_id, server, **kwargs):
+        if server.name == "srv_broken":
+            return await _fails()(user_id, server)
+        if server.name == "srv_signin":
+            return await _wants_sign_in(user_id, server)
+        return await passing(user_id, server)
+
+    checks.imports.side_effect = answer
+    async with _import_patches() as mocks:
+        resp = await client.post(
+            "/api/v1/mcp/servers/import",
+            json={
+                "mcpServers": {
+                    "srv-ok": {"type": "http", "url": "https://api.example.com/a"},
+                    "srv-broken": {
+                        "type": "http",
+                        "url": "https://api.example.com/b",
+                        "headers": {"Authorization": "EXAMPLE-OPAQUE-TOKEN-BBBBBBBBBB"},
+                    },
+                    "srv-signin": {"type": "http", "url": "https://api.example.com/c"},
+                }
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    by_name = {r["name"]: r for r in body["results"]}
+    assert by_name["srv_ok"]["status"] == "created"
+    assert by_name["srv_broken"] == {
+        "original_name": "srv-broken",
+        "name": "srv_broken",
+        "renamed": True,
+        "status": "check_failed",
+        "reason": "the server rejected the key",
+        "verdict": "credential_rejected",
+        "missing_secrets": [],
+    }
+    assert by_name["srv_signin"] == {
+        "original_name": "srv-signin",
+        "name": "srv_signin",
+        "renamed": True,
+        "status": "sign_in_required",
+        "reason": "Sign in to the server to add it.",
+        "url": "https://api.example.com/c",
+    }
+    assert [c.args[1] for c in mocks["create_catalog_server"].await_args_list] == ["srv_ok"]
+    assert body["created"] == 1
+    assert body["secrets_created"] == []
+    mocks["create_user_secret"].assert_not_awaited()
+    # The Plugins page is in no workspace: command servers start on the user's own.
+    assert {c.kwargs["workspace_id"] for c in checks.imports.await_args_list} == {None}
+
+
+@pytest.mark.asyncio
+async def test_import_checks_a_pasted_key_with_its_value_and_never_sends_a_placeholder(
+    client, _import_txn, checks
+):
+    """A key pasted into the file becomes a vault secret only once its entry
+    lands, so the check is handed the value itself. Docs' stand-in text is not
+    a key: it is withheld, and the entry fails as one with no value set."""
+    checks.imports.side_effect = check_server
+    probe = AsyncMock(return_value=ProbeOutcome(ok=True, auth="none", tools=[]))
+    with (
+        patch(
+            "src.server.services.mcp_probe.get_user_secrets_decrypted",
+            new=AsyncMock(return_value={}),
+        ),
+        patch("src.server.services.mcp_probe._probe", new=probe),
+    ):
+        async with _import_patches() as mocks:
+            resp = await client.post(
+                "/api/v1/mcp/servers/import",
+                json={
+                    "mcpServers": {
+                        "srv-keyed": {
+                            "type": "http",
+                            "url": "https://api.example.com/a",
+                            "headers": {"Authorization": "EXAMPLE-OPAQUE-TOKEN-AAAAAAAAAA"},
+                        },
+                        "srv-stub": {
+                            "type": "http",
+                            "url": "https://api.example.com/b",
+                            "headers": {"Authorization": "Bearer <your-api-key>"},
+                        },
+                    }
+                },
+            )
+
+    assert resp.status_code == 200
+    by_name = {r["name"]: r for r in resp.json()["results"]}
+    assert by_name["srv_keyed"]["status"] == "created"
+    assert by_name["srv_stub"]["status"] == "check_failed"
+    assert by_name["srv_stub"]["verdict"] == "missing_secrets"
+    assert by_name["srv_stub"]["missing_secrets"]
+    # Dialled once, for the real key, sent as the value it will be stored as.
+    probe.assert_awaited_once()
+    assert probe.await_args.args == (
+        "https://api.example.com/a", {"Authorization": "EXAMPLE-OPAQUE-TOKEN-AAAAAAAAAA"}
+    )
+    assert probe.await_args.kwargs["credential"] is True
+    assert mocks["create_user_secret"].await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_import_a_name_goes_to_its_first_entry_whether_or_not_it_lands(
+    client, _import_txn, checks
+):
+    """Only the entries the import takes are checked, one per name, so a
+    blob cannot turn into a probe for every key it carries. A later entry
+    that normalizes to the same name is skipped, never landed unchecked."""
+
+    async def answer(user_id, server, **kwargs):
+        if server.url.endswith("/broken"):
+            return await _fails()(user_id, server)
+        return await passing(user_id, server)
+
+    checks.imports.side_effect = answer
+    async with _import_patches() as mocks:
+        resp = await client.post(
+            "/api/v1/mcp/servers/import",
+            json={
+                "mcpServers": {
+                    "srv-a": {"type": "http", "url": "https://api.example.com/broken"},
+                    "srv_a": {"type": "http", "url": "https://api.example.com/works"},
+                }
+            },
+        )
+
+    assert resp.status_code == 200
+    statuses = [(r["original_name"], r["status"]) for r in resp.json()["results"]]
+    assert statuses == [("srv-a", "check_failed"), ("srv_a", "skipped")]
+    assert [c.args[1].url for c in checks.imports.await_args_list] == [
+        "https://api.example.com/broken"
+    ]
+    mocks["create_catalog_server"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_import_reports_a_check_that_could_not_run_and_lands_the_rest(
+    client, _import_txn, checks
+):
+    async def answer(user_id, server, **kwargs):
+        if server.name == "srv_flaky":
+            raise RuntimeError("computer unavailable")
+        return await passing(user_id, server)
+
+    checks.imports.side_effect = answer
+    async with _import_patches():
+        resp = await client.post(
+            "/api/v1/mcp/servers/import",
+            json={
+                "mcpServers": {
+                    "srv-flaky": {"type": "http", "url": "https://api.example.com/a"},
+                    "srv-fine": {"type": "http", "url": "https://api.example.com/b"},
+                }
+            },
+        )
+
+    by_name = {r["name"]: r for r in resp.json()["results"]}
+    assert by_name["srv_flaky"]["status"] == "check_failed"
+    assert by_name["srv_flaky"]["verdict"] == "unreachable"
+    assert by_name["srv_flaky"]["reason"] == "the server could not be checked; try again"
+    assert by_name["srv_fine"]["status"] == "created"
+
+
+@pytest.mark.asyncio
+async def test_import_dials_nothing_it_would_refuse_anyway(client, _import_txn, checks):
+    """Malformed, reserved and taken entries are refused without a check, and
+    an account with no room left is not dialled at all."""
+    async with _import_patches(
+        list_catalog_servers=AsyncMock(return_value=[_row(name="taken")])
+    ):
+        resp = await client.post(
+            "/api/v1/mcp/servers/import",
+            json={
+                "mcpServers": {
+                    "taken": {"type": "http", "url": "https://api.example.com/a"},
+                    "robinhood": {"type": "http", "url": "https://api.example.com/b"},
+                    "plain-http": {"type": "http", "url": "http://api.example.com/c"},
+                    "fresh": {"type": "http", "url": "https://api.example.com/d"},
+                }
+            },
+        )
+    assert resp.status_code == 200
+    assert [c.args[1].name for c in checks.imports.await_args_list] == ["fresh"]
+
+    checks.imports.reset_mock()
+    full = [_row(name=f"s{i}") for i in range(MAX_CATALOG_SERVERS_PER_USER)]
+    async with _import_patches(list_catalog_servers=AsyncMock(return_value=full)):
+        resp = await client.post(
+            "/api/v1/mcp/servers/import",
+            json={"mcpServers": {"fresh": {"type": "http", "url": "https://api.example.com/d"}}},
+        )
+    assert resp.json()["results"][0]["status"] == "error"
+    checks.imports.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_import_refuses_a_value_the_vault_rules_reject(client, _import_txn):
     """An extracted literal never passes through ``CreateSecretRequest``.
 
@@ -1274,6 +1808,7 @@ async def test_import_dials_only_a_row_the_user_switched_on(
     passes and the refusal under test is the pass's own; the route gate is
     pinned separately below.
     """
+    from src.server.services import mcp_probe
     from src.server.services.mcp_oauth import discovery
 
     probe = AsyncMock()
@@ -1286,11 +1821,11 @@ async def test_import_dials_only_a_row_the_user_switched_on(
         ),
         patch.object(discovery, "get_connection", new=AsyncMock(return_value=None)),
         patch.object(
-            discovery,
+            mcp_probe,
             "get_user_secrets_decrypted",
             new=AsyncMock(return_value={"API_KEY": secret}),
         ),
-        patch.object(discovery, "bounded_probe", new=probe),
+        patch.object(mcp_probe, "bounded_probe", new=probe),
     ):
         async with _import_patches(after_secrets_changed=AsyncMock()):
             resp = await client.post(
@@ -1365,10 +1900,10 @@ class TestSelfHealKick:
     """Which rows the list route re-probes, and which it leaves alone."""
 
     def _kicked(self, rows, snapshots) -> list[str]:
-        from src.server.app import mcp_catalog
+        from src.server.services import mcp_catalog_view
 
-        with patch.object(mcp_catalog, "schedule_catalog_discovery") as sched:
-            mcp_catalog._kick_unprobed("u1", rows, snapshots)
+        with patch.object(mcp_catalog_view, "schedule_catalog_discovery") as sched:
+            mcp_catalog_view._kick_unprobed("u1", rows, snapshots)
         return [c.args[1] for c in sched.call_args_list]
 
     def test_a_backfilled_empty_verdict_still_counts_as_unprobed(self):
@@ -1449,7 +1984,7 @@ def _probe_patches(outcome=None, secrets=None):
     stack = ExitStack()
     stack.enter_context(
         patch(
-            "src.server.app.mcp_catalog.get_user_secrets_decrypted",
+            "src.server.services.mcp_probe.get_user_secrets_decrypted",
             new=AsyncMock(return_value=secrets or {}),
         )
     )
@@ -1567,7 +2102,7 @@ async def test_probe_decrypts_only_the_secrets_its_headers_name(client):
     user_vault = AsyncMock(return_value={"API_KEY": "sk-abc"})
     with (
         patch(
-            "src.server.app.mcp_catalog.get_user_secrets_decrypted",
+            "src.server.services.mcp_probe.get_user_secrets_decrypted",
             new=user_vault,
         ),
         patch("src.server.services.mcp_probe._probe", new=AsyncMock(
@@ -1754,33 +2289,33 @@ async def test_brokerages_are_offered_without_touching_the_database(client):
 
 
 @pytest.mark.asyncio
-async def test_enabling_an_unconfigured_brokerage_creates_it_and_switches_it_on(client):
-    """First enable writes the row at OUR address, then goes through the switch.
+async def test_enabling_an_unconfigured_brokerage_asks_for_its_sign_in(client):
+    """A brokerage is saved by its sign-in, never by the switch.
 
-    Created inert and then toggled, never created live: one thing decides a
-    row's enabled state, and it is the one that already knows what each
-    direction owes an OAuth connection. The user still sees it land on.
+    Every shipped brokerage signs in with OAuth, and a row written before that
+    sign-in is one nothing has shown to work. So the switch writes nothing and
+    answers with the address to sign in to; the callback creates the row.
     """
-    created = AsyncMock(return_value=_row(name="robinhood"))
-    live = _row(name="robinhood", enabled=True)
-    async with _toggle_patches(connection=None, row=live):
-        with (
-            patch(
-                "src.server.app.mcp_brokerages.get_catalog_server",
-                new=AsyncMock(return_value=None),
-            ),
-            patch("src.server.app.mcp_brokerages.create_catalog_server", new=created),
-        ):
-            resp = await client.patch(
-                "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
-            )
-    assert resp.status_code == 200
-    assert resp.json()["enabled"] is True
-    kwargs = created.await_args.kwargs
-    assert kwargs["url"] == "https://agent.robinhood.com/mcp/trading"
-    assert kwargs["transport"] == "http"
-    # Not created live: the switch below is what turns it on.
-    assert "enabled" not in kwargs
+    created = AsyncMock()
+    with (
+        patch(
+            "src.server.app.mcp_brokerages.get_catalog_server",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("src.server.services.mcp_catalog.create_catalog_server", new=created),
+    ):
+        resp = await client.patch(
+            "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
+        )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "code": "mcp_sign_in_required",
+        "message": "Sign in to the server to add it.",
+        "servers": [
+            {"server": "robinhood", "url": "https://agent.robinhood.com/mcp/trading"}
+        ],
+    }
+    created.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1800,8 +2335,12 @@ async def test_enabling_a_configured_brokerage_never_rewrites_it(client):
             "src.server.app.mcp_brokerages.get_catalog_server",
             new=AsyncMock(return_value=stored),
         ),
-        patch("src.server.app.mcp_catalog.set_catalog_server_enabled", new=toggled),
-        patch("src.server.app.mcp_brokerages.create_catalog_server", new=created),
+        patch(
+            "src.server.services.mcp_catalog.get_catalog_server",
+            new=AsyncMock(return_value=stored),
+        ),
+        patch("src.server.services.mcp_catalog.set_catalog_server_enabled", new=toggled),
+        patch("src.server.services.mcp_catalog.create_catalog_server", new=created),
     ):
         resp = await client.patch(
             "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
@@ -1863,7 +2402,7 @@ async def test_disabling_one_that_was_never_configured_creates_nothing(client):
             "src.server.app.mcp_brokerages.get_catalog_server",
             new=AsyncMock(return_value=None),
         ),
-        patch("src.server.app.mcp_brokerages.create_catalog_server", new=created),
+        patch("src.server.services.mcp_catalog.create_catalog_server", new=created),
     ):
         resp = await client.patch(
             "/api/v1/mcp/brokerages/ibkr/enabled", json={"enabled": False}
@@ -1882,7 +2421,7 @@ async def test_a_brokerage_name_cannot_be_claimed_by_a_hand_written_row(client):
     the name free let anything at all be presented as Robinhood.
     """
     created = AsyncMock()
-    with patch("src.server.app.mcp_catalog.create_catalog_server", new=created):
+    with patch("src.server.services.mcp_saves.create_catalog_server", new=created):
         resp = await client.post(
             "/api/v1/mcp/servers",
             json={
@@ -1946,7 +2485,7 @@ async def test_a_plugins_row_is_not_adopted_as_a_brokerage(client):
             "src.server.app.mcp_brokerages.get_catalog_server",
             new=AsyncMock(return_value=stored),
         ),
-        patch("src.server.app.mcp_catalog.set_catalog_server_enabled", new=toggled),
+        patch("src.server.services.mcp_catalog.set_catalog_server_enabled", new=toggled),
     ):
         resp = await client.patch(
             "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
@@ -1961,7 +2500,7 @@ async def test_unknown_brokerage_is_not_a_way_to_create_a_row(client):
     """The name is looked up in the shipped registry before anything else, so
     the route cannot be used to write an arbitrary server."""
     created = AsyncMock()
-    with patch("src.server.app.mcp_brokerages.create_catalog_server", new=created):
+    with patch("src.server.services.mcp_catalog.create_catalog_server", new=created):
         resp = await client.patch(
             "/api/v1/mcp/brokerages/not_a_broker/enabled", json={"enabled": True}
         )
@@ -1970,23 +2509,56 @@ async def test_unknown_brokerage_is_not_a_way_to_create_a_row(client):
 
 
 @pytest.mark.asyncio
-async def test_brokerage_create_reports_the_catalog_cap(client):
-    """The cap is the DB layer's to enforce; this route must not swallow it."""
+async def test_a_brokerage_sign_in_saves_the_row_at_our_address():
+    """The callback's write: our definition, switched on, on the callback's
+    connection so the row and the connection land together."""
+    from src.server.services.mcp_catalog import create_brokerage_row
+
+    created = AsyncMock(return_value=_row(name="robinhood"))
+    conn = object()
+    with patch("src.server.services.mcp_catalog.create_catalog_server", new=created):
+        row = await create_brokerage_row("u-1", "robinhood", conn=conn)
+    assert row["name"] == "robinhood"
+    args, kwargs = created.await_args
+    assert args == ("u-1", "robinhood")
+    assert kwargs["url"] == "https://agent.robinhood.com/mcp/trading"
+    assert kwargs["transport"] == "http"
+    assert kwargs["enabled"] is True
+    assert kwargs["conn"] is conn
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name, builtins, insert_error, status, detail",
+    [
+        ("not_a_broker", set(), None, 404, "Unknown brokerage"),
+        ("robinhood", {"robinhood"}, None, 409, "built-in"),
+        # The cap and a duplicate are the DB layer's to enforce under its lock;
+        # the callback must hear them rather than a 500.
+        ("robinhood", set(), "Maximum of 50 ... reached", 409, "Maximum"),
+        ("robinhood", set(), "MCP catalog server 'robinhood' already exists", 409, "already exists"),
+    ],
+)
+async def test_a_brokerage_sign_in_reports_a_row_it_cannot_save(
+    name, builtins, insert_error, status, detail
+):
+    from fastapi import HTTPException
+
+    from src.server.services.mcp_catalog import create_brokerage_row
+
+    created = AsyncMock(
+        side_effect=ValueError(insert_error) if insert_error else None
+    )
     with (
-        patch(
-            "src.server.app.mcp_brokerages.get_catalog_server",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "src.server.app.mcp_brokerages.create_catalog_server",
-            new=AsyncMock(side_effect=ValueError("Maximum of 50 ... reached")),
-        ),
+        patch("src.server.services.mcp_catalog.builtin_names", return_value=builtins),
+        patch("src.server.services.mcp_catalog.create_catalog_server", new=created),
+        pytest.raises(HTTPException) as caught,
     ):
-        resp = await client.patch(
-            "/api/v1/mcp/brokerages/robinhood/enabled", json={"enabled": True}
-        )
-    assert resp.status_code == 409
-    assert "Maximum" in resp.json()["detail"]
+        await create_brokerage_row("u-1", name)
+    assert caught.value.status_code == status
+    assert detail in caught.value.detail
+    if insert_error is None:
+        created.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2092,7 +2664,7 @@ class TestCapabilitiesInForceAndCapabilitiesRemembered:
 
     @staticmethod
     def _decorate(status: str, granted):
-        from src.server.app.mcp_catalog import decorated
+        from src.server.services.mcp_catalog_view import decorated
 
         return decorated(
             _row(), {"status": status, "granted_capabilities": granted}
@@ -2128,7 +2700,7 @@ class TestCapabilitiesInForceAndCapabilitiesRemembered:
     def test_a_group_whose_requirement_was_declined_is_not_drawn_granted(self):
         """The badges read the grant, so it has to be the one the relay enforces:
         live orders stored without account access are refused, and drawn off."""
-        from src.server.app.mcp_catalog import decorated
+        from src.server.services.mcp_catalog_view import decorated
         from src.server.services.brokerages import brokerage_by_name
 
         response = decorated(
@@ -2209,7 +2781,7 @@ async def _binding_patches(
             new=rewrite or AsyncMock(),
         ),
         patch(
-            "src.server.app.mcp_catalog._oauth_by_server",
+            "src.server.services.mcp_catalog_view._oauth_by_server",
             new=AsyncMock(return_value={}),
         ),
     ):
@@ -2781,7 +3353,7 @@ class TestHasDirectTools:
         return snapshot
 
     def test_a_row_with_a_directly_bound_tool_says_so(self):
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
         conn = {
@@ -2792,7 +3364,7 @@ class TestHasDirectTools:
         assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is True
 
     def test_a_ptc_only_row_does_not(self):
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {"transport": "http", "tool_binding": {}}
         conn = {
@@ -2803,7 +3375,7 @@ class TestHasDirectTools:
         assert _has_direct_tools(row, conn, self._snapshot("quote_kline")) is False
 
     def test_a_stdio_row_never_does_whatever_the_map_asks(self):
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {"transport": "stdio", "tool_binding": {"quote_kline": "direct"}}
         conn = {
@@ -2817,7 +3389,7 @@ class TestHasDirectTools:
         # No connection is not "no credential": a remote row authenticates
         # with its own headers, and the sync grants it the same way once a
         # verdict says those headers work.
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {
             "transport": "http",
@@ -2836,7 +3408,7 @@ class TestHasDirectTools:
         only ``last_probe`` moves. Reading the tools alone offered the Flash
         toggle for a row whose header grant the sync then refused to write.
         """
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {
             "transport": "http",
@@ -2850,7 +3422,7 @@ class TestHasDirectTools:
         """A snapshot written before the verdict had a column reads back as
         nothing having reached the address, which is what the resolver clamps
         on, so the offer waits for the probe rather than leading it."""
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {
             "transport": "http",
@@ -2860,7 +3432,7 @@ class TestHasDirectTools:
         assert _has_direct_tools(row, None, self._snapshot("quote_kline")) is False
 
     def test_an_unconnected_row_with_no_address_does_not(self):
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {"transport": "stdio", "tool_binding": {"quote_kline": "direct"}}
         assert _has_direct_tools(row, None, self._snapshot("quote_kline")) is False
@@ -2870,7 +3442,7 @@ class TestHasDirectTools:
         rather than a claim on the row: the user disconnected, and the headers
         the row carries may authenticate it now. Answering no here hid the
         Flash toggle for a row the sync was granting."""
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {
             "transport": "http",
@@ -2889,7 +3461,7 @@ class TestHasDirectTools:
         """Unlike a revoked one: the row is still claimed, the headers are not
         sent while it is, and the sync binds no grant until it is reconnected.
         """
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {
             "transport": "http",
@@ -2908,7 +3480,7 @@ class TestHasDirectTools:
         # The plan carries every name curation or the map grants; only a
         # published schema can actually be bound, so the offer follows the
         # snapshot rather than the plan.
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
         conn = {
@@ -2919,7 +3491,7 @@ class TestHasDirectTools:
         assert _has_direct_tools(row, conn, self._snapshot("something_else")) is False
 
     def test_a_row_with_no_snapshot_yet_does_not(self):
-        from src.server.app.mcp_catalog import _has_direct_tools
+        from src.server.services.mcp_catalog_view import _has_direct_tools
 
         row = {"transport": "http", "tool_binding": {"quote_kline": "direct"}}
         conn = {
@@ -2945,18 +3517,18 @@ class TestRelayExecutionWarning:
             patch("src.server.app.setup.agent_config", MagicMock()),
             patch("src.config.env.EGRESS_RELAY_SECRET", secret),
             patch(
-                "src.server.app.mcp_catalog.get_connection",
+                "src.server.services.mcp_catalog.get_connection",
                 new=AsyncMock(return_value=connection),
             ),
             patch(
-                "src.server.app.mcp_catalog.get_catalog_server",
+                "src.server.services.mcp_catalog.get_catalog_server",
                 new=AsyncMock(return_value=row),
             ),
         ):
             yield
 
     async def _warning(self, **kwargs):
-        from src.server.app.mcp_catalog import _relay_execution_warning
+        from src.server.services.mcp_catalog import _relay_execution_warning
 
         async with self._patches(**kwargs):
             return await _relay_execution_warning("test-user-123", "fund_desk")

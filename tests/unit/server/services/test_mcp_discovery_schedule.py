@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.server.services import mcp_probe
 from src.server.services.mcp_oauth import discovery
 
 
@@ -315,7 +316,7 @@ async def test_background_discovery_shares_the_process_wide_probe_ceiling(
     dialled: list[str] = []
     release = asyncio.Event()
 
-    async def _probe(url, headers=None, *, timeout_s):
+    async def _probe(url, headers=None, *, timeout_s, credential=None, vault_values=()):
         dialled.append(url)
         await release.wait()
         return mcp_probe.ProbeOutcome(ok=True, auth="none")
@@ -351,7 +352,7 @@ async def test_background_discovery_cannot_fill_the_ceiling(monkeypatch):
     dialled: list[str] = []
     release = asyncio.Event()
 
-    async def _probe(url, headers=None, *, timeout_s):
+    async def _probe(url, headers=None, *, timeout_s, credential=None, vault_values=()):
         dialled.append(url)
         await release.wait()
         return mcp_probe.ProbeOutcome(ok=True, auth="none")
@@ -438,8 +439,8 @@ class TestTheSwitchDecidesWhatIsDialled:
             patch.object(
                 discovery, "get_connection", new=AsyncMock(return_value=None)
             ),
-            patch.object(discovery, "get_user_secrets_decrypted", new=secrets),
-            patch.object(discovery, "bounded_probe", new=probe),
+            patch.object(mcp_probe, "get_user_secrets_decrypted", new=secrets),
+            patch.object(mcp_probe, "bounded_probe", new=probe),
             patch.object(discovery, "_SnapshotWriter", new=_writer_stub()),
         ):
             await discovery.discover_catalog_server("u1", "authy")
@@ -467,8 +468,8 @@ class TestTheSwitchDecidesWhatIsDialled:
                 ),
             ),
             patch.object(discovery, "get_connection", new=connection),
-            patch.object(discovery, "get_user_secrets_decrypted", new=secrets),
-            patch.object(discovery, "bounded_probe", new=probe),
+            patch.object(mcp_probe, "get_user_secrets_decrypted", new=secrets),
+            patch.object(mcp_probe, "bounded_probe", new=probe),
             patch.object(discovery, "_SnapshotWriter", new=_writer_stub()),
         ):
             assert await discovery.discover_catalog_server("u1", "authy") is None
