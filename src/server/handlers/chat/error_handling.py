@@ -206,16 +206,17 @@ def _emit_sse_error(handler, payload: dict) -> str:
     return f"event: error\ndata: {json.dumps(payload)}\n\n"
 
 
-async def _run_named_by_key(request: ChatRequest, log_prefix: str):
-    """The run this request's key already produced, or None, also when the
-    read fails: the refusal it would replace still stands then."""
+async def _run_named_by_key(request: ChatRequest, thread_id: str, log_prefix: str):
+    """The run this request's key already reached, as its own turn or as a
+    steer, or None, also when the read fails: the refusal it would replace
+    still stands then."""
     request_key = getattr(request, "request_key", None)
     if not request_key:
         return None
-    from src.server.database.runs.lifecycle import find_run_by_request_key
+    from src.server.services.runs.admission import run_named_by_key
 
     try:
-        return await find_run_by_request_key(request_key)
+        return await run_named_by_key(thread_id, request_key)
     except Exception:
         logger.warning(
             f"[{log_prefix}] request_key recheck failed; keeping the refusal",
@@ -359,8 +360,9 @@ async def handle_workflow_error(
 
     # A refusal before this request's START committed may be its own first
     # copy, admitted on another worker after this copy's duplicate probe and
-    # now holding the slot, the writer fence or the branch this copy checked.
-    # Its key names that run, so the copy gets the duplicate answer instead.
+    # now holding the slot, the writer fence or the branch this copy checked,
+    # or steered into the turn that holds them. Its key names that run, so
+    # the copy gets the duplicate answer instead.
     if run_handle is None and (
         isinstance(
             e,
@@ -380,9 +382,9 @@ async def handle_workflow_error(
             and e.detail.get("code") in ADMISSION_CONFLICT_CODES
         )
     ):
-        existing = await _run_named_by_key(request, log_prefix)
-        if existing is not None:
-            e = DuplicateRequestError(existing)
+        keyed = await _run_named_by_key(request, thread_id, log_prefix)
+        if keyed is not None:
+            e = DuplicateRequestError(keyed.run, steered=keyed.steered)
 
     # An admission-conflict 409 is a deliberate protocol response (raised
     # in-generator by ``wait_or_steer`` for both the foreground and dispatched
@@ -464,6 +466,10 @@ async def handle_workflow_error(
                 run_status=existing.get("status"),
                 run_thread_id=ex_thread,
             )
+            # The run is another message's turn: retrying it would rerun
+            # that message, and adopting it shows this one as its query.
+            if e.steered:
+                error_payload["steered"] = True
         yield _emit_sse_error(handler, error_payload)
         return
 

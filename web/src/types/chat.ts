@@ -475,6 +475,10 @@ export type UserMessage = {
   runId?: string;
   steeringDelivered?: boolean;
   steering?: boolean;
+  /** The request key this view sent the message under. A delivery that
+   *  claims the bubble settles this key rather than its text, since another
+   *  send of the same words may still be waiting on its answer. */
+  requestKey?: string;
   /** On a steer, the run it was sent to. The view stamps a steer's turn from
    *  its own count, which may be behind; replay names a settled run's turn, so
    *  a reload places the steer by this. */

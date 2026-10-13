@@ -393,6 +393,26 @@ class CheckpointHistoryReader:
             configurable["checkpoint_id"] = checkpoint_id
         return await self.graph.aget_state({"configurable": configurable})
 
+    async def aget_run_state(self, thread_id: str, run_id: str):
+        """The thread's state at the newest step ``run_id`` saved, or None
+        when it saved none.
+
+        Found by the run, not the thread's tip, which a later turn may have
+        moved past it or compacted.
+        """
+        config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        newest = [
+            tup
+            async for tup in self._checkpointer.alist(
+                config, filter={"run_id": run_id}, limit=1
+            )
+        ]
+        if not newest:
+            return None
+        return await self._aget_state_at(
+            thread_id, newest[0].config["configurable"]["checkpoint_id"]
+        )
+
     async def aget_task_history(
         self, thread_id: str, task_id: str
     ) -> TaskHistory:

@@ -16,7 +16,7 @@ idempotent under the ownership flag.
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Dict, Literal, Optional
+from typing import Any, Awaitable, Callable, Dict, Literal, NamedTuple, Optional
 
 from fastapi import HTTPException
 
@@ -76,6 +76,17 @@ class RunScope:
         if self._admission_lock is not None:
             self._admission_lock.release()
             self._admission_lock = None
+
+    def hold_admission_until(self, task: asyncio.Future) -> None:
+        """Hand the admission lock to ``task``, released once it is done.
+
+        For a START that goes on after its request was cancelled: until it
+        commits and is settled, the next send's admission would read the
+        thread as idle and race it for the slot.
+        """
+        lock, self._admission_lock = self._admission_lock, None
+        if lock is not None:
+            task.add_done_callback(lambda _done: lock.release())
 
     async def release_slot(self) -> None:
         """Release the burst lease at most once from in-process paths.
@@ -137,6 +148,18 @@ COMPACTION_ADMISSION_MARGIN_S = 20.0
 # the thread. Each is also the code of the 409 a caller that may not steer
 # gets (``admission_gate``), which is how an automation knows to wait.
 BUSY_STATES = frozenset({"running", "stopping", "compacting"})
+
+# START's steer check runs inside its transaction, holding the thread's row
+# lock, its uncommitted slot and the workspace's share lock. The cache client
+# alone allows a stalled call the pool wait, a connect and a socket timeout in
+# turn (over ten seconds by the shipped config), so the check takes its own
+# bound: room for a queued pool slot and the script, after which START fails.
+START_STEER_CHECK_TIMEOUT_S = 3.0
+
+# The bound on reading a run's checkpoint for a steer it took out of the
+# queue, which START also does under its row lock. Reached only once that run
+# has ended.
+STEER_KEPT_CHECK_TIMEOUT_S = 3.0
 
 
 async def wait_for_admission(
@@ -235,23 +258,176 @@ async def wait_for_admission(
     return "stopping", row
 
 
-async def dedup_retransmit_or_raise(request: ChatRequest) -> None:
-    """Resolve a retransmitted request_key to its existing run — or pass.
+class KeyedRun(NamedTuple):
+    """The run that took a key's message. ``steered`` when the message went
+    into it as a steer: its turn is another message's, so a client must not
+    retry or adopt it as the send's own."""
+
+    run: Dict[str, Any]
+    steered: bool
+
+
+async def steer_kept_by_run(
+    thread_id: str, request_key: str, run: Dict[str, Any]
+) -> bool:
+    """Whether ``run``, which took this key's steer out of the queue, kept it.
+
+    A live run is answered as having it. Taking the steer out proves nothing
+    for one that ended: it may have died before saving the step that
+    injected it, or, having lost Redis's answers to the removal and its
+    retry, never injected it and gone on to complete. Only that run's own
+    newest checkpoint tells, by the steer's key-derived message id. No
+    compaction inside the run drops the message from it: a summary hides
+    messages from the model without removing them, and the window trims only
+    turns before the one a summary falls in, which a steer never opens.
+    """
+    if run["status"] == "in_progress":
+        return True
+    from ptc_agent.agent.middleware.steering import carries_steer_key
+    from src.server.services.history.reader import CheckpointHistoryReader
+
+    state = await CheckpointHistoryReader.get_instance().aget_run_state(
+        thread_id, str(run["conversation_response_id"])
+    )
+    messages = ((state.values or {}).get("messages") if state else None) or []
+    return any(carries_steer_key(m, request_key) for m in messages)
+
+
+async def run_named_by_key(thread_id: str, request_key: str) -> Optional[KeyedRun]:
+    """The run that took this key's message: the one it started, else the
+    one it was steered into, while that run is live or once it kept it. None
+    when the key reached no run.
+
+    Moves nothing. A steer still queued for a run that ended, or taken out by
+    one that never saved it, is a message no run kept, but it moves only on
+    a path that goes on to carry the message (``carry_unread_steer``,
+    START's check): one that refused after taking it back would leave it in
+    no queue and no run. Its record is the
+    thread's, since a steer is a message into one thread. A Redis or
+    checkpoint fault reads as no steer: the steer claim and START's own check
+    still refuse a second copy.
+    """
+    from src.server.database.runs import lifecycle as tl_db
+    from src.server.services.runs.steer_queue import steer_state, steered_run_id
+
+    existing = await tl_db.find_run_by_request_key(request_key)
+    if existing is not None:
+        return KeyedRun(existing, steered=False)
+    try:
+        steered_into = await steered_run_id(thread_id, request_key)
+        if steered_into is None:
+            return None
+        run = await tl_db.get_run(steered_into)
+        if run is not None and run["status"] == "in_progress":
+            return KeyedRun(run, steered=True)
+        state, _ = await steer_state(thread_id, request_key, steered_into)
+        if state != "read" or run is None:
+            return None
+        kept = await asyncio.wait_for(
+            steer_kept_by_run(thread_id, request_key, run),
+            STEER_KEPT_CHECK_TIMEOUT_S,
+        )
+    except Exception:
+        logger.warning("[Admission] steer key read failed", exc_info=True)
+        return None
+    return KeyedRun(run, steered=True) if kept else None
+
+
+async def carry_unread_steer(
+    thread_id: str, request_key: str, run_id: str, message: str
+) -> int | None:
+    """Move this key's steer from a run that ended without keeping it into
+    ``run_id``, as ``message``, so the caller answers it as steered there.
+
+    One step moves the message and its claim, so no fault or cancel leaves
+    it in no queue. Returns its queue position, or None when no such steer
+    is left, a Redis or checkpoint fault included: the message then stays
+    where it is.
+    """
+    from src.server.database.runs import lifecycle as tl_db
+    from src.server.services.runs.steer_queue import carry, steered_run_id
+
+    try:
+        steered_into = await steered_run_id(thread_id, request_key)
+        if steered_into is None:
+            return None
+        run = await tl_db.get_run(steered_into)
+        if run is not None and run["status"] == "in_progress":
+            return None
+        outcome, position = await carry(
+            thread_id, request_key, steered_into, run_id, message
+        )
+        if outcome == "read" and run is not None:
+            kept = await asyncio.wait_for(
+                steer_kept_by_run(thread_id, request_key, run),
+                STEER_KEPT_CHECK_TIMEOUT_S,
+            )
+            if not kept:
+                outcome, position = await carry(
+                    thread_id, request_key, steered_into, run_id, message,
+                    requeue=True,
+                )
+    except Exception:
+        logger.warning("[Admission] steer carry failed", exc_info=True)
+        return None
+    return position if outcome == "moved" else None
+
+
+async def refuse_copy_read_as_steer(thread_id: str, request_key: str, conn) -> None:
+    """START's last check of its key, with the thread's slot already held.
+
+    Another copy of this send can have gone into a turn as a steer after this
+    copy's admission read found the thread idle. Once this copy's run row
+    holds the slot, every turn that could read that steer has ended, so the
+    answer is final: a steer still queued, or taken out by a turn that never
+    saved it, is taken back and this run carries the message, and one a turn
+    kept refuses this run as a duplicate. A Redis or checkpoint fault fails
+    the START, since passing it could deliver the message twice, and so does
+    a Redis or checkpoint call slower than its bound: it runs inside START's
+    transaction, holding the thread's row lock. The steered run is read on
+    ``conn``, START's own connection, so the check never waits on a second
+    pool slot under those locks.
+    """
+    from src.server.database.runs import lifecycle as tl_db
+    from src.server.services.runs.steer_queue import release_steer_key, take_back_steer
+
+    outcome, steered_into = await asyncio.wait_for(
+        take_back_steer(thread_id, request_key), START_STEER_CHECK_TIMEOUT_S
+    )
+    if outcome != "read" or steered_into is None:
+        return
+    run = await tl_db.get_run_brief(conn, steered_into)
+    if run is None:
+        return
+    if await asyncio.wait_for(
+        steer_kept_by_run(thread_id, request_key, run), STEER_KEPT_CHECK_TIMEOUT_S
+    ):
+        raise tl_db.DuplicateRequestError(run, steered=True)
+    await asyncio.wait_for(
+        release_steer_key(thread_id, request_key, steered_into),
+        START_STEER_CHECK_TIMEOUT_S,
+    )
+
+
+async def dedup_retransmit_or_raise(
+    thread_id: str, request_key: Optional[str]
+) -> None:
+    """Resolve a retransmitted request_key to the run that took it, or pass.
 
     Must run under the admission lock BEFORE any steering, fork, or retry
     path can act on the duplicate: steering would inject the retransmit
     into the live run as a new message; a fork retransmit would truncate
-    the very rows holding the key. START's unique index remains the
-    race-safe backstop for keys that haven't produced a row yet.
+    the very rows holding the key. START's unique index and its steer check
+    remain the race-safe backstop for keys that haven't produced a row yet,
+    and the steer claim for keys that haven't produced a steer.
     """
-    if not request.request_key:
+    if not request_key:
         return
-    from src.server.database.runs import lifecycle as tl_db
     from src.server.services.runs.coordinator import DuplicateRequestError
 
-    existing = await tl_db.find_run_by_request_key(request.request_key)
-    if existing is not None:
-        raise DuplicateRequestError(existing)
+    keyed = await run_named_by_key(thread_id, request_key)
+    if keyed is not None:
+        raise DuplicateRequestError(keyed.run, steered=keyed.steered)
 
 
 async def resolve_retry_of(request: ChatRequest, thread_id: str):
@@ -347,15 +523,35 @@ async def begin_run(
 
     The run goes to ``scope``, even when START raised once its row had
     committed: no executor ever takes that run, so the turn's error path
-    settles it, as the failed attempt ``/retry`` chains onto."""
+    settles it, as the failed attempt ``/retry`` chains onto.
+
+    A keyed START checks the steer queue before it commits
+    (``refuse_copy_read_as_steer``), so a Redis or checkpoint fault, or a
+    call slower than its bound, fails it. That check may take the message
+    back from the queue, and from then on only the commit keeps it, so
+    START runs in a task of its own, which a client leaving mid-START does
+    not cancel. The run of a START whose request was cancelled is settled
+    as stopped, message kept, once START is done."""
     from uuid import uuid4
 
-    from src.server.services.runs.coordinator import QuerySpec, RunCoordinator
+    from src.server.services.runs.coordinator import (
+        QuerySpec,
+        RunCoordinator,
+        spawn_protected,
+    )
     from src.server.services.runs.pending_input import executor_input_stamp
 
     retry_of = await resolve_retry_of(request, thread_id)
-    try:
-        handle = await RunCoordinator.get_instance().start_run(
+    identity = dict(
+        thread_id=thread_id,
+        msg_type=msg_type,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        is_byok=is_byok,
+    )
+    started: list = []
+    start = spawn_protected(
+        RunCoordinator.get_instance().start_run(
             thread_id=thread_id,
             run_id=run_id,
             msg_type=msg_type,
@@ -407,38 +603,58 @@ async def begin_run(
                 **(extra_run_metadata or {}),
             },
             pending_input=executor_input_stamp(request),
-            on_started=scope.attach_run,
-        )
-    except BaseException as exc:
-        if scope.owned_run_handle is None:
-            identity = dict(
-                thread_id=thread_id,
-                msg_type=msg_type,
-                workspace_id=workspace_id,
-                user_id=user_id,
-                is_byok=is_byok,
-            )
-            if isinstance(exc, Exception):
-                committed = await _committed_start(run_id, **identity)
-                if committed is not None:
-                    scope.attach_run(committed)
-            else:
-                # A cancel lands again on every await here, so a detached
-                # task looks for the run and settles it.
-                from src.server.services.runs.coordinator import spawn_protected
-
-                spawn_protected(
-                    _settle_cancelled_start(run_id, **identity),
-                    f"start-settle-{run_id}",
+            on_started=started.append,
+            before_commit=(
+                (
+                    lambda conn: refuse_copy_read_as_steer(
+                        thread_id, request.request_key, conn
+                    )
                 )
+                if request.request_key
+                else None
+            ),
+        ),
+        f"start-{run_id}",
+        log_failure=False,
+    )
+    try:
+        handle = await asyncio.shield(start)
+    except Exception:
+        committed = started[0] if started else await _committed_start(
+            run_id, **identity
+        )
+        if committed is not None:
+            scope.attach_run(committed)
         raise
+    except BaseException:
+        # A cancel lands again on every await here, so a detached task waits
+        # for START and settles its run.
+        scope.hold_admission_until(
+            spawn_protected(
+                _settle_after_start(start, started, run_id, **identity),
+                f"start-settle-{run_id}",
+            )
+        )
+        raise
+    scope.attach_run(handle)
     return handle
 
 
-async def _settle_cancelled_start(run_id: str, **identity: Any) -> None:
+async def _settle_after_start(
+    start: asyncio.Task, started: list, run_id: str, **identity: Any
+) -> None:
+    """Settle as stopped the run of a START whose request was cancelled.
+
+    Waits for START itself, since a single read of the ledger can come before
+    its COMMIT and leave the run open to fence the thread until recovery."""
     from src.server.services.runs.coordinator import RunCoordinator
 
-    committed = await _committed_start(run_id, **identity)
+    try:
+        committed = await start
+    except Exception:
+        committed = started[0] if started else await _committed_start(
+            run_id, **identity
+        )
     if committed is not None:
         await RunCoordinator.get_instance().fail_open_run(
             committed, "client disconnected during START", status="cancelled"

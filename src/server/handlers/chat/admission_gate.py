@@ -15,7 +15,11 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
-from src.server.services.runs.admission import BUSY_STATES
+from src.server.services.runs.admission import (
+    BUSY_STATES,
+    carry_unread_steer,
+    dedup_retransmit_or_raise,
+)
 
 if TYPE_CHECKING:
     from src.server.models.chat import ChatRequest
@@ -105,6 +109,7 @@ async def wait_or_steer(
     steer_only: bool = False,
     can_steer: bool = True,
     platform: str | None = None,
+    request_key: str | None = None,
 ) -> tuple[bool, str | None]:
     """Admit a new turn, steer the running one, or 409.
 
@@ -127,6 +132,17 @@ async def wait_or_steer(
     ``can_steer=False`` (whatever ``steer_allowed`` refuses) forbids
     steering entirely: any in-flight run is a hard conflict, never a steer.
 
+    ``request_key`` is checked again past the admission read, which can see
+    a copy of this same send that another worker started after the caller's
+    duplicate probe, and claimed in the step that queues the steer, so two
+    copies racing into one running turn steer once (``DuplicateRequestError``
+    for the other). When another copy started a turn of its own after the
+    turn steered into ended, whichever of the two checks the key second takes
+    the steer back: START's check, or the one after the push here. A copy
+    that meets a claim on a turn that ended without keeping the steer moves
+    it into the running turn, or, on an idle thread, leaves it for its
+    START to take back.
+
     Admission states (see ``LocalRunExecutor.wait_for_admission``):
     - ``"fresh"``     → start a new turn ``(True, None)``; with ``steer_only``,
       409 ``not_running`` instead.
@@ -137,9 +153,17 @@ async def wait_or_steer(
       steering fails. With ``can_steer=False`` a running peer is a 409 too.
     """
     # Deferred: steering imports chat-handler modules at module level.
-    from src.server.handlers.chat.steering import steer_thread, unsteer_thread
+    from src.server.handlers.chat.steering import (
+        SteerKeyTaken,
+        steer_payload,
+        steer_thread,
+        unsteer_thread,
+    )
 
     state, active_row = await manager.wait_for_admission(thread_id)
+    # A START that committed before that read, or a steer claimed before it,
+    # is visible from here on, whatever worker made it.
+    await dedup_retransmit_or_raise(thread_id, request_key)
     if state == "fresh":
         if steer_only:
             raise HTTPException(
@@ -160,12 +184,59 @@ async def wait_or_steer(
     # immediately, stamped with the run it targets (v4 2.4c): the consuming
     # middleware delivers only own-run payloads, so a message steered into a
     # run that then died can never leak into a later turn's context.
+    from src.server.database.runs import lifecycle as tl_db
+
     active_run_id = (
         str(active_row["conversation_response_id"]) if active_row else None
     )
-    result = await steer_thread(
-        thread_id, user_input, user_id, run_id=active_run_id, platform=platform
-    )
+
+    try:
+        result = await steer_thread(
+            thread_id,
+            user_input,
+            user_id,
+            run_id=active_run_id,
+            platform=platform,
+            request_key=request_key,
+        )
+    except SteerKeyTaken:
+        # Another copy of this send steered between the recheck and here.
+        await dedup_retransmit_or_raise(thread_id, request_key)
+        current = await tl_db.get_active_run(thread_id)
+        if current is None:
+            # Its turn ended without keeping it. This copy starts a turn and
+            # leaves the message where it is: START's own check, which a
+            # client leaving cannot cut short, takes it back, or finds the
+            # other copy's turn and refuses this one.
+            if steer_only:
+                raise HTTPException(
+                    status_code=409,
+                    detail=admission_conflict_detail("not_running"),
+                )
+            return True, None
+        # Its turn ended without keeping it, and the other copy may already
+        # have answered that it was accepted, so this copy moves it into the
+        # running turn, message and claim in one step.
+        active_run_id = str(current["conversation_response_id"])
+        payload = steer_payload(
+            user_input,
+            user_id,
+            run_id=active_run_id,
+            platform=platform,
+            request_key=request_key,
+        )
+        position = await carry_unread_steer(
+            thread_id, request_key, active_run_id, payload
+        )
+        if position is None:
+            # Nothing moved: another copy carries it, its turn kept it, or a
+            # fault left it queued, and the running turn's final drain
+            # returns it. The refusal rechecks the key in
+            # ``handle_workflow_error``.
+            raise HTTPException(
+                status_code=409, detail=admission_conflict_detail("running")
+            )
+        result = {"position": position, "payload": payload}
     if not result:
         # Steering failed (e.g. Redis unavailable) on a running turn.
         raise HTTPException(
@@ -182,9 +253,8 @@ async def wait_or_steer(
     # ``steering_returned`` carried the text back on the turn stream, so report
     # accepted — but a Redis fault on the reclaim also lands here, so "accepted"
     # is the graceful default, not a hard delivery guarantee.
-    from src.server.database.runs import lifecycle as tl_db
-
-    if await tl_db.get_active_run(thread_id) is None:
+    current = await tl_db.get_active_run(thread_id)
+    if current is None:
         reclaimed = await unsteer_thread(thread_id, result["payload"])
         if reclaimed:
             if steer_only:
@@ -193,6 +263,13 @@ async def wait_or_steer(
                     detail=admission_conflict_detail("not_running"),
                 )
             return True, None
+    elif request_key and str(current["conversation_response_id"]) != active_run_id:
+        # The turn steered into ended and another started: a copy of this
+        # send whose START checked the key before this steer was queued.
+        started = await tl_db.find_run_by_request_key(request_key)
+        if started is not None:
+            await unsteer_thread(thread_id, result["payload"])
+            raise tl_db.DuplicateRequestError(started)
     event_data = json.dumps(
         {
             "thread_id": thread_id,

@@ -37,6 +37,7 @@ import type { CardUpdater } from './streamRefs';
 import type { SubagentHistoryStore } from './subagents/historyStore';
 import type { SubagentTokenUsage } from '../utils/tokenUsage';
 import type { RecentlySentTracker } from '../hooks/utils/recentlySentTracker';
+import type { RequestKeyTracker } from '../hooks/utils/requestKey';
 import type { PreviewData } from '../hooks/utils/types';
 import type { StructuredError } from '@/utils/rateLimitError';
 import type { ChatMessage } from '@/types/chat';
@@ -116,6 +117,8 @@ export interface HistoryRuntime {
   renderedInterruptIdsRef: Ref<Set<string>>;
   subagentHistory: SubagentHistoryStore;
   recentlySentTrackerRef: Ref<RecentlySentTracker>;
+  /** A replay that delivers a steer this view sent settles its key. */
+  requestKeyRef: Ref<RequestKeyTracker>;
   offloadBatchRef: Ref<OffloadBatch>;
 }
 
@@ -167,6 +170,8 @@ export interface StreamRuntime {
   terminalTaskOutcomesRef: Ref<Map<string, 'completed' | 'cancelled' | 'error'>>;
   subagentHistory: SubagentHistoryStore;
   subagentTokenUsageRef: Ref<Record<string, SubagentTokenUsage>>;
+  /** A delivery of a steer this view sent settles its key. */
+  requestKeyRef: Ref<RequestKeyTracker>;
   offloadBatchRef: Ref<OffloadBatch>;
 }
 

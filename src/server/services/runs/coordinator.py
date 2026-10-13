@@ -68,11 +68,24 @@ def _reap_protected(task: asyncio.Task) -> None:
         )
 
 
-def spawn_protected(coro: Coroutine, name: str) -> asyncio.Task:
-    """Run ``coro`` detached, strongly referenced until it finishes."""
+def _drop_protected(task: asyncio.Task) -> None:
+    _protected_tasks.discard(task)
+    if not task.cancelled():
+        task.exception()  # its awaiter reports it
+
+
+def spawn_protected(
+    coro: Coroutine, name: str, *, log_failure: bool = True
+) -> asyncio.Task:
+    """Run ``coro`` detached, strongly referenced until it finishes.
+
+    ``log_failure=False`` for a task that is always awaited, by its caller or
+    by a task that takes over when the caller is cancelled, so what it raises
+    is the awaiter's to handle, a routine refusal included.
+    """
     task = asyncio.create_task(coro, name=name)
     _protected_tasks.add(task)
-    task.add_done_callback(_reap_protected)
+    task.add_done_callback(_reap_protected if log_failure else _drop_protected)
     return task
 
 
@@ -168,6 +181,7 @@ class RunCoordinator:
         run_metadata: Optional[Dict[str, Any]] = None,
         pending_input: Optional[Dict[str, Any]] = None,
         on_started: Optional[Callable[[RunHandle], None]] = None,
+        before_commit: Optional[Callable[[Any], Awaitable[None]]] = None,
     ) -> RunHandle:
         """Create the durable attempt: query row + in_progress run + projection.
 
@@ -183,6 +197,8 @@ class RunCoordinator:
         ``on_started`` receives the run as soon as its row commits, before
         the announcements: a failure or a cancel there still raises, and the
         caller holds the run to settle, since no executor ever takes it.
+        ``before_commit`` runs inside the START transaction, on its connection,
+        once the row holds the thread's slot; raising there rolls the START back.
         """
         from src.server.services import writer_guard as wg
 
@@ -222,6 +238,7 @@ class RunCoordinator:
                     run_horizon=run_horizon,
                     metadata=metadata,
                     user_id=user_id,
+                    before_commit=before_commit,
                     conn=guard.conn if guard is not None else None,
                 )
             handle = RunHandle(

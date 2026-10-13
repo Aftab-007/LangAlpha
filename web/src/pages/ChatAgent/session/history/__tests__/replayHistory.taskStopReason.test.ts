@@ -60,6 +60,7 @@ function buildRuntime() {
     renderedInterruptIdsRef: ref(new Set<string>()),
     subagentHistory: createSubagentHistoryStore(),
     recentlySentTrackerRef: ref({ isRecentlySent: () => false }),
+    requestKeyRef: ref({ settle: () => {} }),
     offloadBatchRef: ref(null),
   } as unknown as HistoryRuntime;
 }

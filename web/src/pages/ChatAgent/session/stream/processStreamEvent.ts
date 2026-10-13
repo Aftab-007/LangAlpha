@@ -402,12 +402,14 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       //    a reconnect.
       // The banners those failed steers raised, which no failed steer holds now.
       let deliveredErrors: unknown[] = [];
+      let deliveredCopies: ChatMessage[] = [];
       rt.setMessages((prev) => {
         const turnIndex = turnOf(prev, steeredId);
         // A steer of this view's it names gets no copy.
         const { messages: claimed, unclaimed } = claimDeliveredSteers(prev, event.messages || [], turnIndex);
         const errorOf = (m: ChatMessage) => (m as { queueError?: unknown }).queueError;
-        deliveredErrors = prev.filter((m, i) => claimed[i] !== m).map(errorOf)
+        deliveredCopies = prev.filter((m, i) => claimed[i] !== m);
+        deliveredErrors = deliveredCopies.map(errorOf)
           .filter((e) => !claimed.some((m) => errorOf(m) === e));
         const steeringMsgs = unclaimed.filter((qMsg) => qMsg.content);
         if (steeringMsgs.length === 0) return claimed;
@@ -428,6 +430,11 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         return [...claimed, ...newUserMessages];
       });
       if (deliveredErrors.length > 0) rt.setMessageError((prev) => (deliveredErrors.includes(prev) ? null : prev));
+      // The server holds each of them now, so a later send of its text is new.
+      for (const m of deliveredCopies) {
+        const key = (m as { requestKey?: string }).requestKey;
+        if (key) rt.requestKeyRef.current.settle(key);
+      }
 
       // 3. Create new assistant message placeholder (steering continuation — not a new backend turn).
       //    Random suffix: the turn's first bubble uses the same Date.now() scheme,

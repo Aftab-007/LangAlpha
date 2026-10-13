@@ -254,8 +254,11 @@ def _client_body(request: ChatRequest, raw_request: Request) -> ChatRequest:
     return request.model_copy(update=cleared) if cleared else request
 
 
-async def _reject_duplicate_request(request_key: str, user_id: str) -> None:
-    """409 if this request_key already produced a run — a retransmit.
+async def _reject_duplicate_request(
+    thread_id: str, request_key: str, user_id: str
+) -> None:
+    """409 if this request_key already reached a run, as its own turn or as
+    a steer into another: a retransmit.
 
     Route-level twin of the in-generator ``dedup_retransmit_or_raise``:
     classifying here answers with a clean HTTP 409 before a thread is
@@ -263,11 +266,12 @@ async def _reject_duplicate_request(request_key: str, user_id: str) -> None:
     consumes the duplicate. Discloses the existing run's identity only to
     the owning user.
     """
-    from src.server.database.runs import lifecycle as tl_db
+    from src.server.services.runs.admission import run_named_by_key
 
-    existing = await tl_db.find_run_by_request_key(request_key)
-    if existing is None:
+    keyed = await run_named_by_key(thread_id, request_key)
+    if keyed is None:
         return
+    existing = keyed.run
     existing_thread = str(existing["conversation_thread_id"])
     owner_id = await get_thread_owner_id(existing_thread)
     detail: dict = {
@@ -285,6 +289,9 @@ async def _reject_duplicate_request(request_key: str, user_id: str) -> None:
             run_id=str(existing["conversation_response_id"]),
             run_status=existing["status"],
         )
+        # A steer's run is another message's turn, not one to retry or adopt.
+        if keyed.steered:
+            detail["steered"] = True
     raise HTTPException(status_code=409, detail=detail)
 
 
@@ -310,7 +317,7 @@ async def _settle_against_branch(
         return request
     except HTTPException as refused:
         if refused.status_code == 409 and request.request_key:
-            await _reject_duplicate_request(request.request_key, user_id)
+            await _reject_duplicate_request(thread_id, request.request_key, user_id)
         raise
 
 
@@ -378,7 +385,7 @@ async def _handle_send_message(
         # retransmit — classify it before any durable work happens for
         # this copy (thread creation, fork truncation, steering).
         if request.request_key:
-            await _reject_duplicate_request(request.request_key, user_id)
+            await _reject_duplicate_request(thread_id, request.request_key, user_id)
 
         # 403 guard: require BYOK, OAuth, or platform access (tier >= 0).
         # All flags are pre-checked by enforce_chat_limit — no DB calls here.
@@ -1243,7 +1250,9 @@ async def retry_thread(
         # existing attempt, not trip the latest-attempt validation below
         # (which would mislabel it stale_retry or running).
         if body and body.request_key:
-            await _reject_duplicate_request(body.request_key, auth.user_id)
+            await _reject_duplicate_request(
+                thread_id, body.request_key, auth.user_id
+            )
 
         latest = await tl_db.get_latest_attempt(thread_id)
         if latest is None:

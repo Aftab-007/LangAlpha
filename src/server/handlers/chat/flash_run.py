@@ -174,7 +174,7 @@ async def astream_flash_workflow(
         # request_key resolves to its existing run HERE, before the steering
         # or fork paths below can act on the duplicate (raises
         # DuplicateRequestError → structured duplicate_request SSE).
-        await dedup_retransmit_or_raise(request)
+        await dedup_retransmit_or_raise(thread_id, request.request_key)
 
         # =================================================================
         # Early steering routing
@@ -193,6 +193,7 @@ async def astream_flash_workflow(
             user_id,
             steer_only=request.steer_only,
             platform=request.platform,
+            request_key=request.request_key,
             can_steer=can_steer,
         )
         if not ready:

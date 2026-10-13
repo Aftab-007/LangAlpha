@@ -65,6 +65,17 @@ describe('postSSEStream: a duplicate refused in the stream', () => {
     expect(onEvent).not.toHaveBeenCalled();
   });
 
+  it('says so when the copy went into another turn as a steer, and only then', async () => {
+    const { postSSEStream } = await import('../transport');
+    const refusal = async (frame: { event: string; data: Record<string, unknown> }) => {
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(sse([frame]));
+      return postSSEStream('/api/v1/threads/thread-1/messages', {}, { onEvent: vi.fn() }).catch((err: { errorInfo: Record<string, unknown> }) => err.errorInfo);
+    };
+
+    expect(await refusal({ ...DUPLICATE, data: { ...DUPLICATE.data, steered: true } })).toMatchObject({ run_id: 'run-1', steered: true });
+    expect(await refusal(DUPLICATE)).not.toHaveProperty('steered');
+  });
+
   it('passes any other failure frame to the processor', async () => {
     const failure = { event: 'error', data: { thread_id: 'thread-1', error: 'boom', type: 'workflow_error' } };
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(sse([failure]));

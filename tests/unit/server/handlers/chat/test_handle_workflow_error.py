@@ -501,10 +501,53 @@ async def test_a_refused_retransmit_reconnects_to_its_first_copy(
     ):
         frames = await _fail(err, scope=_scope(), request=_keyed_send())
 
-    assert [(name, data["code"], data.get("run_id")) for name, data in frames] == [
-        ("error", "duplicate_request", "r-first")
-    ]
+    assert [
+        (name, data["code"], data.get("run_id"), data.get("steered", "absent"))
+        for name, data in frames
+    ] == [("error", "duplicate_request", "r-first", "absent")]
     coordinator.finalize_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_resend_of_a_steered_send_reconnects_to_its_turn(
+    coordinator, monkeypatch
+):
+    # The first copy went into the running turn as a steer: no run row holds
+    # its key, the steer record names the turn that took it.
+    from fastapi import HTTPException
+
+    from src.server.handlers.chat.admission_gate import admission_conflict_detail
+    from src.server.handlers.chat.steering import steer_thread
+
+    from .redis_fakes import FakeCache
+
+    cache = FakeCache()
+    monkeypatch.setattr("src.utils.cache.redis_cache.get_cache_client", lambda: cache)
+    request = _keyed_send()
+    await steer_thread(
+        "t-1", "what moved NVDA?", "u-1", run_id="r-first", request_key=request.request_key
+    )
+    with (
+        patch(_FIND_KEY, AsyncMock(return_value=None)),
+        patch(
+            "src.server.database.runs.lifecycle.get_run",
+            AsyncMock(return_value=_FIRST_COPY),
+        ),
+        patch.object(
+            error_handling.qr_db, "get_thread_owner_id", AsyncMock(return_value="u-1")
+        ),
+    ):
+        frames = await _fail(
+            HTTPException(status_code=409, detail=admission_conflict_detail("running")),
+            scope=_scope(),
+            request=request,
+        )
+
+    # Marked steered: the turn is another message's, not one to retry.
+    assert [
+        (name, data["code"], data.get("run_id"), data.get("steered"))
+        for name, data in frames
+    ] == [("error", "duplicate_request", "r-first", True)]
 
 
 @pytest.mark.asyncio

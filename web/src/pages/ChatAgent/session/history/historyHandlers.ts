@@ -642,6 +642,7 @@ export function handleHistorySteeringDelivered({
   pairStateByPair,
   refs,
   setMessages,
+  onCopyDelivered,
 }: {
   event: HistoryEvent;
   pairIndex: number;
@@ -649,6 +650,10 @@ export function handleHistorySteeringDelivered({
   pairStateByPair: Map<number, PairState>;
   refs: HistorySteeringRefs;
   setMessages: SetMessages;
+  /** Told the request key of each copy of this view's that the replay
+   *  delivers. Replay carries no keys, so only a copy still on screen names
+   *  one. */
+  onCopyDelivered?: (requestKey: string) => void;
 }): void {
   const { newMessagesStartIndexRef } = refs;
   const steeringMessages = (event.messages || []) as Array<Record<string, unknown>>;
@@ -675,6 +680,7 @@ export function handleHistorySteeringDelivered({
     };
     const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
     if (provenance) userMessage.provenance = provenance;
+    let delivered: string | null = null;
     setMessages((prev: MessageRecord[]) => {
       // A steer whose POST lost its answer after the server took it stays on
       // screen as failed until a delivery says otherwise, and one still
@@ -688,12 +694,14 @@ export function handleHistorySteeringDelivered({
         && m.turnIndex === pairIndex && String(m.content ?? '').trim() === text;
       let lost = prev.findIndex((m) => copy(m) && !!m.steering);
       if (lost === -1) lost = prev.findIndex((m) => copy(m) && !!m.queueError && !m.queueRefused);
+      if (lost !== -1) delivered = (prev[lost] as { requestKey?: string }).requestKey ?? null;
       const rest = lost === -1 ? prev : prev.filter((_, i) => i !== lost);
       const idx = newMessagesStartIndexRef.current - (lost !== -1 && lost < newMessagesStartIndexRef.current ? 1 : 0);
       const next = [...rest.slice(0, idx), userMessage, ...rest.slice(idx)];
       newMessagesStartIndexRef.current = idx + 1;
       return next;
     });
+    if (delivered !== null) onCopyDelivered?.(delivered);
   }
 
   // Create new assistant message placeholder

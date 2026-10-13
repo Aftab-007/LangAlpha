@@ -700,6 +700,39 @@ async def test_a_runs_turn_is_read_by_its_run():
     assert await CheckpointHistoryReader(InMemorySaver()).aget_run_turn(THREAD, "run-0") is None
 
 
+async def test_a_runs_own_newest_state_is_read_after_a_later_turn_compacts():
+    """A steer a run kept stays in that run's checkpoint even once a later
+    turn compacts it out of the thread's tip."""
+    saver = InMemorySaver()
+
+    def agent(state):
+        if len(state["messages"]) > 1:
+            return {
+                "messages": [
+                    RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                    AIMessage(content="summary", id="sum-1"),
+                ]
+            }
+        return {"messages": [HumanMessage(content="steer", id="steering-1")]}
+
+    graph = (
+        StateGraph(DeltaAgentState)
+        .add_node("agent", agent)
+        .add_edge(START, "agent")
+        .compile(checkpointer=saver)
+    )
+    await graph.ainvoke({"messages": [HumanMessage("q0", id="h-0")]}, _cfg(run_id="run-0"))
+    await graph.ainvoke({"messages": [HumanMessage("q1", id="h-1")]}, _cfg(run_id="run-1"))
+
+    reader = CheckpointHistoryReader(saver)
+    state = await reader.aget_run_state(THREAD, "run-0")
+
+    assert [m.id for m in state.values["messages"]] == ["h-0", "steering-1"]
+    tip = await reader.aget_state(THREAD)
+    assert [m.id for m in tip.values["messages"]] == ["sum-1"]
+    assert await reader.aget_run_state(THREAD, "run-9") is None
+
+
 async def test_task_runs_slice_by_their_own_boundaries():
     """Each run is the diff between its own boundary and the next run's, so a
     later run that compacts the namespace does not erase an earlier run, and
