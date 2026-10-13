@@ -434,7 +434,8 @@
       "fetchModelDesc": "用于提取网页内容。",
       "compactionModel": "上下文压缩模型",
       "compactionModelDesc": "用于压缩过长的对话上下文。",
-      "defaultsToFlash": "默认使用快速模型"
+      "defaultsToFlash": "默认使用快速模型",
+      "defaultsToConversationModel": "与对话所用模型相同"
     },
     "manageProvidersDesc": "添加或移除 API 密钥、自定义提供商和模型",
     "selectModel": "选择模型…",
@@ -4425,7 +4426,7 @@
       "defaultModel": "默认模型",
       "defaultModelDesc": "运行所有对话，无论是在单个工作区还是跨所有工作区。",
       "backgroundModel": "后台模型",
-      "backgroundModelDesc": "运行后台任务：生成对话标题、读取网页、压缩长对话、总结备忘录。",
+      "backgroundModelDesc": "运行后台任务：生成对话标题、读取网页、总结备忘录。",
       "backgroundPlaceholder": "选择后台模型...",
       "defaultsToBackground": "默认使用后台模型",
       "backgroundSameAsDefault": "与默认模型相同",

@@ -207,8 +207,8 @@ class CompactionMiddleware(AgentMiddleware):
         cutoff: int,
         transcript: TranscriptTarget | None,
     ) -> Compaction:
-        """Summarize ``view`` before ``cutoff``, the turn's own model being
-        the fallback.
+        """Summarize ``view`` before ``cutoff``, this agent's model being
+        the fallback (see ``Summarizer.compact``).
 
         Start is outside the try, so a start that fails opened no window. A
         cancellation still emits error before it propagates: otherwise the

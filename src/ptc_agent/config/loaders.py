@@ -259,8 +259,8 @@ def load_from_dict(
         llm_name = llm_data.get("name", "")
         if not llm_name:
             raise ValueError("llm.name is required in agent_config.yaml when llm is a dict")
-        # Blank compaction/fetch stay None so they follow flash on read
-        # (LLMConfig.compaction_name / fetch_name), including a user's flash.
+        # Blank compaction/fetch stay None so they resolve per turn
+        # (LLMConfig.compaction_name / fetch_name), not to this file's models.
         llm_config = LLMConfig(
             name=llm_name,
             flash=llm_data.get("flash"),

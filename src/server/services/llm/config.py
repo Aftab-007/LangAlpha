@@ -48,7 +48,7 @@ def slot_model(llm: Any, mode: str) -> str:
 
 
 # Saved models a turn reaches besides its own. The flash key is one only on a
-# PTC turn, whose compaction and fetch inherit it. With no flash default saved,
+# PTC turn, whose fetch inherits it. With no flash default saved,
 # the flash slot is the PTC key on either turn (``saved_default_model``), and
 # that is the turn's own model either way, so never a role.
 _ROLE_PREF_KEYS = {
@@ -127,9 +127,7 @@ def select_model(
             name=resolved_name if mode == "ptc" else "placeholder",
             flash=resolved_name if mode == "flash" else model_pref.get("preferred_flash_model"),
             compaction=(
-                model_pref.get("compaction_model")
-                or model_pref.get("summarization_model")
-                or model_pref.get("preferred_flash_model")
+                model_pref.get("compaction_model") or model_pref.get("summarization_model")
             ),
             fetch=model_pref.get("fetch_model"),
             fallback=model_pref.get("fallback_models"),
@@ -149,9 +147,9 @@ def select_model(
             f"[CHAT] No {pref_key} set, using system default: {slot_model(config.llm, mode)}"
         )
 
-    # A PTC turn never runs the flash model, but compaction and fetch default to
-    # it, so the user's flash default reaches ``llm.flash`` here too, by the
-    # rule a flash turn runs on: an unset one is the saved primary.
+    # A PTC turn never runs the flash model, but fetch defaults to it, so the
+    # user's flash default reaches ``llm.flash`` here too, by the rule a flash
+    # turn runs on: an unset one is the saved primary.
     if mode != "flash" and (flash_default := saved_default_model(model_pref, "flash")):
         config.llm.flash = flash_default
 
@@ -166,6 +164,12 @@ def select_model(
         user_val = model_pref.get(other_key)
         if user_val:
             setattr(config.llm, config_field, user_val)
+
+    # With no model picked for it, a summary runs on the model the turn runs.
+    # Written in, because ``compaction_name`` alone cannot tell a flash turn's
+    # model from the PTC one.
+    if not config.llm.compaction:
+        config.llm.compaction = slot_model(config.llm, mode)
 
     user_fallback = model_pref.get("fallback_models")
     if user_fallback is not None:

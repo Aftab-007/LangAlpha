@@ -248,9 +248,7 @@ async def test_compact_messages_calls_llm_with_system_message(monkeypatch):
         return_value=MagicMock(content="summary", additional_kwargs={})
     )
 
-    monkeypatch.setattr(
-        compact_module, "get_llm_by_type", lambda model_name: fake_llm
-    )
+    monkeypatch.setattr(compact_module, "create_llm", lambda model_name, **_: fake_llm)
 
     # Short-circuit offloading so the test doesn't need a sandbox.
     async def _passthrough_offload(backend, messages, **kwargs):
@@ -293,7 +291,7 @@ async def test_chained_compaction_anchors_and_reconstructs_safely(monkeypatch):
     fake_llm.ainvoke = AsyncMock(
         return_value=MagicMock(content="summary", additional_kwargs={})
     )
-    monkeypatch.setattr(compact_module, "get_llm_by_type", lambda model_name: fake_llm)
+    monkeypatch.setattr(compact_module, "create_llm", lambda model_name, **_: fake_llm)
 
     async def _passthrough_offload(backend, messages, **kwargs):
         return messages
@@ -346,7 +344,7 @@ async def test_compact_messages_summarizes_the_offload_view(monkeypatch):
     fake_llm.ainvoke = AsyncMock(
         return_value=MagicMock(content="summary", additional_kwargs={})
     )
-    monkeypatch.setattr(compact_module, "get_llm_by_type", lambda model_name: fake_llm)
+    monkeypatch.setattr(compact_module, "create_llm", lambda model_name, **_: fake_llm)
     sent: list = []
 
     async def _recording_offload(backend, messages, **kwargs):
@@ -391,7 +389,7 @@ class TestCompactMessagesNeverStoresAnError:
             return messages
 
         monkeypatch.setattr(compact_module, "aoffload_base64_content", _passthrough)
-        monkeypatch.setattr(compact_module, "get_llm_by_type", lambda model_name: fake_llm)
+        monkeypatch.setattr(compact_module, "create_llm", lambda model_name, **_: fake_llm)
         self.fake_llm = fake_llm
 
     async def _compact(self, compact_module):

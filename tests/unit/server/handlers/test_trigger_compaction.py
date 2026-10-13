@@ -88,7 +88,7 @@ def _summary_model(cfg):
     name comes back as ``"by-name:<name>"``."""
     from ptc_agent.agent.middleware.compaction.compact import Summarizer
 
-    with patch(f"{COMPACT}.get_llm_by_type", side_effect=lambda name: f"by-name:{name}"):
+    with patch(f"{COMPACT}.create_llm", side_effect=lambda name, **_: f"by-name:{name}"):
         return Summarizer.for_agent(cfg).model
 
 
@@ -399,8 +399,8 @@ async def test_manual_compact_summarizes_with_the_subsidiary_oauth_client(base_c
     cfg = compact_mock.await_args.args[2]
     assert cfg.llm.compaction == "user-compaction-model"
     model = _summary_model(cfg)
-    # A copy, so maybe_disable_streaming in Summarizer.for_agent can't
-    # mutate streaming=False on the shared subsidiary client.
+    # A copy, as every role gets, so nothing done to it reaches the shared
+    # subsidiary client.
     oauth_client.model_copy.assert_called_once_with()
     assert model is oauth_client.model_copy.return_value, (
         "Manual /compact must summarize with a copy of the OAuth/BYOK "
@@ -412,62 +412,16 @@ async def test_manual_compact_summarizes_with_the_subsidiary_oauth_client(base_c
 
 
 @pytest.mark.asyncio
-async def test_manual_compact_falls_back_to_main_llm_client():
-    """With no compaction model at all (blank compaction, no flash), summarize
-    with a copy of the main client, as the automatic path does."""
-    from src.server.handlers.thread_maintenance import trigger_compaction
-
-    base_config = _make_agent_config(compaction_model=None, flash_model=None)
-
-    stub_resolve = _stub_resolve_graph_and_state()
-
-    compact_mock = AsyncMock(return_value=_compaction())
-
-    main_client = MagicMock(name="main-byok-client")
-    resolve_kwargs: dict = {}
-
-    async def _resolve_stub(base_cfg, user_id, request_model, is_byok, mode="ptc", **kwargs):
-        resolve_kwargs.update(kwargs)
-        cfg = base_cfg.model_copy(deep=True)
-        cfg.llm_client = main_client
-        cfg.subsidiary_llm_clients.pop("compaction", None)
-        return cfg
-
-    with (
-        patch("src.server.app.setup.agent_config", base_config),
-        patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-        patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
-        patch(
-            "ptc_agent.agent.middleware.compaction.compact_messages",
-            new=compact_mock,
-        ),
-        patch(
-            "src.server.database.api_keys.is_byok_active",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-        patch(f"{LLM_HANDLER}.resolve_llm_config", new=_resolve_stub),
-    ):
-        await trigger_compaction("thread-1", keep_messages=5, user_id="user-1")
-
-    model = _summary_model(compact_mock.await_args.args[2])
-    # A copy: maybe_disable_streaming would otherwise permanently set
-    # streaming=False on the main agent's shared llm_client.
-    main_client.model_copy.assert_called_once_with()
-    assert model is main_client.model_copy.return_value
-    assert resolve_kwargs.get("thread_id") == "thread-1"
-
-
-@pytest.mark.asyncio
-async def test_manual_compact_platform_user_resolves_by_name():
-    """A platform user has a main client but no role client. Manual /compact
-    must still run the compaction model by name, the same model automatic
-    compaction uses, not a copy of the main client. A blank compaction means
-    flash."""
+async def test_manual_compact_without_a_role_client_runs_the_turns_model():
+    """With no role client, manual /compact builds the compaction model by
+    name at the summary level, a blank compaction meaning the model the turn
+    runs, as automatic compaction does. The server's own config holds no main
+    client to borrow: only ``AgentConfig.create`` hands one in."""
+    from ptc_agent.agent.middleware.compaction.compact import Summarizer
     from src.server.handlers.thread_maintenance import trigger_compaction
 
     base_config = _make_agent_config(compaction_model=None)
-    base_config.llm_client = MagicMock(name="platform-main-client")
+    base_config.llm_client = None
     base_config.subsidiary_llm_clients.pop("compaction", None)
 
     compact_mock = AsyncMock(return_value=_compaction())
@@ -484,46 +438,15 @@ async def test_manual_compact_platform_user_resolves_by_name():
         await trigger_compaction("thread-1", keep_messages=5)
 
     cfg = compact_mock.await_args.args[2]
-    assert _summary_model(cfg) == "by-name:system-flash-model"
-    base_config.llm_client.model_copy.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_manual_compact_summarizes_on_a_copy_of_the_main_client():
-    """Regression: the summary model built from the main client MUST be a copy.
-
-    ``Summarizer.for_agent`` calls ``maybe_disable_streaming``, which sets
-    ``streaming = False`` in place on the client. On the shared
-    ``agent_cfg.llm_client`` itself, the main agent's model is permanently
-    mutated and all subsequent chat workflows lose SSE token streaming.
-    Mirrors the ``.model_copy()`` pattern in ``PTCAgent.create_agent``.
-    """
-    from src.server.handlers.thread_maintenance import trigger_compaction
-
-    stub_resolve = _stub_resolve_graph_and_state()
-
-    compact_mock = AsyncMock(return_value=_compaction())
-
-    base_config = _make_agent_config(compaction_model=None, flash_model=None)
-    shared_client = MagicMock(name="shared-main-client")
-    base_config.llm_client = shared_client
-    base_config.subsidiary_llm_clients.pop("compaction", None)
-
+    model_config = MagicMock()
+    model_config.get_reasoning_efforts.return_value = ["low", "medium", "high", "max"]
     with (
-        patch("src.server.app.setup.agent_config", base_config),
-        patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
-        patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
-        patch(
-            "ptc_agent.agent.middleware.compaction.compact_messages",
-            new=compact_mock,
-        ),
+        patch(f"{COMPACT}.LLM.get_model_config", return_value=model_config),
+        patch(f"{COMPACT}.create_llm", return_value=MagicMock(name="summary")) as build,
     ):
-        await trigger_compaction("thread-1", keep_messages=5)
+        Summarizer.for_agent(cfg)
 
-    model = _summary_model(compact_mock.await_args.args[2])
-    shared_client.model_copy.assert_called_once_with()
-    assert model is not shared_client
-    assert model is shared_client.model_copy.return_value
+    build.assert_called_once_with("system-default-model", reasoning_effort="medium")
 
 
 @pytest.mark.asyncio

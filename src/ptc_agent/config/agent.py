@@ -219,12 +219,14 @@ class LLMConfig(BaseModel):
         """
         return self.flash or self.name
 
-    # Blank compaction/fetch mean "whatever flash is for this turn". Resolved on
-    # read, not at load: a user's flash preference replaces ``flash`` per turn,
-    # and a value baked in at load would keep the deployment's flash instead.
+    # Blank fetch means "whatever flash is for this turn". Resolved on read, not
+    # at load: a user's flash preference replaces ``flash`` per turn, and a
+    # value baked in at load would keep the deployment's flash instead. Blank
+    # compaction means the model the turn runs, which a server turn writes in
+    # (``select_model``); read here it is the PTC model.
     @property
     def compaction_name(self) -> str | None:
-        return self.compaction or self.flash
+        return self.compaction or self.name
 
     @property
     def fetch_name(self) -> str | None:

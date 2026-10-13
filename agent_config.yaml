@@ -9,7 +9,7 @@ llm:
   # Model name from src/llms/manifest/models.json
   name: "claude-opus-5-5"
   flash: "claude-sonnet-5-5"
-  compaction: "" # blank → same model as flash
+  compaction: "" # blank → the model the turn runs
   fetch: ""         # blank → same model as flash
   fallback:
     - "deepseek-flash"
