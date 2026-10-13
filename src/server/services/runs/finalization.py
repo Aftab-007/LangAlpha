@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Literal, Optional
 
+from ptc_agent.agent.middleware.image_capture import CAPTURE_TIMEOUT_SECONDS
 from src.config.settings import get_checkpoint_flush_timeout
 from src.server.contracts.status import (
     INTERRUPT_REASON_CREDIT_PAUSE,
@@ -179,18 +180,6 @@ async def assemble_finalize_artifacts(
         per_call_records = None
         tool_usage = None
 
-    # Pre-finalize artifact hook: the sandbox images the turn's saved text
-    # still names, captured while the sandbox is the turn's.
-    artifact_hook = metadata.get("artifact_hook")
-    image_paths = getattr(handler, "saved_image_paths", None)
-    if status == "completed" and artifact_hook and image_paths:
-        try:
-            await artifact_hook(image_paths)
-        except Exception:
-            logger.warning(
-                f"[Finalize] artifact hook failed for {key}",
-                exc_info=True,
-            )
     return RunOutcome(
         status=status,
         interrupt_reason=interrupt_reason,
@@ -200,7 +189,29 @@ async def assemble_finalize_artifacts(
         per_call_records=per_call_records,
         tool_usage=tool_usage,
         record=await _producer_record(key, handler, stop_events, status),
+        images=await _late_images(key, metadata, handler),
     )
+
+
+async def _late_images(key: tuple, metadata: dict, handler) -> dict[str, str]:
+    """The URLs of the sandbox images the run's saved text still names,
+    which the model-time capture left as paths. Captured on every ending,
+    since a stopped, failed or paused run kept its earlier steps' text, and
+    bounded like that capture: a run whose sandbox died must still settle."""
+    artifact_hook = metadata.get("artifact_hook")
+    image_paths = getattr(handler, "saved_image_paths", None)
+    if not (artifact_hook and image_paths):
+        return {}
+    try:
+        return await asyncio.wait_for(
+            artifact_hook(image_paths), CAPTURE_TIMEOUT_SECONDS
+        )
+    except Exception:
+        logger.warning(
+            f"[Finalize] late image capture failed for {key}; left as paths",
+            exc_info=True,
+        )
+        return {}
 
 
 async def _producer_record(

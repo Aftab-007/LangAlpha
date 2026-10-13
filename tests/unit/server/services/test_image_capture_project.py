@@ -10,10 +10,7 @@ from ptc_agent.config.core import FilesystemConfig
 from ptc_agent.core.project_context import ProjectContext, current_project
 from ptc_agent.core.sandbox.ptc_sandbox import PTCSandbox
 from src.server.database.workspace_folders import WorkspaceFolderMoving
-from src.server.services.persistence.image_capture import (
-    capture_and_record_images,
-    capture_images,
-)
+from src.server.services.persistence.image_capture import capture_images
 
 _HOLD = 'src.server.database.workspace_folders.workspace_folder_in_use'
 
@@ -84,7 +81,7 @@ async def test_late_capture_reads_nothing_from_a_folder_mid_move(monkeypatch, mo
             dir_name='_internal/moving/ws-a', sibling_dir_names=(), layout_origin=None,
             previous_dir_names=(),
         )))
-    assert await capture_and_record_images(_PATHS, sandbox, workspace_id='ws-a', checkpointer=None) == 0
+    assert await capture_images(_PATHS, sandbox, workspace_id='ws-a') == {}
     sandbox.adownload_file_bytes.assert_not_awaited()
 
 
@@ -95,26 +92,5 @@ async def test_late_capture_never_falls_back_to_machine_root(monkeypatch):
     monkeypatch.setattr(_HOLD, _held([]))
     monkeypatch.setattr('src.server.services.workspace_layout.resolve_project_placement',
                         AsyncMock(side_effect=RuntimeError('missing binding')))
-    assert await capture_and_record_images(_PATHS, sandbox, workspace_id='ws-a', checkpointer=None) == 0
+    assert await capture_images(_PATHS, sandbox, workspace_id='ws-a') == {}
     sandbox.adownload_file_bytes.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_the_hook_records_through_the_runs_saver(monkeypatch):
-    # The saver the run's graph wrote through, its guard's session when
-    # fenced, so a run that lost its lock cannot record unfenced.
-    from src.server.handlers.chat.ptc_run import _artifact_hook
-    from src.server.services.history.reader import CheckpointHistoryReader
-
-    reader = SimpleNamespace(append_ui_record=AsyncMock())
-    monkeypatch.setattr(CheckpointHistoryReader, '_instance', reader)
-    monkeypatch.setattr('src.server.services.persistence.image_capture.capture_images',
-                        AsyncMock(return_value={'charts/a.png': 'https://images.example/a.png'}))
-    run_saver = object()
-    hook = _artifact_hook(SimpleNamespace(sandbox=object()), thread_id='t-1', project=None,
-                          checkpointer=run_saver)
-
-    await hook({'charts/a.png'})
-
-    reader.append_ui_record.assert_awaited_once()
-    assert reader.append_ui_record.await_args.kwargs['checkpointer'] is run_saver

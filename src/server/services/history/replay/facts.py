@@ -2,12 +2,15 @@
 
 A run's row carries them in ``replay_facts``. The turn's response row holds
 how long the main agent thought over each message it committed
-(``reasoning_ms``) and the fallback notices a stopped or failed run streamed
-(``model_fallbacks``). A subagent run's ``subagent_runs`` row holds the URL
-each sandbox image it referenced was captured to (``images``) and the
-steering it handed back unread (``steering_returned``). A row settled before
-the column existed has none, and replay keeps reading what it needs from the
-turn's stored events.
+(``reasoning_ms``), the fallback notices a stopped or failed run streamed
+(``model_fallbacks``), and the URL each sandbox image its saved text still
+named at its end was captured to (``images``). A subagent run's
+``subagent_runs`` row holds the URL each sandbox image it referenced was
+captured to (``images``) and the steering it handed back unread
+(``steering_returned``). A row settled before the column existed has none,
+and replay keeps reading what it needs from the turn's stored events; a turn
+settled before its row held its images keeps them in an ``image_capture`` ui
+record on its checkpoint.
 
 Run facts are learned after the run settles, so they can change a turn whose
 lines are already stored: they are read with the thread's other replay rows,
@@ -32,6 +35,8 @@ class ResponseFacts(TypedDict, total=False):
     reasoning_ms: dict[str, list[int]]
     # A stopped or failed run's model_fallback ui records, as streamed.
     model_fallbacks: list[dict[str, Any]]
+    # Sandbox image path -> the URL it was captured to as the run ended.
+    images: dict[str, str]
 
 
 class ReturnedSteering(TypedDict, total=False):
@@ -145,7 +150,15 @@ def unsaved_fallbacks(
     ]
 
 
-# --------------------------------------------------------------- run lanes
+# ------------------------------------------------------------------ images
+
+
+def images_of(facts: Any) -> dict[str, str]:
+    """A row's captured image URLs by sandbox path, or none."""
+    images = facts.get("images") if isinstance(facts, dict) else None
+    if not isinstance(images, dict):
+        return {}
+    return {str(k): str(v) for k, v in images.items() if k and v}
 
 
 def apply_image_url_map(
@@ -173,6 +186,9 @@ def apply_image_url_map(
     return turn_items
 
 
+# --------------------------------------------------------------- run lanes
+
+
 def apply_run_facts(
     run_items: list[dict[str, Any]],
     facts: SubagentRunFacts | None,
@@ -189,11 +205,7 @@ def apply_run_facts(
     """
     if not facts:
         return run_items
-    images = facts.get("images")
-    if isinstance(images, dict):
-        apply_image_url_map(
-            run_items, {str(k): str(v) for k, v in images.items() if k and v}
-        )
+    apply_image_url_map(run_items, images_of(facts))
     returned = facts.get("steering_returned")
     if isinstance(returned, list) and returned:
         run_items = _place_returned_steering(

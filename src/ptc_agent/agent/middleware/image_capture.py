@@ -37,10 +37,11 @@ IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"}
 IMAGE_MD_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 # Capture rides the live turn-completion path (paths are rewritten pre-commit so
-# checkpointed truth carries durable URLs). Bound it so a hung sandbox or storage
-# backend can't stall the turn — on timeout the paths are left in place and the
-# idempotent post-stream capture (same content-addressed keys) recovers them.
-_CAPTURE_TIMEOUT_SECONDS = 30.0
+# checkpointed truth carries durable URLs), and the late capture rides the
+# run's finalize. Both are bounded so a hung sandbox or storage backend can't
+# stall the turn: a path the model-time capture leaves in place is retried
+# late, at the same content-addressed keys.
+CAPTURE_TIMEOUT_SECONDS = 30.0
 
 
 def is_sandbox_image_path(path: str) -> bool:
@@ -186,12 +187,12 @@ class ImageCaptureMiddleware(AgentMiddleware):
         response = await handler(request)
         try:
             result = await asyncio.wait_for(
-                self._arewrite(response.result), _CAPTURE_TIMEOUT_SECONDS
+                self._arewrite(response.result), CAPTURE_TIMEOUT_SECONDS
             )
         except TimeoutError:
             logger.warning(
                 "[ImageCapture] capture exceeded %ss; sandbox paths left in place",
-                _CAPTURE_TIMEOUT_SECONDS,
+                CAPTURE_TIMEOUT_SECONDS,
             )
             return response
         except Exception:

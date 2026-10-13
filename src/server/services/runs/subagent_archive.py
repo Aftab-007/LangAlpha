@@ -226,9 +226,8 @@ async def _capture_lane_images(
     """Hook B: capture the images the lanes reference, recording each lane's
     path-to-URL map on the runs the turn launched for it.
 
-    Not on the thread's checkpoint, as the main turn's capture is: these
-    lanes settle after their turn did, and a record appended now would land
-    on whatever turn is newest, after the stored projection of this one.
+    Not on the turn's response row with the main lane's map: these lanes
+    settle after that row did.
     """
     from src.server.services.persistence.image_capture import (
         capture_images,

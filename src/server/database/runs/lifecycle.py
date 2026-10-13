@@ -182,6 +182,9 @@ class RunOutcome:
     tool_usage: Optional[Dict[str, int]] = None
     # None for a run with no stream to keep apart (one that never started).
     record: Optional[ProducerRecord] = None
+    # Sandbox path -> URL of the images the run's saved text still names,
+    # captured as it ended.
+    images: Dict[str, str] = field(default_factory=dict)
 
 
 @asynccontextmanager
@@ -613,9 +616,10 @@ async def finalize_run(
     same connection so a persist failure aborts the terminal transition
     with it (no more swallowed-exception zombie turns).
 
-    The outcome's record lands with the status it describes, so a settled
-    row never lacks the facts its replay reads, and its provenance replaces
-    the main lane's rows. Subagent lanes are their archive's to write.
+    The outcome's record and images land with the status they describe, so
+    a settled row never lacks the facts its replay reads, and its
+    provenance replaces the main lane's rows. Subagent lanes are their
+    archive's to write.
 
     The thread's pointer moves to ``newest`` only when this run wrote it.
     """
@@ -628,6 +632,8 @@ async def finalize_run(
         replay_facts["reasoning_ms"] = record.reasoning_ms
     if record.model_fallbacks:
         replay_facts["model_fallbacks"] = record.model_fallbacks
+    if outcome.images:
+        replay_facts["images"] = outcome.images
     # A checkpoint the run did not write was there before START. For a fork
     # whose run died before its first step, that is the abandoned branch's
     # tip, under the rows START truncated to the fork, so the pointer stays

@@ -2,8 +2,8 @@
 
 ``ImageCaptureMiddleware`` rewrites checkpointed messages at model time and
 leaves a path in place when its capture fails or times out. The main turn's
-leftovers are captured when it settles and their URLs recorded on its
-checkpoint; a subagent lane's, from its captured events, onto its runs. Keys
+leftovers are captured as its run ends and their URLs recorded on its
+response row; a subagent lane's, from its captured events, onto its runs. Keys
 are content-addressed (shared helpers), so every pass converges on identical
 URLs and re-uploads are idempotent PUTs of the same bytes.
 
@@ -11,7 +11,6 @@ No-op when storage is disabled (storage.provider = "none").
 """
 
 import logging
-from typing import Any
 
 from ptc_agent.core.project_context import ProjectContext
 
@@ -71,54 +70,6 @@ async def capture_images(
     return await capture_sandbox_images(
         sandbox, image_paths, thread_id, project=project
     )
-
-
-async def capture_and_record_images(
-    image_paths: set[str],
-    sandbox,
-    thread_id: str = "",
-    *,
-    project: ProjectContext | None = None,
-    workspace_id: str | None = None,
-    checkpointer: Any,
-) -> int:
-    """``capture_images``, plus the captured map recorded on the thread's
-    checkpoint for replay. Returns the number of images captured.
-
-    For the main turn only, before it finalizes, so its checkpoint is still
-    its own. ``checkpointer`` is the run's saver, its guard's session when
-    fenced: a run that lost its lock while the uploads ran loses the record
-    rather than writing it unfenced. A subagent's archive lands after its
-    turn settled, so its map goes to the run's replay facts instead
-    (``subagent_archive``).
-    """
-    path_to_url = await capture_images(
-        image_paths,
-        sandbox,
-        thread_id,
-        project=project,
-        workspace_id=workspace_id,
-    )
-    if not path_to_url:
-        return 0
-
-    # The checkpointed text keeps the sandbox path; replay resolves it
-    # through this record, without the (long-gone) sandbox.
-    if thread_id:
-        try:
-            from src.server.services.history.reader import CheckpointHistoryReader
-            from src.server.services.history.replay.turn import IMAGE_CAPTURE_UI_NAME
-
-            await CheckpointHistoryReader.get_instance().append_ui_record(
-                thread_id,
-                IMAGE_CAPTURE_UI_NAME,
-                {"path_to_url": path_to_url},
-                checkpointer=checkpointer,
-            )
-        except Exception as e:
-            logger.warning(f"[IMAGE_CAPTURE] Failed to persist ui record: {e}")
-
-    return len(path_to_url)
 
 
 async def _capture_from_held_folder(

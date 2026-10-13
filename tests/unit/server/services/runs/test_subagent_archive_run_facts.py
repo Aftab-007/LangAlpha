@@ -1,8 +1,7 @@
 """A subagent archive records its lanes' captured images as run facts.
 
-The lanes settle after their turn did, so a checkpoint ui record appended now
-would land on whatever turn is newest. Each lane's path-to-URL map goes onto
-the runs the turn launched for that task instead, limited to the paths that
+The lanes settle after their turn's row did, so each lane's path-to-URL map
+goes onto the runs the turn launched for that task, limited to the paths that
 lane referenced, and the launching turn is re-projected once a run took it.
 """
 
@@ -35,8 +34,6 @@ def _text(agent: str | None, content: str, message_id: str | None = None) -> dic
 
 async def _persist(events: list[dict], captured: dict[str, str]):
     record = AsyncMock()
-    reader = MagicMock()
-    reader.append_ui_record = AsyncMock()
     with (
         patch(
             "src.server.services.persistence.image_capture.capture_images",
@@ -47,29 +44,24 @@ async def _persist(events: list[dict], captured: dict[str, str]):
             "src.server.services.runs.subagent_archive.replace_lane_provenance",
             AsyncMock(return_value=True),
         ),
-        patch(
-            "src.server.services.history.reader.CheckpointHistoryReader.get_instance",
-            return_value=reader,
-        ),
     ):
         ok = await persist_collected_events(
             events, "resp-1", "thread-1", "ws-1", sandbox=object()
         )
-    return ok, record, reader
+    return ok, record
 
 
 @pytest.mark.asyncio
 async def test_each_lane_records_only_the_images_it_referenced():
     events = [_text("task:k1", f"see ![a]({_A})"), _text("task:k2", f"see ![b]({_B})")]
 
-    ok, record, reader = await _persist(events, {_A: _URL_A, _B: _URL_B})
+    ok, record = await _persist(events, {_A: _URL_A, _B: _URL_B})
 
     assert ok is True
     assert sorted(c.args for c in record.await_args_list) == [
         ("thread-1", "resp-1", "k1", {_A: _URL_A}),
         ("thread-1", "resp-1", "k2", {_B: _URL_B}),
     ]
-    reader.append_ui_record.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -82,7 +74,7 @@ async def test_a_reference_split_across_streamed_pieces_is_recorded():
         _text("task:k1", "workspace/b.png)", "m2"),
     ]
 
-    _, record, _ = await _persist(events, {_A: _URL_A, _B: _URL_B})
+    _, record = await _persist(events, {_A: _URL_A, _B: _URL_B})
 
     record.assert_awaited_once_with("thread-1", "resp-1", "k1", {_A: _URL_A})
 
@@ -91,14 +83,14 @@ async def test_a_reference_split_across_streamed_pieces_is_recorded():
 async def test_a_lane_with_nothing_captured_records_nothing():
     events = [_text("task:k1", f"see ![a]({_A})"), _text("task:k2", "no image")]
 
-    _, record, _ = await _persist(events, {})
+    _, record = await _persist(events, {})
 
     record.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_rows_outside_a_task_lane_record_nothing():
-    _, record, _ = await _persist([_text(None, f"see ![a]({_A})")], {_A: _URL_A})
+    _, record = await _persist([_text(None, f"see ![a]({_A})")], {_A: _URL_A})
 
     record.assert_not_awaited()
 

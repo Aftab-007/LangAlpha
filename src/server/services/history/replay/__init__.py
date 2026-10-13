@@ -22,9 +22,11 @@ non-derivable remainder from persisted events:
 - ``html_widget`` artifacts prefer the stored event when present — the live
   event inlines resolved data files that are deliberately kept out of the
   checkpointer.
-- Sandbox image paths in projected text resolve through ``image_capture``
-  ui records, a subagent run's through its replay facts, and an older turn's
-  through the URLs its stored events were captured to (``legacy``).
+- Sandbox image paths in projected text resolve through the replay facts of
+  the run that wrote them (the turn's response row, a subagent run's row),
+  through ``image_capture`` ui records for a turn settled before its row held
+  them, and through the URLs an older turn's stored events were captured to
+  (``legacy``).
 - What only the live stream measured or returned (reasoning durations, a
   subagent run's returned steering) comes from the run's replay facts
   (``facts``), and from the stored events for a run settled before those.

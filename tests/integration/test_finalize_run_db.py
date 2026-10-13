@@ -184,6 +184,17 @@ async def test_replay_facts_land_with_the_status_and_survive_a_lost_cas(
     assert await _replay_facts(db_conn, run_id) == {"reasoning_ms": durations}
 
 
+async def test_a_stopped_runs_late_captured_images_land_in_its_facts(
+    open_run, db_conn
+):
+    """Every ending keeps the images its saved text still named, not only a
+    completed one."""
+    thread_id, run_id = open_run
+    images = {"charts/a.png": "https://cdn.example/a.png"}
+    assert (await _finalize(run_id, thread_id, "cancelled", images=images)).applied
+    assert await _replay_facts(db_conn, run_id) == {"images": images}
+
+
 @pytest.mark.parametrize("recovered", [False, True], ids=["fail-open", "recovery"])
 async def test_finalize_without_facts_leaves_the_column_null(
     open_run, db_conn, recovered

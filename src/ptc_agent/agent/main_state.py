@@ -5,8 +5,8 @@ A graph writes back only the channels it declares, and the Postgres saver
 keeps a primitive value (a count, a flag) inside the checkpoint row rather
 than beside it, so one write through a graph that lacks such a field erases
 it. The main agent's checkpoints are written by builds that differ (a turn's,
-and thread maintenance's, which leaves the subagent switch out) and by the
-server's history reader appending a ui record, so each declares this schema.
+and thread maintenance's, which leaves the subagent switch out), so each
+declares this schema.
 """
 
 from __future__ import annotations

@@ -26,7 +26,8 @@ from src.server.services.history.replay import stored_merge
 from src.server.services.history.slices import TurnSlice
 from src.server.services.runs.sse_producer import resolve_token_threshold
 
-# The ui record image capture persists a turn's path -> URL map in.
+# The ui record a turn settled before its row held its images keeps its
+# path -> URL map in.
 IMAGE_CAPTURE_UI_NAME = "image_capture"
 
 
@@ -117,12 +118,16 @@ def project_turn(
         replay_facts.apply_reasoning_durations(turn_items, durations)
     task_items, sealed, watermarks = lane.project(turn, settled_at(response))
     turn_items.extend(task_items)
-    # Legacy path→URL records belong to the turn whose state delta contains
-    # them. A thread-global map is incorrect when a sandbox filename is
-    # reused later: last-write-wins would rewrite the older turn's image to
-    # the newer content-addressed object.
+    # A turn's image map is its own: its row's, or the ui record in its state
+    # delta for a turn settled before its row held one. A thread-global map is
+    # incorrect when a sandbox filename is reused later: last-write-wins would
+    # rewrite the older turn's image to the newer content-addressed object.
     replay_facts.apply_image_url_map(
-        turn_items, _collect_image_url_map(turn.new_ui_records)
+        turn_items,
+        {
+            **_collect_image_url_map(turn.new_ui_records),
+            **replay_facts.images_of((response or {}).get("replay_facts")),
+        },
     )
     # Table-sourced synthesis rides ahead of the merge: a turn with stored
     # events drops these copies and replays the stored ones instead (the

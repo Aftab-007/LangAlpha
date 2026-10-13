@@ -171,31 +171,18 @@ async def _resolve_origin_meta(request, thread_id: str) -> dict:
     }
 
 
-def _artifact_hook(
-    session, *, thread_id: str, project: ProjectContext | None, checkpointer
-):
+def _artifact_hook(session, *, thread_id: str, project: ProjectContext | None):
     """The finalize's pre-terminal hook: upload the sandbox images the turn's
-    saved messages still name and record their URLs on its checkpoint.
+    saved messages still name, returning each one's URL for its row."""
 
-    ``checkpointer`` is bound at the run's start rather than read off its
-    handle when the hook fires: it is the saver the turn's graph wrote
-    through, so a hook that outlived the run's guard meets a saver that
-    refuses the write, not the pooled one the handle falls back to.
-    """
+    async def capture_artifacts(image_paths) -> dict[str, str]:
+        if not (session and session.sandbox):
+            return {}
+        from src.server.services.persistence.image_capture import capture_images
 
-    async def capture_artifacts(image_paths):
-        if session and session.sandbox:
-            from src.server.services.persistence.image_capture import (
-                capture_and_record_images,
-            )
-
-            await capture_and_record_images(
-                image_paths,
-                session.sandbox,
-                thread_id=thread_id,
-                project=project,
-                checkpointer=checkpointer,
-            )
+        return await capture_images(
+            image_paths, session.sandbox, thread_id, project=project
+        )
 
     return capture_artifacts
 
@@ -915,13 +902,10 @@ async def astream_ptc_workflow(
         # already ran there (gated on ``needs_startup``) so steering routed
         # against live state.
 
-        # Runs inside _finalize_run, before the terminal txn, while the run
-        # still holds its guard.
+        # Runs inside _finalize_run, before the terminal txn that records
+        # what it captured.
         capture_artifacts = _artifact_hook(
-            session,
-            thread_id=thread_id,
-            project=project,
-            checkpointer=run_handle.checkpointer,
+            session, thread_id=thread_id, project=project
         )
 
         # Post-finalize side effects only (v4): the durable terminal write —

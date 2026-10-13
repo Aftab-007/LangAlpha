@@ -1,5 +1,6 @@
 """The finalize captures the sandbox images the turn's saved messages still
-name, which the model-time capture left as paths.
+name, which the model-time capture left as paths, and records their URLs
+with the run's ending, whichever it is.
 
 The streamed text always carries the sandbox path; the saved message carries
 it only when the capture at model time failed, and that copy is the one
@@ -43,9 +44,12 @@ async def _streamed(*script):
     return handler
 
 
-async def _finalize(handler, status):
-    hook = AsyncMock()
-    await assemble_finalize_artifacts(
+_URLS = {"charts/a.png": "https://cdn.example/a.png"}
+
+
+async def _finalize(handler, status, hook=None):
+    hook = hook or AsyncMock(return_value=_URLS)
+    outcome = await assemble_finalize_artifacts(
         _KEY,
         metadata={"artifact_hook": hook},
         status=status,
@@ -58,7 +62,7 @@ async def _finalize(handler, status):
         workspace_id=None,
         user_id=None,
     )
-    return hook
+    return hook, outcome
 
 
 @pytest.mark.asyncio
@@ -83,20 +87,27 @@ async def test_the_hook_gets_the_paths_the_saved_messages_still_name():
     )
 
     assert handler.saved_image_paths == {"charts/a.png"}
-    hook = await _finalize(handler, "completed")
+    hook, _ = await _finalize(handler, "completed")
     hook.assert_awaited_once_with({"charts/a.png"})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("script", "status"),
-    [
-        ((_saved("model", "ai-1", "![a](https://cdn.example/a.png)"),), "completed"),
-        ((_saved("model", "ai-1", "![a](charts/a.png)"),), "cancelled"),
-    ],
-    ids=["nothing_left_as_a_path", "not_completed"],
-)
-async def test_no_capture_runs_without_a_saved_path_on_a_completed_turn(script, status):
-    hook = await _finalize(await _streamed(*script), status)
+@pytest.mark.parametrize("status", ["completed", "cancelled", "error", "interrupted"])
+async def test_every_ending_records_the_urls_it_captured(status):
+    """A stopped, failed or paused run saved its earlier steps' text too."""
+    handler = await _streamed(_saved("model", "ai-1", "![a](charts/a.png)"))
+
+    _, outcome = await _finalize(handler, status)
+
+    assert outcome.images == _URLS
+
+
+@pytest.mark.asyncio
+async def test_no_capture_runs_without_a_saved_path():
+    handler = await _streamed(_saved("model", "ai-1", "![a](https://cdn.example/a.png)"))
+
+    hook, outcome = await _finalize(handler, "cancelled")
 
     hook.assert_not_awaited()
+    assert outcome.images == {}
+

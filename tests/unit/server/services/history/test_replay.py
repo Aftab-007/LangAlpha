@@ -860,6 +860,40 @@ async def test_image_maps_are_scoped_to_their_turn(monkeypatch):
     assert chunks == ["![old](https://cdn/old.png)", "![new](https://cdn/new.png)"]
 
 
+async def test_image_map_applied_from_the_rows_replay_facts(monkeypatch):
+    """A turn's late-captured images are on its row, whatever its ending; a
+    turn settled before that keeps resolving through its ui record."""
+    legacy = {
+        "type": "ui",
+        "id": "ui-old",
+        "name": "image_capture",
+        "props": {"path_to_url": {"work/old.png": "https://cdn/old.png"}},
+    }
+    history = ThreadHistory(
+        thread_id=THREAD,
+        turns=[
+            _turn(
+                0,
+                [AIMessage(content="![old](work/old.png)", id="ai-old")],
+                new_ui_records=[legacy],
+            ),
+            _turn(1, [AIMessage(content="![new](work/new.png)", id="ai-new")]),
+        ],
+    )
+    _mock_reader(monkeypatch, history)
+    failed = {
+        **_response(1, status="error"),
+        "replay_facts": {"images": {"work/new.png": "https://cdn/new.png"}},
+    }
+
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0), _query(1, content="next")], {0: _response(0), 1: failed}),
+    )
+
+    chunks = [i["data"]["content"] for i in items if i["event"] == "message_chunk"]
+    assert chunks == ["![old](https://cdn/old.png)", "![new](https://cdn/new.png)"]
+
+
 # Two images whose captured URLs share a basename: no basename match tells
 # them apart, so the turn's main lane replays from its stored copy (the
 # wholesale branch).

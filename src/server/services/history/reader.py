@@ -13,30 +13,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Any
 
-from langgraph.graph import START, StateGraph
-
 from ptc_agent.agent.main_state import MainAgentState
 from src.server.services.history import slices
 from src.server.utils.checkpoint_helpers import (
-    INTERRUPT_CHANNEL,
     Boundary,
     interrupt_records,
-    update_at_commit,
     walk_current_branch_boundaries,
 )
 
 logger = logging.getLogger(__name__)
 
-
-def _has_pending_interrupt(tup: Any) -> bool:
-    return tup is not None and any(
-        w[1] == INTERRUPT_CHANNEL for w in (tup.pending_writes or ())
-    )
 
 # Concurrent aget_state reads per history materialization. Each read holds a
 # checkpointer-pool connection (pool max defaults to 25), so this stays well
@@ -205,24 +195,12 @@ class CheckpointHistoryReader:
 
         _silence_pending_sends_noise()
         self._checkpointer = checkpointer
-        # The main agent's own schema, for two reasons: ``aget_state`` only
-        # surfaces channels the reading graph declares, and the ui-record
-        # append writes through this graph, which would erase any primitive
-        # field it left undeclared (see ``main_state``). Same shape the
-        # snapshot writer uses, so what it wrote into task:{id} is what this
-        # reads back. Public: checkpoint storage maintenance decodes channels
-        # through the same declaration.
+        # The main agent's own schema: ``aget_state`` only surfaces channels
+        # the reading graph declares. Same shape the snapshot writer uses, so
+        # what it wrote into task:{id} is what this reads back. Public:
+        # checkpoint storage maintenance decodes channels through the same
+        # declaration.
         self.graph = task_namespace_graph(MainAgentState, checkpointer)
-        # Separate single-node graph for ui-record appends: with exactly one
-        # node, aupdate_state auto-attributes the write (no as_node needed),
-        # and the update checkpoint carries source="update" — never a turn
-        # boundary.
-        self._updater = (
-            StateGraph(MainAgentState)
-            .add_node("noop", lambda state: {})
-            .add_edge(START, "noop")
-            .compile(checkpointer=checkpointer)
-        )
 
     @classmethod
     def get_instance(cls) -> CheckpointHistoryReader:
@@ -332,76 +310,6 @@ class CheckpointHistoryReader:
             )
             for r in runs
         ]
-
-    async def append_ui_record(
-        self,
-        thread_id: str,
-        name: str,
-        props: dict[str, Any],
-        *,
-        checkpointer: Any = None,
-    ) -> None:
-        """Append a ``UIMessage``-shaped record to the thread's root ``ui`` channel.
-
-        ``checkpointer`` is the saver of the run the record belongs to, and
-        the tip read and the write both go through it. A fenced run's saver
-        is its writer guard's session, so a run that lost its lock fails the
-        append instead of writing onto a thread whose next turn may have
-        started. Without one, the reader's pooled saver is used.
-
-        Skips the write when the thread tip is interrupted: ``aupdate_state``
-        attributes the write to this reader graph's node and clears the real
-        agent graph's pending interrupt, silently breaking HITL resume. A
-        broken resume costs more than the record, whose loss leaves the
-        turn's late-captured images as paths in replay.
-
-        The image-capture hook appends before its run finalizes, and the
-        finalize commits the append with the turn, since the commit reads
-        past update checkpoints. The append is written at the tip read here,
-        and the recorded tip CAS-advanced onto it (``update_at_commit``) for
-        a write that lands after its turn committed. A concurrent turn or
-        branch switch that moved the tip first leaves a dead-branch record,
-        and a thread with no checkpoint gets none.
-        """
-        saver = self._checkpointer if checkpointer is None else checkpointer
-        try:
-            tip = await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
-        except Exception as e:
-            # Fail closed: an unverifiable tip could hide a live interrupt.
-            logger.warning(
-                "[CheckpointHistoryReader] tip read failed, dropping ui "
-                "record %r for thread_id=%s: %s",
-                name,
-                thread_id,
-                e,
-            )
-            return
-        if _has_pending_interrupt(tip):
-            logger.debug(
-                "[CheckpointHistoryReader] skip ui record %r on interrupted "
-                "tip for thread_id=%s",
-                name,
-                thread_id,
-            )
-            return
-        record = {
-            "type": "ui",
-            "id": f"ui-{uuid.uuid4().hex[:12]}",
-            "name": name,
-            "props": props,
-            "metadata": {},
-        }
-        built_on = (
-            (tip.config.get("configurable") or {}).get("checkpoint_id") if tip else None
-        )
-        # ``update_at_commit`` reads and writes through its graph's saver, so
-        # the one-node graph is rebound to the caller's: a copy, not a recompile.
-        updater = (
-            self._updater
-            if checkpointer is None
-            else self._updater.copy({"checkpointer": checkpointer})
-        )
-        await update_at_commit(updater, thread_id, built_on, {"ui": [record]})
 
     async def aget_state(self, thread_id: str, checkpoint_id: str | None = None):
         """The thread's state at ``checkpoint_id``, or at its latest checkpoint."""

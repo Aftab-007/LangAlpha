@@ -1,7 +1,7 @@
 """The main agent's one schema declares what every middleware keeps, so a
-graph built on it (a turn, thread maintenance, the history reader) writes no
-checkpoint without one of them. ``test_main_state_db`` shows the erasure on
-Postgres."""
+graph built on it (a turn, thread maintenance) writes no checkpoint without
+one of them, and the history reader sees them all. ``test_main_state_db``
+shows the erasure on Postgres."""
 
 from __future__ import annotations
 
@@ -51,7 +51,6 @@ def test_messages_keep_their_delta_channel() -> None:
     assert any(isinstance(meta, DeltaChannel) for meta in annotated.__metadata__)
 
 
-def test_the_reader_writes_with_the_main_agents_schema() -> None:
+def test_the_reader_reads_with_the_main_agents_schema() -> None:
     reader = CheckpointHistoryReader(InMemorySaver())
-    for graph in (reader.graph, reader._updater):
-        assert graph.builder.state_schema is MainAgentState
+    assert reader.graph.builder.state_schema is MainAgentState
