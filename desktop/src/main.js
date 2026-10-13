@@ -41,10 +41,11 @@ let setupWindow = null
 // origin, and only one, because the newest link is the one being acted on.
 let deferredLink = null
 // The window whose page last sent the user to the system browser. An
-// integration login leaves through the bridge's `openExternal`, so this is the
-// window it was started in. Taken from the sender, not from focus or blur: those
-// move with every switch between our windows and the browser, and a second
-// launch moves focus again before the link it carries is delivered.
+// integration login or install leaves through the bridge's `openExternal`, so
+// this is the window it was started in. Taken from the sender, not from focus
+// or blur: those move with every switch between our windows and the browser,
+// and a second launch moves focus again before the link it carries is
+// delivered.
 let lastSentOutWindow = null
 
 const SETUP_DIR = path.join(__dirname, '..', 'setup')
@@ -423,6 +424,10 @@ function shellArgs({ chromeHidden }) {
     // editions install side by side, and an email link marked for the wrong one
     // opens the other build, or nothing.
     `--langalpha-shell-scheme=${config.scheme}`,
+    // Whether this build has a console to finish an integration login or
+    // install on. An edition with no platform origin drops those links, so it
+    // must not say it can.
+    `--langalpha-integration-returns=${origins.platformOrigin() ? '1' : ''}`,
   ]
 }
 
@@ -656,12 +661,12 @@ function openDeepLink(win, raw, base) {
 }
 
 /**
- * An integration login handed back from the browser, already mapped onto the
- * console's callback page. It goes back to the page that started it: the
- * console window that sent the user to the browser, or else any window showing
- * the console. Either can be the one, and both can show it at once: an account
- * window opened before the console reserved the strip stays open after the
- * main window starts showing the console too.
+ * An integration login or install handed back from the browser, already mapped
+ * onto the console's callback page. It goes back to the page that started it:
+ * the console window that sent the user to the browser, or else any window
+ * showing the console. Either can be the one, and both can show it at once: an
+ * account window opened before the console reserved the strip stays open after
+ * the main window starts showing the console too.
  *
  * With no window showing the console, it goes wherever a navigation to the
  * console goes, decided here and before the load: `navigate` is loadURL and
@@ -670,9 +675,10 @@ function openDeepLink(win, raw, base) {
  * its own when the main one cannot show it.
  *
  * Restored as well as raised: the window may have been minimized while the
- * browser had the login, and show() does not bring a minimized window back.
+ * browser had the login or install, and show() does not bring a minimized
+ * window back.
  */
-function openIntegrationLogin(url) {
+function openIntegrationReturn(url) {
   const showsConsole = (w) => Boolean(w) && !w.isDestroyed()
     && (w === platformWindow || (w === mainWindow && origins.isPlatform(w.webContents.getURL())))
   let win = [lastSentOutWindow, mainWindow, platformWindow].find(showsConsole)
@@ -694,12 +700,12 @@ function openIntegrationLogin(url) {
 function onDeepLink(raw) {
   // Settled before any window is picked, because the answer picks it, and never
   // left to fall through: the app's /callback would try to redeem the
-  // provider's code as a sign-in. That includes an edition with no console,
+  // provider's answer as a sign-in. That includes an edition with no console,
   // which has nowhere to finish one.
-  if (deeplink.isIntegrationLogin(raw)) {
+  if (deeplink.isIntegrationReturn(raw)) {
     const target = deeplink.toIntegrationUrl(raw)
-    if (target) openIntegrationLogin(target)
-    else console.warn('[shell] ignoring an integration login link this build cannot finish')
+    if (target) openIntegrationReturn(target)
+    else console.warn('[shell] ignoring an integration link this build cannot finish')
     return
   }
 

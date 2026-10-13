@@ -57,11 +57,20 @@ contextBridge.exposeInMainWorld('langalphaDesktop', {
    *   link opens the console's callback page for that login in this app, so a
    *   browser that finished the login can hand the provider's answer back
    *   rather than redeem it itself.
+   * - `integration-install`: the same for an install, through
+   *   `<scheme>://integrations/install/<name>/callback`, so a browser that
+   *   finished the install can hand its result back to the page that started
+   *   it.
    *
-   * A static list, and deliberately not a channel: nothing on it hands the page
-   * a way to drive anything.
+   *   Both present only in an edition that has a console to finish them on;
+   *   one with no platform origin drops those links, so it leaves both out.
+   *
+   * A list fixed when the window opens, and deliberately not a channel: nothing
+   * on it hands the page a way to drive anything.
    */
-  capabilities: Object.freeze(['integration-login']),
+  capabilities: Object.freeze(
+    flag('integration-returns') === '1' ? ['integration-login', 'integration-install'] : [],
+  ),
 
   /**
    * Tell the shell which theme the page settled on, so the window background
