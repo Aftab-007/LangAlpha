@@ -3,8 +3,8 @@
 Wraps every tool call (``awrap_tool_call``), runs the tool unchanged, then
 dispatches on the tool name to a per-tool extractor that yields zero or more
 :class:`ProvenanceSource` objects. Each source is emitted as a custom stream
-event via ``get_stream_writer`` — the same mechanism FileOperationMiddleware
-uses — so records accumulate into ``sse_events`` without entering LLM context.
+event via ``get_stream_writer``, the same mechanism FileOperationMiddleware
+uses, so records reach the turn's provenance without entering LLM context.
 
 Extraction NEVER breaks a tool call: the whole extraction path is wrapped in
 try/except and the original tool result is always returned. Agent attribution
@@ -233,7 +233,7 @@ def _strip_mcp_trace(result: Any) -> None:
     """Drop the provenance-only mcp_trace key from an ExecuteCode/Bash artifact.
 
     Mutates the ToolMessage artifact in place so the raw in-sandbox trace never
-    propagates outward onto tool_call_result or into persisted sse_events.
+    propagates outward onto tool_call_result or into the checkpoint.
     """
     artifact = getattr(result, "artifact", None)
     if isinstance(artifact, dict):
@@ -377,7 +377,7 @@ class ProvenanceMiddleware(AgentMiddleware):
                 # mcp_trace is provenance-only scaffolding carrying raw in-sandbox
                 # args + snippets. Strip it from the artifact (after extraction
                 # reads it) so it never rides the public tool_call_result event or
-                # lands in persisted sse_events. In a finally so it runs even if
+                # lands in the checkpoint. In a finally so it runs even if
                 # the extractor raises — the raw-args-never-persisted property must
                 # not depend on extraction succeeding.
                 if tool_name in _MCP_TRACE_TOOLS:

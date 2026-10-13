@@ -16,11 +16,10 @@ def stop_close_item(
     """The ``finish_reason: "stopped"`` close for a user-stopped turn's last
     main-lane assistant message, unless the turn already carries one for it.
 
-    Stopped is a fact about the turn, recorded on its response row, but the
-    stop finalize writes a close only for a message still streaming at the
-    stop. A stop between messages (during a tool, before the next model call)
-    leaves none, and a close for a message the checkpoint committed does not
-    survive the merge. A stop during bring-up, before any assistant event,
+    Stopped is a fact about the turn, recorded on its response row, and the
+    checkpoint keeps no close for it. An older row's stored events close
+    only a message still streaming at the stop, and a close for a message
+    the checkpoint committed does not survive the merge. A stop during bring-up, before any assistant event,
     has no message to name, so its close carries no ``id``: clients apply a
     close to the turn's bubble by ``turn_index``. System cancels are not
     stops and get no close.

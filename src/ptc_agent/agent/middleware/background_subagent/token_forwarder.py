@@ -25,8 +25,7 @@ _ALLOWED_CUSTOM_EVENT_TYPES = frozenset({"context_window", "provenance"})
 # Artifacts forwarded from a subagent's astream, keyed on ``artifact_type``,
 # with the payload keys each keeps. A file_operation is a path-only ping: the
 # client only needs which path changed to refresh its file panel and
-# memory/memo views, and the written content would bloat the per-task buffer
-# and the archive.
+# memory/memo views, and the written content would bloat the per-task buffer.
 _FORWARDED_ARTIFACT_PAYLOAD_KEYS = {
     "file_operation": ("operation", "file_path", "sandbox_path", "error"),
 }
@@ -255,8 +254,8 @@ class _SubagentTokenForwarder:
                 },
             }
         elif (event := data.get("type")) in _ALLOWED_CUSTOM_EVENT_TYPES:
-            # Nothing shows a subagent's summary count, and this buffer is
-            # archived.
+            # Nothing shows a subagent's summary count, so the buffer never
+            # keeps it.
             if data.get("action") == "summary_progress":
                 return
             body = {k: v for k, v in data.items() if k != "type"}

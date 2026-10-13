@@ -15,9 +15,9 @@ request key it writes, and it owns no cache breakpoint of its own: the envelope
 carries the whole volatile tail and pins the breakpoint there.
 
 Every injection is also attested in the turn's provenance stream (one
-``market_data`` record per watched symbol). Provenance rides sse_events
-persistence, so it records what the model saw even though the stamp itself is
-never checkpointed.
+``market_data`` record per watched symbol). Provenance is recorded beside the
+turn, so it keeps what the model saw even though the stamp itself is never
+checkpointed.
 """
 
 import inspect

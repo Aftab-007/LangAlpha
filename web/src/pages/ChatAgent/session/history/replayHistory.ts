@@ -332,7 +332,7 @@ export async function loadConversationHistory(
         return;
       }
 
-      // Handle steering_delivered events from sse_events (main agent only;
+      // Handle replayed steering_delivered events (main agent only;
       // subagent steering_delivered events are routed through the isSubagent block below)
       if (eventType === 'steering_delivered' && hasPairIndex && !isSubagent) {
         handleHistorySteeringDelivered({

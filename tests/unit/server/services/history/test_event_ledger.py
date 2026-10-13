@@ -6,10 +6,10 @@ exactly one of
 - **checkpoint-projected** — rebuilt from LangGraph checkpoint state,
 - **table-sourced** — rebuilt from an authoritative DB table,
 - **live-only** — transient signal never replayed (its durable content, if
-  any, reaches the client another way),
-- **stored-events-only** — replayable ONLY via persisted ``sse_events``
-  (must be re-homed or explicitly accepted-lost before the dual-write stops;
-  cutover step 5 blocks on this set).
+  any, reaches the client another way).
+
+A new run writes no ``sse_events``, so a type with none of these sources is
+lost on replay; an older row's stored events only add to what these rebuild.
 
 This test scans the chat/replay emit surface for event-type literals and
 fails when an emitted type is missing from the ledger (add the type to the
@@ -61,12 +61,12 @@ TABLE_SOURCED = {
 }
 
 LIVE_ONLY = {
-    "metadata",  # per-run header, accumulate=False
+    "metadata",  # per-run header
     "workspace_status",  # sandbox bring-up progress
     "warning",
     "retry",  # recoverable-error notice, run restarts
     "steering_accepted",  # only on the steering POST's own stream
-    "model_retry",  # transient, accumulate=False
+    "model_retry",  # transient
     "tool_call_chunks",  # replay's consolidated tool_calls carries full args
     "compaction_chunk",  # summarize context_window carries summary_text
     "subagent_stream_end",  # reconnect-stream sentinel
@@ -76,8 +76,8 @@ LIVE_ONLY = {
     "history_page",  # paged replay header: oldest turn sent, older remain
     "snapshot",  # read-time cursors for the runs replay could not project;
     # recomputed from ledger+Redis on every load, never replayed from a store
-    "market_watch_update",  # transient stamp notice, accumulate=False; the
-    # durable watchlist re-seeds the chip via GET /{thread}/market-watch on replay
+    "market_watch_update",  # transient stamp notice; the durable watchlist
+    # re-seeds the chip via GET /{thread}/market-watch on replay
     "thread_created",  # legacy creation SSE branch (POST /threads with
     # Accept: text/event-stream), never on the run wire; the row itself is the
     # durable truth (GET /threads/{id}). ⚠️ Deletes together with that branch.
@@ -97,16 +97,10 @@ LIVE_ONLY = {
     # from history; a socket-level instruction, nothing to replay
 }
 
-# KNOWN GAP: survives replay only through persisted sse_events. Before
-# sse_events writes stop (cutover step 5) each entry here must move to a
-# category above or be explicitly accepted as not replayed.
-STORED_EVENTS_ONLY: set[str] = set()
-
 _CATEGORIES = {
     "checkpoint": CHECKPOINT_PROJECTED,
     "table": TABLE_SOURCED,
     "live-only": LIVE_ONLY,
-    "stored-events-only": STORED_EVENTS_ONLY,
 }
 
 _EMIT_PATTERNS = (
@@ -186,5 +180,4 @@ def test_replay_transition_rules_cover_the_replayable_set():
 
     replayable = CHECKPOINT_PROJECTED | TABLE_SOURCED
     assert set(STORED_PREFERRED_EVENTS) <= replayable
-    # Passthrough may additionally carry the stored-events-only legacy set.
-    assert set(PASSTHROUGH_EVENTS) <= replayable | STORED_EVENTS_ONLY
+    assert set(PASSTHROUGH_EVENTS) <= replayable
