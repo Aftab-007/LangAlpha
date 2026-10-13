@@ -6,6 +6,7 @@
  */
 import type { AssistantMessage, ChatMessage } from '@/types/chat';
 import { createRecentlySentTracker } from '../../hooks/utils/recentlySentTracker';
+import { createRequestKeyTracker } from '../../hooks/utils/requestKey';
 import { flushOffloadBatch } from '../../hooks/utils/contextWindowEvent';
 import type { SSEEvent, SubagentHistoryData, TokenUsage } from '../types';
 import { ownerOfToolCall } from '../toolCallOwner';
@@ -147,6 +148,7 @@ export async function loadOlderHistoryPage(
     latestRunIdRef: { current: null },
     latestRunEpochRef: { current: 0 },
     recentlySentTrackerRef: { current: createRecentlySentTracker() },
+    requestKeyRef: { current: createRequestKeyTracker() },
     lastEventIdRef: { current: null },
     // A copy: a re-raise the newer pages already carded stays a re-raise, and
     // a discarded page must not mark ids it never put on screen.

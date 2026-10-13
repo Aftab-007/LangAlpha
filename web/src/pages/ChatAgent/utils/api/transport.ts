@@ -259,6 +259,7 @@ function duplicateRequestError(frame: Record<string, unknown>): Error & { status
     errorInfo.run_id = frame.run_id;
     errorInfo.run_status = frame.run_status;
     errorInfo.thread_id = frame.run_thread_id || frame.thread_id;
+    if (frame.steered === true) errorInfo.steered = true;
   }
   return Object.assign(new Error(message || 'HTTP error! status: 409'), { status: 409, errorInfo });
 }

@@ -42,7 +42,7 @@ import type { HitlResponseBody } from '@/types/api';
 import type { AssistantMessage, UserMessage, ChatMessage } from '@/types/chat';
 import type { PreviewData } from './utils/types';
 import { createRecentlySentTracker } from './utils/recentlySentTracker';
-import { createRequestKeyTracker } from './utils/requestKey';
+import { createRequestKeyTracker, sendFingerprint } from './utils/requestKey';
 import { withServerTotals, withoutServerTotals } from './utils/contextWindowEvent';
 import { BUSY_REFUSAL_KEYS, createForkRefusalRecovery, forkRefusalMessage, isBusyCode, isRecoverableRetryRefusal, isStaleForkRefusal, type BusyCode, type ForkCut } from './utils/forkRefusal';
 import { createEditDraftStore, sameDraftMessage, type EditDraft } from './utils/editDrafts';
@@ -665,6 +665,7 @@ export function useChatMessages(
     newMessagesStartIndexRef,
     historyPendingTaskToolCallIdsRef,
     recentlySentTrackerRef,
+    requestKeyRef,
     offloadBatchRef,
     replayedRunIdsRef,
     subagentStateRefsRef,
@@ -998,7 +999,7 @@ export function useChatMessages(
    * Returns true when adopted; the caller must skip its own error/finalize
    * path (the reconnect owns teardown from here).
    */
-  const adoptDuplicateRun = (err: unknown, assistantMessageId: string): boolean => {
+  const adoptDuplicateRun = (err: unknown, assistantMessageId: string, requestKey: string): boolean => {
     const e = err as { status?: number; errorInfo?: Record<string, unknown> };
     if (e?.status !== 409 || e?.errorInfo?.code !== 'duplicate_request') return false;
     const runId = e.errorInfo.run_id as string | undefined;
@@ -1006,7 +1007,7 @@ export function useChatMessages(
     // Run identity not disclosed (the key belongs to another user's run —
     // shouldn't happen for an honest client): fall through to a plain error.
     if (!runId || !dupThreadId) return false;
-    requestKeyRef.current.clear(); // consumed by the accepted copy
+    requestKeyRef.current.settle(requestKey); // consumed by the accepted copy
     // A new chat's copy may have made the thread: the reload, the route and
     // the next send all read the state.
     threadIdRef.current = dupThreadId;
@@ -1027,16 +1028,143 @@ export function useChatMessages(
    * reply that would only show the failure. Any other run is adopted as it
    * is, a stopped one too, since only a failed run can be retried.
    */
-  const retryFailedDuplicate = (err: unknown, assistantMessageId: string, request: TurnRequest, modelOptions: ModelOptions): boolean => {
+  const retryFailedDuplicate = (err: unknown, assistantMessageId: string, request: TurnRequest, modelOptions: ModelOptions, requestKey: string): boolean => {
     const e = err as { status?: number; errorInfo?: Record<string, unknown> };
     if (e?.status !== 409 || e?.errorInfo?.code !== 'duplicate_request' || e.errorInfo.run_status !== 'error') return false;
+    // A run the copy steered into is another message's turn.
+    if (e.errorInfo.steered === true) return false;
     const runId = e.errorInfo.run_id;
     if (typeof runId !== 'string' || !runId || e.errorInfo.thread_id !== threadIdRef.current) return false;
-    requestKeyRef.current.clear();
+    requestKeyRef.current.settle(requestKey);
     noteLiveRun({ latestRunIdRef, latestRunEpochRef }, runId);
     const transcript = liveMessages.get();
     const at = transcript.findIndex((m) => m.id === assistantMessageId);
     void streamFromCheckpoint(retryRequest(runId, request.additionalContext), at === -1 ? transcript.length : at, transcript, modelOptions);
+    return true;
+  };
+
+  /**
+   * A steer the server answered with `duplicate_request`: a copy of it under
+   * the same request key reached a run first, and only that copy's answer was
+   * lost. The server holds the message once, so one bubble shows it: the
+   * steer a delivery already marked, else the copy still waiting, else the
+   * lost copy, back to waiting, else a delivered copy in its turn. With none
+   * of those on screen this steer waits for the delivery itself. A run this
+   * view is not following delivers it to a reload instead. A copy is a
+   * bubble sent under the same key; one with no key, which a delivery or a
+   * replay drew, counts only as the delivered copy. Another send of the same
+   * words is its own message, and so is its key.
+   */
+  const settleDuplicateSteer = (err: unknown, steerId: string, message: string, requestKey: string): boolean => {
+    const e = err as { status?: number; errorInfo?: Record<string, unknown> };
+    // A copy of another user's names no run: shown as the refusal it is.
+    if (e?.status !== 409 || e?.errorInfo?.code !== 'duplicate_request' || !e.errorInfo.run_id) return false;
+    requestKeyRef.current.settle(requestKey);
+    if (e.errorInfo.steered !== true) {
+      settleStartedCopy(e.errorInfo.run_id, steerId, message, requestKey);
+      return true;
+    }
+    type Steer = UserMessage & { queueError?: unknown };
+    const asSteer = (m: ChatMessage | undefined): Steer | null => (m?.role === 'user' ? m as Steer : null);
+    const text = message.trim();
+    let dropped: unknown = null;
+    let held = false;
+    setMessages((prev) => {
+      const steer = asSteer(prev.find((m) => m.id === steerId));
+      const copies = prev.flatMap((m, i) => {
+        const copy = asSteer(m);
+        if (!copy || copy.id === steerId) return [];
+        if (copy.requestKey) return copy.requestKey === requestKey ? [{ m: copy, i, keyed: true }] : [];
+        return String(copy.content ?? '').trim() === text ? [{ m: copy, i, keyed: false }] : [];
+      });
+      const lost = copies.filter(({ m, keyed }) => keyed && !m.isHistory && !!m.queueError && !m.queueRefused).pop();
+      const waiting = copies.find(({ m, keyed }) => keyed && !m.isHistory && m.steering);
+      const delivered = copies.find(({ m }) => m.steeringDelivered && m.turnIndex === steer?.turnIndex);
+      let next = prev;
+      if (steer?.steeringDelivered || waiting || (!lost && delivered)) {
+        // This steer, or a copy already showing the message, stands for it.
+        if (!steer?.steeringDelivered) next = next.filter((m) => m.id !== steerId);
+        if (lost) next = next.filter((m) => m !== lost.m);
+      } else if (lost) {
+        const back: Steer = { ...lost.m, steering: true };
+        delete back.queueError;
+        delete back.queueRefused;
+        next = prev.flatMap((m, i) => (i === lost.i ? [back] : m.id === steerId ? [] : [m]));
+      }
+      if (lost && next !== prev) {
+        dropped = lost.m.queueError;
+        held = next.some((m) => asSteer(m)?.queueError === dropped);
+      }
+      return next;
+    });
+    if (dropped !== null && !held) {
+      setMessageError((prev) => (prev === dropped ? null : prev));
+      if (refusalAfterReloadRef.current?.banner === dropped) refusalAfterReloadRef.current = null;
+    }
+    if (e.errorInfo.run_id !== currentRunIdRef.current || e.errorInfo.run_status !== 'in_progress') {
+      pendingMuxResyncRef.current = true;
+    }
+    return true;
+  };
+
+  /**
+   * A steer the server answered `duplicate_request` without `steered`: a copy
+   * of this send started the turn the answer names, as that turn's question,
+   * and only that copy's answer was lost. The steer is not a second message,
+   * so it goes. The question shows when this view follows that turn and has
+   * drawn it; otherwise a reload shows the turn. A bubble under another key
+   * is another send, never that question.
+   */
+  const settleStartedCopy = (runId: unknown, steerId: string, message: string, requestKey: string): void => {
+    const text = message.trim();
+    const users = (liveMessages.get() as ChatMessage[]).filter((m): m is UserMessage => m.role === 'user');
+    const turn = users.find((m) => m.id === steerId)?.turnIndex;
+    const asked = runId === currentRunIdRef.current && users.some((m) => {
+      if (m.id === steerId || m.turnIndex !== turn) return false;
+      if (m.requestKey && m.requestKey !== requestKey) return false;
+      const q = m as UserMessage & { queueError?: unknown };
+      return !q.steering && !q.steeringDelivered && !q.unadmitted && !q.queueError && String(q.content ?? '').trim() === text;
+    });
+    setMessages((prev) => prev.filter((m) => m.id !== steerId));
+    if (!asked) pendingMuxResyncRef.current = true;
+  };
+
+  /**
+   * A send the server answered `duplicate_request` with `steered`: a copy of
+   * it under the same request key went into another turn as a steer, and only
+   * that copy's answer was lost. That run is the other message's turn, so it
+   * is neither retried nor followed as this send's: the message shows once,
+   * as the steer it was, settled as a steer's duplicate is. The send's reply
+   * goes, with the turn it counted, and so do the bubbles of earlier tries
+   * that lost their answer, whose Retry would send it again. No stream here
+   * follows that run, so a reload shows it.
+   */
+  const settleSteeredSend = (err: unknown, send: { userId: string; assistantId: string; turnIndex: number; watermarkBefore: number | null; requestKey: string }): boolean => {
+    const e = err as { status?: number; errorInfo?: Record<string, unknown> };
+    const runId = e?.errorInfo?.run_id;
+    if (e?.status !== 409 || e.errorInfo?.code !== 'duplicate_request' || e.errorInfo.steered !== true) return false;
+    if (typeof runId !== 'string' || !runId) return false;
+    const tries = new Set<string>();
+    for (const [id, held] of heldRetriesRef.current) {
+      if (held.request.requestKey !== send.requestKey) continue;
+      heldRetriesRef.current.delete(id);
+      tries.add(held.bubbleId);
+    }
+    let text = '';
+    setMessages((prev) => prev.flatMap<ChatMessage>((m, i) => {
+      if (m.id === send.assistantId || tries.has(m.id as string)) return [];
+      if (m.role !== 'user') return [m];
+      // A try's message sits right above its reply.
+      if (m.unadmitted && tries.has(prev[i + 1]?.id as string)) return [];
+      if (m.id !== send.userId) return [m];
+      text = String(m.content ?? '');
+      const steer: UserMessage = { ...m, steering: true, steeredRunId: runId, requestKey: send.requestKey };
+      delete steer.unadmitted;
+      return [steer];
+    }));
+    if (lastRenderedTurnIndexRef.current === send.turnIndex) lastRenderedTurnIndexRef.current = send.watermarkBefore;
+    settleDuplicateSteer(err, send.userId, text, send.requestKey);
+    pendingMuxResyncRef.current = true;
     return true;
   };
 
@@ -1720,9 +1848,16 @@ export function useChatMessages(
     // context cards (widget snapshots / chart selections) so a message queued
     // during compaction keeps them when the flush routes through steering.
     const steeredTurn = newestTurn(liveMessages.get()) ?? undefined;
+    // Same fingerprint form as handleSendMessage: if this POST is demoted to
+    // a new turn and its response is lost, the user's re-send (which will
+    // route through handleSendMessage once loading clears) reuses the key and
+    // dedups against the accepted run. Other steers can be waiting on their
+    // answers too, and each keeps its own key for its own re-send.
+    const requestKey = requestKeyRef.current.take(sendFingerprint(threadId, message), { alongside: true });
     const userMessage: ChatMessage = {
       ...createUserMessage(message, steeredTurn, attachmentMeta as AttachmentMeta[] | null, widgetSnapshots ?? null, chartSelections ?? null),
       steering: true,
+      requestKey,
       ...(currentRunIdRef.current ? { steeredRunId: currentRunIdRef.current } : {}),
     };
     recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
@@ -1733,6 +1868,7 @@ export function useChatMessages(
     let demotedAssistantId: string | null = null;
     const demotedInterruptedRef = { current: false };
     const demotedRefs: { current: StreamProcessorRefs | null } = { current: null };
+    const demotedAdmission: { current: ReturnType<typeof trackPlainSend> | null } = { current: null };
     // Controller for the steering POST. If this POST is demoted to a fresh
     // turn it becomes the active main stream, so we register it on
     // mainStreamAbortRef in demoteToNewTurn — stopWorkflow can then abort it.
@@ -1767,6 +1903,14 @@ export function useChatMessages(
       );
       const newAssistantId = `assistant-${Date.now()}`;
       demotedAssistantId = newAssistantId;
+      // From here it is a send, and the server may yet fail to start it.
+      demotedAdmission.current = trackPlainSend({
+        userId: userMessage.id as string,
+        assistantId: newAssistantId,
+        turnIndex: demotedTurn,
+        request: { ...sendRequest(message, additionalContext), requestKey },
+        watermarkBefore: lastRenderedTurnIndexRef.current,
+      });
       beginRun(agentMode, pendingRunIdFromHeader);
       const assistantMessage = createAssistantMessage(newAssistantId, demotedTurn);
       setMessages((prev) => appendMessage(prev, assistantMessage));
@@ -1784,11 +1928,6 @@ export function useChatMessages(
       demotedProcessor = createStreamEventProcessor(runtime, streamRouterDeps, newAssistantId, refs, getTaskIdFromEvent, demotedInterruptedRef);
     };
 
-    // Same fingerprint form as handleSendMessage: if this POST is demoted to
-    // a new turn and its response is lost, the user's re-send (which will
-    // route through handleSendMessage once loading clears) reuses the key and
-    // dedups against the accepted run.
-    const requestKey = requestKeyRef.current.take(`send|${threadId}|${message}`);
     steersInFlightRef.current += 1;
     try {
       // Send to same endpoint — backend will auto-accept steering and return steering_accepted SSE
@@ -1822,6 +1961,7 @@ export function useChatMessages(
             demoteToNewTurn();
           }
           if (demotedProcessor) {
+            demotedAdmission.current?.observe(event);
             demotedProcessor(event);
           }
         },
@@ -1836,7 +1976,7 @@ export function useChatMessages(
         // overwrite the active workflow's run_id with a stream key that
         // never gets written to.
         onRunIdResolved: (runId) => {
-          requestKeyRef.current.clear();
+          requestKeyRef.current.settle(requestKey);
           pendingRunIdFromHeader = runId;
         },
         signal: steeringAbort.signal,
@@ -1865,10 +2005,11 @@ export function useChatMessages(
         return;
       }
       // The demoted turn is a new run, so it can end on a retry notice like a
-      // send, ahead of the drop the server follows it with.
+      // send, ahead of the drop the server follows it with, and its resends
+      // carry its message as a send's do.
       const demotedRetry = demotedRefs.current?.retryNotice;
       const demotedId = currentMessageRef.current || demotedAssistantId;
-      if (demotedToNewTurn && demotedRetry && demotedId && settleRetry(demotedRetry, demotedId, 0, {}, sendRequest(message, additionalContext))) {
+      if (demotedToNewTurn && demotedRetry && demotedId && settleRetry(demotedRetry, demotedId, 0, {}, sendRequest(message, additionalContext), null, demotedAdmission.current?.unstarted() ?? null)) {
         return;
       }
       // Natural transport drop on the demoted turn: reconnect rather than
@@ -1886,8 +2027,10 @@ export function useChatMessages(
           setMessages((prev) =>
             updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, demotedInterruptedRef.current ? 'paused' : 'completed'))
           );
-          // The run it became ended like a send's, and replay holds it now.
-          markTranscriptPersisted();
+          // The run it became ended like a send's, and replay holds it now,
+          // unless the server never started it.
+          if (demotedAdmission.current?.refused() || demotedRetry?.recovery === 'resend') demotedAdmission.current?.unadmit();
+          else markTranscriptPersisted();
           if (!demotedInterruptedRef.current) {
             cleanupAfterStreamEnd(finalId);
           }
@@ -1910,12 +2053,14 @@ export function useChatMessages(
             content: msg.content || 'Failed to send message. Please try again.',
           }))
         );
+        demotedAdmission.current?.unadmit();
         const { banner } = refusalBanner(err);
         if (banner !== null) setMessageError(banner);
         releaseStreamOwnership();
         setIsLoading(false);
         return;
       }
+      if (settleDuplicateSteer(err, userMessage.id as string, message, requestKey)) return;
       // The server sends a refusal (a 4xx) before it queues a steer. It holds
       // the status line of a steer it takes until the stream's first frame,
       // so a failure in between reads as a 5xx or as no answer, and a
@@ -1998,7 +2143,9 @@ export function useChatMessages(
       /** Marks the send as one the server never kept, unless it started the run. */
       unadmit(): void {
         if (started) return;
-        setMessages((prev) => prev.map((m) => (ids.has(m.id as string) ? { ...m, unadmitted: true } : m)));
+        // Not history either, whatever counted it so before: a steer the
+        // running turn's end took for kept may have turned into this send.
+        setMessages((prev) => prev.map((m) => (ids.has(m.id as string) ? { ...m, unadmitted: true, isHistory: false } : m)));
         if (lastRenderedTurnIndexRef.current === send.turnIndex) lastRenderedTurnIndexRef.current = send.watermarkBefore;
         heldRetriesRef.current.set(send.assistantId, { bubbleId: send.assistantId, request: send.request, cut: null });
       },
@@ -2163,7 +2310,7 @@ export function useChatMessages(
     // One request_key per logical send, reused if this exact send is
     // retransmitted after a lost response (fingerprint match) — see
     // createRequestKeyTracker.
-    const requestKey = requestKeyRef.current.take(`send|${effectiveThreadId}|${message}`);
+    const requestKey = requestKeyRef.current.take(sendFingerprint(effectiveThreadId, message));
     let wasDisconnected = false;
     const wasInterruptedRef = { current: false };
     const admission = trackPlainSend({
@@ -2201,7 +2348,7 @@ export function useChatMessages(
         // run instead of skipping cancel. The first event still drives the
         // route/storage update (see the thread_id branch in processEvent).
         onRunIdResolved: (runId, resolvedThreadId) => {
-          requestKeyRef.current.clear();
+          requestKeyRef.current.settle(requestKey);
           currentRunIdRef.current = runId;
           if (resolvedThreadId && resolvedThreadId !== '__default__') {
             threadIdRef.current = resolvedThreadId;
@@ -2257,12 +2404,13 @@ export function useChatMessages(
           if ((err as Error)?.name === 'AbortError' || wasStoppedRef.current) {
             return;
           }
+          if (settleSteeredSend(err, { userId: userMessage.id as string, assistantId: assistantMessageId, turnIndex, watermarkBefore, requestKey })) return;
           // 409 duplicate_request: an earlier copy of this send was already
           // accepted (its response was lost) — adopt that run instead of
           // erroring; the reconnect owns finalization from here.
           if (
-            retryFailedDuplicate(err, assistantMessageId, sendRequest(message, additionalContext, subagentsAllowed), { model, reasoningEffort, fastMode })
-            || adoptDuplicateRun(err, assistantMessageId)
+            retryFailedDuplicate(err, assistantMessageId, sendRequest(message, additionalContext, subagentsAllowed), { model, reasoningEffort, fastMode }, requestKey)
+            || adoptDuplicateRun(err, assistantMessageId, requestKey)
           ) {
             wasDisconnected = true;
             return;
@@ -2431,7 +2579,7 @@ export function useChatMessages(
         // attemptReconnectAfterDisconnect fall back to the prior run's
         // TaskInfo and silently hang.
         onRunIdResolved: (runId) => {
-          requestKeyRef.current.clear();
+          requestKeyRef.current.settle(requestKey);
           currentRunIdRef.current = runId;
           // The backend opened a run, so the resume was admitted. Settled here
           // rather than left to the `finally` because this is the first moment
@@ -2493,7 +2641,7 @@ export function useChatMessages(
       }
       // 409 duplicate_request: an earlier copy of this resume was already
       // accepted (its response was lost) — adopt that run instead of erroring.
-      if (adoptDuplicateRun(err, assistantMessageId)) {
+      if (adoptDuplicateRun(err, assistantMessageId, requestKey)) {
         wasDisconnected = true;
         // Accepted, just not by this attempt — the pause is genuinely answered.
         admitted = true;
@@ -2813,7 +2961,7 @@ export function useChatMessages(
       // Latch run_id from response headers — see handleSendMessage for the same
       // closing-the-race rationale. Shared by both branches.
       const latchRunId = (runId: string) => {
-        requestKeyRef.current.clear();
+        requestKeyRef.current.settle(requestKey);
         currentRunIdRef.current = runId;
       };
       const result = viaRetryEndpoint
@@ -2895,9 +3043,10 @@ export function useChatMessages(
       if ((err as Error)?.name === 'AbortError' || wasStoppedRef.current) {
         return;
       }
+      if (sendUserId !== null && settleSteeredSend(err, { userId: sendUserId, assistantId: assistantMessageId, turnIndex, watermarkBefore, requestKey })) return;
       // 409 duplicate_request: an earlier copy of this retry/fork was already
       // accepted (its response was lost) — adopt that run instead of erroring.
-      if (retryFailedDuplicate(err, assistantMessageId, request, modelOptions) || adoptDuplicateRun(err, assistantMessageId)) {
+      if (retryFailedDuplicate(err, assistantMessageId, request, modelOptions, requestKey) || adoptDuplicateRun(err, assistantMessageId, requestKey)) {
         wasDisconnected = true;
         return;
       }
