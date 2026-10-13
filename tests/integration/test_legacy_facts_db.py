@@ -233,23 +233,13 @@ async def test_facts_that_would_replay_differently_are_never_written(turn, monke
     assert set(await backfill._pending_rows(turn.thread_id)) == {0}
 
 
-@pytest.mark.parametrize("writer", ["append", "replace"])
-async def test_a_write_to_the_stored_events_takes_the_facts_away(turn, writer):
-    from src.server.database.conversation.responses import (
-        append_sse_event,
-        replace_agent_events,
-    )
+async def test_a_write_to_the_stored_events_takes_the_facts_away(turn):
+    from src.server.database.conversation.responses import append_sse_event
 
     await _backfill(turn.thread_id)
     assert "legacy" in (await turn.row())["replay_facts"]
 
-    if writer == "append":
-        assert await append_sse_event(turn.thread_id, LATER)
-    else:
-        assert await replace_agent_events(
-            turn.response_id,
-            [{"event": "message_chunk", "data": {"agent": "task:k1", "content": "t"}}],
-        )
+    assert await append_sse_event(turn.thread_id, LATER)
 
     facts = (await turn.row())["replay_facts"]
     assert facts == RUN_FACTS

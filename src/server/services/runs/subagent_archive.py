@@ -1,12 +1,12 @@
-"""A subagent's captured-event archive: read back from Redis, written to the turn.
+"""A subagent's captured-event archive: read back from Redis, recorded on the turn.
 
 The per-task capture stream is written by the agent-side spill and read back
-here once, post-terminal, to rebuild the subagent's history; the collected
-events then land in the turn's ``sse_events``. Separated from the collection
-lifecycle because both halves carry their own failure contract: an archive
-that cannot be read to the end is refused whole, never served as a prefix, and
-the capture streams stay the transcript's copy until every event replayed from
-them has been written.
+here once, post-terminal; what the turn keeps of it is each lane's provenance
+and the images its text references. Separated from the collection lifecycle
+because both halves carry their own failure contract: an archive that cannot
+be read to the end is refused whole, never served as a prefix, and the
+capture streams stay the only copy until every lane replayed from them has
+been recorded.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any, AsyncIterator
 from ptc_agent.agent.middleware.background_subagent.redis_stream import (
     task_stream_key,
 )
-from src.server.database.conversation.responses import replace_agent_events
+from src.server.database.conversation.responses import replace_lane_provenance
 from src.utils.cache.redis_cache import get_cache_client
 
 logger = logging.getLogger(__name__)
@@ -153,11 +153,12 @@ async def persist_collected_events(
     workspace_id: str,
     sandbox=None,
 ) -> bool:
-    """Write subagent events into the turn's sse_events, replacing their agents' rows.
+    """Record the lanes ``events`` hold on the turn: their images, and their
+    provenance for the tool calls each task's checkpoints saved.
 
-    Returns True once the write landed; callers must not retire the Redis
-    capture streams on False, since they are the only remaining source of the
-    captured transcript.
+    Returns True once the provenance landed; callers must not retire the
+    Redis capture streams on False, since they are the only remaining source
+    of it.
     """
     if sandbox:
         try:
@@ -169,19 +170,19 @@ async def persist_collected_events(
                 "[IMAGE_CAPTURE] Hook B failed", exc_info=True,
             )
 
-    # One bounded retry: the replay cache gate holds the turn uncacheable
-    # until these rows land, so a transiently failed write must not leave
-    # the turn rebuilding on every read for its lifetime. Each attempt runs
-    # in one row-locked transaction: concurrent atomic appends
-    # (compact/offload context_window) serialize on the lock instead of being
-    # erased, and any rows the turn itself saved for these agents give way to
-    # the full capture rather than duplicate it.
+    lanes = _task_lanes(events)
+    if not lanes:
+        return True
+    # One bounded retry: a transiently failed write must not cost the lanes
+    # their provenance. The write replaces each lane's rows whole, so a
+    # repeat never duplicates them.
     for attempt in (1, 2):
         try:
-            if await replace_agent_events(response_id, events):
+            provenance = await _saved_lane_provenance(events, thread_id, lanes)
+            if await replace_lane_provenance(response_id, provenance, lanes):
                 logger.info(
-                    f"[SubagentCollector] Updated sse_events for "
-                    f"response_id={response_id} (+{len(events)} events)"
+                    f"[SubagentCollector] Recorded {len(provenance)} provenance "
+                    f"entries for {len(lanes)} lanes, response_id={response_id}"
                 )
                 return True
             raise RuntimeError(f"no response row for {response_id}")
@@ -190,11 +191,55 @@ async def persist_collected_events(
                 await asyncio.sleep(2.0)
                 continue
             logger.error(
-                f"[SubagentCollector] Failed to update sse_events "
+                f"[SubagentCollector] Failed to record lanes for "
                 f"response_id={response_id}: {e}",
                 exc_info=True,
             )
     return False
+
+
+def _task_lanes(events: list[dict]) -> dict[str, str]:
+    """Each ``task:{id}`` lane the events name, to its task id."""
+    lanes: dict[str, str] = {}
+    for event in events:
+        data = event.get("data")
+        agent = data.get("agent") if isinstance(data, dict) else None
+        if isinstance(agent, str) and agent.startswith("task:"):
+            lanes[agent] = agent.removeprefix("task:")
+    return lanes
+
+
+async def _saved_lane_provenance(
+    events: list[dict], thread_id: str, lanes: dict[str, str]
+) -> list[dict]:
+    """The lanes' provenance for the tool calls their tasks' checkpoints
+    saved. A subagent that failed streamed what it fetched in its last step,
+    which its transcript never shows. A failed read raises."""
+    from src.server.services.history.committed import (
+        saved_provenance,
+        task_saved_tool_calls,
+    )
+
+    by_lane: dict[str, list[dict]] = {}
+    for event in events:
+        data = event.get("data")
+        if event.get("event") != "provenance" or not isinstance(data, dict):
+            continue
+        agent = data.get("agent")
+        if agent in lanes:
+            by_lane.setdefault(agent, []).append(event)
+    kept: list[dict] = []
+    for agent, provenance in by_lane.items():
+        saved = await task_saved_tool_calls(thread_id, lanes[agent])
+        lane_kept = saved_provenance(provenance, saved)
+        if len(lane_kept) < len(provenance):
+            logger.info(
+                f"[SubagentCollector] {agent}: kept {len(lane_kept)} of "
+                f"{len(provenance)} provenance entries, the rest from tool "
+                f"calls it never saved"
+            )
+        kept.extend(lane_kept)
+    return kept
 
 
 async def _capture_lane_images(

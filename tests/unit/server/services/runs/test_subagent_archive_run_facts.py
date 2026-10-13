@@ -39,7 +39,7 @@ async def _persist(events: list[dict], captured: dict[str, str]):
         ),
         patch.object(subagent_run_coordinator, "record_lane_images", record),
         patch(
-            "src.server.services.runs.subagent_archive.replace_agent_events",
+            "src.server.services.runs.subagent_archive.replace_lane_provenance",
             AsyncMock(return_value=True),
         ),
         patch(

@@ -259,7 +259,7 @@ async def test_finalize_without_facts_leaves_the_column_null(
 async def test_main_lane_provenance_leaves_subagent_lanes(open_run, db_conn):
     """A subagent's archive writes its lane before the parent settles; the
     finalize rewrites only the main lane."""
-    from src.server.database.conversation.responses import replace_agent_events
+    from src.server.database.conversation.responses import replace_lane_provenance
 
     thread_id, run_id = open_run
     task_record = {
@@ -270,7 +270,7 @@ async def test_main_lane_provenance_leaves_subagent_lanes(open_run, db_conn):
             "identifier": "https://task.example",
         },
     }
-    assert await replace_agent_events(run_id, [task_record])
+    assert await replace_lane_provenance(run_id, [task_record], {"task:abc": "abc"})
     assert await _provenance_ids(db_conn, run_id) == ["https://task.example"]
 
     main_record = {
