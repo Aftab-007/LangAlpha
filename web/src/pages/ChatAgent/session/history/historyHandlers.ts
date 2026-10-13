@@ -8,8 +8,10 @@ import { ownerOfToolCall } from '../toolCallOwner';
 import { isTaskAgentId } from '../../utils/agentId';
 import { opensTurn } from '../../components/messageList/messagePredicates';
 import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subagents/taskSegmentBuilder';
-import { reportRowProvenance, senderProvenance, type SenderMetadata } from '../provenance';
+import { reportRow, senderProvenance, type SenderMetadata } from '../provenance';
+import { deliveredEntryRow, steeringDeliveredEntries } from '../stream/steeringDelivery';
 import type { ReportSource } from '@/types/api';
+import { isDeliveredReport } from '@/types/sse';
 import type { SubagentTaskRecord, TextSegment } from '@/types/chat';
 import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from '../../hooks/utils/types';
 import type { PairState } from '../types';
@@ -102,6 +104,37 @@ function refusedBefore(m: MessageRecord, turn: number): boolean {
   return m.role === 'user' && !m.isHistory && !!m.queueError && typeof m.turnIndex === 'number' && m.turnIndex < turn;
 }
 
+/**
+ * The row a replayed turn opens with, or null for empty content and HITL
+ * resume pairs. A system query, a report-back's invocation, is written for
+ * the model: it shows only as the label naming what it reports, and stays
+ * hidden when the row names nothing (an older row, or a share's replay).
+ */
+function turnOpenerRow(event: HistoryEvent, pairIndex: number, text: string): MessageRecord | null {
+  // Deterministic id keyed only on pairIndex (the server-side turn_index,
+  // unique per turn). Earlier code suffixed `Date.now()` here as
+  // speculative collision defense, but that made the same logical bubble
+  // look new on every replay: with a non-deduping setMessages reducer, a
+  // second replay would silently double the visible history.
+  const id = `history-user-${pairIndex}`;
+  const timestamp = event.timestamp ? new Date(event.timestamp) : new Date();
+  if (event.query_type === 'system') {
+    const source = event.metadata?.report_source;
+    return source ? reportRow(source, {
+      id, timestamp, isHistory: true, turnIndex: pairIndex,
+      ...(event.report_run_id ? { runId: event.report_run_id } : {}),
+    }) : null;
+  }
+  if (!text) return null;
+  const row: MessageRecord = {
+    id, role: 'user', content: event.content, contentType: 'text', timestamp,
+    isStreaming: false, isHistory: true, turnIndex: pairIndex,
+  };
+  const provenance = senderProvenance(event.metadata);
+  if (provenance) row.provenance = provenance;
+  return row;
+}
+
 /** Handles user_message events from history replay. */
 export function handleHistoryUserMessage({
   event,
@@ -189,34 +222,8 @@ export function handleHistoryUserMessage({
       steeringBatches: 0,
     });
 
-    // Create user message bubble (skip for empty content and HITL resume
-    // pairs). A system query, a report-back's invocation, is written for the
-    // model: it shows only as the label naming what it reports, and stays
-    // hidden when the row names nothing (an older row, or a share's replay).
-    const isSystemQuery = (event as Record<string, unknown>).query_type === 'system';
-    const provenance = isSystemQuery
-      ? reportRowProvenance(event.metadata?.report_source)
-      : senderProvenance(event.metadata);
-    if (isSystemQuery ? provenance : messageContent) {
-      // Deterministic id keyed only on pairIndex (the server-side turn_index,
-      // unique per turn). Earlier code suffixed `Date.now()` here as
-      // speculative collision defense, but that made the same logical bubble
-      // look new on every replay — combined with a non-deduping setMessages
-      // reducer, a second replay would silently double the visible history.
-      const currentUserMessageId = `history-user-${pairIndex}`;
-      const userMessage: MessageRecord = {
-        id: currentUserMessageId,
-        role: 'user',
-        content: isSystemQuery ? '' : event.content,
-        contentType: 'text',
-        timestamp: event.timestamp ? new Date(event.timestamp as string | number) : new Date(),
-        isStreaming: false,
-        isHistory: true,
-        turnIndex: pairIndex,
-      };
-      if (provenance) userMessage.provenance = provenance;
-      if (isSystemQuery && event.report_run_id) userMessage.runId = event.report_run_id;
-
+    const userMessage = turnOpenerRow(event, pairIndex, messageContent);
+    if (userMessage) {
       // Restore attachment metadata from persisted query metadata
       const attachments = event.metadata?.attachments as unknown[] | undefined;
       if (attachments && attachments.length > 0) {
@@ -631,9 +638,26 @@ export function handleHistoryToolCallResult({ assistantMessageId, toolCallId, re
 }
 
 /**
+ * The copy on screen of a steer a replayed delivery names, or -1: one still
+ * pending when its stream died, else one shown as failed because its POST
+ * lost its answer after the server took it, as on the live stream. The run's
+ * queue delivers steers in the order it took them, so of two copies this is
+ * the older. A refused copy never counts: the server refuses a steer before
+ * it queues it.
+ */
+function lostSteerCopy(prev: MessageRecord[], content: string, pairIndex: number): number {
+  const text = content.trim();
+  const copy = (m: MessageRecord) => m.role === 'user' && !m.isHistory
+    && m.turnIndex === pairIndex && String(m.content ?? '').trim() === text;
+  const pending = prev.findIndex((m) => copy(m) && !!m.steering);
+  return pending !== -1 ? pending : prev.findIndex((m) => copy(m) && !!m.queueError && !m.queueRefused);
+}
+
+/**
  * Handles steering_delivered events in history replay. Creates user bubble(s)
- * for each steering message, then a new assistant placeholder so subsequent
- * events render in a fresh assistant bubble.
+ * for each steering message, and a report's caption row for each report the
+ * turn took in, then a new assistant placeholder so subsequent events render
+ * in a fresh assistant bubble.
  */
 export function handleHistorySteeringDelivered({
   event,
@@ -656,44 +680,21 @@ export function handleHistorySteeringDelivered({
   onCopyDelivered?: (requestKey: string) => void;
 }): void {
   const { newMessagesStartIndexRef } = refs;
-  const steeringMessages = (event.messages || []) as Array<Record<string, unknown>>;
+  const entries = steeringDeliveredEntries(event);
 
   // Create user message bubble(s) for each steering message. The batch is
   // numbered within its pair, never from a process-wide counter: ids that
   // change on every replay make the same bubbles look new to every id-keyed
   // consumer (scroll observers, the minimap) each time history reattaches.
   const batchId = (pairStateByPair.get(pairIndex)?.steeringBatches ?? 0) + 1;
-  for (let sIdx = 0; sIdx < steeringMessages.length; sIdx++) {
-    const qMsg = steeringMessages[sIdx];
-    if (!qMsg.content) continue;
-    const userMsgId = `history-steering-user-${pairIndex}-${batchId}-${sIdx}`;
-    const userMessage: MessageRecord = {
-      id: userMsgId,
-      role: 'user',
-      content: qMsg.content,
-      contentType: 'text',
-      timestamp: qMsg.timestamp ? new Date((qMsg.timestamp as number) * 1000) : new Date(),
-      isStreaming: false,
-      isHistory: true,
-      turnIndex: pairIndex,
-      steeringDelivered: true,
-    };
-    const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
-    if (provenance) userMessage.provenance = provenance;
+  for (let sIdx = 0; sIdx < entries.length; sIdx++) {
+    const entry = entries[sIdx];
+    const row = deliveredEntryRow(entry, (kind) => `history-steering-${kind}-${pairIndex}-${batchId}-${sIdx}`, pairIndex);
+    if (!row) continue;
+    const userMessage: MessageRecord = { ...row, isHistory: true };
     let delivered: string | null = null;
     setMessages((prev: MessageRecord[]) => {
-      // A steer whose POST lost its answer after the server took it stays on
-      // screen as failed until a delivery says otherwise, and one still
-      // pending when its stream died stays pending. This is that delivery.
-      // The run's queue delivers steers in the order it took them, so of two
-      // copies this is the older. A failed copy counts only when none is
-      // pending, as on the live stream, and never a refused one: the server
-      // refuses a steer before it queues it.
-      const text = String(qMsg.content).trim();
-      const copy = (m: MessageRecord) => m.role === 'user' && !m.isHistory
-        && m.turnIndex === pairIndex && String(m.content ?? '').trim() === text;
-      let lost = prev.findIndex((m) => copy(m) && !!m.steering);
-      if (lost === -1) lost = prev.findIndex((m) => copy(m) && !!m.queueError && !m.queueRefused);
+      const lost = isDeliveredReport(entry) ? -1 : lostSteerCopy(prev, entry.content, pairIndex);
       if (lost !== -1) delivered = (prev[lost] as { requestKey?: string }).requestKey ?? null;
       const rest = lost === -1 ? prev : prev.filter((_, i) => i !== lost);
       const idx = newMessagesStartIndexRef.current - (lost !== -1 && lost < newMessagesStartIndexRef.current ? 1 : 0);
@@ -720,7 +721,7 @@ export function handleHistorySteeringDelivered({
   // not when this replay ran: the tray ages a hand-off made here by it.
   const deliveredAt = typeof event.timestamp === 'number'
     ? event.timestamp
-    : steeringMessages.reduce<number | null>((at, m) => (typeof m.timestamp === 'number' ? m.timestamp : at), null);
+    : entries.reduce<number | null>((at, m) => (typeof m.timestamp === 'number' ? m.timestamp : at), null);
   const assistantMessage: MessageRecord = {
     id: newAssistantId,
     role: 'assistant',

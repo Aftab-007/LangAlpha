@@ -24,6 +24,7 @@ from ptc_agent.agent.middleware.background_subagent.registry import (
 )
 from ptc_agent.agent.middleware.background_subagent.task import (
     WORKFLOW_SUBAGENT_TYPE,
+    bare_task_id,
 )
 from ptc_agent.agent.middleware.background_subagent.outcomes import is_credit_stop
 from ptc_agent.agent.middleware.background_subagent.spawn import (
@@ -78,7 +79,7 @@ async def handle_task_action(
     description = args.get("description", "unknown task")
     prompt = args.get("prompt", "")
     action = args.get("action", "init")
-    target_task_id = args.get("task_id")
+    target_task_id = bare_task_id(args.get("task_id"))
     subagent_type = args.get("subagent_type")
 
     # Extract parent_thread_id for hydration fallback
@@ -233,9 +234,6 @@ async def _handle_update(
         return resolved
     task = resolved
 
-    # The agent just looked at this task — bump last_checked_at.
-    task.last_checked_at = time.time()
-
     if task.cancelled:
         return ToolMessage(
             content=f"Error: Task-{target_task_id} was cancelled and cannot be updated.",
@@ -358,9 +356,6 @@ async def _handle_resume(
     if isinstance(resolved, ToolMessage):
         return resolved
     task = resolved
-
-    # The agent just looked at this task — bump last_checked_at.
-    task.last_checked_at = time.time()
 
     # A credit stop spells itself as a cancel everywhere else on purpose, but
     # it is the one kind of stop whose checkpoint is meant to be re-entered:
@@ -559,9 +554,7 @@ async def _handle_resume(
         f"- Type: {task.subagent_type}\n"
         f"- New task: {short_description}\n"
         f"- Status: Running (resumed with full previous context)\n\n"
-        f"You can:\n"
-        f"- Continue with other work\n"
-        f'- Use `TaskOutput(task_id="{task.task_id}")` to get progress or result'
+        f"You will be notified when it finishes."
     )
 
     return ToolMessage(
@@ -626,8 +619,7 @@ async def _handle_init(
                 f"**{existing.display_id}**\n"
                 f"- Type: {existing.subagent_type}\n"
                 f"- Status: Running in background\n\n"
-                f'Use `TaskOutput(task_id="{existing.task_id}")` to get '
-                f"progress or result"
+                f"You will be notified when it finishes."
             ),
             tool_call_id=tool_call_id,
             name="Task",
@@ -694,9 +686,7 @@ async def _handle_init(
         f"- Type: {subagent_type}\n"
         f"- Task: {short_description}\n"
         f"- Status: Running in background\n\n"
-        f"You can:\n"
-        f"- Continue with other work\n"
-        f'- Use `TaskOutput(task_id="{task.task_id}")` to get progress or result'
+        f"You will be notified when it finishes."
     )
 
     return ToolMessage(

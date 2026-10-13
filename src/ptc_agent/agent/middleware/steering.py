@@ -1,23 +1,36 @@
 """
 Steering Middleware.
 
-Checks Redis for steering messages from the user before each LLM call and injects
-them into the conversation state. This enables users to send messages while the
-agent is processing, which get picked up before the next model invocation.
+Before each LLM call, takes in what reached the thread while the agent works:
+the user's steering messages from Redis, and the reports owed to the thread
+by background work that finished meanwhile. Both are picked up before the
+next model invocation instead of waiting for the turn to end.
 """
 
 import hashlib
-import json
 import logging
 import time
 import uuid
-from typing import Any, Iterable
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
+from typing import Any, Protocol, TypedDict
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
 
-from langchain.agents.middleware.types import AgentMiddleware, AgentState
+from langchain.agents.middleware.types import (
+    AgentMiddleware,
+    AgentState,
+    ModelRequest,
+    ModelResponse,
+)
+from ptc_agent.agent.middleware.background_subagent.utils import (
+    config_own_run_id,
+    decode_steer,
+    is_foreign_steer,
+    steering_queue_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,138 +111,225 @@ async def _take(client: Any, queue_key: str, values: list[Any]) -> list[bool]:
     return [flag == "1" for flag in flags]
 
 
-class SteeringMiddleware(AgentMiddleware):
-    """Checks Redis for steering messages from the user before each LLM call.
+# The steering message's record of the reports its run holds, which the
+# model call that reads them confirms.
+_HELD_REPORTS = "held_reports"
 
-    When a user sends a message while the agent is already processing,
-    the server queues it in Redis. This middleware picks up those steering
-    messages before the next LLM invocation and injects them as a
-    HumanMessage into the conversation state.
+
+@dataclass(frozen=True)
+class SteeredReport:
+    job_id: str
+    content: str                    # what the model reads
+    report_source: dict[str, Any]   # what the reader is shown
+
+
+class ReportInbox(Protocol):
+    async def take(self, thread_id: str, run_id: str) -> list[SteeredReport]: ...
+    async def confirm(self, run_id: str, job_ids: list[str]) -> None: ...
+
+
+class _HeldReports(TypedDict):
+    run_id: str
+    job_ids: list[str]
+
+
+class SteeringMiddleware(AgentMiddleware):
+    """Takes in what reached the thread while the agent works, before each LLM call.
+
+    Two kinds of input arrive mid-turn. When a user sends a message while
+    the agent is already processing, the server queues it in Redis. When
+    background work the thread is owed a report on finishes (a subagent
+    task, an analyst's hand-off), the report waits in the server's outbox
+    until the turn ends, unless this turn takes it in first through the
+    server's ``report_inbox``: ``take`` holds each report it hands over, and
+    the model call that reads them closes them (``confirm``), since the graph
+    checkpoints the injected message before that step starts. A report the
+    turn never takes, or never confirms, is posted as its own turn when this
+    one ends. Both reach the model as one HumanMessage, reports first so the
+    user's words come last.
 
     Placement: main_only_middleware (subagents don't consume steering messages).
     """
 
+    def __init__(self, report_inbox: ReportInbox | None = None) -> None:
+        super().__init__()
+        self.report_inbox = report_inbox
+
     async def abefore_model(
         self, state: AgentState, runtime: Runtime, *, config: RunnableConfig
     ) -> dict[str, Any] | None:
-        """Check Redis for steering messages and inject them before model call."""
+        """Inject queued steering messages and owed reports before the model call."""
+        thread_id = (config.get("configurable") or {}).get("thread_id")
+        if not thread_id:
+            logger.debug("[Steering] No thread_id in config, skipping")
+            return None
+        run_id = config_own_run_id(config)
+
+        reports = await self._take_reports(thread_id, run_id)
+        steers = await self._take_user_steering(thread_id, run_id)
+        if not reports and not steers:
+            return None
+
+        message, delivered = _steering_message(reports, steers, run_id, time.time())
+        logger.info(
+            f"[Steering] Injecting {len(steers)} steering message(s) and "
+            f"{len(reports)} report(s) for thread_id={thread_id}"
+        )
         try:
-            thread_id = config.get("configurable", {}).get("thread_id")
-            if not thread_id:
-                logger.debug("[Steering] No thread_id in config, skipping")
-                return None
+            runtime.stream_writer(
+                {"type": "steering_delivered", "thread_id": thread_id, **delivered}
+            )
+        except Exception:
+            logger.debug("[Steering] stream_writer unavailable, skipping SSE event")
+        return {"messages": [message]}
 
-            # Import here to avoid circular imports
-            from src.utils.cache.redis_cache import get_cache_client
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        await self._confirm_reports(request.state)
+        return await handler(request)
 
+    async def _confirm_reports(self, state: Any) -> None:
+        """Close the reports injected since the last model response.
+
+        The step that injected them is checkpointed before this one starts,
+        so they can no longer be lost with the turn. Retries of the same
+        call confirm again, which closes nothing twice."""
+        if self.report_inbox is None:
+            return
+        for message in reversed((state or {}).get("messages") or []):
+            if isinstance(message, AIMessage):
+                return
+            held: _HeldReports | None = (
+                getattr(message, "additional_kwargs", None) or {}
+            ).get(_HELD_REPORTS)
+            if held and held.get("run_id") and held.get("job_ids"):
+                try:
+                    await self.report_inbox.confirm(
+                        held["run_id"], list(held["job_ids"])
+                    )
+                except Exception as e:
+                    logger.warning(f"[Steering] Report confirm failed: {e}")
+
+    async def _take_reports(
+        self, thread_id: str, run_id: str | None
+    ) -> list[SteeredReport]:
+        """The reports the server hands this run, held until the model call
+        that reads them confirms them. Holding needs a run to hold them for."""
+        if self.report_inbox is None or not run_id:
+            return []
+        try:
+            return await self.report_inbox.take(thread_id, run_id)
+        except Exception as e:
+            logger.warning(f"[Steering] Report inbox failed: {e}")
+            return []
+
+    async def _take_user_steering(
+        self, thread_id: str, run_id: str | None
+    ) -> list[dict]:
+        """Take this run's messages off the thread's steering queue.
+
+        Peek, partition, then take exactly what we consume (v4 2.4c review
+        F3). Foreign-stamped payloads (a run that died without draining) are
+        never touched: this run's end-of-run drain returns them to the user.
+        A pop-and-requeue cycle would open a crash window per model call in
+        which the only copy of an accepted user message vanishes. A failed
+        read leaves the queue where it was.
+        """
+        # Import here to avoid circular imports
+        from src.utils.cache.redis_cache import get_cache_client
+
+        try:
             cache = get_cache_client()
             if not cache.enabled or not cache.client:
-                return None
-
-            key = f"workflow:steering:{thread_id}"
-
-            # Peek, partition, then take exactly what we consume (v4 2.4c
-            # review F3). Foreign-stamped payloads (a run that died without
-            # draining) are never touched — this run's end-of-run drain
-            # returns them to the user. A pop-and-requeue cycle would open
-            # a crash window per model call in which the only copy of an
-            # accepted user message vanishes.
-            raw_messages = await cache.client.lrange(key, 0, -1)
-            if not raw_messages:
-                return None
-
-            own_run_id = (config.get("metadata") or {}).get("run_id")
-
-            # Parse steering messages (handle both str and dict payloads);
-            # garbage is taken out of the queue with a None in its place.
+                return []
+            key = steering_queue_key(thread_id)
+            # Garbage is taken out of the queue with a None in its place.
             consumed: list[tuple[Any, dict | None]] = []
-            for raw in raw_messages:
+            for raw in await cache.client.lrange(key, 0, -1):
                 try:
-                    text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                    data = json.loads(text)
-                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    data = decode_steer(raw)
+                except ValueError as e:
                     logger.warning(f"[Steering] Failed to parse steering message: {e}")
                     consumed.append((raw, None))
                     continue
-                if (
-                    isinstance(data, dict)
-                    and own_run_id
-                    and data.get("run_id") not in (None, own_run_id)
-                ):
+                if is_foreign_steer(data, run_id):
                     continue
-                if isinstance(data, str):
-                    consumed.append((raw, {"content": data}))
-                elif isinstance(data, dict):
-                    consumed.append((raw, data))
-                else:
-                    consumed.append((raw, {"content": str(data)}))
+                consumed.append(
+                    (raw, data if isinstance(data, dict) else {"content": str(data)})
+                )
 
             if not consumed:
-                return None
+                return []
             taken = await _take(cache.client, key, [raw for raw, _ in consumed])
-            parsed = [
-                entry
-                for (_, entry), took in zip(consumed, taken)
-                if took and entry is not None
+            return [
+                steer
+                for (_, steer), took in zip(consumed, taken)
+                if took and steer is not None
             ]
-            if not parsed:
-                return None
-
-            # Build combined message content
-            if len(parsed) == 1:
-                content = parsed[0].get("content", str(parsed[0]))
-            else:
-                lines = [
-                    f"{i + 1}. {msg.get('content', str(msg))}"
-                    for i, msg in enumerate(parsed)
-                ]
-                content = "\n".join(lines)
-
-            # Delivered payload rides both the live SSE event and the injected
-            # message's additional_kwargs, so checkpoint-sourced replay can
-            # re-emit steering_delivered without the stored SSE stream.
-            delivered = {
-                "count": len(parsed),
-                "messages": [
-                    {
-                        "content": q.get("content", ""),
-                        "user_id": q.get("user_id"),
-                        "timestamp": q.get("timestamp"),
-                        **({"platform": q["platform"]} if q.get("platform") else {}),
-                    }
-                    for q in parsed
-                ],
-                "timestamp": time.time(),
-            }
-            human_msg = HumanMessage(
-                content=f"[Steering from User]\n{content}",
-                id=steering_message_id(q.get("request_key") for q in parsed),
-                additional_kwargs={
-                    "lc_source": "steering",
-                    "steering_delivered": delivered,
-                },
-            )
-
-            logger.info(
-                f"[Steering] Injecting {len(parsed)} steering message(s) "
-                f"for thread_id={thread_id}"
-            )
-
-            # Emit SSE custom event so frontend knows the message was delivered
-            try:
-                runtime.stream_writer(
-                    {
-                        "type": "steering_delivered",
-                        "thread_id": thread_id,
-                        **delivered,
-                    }
-                )
-            except Exception:
-                # Stream writer may not be available in all contexts
-                logger.debug("[Steering] stream_writer unavailable, skipping SSE event")
-
-            return {"messages": [human_msg]}
-
         except Exception as e:
             logger.error(f"[Steering] Error checking steering queue: {e}")
-            return None
+            return []
+
+
+def _steering_message(
+    reports: list[SteeredReport],
+    steers: list[dict],
+    run_id: str | None,
+    now: float,
+) -> tuple[HumanMessage, dict[str, Any]]:
+    """The message the model takes everything in through, and its
+    ``steering_delivered`` payload.
+
+    The payload rides both the live SSE event and the message's
+    additional_kwargs, so checkpoint-sourced replay can re-emit
+    steering_delivered without the stored SSE stream. A report's text is
+    model-facing: the reader is shown what it reports on, as a report turn's
+    hidden message is.
+    """
+    parts = [report.content for report in reports]
+    if steers:
+        if len(steers) == 1:
+            content = steers[0].get("content", str(steers[0]))
+        else:
+            content = "\n".join(
+                f"{i + 1}. {steer.get('content', str(steer))}"
+                for i, steer in enumerate(steers)
+            )
+        parts.append(f"[Steering from User]\n{content}")
+
+    delivered = {
+        # The user's messages only: a chat gateway retires this many of the
+        # messages it queued, oldest first, and it never queued a report.
+        "count": len(steers),
+        "messages": [
+            {"content": "", "report_source": report.report_source, "timestamp": now}
+            for report in reports
+        ]
+        + [
+            {
+                "content": steer.get("content", ""),
+                "user_id": steer.get("user_id"),
+                "timestamp": steer.get("timestamp"),
+                **({"platform": steer["platform"]} if steer.get("platform") else {}),
+            }
+            for steer in steers
+        ],
+        "timestamp": now,
+    }
+    additional_kwargs: dict[str, Any] = {
+        "lc_source": "steering",
+        "steering_delivered": delivered,
+    }
+    if reports:
+        additional_kwargs[_HELD_REPORTS] = _HeldReports(
+            run_id=run_id, job_ids=[report.job_id for report in reports]
+        )
+    message = HumanMessage(
+        content="\n\n".join(parts),
+        id=steering_message_id(steer.get("request_key") for steer in steers),
+        additional_kwargs=additional_kwargs,
+    )
+    return message, delivered

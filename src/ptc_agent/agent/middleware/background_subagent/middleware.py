@@ -457,9 +457,8 @@ class BackgroundSubagentMiddleware(AgentMiddleware):
             task.stream_quota = None
         else:
             task.captured_event_seq_base = task.captured_event_seq
-        # Reset timestamps so the LLM sees honest staleness for the
-        # resumed run, not leftover values from the prior asyncio.Task.
-        task.last_checked_at = time.time()
+        # Reset so the LLM sees honest staleness for the resumed run, not a
+        # leftover value from the prior asyncio.Task.
         task.last_updated_at = time.time()
 
     async def _resolve_or_error(

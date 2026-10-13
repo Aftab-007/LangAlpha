@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 MessageChecker = Callable[[], Awaitable[bool]]
 
@@ -10,6 +11,29 @@ def config_own_run_id(config: dict | None) -> str | None:
     """The run stamped into this invocation's config metadata (v4 2.4c) —
     the same identity SteeringMiddleware filters deliveries by."""
     return ((config or {}).get("metadata") or {}).get("run_id")
+
+
+def steering_queue_key(thread_id: str) -> str:
+    """The Redis list the user's mid-turn messages for a thread queue on."""
+    return f"workflow:steering:{thread_id}"
+
+
+def decode_steer(raw: bytes | str) -> Any:
+    """One queued steering payload, decoded. Garbage raises ``ValueError``
+    (a JSON or UTF-8 decode error is one)."""
+    return json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+
+
+def is_foreign_steer(data: Any, own_run_id: str | None) -> bool:
+    """Stamped for another run (v4 2.4c), so this run never delivers it.
+
+    Unstamped payloads, and every payload when this run carries no stamp of
+    its own, belong to whoever reads them."""
+    return bool(
+        isinstance(data, dict)
+        and own_run_id
+        and data.get("run_id") not in (None, own_run_id)
+    )
 
 
 async def build_message_checker(
@@ -32,24 +56,16 @@ async def build_message_checker(
     if not cache.enabled or not cache.client:
         return None
 
-    key = f"workflow:steering:{thread_id}"
+    key = steering_queue_key(thread_id)
 
     async def checker() -> bool:
-        raws = await cache.client.lrange(key, 0, -1)
-        for raw in raws:
+        for raw in await cache.client.lrange(key, 0, -1):
             try:
-                data = json.loads(
-                    raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                )
-            except (ValueError, UnicodeDecodeError):
+                data = decode_steer(raw)
+            except ValueError:
                 continue
-            if (
-                isinstance(data, dict)
-                and own_run_id
-                and data.get("run_id") not in (None, own_run_id)
-            ):
-                continue
-            return True
+            if not is_foreign_steer(data, own_run_id):
+                return True
         return False
 
     return checker

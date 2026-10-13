@@ -8,13 +8,14 @@ the EXECUTOR's decision at claim time, against the ledger: a run whose
 ``result_delivered_at`` is stamped (TaskOutput delivered it) is dropped
 with a cleared wake; a live or interrupted parent parks the job until the
 thread's next dead-turn finalize (completed, error or cancelled) releases
-it. A release the user's own stop caused drops too, for a run that had
-already settled when they stopped (``_stop_already_covered``) — the whole
-point of a stop is that no new turn starts. The POST is a synthetic
-notification turn via the shared
-``notify_turn`` machinery: it announces the outcome and leaves TaskOutput
-to fetch the result from the durable archive — nothing volatile rides the
-payload.
+it, and a live turn may close it first by taking the report in as a steer
+(``report_back.steer``). A run that had already settled when the user
+stopped the turn that launched it drops too (``_stop_already_covered``),
+since the whole point of a stop is that no new turn starts. Both paths
+decide through ``task_report_verdict``. The POST is a synthetic
+notification turn via the shared ``notify_turn`` machinery: it announces
+the outcome and leaves TaskOutput to fetch the result from the durable
+archive, so nothing volatile rides the payload.
 
 Unlike the flash pipeline there is no Redis reserve state: the open outbox
 row IS the pending-registry, owed from enqueue until the notification run
@@ -32,7 +33,10 @@ posture — the ledger stamp is the dedup, process memory never is.
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from src.server.services.report_back.notify_turn import NotOwed
 
 if TYPE_CHECKING:
     from src.server.models.chat import TaskReport
@@ -52,8 +56,23 @@ _TASK_RB_BUSY_WAIT_CAP = 120.0
 _TASK_RB_TERMINAL_WAIT_CAP = 45 * 60.0
 
 
-def _job_request_key(job_id: str) -> str:
+def task_request_key(job_id: str) -> str:
+    """The request key a job's notification turn is admitted under."""
     return str(uuid.uuid5(TASK_RB_REQUEST_NS, job_id))
+
+
+async def publish_cleared_wake(thread_id: str) -> None:
+    """Tell a thread's watchers to re-read its report-back status now.
+    Best-effort: a dropped wake degrades to the watch's own backstop."""
+    try:
+        from src.server.services.report_back.flash import wake
+        from src.utils.cache.redis_cache import get_cache_client
+
+        await wake.publish_wake(get_cache_client(), str(thread_id), cleared=True)
+    except Exception:
+        logger.debug(
+            f"[TASK_REPORT_BACK] Cleared wake for {thread_id} failed", exc_info=True
+        )
 
 
 async def publish_cleared_wake_if_no_open_job(thread_id: str) -> None:
@@ -160,7 +179,7 @@ async def read_task_report_back_status(thread_id: str) -> dict:
     }
 
 
-def _task_report(payload: dict) -> "TaskReport":
+def task_report(payload: dict) -> "TaskReport":
     """The task a notification turn announces, read off its payload once: the
     turn's message names it from this, and history labels the turn with it."""
     from src.server.models.chat import TaskReport
@@ -177,44 +196,31 @@ def _task_report(payload: dict) -> "TaskReport":
     )
 
 
-def _build_notification_message(report: "TaskReport", subagent_type: str | None) -> str:
-    """The synthetic turn's content: announce the run's outcome and direct
-    the agent to TaskOutput, which serves the result — or the failure
-    detail — from the durable ledger. A failed run must never be announced
-    as finished work: the agent would report a deliverable that does not
-    exist."""
-    display_id = report.display_id
-    subagent_type = subagent_type or "subagent"
-    description = report.description or ""
-    if report.failed:
-        headline = (
-            f"Background subagent {display_id} ({subagent_type}) FAILED after "
-            f"your previous turn ended, and you have not seen the failure. "
-            f"Retrieve the error details and report the failure to the user "
-            f"honestly — do not claim its work exists. Re-dispatch only if "
-            f"the user still needs the work."
-        )
-        call_to_action = "to see the failure details."
-    else:
-        headline = (
-            f"Background subagent {display_id} ({subagent_type}) finished "
-            f"after your previous turn ended, and you have not seen its "
-            f"result. Retrieve it and report the outcome to the user "
-            f"(integrate it with your prior work where relevant)."
-        )
-        call_to_action = "to see the result."
+def task_report_message(
+    report: "TaskReport", subagent_type: str | None, *, steered: bool = False
+) -> str:
+    """The report's content, as its own turn or as a steer into a live one.
+
+    Only the event. Reading the result is the Task description's to say and
+    never passing a failure off as finished work the system prompt's, so the
+    report does not restate either. It need not say the result is unseen
+    either: once TaskOutput serves a result, its report is dropped."""
+    # Posted, it names no time: a report is posted whenever no live turn took
+    # it in, which includes a task that settled after the turn's last model
+    # call, so "after your previous turn ended" can be false.
+    when = " while you were working" if steered else ""
+    outcome = "FAILED" if report.failed else "finished"
     return (
         "<system>\n"
-        f"{headline}\n"
-        f"Task description: {description}\n"
+        f"Background subagent {report.display_id} ({subagent_type or 'subagent'}) "
+        f"{outcome}{when}.\n"
+        f"Task description: {report.description or ''}\n"
         "</system>"
-        f"\n\nCall `TaskOutput(task_id=\"{report.task_id}\")` "
-        f"{call_to_action}"
     )
 
 
-def _stop_already_covered(latest: dict | None, run_row: dict | None) -> bool:
-    """Whether the user's own stop is what released this job.
+def _stop_already_covered(parent: dict | None, run_row: dict) -> bool:
+    """Whether the user stopped the task's parent turn after the task settled.
 
     A cancel finalize releases every parked report-back on the thread, so
     without this the stop itself opens a synthetic turn — billable model work
@@ -224,26 +230,60 @@ def _stop_already_covered(latest: dict | None, run_row: dict | None) -> bool:
     announcing it is the entire job of this pipeline — a blanket "the thread
     was cancelled once" test would silence every later completion instead.
 
-    Scoped to the task's own parent attempt, not merely to the newest one.
-    A task launched by turn A can settle while turn B runs, parking its job;
-    cancelling B then releases it, and a timestamp-only test would read A's
-    earlier settle as "covered" and drop a result the stop was never about.
+    Read off the task's own parent attempt, never the thread's newest one: a
+    task launched by turn A can settle while turn B runs, and cancelling B
+    must not read A's earlier settle as covered; and once the user starts
+    another turn after the stop, the drop still holds, whichever of the
+    drainer or that turn reaches the report first.
 
     Undecidable without both stamps, and silence is the worse failure, so a
     missing one notifies.
     """
-    if not latest or latest.get("status") != "cancelled":
+    if not parent or parent.get("status") != "cancelled":
         return False
-    parent_run_id = (run_row or {}).get("parent_run_id")
-    if parent_run_id is None or str(parent_run_id) != str(
-        latest.get("conversation_response_id")
-    ):
-        return False
-    stopped_at = latest.get("cancel_requested_at")
-    settled_at = (run_row or {}).get("finalized_at")
+    stopped_at = parent.get("cancel_requested_at")
+    settled_at = run_row.get("finalized_at")
     if stopped_at is None or settled_at is None:
         return False
     return settled_at <= stopped_at
+
+
+@dataclass(frozen=True)
+class OwedTaskReport:
+    """A task report still owed: what the reader is shown, and the subagent
+    type the model is told about."""
+
+    report: "TaskReport"
+    subagent_type: str | None
+
+    def message(self, *, steered: bool) -> str:
+        return task_report_message(self.report, self.subagent_type, steered=steered)
+
+
+async def task_report_verdict(job: dict) -> OwedTaskReport | NotOwed:
+    """Whether a ``task_report_back`` job is still owed, against the ledger.
+
+    The one eligibility both its executor (at claim time) and a live turn
+    taking it in as a steer decide by. TaskOutput deliveries stamp
+    ``result_delivered_at``, so a stamped run owes nothing.
+    """
+    from src.server.database.runs import lifecycle as tl_db
+    from src.server.database.runs import subagent_runs as sr_db
+
+    payload = job.get("payload") or {}
+    task_run_id = payload.get("task_run_id")
+    if task_run_id:
+        run_row = await sr_db.get_task_run(str(task_run_id))
+        if run_row is None:
+            return NotOwed("its run row is gone", wake=False)
+        if run_row.get("result_delivered_at"):
+            return NotOwed("its result was already delivered")
+        parent_run_id = run_row.get("parent_run_id")
+        if parent_run_id and _stop_already_covered(
+            await tl_db.get_run(str(parent_run_id)), run_row
+        ):
+            return NotOwed("its turn was stopped after it settled")
+    return OwedTaskReport(task_report(payload), payload.get("subagent_type"))
 
 
 async def execute_task_report_back(job: dict) -> None:
@@ -258,9 +298,9 @@ async def execute_task_report_back(job: dict) -> None:
     thread's next dead-turn finalize releases it.
     """
     from src.server.database.runs import outbox as outbox_db
-    from src.server.database.runs import lifecycle as tl_db
     from src.server.services.report_back.notify_turn import (
         await_run_terminal,
+        park_while_thread_busy,
         post_notification_turn,
     )
     from src.server.services.report_back.flash import wake
@@ -324,86 +364,39 @@ async def execute_task_report_back(job: dict) -> None:
     if not rb_run_id:
         # Ledger arbitration: the job was enqueued unconditionally at the
         # run's terminal CAS; whether a notification is still owed is
-        # decided HERE, at claim time, against the durable row. TaskOutput
-        # deliveries stamp result_delivered_at — a stamped run owes nothing.
-        task_run_id = payload.get("task_run_id")
-        run_row: dict | None = None
-        if task_run_id:
-            from src.server.database.runs import subagent_runs as sr_db
-
-            run_row = await sr_db.get_task_run(str(task_run_id))
-            if run_row is None:
-                logger.info(
-                    f"[TASK_REPORT_BACK] Run row gone for {subject} on "
-                    f"thread {thread_id}; dropping"
-                )
-                return
-            if run_row.get("result_delivered_at"):
-                logger.info(
-                    f"[TASK_REPORT_BACK] Result already delivered for "
-                    f"{subject} on thread {thread_id}; dropping"
-                )
+        # decided HERE, at claim time, against the durable rows.
+        verdict = await task_report_verdict(job)
+        if isinstance(verdict, NotOwed):
+            logger.info(
+                f"[TASK_REPORT_BACK] Dropping {subject} on thread {thread_id}: "
+                f"{verdict.reason}"
+            )
+            if verdict.wake:
                 # Watchers may be riding the pending chip on this job —
                 # tell them to reconcile now instead of via the backstop.
-                try:
-                    await wake.publish_wake(
-                        get_cache_client(), thread_id, cleared=True
-                    )
-                except Exception:
-                    pass
-                return
-
-        # Live/interrupted-latest guard. A live parent turn may still fetch
-        # the result itself (jobs are born at the run's CAS, usually
-        # mid-turn); an interrupted one must not receive a POST that would
-        # collide with the pending HITL checkpoint. Both park the job until
-        # the thread's next dead-turn finalize releases it — the re-read
-        # closes the race where that finalize landed between the status
-        # read and the park (its release pass saw no deferred row yet).
-        latest = await tl_db.get_latest_attempt(thread_id)
-        if latest and latest.get("status") in ("interrupted", "in_progress"):
-            parked = await _repark()
-            if parked == "pending":
-                latest = await tl_db.get_latest_attempt(thread_id)
-                if not latest or latest.get("status") not in (
-                    "interrupted",
-                    "in_progress",
-                ):
-                    from src.server.database.pool import get_db_connection
-
-                    async with get_db_connection() as conn:
-                        await outbox_db.release_deferred_jobs(
-                            conn, thread_id, "task_report_back"
-                        )
-                    try:
-                        from src.server.services.hook_outbox import (
-                            HookOutboxDrainer,
-                        )
-
-                        HookOutboxDrainer.get_instance().nudge()
-                    except Exception:
-                        pass
+                await publish_cleared_wake(thread_id)
             return
 
-        if _stop_already_covered(latest, run_row):
-            logger.info(
-                f"[TASK_REPORT_BACK] Thread {thread_id} was stopped after "
-                f"{subject} settled; dropping rather than opening a turn"
-            )
-            try:
-                await wake.publish_wake(get_cache_client(), thread_id, cleared=True)
-            except Exception:
-                pass
+        # A live turn takes the report in as a steer before its next model
+        # call (``report_back.steer``; jobs are born at the run's CAS,
+        # usually mid-turn), or fetches the result itself.
+        if await park_while_thread_busy(
+            job_id,
+            attempts,
+            thread_id,
+            log_prefix="[TASK_REPORT_BACK]",
+            subject=subject,
+        ):
             return
 
-        report = _task_report(payload)
-        message = _build_notification_message(report, payload.get("subagent_type"))
+        report = verdict.report
+        message = verdict.message(steered=False)
         body = {
             "messages": [{"role": "user", "content": message}],
             "agent_mode": "ptc",
             "workspace_id": workspace_id,
             "query_type": "system",
-            "request_key": _job_request_key(job_id),
+            "request_key": task_request_key(job_id),
         }
         # The message is hidden, so history labels the turn from this. Every
         # enqueue names its task; a payload that does not still announces,
@@ -499,16 +492,12 @@ async def _on_subagent_report_back_closed(job: dict) -> None:
     # of a job parked dead, leaves the client armed with no later signal
     # until the ~30-min watch recycle. `cleared` only means "reconcile now":
     # the client re-reads /status, so a wake with another job still queued
-    # is harmless. Best-effort (drainer swallows); a dropped wake degrades to
-    # the recycle snapshot.
-    from src.server.services.report_back.flash import wake
-    from src.utils.cache.redis_cache import get_cache_client
-
+    # is harmless. A dropped wake degrades to the recycle snapshot.
     thread_id = job.get("conversation_thread_id") or (
         job.get("payload") or {}
     ).get("thread_id")
     if thread_id:
-        await wake.publish_wake(get_cache_client(), str(thread_id), cleared=True)
+        await publish_cleared_wake(thread_id)
 
 
 def register_outbox_executors() -> None:

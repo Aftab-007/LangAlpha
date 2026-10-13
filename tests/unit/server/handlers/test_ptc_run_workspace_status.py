@@ -278,7 +278,12 @@ async def test_warm_sibling_acquisition_does_not_wait_for_state_callback():
     lines = await _run_to_sentinel(req, wm, stamps)
 
     # Ready arrives on the session, not after the 5 s state-callback wait.
-    assert stamps[-1] < 1.0
+    # The bound sits halfway to that wait: a CI runner pauses about one test
+    # in a few thousand for over a second (a full garbage collection, landing
+    # wherever the suite's allocations put it), which a tighter bound reads
+    # as the wait.
+    ready = next(i for i, line in enumerate(lines) if '"status": "ready"' in line)
+    assert stamps[ready] < 2.5
     assert _parse_ws_status_events(lines) == [
         {"status": "starting", "workspace_id": "ws-1"},
         {"status": "ready", "workspace_id": "ws-1"},

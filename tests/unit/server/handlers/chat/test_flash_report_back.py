@@ -57,8 +57,10 @@ class _ExecHarness:
         run_statuses=("completed",),
         lease_ok=True,
         guard_owned=True,
+        thread_busy=False,
     ):
         self.cache = cache
+        self.park = AsyncMock(return_value=thread_busy)
         self.post = AsyncMock(return_value=post_result)
         self.get_run = AsyncMock(side_effect=[_run_row(s) if s else None for s in run_statuses])
         self.extend_lease = AsyncMock(return_value=lease_ok)
@@ -81,6 +83,8 @@ class _ExecHarness:
             patch("src.utils.cache.redis_cache.get_cache_client", return_value=self.cache),
             patch.object(executor, "_post_report_back", self.post),
             patch("src.server.database.runs.lifecycle.get_run", self.get_run),
+            # Idle unless a test says otherwise, so the job is not parked.
+            patch.object(notify_turn, "park_while_thread_busy", self.park),
             patch("src.server.database.runs.outbox.extend_job_lease", self.extend_lease),
             patch("src.server.database.runs.outbox.merge_job_payload", self.merge_payload),
             patch("src.server.database.runs.outbox.requeue_job_with_key", self.requeue),
@@ -542,6 +546,26 @@ async def test_execute_dispatches_with_deterministic_request_key_and_holds_open(
     # polls (two in_progress + the terminal one) mean three heartbeats.
     assert h.get_run.await_count == 3
     assert h.extend_lease.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_execute_parks_while_the_watcher_thread_is_busy():
+    """A live turn takes the report in as a steer, and a POST into an
+    interrupted one would collide with its checkpoint: the job waits for the
+    thread's next dead-turn finalize, posting nothing and tearing nothing
+    down."""
+    cache = _FakeCache()
+    flash, ptc = "flash-1", "ptc-1"
+    _seed_dispatched(cache, flash, [ptc])
+
+    h = _ExecHarness(cache, thread_busy=True)
+    await h.run(_job(ptc, job_id="job-42"))
+
+    h.park.assert_awaited_once()
+    assert h.park.await_args.args == ("job-42", 1, flash)
+    h.post.assert_not_awaited()
+    h.merge_payload.assert_not_awaited()
+    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
 
 
 @pytest.mark.asyncio

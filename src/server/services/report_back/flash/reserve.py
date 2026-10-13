@@ -191,14 +191,15 @@ return removed
 def _cap_error_flash() -> str:
     return (
         f"too many concurrent analyses on this thread "
-        f"(max {MAX_DISPATCH_PER_FLASH}); wait for one to finish"
+        f"(max {MAX_DISPATCH_PER_FLASH}); this one was not started. You will be "
+        f"notified when one finishes; dispatch it again then"
     )
 
 
 def _cap_error_user() -> str:
     return (
         f"too many concurrent analyses running "
-        f"(max {MAX_DISPATCH_PER_USER}); wait for one to finish"
+        f"(max {MAX_DISPATCH_PER_USER}); try again after one finishes"
     )
 
 

@@ -7,6 +7,7 @@ import type {
   OrderStatus,
   OrderSummary,
 } from './orders';
+import type { ReportSource } from './api';
 
 /**
  * `error_type` on a task's terminal frame when the credit gate stopped it,
@@ -246,14 +247,37 @@ export interface ModelFallbackEvent extends BaseSSEEvent {
   attempts_on_from?: number;
 }
 
+/** A steer of the user's that the run took in. */
+export interface DeliveredSteer {
+  content: string;
+  /** Epoch seconds. */
+  timestamp?: number;
+  /** The surface it was sent from, as on a turn's query. */
+  platform?: string;
+  report_source?: never;
+}
+
+/** A finished task's or analyst's report the run took in, which carries no
+ *  words of the user's. A share drops `report_source`, which leaves an empty
+ *  steer that draws nothing. */
+export interface DeliveredReport {
+  content: '';
+  /** Epoch seconds. */
+  timestamp?: number;
+  report_source: ReportSource;
+}
+
+/** One entry of a delivery. The server lists its reports ahead of the
+ *  user's steers, the order the model reads them. */
+export type SteeringDeliveredEntry = DeliveredSteer | DeliveredReport;
+
+export function isDeliveredReport(entry: SteeringDeliveredEntry): entry is DeliveredReport {
+  return entry.report_source !== undefined;
+}
+
 export interface SteeringDeliveredEvent extends BaseSSEEvent {
   event: 'steering_delivered';
-  messages: Array<{
-    content: string;
-    timestamp?: number;
-    /** The surface it was sent from, as on a turn's query. */
-    platform?: string;
-  }>;
+  messages: SteeringDeliveredEntry[];
 }
 
 export interface TaskSteeringAcceptedEvent extends BaseSSEEvent {

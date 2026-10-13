@@ -24,6 +24,7 @@ from .task import BackgroundTask, TerminalStatus
 
 if TYPE_CHECKING:
     from ptc_agent.agent.middleware.background_subagent.utils import MessageChecker
+    from ptc_agent.agent.middleware.steering import ReportInbox
 
 logger = structlog.get_logger(__name__)
 
@@ -180,7 +181,6 @@ class BackgroundTaskRegistry:
         self._lock = asyncio.Lock()
         # The clock each task's delta coalescer reads; a seam for tests.
         self._clock: Callable[[], float] = time.monotonic
-        self._results: dict[str, Any] = {}
         # Entries kept until their cancelled writers settle; one reaper per
         # round however many kills find it unwinding.
         self._late_removals: dict[str, _LateRemoval] = {}
@@ -210,6 +210,10 @@ class BackgroundTaskRegistry:
         self.usage_biller: (
             Callable[[str, UsageTake], Awaitable[None]] | None
         ) = None
+        # Server-injected: the reports owed to the thread (a task's, an
+        # analyst's), which a live turn takes in as a steer. None in CLI/tests,
+        # where a ledger-less task is announced after the stream.
+        self.report_inbox: ReportInbox | None = None
 
     async def mark_result_delivered(self, task: BackgroundTask) -> None:
         """Stamp the durable result_delivered_at on the run's ledger row —
@@ -359,7 +363,7 @@ class BackgroundTaskRegistry:
     async def get_turn_visible_tasks(self) -> list[BackgroundTask]:
         """The task set the agent is allowed to see in aggregate.
 
-        The door for the TaskOutput aggregates, where applying
+        The door for the TaskOutput aggregate, where applying
         ``is_turn_visible`` per call site is how a workflow's children leaked
         into one branch while the branch beside it filtered them out. The two
         other visibility-filtered readers inline the predicate instead, and
@@ -813,121 +817,20 @@ class BackgroundTaskRegistry:
                     total_calls=task.total_tool_calls,
                 )
 
-    async def wait_for_specific(
-        self,
-        task_id: str,
-        timeout: float = 60.0,
-        *,
-        message_checker: MessageChecker | None = None,
-        poll_interval: float = 2.0,
-    ) -> dict[str, Any]:
-        """Wait for a specific task to complete.
-
-        When ``message_checker`` is provided, polls every ``poll_interval``
-        seconds and returns early with ``status="interrupted"`` if a steering
-        message arrives. Returns a result dict (``success``, ``result``, or
-        ``error``/``status`` on timeout/interrupt).
-        """
-        tool_call_id = self._task_id_to_tool_call_id.get(task_id)
-        if not tool_call_id:
-            return {"success": False, "error": f"Task-{task_id} not found"}
-
-        task = self._tasks.get(tool_call_id)
-        if not task:
-            return {"success": False, "error": f"Task-{task_id} not found"}
-
-        if task.completed:
-            return task.result or {"success": True, "result": None}
-
-        if task.asyncio_task is None:
-            return {
-                "success": False,
-                "error": f"Task-{task_id} has no asyncio task",
-            }
-
-        logger.info(
-            "Waiting for specific task",
-            task_id=task_id,
-            display_id=task.display_id,
-            timeout=timeout,
-        )
-
-        # --- polling loop (or single wait when no checker) ---------------
-        start = time.monotonic()
-
-        if message_checker is None:
-            # Original single-wait behaviour
-            await asyncio.wait(
-                [task.asyncio_task],
-                timeout=timeout,
-                return_when=asyncio.ALL_COMPLETED,
-            )
-        else:
-            while True:
-                remaining = timeout - (time.monotonic() - start)
-                if remaining <= 0:
-                    break
-
-                await asyncio.wait(
-                    [task.asyncio_task],
-                    timeout=min(poll_interval, remaining),
-                    return_when=asyncio.ALL_COMPLETED,
-                )
-
-                if task.asyncio_task.done():
-                    break
-
-                # Check for pending user steering
-                try:
-                    if await message_checker():
-                        logger.info(
-                            "Wait interrupted by user steering",
-                            task_id=task_id,
-                            display_id=task.display_id,
-                            elapsed=f"{time.monotonic() - start:.1f}s",
-                        )
-                        return {
-                            "success": False,
-                            "status": "interrupted",
-                            "reason": "user_steering",
-                        }
-                except Exception:
-                    # Redis glitch — continue waiting normally
-                    pass
-
-        # --- collect result ----------------------------------------------
-        async with self._lock:
-            if task.asyncio_task.done():
-                result = task.adopt_writer_outcome(task.asyncio_task)
-                self._results[tool_call_id] = result
-                logger.info(
-                    "Specific task settled",
-                    task_id=task_id,
-                    display_id=task.display_id,
-                    terminal_status=task.terminal_status,
-                )
-                return result
-            else:
-                return {
-                    "success": False,
-                    "error": f"Wait timed out after {timeout}s - task may still be running",
-                    "status": "timeout",
-                }
-
     async def wait_for_all(
         self,
         timeout: float = 60.0,
         *,
         message_checker: MessageChecker | None = None,
         poll_interval: float = 2.0,
-    ) -> dict[str, Any]:
-        """Wait for all background tasks to complete.
+    ) -> None:
+        """Wait up to ``timeout`` for the turn's background tasks, then settle
+        each one whose writer finished from that writer's outcome.
 
-        Returns a dict mapping tool_call_id to result. Still-running tasks
-        on interrupt get ``status="interrupted"``.
-
-        Workflow-owned children (``owner_task_id`` set) are excluded: their
-        driver waits on them; the turn only waits on the run task itself.
+        A steer this run would take, reported by ``message_checker``, ends the
+        wait early. Workflow-owned children (``owner_task_id`` set) are
+        excluded: their driver waits on them; the turn only waits on the run
+        task itself.
         """
         async with self._lock:
             tasks_to_wait = {
@@ -940,7 +843,7 @@ class BackgroundTaskRegistry:
 
         if not tasks_to_wait:
             logger.debug("No background tasks to wait for")
-            return self._results.copy()
+            return
 
         logger.info(
             "Waiting for background tasks",
@@ -948,20 +851,30 @@ class BackgroundTaskRegistry:
             timeout=timeout,
         )
 
-        interrupted = False
         start = time.monotonic()
 
         if message_checker is None:
-            await asyncio.wait(
+            _, still_running = await asyncio.wait(
                 tasks_to_wait.values(),
                 timeout=timeout,
                 return_when=asyncio.ALL_COMPLETED,
             )
+            if still_running:
+                logger.warning(
+                    "Wait timed out for background tasks",
+                    pending=len(still_running),
+                    timeout=timeout,
+                )
         else:
             remaining_tasks = set(tasks_to_wait.values())
             while remaining_tasks:
                 remaining = timeout - (time.monotonic() - start)
                 if remaining <= 0:
+                    logger.warning(
+                        "Wait timed out for background tasks",
+                        pending=len(remaining_tasks),
+                        timeout=timeout,
+                    )
                     break
 
                 done, remaining_tasks = await asyncio.wait(
@@ -980,48 +893,20 @@ class BackgroundTaskRegistry:
                             elapsed=f"{time.monotonic() - start:.1f}s",
                             pending=len(remaining_tasks),
                         )
-                        interrupted = True
                         break
                 except Exception:
                     pass
 
-        # Collect results
-        results = {}
         async with self._lock:
             for tool_call_id, asyncio_task in tasks_to_wait.items():
                 task = self._tasks.get(tool_call_id)
-                if task is None:
-                    continue
-
-                if asyncio_task.done():
-                    results[tool_call_id] = task.adopt_writer_outcome(asyncio_task)
+                if task is not None and asyncio_task.done():
+                    task.adopt_writer_outcome(asyncio_task)
                     logger.info(
                         "Background task settled",
                         tool_call_id=tool_call_id,
                         terminal_status=task.terminal_status,
                     )
-                elif interrupted:
-                    results[tool_call_id] = {
-                        "success": False,
-                        "status": "interrupted",
-                        "reason": "user_steering",
-                    }
-                else:
-                    # Task didn't complete within timeout
-                    results[tool_call_id] = {
-                        "success": False,
-                        "error": f"Wait timed out after {timeout}s - task may still be running",
-                        "status": "timeout",
-                    }
-                    logger.warning(
-                        "Wait timed out for background task",
-                        tool_call_id=tool_call_id,
-                        timeout=timeout,
-                    )
-
-            self._results.update(results)
-
-        return results
 
     async def stamp_cancel_intent(self, tasks: list["BackgroundTask"]) -> None:
         """Best-effort durable cancel intent for ledgered tasks, stamped
@@ -1313,7 +1198,6 @@ class BackgroundTaskRegistry:
         if task is None:
             return
         self._task_id_to_tool_call_id.pop(task.task_id, None)
-        self._results.pop(tool_call_id, None)
 
     def _remove_when_settled(self, tool_call_id: str, task) -> None:
         """A cancelled entry retained for the guard drain must still leave
@@ -1360,14 +1244,13 @@ class BackgroundTaskRegistry:
         reaper.add_done_callback(_forget)
 
     def _clear_unlocked(self) -> None:
-        """Drop all task/result/lookup state. Caller owns concurrency control."""
+        """Drop all task and lookup state. Caller owns concurrency control."""
         self._tasks.clear()
         self._task_id_to_tool_call_id.clear()
-        self._results.clear()
         logger.debug("Cleared background task registry")
 
     def clear(self) -> None:
-        """Clear all tasks and results from the registry (synchronous).
+        """Clear all tasks from the registry (synchronous).
 
         Note: This does NOT cancel running tasks. Call cancel_all() first
         if you want to stop running tasks.

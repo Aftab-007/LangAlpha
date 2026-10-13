@@ -228,6 +228,56 @@ describe('handleHistorySteeringDelivered provenance', () => {
   });
 });
 
+describe('handleHistorySteeringDelivered report entries', () => {
+  const replay = (messagesIn: Record<string, unknown>[], live: MessageRecord[] = []) => {
+    const messages: MessageRecord[] = [...live];
+    handleHistorySteeringDelivered({
+      event: { event: 'steering_delivered', messages: messagesIn },
+      pairIndex: 4,
+      assistantMessagesByPair: new Map(),
+      pairStateByPair: new Map(),
+      refs: { newMessagesStartIndexRef: { current: 0 } },
+      setMessages: (updater) => {
+        const next = updater(messages.slice());
+        messages.length = 0;
+        messages.push(...next);
+      },
+    });
+    return messages;
+  };
+
+  it('draws a report as its caption row ahead of the user\'s bubble, then the steering placeholder', () => {
+    const rows = replay([
+      { content: '', report_source: { kind: 'task', task_id: 'k3', display_id: 'Task-k3', failed: false }, timestamp: 1_700_000_000 },
+      { content: 'and margins', timestamp: 1_700_000_001 },
+    ]);
+    expect(rows).toHaveLength(3);
+    expect(rows[0].id).toBe('history-steering-report-4-1-0');
+    expect(rows[0]).toMatchObject({
+      role: 'user',
+      content: '',
+      isHistory: true,
+      steeringDelivered: true,
+      turnIndex: 4,
+      provenance: { kind: 'task_report', taskId: 'k3', displayId: 'Task-k3', description: null, failed: false },
+    });
+    expect(rows[1]).toMatchObject({ role: 'user', content: 'and margins', steeringDelivered: true });
+    expect(rows[1].id).toBe('history-steering-user-4-1-1');
+    expect(rows[2]).toMatchObject({ role: 'assistant', isSteering: true });
+  });
+
+  it('skips an entry with neither a report source nor words', () => {
+    const rows = replay([{ content: '' }]);
+    expect(rows.filter((m) => m.role === 'user')).toEqual([]);
+  });
+
+  it('takes no live steer\'s place, even one with no words', () => {
+    const steer = { id: 's1', role: 'user', content: '', steering: true, turnIndex: 4 };
+    const rows = replay([{ content: '', report_source: { kind: 'task', task_id: 'k3', display_id: 'Task-k3', failed: false } }], [steer]);
+    expect(rows.map((m) => m.id)).toEqual(['history-steering-report-4-1-0', 'history-assistant-steering-4-1', 's1']);
+  });
+});
+
 describe('minimap entries', () => {
   it('folds a report-back\'s reply into the entry above, as while its row was hidden', () => {
     const messages: MessageRecord[] = [

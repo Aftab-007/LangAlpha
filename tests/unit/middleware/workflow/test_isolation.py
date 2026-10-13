@@ -140,8 +140,8 @@ class TestWaitForAllOwnerFence:
     @pytest.mark.asyncio
     async def test_pending_owned_child_is_not_waited(self):
         """A pending owned child is excluded from the wait set entirely: with
-        only that child pending, wait_for_all returns immediately with no
-        results even though a large timeout was requested."""
+        only that child pending, wait_for_all returns immediately even though
+        a large timeout was requested."""
         registry = BackgroundTaskRegistry()
 
         async def _never():
@@ -160,18 +160,18 @@ class TestWaitForAllOwnerFence:
 
             # A 30s timeout would hang here if the owned child were waited;
             # the 2s wrapper proves it returns without blocking.
-            results = await asyncio.wait_for(
+            await asyncio.wait_for(
                 registry.wait_for_all(timeout=30.0), timeout=2.0
             )
-            assert results == {}
             assert not child_task.done()
+            assert registry.get_by_tool_call_id("child-1").terminal_status is None
         finally:
             await _cancel_task(child_task)
 
     @pytest.mark.asyncio
-    async def test_non_owned_waited_owned_excluded_from_results(self):
-        """A non-owned task IS waited and lands in results; a concurrently
-        pending owned child is neither waited nor present in results."""
+    async def test_non_owned_waited_owned_excluded(self):
+        """A non-owned task IS waited and settled from its writer; a
+        concurrently pending owned child is neither waited nor settled."""
         registry = BackgroundTaskRegistry()
 
         async def _quick():
@@ -199,12 +199,13 @@ class TestWaitForAllOwnerFence:
                 asyncio_task=owned_task,
             )
 
-            results = await asyncio.wait_for(
+            await asyncio.wait_for(
                 registry.wait_for_all(timeout=30.0), timeout=2.0
             )
-            assert "reg-1" in results
-            assert results["reg-1"] == {"success": True, "result": "done"}
-            assert "child-1" not in results
+            waited = registry.get_by_tool_call_id("reg-1")
+            assert waited.terminal_status == "completed"
+            assert waited.result == {"success": True, "result": "done"}
+            assert registry.get_by_tool_call_id("child-1").completed is False
             assert not owned_task.done()
         finally:
             await _cancel_task(owned_task)
@@ -235,7 +236,7 @@ class TestTaskOutputAllTasksOwnerFence:
         )
         tool = _make_output_tool(registry)
 
-        output = await tool.coroutine(task_id=None, timeout=0)
+        output = await tool.coroutine(task_id=None)
 
         assert run.display_id in output
         assert "RUN_SUMMARY" in output
@@ -262,7 +263,7 @@ class TestTaskOutputAllTasksOwnerFence:
         )
         tool = _make_output_tool(registry)
 
-        output = await tool.coroutine(task_id=owned.task_id, timeout=0)
+        output = await tool.coroutine(task_id=owned.task_id)
         assert owned.display_id in output
         assert "CHILD_OUTPUT" in output
 
@@ -279,5 +280,5 @@ class TestTaskOutputAllTasksOwnerFence:
         )
         tool = _make_output_tool(registry)
 
-        output = await tool.coroutine(task_id=None, timeout=0)
+        output = await tool.coroutine(task_id=None)
         assert output == "No background tasks have been assigned yet."

@@ -156,8 +156,8 @@ Returns:
     autonomously and reports only its final result; intermediate steps stay
     hidden.
 
-Keep working. The report arrives through TaskOutput once a completion
-notification names the task."""
+You are notified when the task finishes. TaskOutput then returns its
+result."""
 
 
 def _get_subagents(
