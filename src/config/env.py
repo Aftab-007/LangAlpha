@@ -66,9 +66,9 @@ PLUGIN_MARKETPLACE_URL: str = os.getenv("PLUGIN_MARKETPLACE_URL", "")
 
 # A read-only GitHub token, so a team can point Discover at its own private
 # catalog. Sent to api.github.com only, only when fetching the marketplace's
-# own repository (the listing, and installs and updates from it), and never
-# along a redirect: services/plugins/fetch.py's _first_hop is the one place
-# that reads it.
+# own repository (the listing, and installs and updates of what it lists), and
+# never along a redirect: services/plugins/fetch.py's _first_hop is the one
+# place that sends it.
 PLUGIN_MARKETPLACE_TOKEN: str = os.getenv("PLUGIN_MARKETPLACE_TOKEN", "")
 
 # Internal base URL the server-side PDF renderer (headless Chromium) loads

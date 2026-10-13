@@ -8,8 +8,8 @@ byte-bounded by the pinned stream client; all four supported forges accept
 ``HEAD`` as the ref, so a bare repo URL means "default branch".
 
 The one credential this module ever sends is the marketplace token, and only
-to GitHub's API for the marketplace's own repository at its configured ref
-(see ``_first_hop``).
+to GitHub's API for the marketplace's own repository at its configured ref,
+for a source the catalog lists (see ``_first_hop``).
 """
 
 import asyncio
@@ -333,46 +333,69 @@ def forge_repository(url: str) -> tuple[str, str | None] | None:
     return source.repository, source.ref
 
 
-def _first_hop(url: str, archive: str) -> tuple[str, dict[str, str] | None]:
-    """Where the first request goes, and the headers only it may carry.
+def _catalog_tree(url: str) -> tuple[str, str | None] | None:
+    """(repository, ref) when ``url`` is in the marketplace's own github.com
+    repository at the ref the catalog is read from, with a token to read it.
 
-    A team can point Discover at its own private catalog, and codeload serves
-    a private repository to nobody. With a token configured, a source in the
-    marketplace's own github.com repository, at the ref the catalog is read
-    from (which its in-repo entries are composed onto), is fetched through the
-    API's tarball endpoint instead, which answers with a redirect to a
-    codeload URL carrying GitHub's own short-lived grant. The redirect loop
-    follows that without the header, so the token reaches api.github.com
-    once, for the one tree it was configured for. Any signed-in user can name
-    a source URL, so matching the repository alone would read every other
-    branch and commit of a private catalog on the deployment's token.
+    The one tree the token is for: its in-repo entries are composed onto that
+    ref. Any signed-in user can name a source URL, so matching the repository
+    alone would read every other branch and commit of a private catalog on
+    the deployment's token.
     """
-    token = PLUGIN_MARKETPLACE_TOKEN.strip()
-    if not token:
-        return archive, None
+    if not PLUGIN_MARKETPLACE_TOKEN.strip():
+        return None
     home = forge_repository(PLUGIN_MARKETPLACE_URL)
     source = forge_repository(url)
     if home is None or source is None:
-        return archive, None
+        return None
     repo, ref = source
     if not repo.lower().startswith("https://github.com/"):
-        return archive, None
+        return None
     if repo.lower() != home[0].lower() or (ref or "HEAD") != (home[1] or "HEAD"):
+        return None
+    return source
+
+
+def in_catalog_tree(url: str) -> bool:
+    return _catalog_tree(url) is not None
+
+
+def _first_hop(
+    url: str, archive: str, listed: bool
+) -> tuple[str, dict[str, str] | None]:
+    """Where the first request goes, and the headers only it may carry.
+
+    A team can point Discover at its own private catalog, and codeload serves
+    a private repository to nobody. A source the catalog lists (``listed``,
+    the caller's to establish) in the catalog's own tree is fetched through
+    the API's tarball endpoint instead, which answers with a redirect to a
+    codeload URL carrying GitHub's own short-lived grant. The redirect loop
+    follows that without the header, so the token reaches api.github.com
+    once. The tarball is the whole repository, so a folder the catalog does
+    not list (a draft, a package held back) is never fetched with it.
+    """
+    tree = _catalog_tree(url) if listed else None
+    if tree is None:
         return archive, None
+    repo, ref = tree
     return (
         f"https://api.github.com/repos{urlsplit(repo).path}/tarball/"
         f"{quote(ref or 'HEAD', safe='')}"
     ), {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {PLUGIN_MARKETPLACE_TOKEN.strip()}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
 
-async def fetch_plugin_source(url: str) -> tuple[bytes, str | None]:
+async def fetch_plugin_source(
+    url: str, *, listed: bool = False
+) -> tuple[bytes, str | None]:
     """Download a plugin package from a normalized source URL.
 
-    Returns (bytes, subdirectory the URL deep-links to, or None). Raises
+    Returns (bytes, subdirectory the URL deep-links to, or None). ``listed``
+    says the catalog itself, or one of its entries, is being fetched, which
+    is what lets a private catalog's token go out (``_first_hop``). Raises
     PluginFatal with a user-facing message on every failure class — bad URL,
     SSRF refusal, redirect chain, oversize, timeout, HTTP error.
     """
@@ -381,7 +404,7 @@ async def fetch_plugin_source(url: str) -> tuple[bytes, str | None]:
     except ValueError as e:
         raise PluginFatal(str(e)) from e
 
-    current, hop_headers = _first_hop(url, normalized)
+    current, hop_headers = _first_hop(url, normalized, listed)
     try:
         async with asyncio.timeout(FETCH_DEADLINE_SECONDS):
             for _hop in range(_MAX_REDIRECTS + 1):

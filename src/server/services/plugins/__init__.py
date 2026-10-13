@@ -29,6 +29,7 @@ from src.server.services.plugins.lifecycle import (
     install_plugin_package,
     uninstall_plugin,
 )
+from src.server.services.plugins.marketplace import load_marketplace
 from src.server.services.plugins.package import ValidatedPackage, validate_package
 from src.server.services.plugins.pending import (
     CommittedPluginInstall,
@@ -71,6 +72,7 @@ __all__ = [
     "export_plugin_zip",
     "fetch_plugin_source",
     "install_plugin_package",
+    "load_marketplace",
     "prepare_pending_install",
     "refusals_as_http",
     "refuse_pending_commit",

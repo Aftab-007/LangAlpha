@@ -93,16 +93,22 @@ async def resolve_url_source(source_url: str, subdir: str | None) -> PackageSour
     answer) wins over it, and is folded into the stored source_ref so update
     lands on the same plugin. Raises PluginFatal.
     """
-    raw, url_subdir = await fetch_plugin_source(source_url)
+    # Imported here: the catalog reads name_hint from this module.
+    from src.server.services.plugins.marketplace import lists_source
+
+    source_ref = (
+        compose_subdir_url(source_url, subdir) if subdir is not None else source_url
+    )
+    raw, url_subdir = await fetch_plugin_source(
+        source_url, listed=await lists_source(source_ref)
+    )
     chosen = subdir if subdir is not None else url_subdir
     return PackageSource(
         raw=raw,
         subdir=chosen,
         name_hint=name_hint(source_url, chosen),
         source_type="git",
-        source_ref=(
-            compose_subdir_url(source_url, subdir) if subdir is not None else source_url
-        ),
+        source_ref=source_ref,
     )
 
 

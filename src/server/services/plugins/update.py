@@ -996,9 +996,9 @@ async def update_plugin_package(
             source_ref=source_ref,
             manifest=package.manifest,
             mcp_document=document,
-            # Same rule as install: the hash claims this tree is installed, so a
-            # component left in error keeps the old one and stays reconcilable.
-            content_hash=package.content_hash if settled else None,
+            # Same rule as install: the hash claims this tree is installed, so
+            # a component left in error leaves none and stays reconcilable.
+            content_hash=package.content_hash if settled else "",
         )
 
     disclose_vaulted_literals(report)
