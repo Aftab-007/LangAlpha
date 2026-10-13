@@ -10,6 +10,7 @@ cannot exist as file trees are built in-code.
 
 import io
 import json
+import random
 import stat
 import tarfile
 import tracemalloc
@@ -1159,6 +1160,245 @@ class TestArchiveLinks:
         assert any(
             d.code == "too_many_members" for d in exc.value.diagnostics
         )
+
+    def test_a_package_is_charged_only_for_the_links_it_can_see(self):
+        """A forge archive is the whole repository. One that mirrors its
+        skills for other agents keeps its links outside the package, and the
+        package installs from its folder; the repository as a whole still
+        meets the cap."""
+        mirror = {
+            f"repo-abc/.mirror/d{k:02d}/{side}": (f"../d{k - 1:02d}", False)
+            for k in range(1, 17)
+            for side in "ab"
+        }
+        raw = tar_with_links(
+            {
+                "repo-abc/pkg/plugin.json": self.MANIFEST,
+                "repo-abc/pkg/skills/s/SKILL.md": SKILL_MD,
+                "repo-abc/.mirror/d00/f": b"",
+            },
+            mirror,
+        )
+        package = validate_package(raw, subdir="pkg")
+        assert skill(package, "s").skip_code is None
+        with pytest.raises(PluginFatal) as exc:
+            validate_package(raw)
+        assert any(
+            d.code == "too_many_members" for d in exc.value.diagnostics
+        )
+
+    def test_a_link_in_the_package_still_reaches_outside_it(self):
+        package = validate_package(
+            tar_with_links(
+                {
+                    "pkg/plugin.json": self.MANIFEST,
+                    "vendor/s/SKILL.md": SKILL_MD,
+                },
+                {"pkg/skills": ("../vendor", False)},
+            ),
+            subdir="pkg",
+        )
+        assert skill(package, "s").skip_code is None
+
+    def test_a_package_reached_through_a_linked_directory(self):
+        package = validate_package(
+            tar_with_links(
+                {
+                    "packages/pkg/plugin.json": self.MANIFEST,
+                    "packages/pkg/skills/s/SKILL.md": SKILL_MD,
+                },
+                {"plugins": ("packages", False)},
+            ),
+            subdir="plugins/pkg",
+        )
+        assert skill(package, "s").skip_code is None
+
+    def test_a_folder_reached_through_a_link_is_charged_for_itself(self):
+        """Through ``plugins -> packages``, the package is ``packages/a``;
+        the links of a sibling beside it stay unexpanded."""
+        doubling = {
+            f"packages/b/d{k:02d}/{side}": (f"../d{k - 1:02d}", False)
+            for k in range(1, 17)
+            for side in "ab"
+        }
+        raw = tar_with_links(
+            {
+                "packages/a/plugin.json": self.MANIFEST,
+                "packages/a/skills/s/SKILL.md": SKILL_MD,
+                "packages/b/d00/f": b"",
+            },
+            {"plugins": ("packages", False), **doubling},
+        )
+        package = validate_package(raw, subdir="plugins/a")
+        assert skill(package, "s").skip_code is None
+
+    def test_a_link_above_the_package_mirrors_only_its_folder(self):
+        """``plugins -> packages`` copies ``packages/a`` for ``plugins/a``,
+        not the files of every sibling beside it."""
+        raw = tar_with_links(
+            {
+                "packages/a/plugin.json": self.MANIFEST,
+                "packages/a/skills/s/SKILL.md": SKILL_MD,
+                **{f"packages/b/f{i}": b"" for i in range(30)},
+            },
+            {"plugins": ("packages", False)},
+        )
+        with patch.object(archive, "MAX_MEMBERS", 40):
+            package = validate_package(raw, subdir="plugins/a")
+            with pytest.raises(PluginFatal):
+                validate_package(raw)
+        assert skill(package, "s").skip_code is None
+
+    def test_a_broken_link_is_reported_where_the_package_sees_it(self):
+        """A package reached through ``plugins -> packages`` holds the broken
+        link at ``skills/bad``, though the archive keeps it under ``packages``."""
+        raw = tar_with_links(
+            {
+                "packages/a/plugin.json": self.MANIFEST,
+                "packages/a/skills/s/SKILL.md": SKILL_MD,
+            },
+            {
+                "plugins": ("packages", False),
+                "packages/a/skills/bad": ("nowhere", False),
+            },
+        )
+        for subdir in ("plugins/a", None):
+            files, diagnostics = archive.extract_plugin_archive(
+                raw, subdir=subdir
+            )
+            assert "plugins/a/skills/bad" in {d.target for d in diagnostics}
+        package = validate_package(raw, subdir="plugins/a")
+        assert [
+            d.target for d in package.diagnostics if d.code == "link_unresolved"
+        ] == ["skills/bad"]
+
+    def test_links_into_a_folder_of_links_are_reported_once_each(self):
+        """Links that reach only each other copy nothing, so their reports of
+        what is missing are not copied either."""
+        _, diagnostics = archive.extract_plugin_archive(
+            tar_with_links(
+                {"plugin.json": self.MANIFEST},
+                {f"d/l{i}": (".", False) for i in range(10)},
+            )
+        )
+        assert sorted(d.target for d in diagnostics) == [
+            f"d/l{i}" for i in range(10)
+        ]
+
+    def test_a_package_holds_what_the_whole_archive_shows_under_it(self):
+        """The chooser expands every link and an install only the ones its
+        folder can see, and on random link-heavy trees, wrapped or not, they
+        agree on every file and broken link under the folder."""
+        rng = random.Random(532)
+
+        def place(lo: int = 1, hi: int = 4, names: str = "abcd") -> str:
+            return "/".join(
+                rng.choice(names) for _ in range(rng.randint(lo, hi))
+            ).replace("....", "..")
+
+        def read(raw: bytes, subdir: str | None):
+            try:
+                return archive.extract_plugin_archive(raw, subdir=subdir)
+            except PluginFatal:
+                return None
+
+        def under(read, folder: str):
+            files, diagnostics = read
+            return (
+                {k: v for k, v in files.items() if k.startswith(folder + "/")},
+                sorted(
+                    d.target for d in diagnostics
+                    if d.target.startswith(folder + "/")
+                ),
+            )
+
+        for case in range(1000):
+            wrapper = "r/" if case % 2 else ""
+            files = {
+                wrapper + place(): rng.choice([b"", b"x"])
+                for _ in range(rng.randint(1, 8))
+            }
+            links = {}
+            for _ in range(rng.randint(1, 8)):
+                roll = rng.random()
+                if roll < 0.75:
+                    target = (place(names="abcd.."), False)
+                elif roll < 0.9:
+                    target = (wrapper + place(), True)
+                else:
+                    target = ("/etc/passwd", False)
+                links[wrapper + place()] = target
+            raw = tar_with_links(files, links)
+            folder = place(1, 2)
+            whole, package = read(raw, None), read(raw, folder)
+            if package is None:
+                assert whole is None, (files, links, folder)
+            elif whole is not None:
+                assert under(whole, folder) == under(package, folder), (
+                    files, links, folder,
+                )
+
+    def test_each_folder_the_chooser_offers_installs(self):
+        """The chooser expands every link and an install only the ones its
+        folder can see, so both must name folders from the same root: here
+        the top-level alias keeps ``plugins/`` from being stripped."""
+        raw = tar_with_links(
+            {
+                "plugins/a/plugin.json": self.MANIFEST,
+                "plugins/a/skills/s/SKILL.md": SKILL_MD,
+                "plugins/b/plugin.json": self.MANIFEST,
+            },
+            {"latest": ("plugins/b", False)},
+        )
+        with pytest.raises(PluginAmbiguous) as exc:
+            validate_package(raw)
+        offered = {c.path for c in exc.value.candidates}
+        assert offered == {"latest", "plugins/a", "plugins/b"}
+        package = validate_package(raw, subdir="plugins/a")
+        assert skill(package, "s").skip_code is None
+
+    def test_a_link_to_nothing_leaves_its_wrapper_alone(self):
+        """A working folder zipped from inside keeps its stray links, and one
+        that leads out of the archive, to nothing, or only to other links is
+        never content."""
+        package = validate_package(
+            tar_with_links(
+                {
+                    "src/pkg/plugin.json": self.MANIFEST,
+                    "src/vendor/s/SKILL.md": SKILL_MD,
+                },
+                {
+                    "src/pkg/skills": ("../vendor", False),
+                    ".venv": ("/opt/venv", False),
+                    ".cache": ("missing", False),
+                    "loop/back": (".", False),
+                    "stray": ("src/pkg/skills/missing", False),
+                },
+            ),
+            subdir="pkg",
+        )
+        assert skill(package, "s").skip_code is None
+        assert not any(d.code == "link_unresolved" for d in package.diagnostics)
+
+    def test_a_tar_link_target_that_is_not_utf8_is_only_a_broken_link(self):
+        """A tar header may hold any bytes, and measuring the target for its
+        cap must not refuse the archive over them."""
+        package = validate_package(
+            tar_with_links(
+                {"plugin.json": self.MANIFEST},
+                {"l": (b"caf\xe9".decode("utf-8", "surrogateescape"), False)},
+            )
+        )
+        assert [d.target for d in package.diagnostics if d.code == "link_unresolved"] == ["l"]
+
+    def test_a_tar_link_target_answers_to_the_path_cap(self):
+        """As a zip's does: where a link lands is walked level by level."""
+        raw = tar_with_links(
+            {"plugin.json": self.MANIFEST}, {"l": ("a/" * 3000, False)}
+        )
+        with pytest.raises(PluginFatal) as exc:
+            validate_package(raw)
+        assert exc.value.diagnostics[0].code == "link_target_too_long"
 
 
 class TestSchemaMessages:
