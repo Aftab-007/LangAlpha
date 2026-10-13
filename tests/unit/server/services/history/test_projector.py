@@ -828,3 +828,68 @@ def test_workflow_run_items_synthesizes_terminal_when_snapshot_missing():
     # No synthesis while the run is open or the ledger row is absent.
     assert workflow_run_items(history, task_id="wf1", ledger_status="in_progress") == []
     assert workflow_run_items(history, task_id="wf1") == []
+
+
+def test_a_fallback_notice_sits_after_the_message_its_call_followed():
+    # Each model call tries the primary first, so a primary that stays down
+    # leaves one notice per call; live, each fired just before its call's
+    # output. A record from before notices named their message opens the turn.
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from src.server.services.history.projector import (
+        history_events_to_sse,
+        messages_to_history_events,
+        with_model_fallbacks,
+    )
+
+    def fallback(n: int, after: str | None) -> dict:
+        record = {
+            "id": f"ui-{n}",
+            "name": "model_fallback",
+            "props": {"from_model": "primary", "to_model": f"backup-{n}"},
+        }
+        if after:
+            record["metadata"] = {"after_message_id": after}
+        return record
+
+    turn = SimpleNamespace(
+        messages=[
+            HumanMessage(content="go", id="h-1"),
+            AIMessage(
+                content="",
+                id="ai-1",
+                tool_calls=[{"name": "Bash", "args": {}, "id": "tc-1"}],
+            ),
+            ToolMessage(content="out", tool_call_id="tc-1", id="tm-1"),
+            AIMessage(content="done", id="ai-2"),
+        ],
+        new_ui_records=[
+            fallback(1, "h-1"),
+            fallback(2, "tm-1"),
+            fallback(3, None),
+            fallback(4, "elsewhere"),
+        ],
+    )
+
+    items = with_model_fallbacks(
+        "t-1",
+        turn,
+        lambda messages: history_events_to_sse(
+            messages_to_history_events(messages), thread_id="t-1"
+        ),
+    )
+
+    assert [
+        i["data"]["to_model"] if i["event"] == "model_fallback" else i["event"]
+        for i in items
+    ] == [
+        "backup-1",
+        "backup-3",
+        "backup-4",
+        "tool_calls",
+        "tool_call_result",
+        "backup-2",
+        "message_chunk",
+    ]

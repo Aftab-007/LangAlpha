@@ -21,14 +21,16 @@ class _FakeModel:
 class _FakeRequest:
     """Duck-typed stand-in for langchain's ModelRequest."""
 
-    def __init__(self, model, messages=None):
+    def __init__(self, model, messages=None, state=None):
         self.model = model
         self.messages = messages if messages is not None else []
+        self.state = state if state is not None else {"messages": []}
 
     def override(self, *, model=None, messages=None):
         return _FakeRequest(
             model if model is not None else self.model,
             messages if messages is not None else self.messages,
+            self.state,
         )
 
 
@@ -189,6 +191,31 @@ class TestFallbackChain:
             ("primary-model", "fallback-a", True),
             ("fallback-a", "fallback-b", False),
         ]
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_names_the_message_its_call_followed(self, events):
+        # The turn's records keep no step, so replay places the notice by it.
+        from langchain_core.messages import HumanMessage, ToolMessage
+
+        client = _FakeModel("primary-model")
+        fb = _FakeModel("fallback-a")
+        mw = _make_middleware(client, fallbacks=[("fallback-a", fb)])
+        state = {
+            "messages": [
+                HumanMessage(content="go", id="h-1"),
+                ToolMessage(content="out", tool_call_id="tc-1", id="tm-1"),
+            ]
+        }
+
+        async def handler(req):
+            if req.model is fb:
+                return "ok"
+            raise _status_error("bad request", status=400)
+
+        await mw.awrap_model_call(_FakeRequest(client, state=state), handler)
+        [record] = [e for e in events if e.get("name") == "model_fallback"]
+        assert record["metadata"]["after_message_id"] == "tm-1"
+        assert "after_message_id" not in record["props"]
 
     @pytest.mark.asyncio
     async def test_total_exhaustion_raises_primary_exception_with_trace(self, events):

@@ -49,6 +49,13 @@ RESILIENCE_TRACE_ATTR = "__model_resilience__"
 _ERROR_SUMMARY_MAX_CHARS = 300
 
 
+def _last_message_id(request: ModelRequest) -> str | None:
+    """The newest message of the state the call was made from."""
+    state = getattr(request, "state", None)
+    messages = state.get("messages") if isinstance(state, dict) else None
+    return getattr(messages[-1], "id", None) if messages else None
+
+
 def _summarize_error(exc: BaseException) -> str:
     text = str(exc) or type(exc).__name__
     return text[:_ERROR_SUMMARY_MAX_CHARS]
@@ -208,11 +215,18 @@ class ModelResilienceMiddleware(AgentMiddleware):
         )
 
     def _emit_fallback(
-        self, record: _AttemptRecord, to_model: str, *, from_is_primary: bool
+        self,
+        record: _AttemptRecord,
+        to_model: str,
+        request: ModelRequest,
+        *,
+        from_is_primary: bool,
     ) -> None:
         # Unlike retries, fallbacks must survive replay: push_ui_message
         # dual-writes the record to the custom stream (live SSE) and the
-        # checkpointed ``ui`` channel, which replay projects per turn.
+        # checkpointed ``ui`` channel, which replay projects per turn. The
+        # turn's records keep no step, so the record names the message the
+        # call followed, which replay places the notice after.
         props = {
             "from_model": record.model,
             "to_model": to_model,
@@ -224,7 +238,12 @@ class ModelResilienceMiddleware(AgentMiddleware):
         try:
             from langgraph.graph.ui import push_ui_message
 
-            push_ui_message(name="model_fallback", props=props)
+            after = _last_message_id(request)
+            push_ui_message(
+                name="model_fallback",
+                props=props,
+                metadata={"after_message_id": after} if after else None,
+            )
         except Exception:
             # Runtime context is unavailable outside a graph run (tests, sync
             # invocations); resilience must not depend on it.
@@ -353,7 +372,10 @@ class ModelResilienceMiddleware(AgentMiddleware):
                     continue
             if index + 1 < len(candidates):
                 self._emit_fallback(
-                    records[-1], candidates[index + 1][0], from_is_primary=index == 0
+                    records[-1],
+                    candidates[index + 1][0],
+                    request,
+                    from_is_primary=index == 0,
                 )
 
         return self._raise_exhausted(records)
@@ -389,7 +411,10 @@ class ModelResilienceMiddleware(AgentMiddleware):
                     continue
             if index + 1 < len(candidates):
                 self._emit_fallback(
-                    records[-1], candidates[index + 1][0], from_is_primary=index == 0
+                    records[-1],
+                    candidates[index + 1][0],
+                    request,
+                    from_is_primary=index == 0,
                 )
 
         return self._raise_exhausted(records)

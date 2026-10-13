@@ -97,17 +97,18 @@ def project_turn(
         for q in inputs.queries_by_turn.get(turn_index, [])
     ]
 
-    turn_items = history_events_to_sse(
-        messages_to_history_events(turn.messages), thread_id=thread_id
+    turn_items = projector.with_model_fallbacks(
+        thread_id,
+        turn,
+        lambda messages: history_events_to_sse(
+            messages_to_history_events(messages), thread_id=thread_id
+        ),
     )
     # Compaction signals (offload counts, the summarize event) live in
     # private state keys, not the messages channel — re-emit them at the
     # head of the turn they landed in (live they fire before the first
-    # post-compaction model call). Fallback notices follow the same
-    # head placement: live they fire before the succeeding model's chunks.
-    turn_items[:0] = projector.context_signal_items(
-        thread_id, turn
-    ) + projector.model_fallback_items(thread_id, turn)
+    # post-compaction model call).
+    turn_items[:0] = projector.context_signal_items(thread_id, turn)
     durations = replay_facts.reasoning_durations(response)
     if durations is not None:
         replay_facts.apply_reasoning_durations(turn_items, durations)

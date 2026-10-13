@@ -16,7 +16,7 @@ replay endpoint from persisted sources, not synthesized here.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -816,7 +816,50 @@ def model_fallback_items(
     that never reach the checkpointed ``ui`` channel. ``agent`` identifies the
     namespace being projected (main or ``task:{id}``).
     """
-    items: list[dict[str, Any]] = []
+    return [item for _, item in _model_fallbacks(thread_id, turn, agent)]
+
+
+def with_model_fallbacks(
+    thread_id: str,
+    turn: SpanDelta,
+    project: Callable[[list[AnyMessage]], list[dict[str, Any]]],
+    *,
+    agent: str = MAIN_AGENT,
+) -> list[dict[str, Any]]:
+    """``project(turn.messages)`` with the turn's model_fallback notices where
+    they fired live: after the items of the message the falling-back call
+    followed, which is as many items as projecting the messages up to it
+    gives. A record that names no message of the span opens the turn."""
+    ids = [message.id for message in turn.messages]
+
+    def position(after: str | None) -> int:
+        if not after or after not in ids:
+            return 0
+        return len(project(turn.messages[: ids.index(after) + 1]))
+
+    placed = sorted(
+        (
+            (position(after), item)
+            for after, item in _model_fallbacks(thread_id, turn, agent)
+        ),
+        key=lambda p: p[0],
+    )
+    items = project(turn.messages)
+    out: list[dict[str, Any]] = []
+    done = 0
+    for at, item in placed:
+        out.extend(items[done:at])
+        out.append(item)
+        done = at
+    out.extend(items[done:])
+    return out
+
+
+def _model_fallbacks(
+    thread_id: str, turn: SpanDelta, agent: str
+) -> list[tuple[str | None, dict[str, Any]]]:
+    """Each fallback notice, with the id of the message its call followed."""
+    out: list[tuple[str | None, dict[str, Any]]] = []
     for record in turn.new_ui_records:
         if record.get("name") != MODEL_FALLBACK_UI_NAME:
             continue
@@ -828,5 +871,6 @@ def model_fallback_items(
         error_text = props.get("error")
         if isinstance(error_text, str):
             data["error"] = _sanitize_error_text(error_text)
-        items.append({"event": "model_fallback", "data": data})
-    return items
+        after = (record.get("metadata") or {}).get("after_message_id")
+        out.append((after, {"event": "model_fallback", "data": data}))
+    return out
