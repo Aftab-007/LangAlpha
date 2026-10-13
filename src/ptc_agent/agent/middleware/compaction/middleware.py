@@ -207,8 +207,8 @@ class CompactionMiddleware(AgentMiddleware):
         cutoff: int,
         transcript: TranscriptTarget | None,
     ) -> Compaction:
-        """Summarize ``view`` before ``cutoff``, the turn's own model being
-        the fallback.
+        """Summarize ``view`` before ``cutoff``, this agent's model being
+        the fallback (see ``Summarizer.compact``).
 
         Start is outside the try, so a start that fails opened no window. A
         cancellation still emits error before it propagates: otherwise the
@@ -226,6 +226,11 @@ class CompactionMiddleware(AgentMiddleware):
                 fallback=request.model,
                 notes_dir=self._notes_dir,
                 window=Window.of(request.state),
+                # Its own action: a client built before the count reads any
+                # summarize signal but start as the summary's end.
+                progress=lambda tokens: self._emit_context_signal(
+                    "summary_progress", "progress", summary_tokens=tokens
+                ),
             )
         except BaseException as e:
             self._emit_context_signal("summarize", "error", error=str(e))
@@ -411,8 +416,9 @@ class CompactionMiddleware(AgentMiddleware):
         """Emit a context_window event via the stream writer.
 
         Args:
-            action: Action discriminator ("summarize", "offload", "token_usage")
-            signal: Signal type ("start", "complete", or "error")
+            action: Action discriminator ("summarize", "summary_progress",
+                "offload", "token_usage")
+            signal: Signal type ("start", "progress", "complete", or "error")
             **kwargs: Additional payload fields (summary_length, error, etc.)
         """
         try:

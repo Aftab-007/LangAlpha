@@ -19,6 +19,8 @@ export interface ModelSlotCopy {
   explainerTitle: string;
   /** Placeholder for a routing slot left blank to follow the second model. */
   defaultsToBackground: string;
+  /** Placeholder for the compaction slot left blank, which follows the conversation's own model. */
+  defaultsToConversation: string;
   /** Placeholder for a second model left on Auto, which follows the first. */
   backgroundSameAsDefault: string;
   fallbackDesc: string;
@@ -53,6 +55,7 @@ export function useModelSlotCopy(): ModelSlotCopy {
       },
       explainerTitle: t('agents.models.explainerTitle'),
       defaultsToBackground: t('agents.models.defaultsToBackground'),
+      defaultsToConversation: t('settings.modelTuning.defaultsToConversationModel'),
       backgroundSameAsDefault: t('agents.models.backgroundSameAsDefault'),
       fallbackDesc: t('agents.models.fallbackModelsDesc'),
       chooseDesc: t('agents.models.chooseYourModelsDesc'),
@@ -77,6 +80,7 @@ export function useModelSlotCopy(): ModelSlotCopy {
     },
     explainerTitle: t('setup.explainerTitle'),
     defaultsToBackground: t('settings.modelTuning.defaultsToFlash'),
+    defaultsToConversation: t('settings.modelTuning.defaultsToConversationModel'),
     backgroundSameAsDefault: t('setup.flashSameAsPrimary'),
     fallbackDesc: t('settings.fallbackModelsDesc'),
     chooseDesc: t('setup.chooseYourModelsDesc'),

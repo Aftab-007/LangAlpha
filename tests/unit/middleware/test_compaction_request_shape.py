@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
 
 from ptc_agent.agent.middleware.compaction.summary_request import (
     _COMPACTION_USER_NUDGE,
@@ -21,6 +21,36 @@ from ptc_agent.agent.middleware.compaction.summary_request import (
 )
 from src.llms import maybe_disable_streaming
 
+
+
+def _summary_model(reply: str = "summary", *, error: BaseException | None = None) -> MagicMock:
+    """A summary model that streams ``reply``, keeping each request in ``sent``."""
+    model = MagicMock()
+    model.sent = []
+
+    async def astream(request, config=None):
+        model.sent.append(request)
+        if error is not None:
+            raise error
+        yield AIMessageChunk(content=reply)
+
+    model.astream = astream
+    return model
+
+
+def _hanging(cancelled: list[bool]):
+    """An ``astream`` that never sends a chunk, noting when it is cut off."""
+    import asyncio
+
+    async def astream(request, config=None):
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+        yield AIMessageChunk(content="too late")
+
+    return astream
 
 def _config(main):
     """A config whose summary model is resolved by name. ``main`` is the
@@ -243,14 +273,9 @@ async def test_compact_messages_calls_llm_with_system_message(monkeypatch):
     way so Codex OAuth works end-to-end."""
     from ptc_agent.agent.middleware.compaction import compact as compact_module
 
-    fake_llm = MagicMock()
-    fake_llm.ainvoke = AsyncMock(
-        return_value=MagicMock(content="summary", additional_kwargs={})
-    )
+    fake_llm = _summary_model()
 
-    monkeypatch.setattr(
-        compact_module, "get_llm_by_type", lambda model_name: fake_llm
-    )
+    monkeypatch.setattr(compact_module, "create_llm", lambda model_name, **_: fake_llm)
 
     # Short-circuit offloading so the test doesn't need a sandbox.
     async def _passthrough_offload(backend, messages, **kwargs):
@@ -269,8 +294,8 @@ async def test_compact_messages_calls_llm_with_system_message(monkeypatch):
         messages, {}, _config(fake_llm), thread_id="thread-1", keep_messages=1
     )
 
-    assert fake_llm.ainvoke.await_count == 1
-    sent = fake_llm.ainvoke.await_args.args[0]
+    assert len(fake_llm.sent) == 1
+    sent = fake_llm.sent[0]
     assert isinstance(sent, list)
     assert isinstance(sent[0], SystemMessage), (
         "Compaction must send the prompt as SystemMessage so Codex OAuth "
@@ -289,11 +314,8 @@ async def test_chained_compaction_anchors_and_reconstructs_safely(monkeypatch):
     from ptc_agent.agent.middleware.compaction import compact as compact_module
     from ptc_agent.agent.middleware.compaction.utils import get_effective_messages
 
-    fake_llm = MagicMock()
-    fake_llm.ainvoke = AsyncMock(
-        return_value=MagicMock(content="summary", additional_kwargs={})
-    )
-    monkeypatch.setattr(compact_module, "get_llm_by_type", lambda model_name: fake_llm)
+    fake_llm = _summary_model()
+    monkeypatch.setattr(compact_module, "create_llm", lambda model_name, **_: fake_llm)
 
     async def _passthrough_offload(backend, messages, **kwargs):
         return messages
@@ -342,11 +364,8 @@ async def test_compact_messages_summarizes_the_offload_view(monkeypatch):
 
     from ptc_agent.agent.middleware.compaction import compact as compact_module
 
-    fake_llm = MagicMock()
-    fake_llm.ainvoke = AsyncMock(
-        return_value=MagicMock(content="summary", additional_kwargs={})
-    )
-    monkeypatch.setattr(compact_module, "get_llm_by_type", lambda model_name: fake_llm)
+    fake_llm = _summary_model()
+    monkeypatch.setattr(compact_module, "create_llm", lambda model_name, **_: fake_llm)
     sent: list = []
 
     async def _recording_offload(backend, messages, **kwargs):
@@ -391,7 +410,7 @@ class TestCompactMessagesNeverStoresAnError:
             return messages
 
         monkeypatch.setattr(compact_module, "aoffload_base64_content", _passthrough)
-        monkeypatch.setattr(compact_module, "get_llm_by_type", lambda model_name: fake_llm)
+        monkeypatch.setattr(compact_module, "create_llm", lambda model_name, **_: fake_llm)
         self.fake_llm = fake_llm
 
     async def _compact(self, compact_module):
@@ -417,8 +436,7 @@ class TestCompactMessagesNeverStoresAnError:
     async def test_llm_failure_ends_in_a_server_summary(self, monkeypatch):
         from ptc_agent.agent.middleware.compaction import compact as compact_module
 
-        fake_llm = MagicMock()
-        fake_llm.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+        fake_llm = _summary_model(error=RuntimeError("boom"))
         self._patch(monkeypatch, compact_module, fake_llm)
 
         self._assert_server_summary(await self._compact(compact_module))
@@ -427,29 +445,19 @@ class TestCompactMessagesNeverStoresAnError:
     async def test_empty_summary_ends_in_a_server_summary(self, monkeypatch):
         from ptc_agent.agent.middleware.compaction import compact as compact_module
 
-        fake_llm = MagicMock()
-        fake_llm.ainvoke = AsyncMock(return_value=MagicMock(content="", additional_kwargs={}))
+        fake_llm = _summary_model("")
         self._patch(monkeypatch, compact_module, fake_llm)
 
         self._assert_server_summary(await self._compact(compact_module))
 
     @pytest.mark.asyncio
     async def test_a_hung_call_ends_in_a_server_summary_within_the_budget(self, monkeypatch):
-        import asyncio
 
         from ptc_agent.agent.middleware.compaction import compact as compact_module
 
         cancelled: list[bool] = []
-
-        async def _hang(*args, **kwargs):
-            try:
-                await asyncio.sleep(10)
-            except asyncio.CancelledError:
-                cancelled.append(True)
-                raise
-
         fake_llm = MagicMock()
-        fake_llm.ainvoke = _hang
+        fake_llm.astream = _hanging(cancelled)
         self._patch(monkeypatch, compact_module, fake_llm)
         monkeypatch.setattr(compact_module, "get_compaction_timeout", lambda: 0.01)
 
@@ -492,16 +500,14 @@ class TestCompactWindowClose:
     source, or by error when a cancellation propagates. Otherwise a stream
     persists a naked start, which keeps the compaction window open."""
 
-    def _make_middleware(self, monkeypatch, ainvoke_side_effect=None):
+    def _make_middleware(self, monkeypatch, error=None):
         from ptc_agent.agent.middleware.compaction import compact as compact_mod
         from ptc_agent.agent.middleware.compaction.compact import Summarizer
         from ptc_agent.agent.middleware.compaction.middleware import (
             CompactionMiddleware,
         )
 
-        # The summarizer only calls ``model.ainvoke(...)``.
-        fake_model = MagicMock()
-        fake_model.ainvoke = AsyncMock(side_effect=ainvoke_side_effect)
+        fake_model = _summary_model(error=error)
 
         mw = CompactionMiddleware(
             Summarizer(
@@ -533,7 +539,7 @@ class TestCompactWindowClose:
         import asyncio as _asyncio
 
         mw, signals = self._make_middleware(
-            monkeypatch, ainvoke_side_effect=_asyncio.CancelledError()
+            monkeypatch, error=_asyncio.CancelledError()
         )
 
         with pytest.raises(_asyncio.CancelledError):
@@ -547,7 +553,7 @@ class TestCompactWindowClose:
     @pytest.mark.asyncio
     async def test_a_failed_call_completes_with_a_server_summary(self, monkeypatch):
         mw, signals = self._make_middleware(
-            monkeypatch, ainvoke_side_effect=RuntimeError("upstream down")
+            monkeypatch, error=RuntimeError("upstream down")
         )
 
         summary = await self._summarize(mw)
@@ -564,21 +570,12 @@ class TestCompactWindowClose:
     async def test_timeout_completes_with_a_server_summary(self, monkeypatch):
         """A hung summarize self-terminates on the compaction budget, so the
         window closes and the admission guard is released."""
-        import asyncio
 
         from ptc_agent.agent.middleware.compaction import compact as compact_mod
 
         mw, signals = self._make_middleware(monkeypatch)
         cancelled: list[bool] = []
-
-        async def _hang(*args, **kwargs):
-            try:
-                await asyncio.sleep(10)
-            except asyncio.CancelledError:
-                cancelled.append(True)
-                raise
-
-        mw._summarizer.model.ainvoke = _hang
+        mw._summarizer.model.astream = _hanging(cancelled)
         monkeypatch.setattr(compact_mod, "get_compaction_timeout", lambda: 0.01)
 
         summary = await self._summarize(mw)
@@ -586,6 +583,63 @@ class TestCompactWindowClose:
         assert cancelled
         assert summary.source == "server"
         assert [(a, s) for a, s, _ in signals][-1] == ("summarize", "complete")
+
+
+class TestSummaryFallback:
+    """When the summary model fails, the agent's own model is tried if it is
+    another one, as the summarizer's fallback when that is the same model at
+    the summary level. If it is the summary model, the summarizer's fallback
+    is tried, since the same model would fail again."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("agent", "expected"),
+        [
+            ("summary", "from the summarizer's fallback"),
+            ("other", "from the agent's model"),
+            ("turn", "from the summarizer's fallback"),
+        ],
+    )
+    async def test_the_next_model_tried(self, monkeypatch, agent, expected):
+        from ptc_agent.agent.middleware.compaction import compact as compact_mod
+        from ptc_agent.agent.middleware.compaction.compact import Summarizer
+        from ptc_agent.agent.middleware.compaction.middleware import (
+            CompactionMiddleware,
+        )
+
+        async def _passthrough(backend, messages, **kwargs):
+            return messages
+
+        monkeypatch.setattr(compact_mod, "aoffload_base64_content", _passthrough)
+        def labelled(model, name):
+            model.model_name = name
+            return model
+
+        summary_model = labelled(_summary_model(error=RuntimeError("upstream down")), "picked")
+        mw = CompactionMiddleware(
+            Summarizer(
+                summary_model,
+                limit=100_000,
+                counter=lambda msgs: sum(len(str(m.content)) for m in msgs),
+                fallback=labelled(_summary_model("from the summarizer's fallback"), "turn-model"),
+            ),
+            token_threshold=100_000,
+            keep_messages=5,
+        )
+        monkeypatch.setattr(mw, "_emit_context_signal", lambda *a, **k: None)
+        messages = [HumanMessage(content="hi", id="h")]
+        agent_model = {
+            "summary": summary_model,
+            "other": labelled(_summary_model("from the agent's model"), "other-model"),
+            # The same model at the turn's own level: the summary-level copy runs.
+            "turn": labelled(_summary_model("from the agent's model"), "turn-model"),
+        }[agent]
+        request = SimpleNamespace(messages=messages, model=agent_model, state={})
+
+        summary = (await mw._compact(request, messages, 1, None)).summary
+
+        assert summary.source == "fallback"
+        assert expected in summary.text
 
 
 class TestMaybeDisableStreaming:

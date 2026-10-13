@@ -150,7 +150,16 @@ export function useChatMessages(
   // false | 'starting' (generic cold start) | 'archived' (slow ~90s restore from cold storage).
   // Widen this union when backend adds a new sandbox_state discriminator.
   const [workspaceStarting, setWorkspaceStarting] = useState<false | 'starting' | 'archived'>(false);
-  const [isCompacting, setIsCompacting] = useState<string | false>(false);  // Context compaction in progress (summarize/offload)
+  const [isCompacting, setIsCompactingState] = useState<string | false>(false);  // Context compaction in progress (summarize/offload)
+  // About how many tokens the summary being written has written, null until
+  // the server first says.
+  const [compactionTokens, setCompactionTokens] = useState<number | null>(null);
+  // A compaction that starts or ends starts its count over, so a count never
+  // carries into the next one, nor onto a manual /compact, which sends none.
+  const setIsCompacting = useCallback((value: string | false) => {
+    setIsCompactingState(value);
+    setCompactionTokens(null);
+  }, []);
   // Transient model-resilience status (retry / fallback) shown as a pill above
   // the input while streaming. Mirrored in a ref so the clear can be
   // ref-guarded — avoids a setState on every streamed chunk once it's already
@@ -632,6 +641,7 @@ export function useChatMessages(
     setIsLoadingHistory,
     setHistoryLoadFailed,
     setIsCompacting,
+    setCompactionTokens,
     setMessageError,
     setFallbackSuggestion,
     setThreadModels,
@@ -3386,6 +3396,7 @@ export function useChatMessages(
     workspaceStarting,
     isCompacting,
     setIsCompacting,
+    compactionTokens,
     queuedSend,
     isLoadingHistory,
     historyLoadFailed,

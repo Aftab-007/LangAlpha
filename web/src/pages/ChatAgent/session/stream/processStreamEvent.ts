@@ -468,6 +468,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         setTokenUsage: rt.setTokenUsage,
         live: true,
         setIsCompacting: rt.setIsCompacting,
+        setCompactionTokens: rt.setCompactionTokens,
         insertNotification: deps.insertNotification,
         t: rt.t,
         offloadBatch: rt.offloadBatchRef,

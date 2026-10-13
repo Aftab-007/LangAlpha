@@ -860,10 +860,11 @@ async def list_models():
             # One source with the default-model reassignment on preference
             # writes, so "threads on the old default" means what the composer showed.
             **system_default_models(),
-            "compaction_model": (llm_cfg.compaction_name or "") if llm_cfg else "",
+            # Blank: a summary runs on the model each turn runs.
+            "compaction_model": (llm_cfg.compaction or "") if llm_cfg else "",
             # Legacy alias for cached frontend bundles / third-party clients that
             # still read the pre-rename key. Remove once clients have cycled.
-            "summarization_model": (llm_cfg.compaction_name or "") if llm_cfg else "",
+            "summarization_model": (llm_cfg.compaction or "") if llm_cfg else "",
             "fetch_model": (llm_cfg.fetch_name or "") if llm_cfg else "",
             "fallback_models": (llm_cfg.fallback or []) if llm_cfg else [],
             # Null for "auto". A pin sits between the account value and the

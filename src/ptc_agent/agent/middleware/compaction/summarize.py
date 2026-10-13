@@ -9,22 +9,29 @@ the compaction to try again next turn would only pay the same failures again
 while the next turn waits on admission.
 
 Shared by the automatic path and manual /compact, so both end the same way.
+
+A model's reply is streamed rather than awaited whole, so a model still
+writing is not cut off at a fixed share of the budget, and a reader watching
+the compaction sees a count of what it has written. The call is tagged
+``nostream``, which keeps its chunks out of the turn's own message stream,
+where they would read as the answer, while the callbacks that bill and trace
+it still see it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import aclosing
 from dataclasses import dataclass
 from itertools import groupby
 from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langchain_core.runnables.base import RunnableBindingBase
+from langgraph.constants import TAG_NOSTREAM
 
-from src.llms import maybe_disable_streaming
 from src.llms.content_utils import format_llm_content
 
 from ptc_agent.agent.middleware.compaction.model import max_input_tokens
@@ -45,8 +52,15 @@ logger = logging.getLogger(__name__)
 SummarySource = Literal["model", "fallback", "server"]
 
 #: The summary model's share of the budget when another model waits behind
-#: it, so a hung summary model still leaves the fallback a real call.
+#: it, so a hung summary model still leaves the fallback a real call. A
+#: model still writing at the end of its share goes on: what it wrote would
+#: be lost, and the fallback would start over in what is left.
 _FIRST_SHARE = 2 / 3
+#: How long a model that has begun writing may go without a chunk past its
+#: share before it is taken for hung. Mid-summary gaps measure seconds.
+_STALL_S = 60.0
+#: How often the running count of what the summary has written is reported.
+_PROGRESS_EVERY_S = 2.0
 #: Room kept in a model's window for the instructions, the transcript index
 #: and the summary it writes back.
 _WINDOW_RESERVE = 16_000
@@ -83,6 +97,8 @@ class Summary:
 #: Given the most tokens a model's window leaves for the history (None when
 #: it does not say), the messages it is sent and the request built from them.
 Prepare = Callable[[int | None], Awaitable[tuple[list[AnyMessage], list[AnyMessage]]]]
+#: Told about how many tokens the summary has written so far.
+Progress = Callable[[int], None]
 
 
 def model_label(model: Any) -> str | None:
@@ -136,24 +152,35 @@ async def awrite_summary(
     prepare: Prepare,
     server: Callable[[], Summary],
     budget: float,
+    progress: Progress | None = None,
 ) -> Summary:
     """The summary model's summary, else ``fallback``'s, else the server's.
 
     The whole chain fits ``budget``, about as long as admission holds the
     next turn, including preparing each request, which uploads attachments
-    to the sandbox. Only a cancellation escapes; every other failure moves on.
+    to the sandbox. ``progress`` hears every few seconds about how many
+    tokens have been written. Only a cancellation escapes; every other
+    failure moves on.
     """
-    deadline = time.monotonic() + budget
-    has_fallback = is_other_model(model, fallback)
-    for source, candidate in _candidates(model, fallback if has_fallback else None):
-        remaining = deadline - time.monotonic()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + budget
+    candidates = [("model", model)]
+    if is_other_model(model, fallback):
+        candidates.append(("fallback", fallback))
+    for source, candidate in candidates:
+        remaining = deadline - loop.time()
         if remaining <= 0:
             logger.warning("[Compaction] no time left for the %s summary", source)
             break
-        timeout = remaining * _FIRST_SHARE if source == "model" and has_fallback else remaining
+        share = remaining * _FIRST_SHARE if len(candidates) > 1 and source == "model" else remaining
         try:
-            covered, response = await asyncio.wait_for(
-                _attempt(prepare, candidate), timeout=timeout
+            # Each attempt counts from zero: the count is the summary's size.
+            covered, response = await _attempt(
+                prepare,
+                candidate,
+                quiet_until=loop.time() + share,
+                deadline=deadline,
+                written=_Written(progress),
             )
             return Summary(_checked(response), source, covered)
         except Exception as e:
@@ -161,9 +188,56 @@ async def awrite_summary(
     return _server(server)
 
 
-async def _attempt(prepare: Prepare, model: Any) -> tuple[list[AnyMessage], Any]:
-    covered, request = await prepare(_room(model))
-    return covered, await model.ainvoke(request)
+async def _attempt(
+    prepare: Prepare, model: Any, *, quiet_until: float, deadline: float, written: _Written
+) -> tuple[list[AnyMessage], Any]:
+    """``model``'s reply, held to ``quiet_until`` until it begins writing,
+    then past it to ``deadline`` for as long as its chunks keep coming."""
+    loop = asyncio.get_running_loop()
+    response = None
+    writing = False
+    async with asyncio.timeout_at(quiet_until) as limit:
+        covered, request = await prepare(_room(model))
+        stream = model.astream(request, config={"tags": [TAG_NOSTREAM]})
+        async with aclosing(stream) as chunks:
+            async for chunk in chunks:
+                response = chunk if response is None else response + chunk
+                writing = written.add(chunk) or writing
+                if writing:
+                    limit.reschedule(max(quiet_until, min(deadline, loop.time() + _STALL_S)))
+    if response is None:
+        raise ValueError("no reply")
+    return covered, response
+
+
+class _Written:
+    """About how many tokens a summary has written, reported to ``progress``
+    every few seconds rather than per chunk, which is several a second."""
+
+    def __init__(self, progress: Progress | None) -> None:
+        self.tokens = 0
+        self._progress = progress
+        self._reported: float | None = None
+
+    def add(self, chunk: Any) -> bool:
+        """Count ``chunk``, and say whether it holds text or reasoning the
+        model wrote, rather than the opening role or the closing usage."""
+        parts = format_llm_content(chunk.content, getattr(chunk, "additional_kwargs", None))
+        chars = len(parts.get("text") or "") + len(parts.get("reasoning") or "")
+        if not (chars or chunk.content):
+            return False
+        # A chunk is about a token, in any script and for reasoning a
+        # provider hides; one carrying more counts by its length.
+        self.tokens += max(1, chars // 4)
+        now = asyncio.get_running_loop().time()
+        # The first report waits a few seconds into the writing, so the count
+        # opens on a size rather than on one token.
+        if self._reported is None:
+            self._reported = now
+        elif self._progress is not None and now - self._reported >= _PROGRESS_EVERY_S:
+            self._reported = now
+            self._progress(self.tokens)
+        return chars > 0
 
 
 def summary_text(response: Any) -> str:
@@ -242,21 +316,6 @@ def server_summary(
         "server",
         [m for m in to_summarize if m.id in covered],
     )
-
-
-def _candidates(model: Any, fallback: Any | None):
-    yield "model", model
-    if fallback is None:
-        return
-    # A copy with streaming off, made only when it is needed: the turn's own
-    # client is shared, and its chunks would stream as the answer.
-    try:
-        copy = fallback.model_copy() if hasattr(fallback, "model_copy") else fallback
-        maybe_disable_streaming(copy)
-    except Exception as e:
-        _log_failure("fallback", fallback, e)
-        return
-    yield "fallback", copy
 
 
 def _room(model: Any) -> int | None:

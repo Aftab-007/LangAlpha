@@ -21,7 +21,8 @@ from langchain_core.messages import AnyMessage
 from langchain.chat_models import BaseChatModel
 
 from src.config.settings import get_compaction_timeout
-from src.llms import get_llm_by_type, maybe_disable_streaming
+from src.llms import LLM, create_llm
+from src.llms.model_spec import summary_reasoning_effort
 
 from ptc_agent.agent.state import ensure_message_ids
 from ptc_agent.agent.middleware.compaction.types import (
@@ -34,8 +35,10 @@ from ptc_agent.agent.middleware.compaction.summary_request import (
     build_summary_request,
 )
 from ptc_agent.agent.middleware.compaction.summarize import (
+    Progress,
     Summary,
     awrite_summary,
+    is_other_model,
     preparer,
     server_summary,
 )
@@ -60,6 +63,7 @@ from ptc_agent.agent.middleware.compaction.offloading import (
     tool_call_ids,
 )
 from ptc_agent.agent.transcript import TranscriptTarget, Window
+from ptc_agent.config.agent import CredentialSource
 from ptc_agent.agent.transcript.pointer import (
     TranscriptTurns,
     aexport_transcript,
@@ -123,17 +127,24 @@ class Summarizer:
     limit: int
     #: How tokens are counted, for the threshold and for trimming.
     counter: TokenCounter = count_tokens_tiktoken
+    #: The model a summary falls back to, at the summary level: the turn's
+    #: model when one picked for compaction writes it, else the model the
+    #: turn falls back to.
+    fallback: BaseChatModel | None = None
 
     @classmethod
     def for_agent(cls, config: AgentConfig) -> Summarizer:
         """The client ``resolve_compaction_client`` picks, else the named
-        compaction model, with streaming off so its chunks never stream as
-        the answer."""
-        model = resolve_compaction_client(config) or get_llm_by_type(
-            (config.llm.compaction_name if config.llm else None) or ""
+        compaction model at the summary level."""
+        model = resolve_compaction_client(config)
+        if model is None:
+            name = (config.llm.compaction_name if config.llm else None) or ""
+            model = _at_summary_level(name)
+        return cls(
+            model,
+            config.compaction.token_threshold + _SUMMARY_HEADROOM,
+            fallback=_summary_fallback(config),
         )
-        maybe_disable_streaming(model)
-        return cls(model, config.compaction.token_threshold + _SUMMARY_HEADROOM)
 
     async def compact(
         self,
@@ -148,10 +159,12 @@ class Summarizer:
         thread_id: str | None = None,
         notes_dir: str | None = None,
         window: Window,
+        progress: Progress | None = None,
     ) -> Compaction:
         """Summarize ``view`` before ``cutoff``, ``messages`` being the
         agent's checkpoint list (what ``window`` trimmed of it aside), from
-        this model, ``fallback`` or the server (see ``summarize``).
+        this model, then the next one (see ``_next``), then the server (see
+        ``summarize``).
 
         The transcript is saved first: the summary cites its turn files and
         ends pointing at it only if that save lands and ``workspace_id``'s
@@ -159,6 +172,7 @@ class Summarizer:
         compaction timeout, so the save counts against it too. The notes in
         ``notes_dir``, the main agent's scratchpad, are listed while the
         summary is written, and the summary names them after its pointer.
+        ``progress`` hears how much of the summary has been written.
         """
         to_summarize, preserved = partition_at_cutoff(view, cutoff)
         started = time.monotonic()
@@ -185,7 +199,7 @@ class Summarizer:
         try:
             summary = await awrite_summary(
                 model=self.model,
-                fallback=fallback,
+                fallback=self._next(fallback),
                 prepare=preparer(
                     to_summarize, limit=self.limit, counter=self.counter, render=render
                 ),
@@ -197,6 +211,7 @@ class Summarizer:
                     window=window,
                 ),
                 budget=remaining,
+                progress=progress,
             )
             notes = await listing
         finally:
@@ -212,6 +227,17 @@ class Summarizer:
             notes=notes,
         )
         return Compaction(event, summary, len(view), preserved)
+
+    def _next(self, agent_model: Any) -> Any | None:
+        """The model tried after this one: the agent's own when it is another
+        model, as this summarizer's fallback when that is the same model at
+        the summary level; else this summarizer's fallback, since the same
+        model would most likely fail again."""
+        if not is_other_model(self.model, agent_model):
+            return self.fallback
+        if self.fallback is not None and not is_other_model(agent_model, self.fallback):
+            return self.fallback
+        return agent_model
 
 
 def build_summary_event(
@@ -313,6 +339,29 @@ async def compact_messages(
         notes_dir=notes_dir,
         window=Window.of(state),
     )
+
+
+def _at_summary_level(name: str) -> BaseChatModel:
+    efforts = LLM.get_model_config().get_reasoning_efforts(name)
+    return create_llm(name, reasoning_effort=summary_reasoning_effort(efforts))
+
+
+def _summary_fallback(config: AgentConfig) -> BaseChatModel | None:
+    """The role's client, else the turn's first fallback model built by name,
+    except for a user on their own key or subscription, whose summary never
+    moves to a platform key."""
+    client = config.client_for_role("compaction_fallback")
+    names = (config.llm.fallback if config.llm else None) or []
+    if client is not None or not names or config.credential_source in (
+        CredentialSource.OAUTH,
+        CredentialSource.BYOK,
+    ):
+        return client
+    try:
+        return _at_summary_level(names[0])
+    except Exception as e:
+        logger.warning("[Compaction] no fallback model for summaries (%s)", type(e).__name__)
+        return None
 
 
 def _main_client(config: AgentConfig) -> BaseChatModel | None:

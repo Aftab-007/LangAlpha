@@ -12,6 +12,7 @@ Covers:
 - Custom model with BYOK disabled falls back to system default
 """
 
+from collections import Counter
 from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -951,15 +952,20 @@ class TestTuningReachesEveryClient:
     """
 
     @staticmethod
-    def _tuning_by_model(mock_oauth):
-        """What each model was offered, keyed by model name."""
-        return {
-            call.args[1]: {
+    def _offers_by_model(mock_oauth):
+        """Every tuning each model was offered, in call order, keyed by name.
+
+        The main client resolves first, before the roles. A model can be
+        offered twice: the compaction role runs the turn's model, and
+        ``compaction_fallback`` the turn's first fallback, at the summary level.
+        """
+        offers: dict = {}
+        for call in mock_oauth.call_args_list:
+            offers.setdefault(call.args[1], []).append({
                 "reasoning_effort": call.args[2],
                 "service_tier": call.kwargs.get("service_tier"),
-            }
-            for call in mock_oauth.call_args_list
-        }
+            })
+        return offers
 
     @pytest.mark.asyncio
     async def test_a_fallback_is_tuned_for_itself_not_for_the_model_it_replaces(
@@ -994,13 +1000,15 @@ class TestTuningReachesEveryClient:
         ):
             await resolve_llm_config(base_config, "user-1", None, False)
 
-        seen = self._tuning_by_model(mock_oauth)
-        assert seen["system-default-model"] == {
+        offers = self._offers_by_model(mock_oauth)
+        assert offers["system-default-model"][0] == {
             "reasoning_effort": "high", "service_tier": "priority",
         }
         # The spare said it is not fast. Standing in for a fast model does not
-        # change that, and it must not be billed as though it did.
-        assert seen["spare"] == {"reasoning_effort": "low", "service_tier": None}
+        # change that, and it must not be billed as though it did, as the turn's
+        # fallback or as the summary's.
+        assert {"reasoning_effort": "low", "service_tier": None} in offers["spare"]
+        assert all(offer["service_tier"] is None for offer in offers["spare"])
 
     @pytest.mark.asyncio
     async def test_a_fallback_still_takes_the_turns_own_override(self, base_config):
@@ -1034,7 +1042,10 @@ class TestTuningReachesEveryClient:
                 base_config, "user-1", None, False, reasoning_effort="high"
             )
 
-        assert self._tuning_by_model(mock_oauth)["spare"]["reasoning_effort"] == "high"
+        # The summary's fallback runs the spare at the summary level, which
+        # this ladder-less mock leaves unset; the override is not the summary's.
+        efforts = [offer["reasoning_effort"] for offer in self._offers_by_model(mock_oauth)["spare"]]
+        assert Counter(efforts) == Counter(["high", None])
 
     @pytest.mark.asyncio
     async def test_a_subagent_runs_its_own_models_level_not_the_requests(
@@ -1075,11 +1086,10 @@ class TestTuningReachesEveryClient:
                 base_config, "user-1", None, False, reasoning_effort="high"
             )
 
-        seen = self._tuning_by_model(mock_oauth)
-        assert seen["system-default-model"]["reasoning_effort"] == "high"
-        assert seen["sub-model"]["reasoning_effort"] == "medium"
+        offers = self._offers_by_model(mock_oauth)
+        assert offers["system-default-model"][0]["reasoning_effort"] == "high"
         # Priority is bought per call; one fast turn must not become N.
-        assert seen["sub-model"]["service_tier"] is None
+        assert offers["sub-model"] == [{"reasoning_effort": "medium", "service_tier": None}]
 
 
 # ---------------------------------------------------------------------------
@@ -1377,6 +1387,7 @@ class TestBlankFetchFollowsFlash:
     async def test_blank_yaml_fetch_follows_the_users_flash(self):
         """Through the real loader: ``fetch: ""`` in agent_config.yaml must not
         pin the deployment's flash, or the user's flash never reaches the role.
+        ``compaction: ""`` follows the model the turn runs.
         """
         from ptc_agent.config.loaders import load_from_dict
 
@@ -1402,9 +1413,9 @@ class TestBlankFetchFollowsFlash:
         )
 
         assert config.llm.fetch_name == "flash-oauth"
-        assert config.llm.compaction_name == "flash-oauth"
+        assert config.llm.compaction_name == "main-oauth"
         assert config.subsidiary_llm_clients["fetch"]._extract_mock_name() == "oauth:flash-oauth"
-        assert config.subsidiary_llm_clients["compaction"]._extract_mock_name() == "oauth:flash-oauth"
+        assert config.subsidiary_llm_clients["compaction"]._extract_mock_name() == "oauth:main-oauth"
 
     @pytest.mark.asyncio
     async def test_platform_user_keeps_the_name_path(self):

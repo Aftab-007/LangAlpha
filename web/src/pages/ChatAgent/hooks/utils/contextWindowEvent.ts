@@ -63,11 +63,20 @@ function withoutServerTotals(prev: TokenUsage | null): TokenUsage | null {
  * @param {Function} callbacks.t - i18n translation function
  * @param {React.MutableRefObject} callbacks.offloadBatch - Mutable ref for batching offload events
  */
-function handleContextWindowEvent(event: SSEEvent, { getMsgId, nextOrder, setMessages, setTokenUsage, live, setIsCompacting, insertNotification, t, offloadBatch }: ContextWindowCallbacks): void {
+function handleContextWindowEvent(event: SSEEvent, { getMsgId, nextOrder, setMessages, setTokenUsage, live, setIsCompacting, setCompactionTokens, insertNotification, t, offloadBatch }: ContextWindowCallbacks): void {
   const action = event.action;
 
   if (action === 'token_usage') {
     setTokenUsage((prev) => applyCallUsage(prev, event, live));
+    return;
+  }
+
+  // A running count while the summary is written. Its own action rather than
+  // a summarize signal, which a build from before it reads as the end.
+  if (action === 'summary_progress') {
+    if (setIsCompacting && typeof event.summary_tokens === 'number') {
+      setCompactionTokens?.(event.summary_tokens);
+    }
     return;
   }
 

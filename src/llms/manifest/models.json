@@ -579,7 +579,7 @@
         "high",
         "max"
       ],
-      "default": "max",
+      "default": "high",
       "write": "extra_body.reasoning_effort",
       "on": {
         "extra_body.thinking.clear_thinking": false,
@@ -616,7 +616,7 @@
         "high",
         "max"
       ],
-      "default": "max",
+      "default": "high",
       "write": "extra_body.reasoning_effort"
     }
   },
@@ -648,7 +648,7 @@
         "high",
         "max"
       ],
-      "default": "max",
+      "default": "high",
       "write": "extra_body.reasoning_effort"
     }
   },
@@ -672,7 +672,7 @@
         "high",
         "max"
       ],
-      "default": "max",
+      "default": "high",
       "write": "extra_body.reasoning_effort",
       "on": {
         "extra_body.thinking.clear_thinking": false,
@@ -709,7 +709,7 @@
         "high",
         "max"
       ],
-      "default": "max",
+      "default": "high",
       "write": "extra_body.reasoning_effort"
     }
   },
@@ -741,7 +741,7 @@
         "high",
         "max"
       ],
-      "default": "max",
+      "default": "high",
       "write": "extra_body.reasoning_effort"
     }
   },
@@ -795,7 +795,7 @@
         "xhigh",
         "max"
       ],
-      "default": "xhigh",
+      "default": "medium",
       "write": "parameters.reasoning.effort"
     }
   },
@@ -871,7 +871,7 @@
         "xhigh",
         "max"
       ],
-      "default": "xhigh",
+      "default": "medium",
       "write": "parameters.reasoning.effort"
     }
   },
@@ -943,8 +943,8 @@
         "high",
         "max"
       ],
-      "default": "max",
-      "write": "extra_body.reasoning_effort"
+      "default": "high",
+      "write": "parameters.output_config.effort"
     }
   },
   "kimi-k3-coding": {

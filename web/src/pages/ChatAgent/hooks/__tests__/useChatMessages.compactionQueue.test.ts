@@ -298,6 +298,57 @@ describe('useChatMessages – queued send during compaction', () => {
     });
   });
 
+  it('keeps a Send parked while the summary reports progress, and shows its count', async () => {
+    // A progress event is not the summary's end: it must leave isCompacting
+    // set, or the parked message would go out into the context being rewritten.
+    // The count rides an action of its own, as the server sends it.
+    const hang = deferred<{ disconnected: boolean }>();
+    let emit: OnEvent = () => {};
+    mockSendStream.mockImplementation(
+      async (_msg: string, _ws: string, _tid: string | null, { onEvent }: { onEvent: OnEvent }) => {
+        if (mockSendStream.mock.calls.length === 1) {
+          emit = onEvent;
+          onEvent({ event: 'thread_id', thread_id: 'thread-progress' });
+          return hang.promise;
+        }
+        return { disconnected: false };
+      },
+    );
+    const { result } = renderHookWithProviders(() => useChatMessages('ws-test'));
+
+    let firstSend: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      firstSend = result.current.handleSendMessage('long task');
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(true));
+
+    const summarize = { event: 'context_window', agent: 'main', action: 'summarize' };
+    act(() => {
+      emit({ ...summarize, signal: 'start' });
+      emit({ event: 'context_window', agent: 'main', action: 'summary_progress', signal: 'progress', summary_tokens: 2400 });
+    });
+    expect(result.current.isCompacting).toBe('summarize');
+    expect(result.current.compactionTokens).toBe(2400);
+
+    await act(async () => {
+      await result.current.handleSendMessage('while it summarizes');
+    });
+    expect(result.current.queuedSend).toBe('while it summarizes');
+    expect(mockSendStream).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      emit({ ...summarize, signal: 'complete', original_message_count: 40, summary_text: 'summary' });
+    });
+    expect(result.current.isCompacting).toBe(false);
+    expect(result.current.compactionTokens).toBeNull();
+
+    hang.resolve({ disconnected: false });
+    await act(async () => {
+      await firstSend.catch(() => undefined);
+    });
+  });
+
   it('clears the parked queue + compacting flag on thread switch (no cross-thread replay)', async () => {
     // A message parked during compaction on thread A must not survive a switch
     // to thread B: the queue payload, the preview chip, and the compacting flag

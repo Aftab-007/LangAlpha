@@ -85,8 +85,9 @@ export default function DefaultsStep() {
 
     try {
       // Leave unset rather than pinning to today's flash pick: the server
-      // resolves a blank compaction/fetch model from the flash/background
-      // model at turn time, so a later change in Settings keeps following it.
+      // resolves a blank fetch model from the flash/background model, and a
+      // blank compaction model from the conversation's own, at turn time, so a
+      // later change in Settings keeps following it.
       const compaction = advancedModels.compactionModel || null;
       const fetchModel = advancedModels.fetchModel || null;
 
@@ -217,7 +218,7 @@ export default function DefaultsStep() {
                   value={advancedModels.compactionModel}
                   onChange={(v) => handleAdvancedChange({ compactionModel: v })}
                   models={models}
-                  placeholder={copy.defaultsToBackground}
+                  placeholder={copy.defaultsToConversation}
                   modelAccess={modelAccessMap}
                   metadata={metadata}
                 />

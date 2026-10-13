@@ -488,7 +488,7 @@ class RunSSEProducer:
                             for key in ("action", "signal", "input_tokens", "output_tokens",
                                         "total_tokens", "summary_length", "summary_text",
                                         "original_message_count", "source",
-                                        "truncated_count", "error",
+                                        "summary_tokens", "truncated_count", "error",
                                         "kind", "offloaded_args", "offloaded_reads"):
                                 if key in event_data:
                                     cw_data[key] = event_data[key]
@@ -514,7 +514,13 @@ class RunSSEProducer:
                                 f"[CONTEXT_WINDOW] Emitting {action}/{signal} "
                                 f"(thread_id={self.thread_id})"
                             )
-                            yield self._build_sse_event("context_window", cw_data)
+                            # A summary's running count is live only, like
+                            # ``model_retry``: a reload shows the summary.
+                            yield self._build_sse_event(
+                                "context_window",
+                                cw_data,
+                                accumulate=action != "summary_progress",
+                            )
                             continue
 
                         # Handle provenance records (data the agent accessed).

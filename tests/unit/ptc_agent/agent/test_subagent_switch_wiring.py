@@ -41,7 +41,7 @@ def _build(**kwargs) -> dict:
     with (
         patch.object(AgentConfig, "get_llm_client", return_value=llm),
         patch(
-            "ptc_agent.agent.middleware.compaction.compact.get_llm_by_type",
+            "ptc_agent.agent.middleware.compaction.compact.create_llm",
             return_value=llm,
         ),
         patch("ptc_agent.agent.agent.create_agent", side_effect=fake_create_agent),

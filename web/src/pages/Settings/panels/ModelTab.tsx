@@ -411,7 +411,7 @@ export function ModelTab() {
                     summarization_model: null,
                   })}
                   models={visibleModels}
-                  placeholder={modelSlotCopy.defaultsToBackground}
+                  placeholder={modelSlotCopy.defaultsToConversation}
                   modelAccess={modelAccessMap}
                   metadata={modelMetadata}
                 />

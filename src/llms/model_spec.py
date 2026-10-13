@@ -53,6 +53,18 @@ def default_reasoning_effort(
     return efforts[len(efforts) // 2]
 
 
+def summary_reasoning_effort(efforts: tuple[str, ...] | list[str]) -> str | None:
+    """The level a compaction summary runs at: ``medium``, else ``high``.
+
+    A summary reads a long stretch of history inside a fixed time budget, so
+    it takes neither the model's default, which can be its deepest level, nor
+    a level picked for conversations: at its deepest a model can reason for
+    minutes before writing a word of the summary. A ladder offering neither
+    leaves the model's own default.
+    """
+    return next((level for level in ("medium", "high") if level in efforts), None)
+
+
 def reasoning_block(entry: dict | None) -> dict:
     """One model's reasoning declaration, from either shape it may be stored in.
 

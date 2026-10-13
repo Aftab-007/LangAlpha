@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Clock, Info } from 'lucide-react';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import { Loader } from '@/components/ui/loader';
+import { compactNumber } from '@/lib/format';
+import { useLocale } from '@/hooks/useLocale';
 import type { ModelStatus } from '../../session/types';
 import type { RetiredModel } from '../../hooks/useThreadModel';
 import type { WarmingDisplay } from '../../utils/warmWorkspace';
@@ -20,6 +22,8 @@ interface TranscriptStatusProps {
   retired: RetiredModel | null;
   workspaceStarting: WarmingDisplay;
   isCompacting: string | false;
+  /** About how many tokens the summary being written has written. */
+  compactionTokens: number | null;
   queuedSend: string | false;
   /** The thread whose due automations wait for its turn to end. */
   threadId: string;
@@ -40,20 +44,31 @@ export function TranscriptStatus({
   retired,
   workspaceStarting,
   isCompacting,
+  compactionTokens,
   queuedSend,
   threadId,
   active,
 }: TranscriptStatusProps): React.ReactElement {
   const { t } = useTranslation();
+  const locale = useLocale();
   return (
     <div data-transcript-status className="flex flex-col not-empty:pt-3">
       <ModelStatusPill modelStatus={modelStatus} isLoading={isLoading} />
       {retired && <RetiredModelNotice {...retired} />}
       {workspaceStarting && <WorkspaceStartingLine archived={workspaceStarting === 'archived'} />}
       {isCompacting && (
-        <StatusLine glyph={<Loader size={14} className="text-(--color-accent-primary)" />}>
-          {t(isCompacting === 'offload' ? 'chat.offloading' : 'chat.compacting')}
-        </StatusLine>
+        <div className="flex items-center gap-2">
+          <StatusLine glyph={<Loader size={14} className="text-(--color-accent-primary)" />}>
+            {t(isCompacting === 'offload' ? 'chat.offloading' : 'chat.compacting')}
+          </StatusLine>
+          {/* Beside the live region rather than in it, which would read the
+              count out every time it moves; a screen reader still reaches it. */}
+          {isCompacting === 'summarize' && compactionTokens != null && (
+            <span className="text-xs tabular-nums" style={{ color: 'var(--color-text-quaternary)' }}>
+              {t('chat.compactingTokens', { value: compactNumber(compactionTokens, locale) })}
+            </span>
+          )}
+        </div>
       )}
       {queuedSend && (
         <StatusLine

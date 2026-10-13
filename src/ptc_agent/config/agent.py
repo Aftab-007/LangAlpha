@@ -219,12 +219,14 @@ class LLMConfig(BaseModel):
         """
         return self.flash or self.name
 
-    # Blank compaction/fetch mean "whatever flash is for this turn". Resolved on
-    # read, not at load: a user's flash preference replaces ``flash`` per turn,
-    # and a value baked in at load would keep the deployment's flash instead.
+    # Blank fetch means "whatever flash is for this turn". Resolved on read, not
+    # at load: a user's flash preference replaces ``flash`` per turn, and a
+    # value baked in at load would keep the deployment's flash instead. Blank
+    # compaction means the model the turn runs, which a server turn writes in
+    # (``select_model``); read here it is the PTC model.
     @property
     def compaction_name(self) -> str | None:
-        return self.compaction or self.flash
+        return self.compaction or self.name
 
     @property
     def fetch_name(self) -> str | None:
@@ -591,10 +593,9 @@ class AgentConfig(BaseModel):
         """Return the pre-resolved client for a role, or None.
 
         Roles: "compaction", "fetch", "subagent:<name>". Returns a
-        ``.model_copy()`` so role-local mutation (e.g. compaction setting
-        ``streaming=False``) never touches the shared main client. With
-        ``fallback_to_main=True`` and no role client, returns a copy of the
-        main client when one exists.
+        ``.model_copy()`` so role-local mutation never touches the shared
+        main client. With ``fallback_to_main=True`` and no role client,
+        returns a copy of the main client when one exists.
         """
         c = self.subsidiary_llm_clients.get(role)
         if c is not None:

@@ -89,7 +89,7 @@ export interface HistoryRuntime {
   setMessages: SetMessages;
   setIsLoadingHistory: React.Dispatch<React.SetStateAction<boolean>>;
   setHistoryLoadFailed: React.Dispatch<React.SetStateAction<boolean>>;
-  setIsCompacting: React.Dispatch<React.SetStateAction<string | false>>;
+  setIsCompacting: (value: string | false) => void;
   setMessageError: React.Dispatch<React.SetStateAction<string | StructuredError | null>>;
   setFallbackSuggestion: React.Dispatch<React.SetStateAction<FallbackSuggestion | null>>;
   setThreadModels: React.Dispatch<React.SetStateAction<string[]>>;
@@ -146,7 +146,8 @@ export interface StreamRuntime {
   setPendingInterrupt: React.Dispatch<React.SetStateAction<PendingInterrupt | null>>;
   setTokenUsage: React.Dispatch<React.SetStateAction<TokenUsage | null>>;
   setMessageError: React.Dispatch<React.SetStateAction<string | StructuredError | null>>;
-  setIsCompacting: React.Dispatch<React.SetStateAction<string | false>>;
+  setIsCompacting: (value: string | false) => void;
+  setCompactionTokens: (tokens: number | null) => void;
   setFallbackSuggestion: React.Dispatch<React.SetStateAction<FallbackSuggestion | null>>;
   setReturnedSteering: React.Dispatch<React.SetStateAction<string | null>>;
   setThreadId: React.Dispatch<React.SetStateAction<string>>;
@@ -192,7 +193,7 @@ export interface RecoveryRuntime {
   setIsReconnecting: React.Dispatch<React.SetStateAction<boolean>>;
   setMessageError: React.Dispatch<React.SetStateAction<string | StructuredError | null>>;
   setWorkspaceStarting: React.Dispatch<React.SetStateAction<false | 'starting' | 'archived'>>;
-  setIsCompacting: React.Dispatch<React.SetStateAction<string | false>>;
+  setIsCompacting: (value: string | false) => void;
   setHasActiveSubagents: React.Dispatch<React.SetStateAction<boolean>>;
   setReloadTrigger: React.Dispatch<React.SetStateAction<number>>;
   // stable containers, ref-current reads — owned by this lane

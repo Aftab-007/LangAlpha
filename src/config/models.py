@@ -82,7 +82,7 @@ class BackgroundExecutionConfig(BaseModel):
         default=10.0, description="Timeout (seconds) for checkpoint state reads/writes"
     )
     admission_compaction_wait_timeout: float = Field(
-        default=180.0,
+        default=260.0,
         gt=0,
         description=(
             "Max seconds a new turn blocks at admission for an in-progress "
@@ -100,7 +100,7 @@ class BackgroundExecutionConfig(BaseModel):
         ),
     )
     compaction_timeout: float = Field(
-        default=180.0,
+        default=240.0,
         gt=0,
         description=(
             "Wall-clock budget (seconds) for a single compaction LLM call "

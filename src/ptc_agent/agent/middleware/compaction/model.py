@@ -1,8 +1,9 @@
 """The model that writes a compaction summary, and the window it declares.
 
-The summary runs on the compaction model, by default the Background model,
-whose window can be far smaller than that of the turn's model whose history it
-reads, so ``summarize`` sizes each summary call to the model it goes to.
+The summary runs on the compaction model, by default the model the turn runs.
+A model picked for compaction can have a far smaller window than the turn's
+model whose history it reads, so ``summarize`` sizes each summary call to the
+model it goes to.
 """
 
 from __future__ import annotations
@@ -15,14 +16,13 @@ if TYPE_CHECKING:
 
 
 def resolve_compaction_client(config: AgentConfig) -> Any | None:
-    """Return the compaction LLM client (role-resolved or main-copy), or None.
-
-    With a dedicated compaction model, use the pre-resolved role client
-    (credentialed users) or None (platform users keep the cheap name-based
-    model). Without one, fall back to a copy of the main client.
-    """
-    has_compaction_model = bool(config.llm and config.llm.compaction_name)
-    return config.client_for_role("compaction", fallback_to_main=not has_compaction_model)
+    """The compaction role's pre-resolved client, or None to build the named
+    model. A client handed to the config (``AgentConfig.create``) has no name
+    to build, so with no compaction model named the summary runs on a copy of
+    it. A server turn always names one (``select_model``), so its main client,
+    at the turn's own level, is never borrowed."""
+    named = bool(config.llm and config.llm.compaction)
+    return config.client_for_role("compaction", fallback_to_main=not named)
 
 
 def max_input_tokens(model: Any) -> int | None:

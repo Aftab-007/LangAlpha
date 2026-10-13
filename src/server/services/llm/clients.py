@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from ptc_agent.config.agent import CredentialSource
+from src.llms.model_spec import (
+    canonical_reasoning_efforts,
+    reasoning_block,
+    summary_reasoning_effort,
+)
 from src.llms.preferences import resolve_tuning, resolve_turn_tuning
 
 from . import logger, user_models
@@ -550,16 +555,21 @@ async def resolve_model_client(
 class LLMRole:
     """A subsidiary model slot to resolve a client for.
 
-    ``key`` is the ``subsidiary_llm_clients`` key ("compaction" | "fetch" |
-    "subagent:<name>"). ``fallback_to_main`` controls whether a keyless role
-    inherits a copy of the main client at materialization time.
+    ``key`` is the ``subsidiary_llm_clients`` key ("compaction" |
+    "compaction_fallback" | "fetch" | "subagent:<name>"). ``fallback_to_main``
+    controls whether a keyless role inherits a copy of the main client at
+    materialization time.
 
     ``reasoning_effort`` is the role model's own resolved level, because a
-    level set on a model is a fact about that model wherever it runs.
-    ``service_tier`` stays unset by decision rather than by omission: priority
-    routing is bought per call, so honoring it here would multiply one fast
-    turn across compaction, fetch and every enabled subagent. The resolver
-    reads it off the role so that decision has one place to change.
+    level set on a model is a fact about that model wherever it runs. The
+    compaction role is the exception: a summary runs at the summary level
+    (``summary_reasoning_effort``), whatever the model is set to for
+    conversations, and so does the model a summary falls back to.
+    ``service_tier`` stays unset by decision rather than by
+    omission: priority routing is bought per call, so honoring it here would
+    multiply one fast turn across compaction, fetch and every enabled
+    subagent. The resolver reads it off the role so that decision has one
+    place to change.
     """
 
     key: str
@@ -569,10 +579,20 @@ class LLMRole:
     reasoning_effort: str | None = None
 
 
-def role_registry(config, enabled_subagents, subagent_defs, model_pref) -> list[LLMRole]:
+def _summary_effort(model_pref: dict, model: str | None) -> str | None:
+    """The level a summary runs ``model`` at, by its own effort ladder."""
+    return summary_reasoning_effort(canonical_reasoning_efforts(
+        reasoning_block(user_models.model_entry(model_pref, model)).get("efforts")
+    ))
+
+
+def role_registry(
+    config, enabled_subagents, subagent_defs, model_pref, turn_model: str | None = None,
+) -> list[LLMRole]:
     """Build the ordered list of model roles to resolve for this request.
 
-    Each role carries the tuning its own model resolves to. The turn-level
+    Each role carries the tuning its own model resolves to, compaction's
+    effort aside (see ``LLMRole``). The turn-level
     override is deliberately not applied: it names the model the composer
     picked, not whichever model a subagent happens to pin.
     """
@@ -582,8 +602,23 @@ def role_registry(config, enabled_subagents, subagent_defs, model_pref) -> list[
             reasoning_effort=resolve_tuning(model_pref, model).reasoning_effort,
         )
 
+    compaction = config.llm.compaction_name
+    # A summary written by a model picked for it falls back to the turn's
+    # model; one on the turn's own model, to the model the turn falls back to,
+    # since the main client would be the model that just failed.
+    if turn_model and compaction != turn_model:
+        summary_fallback = turn_model
+    else:
+        summary_fallback = next(iter(config.llm.fallback or []), None)
     roles = [
-        _role("compaction", config.llm.compaction_name),
+        LLMRole(
+            "compaction", compaction,
+            reasoning_effort=_summary_effort(model_pref, compaction),
+        ),
+        LLMRole(
+            "compaction_fallback", summary_fallback, fallback_to_main=False,
+            reasoning_effort=_summary_effort(model_pref, summary_fallback),
+        ),
         _role("fetch", config.llm.fetch_name),
     ]
     for name in enabled_subagents:
@@ -593,7 +628,9 @@ def role_registry(config, enabled_subagents, subagent_defs, model_pref) -> list[
     return [r for r in roles if r.model]
 
 
-def _build_roles(config, enabled_subagents: list[str], model_pref: dict) -> list[LLMRole]:
+def _build_roles(
+    config, enabled_subagents: list[str], model_pref: dict, turn_model: str | None = None,
+) -> list[LLMRole]:
     """Build the role list once, resolving subagent defs through the registry.
 
     Shared by the BYOK prefetch (so subagent model slugs land in the batch) and
@@ -610,7 +647,7 @@ def _build_roles(config, enabled_subagents: list[str], model_pref: dict) -> list
             exc_info=True,
         )
         subagent_defs = {}
-    return role_registry(config, enabled_subagents, subagent_defs, model_pref)
+    return role_registry(config, enabled_subagents, subagent_defs, model_pref, turn_model)
 
 
 async def _prefetch_byok_cache(
@@ -681,6 +718,7 @@ def _stamp(config, client, prompt_guidance: str | None) -> None:
 async def _resolve_role_clients(
     config, user_id: str, roles: list[LLMRole], model_pref: dict,
     byok_cache: dict, *, is_byok: bool, cache_key: str | None,
+    main_model: str | None = None,
 ) -> None:
     """Resolve compaction/fetch/subagent role clients onto ``config`` in place.
 
@@ -690,7 +728,8 @@ async def _resolve_role_clients(
     store nothing so the cheap name-based path stays -- unless the role is
     tuned, which ``_needs_own_client`` decides. Each role's I/O (OAuth check +
     BYOK walk) runs concurrently; writes happen after the gather so the SSE hot
-    path waits one round-trip, not N.
+    path waits one round-trip, not N. A keyless compaction role gets
+    ``main_model`` at the summary level instead, so a summary keeps its level.
     """
 
     def _needs_own_client(role: LLMRole) -> bool:
@@ -706,6 +745,24 @@ async def _resolve_role_clients(
             CredentialSource.OAUTH,
             CredentialSource.BYOK,
         )
+
+    async def _summary_client(model: str):
+        """``model`` on the user's own key at the summary level, or None."""
+        try:
+            rc = await resolve_model_client(
+                user_id, model, is_byok=is_byok, cache_key=cache_key,
+                allow_platform_fallback=False,
+                reasoning_effort=_summary_effort(model_pref, model),
+                _pref_cache=model_pref, _byok_cache=byok_cache,
+            )
+        except Exception:
+            logger.warning(
+                "[CHAT] No summary-level client for %s", model, exc_info=True
+            )
+            return None
+        if rc.client is not None:
+            _stamp(config, rc.client, config.prompt_guidance)
+        return rc.client
 
     async def _resolve_one(role: LLMRole):
         try:
@@ -761,7 +818,14 @@ async def _resolve_role_clients(
     ):
         for role in roles:
             if role.fallback_to_main and role.key not in config.subsidiary_llm_clients:
-                config.subsidiary_llm_clients[role.key] = config.llm_client.model_copy()
+                summary_client = (
+                    await _summary_client(main_model)
+                    if role.key == "compaction" and main_model
+                    else None
+                )
+                config.subsidiary_llm_clients[role.key] = (
+                    summary_client or config.llm_client.model_copy()
+                )
                 # The copy runs the MAIN model, so the level resolved for the
                 # role's own name stops being the answer for it.
                 if config.prompt_guidance:
@@ -890,6 +954,7 @@ async def resolve_clients(
         if enabled_subagents is not None
         else list(config.subagents.enabled),
         model_pref,
+        effective_model,
     )
 
     # STEP 0 — best-effort batch BYOK prefetch (pure perf; see helper docstring).
@@ -934,7 +999,7 @@ async def resolve_clients(
     await asyncio.gather(
         _resolve_role_clients(
             config, user_id, roles, model_pref, byok_cache,
-            is_byok=is_byok, cache_key=thread_id,
+            is_byok=is_byok, cache_key=thread_id, main_model=effective_model,
         ),
         _resolve_fallback_clients(
             config, user_id, model_pref, byok_cache,

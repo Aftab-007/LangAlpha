@@ -436,7 +436,8 @@
       "fetchModelDesc": "Used for web page extraction.",
       "compactionModel": "Compaction model",
       "compactionModelDesc": "Used for compacting long conversation context.",
-      "defaultsToFlash": "Defaults to flash model"
+      "defaultsToFlash": "Defaults to flash model",
+      "defaultsToConversationModel": "Same as the conversation's model"
     },
     "manageProvidersDesc": "Add or remove API keys, custom providers, and models",
     "selectModel": "Select a model...",
@@ -1796,6 +1797,7 @@
       "confirm": "Archive"
     },
     "compacting": "Compacting conversation...",
+    "compactingTokens": "{{value}} tokens written",
     "offloading": "Offloading context...",
     "compactionStopped": "Compaction stopped",
     "queuedSend": "Message queued — sends when compaction finishes",
@@ -4471,7 +4473,7 @@
       "defaultModel": "Default model",
       "defaultModelDesc": "Runs every conversation, in one workspace or across all of them.",
       "backgroundModel": "Background model",
-      "backgroundModelDesc": "Runs background work: thread titles, reading web pages, compacting long conversations and summarizing memos.",
+      "backgroundModelDesc": "Runs background work: thread titles, reading web pages and summarizing memos.",
       "backgroundPlaceholder": "Select background model...",
       "defaultsToBackground": "Defaults to the background model",
       "backgroundSameAsDefault": "Same as Default model",

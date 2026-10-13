@@ -83,8 +83,9 @@ ALLOWLIST: dict[tuple[str, str], int] = {
     # runs pre-resolve fallback_llm_clients via resolve_llm_config first).
     ("src/ptc_agent/agent/middleware/model_resilience.py", "get_llm_by_type"): 1,
     # compaction summarizer name path (Summarizer.for_agent, shared by the
-    # middleware and manual /compact; reached only without a role client).
-    ("src/ptc_agent/agent/middleware/compaction/compact.py", "get_llm_by_type"): 1,
+    # middleware and manual /compact; reached only without a role client),
+    # built at the summary level.
+    ("src/ptc_agent/agent/middleware/compaction/compact.py", "create_llm"): 1,
     # non-BYOK fetch name path (reached only for non-credentialed users).
     ("src/tools/web/fetch.py", "get_llm"): 1,
     # The resolution layer itself, the sanctioned constructor home. Entered
