@@ -193,9 +193,12 @@ export const queryKeys = {
         ...queryKeys.skills.all, 'list', mode ?? 'all', includeDisabled,
         allScopes ? 'all-scopes' : (workspaceId ?? 'user'),
       ],
-    // One skill's SKILL.md text (the detail view).
-    content: (name: string, workspaceId: string | null = null) =>
-      [...queryKeys.skills.all, 'content', name, workspaceId ?? 'user'],
+    // One file of a skill, SKILL.md by default (the detail view).
+    content: (name: string, workspaceId: string | null = null, path = 'SKILL.md') =>
+      [...queryKeys.skills.all, 'content', name, workspaceId ?? 'user', path],
+    // The server's upload caps; deployment configuration, so they hold for
+    // the life of the page.
+    limits: () => [...queryKeys.skills.all, 'limits'],
   },
   userVault: {
     all:        ['userVault'],
@@ -208,6 +211,8 @@ export const queryKeys = {
     all:    ['plugins'],
     list:   () => [...queryKeys.plugins.all, 'list'],
     detail: (name: string) => [...queryKeys.plugins.all, 'detail', name],
+    // Under `all` so an install anywhere refreshes each entry's `installed`.
+    marketplace: () => [...queryKeys.plugins.all, 'marketplace'],
   },
   // The user's order attempts. The list is paged by the server on a keyset
   // cursor, so a filter set is its own list rather than a client-side view of

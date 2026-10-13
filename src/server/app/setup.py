@@ -1222,6 +1222,7 @@ from src.server.app.mcp_builtin import router as mcp_builtin_router
 from src.server.app.mcp_icons import router as mcp_icons_router
 from src.server.app.mcp_oauth import router as mcp_oauth_router
 from src.server.app.plugins import router as plugins_router
+from src.server.app.marketplace import router as marketplace_router
 from src.server.app.user_vault import router as user_vault_router
 from src.server.app.mcp_servers import router as mcp_servers_router
 
@@ -1333,6 +1334,9 @@ app.include_router(
 app.include_router(
     plugins_router
 )  # /api/v1/plugins/* - Agent Plugins packages (install/manage/export)
+app.include_router(
+    marketplace_router
+)  # /api/v1/marketplace/* - Plugin catalog for the Discover tab
 app.include_router(
     egress_relay_router
 )  # /v1/egress/{grant_id} - Sandbox egress relay (relay-JWT auth, not user auth)

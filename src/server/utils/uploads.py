@@ -1,6 +1,11 @@
 """Shared helpers for multipart upload handling."""
 
+from typing import TypeVar
+
 from fastapi import HTTPException, UploadFile
+from pydantic import TypeAdapter, ValidationError
+
+T = TypeVar("T")
 
 _UPLOAD_READ_CHUNK: int = 64 * 1024
 
@@ -42,3 +47,20 @@ async def read_capped(file: UploadFile, max_bytes: int) -> bytes:
             raise HTTPException(status_code=413, detail=_too_large(max_bytes))
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def json_form_field(
+    raw: str | None, adapter: TypeAdapter[T], refusal: str
+) -> T | None:
+    """A multipart field that carries JSON, as the JSON body would carry it.
+
+    None when the field is absent or blank. Anything ``adapter`` refuses,
+    unparseable JSON included, is answered 422 with ``refusal``: one sentence
+    naming the shape the field takes.
+    """
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return adapter.validate_json(raw)
+    except ValidationError:
+        raise HTTPException(status_code=422, detail=refusal) from None

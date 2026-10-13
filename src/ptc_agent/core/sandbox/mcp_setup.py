@@ -10,8 +10,10 @@ semantics are unchanged.
 import asyncio
 import json
 import posixpath
+import re
 import shlex
 import uuid
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -125,22 +127,52 @@ async def _upload_discovery_client(
     client_path = (
         f"{layout.internal}/.mcp_discover_client_{uuid.uuid4().hex}.py"
     )
-    await sandbox._runtime_call(
-        sandbox.runtime.exec,
-        f"mkdir -p {shlex.quote(layout.internal)}",
-        retry_policy=RetryPolicy.SAFE,
-    )
-    await sandbox._runtime_call(
-        sandbox.runtime.upload_file,
-        mcp_client_code.encode("utf-8"),
-        client_path,
-        retry_policy=RetryPolicy.SAFE,
-    )
+    await _upload_client(sandbox, mcp_client_code, client_path)
     logger.debug("MCP discovery client installed", path=client_path)
     return client_path
 
 
+async def _upload_client(sandbox: "PTCSandbox", code: str, path: str) -> None:
+    assert sandbox.runtime is not None
+    await sandbox._runtime_call(
+        sandbox.runtime.exec,
+        f"mkdir -p {shlex.quote(posixpath.dirname(path))}",
+        retry_policy=RetryPolicy.SAFE,
+    )
+    await sandbox._runtime_call(
+        sandbox.runtime.upload_file,
+        code.encode("utf-8"),
+        path,
+        retry_policy=RetryPolicy.SAFE,
+    )
 
+
+def _discover_call(client_path: str, name: str, out_path: str) -> str:
+    # python3, not python: the no-snapshot fallback image never gets the
+    # /usr/bin/python alias the snapshot build adds.
+    q = shlex.quote
+    return f"python3 {q(client_path)} discover {q(name)} {q(out_path)}"
+
+
+def _read_listing(raw: bytes | None) -> dict[str, Any] | None:
+    """Normalize the discovery CLI's result file, or None when it wrote none.
+
+    None rather than an error, because only the caller knows what a missing
+    file means. The CLI writes status ``ok`` or ``error`` alone, so anything
+    else reads as an error.
+    """
+    if not raw:
+        return None
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("the discovery result is not a JSON object")
+    info = parsed.get("server_info")
+    return {
+        "status": "ok" if parsed.get("status") == "ok" else "error",
+        "error": str(parsed.get("error") or ""),
+        "tools": parsed.get("tools") or [],
+        "server_info": info if isinstance(info, dict) else None,
+    }
 
 
 async def discover_user_mcp_schemas(
@@ -177,37 +209,22 @@ async def discover_user_mcp_schemas(
         out_path = f"{layout.internal}/.mcp_discover_{uuid.uuid4().hex}.json"
         async with sem:
             try:
-                # python3, not python: the no-snapshot fallback image never
-                # gets the /usr/bin/python alias the snapshot build adds.
-                cmd = (
-                    f"cd {shlex.quote(work_dir)} && python3 "
-                        f"{shlex.quote(client_path)} discover "
-                        f"{shlex.quote(name)} {shlex.quote(out_path)}"
-                )
                 await sandbox._runtime_call(
                     sandbox.runtime.exec,
-                    cmd,
+                    f"cd {shlex.quote(work_dir)} && "
+                    + _discover_call(client_path, name, out_path),
                     timeout=sandbox._DISCOVERY_EXEC_TIMEOUT_S,
                     retry_policy=RetryPolicy.SAFE,
                     total_timeout=float(sandbox._DISCOVERY_EXEC_TIMEOUT_S + 30),
                 )
-                raw = await sandbox.adownload_file_bytes(out_path)
-                if not raw:
+                listing = _read_listing(await sandbox.adownload_file_bytes(out_path))
+                if listing is None:
                     return name, {
                         "status": "error",
                         "error": "discovery produced no output",
                         "tools": [],
                     }
-                parsed = json.loads(
-                    raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                )
-                info = parsed.get("server_info")
-                return name, {
-                    "status": parsed.get("status", "error"),
-                    "error": parsed.get("error", "") or "",
-                    "tools": parsed.get("tools") or [],
-                    "server_info": info if isinstance(info, dict) else None,
-                }
+                return name, listing
             except Exception as e:  # noqa: BLE001 — isolate one bad server
                 logger.warning(
                     "MCP discovery failed for server", server=name, error=str(e)
@@ -238,6 +255,171 @@ async def discover_user_mcp_schemas(
         except Exception:
             pass
     return dict(pairs)
+
+
+# Runs the discovery CLI as the leader of a session of its own, so everything
+# the server's command spawned (npx's node, uvx's python) shares one process
+# group that is stopped as a whole once the listing is in or the budget is
+# spent. A server that keeps running after its stdin closes would otherwise
+# outlive the check. Its last line says how the client ended, which is all a
+# missing result file cannot.
+_CHECK_LEADER = """\
+import os, signal, subprocess, sys, time
+budget = float(sys.argv[1])
+child = subprocess.Popen(
+    sys.argv[2:], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+    start_new_session=True,
+)
+try:
+    rc = str(child.wait(timeout=budget))
+except subprocess.TimeoutExpired:
+    rc = "timeout"
+for sig in (signal.SIGTERM, signal.SIGKILL):
+    try:
+        os.killpg(child.pid, sig)
+    except OSError:
+        break
+    time.sleep(0.5)
+child.wait()
+print("MCP_CHECK_RC=" + rc, flush=True)
+"""
+
+_CHECK_RC_RE = re.compile(r"MCP_CHECK_RC=(\S+)")
+
+# Strong refs so a cleanup outlives the check that stopped waiting for it;
+# never consulted.
+_check_cleanups: set[asyncio.Task] = set()
+
+# How long a check waits for its files to go before it answers. The run takes
+# the client and the vault file with it, so the removal after it is a backstop
+# that keeps going in the background; its SAFE retries can take minutes, which
+# no request should spend.
+CHECK_CLEANUP_WAIT_S = 3.0
+
+
+async def check_user_mcp_server(
+    sandbox: "PTCSandbox",
+    server: Any,
+    vault: Mapping[str, str],
+    *,
+    budget_s: float,
+    deadline: float | None = None,
+) -> dict[str, Any]:
+    """Start one unsaved server the way the computer runs it and list its tools.
+
+    The client is the one a turn's calls go through, composed for this server
+    alone, and it resolves ``${vault:NAME}`` refs from a vault file exactly as
+    it does at runtime. That file is this check's own, holding only ``vault``,
+    so a value the caller has not stored yet resolves without touching the
+    computer's vault file, and a sibling's check never reads it. The command
+    runs from the folder the MCP supervisor runs servers from.
+
+    Nothing is left behind: the run removes the client and the vault file the
+    moment it ends, the server's process group is stopped, and the result file
+    is removed after it is read, even when the caller is cancelled. Returns
+    ``{"status", "error", "tools", "server_info"}``; status is ``ok``,
+    ``error``, or ``timeout`` when ``budget_s`` ran out first.
+
+    ``deadline`` (event-loop time) bounds the run, which raises TimeoutError
+    past it. The removal is waited on after the run and outside it, for at
+    most ``CHECK_CLEANUP_WAIT_S``, so a run that answered in time keeps its
+    answer however slowly the computer deletes three files.
+    """
+    async with asyncio.timeout_at(deadline):
+        await sandbox._wait_ready()
+    assert sandbox.runtime is not None
+    work_dir = sandbox._work_dir
+    layout = SandboxLayout(work_dir)
+    stem = f"{SandboxLayout.INTERNAL_DIR}/.mcp_check_{uuid.uuid4().hex}"
+    vault_rel = f"{stem}.vault.json"
+    client_path = layout.join(f"{stem}.py")
+    vault_path = layout.join(vault_rel)
+    out_path = layout.join(f"{stem}.out.json")
+
+    # The discovery entry point blanks every vault ref unless the server
+    # opts in, and a check has to start the server with its real values.
+    probe = server.model_copy(update={"discovery_uses_secrets": True})
+    config = sandbox.tool_generator.generate_client_config(
+        [probe], working_dir=work_dir, fold_union=False
+    )
+    emitted = dict(config.get("layout") or {})
+    emitted["SandboxLayout"] = {
+        **(emitted.get("SandboxLayout") or {}),
+        "VAULT_SECRETS_FILE": vault_rel,
+    }
+    config = {**config, "layout": emitted}
+    code = sandbox.tool_generator.compose_mcp_client_code(config)
+
+    run_s = max(1, int(budget_s))
+    q = shlex.quote
+    script = (
+        f"cd {q(layout.internal_src)} 2>/dev/null || cd {q(work_dir)} || exit 97\n"
+        f"python3 -c {q(_CHECK_LEADER)} {run_s} "
+        f"{_discover_call(client_path, server.name, out_path)}\n"
+        f"rm -f {q(client_path)} {q(vault_path)}\n"
+    )
+    try:
+        async with asyncio.timeout_at(deadline):
+            await _upload_client(sandbox, code, client_path)
+            if vault:
+                await sandbox._runtime_call(
+                    sandbox.runtime.upload_file,
+                    json.dumps(dict(vault)).encode("utf-8"),
+                    vault_path,
+                    retry_policy=RetryPolicy.SAFE,
+                )
+            # UNSAFE: a retried run would find the files the first one removed.
+            result = await sandbox._runtime_call(
+                sandbox.runtime.exec,
+                f"sh -c {q(script)}",
+                timeout=run_s + 15,
+                retry_policy=RetryPolicy.UNSAFE,
+                total_timeout=float(run_s + 20),
+            )
+            raw = await sandbox.adownload_file_bytes(out_path)
+    finally:
+        cleanup = asyncio.ensure_future(
+            _remove_check_files(sandbox, (client_path, vault_path, out_path))
+        )
+        _check_cleanups.add(cleanup)
+        cleanup.add_done_callback(_check_cleanups.discard)
+        # A bounded wait, not a shield: it gives up without cancelling the
+        # removal, and it returns rather than raising when the time is up.
+        await asyncio.wait({cleanup}, timeout=CHECK_CLEANUP_WAIT_S)
+
+    try:
+        listing = _read_listing(raw)
+    except ValueError:
+        listing = None
+    if listing is not None:
+        return listing
+    output = getattr(result, "stdout", "") or ""
+    rc = _CHECK_RC_RE.findall(output)
+    if rc and rc[-1] == "timeout":
+        return {"status": "timeout", "error": "", "tools": [], "server_info": None}
+    logger.warning(
+        "MCP command check produced no result",
+        server=server.name,
+        exit_code=getattr(result, "exit_code", None),
+        output=output[-500:],
+    )
+    return {
+        "status": "error",
+        "error": "the check produced no result",
+        "tools": [],
+        "server_info": None,
+    }
+
+
+async def _remove_check_files(sandbox: "PTCSandbox", paths: tuple[str, ...]) -> None:
+    try:
+        await sandbox._runtime_call(
+            sandbox.runtime.exec,
+            "rm -f " + " ".join(shlex.quote(p) for p in paths),
+            retry_policy=RetryPolicy.SAFE,
+        )
+    except Exception as e:  # noqa: BLE001 - the run removed the secret-bearing files
+        logger.warning("MCP command check cleanup failed", error=str(e))
 
 
 async def _start_internal_mcp_servers(sandbox: "PTCSandbox") -> bool | None:

@@ -10,6 +10,7 @@ import type {
 } from '@/pages/ChatAgent/utils/api';
 import type { CapabilityGroup } from '../brokerages';
 import { SelectCheckbox } from './SelectCheckbox';
+import { ToolRow } from './ToolRow';
 import {
   BINDING_PATHS,
   bindingOptions,
@@ -46,8 +47,9 @@ import {
  * of the user, so it ticks the visible rows and nothing else.
  */
 
-/** A lone tool needs no filter, and an input over one row reads as clutter. */
-const FILTER_FROM = 2;
+/** A list that fits on a screen is read, not searched; an input over three
+ *  rows reads as clutter. */
+const FILTER_FROM = 8;
 
 export function ToolList({
   tools,
@@ -427,8 +429,20 @@ function ToolSectionBlock({
             <ToolChip key={tool.name} tool={tool} dimmed={section.dimmed} />
           ))}
         </div>
+      ) : copy.names === 'prose' ? (
+        <div className="tool-rows">
+          {section.tools.map((tool) => (
+            <ToolRow
+              key={tool.name}
+              tool={tool}
+              checkbox={selection && <ToolRowCheckbox tool={tool} selection={selection} />}
+              control={control?.(tool)}
+              defaultOpen={section.tools.length === 1}
+            />
+          ))}
+        </div>
       ) : (
-        <div className={copy.names === 'prose' ? 'flex flex-col gap-2' : 'flex flex-col gap-1'}>
+        <div className="flex flex-col gap-1">
           {section.tools.map((tool) => (
             <div key={tool.name} className="flex items-start justify-between gap-2">
               <div className="flex items-start gap-2 min-w-0">
@@ -437,11 +451,7 @@ function ToolSectionBlock({
                     <ToolRowCheckbox tool={tool} selection={selection} />
                   </span>
                 )}
-                {copy.names === 'prose' ? (
-                  <ToolProse tool={tool} />
-                ) : (
-                  <ToolChip tool={tool} dimmed={section.dimmed} />
-                )}
+                <ToolChip tool={tool} dimmed={section.dimmed} />
               </div>
               {control?.(tool)}
             </div>
@@ -466,31 +476,6 @@ function ToolChip({ tool, dimmed }: { tool: McpToolSummary; dimmed: boolean }) {
     >
       {tool.name}
     </span>
-  );
-}
-
-/** A name with nothing above it to explain the bucket, so it brings its own. */
-function ToolProse({ tool }: { tool: McpToolSummary }) {
-  return (
-    <div className="flex flex-col gap-0.5 min-w-0">
-      <span
-        className="text-xs font-medium break-all"
-        style={{
-          color: 'var(--color-text-secondary)',
-          fontFamily: "'JetBrains Mono', 'Menlo', monospace",
-        }}
-      >
-        {tool.name}
-      </span>
-      {tool.description && (
-        <span
-          className="text-xs line-clamp-2"
-          style={{ color: 'var(--color-text-tertiary)' }}
-        >
-          {tool.description}
-        </span>
-      )}
-    </div>
   );
 }
 

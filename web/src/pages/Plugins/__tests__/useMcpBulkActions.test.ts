@@ -1,7 +1,7 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import { renderHookWithProviders } from '@/test/utils';
-import { catalogServer } from '@/test/factories';
+import { catalogProbe, catalogServer } from '@/test/factories';
 import type { BuiltinMcpServer } from '@/pages/ChatAgent/utils/api';
 import type { BulkTarget } from '../components/useBulkSelection';
 import type { PluginListSurface } from '../hooks/usePluginListSurface';
@@ -237,6 +237,38 @@ describe('useMcpBulkActions: Only in and Flash', () => {
 });
 
 /**
+ * The backend takes a switch-on for a row a check refused, so a bulk one put a
+ * failing server in every workspace while its own switch said it could not be
+ * switched on. Bulk holds it as that switch does.
+ */
+describe('useMcpBulkActions: a row a check refused', () => {
+  it('leaves it out of Switch on, and still switches it off', () => {
+    const refused = { verdict: 'credential_rejected' as const, missing_secrets: [] };
+    const catalog = [
+      catalogServer({ name: 'fine', enabled: false }),
+      catalogServer({ name: 'refused_off', enabled: false, probe: catalogProbe(refused) }),
+      catalogServer({ name: 'refused_on', enabled: true, probe: catalogProbe(refused) }),
+    ];
+    const run = vi.fn<(targets: BulkTarget[]) => void>();
+    const surface = {
+      selection: { selected: new Set(catalog.map((s) => `catalog:${s.name}`)) },
+      run,
+    } as unknown as PluginListSurface;
+
+    const { result } = renderHookWithProviders(() =>
+      useMcpBulkActions({ builtins: [], catalog, surface, workspaces: [] }),
+    );
+    const [enable, disable] = result.current.actions;
+    enable.run();
+    disable.run();
+    expect(run.mock.calls.map(([targets]) => targets.map((target) => target.name))).toEqual([
+      ['fine'],
+      ['refused_on'],
+    ]);
+  });
+});
+
+/**
  * A row whose plugin is off keeps `enabled: true`, but its own checklist is
  * locked: a deny it cleared could not be put back, and the plugin coming back
  * on would land in workspaces the user never picked from that row.
@@ -267,5 +299,36 @@ describe('useMcpBulkActions: a plugin that is off', () => {
     for (const [targets] of run.mock.calls) {
       expect(targets.map((target) => target.key)).toEqual(['catalog:open']);
     }
+  });
+
+  // Under "Off" such a row still has `enabled: true`: "Switch off" counted it
+  // and changed nothing on screen, and "Switch on" skipped it unexplained.
+  it('switches on and off by the state the pills show, and says why a row is left out', () => {
+    const catalog = [
+      catalogServer({ name: 'on', enabled: true }),
+      catalogServer({ name: 'off', enabled: false }),
+      catalogServer({ name: 'held_on', plugin_name: 'wind', plugin_enabled: false, enabled: true }),
+      catalogServer({ name: 'held_off', plugin_name: 'wind', plugin_enabled: false, enabled: false }),
+    ];
+    const run = vi.fn<(targets: BulkTarget[]) => void>();
+    const surface = {
+      selection: { selected: new Set(catalog.map((s) => `catalog:${s.name}`)) },
+      run,
+    } as unknown as PluginListSurface;
+
+    const { result } = renderHookWithProviders(() =>
+      useMcpBulkActions({ builtins: [], catalog, surface, workspaces: [] }),
+    );
+    const [enable, disable] = result.current.actions;
+    expect(enable.label).toBe('Switch on 1');
+    expect(disable.label).toBe('Switch off 1');
+    expect(result.current.note).toContain('2 selected are off because their plugin is off.');
+
+    enable.run();
+    disable.run();
+    expect(run.mock.calls.map(([targets]) => targets.map((target) => target.name))).toEqual([
+      ['off'],
+      ['on'],
+    ]);
   });
 });

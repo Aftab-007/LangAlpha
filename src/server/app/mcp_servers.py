@@ -26,12 +26,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
-from pydantic import ValidationError
 
-from src.server.app.mcp_catalog import catalog_write_warnings
 from src.server.database.mcp_servers import (
     MAX_CATALOG_SERVERS_PER_USER,
     create_workspace_catalog_server,
@@ -50,11 +49,12 @@ from src.server.database.user_vault_secrets import (
 )
 from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services.brokerages import brokerage_names
-from src.server.services.mcp_catalog import (
-    apply_catalog_edit,
-    detach_warning,
-    reject_reserved_catalog_name,
+from src.server.services.mcp_apply import (
+    schedule_proactive_apply,
+    schedule_session_mcp_refresh,
 )
+from src.server.services.mcp_catalog import detach_warning, refuse_missing_sign_in
+from src.server.services.mcp_catalog_view import catalog_write_warnings
 from src.server.services.mcp_config import (
     Origin,
     ResolvedServer,
@@ -72,6 +72,13 @@ from src.server.services.mcp_oauth.discovery import (
 )
 from src.server.services.mcp_oauth.lifecycle import TokenUnavailable
 from src.server.services.mcp_import import catalog_import_scope, run_mcp_import
+from src.server.services.mcp_saves import (
+    NOT_FOUND,
+    ServerEdit,
+    WorkspaceAdd,
+    parse_server,
+)
+from src.server.services.mcp_validation import check_servers
 from src.server.services.vault_invalidation import (
     after_secrets_changed,
     refs_for_server,
@@ -88,7 +95,6 @@ from src.server.models.mcp_server import (
 )
 from src.server.services.workspace_manager import WorkspaceManager
 from src.server.utils.api import CurrentUserId, handle_api_exceptions, require_workspace_owner
-from src.server.utils.error_sanitization import validation_error_text
 
 logger = logging.getLogger(__name__)
 
@@ -98,19 +104,6 @@ router = APIRouter(prefix="/api/v1/workspaces", tags=["MCP Servers"])
 # the cached row at the current version is < this many seconds old and not
 # pending (kept simple — no Redis).
 _DISCOVER_DEBOUNCE_SECONDS = 15
-
-# Mutation refusals, written once: the endpoints reach the same states.
-_NOT_FOUND = "MCP server not found"
-_BUILTIN_EDIT = "Cannot edit a built-in server"
-_BROKERAGE_EDIT = "Manage this brokerage connection from Plugins"
-
-
-def _name_taken(name: str) -> str:
-    return (
-        f"A server named {name!r} already exists on your account. "
-        "Choose another name."
-    )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -344,28 +337,17 @@ async def add_server(
     The row is the same one Plugins lists; every other workspace of the user
     gets a tombstone in the same transaction, and a workspace created later
     starts with it off, so the server starts nowhere the user did not add it.
+    It is written only once the server has passed its check, a command server
+    on this workspace's computer.
     """
-    await _require_owned_workspace(workspace_id, user_id)
-
-    try:
-        server = McpServerInput(**body)
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=validation_error_text(e))
-    reject_reserved_catalog_name(server.name)
-    if await get_catalog_server(user_id, server.name) is not None:
-        raise HTTPException(status_code=409, detail=_name_taken(server.name))
-
-    try:
-        row = await create_workspace_catalog_server(
-            user_id, workspace_id, server.name, **server.to_catalog_fields()
-        )
-    except ValueError as e:
-        # Over the account cap, or a concurrent create won the name.
-        raise HTTPException(status_code=409, detail=str(e))
+    save = WorkspaceAdd(user_id, parse_server(body), workspace_id)
+    await save.refuse()
+    await save.check()
+    row = await save.write()
     schedule_catalog_discovery(user_id, row["name"], reason="create")
-    _schedule_proactive_apply(workspace_id, user_id)
+    await save.after_write()
     response = {"name": row["name"], "source": "user", "enabled": True}
-    if warnings := await catalog_write_warnings(user_id, server):
+    if warnings := await catalog_write_warnings(user_id, save.server):
         response["warnings"] = warnings
     return response
 
@@ -388,8 +370,10 @@ async def import_servers(
     switched on only in this workspace, and off in workspaces created later.
     Names are coerced to our identifier shape, transports are mapped, and
     inline literal secrets are auto-extracted into the user's vault (rewritten
-    to ``${vault:NAME}`` refs, deduped by value across the import). Per-server
-    outcomes are reported so a partial import is legible.
+    to ``${vault:NAME}`` refs, deduped by value across the import). Each entry
+    is checked before it lands, a command server on this workspace's computer,
+    and one that fails or needs a sign-in is reported rather than created.
+    Per-server outcomes are reported so a partial import is legible.
     """
     await _require_owned_workspace(workspace_id, user_id)
 
@@ -418,6 +402,7 @@ async def import_servers(
             existing_names={r["name"] for r in await list_catalog_servers(user_id)},
             persist=persist,
             exists_message="already exists in your Plugins",
+            check=partial(check_servers, user_id, workspace_id=workspace_id),
         ),
     )
 
@@ -431,7 +416,7 @@ async def import_servers(
 
     _, version = await get_workspace_servers_and_version(workspace_id)
     if report.created > 0:
-        _schedule_proactive_apply(workspace_id, user_id)
+        schedule_proactive_apply(workspace_id, user_id)
     return {
         "results": report.results,
         "created": report.created,
@@ -454,31 +439,14 @@ async def edit_server(
     where the server is on.
 
     There is one definition per name, so this is the Plugins edit reached from
-    here, through the same service: a plugin-owned row detaches from its
-    plugin and an OAuth consent the edit moves off is revoked.
+    here, through the same service: it is checked when it moves how the server
+    is reached, a plugin-owned row detaches from its plugin, and an OAuth
+    consent the edit moves off is revoked.
     """
-    await _require_owned_workspace(workspace_id, user_id)
-
-    if name in builtin_names():
-        raise HTTPException(status_code=409, detail=_BUILTIN_EDIT)
-    if name in brokerage_names():
-        raise HTTPException(status_code=409, detail=_BROKERAGE_EDIT)
-    # No rename, so no reserved-name check either: like the Plugins edit, this
-    # keeps the name the row was saved under.
-    if body.name != name:
-        raise HTTPException(
-            status_code=409, detail="name in body must match the path name"
-        )
-
-    ref = await classify_server_name(workspace_id, user_id, name)
-    if ref is None or ref.origin is not Origin.USER:
-        raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    edit = await apply_catalog_edit(
-        user_id, name, body.to_catalog_fields(), detach_plugin=True
-    )
-    if edit is None:
-        raise HTTPException(status_code=404, detail=_NOT_FOUND)
-    _schedule_proactive_apply(workspace_id, user_id)
+    save = ServerEdit(user_id, name, body, workspace_id)
+    ref = await save.refuse()
+    edit = await save.write()
+    await save.after_write()
     response = {
         "name": name,
         "source": "user",
@@ -541,14 +509,14 @@ async def set_enabled(
             )
         if not is_flash:
             await _sync_sandbox_grants_now(workspace_id, user_id)
-            _schedule_proactive_apply(workspace_id, user_id)
+            schedule_proactive_apply(workspace_id, user_id)
         else:
             await _sync_flash_grants_now(workspace_id, user_id)
         return {"name": name, "enabled": body.enabled}
 
     ref = await classify_server_name(workspace_id, user_id, name)
     if ref is None:
-        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
     match (ref.origin, ref.state):
         case (Origin.USER, State.TOMBSTONED):
             # An existing tombstone for an inherited server; enabling = delete
@@ -556,6 +524,12 @@ async def set_enabled(
             # the account keeps the server off, dropping it would report a
             # switch that did not move and start the server here later.
             if body.enabled:
+                catalog = await get_catalog_server(user_id, name)
+                # The account's own switch answers first (the untombstone
+                # below refuses it under its lock): signing in would not
+                # turn on a server the account keeps off.
+                if catalog is not None and runs_on_account(catalog):
+                    await refuse_missing_sign_in(user_id, catalog)
                 match await untombstone_user_server(
                     user_id, workspace_id, name, ref.row["workspace_mcp_server_id"]
                 ):
@@ -563,24 +537,25 @@ async def set_enabled(
                         raise HTTPException(status_code=409, detail=_ACCOUNT_DISABLED)
                     case "gone":
                         # Deleted, or replaced by a server scoped off here.
-                        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+                        raise HTTPException(status_code=404, detail=NOT_FOUND)
         case (Origin.USER, _):
             # Inherited and not yet marked: disabling writes the per-workspace
             # tombstone; enabling is a no-op (it's already live via inheritance).
             if body.enabled:
                 _refuse_account_disabled(ref.row)
+                await refuse_missing_sign_in(user_id, ref.row)
             elif not await tombstone_user_server(
                 user_id, workspace_id, name, ref.row["user_mcp_server_id"]
             ):
                 # Deleted since it was classified, or replaced by a server
                 # this request never read.
-                raise HTTPException(status_code=404, detail=_NOT_FOUND)
+                raise HTTPException(status_code=404, detail=NOT_FOUND)
         case _:
             # A disable-marker whose built-in no longer exists: nothing to toggle.
-            raise HTTPException(status_code=404, detail=_NOT_FOUND)
+            raise HTTPException(status_code=404, detail=NOT_FOUND)
     if not is_flash:
         await _sync_sandbox_grants_now(workspace_id, user_id)
-        _schedule_proactive_apply(workspace_id, user_id)
+        schedule_proactive_apply(workspace_id, user_id)
     else:
         await _sync_flash_grants_now(workspace_id, user_id)
     return {"name": name, "enabled": body.enabled}
@@ -641,7 +616,7 @@ async def discover_server(
             )
         if row is not None:
             if row.get("status") == "ok":
-                _schedule_session_mcp_refresh(workspace_id, user_id)
+                schedule_session_mcp_refresh(workspace_id, user_id)
             return {"server": _discovery_row_to_dict(row)}
         # None: the row has no host-side path -- it is an ``sse`` row, or it
         # was deleted or turned stdio between the resolve and the re-read. The
@@ -672,61 +647,14 @@ async def discover_server(
         # session's composite/summary would short-circuit past it on the next
         # acquire. Refresh explicitly (background, best-effort) so the agent
         # sees the same tools the UI now shows.
-        _schedule_session_mcp_refresh(workspace_id, user_id)
+        schedule_session_mcp_refresh(workspace_id, user_id)
     return {"server": _discovery_row_to_dict(row)}
-
-
-# Strong refs to in-flight proactive-apply tasks so they aren't GC'd mid-run.
-_proactive_apply_tasks: set[asyncio.Task] = set()
-_proactive_apply_pending: dict[str, asyncio.Task] = {}
-_PROACTIVE_APPLY_SETTLE_S = 1.5
-
-
-def _schedule_proactive_apply(workspace_id: str, user_id: str) -> None:
-    """Front-load verifying + applying a just-saved MCP config.
-
-    Fire-and-forget so it never blocks (or fails) the mutation response. It
-    drives a background session acquire that brings the applied config up to the
-    new version — warming (cold-starting) the sandbox if it isn't running yet —
-    so the change is discovered and live before the user's next turn (no
-    surprise). Best-effort: any failure falls back to the next-message apply.
-
-    Mutations within the settle window coalesce into one apply: a newer
-    mutation cancels a still-waiting sleeper, never an in-flight apply.
-    """
-    try:
-        wm = WorkspaceManager.get_instance()
-    except Exception:
-        return
-
-    pending = _proactive_apply_pending.get(workspace_id)
-    if pending is not None and not pending.done():
-        pending.cancel()
-
-    async def _settle_then_apply() -> None:
-        await asyncio.sleep(_PROACTIVE_APPLY_SETTLE_S)
-        # Past the settle window: deregister so newer mutations schedule a
-        # fresh apply instead of cancelling this one mid-flight.
-        if _proactive_apply_pending.get(workspace_id) is asyncio.current_task():
-            _proactive_apply_pending.pop(workspace_id, None)
-        await wm.proactively_apply_mcp_config(workspace_id, user_id)
-
-    task = asyncio.create_task(_settle_then_apply())
-    _proactive_apply_pending[workspace_id] = task
-    _proactive_apply_tasks.add(task)
-
-    def _cleanup(t: asyncio.Task) -> None:
-        _proactive_apply_tasks.discard(t)
-        if _proactive_apply_pending.get(workspace_id) is t:
-            _proactive_apply_pending.pop(workspace_id, None)
-
-    task.add_done_callback(_cleanup)
 
 
 async def _sync_flash_grants_now(workspace_id: str, user_id: str) -> None:
     """Bring a flash workspace's relay grants to its new scope before replying.
 
-    The flash workspace has no sandbox, so ``_schedule_proactive_apply`` has
+    The flash workspace has no sandbox, so ``schedule_proactive_apply`` has
     nothing to warm and is skipped for it. Its grants still need retiring: a
     Flash turn already in flight holds the set it bound with, and the per-call
     ``DirectMCPBinding.check`` rereads connection status and consent but not
@@ -770,7 +698,7 @@ async def _sync_flash_grants_now(workspace_id: str, user_id: str) -> None:
 async def _sync_sandbox_grants_now(workspace_id: str, user_id: str) -> None:
     """Retire a sandbox workspace's out-of-scope relay grants before replying.
 
-    ``_schedule_proactive_apply`` converges these too, but it sleeps first and
+    ``schedule_proactive_apply`` converges these too, but it sleeps first and
     swallows its own failures, so between the 200 and that task a turn already
     in flight still holds an active grant for a server the workspace no longer
     resolves. The relay authorizes against the grant row on every request, so
@@ -793,7 +721,7 @@ async def _sync_sandbox_grants_now(workspace_id: str, user_id: str) -> None:
 
     snapshots = await user_snapshots(user_id)
     # Unlike the flash sibling this one does not raise when the retries are
-    # exhausted: ``_schedule_proactive_apply`` runs behind it and re-resolves,
+    # exhausted: ``schedule_proactive_apply`` runs behind it and re-resolves,
     # so the retirement has somewhere else to land, and failing the toggle
     # would be the harsher answer to a race that fixes itself.
     await sync_grants_until_current(
@@ -804,22 +732,6 @@ async def _sync_sandbox_grants_now(workspace_id: str, user_id: str) -> None:
             resolved, user_id=user_id, snapshots=snapshots
         ),
     )
-
-
-def _schedule_session_mcp_refresh(workspace_id: str, user_id: str) -> None:
-    """Background composite rebuild after an out-of-band schema-cache update.
-
-    Unlike ``_schedule_proactive_apply`` there is no version bump to apply, so
-    this goes through ``refresh_session_mcp`` (which busts the session's cached
-    version first). Undebounced: probes are explicit single user actions.
-    """
-    try:
-        wm = WorkspaceManager.get_instance()
-    except Exception:
-        return
-    task = asyncio.create_task(wm.refresh_session_mcp(workspace_id, user_id))
-    _proactive_apply_tasks.add(task)
-    task.add_done_callback(_proactive_apply_tasks.discard)
 
 
 def _get_live_sandbox(workspace_id: str, workspace: dict) -> Any | None:

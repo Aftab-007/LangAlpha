@@ -9,70 +9,50 @@ import {
   type CatalogServer,
 } from '@/pages/ChatAgent/utils/api';
 import { useFlashScope } from '@/hooks/useFlashWorkspace';
-import type { BulkAction } from '../components/BulkActionBar';
 import type { BulkScopeSpec } from '../components/BulkScopeMenu';
 import { scopeLocked, type ScopeWorkspace } from '../components/ScopeControl';
-import { bulkSelectionKey, type BulkTarget } from '../components/useBulkSelection';
-import { isPluginOwned } from '../utils/provenance';
+import type { BulkRunOptions } from '../components/useBulkSelection';
+import { buildBulkActions, type BulkActions } from '../utils/bulkActions';
+import { connectorState } from '../utils/connectorState';
+import { isEffectivelyEnabled, isPluginOwned, isPluginSuppressed } from '../utils/provenance';
+import { connectorRowKey, type ConnectorRow } from '../utils/rowKeys';
 import type { PluginListSurface } from './usePluginListSurface';
 import { useScopeBulk } from './useScopeBulk';
 
-/**
- * The select-mode actions for the MCP tab. One selection spans two row tiers
- * with different endpoints, so the keys are tier-namespaced and the rows
- * travel as a tagged union rather than as parallel arrays; the scope
- * algorithm downstream wants one list.
- */
-
-type McpScopeRow =
-  | { tier: 'builtin'; server: BuiltinMcpServer }
-  | { tier: 'catalog'; server: CatalogServer };
-
-const rowKey = (row: McpScopeRow) => `${row.tier}:${row.server.name}`;
-
+/** The select-mode actions for the MCP tab, over both row tiers at once. */
 export function useMcpBulkActions({
   builtins,
   catalog,
   surface,
   workspaces,
+  signIn,
 }: {
   builtins: readonly BuiltinMcpServer[];
   catalog: readonly CatalogServer[];
   surface: PluginListSurface;
   workspaces: ScopeWorkspace[];
-}): { actions: BulkAction[]; scope: BulkScopeSpec; count: number; selectionKey: string } {
+  /** Starts the sign-in a switch-on was refused for, until the connector is
+   *  signed in to. */
+  signIn?: BulkRunOptions['signIn'];
+}): BulkActions & { scope: BulkScopeSpec } {
   const { t } = useTranslation();
   const { selected } = surface.selection;
   const flashScopeFor = useFlashScope();
 
-  const rows: McpScopeRow[] = [
+  const rows: ConnectorRow[] = [
     ...builtins.map((server) => ({ tier: 'builtin' as const, server })),
     ...catalog.map((server) => ({ tier: 'catalog' as const, server })),
-  ].filter((row) => selected.has(rowKey(row)));
-
-  function toggleTargets(enabled: boolean): BulkTarget[] {
-    return rows.flatMap((row) => {
-      if (!!row.server.enabled === enabled) return [];
-      const key = rowKey(row);
-      const { name } = row.server;
-      return [
-        {
-          key,
-          run: () =>
-            row.tier === 'builtin'
-              ? setBuiltinMcpServerEnabled(name, enabled)
-              : setMcpCatalogServerEnabled(name, enabled),
-        },
-      ];
-    });
-  }
+  ].filter((row) => selected.has(connectorRowKey(row)));
 
   // Same eligibility as each row's ScopeControl: a locked checklist, off or
   // under a plugin that is off, is out. No move: every server lives on the account.
-  const scope = useScopeBulk<McpScopeRow>(rows, {
+  const scope = useScopeBulk<ConnectorRow>(rows, {
     workspaces,
-    run: surface.run,
-    key: rowKey,
+    // Switching a connector on in a workspace is refused for a missing
+    // sign-in as its account switch is.
+    run: (targets) => surface.run(targets, { verb: 'scope', noun: 'connector', signIn }),
+    key: connectorRowKey,
+    name: (row) => row.server.name,
     denyMarkers: (row) =>
       scopeLocked(row.server) ? null : (row.server.disabled_workspace_ids ?? []),
     // The row's rule (useFlashScope), for user rows only.
@@ -91,42 +71,35 @@ export function useMcpBulkActions({
     },
   });
 
-  // Builtins have no delete, and plugin-owned rows uninstall through their
-  // plugin — bulk delete covers only the user's own catalog rows.
-  const deleteTargets = rows.filter(
-    (row) => row.tier === 'catalog' && !isPluginOwned(row.server),
-  );
-  const enableCount = toggleTargets(true).length;
-  const disableCount = toggleTargets(false).length;
-
-  const actions: BulkAction[] = [
-    {
-      id: 'enable',
-      label: t('plugins.bulk.enable', { count: enableCount }),
-      disabled: enableCount === 0,
-      run: () => surface.run(toggleTargets(true)),
-    },
-    {
-      id: 'disable',
-      label: t('plugins.bulk.disable', { count: disableCount }),
-      disabled: disableCount === 0,
-      run: () => surface.run(toggleTargets(false)),
-    },
-    {
-      id: 'delete',
-      label: t('plugins.bulk.delete', { count: deleteTargets.length }),
-      destructive: true,
-      disabled: deleteTargets.length === 0,
-      confirmMessage: t('plugins.bulk.confirmDelete', { count: deleteTargets.length }),
-      run: () =>
-        surface.run(
-          deleteTargets.map((row) => ({
-            key: rowKey(row),
-            run: () => deleteMcpCatalogServer(row.server.name),
-          })),
-        ),
-    },
-  ];
-
-  return { actions, scope, count: rows.length, selectionKey: bulkSelectionKey(rows.map(rowKey)) };
+  return {
+    ...buildBulkActions(t, surface, rows, {
+      noun: 'connector',
+      key: connectorRowKey,
+      name: (row) => row.server.name,
+      // Decided on the state the pills show, not on the row's own flag.
+      isOn: (row) => isEffectivelyEnabled(row.server),
+      held: (row) => isPluginSuppressed(row.server),
+      // Held as the row's own switch holds it: a row a check refused would be
+      // switched on as asked and sent failing to every workspace. A missing
+      // sign-in is left in, since that switch-on is refused before anything is
+      // written and the refusal is what offers the sign-in.
+      enableLocked: (row) => row.tier === 'catalog' && connectorState(row.server).kind === 'failing',
+      setEnabled: (row, on) =>
+        row.tier === 'builtin'
+          ? setBuiltinMcpServerEnabled(row.server.name, on)
+          : setMcpCatalogServerEnabled(row.server.name, on),
+      // Builtins have no delete, and plugin-owned rows uninstall through
+      // their plugin: bulk delete covers only the user's own catalog rows.
+      remove: {
+        verb: 'remove',
+        labelKey: 'plugins.bulk.remove',
+        confirmKey: 'plugins.bulk.confirmRemoveConnectors',
+        eligible: (row) => row.tier === 'catalog' && !isPluginOwned(row.server),
+        run: (row) => deleteMcpCatalogServer(row.server.name),
+      },
+      keptKey: 'plugins.bulk.keptBundled',
+      signIn,
+    }),
+    scope,
+  };
 }

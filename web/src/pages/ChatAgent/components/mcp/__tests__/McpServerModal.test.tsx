@@ -7,6 +7,7 @@ import { renderWithProviders } from '@/test/utils';
 import { queryKeys } from '@/lib/queryKeys';
 import { McpServerModal } from '../McpServerModal';
 import type { McpProbeResult, McpServerDraft } from '../../../utils/api';
+import { refusalSaying } from '../../../utils/api/refusal';
 
 // The modal reads its check through React Query, so it needs a client.
 const render = (ui: ReactElement, queryClient?: QueryClient) =>
@@ -34,10 +35,8 @@ function probeResult(overrides: Partial<McpProbeResult> = {}): McpProbeResult {
 }
 
 const baseProps = {
-  secretNames: ['EXISTING_TOKEN'],
   onClose: vi.fn(),
   onSubmit: vi.fn().mockResolvedValue(undefined),
-  createSecret: vi.fn().mockResolvedValue({ name: 'NEW' }),
 };
 
 /**
@@ -147,13 +146,13 @@ describe('McpServerModal: one field, kind detected from it', () => {
 
   it('keeps the prompt-tuning fields under Advanced, each with its own helper text', () => {
     render(<McpServerModal {...baseProps} />);
-    expect(screen.queryByText(/decide when to reach for this server/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/decide when to reach for this connector/i)).not.toBeInTheDocument();
     openAdvanced();
-    expect(screen.getByText(/decide when to reach for this server/i)).toBeInTheDocument();
-    expect(screen.getByText(/before it calls this server's tools/i)).toBeInTheDocument();
+    expect(screen.getByText(/decide when to reach for this connector/i)).toBeInTheDocument();
+    expect(screen.getByText(/before it calls this connector's tools/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /summary/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /detailed/i })).toBeInTheDocument();
-    const checkbox = screen.getByRole('checkbox', { name: /use my secrets during discovery/i });
+    const checkbox = screen.getByRole('checkbox', { name: /use my keys to list its tools/i });
     expect(checkbox).not.toBeChecked();
   });
 
@@ -172,7 +171,7 @@ describe('McpServerModal: header picker', () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<McpServerModal {...baseProps} onSubmit={onSubmit} />);
     typeEntry('https://mcp.example.com/mcp');
-    fireEvent.click(screen.getByRole('button', { name: /add entry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add header/i }));
     expect(screen.getByTestId('mcp-header-choice-0')).toHaveValue('bearer');
 
     fireEvent.change(screen.getByPlaceholderText(/^value$/i), { target: { value: 'k' } });
@@ -180,21 +179,27 @@ describe('McpServerModal: header picker', () => {
 
     fireEvent.click(screen.getByTestId('mcp-submit'));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ headers: { Authorization: 'Bearer k' } }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { Authorization: 'Bearer k' } }),
+      expect.anything(),
+    );
   });
 
   it('sends the exact listed name for an API-key header, and nothing for a row with no value', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<McpServerModal {...baseProps} onSubmit={onSubmit} />);
     typeEntry('https://mcp.example.com/mcp');
-    fireEvent.click(screen.getByRole('button', { name: /add entry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add header/i }));
     fireEvent.change(screen.getByTestId('mcp-header-choice-0'), { target: { value: 'x-api-key' } });
     fireEvent.change(screen.getByPlaceholderText(/^value$/i), { target: { value: 'k' } });
-    fireEvent.click(screen.getByRole('button', { name: /add entry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add header/i }));
 
     fireEvent.click(screen.getByTestId('mcp-submit'));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ headers: { 'X-API-Key': 'k' } }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { 'X-API-Key': 'k' } }),
+      expect.anything(),
+    );
   });
 
   it("edits a vendor's own header spelling as Custom and keeps it on save", async () => {
@@ -220,15 +225,18 @@ describe('McpServerModal: header picker', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ headers: { 'X-api-key': '${vault:FUYAO}' } }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { 'X-api-key': '${vault:FUYAO}' } }),
+      expect.anything(),
+    );
   });
 
   it('refuses the save while two rows would send the same header name', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<McpServerModal {...baseProps} onSubmit={onSubmit} />);
     typeEntry('https://mcp.example.com/mcp');
-    fireEvent.click(screen.getByRole('button', { name: /add entry/i }));
-    fireEvent.click(screen.getByRole('button', { name: /add entry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add header/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add header/i }));
     const values = screen.getAllByPlaceholderText(/^value$/i);
     fireEvent.change(values[0], { target: { value: 'EXAMPLE-TOKEN' } });
     fireEvent.change(values[1], { target: { value: 'EXAMPLE-BASIC' } });
@@ -247,6 +255,7 @@ describe('McpServerModal: header picker', () => {
       expect.objectContaining({
         headers: { Authorization: 'Bearer EXAMPLE-TOKEN', 'X-API-Key': 'EXAMPLE-BASIC' },
       }),
+      expect.anything(),
     );
   });
 });
@@ -289,8 +298,8 @@ describe('McpServerModal: host-side check of a remote address', () => {
     typeEntry('https://mcp.linear.app/mcp');
     const panel = await screen.findByTestId('mcp-probe');
     expect(panel).toHaveAttribute('data-verdict', 'oauth');
-    expect(panel).toHaveTextContent(/uses oauth/i);
-    // The verdict never blocks the save: OAuth is completed from the row.
+    expect(panel).toHaveTextContent(/signs in with oauth/i);
+    // The verdict never blocks the save: saving is what opens the sign-in.
     expect(screen.getByRole('button', { name: /^add$/i })).not.toBeDisabled();
   });
 
@@ -302,7 +311,7 @@ describe('McpServerModal: host-side check of a remote address', () => {
     typeEntry('https://mcp.linear.app/mcp');
     const panel = await screen.findByTestId('mcp-probe');
     expect(panel).toHaveAttribute('data-verdict', 'credential_rejected');
-    expect(panel).toHaveTextContent(/rejected that credential/i);
+    expect(panel).toHaveTextContent(/rejected that key/i);
     expect(panel).toHaveTextContent(/HTTP 403/);
   });
 
@@ -325,7 +334,7 @@ describe('McpServerModal: host-side check of a remote address', () => {
     // A credential makes it a different question, and one the address has to
     // be committed for, which in the browser the click into the value field
     // already did.
-    fireEvent.click(screen.getByRole('button', { name: /add entry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add header/i }));
     fireEvent.change(screen.getByPlaceholderText(/^value$/i), { target: { value: 'k' } });
     commitEntry();
     await waitFor(() => expect(onProbe).toHaveBeenCalledTimes(3));
@@ -359,7 +368,7 @@ describe('McpServerModal: the check caches the question, not the credential', ()
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<McpServerModal {...baseProps} onProbe={onProbe} />, client);
     typeEntry('https://mcp.linear.app/mcp');
-    fireEvent.click(screen.getByRole('button', { name: /add entry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add header/i }));
     fireEvent.change(screen.getByPlaceholderText(/^value$/i), { target: { value: SECRET } });
     commitEntry();
     // It still rides to the host, it just never lands in the cache.
@@ -399,7 +408,7 @@ describe('McpServerModal: the check caches the question, not the credential', ()
  */
 describe('McpServerModal: a credential waits for a committed address', () => {
   const fillHeader = () => {
-    fireEvent.click(screen.getByRole('button', { name: /add entry/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add header/i }));
     fireEvent.change(screen.getByPlaceholderText(/^value$/i), { target: { value: 'k' } });
   };
 
@@ -479,6 +488,35 @@ describe('McpServerModal: a credential waits for a committed address', () => {
 
     fireEvent.keyDown(screen.getByTestId(ENTRY), { key: 'Enter' });
     await waitFor(() => expect(onProbe).toHaveBeenCalledTimes(2));
+  });
+
+  it('checks again with the key once one is added to an address that asked for it', async () => {
+    const onProbe = vi
+      .fn()
+      .mockResolvedValueOnce(
+        probeResult({ verdict: 'needs_credential', error: 'server answered HTTP 401', http_status: 401 }),
+      )
+      .mockResolvedValueOnce(probeResult({ verdict: 'ok_authed', tools: [{ name: 'a', description: '' }] }));
+    render(<McpServerModal {...baseProps} onProbe={onProbe} />);
+    typeEntry('https://acme.co/mcp');
+    expect(await screen.findByTestId('mcp-probe')).toHaveAttribute('data-verdict', 'needs_credential');
+
+    // The address asked for a key, which is all the saying-so it needs: the
+    // user was never sent back to it. Mid-paste nothing goes out yet.
+    fireEvent.click(screen.getByRole('button', { name: /add header/i }));
+    const value = screen.getByPlaceholderText(/^value$/i);
+    fireEvent.change(value, { target: { value: 'k' } });
+    await settle();
+    expect(onProbe).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('mcp-probe-pending')).toHaveAttribute('data-pending', 'keyAdded');
+
+    fireEvent.blur(value);
+    await waitFor(() => expect(onProbe).toHaveBeenCalledTimes(2));
+    expect(onProbe).toHaveBeenLastCalledWith(
+      { url: 'https://acme.co/mcp', headers: { Authorization: 'Bearer k' } },
+      expect.any(AbortSignal),
+    );
+    expect(await screen.findByTestId('mcp-probe')).toHaveAttribute('data-verdict', 'ok_authed');
   });
 
   it('leaves the rest alone for a draft with nothing to hand over', async () => {
@@ -585,6 +623,7 @@ describe('McpServerModal: discovery_uses_secrets toggle', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ discovery_uses_secrets: false }),
+      expect.anything(),
     );
   });
 
@@ -593,11 +632,12 @@ describe('McpServerModal: discovery_uses_secrets toggle', () => {
     render(<McpServerModal {...baseProps} onSubmit={onSubmit} />);
     typeEntry('npx -y @scope/thing');
     openAdvanced();
-    fireEvent.click(screen.getByRole('checkbox', { name: /use my secrets during discovery/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /use my keys to list its tools/i }));
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ discovery_uses_secrets: true }),
+      expect.anything(),
     );
   });
 
@@ -605,7 +645,7 @@ describe('McpServerModal: discovery_uses_secrets toggle', () => {
     render(<McpServerModal {...baseProps} initial={makeDraft({ discovery_uses_secrets: true })} />);
     openAdvanced();
     expect(
-      screen.getByRole('checkbox', { name: /use my secrets during discovery/i }),
+      screen.getByRole('checkbox', { name: /use my keys to list its tools/i }),
     ).toBeChecked();
   });
 });
@@ -631,7 +671,7 @@ describe('McpServerModal: edit-mode env/header hydration (data-loss guard)', () 
 
     // Touch an unrelated field, then save.
     openAdvanced();
-    fireEvent.change(screen.getByPlaceholderText('What this server does'), {
+    fireEvent.change(screen.getByPlaceholderText('What this connector does'), {
       target: { value: 'new description' },
     });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -644,6 +684,7 @@ describe('McpServerModal: edit-mode env/header hydration (data-loss guard)', () 
         // The full env config survives the save — no silent erasure.
         env: { API_TOKEN: '${vault:API_TOKEN}', REGION: 'us-east-1' },
       }),
+      expect.anything(),
     );
   });
 
@@ -668,7 +709,7 @@ describe('McpServerModal: edit-mode env/header hydration (data-loss guard)', () 
     expect(screen.getByDisplayValue('X-Region')).toBeInTheDocument();
 
     openAdvanced();
-    fireEvent.change(screen.getByPlaceholderText('What this server does'), {
+    fireEvent.change(screen.getByPlaceholderText('What this connector does'), {
       target: { value: 'edited' },
     });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -678,6 +719,7 @@ describe('McpServerModal: edit-mode env/header hydration (data-loss guard)', () 
       expect.objectContaining({
         headers: { Authorization: '${vault:AUTH}', 'X-Region': 'eu' },
       }),
+      expect.anything(),
     );
   });
 
@@ -694,7 +736,7 @@ describe('McpServerModal: edit-mode env/header hydration (data-loss guard)', () 
     expect(screen.queryByDisplayValue('REGION')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
-    expect(await screen.findByText(/key is required/i)).toBeInTheDocument();
+    expect(await screen.findByText(/name is required/i)).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
 
     // Re-labeling the blank key clears the guard; the entry survives the save.
@@ -705,6 +747,7 @@ describe('McpServerModal: edit-mode env/header hydration (data-loss guard)', () 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ env: { API_TOKEN: '${vault:API_TOKEN}' } }),
+      expect.anything(),
     );
   });
 });
@@ -741,6 +784,7 @@ describe('McpServerModal: validation gating', () => {
         command: 'npx',
         args: ['-y', '@scope/thing', '--flag', 'two words'],
       }),
+      expect.anything(),
     );
   });
 
@@ -764,7 +808,7 @@ describe('McpServerModal: validation gating', () => {
     expect(screen.queryByText(/Python keyword/)).not.toBeInTheDocument();
     fireEvent.click(save);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ name: 'class' }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ name: 'class' }), expect.anything());
   });
 
   it('says why a new name is refused instead of only disabling Add', () => {
@@ -851,5 +895,129 @@ describe('McpServerModal: dismissal while saving', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
     dismissAllWays(container);
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('McpServerModal: refusals and stand-ins in hand at open', () => {
+  it('shows no refusal on a form that has nothing in it to have sent', () => {
+    render(
+      <McpServerModal
+        {...baseProps}
+        said={{ refusal: refusalSaying('The connection did not complete. Try again.') }}
+      />,
+    );
+    expect(screen.queryByText('The connection did not complete. Try again.')).not.toBeInTheDocument();
+  });
+
+  it('saves an edit whose stored values merely carry a hint word', () => {
+    render(
+      <McpServerModal
+        {...baseProps}
+        initial={makeDraft({ env: { TODO_FILE: '/Users/alice/todo.md', TOKEN: 'REPLACE_ME' } })}
+      />,
+    );
+    // The stored `REPLACE_ME` is the user's to keep: Save stays the user's call.
+    expect(screen.queryByTestId('mcp-standins')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mcp-submit')).toBeEnabled();
+  });
+});
+
+describe('McpServerModal: every refusal says why, once, where it is fixed', () => {
+  it('says why an http:// address leaves Add disabled', () => {
+    render(<McpServerModal {...baseProps} />);
+    typeEntry('http://example.com/mcp');
+    expect(screen.getByTestId('mcp-submit')).toBeDisabled();
+    expect(screen.getByText(/use an https:\/\/ address/i)).toBeInTheDocument();
+  });
+
+  it('names what blocks a local address rather than the scheme https would not fix', () => {
+    render(<McpServerModal {...baseProps} />);
+    typeEntry('http://localhost:3000/mcp');
+    expect(screen.getByText(/can't reach localhost/i)).toBeInTheDocument();
+    expect(screen.queryByText(/use an https:\/\/ address/i)).not.toBeInTheDocument();
+  });
+
+  it('says a rejected key once, in the check beside the key, when the save is refused for it', async () => {
+    const wire = 'server answered HTTP 401: it rejected the configured credentials';
+    const onProbe = vi
+      .fn()
+      .mockResolvedValue(probeResult({ verdict: 'credential_rejected', error: wire, http_status: 401 }));
+    render(
+      <McpServerModal
+        {...baseProps}
+        onProbe={onProbe}
+        prefill={{ name: 'acme', transport: 'http', url: 'https://acme.co/mcp', headers: { 'X-Key': 'bad' } }}
+        said={{
+          refusal: {
+            message: `acme did not pass its check: ${wire}`,
+            failures: [{ server: 'acme', verdict: 'credential_rejected', reason: wire, missing_secrets: [] }],
+            diagnostics: [],
+          },
+        }}
+      />,
+    );
+    expect(await screen.findByTestId('mcp-probe')).toHaveAttribute('data-verdict', 'credential_rejected');
+    expect(screen.getByTestId('mcp-probe-wire')).toHaveTextContent(`Server said: ${wire}`);
+    expect(screen.queryByTestId('mcp-check-failures')).not.toBeInTheDocument();
+    expect(screen.getAllByText(new RegExp(wire)).length).toBe(1);
+  });
+
+  it('opens an import entry to fix with the reason the import gave', () => {
+    const reason = 'the command did not start and list its tools within 90 seconds';
+    render(
+      <McpServerModal
+        {...baseProps}
+        prefill={{ name: 'pg', transport: 'stdio', command: 'npx', args: ['-y', 'server-postgres'] }}
+        said={{
+          refusal: {
+            message: reason,
+            failures: [{ server: 'pg', verdict: 'command_failed', reason, missing_secrets: [] }],
+            diagnostics: [],
+          },
+        }}
+      />,
+    );
+    expect(screen.getByTestId('mcp-check-failures')).toHaveTextContent(reason);
+    // It speaks to what the form opened on, and leaves once that changes.
+    typeEntry('npx -y server-postgres postgresql://db.example.com/app');
+    expect(screen.queryByTestId('mcp-check-failures')).not.toBeInTheDocument();
+  });
+});
+
+describe('McpServerModal: an SSE connector being edited', () => {
+  const sse = () =>
+    makeDraft({ name: 'feed', transport: 'sse', command: null, url: 'https://feed.example.com/sse' });
+
+  it('holds SSE as unsupported, with HTTP the way out, and never checks it over HTTP', async () => {
+    const onProbe = vi
+      .fn()
+      .mockResolvedValue(probeResult({ verdict: 'unreachable', error: 'server answered HTTP 405', http_status: 405 }));
+    render(<McpServerModal {...baseProps} initial={sse()} onProbe={onProbe} />);
+    openAdvanced();
+    const sseButton = screen.getByTestId('mcp-transport-sse');
+    expect(sseButton).toHaveAttribute('aria-pressed', 'true');
+    expect(sseButton).toBeDisabled();
+    expect(sseButton).toHaveTextContent('SSE (not supported)');
+    expect(screen.getByTestId('mcp-transport-http')).toBeEnabled();
+    await settle();
+    expect(onProbe).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('mcp-probe')).not.toBeInTheDocument();
+  });
+});
+
+describe('McpServerModal: a pasted SSE entry under Advanced', () => {
+  it('shows SSE as what the form holds, held, and HTTP moves it off', () => {
+    render(<McpServerModal {...baseProps} />);
+    typeEntry(JSON.stringify({ mcpServers: { legacy: { type: 'sse', url: 'https://mcp.example.com/sse' } } }));
+    openAdvanced();
+    const sse = screen.getByTestId('mcp-transport-sse');
+    expect(sse).toHaveAttribute('aria-pressed', 'true');
+    expect(sse).toBeDisabled();
+    expect(sse).toHaveTextContent('SSE (not supported)');
+
+    fireEvent.click(screen.getByTestId('mcp-transport-http'));
+    expect(screen.getByTestId('mcp-transport-http')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('mcp-transport-sse')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('mcp-sse-refused')).not.toBeInTheDocument();
   });
 });

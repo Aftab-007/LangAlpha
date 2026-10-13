@@ -8,10 +8,11 @@
  * own only identity and lifecycle (install, update, toggle, export, remove).
  */
 import { api } from '@/api/client';
-import { apiErrorDetail } from './errors';
+import { apiErrorCoded, apiErrorObject } from './errors';
 
 export interface PluginDiagnostic {
-  level: 'warning' | 'error';
+  /** info: how the package was read, not a problem with it. */
+  level: 'info' | 'warning' | 'error';
   /** Where the finding isolates: the whole bundle, the MCP component, one
    * mcp.json entry, one skills/ directory, or one archive member. */
   scope: 'plugin' | 'mcp' | 'entry' | 'skill' | 'file';
@@ -134,16 +135,25 @@ export interface PluginCandidate {
 export function multiplePluginCandidates(
   err: unknown,
 ): PluginCandidate[] | null {
-  const detail = apiErrorDetail(err);
-  if (
-    typeof detail === 'object' &&
-    detail !== null &&
-    (detail as { code?: unknown }).code === 'multiple_plugins' &&
-    Array.isArray((detail as { discovered?: unknown }).discovered)
-  ) {
-    return (detail as { discovered: PluginCandidate[] }).discovered;
-  }
-  return null;
+  const discovered = apiErrorCoded(err, 'multiple_plugins')?.discovered;
+  return Array.isArray(discovered) ? discovered : null;
+}
+
+/**
+ * The keys a 422 `plugin_secrets_required` asks for, or null for any other
+ * error: declared keys the vault does not hold and the install did not send.
+ * The install asks again with them in `secrets`.
+ */
+export function pluginSecretsRequired(err: unknown): PluginSecretRequest[] | null {
+  const secrets = apiErrorCoded(err, 'plugin_secrets_required')?.secrets;
+  if (!Array.isArray(secrets)) return null;
+  return secrets.map((s: Partial<Record<keyof PluginSecretRequest, unknown>>) => ({
+    name: String(s.name ?? ''),
+    label: String(s.label || s.name || ''),
+    description: typeof s.description === 'string' ? s.description : '',
+    docs_url: typeof s.docs_url === 'string' ? s.docs_url : null,
+    regex: typeof s.regex === 'string' ? s.regex : null,
+  }));
 }
 
 /**
@@ -152,8 +162,8 @@ export function multiplePluginCandidates(
  * carries none.
  */
 export function fatalDiagnostics(err: unknown): PluginDiagnostic[] {
-  const diags = (apiErrorDetail(err) as { diagnostics?: unknown })?.diagnostics;
-  return Array.isArray(diags) ? (diags as PluginDiagnostic[]) : [];
+  const diags = apiErrorObject(err)?.diagnostics;
+  return Array.isArray(diags) ? diags : [];
 }
 
 function uploadConfig(onProgress: ((percent: number) => void) | null) {
@@ -178,13 +188,23 @@ export async function getPlugin(name: string): Promise<PluginInfo> {
   return data;
 }
 
+/** Values for the keys a plugin declares, which its servers are checked with
+ *  before anything is installed. Sent only when there are any. */
+type PluginSecrets = Record<string, string> | null;
+
+function nonEmpty(secrets: PluginSecrets): secrets is Record<string, string> {
+  return !!secrets && Object.keys(secrets).length > 0;
+}
+
 export async function installPluginFromUrl(
   sourceUrl: string,
   subdir: string | null = null,
+  secrets: PluginSecrets = null,
 ): Promise<PluginInstallResponse> {
   const { data } = await api.post<PluginInstallResponse>('/api/v1/plugins', {
     source_url: sourceUrl,
     ...(subdir !== null ? { subdir } : {}),
+    ...(nonEmpty(secrets) ? { secrets } : {}),
   });
   return data;
 }
@@ -193,10 +213,12 @@ export async function installPluginFromZip(
   file: File,
   onProgress: ((percent: number) => void) | null = null,
   subdir: string | null = null,
+  secrets: PluginSecrets = null,
 ): Promise<PluginInstallResponse> {
   const form = new FormData();
   form.append('file', file);
   if (subdir !== null) form.append('subdir', subdir);
+  if (nonEmpty(secrets)) form.append('secrets', JSON.stringify(secrets));
   const { data } = await api.post<PluginInstallResponse>(
     '/api/v1/plugins/upload',
     form,
@@ -205,10 +227,23 @@ export async function installPluginFromZip(
   return data;
 }
 
-/** Re-fetch a remote-sourced plugin and reconcile components. */
-export async function updatePlugin(name: string): Promise<PluginInstallResponse> {
+/** Re-fetch a remote-sourced plugin and reconcile components. `secrets`
+ *  answers a `plugin_secrets_required` refusal: keys the new version
+ *  declares, checked with its servers before anything is written.
+ *  `sourceUrl` moves it to another revision of its own source, the catalog
+ *  entry's when the catalog holds a newer one; the server refuses any other
+ *  package with `plugin_source_mismatch`. */
+export async function updatePlugin(
+  name: string,
+  secrets: PluginSecrets = null,
+  sourceUrl: string | null = null,
+): Promise<PluginInstallResponse> {
+  const body: { source_url?: string; secrets?: Record<string, string> } = {};
+  if (sourceUrl) body.source_url = sourceUrl;
+  if (nonEmpty(secrets)) body.secrets = secrets;
   const { data } = await api.post<PluginInstallResponse>(
     `/api/v1/plugins/${encodeURIComponent(name)}/update`,
+    body.source_url || body.secrets ? body : undefined,
   );
   return data;
 }
@@ -217,9 +252,11 @@ export async function updatePluginFromZip(
   name: string,
   file: File,
   onProgress: ((percent: number) => void) | null = null,
+  secrets: PluginSecrets = null,
 ): Promise<PluginInstallResponse> {
   const form = new FormData();
   form.append('file', file);
+  if (nonEmpty(secrets)) form.append('secrets', JSON.stringify(secrets));
   const { data } = await api.post<PluginInstallResponse>(
     `/api/v1/plugins/${encodeURIComponent(name)}/update/upload`,
     form,
@@ -232,18 +269,6 @@ export async function setPluginEnabled(name: string, enabled: boolean) {
   const { data } = await api.patch<{ name: string; enabled: boolean }>(
     `/api/v1/plugins/${encodeURIComponent(name)}/enabled`,
     { enabled },
-  );
-  return data;
-}
-
-/** Fill declared secret blueprints; values land in the user vault. */
-export async function bindPluginSecrets(
-  name: string,
-  secrets: Record<string, string>,
-) {
-  const { data } = await api.post<{ set: string[] }>(
-    `/api/v1/plugins/${encodeURIComponent(name)}/bindings`,
-    { secrets },
   );
   return data;
 }

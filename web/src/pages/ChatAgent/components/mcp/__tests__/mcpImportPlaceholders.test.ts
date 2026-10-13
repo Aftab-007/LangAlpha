@@ -69,6 +69,25 @@ describe('isPlaceholder', () => {
     expect(isPlaceholder('xxxx')).toBe(true);
     expect(isPlaceholder('sk-live-xxxx9f8e7d')).toBe(false);
   });
+
+  it('reads a hint word inside a real value as real', () => {
+    // A hit stops the add form's save, so these locked even a description
+    // edit of a connector that held one.
+    expect(isPlaceholder('/Users/alice/todo.md')).toBe(false);
+    expect(isPlaceholder('https://api.todoist.com')).toBe(false);
+    expect(isPlaceholder('YourCompany')).toBe(false);
+    expect(isPlaceholder('my-todo-app')).toBe(false);
+    expect(isPlaceholder('insert-only')).toBe(false);
+  });
+
+  it('reads a value that is wholly a stand-in phrase as one, behind a scheme too', () => {
+    expect(isPlaceholder('your-api-key-here')).toBe(true);
+    expect(isPlaceholder('YOUR_GITHUB_TOKEN')).toBe(true);
+    expect(isPlaceholder('paste-token-here')).toBe(true);
+    expect(isPlaceholder('changeme')).toBe(true);
+    expect(isPlaceholder('Bearer YOUR_API_KEY')).toBe(true);
+    expect(isPlaceholder('Bearer <token>')).toBe(true);
+  });
 });
 
 describe('findPlaceholders', () => {

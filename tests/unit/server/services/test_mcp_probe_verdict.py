@@ -38,9 +38,10 @@ from src.server.services.mcp_oauth.lifecycle import TokenUnavailable
 from src.server.services.mcp_probe import (
     INVALID_HEADER_VALUE,
     ProbeOutcome,
+    RejectedHeaderValue,
     probe_result,
     probe_verdict,
-    rejected_header_result,
+    resolve_header_refs,
 )
 
 
@@ -61,9 +62,12 @@ def _outcome(**overrides) -> ProbeOutcome:
             "credential_rejected",
         ),
         (_outcome(auth="oauth", http_status=401), "oauth"),
-        # A supplied credential does not change an OAuth challenge: the server
-        # is naming a flow, not rejecting a key.
-        (_outcome(auth="oauth", http_status=401, sent_credential=True), "oauth"),
+        # A sign-in challenge in answer to a key is that key turned down; the
+        # save refuses it as such, so the preview must not offer a sign-in.
+        (
+            _outcome(auth="oauth", http_status=401, sent_credential=True),
+            "credential_rejected",
+        ),
         (_outcome(auth="none", error="timeout"), "unreachable"),
         (_outcome(auth="none", http_status=503), "unreachable"),
     ],
@@ -76,7 +80,7 @@ def test_missing_secrets_outrank_everything_else():
     """Nothing was dialled. Sending the literal ``${vault:...}`` string would
     come back a rejected key, which is the wrong thing to tell the user."""
     assert (
-        probe_verdict(_outcome(auth="credential"), missing_secrets=["API_KEY"])
+        probe_verdict(_outcome(auth="credential", missing_secrets=("API_KEY",)))
         == "missing_secrets"
     )
 
@@ -133,7 +137,7 @@ def test_the_result_round_trips_through_json():
 
 
 def test_a_ref_that_resolves_is_expanded_in_place():
-    resolved, missing = discovery.resolve_header_refs(
+    resolved, missing = resolve_header_refs(
         {"Authorization": "Bearer ${vault:K}"}, {"K": "sk-live"}
     )
 
@@ -145,7 +149,7 @@ def test_a_trailing_newline_is_trimmed_off_the_resolved_value():
     """The vault stores what was pasted so a PEM survives it; this is the sink
     that has to turn that into something HTTP can frame, and a trailing newline
     is the one case where the user's intent is not in doubt."""
-    resolved, _ = discovery.resolve_header_refs(
+    resolved, _ = resolve_header_refs(
         {"Authorization": "Bearer ${vault:K}"}, {"K": "sk-live\n"}
     )
 
@@ -160,25 +164,37 @@ def test_a_trailing_newline_is_trimmed_off_the_resolved_value():
 def test_a_line_break_inside_the_value_is_refused(value):
     """An embedded break is a second header, not a credential, so nothing here
     guesses at a repair."""
-    with pytest.raises(discovery.RejectedHeaderValue) as caught:
-        discovery.resolve_header_refs({"X-Api-Key": "${vault:K}"}, {"K": value})
+    with pytest.raises(RejectedHeaderValue) as caught:
+        resolve_header_refs({"X-Api-Key": "${vault:K}"}, {"K": value})
 
     assert caught.value.header == "X-Api-Key"
     assert str(caught.value) == INVALID_HEADER_VALUE
 
 
-def test_the_refusal_reads_the_same_as_the_one_httpx_would_have_raised():
+@pytest.mark.asyncio
+async def test_the_refusal_reads_the_same_as_the_one_httpx_would_have_raised(
+    monkeypatch,
+):
     """One wording, whichever side catches it: the row's stored verdict and the
     add form's answer must not describe the same value two ways."""
     import httpx2
 
-    from src.server.services.mcp_probe import _describe
+    from src.server.services import mcp_probe
 
-    assert _describe(httpx2.LocalProtocolError("quotes the value")) == (
+    monkeypatch.setattr(
+        mcp_probe,
+        "get_user_secrets_decrypted",
+        AsyncMock(return_value={"K": "one\ntwo"}),
+    )
+    refused = await mcp_probe.probe_configured(
+        "u1", "https://mcp.invalid/mcp", {"X-Api-Key": "${vault:K}"}
+    )
+
+    assert mcp_probe._describe(httpx2.LocalProtocolError("quotes the value")) == (
         INVALID_HEADER_VALUE
     )
-    assert rejected_header_result().error == INVALID_HEADER_VALUE
-    assert rejected_header_result().verdict == "unreachable"
+    assert refused.error == INVALID_HEADER_VALUE
+    assert probe_verdict(refused) == "unreachable"
 
 
 # ---------------------------------------------------------------------------
@@ -510,3 +526,201 @@ async def test_a_row_cannot_overwrite_the_preflights_own_protocol_version(monkey
     # verdict for a 401 turns on it.
     assert probe["X-Api-Key"] == "k-123"
     assert outcome.sent_credential is True
+
+
+def _answering(monkeypatch, status: int, body: bytes, content_type: str) -> None:
+    """Answer the preflight with one canned reply and dial nothing else."""
+    import httpx2
+
+    from src.server.services import mcp_probe
+    from src.server.utils.egress_guard import PinnedTarget
+
+    async def _pin(url, **kwargs):
+        return PinnedTarget(
+            url="https://93.184.216.34/mcp",
+            host="mcp.invalid",
+            ip="93.184.216.34",
+            authority="mcp.invalid",
+        )
+
+    async def _pinned_request(client, method, url, **kwargs):
+        return httpx2.Response(
+            status, headers={"content-type": content_type}, content=body
+        )
+
+    monkeypatch.setattr(mcp_probe, "pin_public_url", _pin)
+    monkeypatch.setattr(mcp_probe, "pinned_request", _pinned_request)
+
+
+# CoinMarketCap's answer to a wrong key: a 200 whose result is a tool-style
+# error, which the SDK can only report as a schema mismatch.
+_ISERROR_REPLY = (
+    b'{"jsonrpc":"2.0","id":0,"result":{"content":[{"type":"text","text":'
+    b'"{\\"error\\":{\\"code\\":1001,\\"message\\":\\"This API Key is invalid. \\"}}"}],'
+    b'"isError":true}}'
+)
+
+
+@pytest.mark.asyncio
+async def test_a_key_refused_inside_the_handshake_reads_as_the_servers_words(
+    monkeypatch,
+):
+    from src.server.services import mcp_probe
+
+    _answering(monkeypatch, 200, _ISERROR_REPLY, "application/json")
+
+    outcome = await mcp_probe.probe_remote_server(
+        "https://mcp.invalid/mcp", {"X-Api-Key": "k-123"}
+    )
+
+    assert probe_result(outcome).verdict == "credential_rejected"
+    assert outcome.error == "the server refused the handshake: This API Key is invalid."
+
+
+@pytest.mark.asyncio
+async def test_a_json_rpc_error_on_an_event_stream_is_read_too(monkeypatch):
+    from src.server.services import mcp_probe
+
+    body = (
+        b'event: message\ndata: {"jsonrpc":"2.0","id":0,"error":'
+        b'{"code":-32001,"message":"Unauthorized: bad token"}}\n\n'
+    )
+    _answering(monkeypatch, 200, body, "text/event-stream")
+
+    outcome = await mcp_probe.probe_remote_server("https://mcp.invalid/mcp", {})
+
+    # No credential went out, so the refusal cannot be a rejected key.
+    assert probe_result(outcome).verdict == "unreachable"
+    assert outcome.error == "the server refused the handshake: Unauthorized: bad token"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_quoting_the_key_is_scrubbed_before_it_is_cut(monkeypatch):
+    """The server's words are kept whole until the key is out of them: a cap
+    applied first would cut the quoted key in half, past any scrub."""
+    import json
+
+    from src.server.services import mcp_probe
+
+    key = "k-STRADDLE-0123456789abcdef"
+    # Placed across where a 160-character cap on the refusal would fall.
+    message = "x" * 125 + f" key {key} is not valid"
+    body = json.dumps(
+        {"jsonrpc": "2.0", "id": 0, "error": {"code": -32001, "message": message}}
+    ).encode()
+    _answering(monkeypatch, 200, body, "application/json")
+
+    outcome = await mcp_probe.probe_remote_server(
+        "https://mcp.invalid/mcp", {"X-Api-Key": key}
+    )
+
+    assert outcome.error.endswith(" key [redacted] is not valid")
+    assert not any(key[:n] in outcome.error for n in range(8, len(key) + 1))
+
+
+_ECHOED_KEY = "sk_live_9f8e7d6c5b4a3210"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "headers", "vault"),
+    [
+        (f"https://mcp.invalid/mcp?apiKey={_ECHOED_KEY}", {}, {}),
+        (
+            "https://mcp.invalid/mcp",
+            {"Authorization": "Token ${vault:VENDOR_KEY}"},
+            {"VENDOR_KEY": _ECHOED_KEY},
+        ),
+        (
+            "https://mcp.invalid/mcp",
+            {"X-Auth": "acct=42;key=${vault:VENDOR_KEY}"},
+            {"VENDOR_KEY": _ECHOED_KEY},
+        ),
+        # An import vaults a literal header whole, scheme word and all.
+        (
+            "https://mcp.invalid/mcp",
+            {"Authorization": "${vault:VENDOR_KEY}"},
+            {"VENDOR_KEY": f"Token {_ECHOED_KEY}"},
+        ),
+    ],
+    ids=["url-query", "other-scheme-word", "composite-header", "vaulted-with-scheme"],
+)
+async def test_a_refusal_quoting_the_key_alone_is_scrubbed_wherever_it_was_sent(
+    monkeypatch, url, headers, vault
+):
+    """A server quotes the part it rejected, not the field it sat in, and the
+    refusal is stored on the row, logged, and served in a failed check."""
+    import json
+
+    from src.server.services import mcp_probe
+
+    message = f"key {_ECHOED_KEY} is not valid for {url}"
+    body = json.dumps(
+        {"jsonrpc": "2.0", "id": 0, "error": {"code": -32001, "message": message}}
+    ).encode()
+    _answering(monkeypatch, 200, body, "application/json")
+    monkeypatch.setattr(
+        mcp_probe, "get_user_secrets_decrypted", AsyncMock(return_value=vault)
+    )
+
+    outcome = await mcp_probe.probe_configured("u1", url, headers)
+
+    assert outcome.error == (
+        "the server refused the handshake: key [redacted] is not valid for mcp.invalid"
+    )
+
+
+def test_a_real_handshake_reply_is_not_a_refusal():
+    from src.server.services.mcp_probe import _handshake_refusal
+
+    reply = (
+        b'event: message\ndata: {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":'
+        b'"2025-06-18","capabilities":{},"serverInfo":{"name":"x","version":"1"}}}\n\n'
+    )
+    assert _handshake_refusal(reply) is None
+    assert _handshake_refusal(b"") is None
+    assert _handshake_refusal(b"\xff\xfe not json") is None
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limit_says_to_try_again(monkeypatch):
+    from src.server.services import mcp_probe
+
+    _answering(monkeypatch, 429, b"slow down", "text/plain")
+
+    outcome = await mcp_probe.probe_remote_server("https://mcp.invalid/mcp", {})
+
+    assert outcome.http_status == 429
+    assert "try again in a minute" in outcome.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "oauth", "verdict"),
+    [
+        # The form offered a sign-in, and the save then refused the key.
+        ({"Authorization": "Bearer x"}, True, "credential_rejected"),
+        # Plain config is not a key: both said one was rejected when none went.
+        ({"X-Region": "us"}, False, "needs_credential"),
+    ],
+    ids=["key-to-an-oauth-server", "plain-config-to-a-401"],
+)
+async def test_the_preview_says_what_the_save_will(monkeypatch, headers, oauth, verdict):
+    """The add form's probe is a preview of the save's check, so one answer
+    from the server has to read the same on both."""
+    from src.server.models.mcp_server import McpServerInput
+    from src.server.services import mcp_probe
+    from src.server.services.mcp_validation import check_server
+
+    _answering(monkeypatch, 401, b"", "text/plain")
+    monkeypatch.setattr(
+        mcp_probe, "_oauth_metadata_behind", AsyncMock(return_value=oauth)
+    )
+    url = "https://mcp.invalid/mcp"
+
+    preview = probe_result(await mcp_probe.probe_configured("u1", url, headers))
+    saved = await check_server(
+        "u1", McpServerInput(name="vendor", transport="http", url=url, headers=headers)
+    )
+
+    assert (preview.verdict, saved.verdict) == (verdict, verdict)

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from '@/lib/framer';
-import { Check, Download, MoreVertical, Plus } from 'lucide-react';
+import { Download, MoreVertical, Plus } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
 import { EASE_OUT } from '@/lib/motion';
 import { cn } from '@/lib/utils';
@@ -34,33 +34,22 @@ const FADE_IN = { duration: 0.15, ease: EASE_OUT };
 const EXIT_TWEEN = { duration: 0.15, ease: EASE_OUT };
 
 /** Row container: identity tile + content column left, actions column right.
- *  In select mode (`selecting`) the whole row becomes the checkbox — a leading
- *  box reflects `selected`, the row's own controls go inert so a click
- *  anywhere toggles selection instead of firing a toggle or menu. `onOpen`
- *  makes the content column a pointer target for the row's detail view; the
- *  keyboard path is the name button inside `ServerNameLine`, so this click
- *  surface stays out of the accessibility tree. */
+ *  `onOpen` makes the content column a pointer target for the row's detail
+ *  view; the keyboard path is the name button inside `ServerNameLine`, so this
+ *  click surface stays out of the accessibility tree. */
 export function ServerRowShell({
   testid,
   tile,
   main,
   actions,
-  selecting = false,
-  selected = false,
-  onSelectToggle,
   onOpen,
 }: {
   testid: string;
   tile?: React.ReactNode;
   main: React.ReactNode;
   actions: React.ReactNode;
-  selecting?: boolean;
-  selected?: boolean;
-  onSelectToggle?: () => void;
   onOpen?: () => void;
 }) {
-  const selectable = selecting && !!onSelectToggle;
-  const openable = !!onOpen && !selectable;
   // The presence box collapses; the row inside never changes shape. `animate`
   // restores every key the exit moves: on framer-motion 12.39+ a row that
   // re-enters after its own exit finished (a sibling's still running) keeps
@@ -77,63 +66,21 @@ export function ServerRowShell({
       style={{ marginTop: 0 }}
     >
       <div
-        className={`flex items-start justify-between gap-3 py-2.5 px-3 rounded-lg overflow-hidden bg-(--color-bg-card) ${
-          selectable ? 'cursor-pointer' : ''
-        }${
+        className={`flex items-start justify-between gap-3 py-2.5 px-3 rounded-lg overflow-hidden bg-(--color-bg-card)${
           // The fill lives in the class (not style) so the hover twin can win;
           // only rows that open a detail view invite the pointer.
-          openable ? ' transition-colors duration-150 hover:bg-(--color-bg-card-hover)' : ''
+          onOpen ? ' transition-colors duration-150 hover:bg-(--color-bg-card-hover)' : ''
         }`}
-        style={{
-          boxShadow:
-            selectable && selected ? 'inset 0 0 0 1px var(--color-accent-primary)' : 'none',
-        }}
         data-testid={testid}
-        {...(selectable
-          ? {
-              role: 'checkbox' as const,
-              'aria-checked': selected,
-              tabIndex: 0,
-              onClick: onSelectToggle,
-              onKeyDown: (e: React.KeyboardEvent) => {
-                if (e.key === ' ' || e.key === 'Enter') {
-                  e.preventDefault();
-                  onSelectToggle?.();
-                }
-              },
-            }
-          : {})}
       >
-        {selectable && (
-          <span
-            aria-hidden
-            className="shrink-0 mt-2 inline-flex h-4 w-4 items-center justify-center rounded"
-            style={{
-              border: selected ? 'none' : '1px solid var(--color-border-muted)',
-              backgroundColor: selected ? 'var(--color-accent-primary)' : 'transparent',
-            }}
-          >
-            {selected && (
-              <Check className="h-3 w-3" style={{ color: 'var(--color-btn-primary-text)' }} />
-            )}
-          </span>
-        )}
         {tile && <div className="shrink-0 mt-0.5">{tile}</div>}
         <div
-          className={`min-w-0 flex flex-col gap-1 flex-1 ${
-            selectable ? 'pointer-events-none select-none' : ''
-          }${openable ? ' cursor-pointer' : ''}`}
-          {...(openable ? { onClick: onOpen } : {})}
+          className={`min-w-0 flex flex-col gap-1 flex-1${onOpen ? ' cursor-pointer' : ''}`}
+          {...(onOpen ? { onClick: onOpen } : {})}
         >
           {main}
         </div>
-        <div
-          className={`flex items-center gap-2 shrink-0 ${
-            selectable ? 'pointer-events-none opacity-40' : ''
-          }`}
-        >
-          {actions}
-        </div>
+        <div className="flex items-center gap-2 shrink-0">{actions}</div>
       </div>
     </motion.div>
   );
@@ -553,13 +500,29 @@ export function ListSkeleton({ rows = 3 }: { rows?: number }) {
   );
 }
 
-export function ListError({ children }: { children: React.ReactNode }) {
+export function ListError({
+  children,
+  onRetry,
+}: {
+  children: React.ReactNode;
+  /** A load that failed is usually worth one more try, offered where it is read. */
+  onRetry?: () => void;
+}) {
+  const { t } = useTranslation();
   return (
     <div
       className="text-xs p-2 rounded"
       style={{ backgroundColor: 'var(--color-bg-card)', color: 'var(--color-loss)' }}
     >
       {children}
+      {onRetry && (
+        <>
+          {' '}
+          <button type="button" onClick={onRetry} className="underline underline-offset-2">
+            {t('common.retry')}
+          </button>
+        </>
+      )}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   validateArg,
   isValidSecretValue,
   collectVaultRefs,
+  refsOnlyValue,
   DESCRIPTION_MAX,
   INSTRUCTION_MAX,
 } from '../mcpSchemas';
@@ -207,6 +208,27 @@ describe('mcpSchemas — secret value policy (vault-ref vs bare $VAR)', () => {
   it('rejects an invalid env key name', () => {
     expect(validateMcpServer(stdio({ env: { '1bad key': 'literal' } })).ok).toBe(false);
   });
+});
+
+// A sign-in that saves a server keeps its body in session storage until it
+// comes back. A value with a ref in it was kept whole, so a key typed beside
+// the ref (`sk-live ${vault:X}`) went into storage with it.
+describe('mcpSchemas — refsOnlyValue', () => {
+  it.each([
+    ['sk-live ${vault:X}'],
+    ['abc123${vault:'],
+    ['sk-live-abc123'],
+    ['Bearer sk-live${vault:X}'],
+  ])('drops %s, which holds more than refs', (value) => {
+    expect(refsOnlyValue(value)).toBe('');
+  });
+
+  it.each([['${vault:T}'], ['Bearer ${vault:T}'], ['basic ${vault:T}'], ['${vault:A}${vault:B}']])(
+    'keeps %s, which names stored keys and nothing else',
+    (value) => {
+      expect(refsOnlyValue(value)).toBe(value);
+    },
+  );
 });
 
 describe('mcpSchemas — stdio args policy (vault refs vs host-env placeholders)', () => {

@@ -24,6 +24,7 @@ from src.server.database.computer import (
     get_computer,
     get_computer_by_provider_ref,
     get_computer_for_workspace,
+    get_computers_for_user,
     get_primary_computer,
     mark_computer_retirement_pending,
     try_bind_computer_provider_ref,
@@ -966,6 +967,35 @@ class MachineLifecycleMixin:
                 await asyncio.shield(self._revert_machine_start(computer_id))
                 raise
 
+    async def pick_for_user(
+        self, user_id: str, *, workspace_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """The computer a user's command check runs on, None if none would start.
+
+        A workspace's own computer when there is one, since that is where the
+        server will run. Otherwise any of the user's, because a user server runs
+        on every computer they own: a running one first, so the check wakes
+        nothing, then one with a sandbox, so it builds nothing. The ones passed
+        over are the ones _start_machine refuses.
+        """
+        if workspace_id:
+            computer = await get_computer_for_workspace(workspace_id)
+            if computer is not None and str(computer.get("user_id")) == str(user_id):
+                return computer
+        usable = [
+            c
+            for c in await get_computers_for_user(user_id)
+            if c.get("status") not in (ComputerStatus.DELETED, ComputerStatus.ERROR)
+            and not (c.get("config") or {}).get("retire_when_empty")
+        ]
+        for c in usable:
+            if c.get("status") == ComputerStatus.RUNNING:
+                return c
+        for c in usable:
+            if c.get("provider_ref") and not c.get("host_unavailable_since"):
+                return c
+        return usable[0] if usable else None
+
     # The router must check ownership; these methods act on any supplied computer.
 
     async def get_session_for_computer(
@@ -987,26 +1017,51 @@ class MachineLifecycleMixin:
             )
         return session
 
+    async def wake_computer(
+        self, computer_id: str, *, user_id: str | None = None
+    ) -> Session:
+        """This worker's session on the machine, starting the machine if it is down.
+
+        Where get_session_for_computer refuses a start or stop another worker
+        owns, this waits it out and tries again, so a caller that just needs
+        the machine up gets it once that transition lands. The row says when:
+        a start claimed elsewhere ends running, and this worker then reconnects.
+        """
+        deadline = asyncio.get_running_loop().time() + self.start_wait_timeout
+        settling = (ComputerStatus.STARTING, ComputerStatus.STOPPING)
+        while True:
+            session = await self._start_machine(computer_id, user_id=user_id)
+            if session is not None:
+                return session
+            await self._wait_while(computer_id, settling, deadline)
+
     def cached_session_for_computer(
         self, computer: Dict[str, Any]
     ) -> Optional[Session]:
         """Return only this worker's matching live handle; never reconnect or provision."""
         return self._machine_session_if_live(computer)
 
-    async def _wait_for_computer_start(self, computer_id: str) -> Dict[str, Any]:
-        deadline = asyncio.get_running_loop().time() + self.start_wait_timeout
+    async def _wait_while(
+        self,
+        computer_id: str,
+        statuses: tuple[ComputerStatus, ...],
+        deadline: float,
+    ) -> dict[str, Any] | None:
+        """The row once it leaves ``statuses``, or None once it is gone.
+
+        The transition being waited on may belong to another worker, so the
+        row is the only place its end shows up."""
+        loop = asyncio.get_running_loop()
         while True:
-            computer = await get_computer(computer_id)
-            if computer is None:
-                raise RuntimeError(f"Computer {computer_id} was deleted while starting")
-            if computer["status"] != ComputerStatus.STARTING:
-                return computer
-            if asyncio.get_running_loop().time() >= deadline:
+            if loop.time() >= deadline:
                 raise RuntimeError(
-                    f"Computer {computer_id} did not finish starting within "
+                    f"Computer {computer_id} did not settle within "
                     f"{self.start_wait_timeout:.0f}s"
                 )
             await asyncio.sleep(self.start_wait_poll_interval)
+            computer = await get_computer(computer_id)
+            if computer is None or computer["status"] not in statuses:
+                return computer
 
     async def start_computer(
         self, computer_id: str, *, on_start_claimed: Callable[[], None] | None = None
@@ -1016,7 +1071,12 @@ class MachineLifecycleMixin:
             computer_id, on_start_claimed=on_start_claimed
         )
         if session is None:
-            computer = await self._wait_for_computer_start(computer_id)
+            deadline = asyncio.get_running_loop().time() + self.start_wait_timeout
+            computer = await self._wait_while(
+                computer_id, (ComputerStatus.STARTING,), deadline
+            )
+            if computer is None:
+                raise RuntimeError(f"Computer {computer_id} was deleted while starting")
             if computer["status"] != ComputerStatus.RUNNING:
                 raise RuntimeError(
                     f"Computer {computer_id} ended start in "

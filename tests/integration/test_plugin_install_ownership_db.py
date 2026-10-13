@@ -16,14 +16,25 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib
-import io
 import json
-import zipfile
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tests.unit.server.mcp_builders import all_passing, zip_package
+
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="session")]
+
+@pytest.fixture(autouse=True)
+def _every_server_passes_its_check():
+    """The checks dial vendors and start the user's computer; what these tests
+    pin is the lock and the version bump around the writes that follow."""
+    with patch(
+        "src.server.services.plugins.gate.check_servers",
+        new=AsyncMock(side_effect=all_passing),
+    ):
+        yield
+
 
 PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
 MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
@@ -56,11 +67,7 @@ def _package(
         members["mcp.json"] = json.dumps(
             {"$schema": MCP_SCHEMA, "mcpServers": {SERVER: server}}
         ).encode()
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        for path, data in members.items():
-            zf.writestr(path, data)
-    return validate_package(buf.getvalue())
+    return validate_package(zip_package(members))
 
 
 async def _install(user_id: str, package):

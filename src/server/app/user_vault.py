@@ -21,6 +21,8 @@ from fastapi import APIRouter, HTTPException
 
 from src.server.database.user_vault_secrets import (
     MAX_SECRETS_PER_USER,
+    SecretExists,
+    SecretLimitReached,
     create_user_secret,
     delete_user_secret,
     get_user_secrets,
@@ -93,7 +95,6 @@ async def list_blueprints(user_id: CurrentUserId):
     """
     from src.server.database.plugins import list_plugins
     from src.server.database.user_vault_secrets import get_user_secret_names
-    from src.server.services.plugins.errors import PluginFatal
     from src.server.services.plugins.extension import NAMESPACE, parse_extension
     from src.server.services.plugins.manifest import manifest_extension
 
@@ -104,14 +105,9 @@ async def list_blueprints(user_id: CurrentUserId):
     for plugin in await list_plugins(user_id):
         if not plugin["enabled"]:
             continue
-        try:
-            extension = parse_extension(
-                manifest_extension(plugin.get("manifest") or {}, NAMESPACE)
-            )
-        except PluginFatal:
-            # Stored manifests were validated at install; a parse failure
-            # here is corrupt data, not a reason to 500 the vault tab.
-            continue
+        extension = parse_extension(
+            manifest_extension(plugin.get("manifest") or {}, NAMESPACE)
+        )
         for secret in extension.secrets:
             sources = sorted({b.server for b in secret.bind}) or [plugin["name"]]
             entry = collected.get(secret.name)
@@ -139,8 +135,20 @@ async def list_blueprints(user_id: CurrentUserId):
 async def create_secret(body: CreateSecretRequest, user_id: CurrentUserId):
     try:
         await create_user_secret(user_id, body.name, body.value, body.description)
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    except SecretExists as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "secret_exists", "message": str(e), "name": body.name},
+        ) from e
+    except SecretLimitReached as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "secret_limit",
+                "message": str(e),
+                "max": MAX_SECRETS_PER_USER,
+            },
+        ) from e
 
     await after_secret_change(user_id, body.name)
     return {"name": body.name}

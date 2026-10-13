@@ -23,15 +23,23 @@ describe('FilterEmpty', () => {
 
   it('carries both when both are narrowing', () => {
     render(<FilterEmpty noun="plugins" filter="  acme " stateFilter="on" onReset={vi.fn()} />);
-    expect(screen.getByText('No enabled plugins match "acme".')).toBeInTheDocument();
+    expect(screen.getByText('No plugins that are on match "acme".')).toBeInTheDocument();
   });
 
   it('offers the one control that undoes it', () => {
     const onReset = vi.fn();
     render(<FilterEmpty noun="plugins" filter="acme" stateFilter="off" onReset={onReset} />);
 
-    expect(screen.getByText('No disabled plugins match "acme".')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /clear filters/i }));
+    expect(screen.getByText('No plugins that are off match "acme".')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(onReset).toHaveBeenCalled();
+  });
+
+  it('names the pill as what to undo when no search is narrowing', () => {
+    const onReset = vi.fn();
+    render(<FilterEmpty noun="plugins" filter="" stateFilter="off" onReset={onReset} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
     expect(onReset).toHaveBeenCalled();
   });
 });

@@ -17,6 +17,8 @@ import { isPlatformMode, APP_ENTRY_PATH } from './config/hostMode';
 import { AUTH_BROADCAST_CHANNEL, type AuthBroadcastMessage } from './lib/oauthPopup';
 import { inAppPath } from './lib/inAppPath';
 import { OnboardingProvider, OnboardingHostGate, OnboardingConnectHost } from './pages/Onboarding';
+import { ConnectConsentHost } from './pages/Plugins/components/ConnectConsentHost';
+import { ConnectLandingHost } from './pages/Plugins/components/ConnectLandingHost';
 import { ThreadLifecycleFeed } from './lib/threadLifecycle/ThreadLifecycleFeed';
 import { WarmHome } from './components/WarmHome';
 import { markBooted, watchStaleBuild } from './lib/staleBuild';
@@ -306,6 +308,9 @@ function AuthenticatedShell() {
       </div>
       <OnboardingHostGate />
       <OnboardingConnectHost />
+      {/* After the onboarding sheet, so a connect it starts asks above it. */}
+      <ConnectConsentHost />
+      <ConnectLandingHost />
     </OnboardingProvider>
   );
 }

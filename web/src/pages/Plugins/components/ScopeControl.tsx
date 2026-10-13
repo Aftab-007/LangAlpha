@@ -1,6 +1,7 @@
+import { useId } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { ArrowRightLeft, Check, ChevronDown, FolderOpen, Globe } from 'lucide-react';
+import { ArrowRightLeft, Check, ChevronDown, FolderOpen, Globe, PowerOff } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -15,6 +16,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { FlashGlyph } from '@/hooks/useFlashWorkspace';
+import { scopeOff, type ScopeOff } from '../utils/scopeOff';
 
 /**
  * The scope control on a Plugins row: where a skill / MCP server lives and
@@ -35,7 +37,8 @@ export interface ScopeWorkspace {
 }
 
 /**
- * Whether a row's checklist has to lock, from its *effective* state.
+ * Whether a row's per-workspace switches are locked, from its *effective*
+ * state.
  *
  * A workspace can add a deny-marker for anything, but removing one goes
  * through a re-enable that 409s whenever the account tier already subtracts
@@ -48,7 +51,7 @@ export function scopeLocked(row: {
   enabled?: boolean | null;
   plugin_enabled?: boolean | null;
 }): boolean {
-  return !row.enabled || row.plugin_enabled === false;
+  return scopeOff(row) !== null;
 }
 
 export type ScopeReach =
@@ -59,36 +62,30 @@ export type ScopeReach =
   | { kind: 'some'; count: number };
 
 /**
- * Where a user-tier row is on, as the badge and the row's state line both say
- * it. A row new workspaces start with reads as the deny-list it is: all
+ * The checklist a user-tier row offers, the workspaces in it that switched the
+ * row off, and the reach that follows, in one pass so the badge, the menu and
+ * every cell that names a reach cannot read them differently. Only listed
+ * workspaces count as off: a stale disable for a deleted one would otherwise
+ * inflate "except N".
+ *
+ * A row new workspaces start with reads as the deny-list it is: all
  * workspaces, less the ones that switched it off. A row they start without
  * reads as the list of workspaces it is actually on in, Flash included when
  * the checklist offers it, because "All workspaces" there would promise the
  * next workspace a server it will not have. `undefined` is a backend that
  * predates the setting, where every row still inherited.
  */
-export function scopeReach(
+export function readChecklist(
   workspaces: ScopeWorkspace[],
   disabledWorkspaceIds: string[] = [],
   flashWorkspace?: ScopeWorkspace,
   newWorkspacesOn?: boolean,
-): ScopeReach {
-  return readChecklist(workspaces, disabledWorkspaceIds, flashWorkspace, newWorkspacesOn).reach;
-}
-
-/**
- * The checklist a user-tier row offers, the workspaces in it that switched the
- * row off, and the reach that follows, in one pass so the badge, the state
- * line and the menu cannot read them differently. Only listed workspaces
- * count as off: a stale disable for a deleted one would otherwise inflate
- * "except N".
- */
-function readChecklist(
-  workspaces: ScopeWorkspace[],
-  disabledWorkspaceIds: string[] = [],
-  flashWorkspace?: ScopeWorkspace,
-  newWorkspacesOn?: boolean,
-): { checklist: ScopeWorkspace[]; disabled: ReadonlySet<string>; reach: ScopeReach } {
+): {
+  checklist: ScopeWorkspace[];
+  disabled: ReadonlySet<string>;
+  active: ScopeWorkspace[];
+  reach: ScopeReach;
+} {
   const checklist = flashWorkspace ? [...workspaces, flashWorkspace] : workspaces;
   const disabled = new Set(disabledWorkspaceIds);
   const active = checklist.filter((w) => !disabled.has(w.id));
@@ -103,27 +100,11 @@ function readChecklist(
   } else {
     reach = { kind: 'some', count: active.length };
   }
-  return { checklist, disabled, reach };
+  return { checklist, disabled, active, reach };
 }
 
-/** A user server row's state line, worded off the same reach as its badge. */
-export function serverStateLine(t: TFunction, enabled: boolean, reach: ScopeReach): string {
-  if (!enabled) return t('plugins.servers.disabledState');
-  switch (reach.kind) {
-    case 'all':
-      return t('plugins.servers.enabledState');
-    case 'allExcept':
-      return t('plugins.servers.enabledExceptState', { count: reach.count });
-    case 'none':
-      return t('plugins.servers.enabledNowhereState');
-    case 'only':
-      return t('plugins.servers.enabledOnlyInState', { name: reach.name });
-    case 'some':
-      return t('plugins.servers.enabledInState', { count: reach.count });
-  }
-}
-
-function reachLabel(t: TFunction, reach: ScopeReach): string {
+/** A reach in the words the badge uses, which every cell naming one repeats. */
+export function reachText(t: TFunction, reach: ScopeReach): string {
   switch (reach.kind) {
     case 'all':
       return t('plugins.scope.allWorkspaces');
@@ -142,7 +123,7 @@ export function ScopeControl({
   workspaces,
   scopeWorkspaceId,
   disabledWorkspaceIds = [],
-  checklistLocked = false,
+  off = null,
   moveBlockedReason = null,
   moveToAllBlockedReason = null,
   busy = false,
@@ -157,9 +138,11 @@ export function ScopeControl({
   /** null = all-workspaces tier; a workspace id = scoped to that workspace. */
   scopeWorkspaceId: string | null;
   disabledWorkspaceIds?: string[];
-  /** Lock the checklist, e.g. when the row itself is disabled account-wide
-   * (a workspace re-enable would 409 against the asymmetry rule). */
-  checklistLocked?: boolean;
+  /** The row is off account-wide (`scopeOff`). An all-workspaces row then
+   * says so instead of a reach that does not apply, and its menu leads with
+   * the step that comes first in place of a checklist that could change
+   * nothing yet: a workspace re-enable would 409 until the row is back on. */
+  off?: ScopeOff;
   /** Shown instead of the move actions (e.g. a plugin-owned skill, which
    * stays at the account level with its package). */
   moveBlockedReason?: string | null;
@@ -189,6 +172,8 @@ export function ScopeControl({
   // Under the all-workspaces agent the flash row is the Chief of Staff's
   // Home, the full agent, so it carries a house and no Flash-only caveat.
   const allWorkspaces = useAllWorkspacesAgent();
+  const useInId = useId();
+  const moveId = useId();
   if (loading) return null;
   const isUserTier = scopeWorkspaceId === null;
   const scopeWorkspace = workspaces.find((w) => w.id === scopeWorkspaceId);
@@ -199,14 +184,23 @@ export function ScopeControl({
     newWorkspacesOn,
   );
   const inherits = reach.kind === 'all' || reach.kind === 'allExcept';
+  // A workspace's own row is off in the one place it lives; its pill names
+  // that place either way, so only the all-workspaces reach gives way.
+  const offAll = isUserTier ? off : null;
+  const workspaceName = scopeWorkspace?.name ?? t('plugins.scope.unknownWorkspace');
 
-  const label = isUserTier
-    ? reachLabel(t, reach)
-    : scopeWorkspace?.name ?? t('plugins.scope.unknownWorkspace');
-  const Icon = isUserTier && inherits ? Globe : FolderOpen;
+  const label =
+    offAll === 'plugin'
+      ? t('plugins.scope.pluginOff')
+      : offAll === 'self'
+        ? t('plugins.scope.offEverywhere')
+        : isUserTier
+          ? reachText(t, reach)
+          : workspaceName;
+  const Icon = offAll ? PowerOff : isUserTier && inherits ? Globe : FolderOpen;
   // Only a label that carries a workspace name can outgrow the pill, so only
   // that one needs the full text on hover.
-  const labelTitle = isUserTier && reach.kind !== 'only' ? undefined : label;
+  const labelTitle = offAll || (isUserTier && reach.kind !== 'only') ? undefined : label;
 
   const hasChecklist =
     isUserTier && !!onSetWorkspaceDisabled && checklist.length > 0;
@@ -249,16 +243,26 @@ export function ScopeControl({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        {hasChecklist && (
-          <>
-            <DropdownMenuLabel>{t('plugins.scope.activeIn')}</DropdownMenuLabel>
+        {hasChecklist && offAll ? (
+          // Locked boxes would read as a choice still on offer; until the row
+          // is back on, the step that comes first is the whole answer.
+          <DropdownMenuLabel
+            className="font-normal max-w-[16rem] whitespace-normal"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            {offAll === 'plugin' ? t('plugins.scope.pluginOffHint') : t('plugins.scope.offHint')}
+          </DropdownMenuLabel>
+        ) : hasChecklist ? (
+          // A named group, so a screen reader hears which half an item is in.
+          <div role="group" aria-labelledby={useInId}>
+            <DropdownMenuLabel id={useInId}>{t('plugins.scope.activeIn')}</DropdownMenuLabel>
             {checklist.map((ws) => {
               const active = !disabled.has(ws.id);
               return (
                 <DropdownMenuCheckboxItem
                   key={ws.id}
                   checked={active}
-                  disabled={checklistLocked || busy}
+                  disabled={busy}
                   onSelect={(e) => {
                     // Keep the menu open: the checklist is a multi-toggle.
                     e.preventDefault();
@@ -292,8 +296,8 @@ export function ScopeControl({
                 {t('plugins.scope.futureHint')}
               </DropdownMenuLabel>
             )}
-          </>
-        )}
+          </div>
+        ) : null}
         {hasNewWorkspaces && (
           <>
             {/* Apart from the checklist: it is not a workspace, and a flip
@@ -301,8 +305,9 @@ export function ScopeControl({
             {hasChecklist && <DropdownMenuSeparator />}
             <DropdownMenuCheckboxItem
               checked={newOn}
-              // Not held by `checklistLocked`: the setting is stored on the
-              // row and no workspace re-enable is involved, so nothing 409s.
+              // Live while the row is off account-wide: the setting is stored
+              // on the row and no workspace re-enable is involved, so nothing
+              // 409s.
               disabled={busy}
               onSelect={(e) => {
                 // Keep the menu open, as the checklist does.
@@ -316,52 +321,75 @@ export function ScopeControl({
           </>
         )}
         {(hasChecklist || hasNewWorkspaces) && hasMove && <DropdownMenuSeparator />}
-        {hasMove && moveBlockedReason !== null ? (
-          <DropdownMenuItem disabled>
-            <ArrowRightLeft className="h-3.5 w-3.5 mr-2" />
-            <span className="max-w-[16rem] whitespace-normal">
-              {moveBlockedReason}
-            </span>
-          </DropdownMenuItem>
-        ) : hasMove ? (
-          <>
-            {!isUserTier &&
-              (moveToAllBlockedReason !== null ? (
-                <DropdownMenuItem disabled>
-                  <Globe className="h-3.5 w-3.5 mr-2" />
-                  <span className="max-w-[16rem] whitespace-normal">
-                    {moveToAllBlockedReason}
-                  </span>
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem disabled={busy} onSelect={() => onMove?.(null)}>
-                  <Globe className="h-3.5 w-3.5 mr-2" />
-                  {t('plugins.scope.moveToAll')}
-                </DropdownMenuItem>
-              ))}
-            {moveTargets.length > 0 && (
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <ArrowRightLeft className="h-3.5 w-3.5 mr-2" />
-                  {isUserTier
-                    ? t('plugins.scope.moveToWorkspace')
-                    : t('plugins.scope.moveToAnother')}
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  {moveTargets.map((ws) => (
-                    <DropdownMenuItem
-                      key={ws.id}
-                      disabled={busy}
-                      onSelect={() => onMove?.(ws.id)}
-                    >
-                      <span className="truncate">{ws.name}</span>
+        {hasMove && (
+          <div role="group" aria-labelledby={moveId}>
+            {/* A move changes where the row lives, not where it is on, and
+                the checklist above is easy to mistake for it. So the half
+                opens on what a move means from here: into one workspace at
+                the cost of every other, or, for a workspace's own row, the
+                one place it lives now, which each move below widens or
+                trades. */}
+            <DropdownMenuLabel id={moveId} className="max-w-[16rem] whitespace-normal">
+              {isUserTier
+                ? t('plugins.scope.moveIntoOne')
+                : t('plugins.scope.onlyIn', { name: workspaceName })}
+            </DropdownMenuLabel>
+            {moveBlockedReason !== null ? (
+              <DropdownMenuItem disabled>
+                <ArrowRightLeft className="h-3.5 w-3.5 mr-2" />
+                <span className="max-w-[16rem] whitespace-normal">
+                  {moveBlockedReason}
+                </span>
+              </DropdownMenuItem>
+            ) : (
+              <>
+                {isUserTier && (
+                  <DropdownMenuLabel
+                    className="font-normal pt-0 max-w-[16rem] whitespace-normal"
+                    style={{ color: 'var(--color-text-tertiary)' }}
+                  >
+                    {t('plugins.scope.moveIntoOneNote')}
+                  </DropdownMenuLabel>
+                )}
+                {!isUserTier &&
+                  (moveToAllBlockedReason !== null ? (
+                    <DropdownMenuItem disabled>
+                      <Globe className="h-3.5 w-3.5 mr-2" />
+                      <span className="max-w-[16rem] whitespace-normal">
+                        {moveToAllBlockedReason}
+                      </span>
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem disabled={busy} onSelect={() => onMove?.(null)}>
+                      <Globe className="h-3.5 w-3.5 mr-2" />
+                      {t('plugins.scope.moveToAll')}
                     </DropdownMenuItem>
                   ))}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
+                {moveTargets.length > 0 && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <ArrowRightLeft className="h-3.5 w-3.5 mr-2" />
+                      {isUserTier
+                        ? t('plugins.scope.chooseWorkspace')
+                        : t('plugins.scope.moveToAnother')}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {moveTargets.map((ws) => (
+                        <DropdownMenuItem
+                          key={ws.id}
+                          disabled={busy}
+                          onSelect={() => onMove?.(ws.id)}
+                        >
+                          <span className="truncate">{ws.name}</span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
+              </>
             )}
-          </>
-        ) : null}
+          </div>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

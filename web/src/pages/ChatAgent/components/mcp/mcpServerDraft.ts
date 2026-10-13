@@ -1,11 +1,13 @@
 import { commandLine, parseEntry, shellSplit, suggestName } from './mcpEntry';
+import { isPlaceholder, placeholderArgIndexes } from './mcpImportPlaceholders';
 import {
-  headerRowName,
   headersToMap,
   kvsToMap,
   mapToHeaderRows,
   mapToKVs,
   nextRowId,
+  savedHeaderRows,
+  sentHeader,
   type HeaderRow,
   type KvRow,
 } from './McpKeyValueEditor';
@@ -98,7 +100,7 @@ function hydrateEnv(map: Record<string, string> | undefined, refs: string[]): Kv
 }
 
 function hydrateHeaders(map: Record<string, string> | undefined, refs: string[]): HeaderRow[] {
-  if (map && Object.keys(map).length > 0) return mapToHeaderRows(map);
+  if (map && Object.keys(map).length > 0) return savedHeaderRows(map);
   return (refs ?? []).map((name) => ({
     id: nextRowId(),
     choice: 'custom' as const,
@@ -212,6 +214,9 @@ export function transportPinned(draft: Draft, next: McpTransport): Draft {
     transportPinned: true,
     headers: draft.headers,
     env: draft.env,
+    // A pasted config's name rides along: "Use HTTP" on a refused SSE entry
+    // changes how it connects, not what the user called it.
+    filled: draft.kind === 'remote' ? draft.filled : undefined,
   };
 }
 
@@ -273,14 +278,73 @@ export function draftSuggestedName(draft: Draft): string {
 }
 
 /**
+ * The first free spelling of a suggested name: `brave_search` while it is
+ * free, then `brave_search_2`, `_3`... cut to fit the 64-character limit.
+ * The backend refuses a taken name only after the whole check has run, so the
+ * form settles it while the name is still a suggestion.
+ */
+export function freeName(base: string, taken: { has(name: string): boolean }): string {
+  if (!base || !taken.has(base)) return base;
+  for (let n = 2; n < 1000; n += 1) {
+    const suffix = `_${n}`;
+    const candidate = `${base.slice(0, 64 - suffix.length)}${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return base;
+}
+
+/** Whether an edited local command changed what is run, which is what makes
+ *  the save start it again. A description edit saves without a check. */
+export function commandChanged(body: McpServerInput | null, initial: McpServerDraft | null | undefined): boolean {
+  if (!body || !initial) return true;
+  const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  return (
+    body.transport !== initial.transport ||
+    !same(body.command, initial.command) ||
+    !same(body.args ?? [], initial.args ?? []) ||
+    !same(body.env ?? {}, initial.env ?? {})
+  );
+}
+
+/**
  * The address the pre-save check runs against, or null when there is nothing
  * checkable: a local command has no host-side check, and an address the URL
- * policy already refuses is not worth a round trip.
+ * policy already refuses is not worth a round trip. Nor is SSE, which every
+ * save's check refuses: the check dials streamable HTTP, so the 405 an SSE
+ * server answers it with is the transport talking, not a second fault.
  */
 export function probeTarget(draft: Draft): { url: string; headers: Record<string, string> } | null {
   const url = draftUrl(draft);
-  if (draft.kind !== 'remote' || validateRemoteUrl(url) !== null) return null;
+  if (draft.kind !== 'remote' || draft.transport === 'sse' || validateRemoteUrl(url) !== null) return null;
   return { url, headers: draftHeaderMap(draft) };
+}
+
+/** Why the address policy refuses a remote address, by what the user changes. */
+export type RemoteUrlProblem = 'scheme' | 'local' | 'userinfo' | 'secret' | 'malformed';
+
+/**
+ * Which fix a refused address needs, read in `validateRemoteUrl`'s own order
+ * and only once it has refused, so this can never refuse what the policy (and
+ * the backend's `validate_remote_url`, which it mirrors) would let through. An
+ * `http://` address that https alone would not rescue is reported for what
+ * still blocks it: told to switch the scheme, the user of `http://localhost`
+ * would only meet the next refusal.
+ */
+export function remoteUrlProblem(url: string): RemoteUrlProblem | null {
+  if (!url || validateRemoteUrl(url) === null) return null;
+  if (url.includes('${')) return 'secret';
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return 'malformed';
+  }
+  if (parsed.protocol !== 'https:') {
+    if (parsed.protocol !== 'http:') return 'scheme';
+    return remoteUrlProblem(`https:${url.slice('http:'.length)}`) ?? 'scheme';
+  }
+  if (parsed.username || parsed.password) return 'userinfo';
+  return 'local';
 }
 
 /**
@@ -312,12 +376,11 @@ export function draftBlankKeyPath(draft: Draft): 'headers' | 'env' | null {
 export function draftDuplicateKeyPath(draft: Draft): 'headers' | 'env' | null {
   const repeats = (names: string[]) => new Set(names).size < names.length;
   if (draft.kind === 'remote') {
-    // `headersToMap` skips a row with no value, and a scheme word is only
-    // written in front of a value that exists, so an empty `inner` is exactly
-    // the row it drops.
-    const names = draft.headers
-      .filter((row) => headerRowName(row).trim() && row.inner !== '')
-      .map((row) => headerRowName(row).trim().toLowerCase());
+    // Read off what each row sends, since a saved row sends even an empty value.
+    const names = draft.headers.flatMap((row) => {
+      const sent = sentHeader(row);
+      return sent ? [sent.key.toLowerCase()] : [];
+    });
     return repeats(names) ? 'headers' : null;
   }
   if (draft.kind === 'stdio') {
@@ -327,6 +390,48 @@ export function draftDuplicateKeyPath(draft: Draft): 'headers' | 'env' | null {
     return repeats(keys) ? 'env' : null;
   }
   return null;
+}
+
+/**
+ * The values still holding a vendor's stand-in, `<your-api-key>` or
+ * `YOUR_TOKEN`, read with the same rule Import asks about. A pasted config is
+ * the usual source, and saved as written the stand-in became the credential:
+ * the save's check then failed against it, or a local command started with it
+ * and failed later. Only the rows this draft would send are read.
+ */
+export interface DraftStandIns {
+  headers: Set<string>;
+  env: Set<string>;
+  args: Set<number>;
+}
+
+/**
+ * `saved` is the edited connector as it was opened. A value it already holds
+ * is the user's, whatever it reads like, so it never blocks the save: a stand-in
+ * rule that misread a stored value would otherwise lock even a description edit.
+ */
+export function draftStandIns(draft: Draft, saved: Draft | null = null): DraftStandIns {
+  const out: DraftStandIns = { headers: new Set(), env: new Set(), args: new Set() };
+  const keptHeaders = new Set(saved?.headers.map((row) => row.inner));
+  const keptEnv = new Set(saved?.env.map((row) => row.value));
+  const keptArgs = new Set(saved ? draftArgv(saved).args : []);
+  if (draft.kind === 'remote') {
+    for (const row of draft.headers) {
+      if (!keptHeaders.has(row.inner) && isPlaceholder(row.inner)) out.headers.add(row.id);
+    }
+  }
+  if (draft.kind === 'stdio') {
+    for (const row of draft.env) {
+      if (!keptEnv.has(row.value) && isPlaceholder(row.value)) out.env.add(row.id);
+    }
+    const { args } = draftArgv(draft);
+    for (const i of placeholderArgIndexes(args)) if (!keptArgs.has(args[i])) out.args.add(i);
+  }
+  return out;
+}
+
+export function hasStandIns(s: DraftStandIns): boolean {
+  return s.headers.size + s.env.size + s.args.size > 0;
 }
 
 /** What Save sends, or null while the field holds nothing a server can be
@@ -347,4 +452,144 @@ export function draftPayload(draft: Draft, meta: DraftMeta): McpServerInput | nu
     return { ...base, transport: 'stdio', command, args, env: kvsToMap(draft.env) };
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// The form
+// ---------------------------------------------------------------------------
+
+/**
+ * The draft with what the form holds beside it: the prompt fields, and where
+ * the automatic check may send a key. One value moved by one reducer, so a
+ * server the form opens on goes in exactly as a paste of it does.
+ */
+export interface FormState {
+  draft: Draft;
+  meta: Omit<DraftMeta, 'name'>;
+  /**
+   * The addresses a key may go to without the user saying so again: ones
+   * committed with a key already in the form, ones that asked for a key
+   * themselves, and an edit's saved address, since that pairing exists.
+   */
+  trusted: readonly string[];
+  /** Whether the headers are finished for now. Typing a key unsettles them;
+   *  leaving its field, choosing a stored key or keeping a typed one settles
+   *  them, and that is when a trusted address is asked again. */
+  headersSettled: boolean;
+}
+
+export type FormAction =
+  | { type: 'entry'; raw: string }
+  | { type: 'headers'; rows: HeaderRow[] }
+  /** Any other change to the draft: env, args, a transport chosen. */
+  | { type: 'draft'; change: (draft: Draft) => Draft }
+  | { type: 'meta'; meta: Partial<FormState['meta']> }
+  | { type: 'settle' }
+  /** The address field left, or Enter pressed in it. */
+  | { type: 'commit' }
+  /** The user, or the server's own answer about a key, vouches for this address. */
+  | { type: 'trust'; url: string };
+
+function trusting(trusted: readonly string[], url: string): readonly string[] {
+  return trusted.includes(url) ? trusted : [...trusted, url];
+}
+
+export function formReducer(state: FormState, action: FormAction): FormState {
+  switch (action.type) {
+    case 'entry': {
+      const draft = entryChanged(state.draft, action.raw);
+      const filled = draft.kind === 'remote' || draft.kind === 'stdio' ? draft.filled : undefined;
+      if (!filled) return { ...state, draft };
+      // A pasted config also carries the fields that live outside the draft,
+      // and its address arrives whole with its key beside it: nothing about
+      // it is half-typed, so it is checked as it stands.
+      const remote = draft.kind === 'remote';
+      return {
+        draft,
+        meta: { ...state.meta, ...filled.meta },
+        trusted: remote ? trusting(state.trusted, draftUrl(draft)) : state.trusted,
+        headersSettled: state.headersSettled || remote,
+      };
+    }
+    case 'headers':
+      return { ...state, draft: headersChanged(state.draft, action.rows), headersSettled: false };
+    case 'draft':
+      return { ...state, draft: action.change(state.draft) };
+    case 'meta':
+      return { ...state, meta: { ...state.meta, ...action.meta } };
+    case 'settle':
+      return { ...state, headersSettled: true };
+    case 'commit': {
+      const target = probeTarget(state.draft);
+      if (!target) return state;
+      // A commit made before any credential existed is not consent to send
+      // one: clicking "Add header" is itself what leaves the address field,
+      // so the host still being typed is committed a beat before the key.
+      const keyed = Object.keys(target.headers).length > 0;
+      return {
+        ...state,
+        trusted: keyed ? trusting(state.trusted, target.url) : state.trusted,
+        headersSettled: true,
+      };
+    }
+    case 'trust':
+      return { ...state, trusted: trusting(state.trusted, action.url) };
+  }
+}
+
+/** A server written out elsewhere, as the one-server config a paste of it is. */
+function asConfig(server: McpServerInput): string {
+  const def: Record<string, unknown> = { type: server.transport };
+  if (server.transport === 'stdio') {
+    def.command = server.command ?? '';
+    def.args = server.args ?? [];
+    if (server.env && Object.keys(server.env).length > 0) def.env = server.env;
+  } else {
+    def.url = server.url ?? '';
+    if (server.headers && Object.keys(server.headers).length > 0) def.headers = server.headers;
+  }
+  if (server.description) def.description = server.description;
+  if (server.instruction) def.instruction = server.instruction;
+  if (server.tool_exposure_mode) def.tool_exposure_mode = server.tool_exposure_mode;
+  return JSON.stringify({ mcpServers: { [server.name]: def } });
+}
+
+/**
+ * The form as it opens: on the row being edited, or on a new server somebody
+ * already wrote out (an import entry being fixed, a save being tried again),
+ * which goes in as a paste, so it takes the same reading and the form says
+ * where it came from.
+ */
+export function initialForm(initial?: McpServerDraft | null, prefill?: McpServerInput | null): FormState {
+  const opened: FormState = {
+    draft: initialDraft(initial),
+    meta: {
+      description: initial?.description ?? '',
+      instruction: initial?.instruction ?? '',
+      exposure: EXPOSURE_MODES.find((m) => m === initial?.tool_exposure_mode) ?? 'summary',
+      discoveryUsesSecrets: initial?.discovery_uses_secrets ?? false,
+    },
+    trusted: initial?.url ? [initial.url] : [],
+    headersSettled: true,
+  };
+  return !initial && prefill ? formReducer(opened, { type: 'entry', raw: asConfig(prefill) }) : opened;
+}
+
+/** Where a refusal is said: the one place on the form that fixes it. */
+export type RefusalSpot = 'probe' | 'sse' | 'entry' | 'name' | 'headers' | 'env' | 'box';
+
+const SPOTS = ['probe', 'sse', 'entry', 'name', 'headers', 'env'] as const;
+
+/**
+ * The first place on the form that answers for a refusal. The live check is
+ * the save's own check asked again of exactly this form, so while it answers,
+ * or once it has refused, its panel says the refusal in the form's words.
+ * Otherwise a problem the form can see for itself is the place, with the
+ * refusal's own words as a detail under it, and only a refusal the form cannot
+ * place stands on its own.
+ */
+export function placeRefusal(
+  faults: Partial<Record<Exclude<RefusalSpot, 'box'>, boolean>>,
+): RefusalSpot {
+  return SPOTS.find((spot) => faults[spot]) ?? 'box';
 }

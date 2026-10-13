@@ -6,6 +6,7 @@ export interface SegmentedOption<T extends string> {
   /** Offered but refused. It greys out in place, so the row still says which
    *  answers exist rather than quietly shrinking to the ones that are left. */
   disabled?: boolean;
+  testId?: string;
 }
 
 interface SegmentedControlProps<T extends string> {
@@ -66,6 +67,7 @@ export function SegmentedControl<T extends string>({
             aria-pressed={selected}
             disabled={disabled || option.disabled}
             onClick={() => onChange(option.value)}
+            data-testid={option.testId}
             className={`flex items-center gap-1.5 font-medium transition-colors disabled:cursor-default ${
               compact ? 'px-2 py-0.5 text-[0.6875rem]' : 'px-2.5 py-1 text-[0.8125rem]'
             }`}

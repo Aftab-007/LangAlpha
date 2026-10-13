@@ -20,7 +20,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import src.server.app.mcp_servers as mcp_servers_mod
 import src.server.services.vault_invalidation as vi
 from ptc_agent.config.core import MCPServerConfig
 from src.server.services.vault_invalidation import refs_for_server
@@ -95,7 +94,7 @@ def probes(monkeypatch, pushes, running, rediscover):
     sched = MagicMock()
     monkeypatch.setattr(vi, "delete_user_and_workspace_tool_schemas_and_bump", purge_bump)
     monkeypatch.setattr(vi, "bump_user_workspaces_mcp_version", bump)
-    monkeypatch.setattr(mcp_servers_mod, "_schedule_proactive_apply", sched)
+    monkeypatch.setattr(vi, "schedule_proactive_apply", sched)
     monkeypatch.setattr(vi, "list_catalog_servers", AsyncMock(return_value=[]))
     return purge_bump, bump, sched
 

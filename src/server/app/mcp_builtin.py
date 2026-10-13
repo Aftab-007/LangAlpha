@@ -17,7 +17,6 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from src.server.app.mcp_icons import icon_url
 from src.server.database.account_disables import (
     list_account_disables,
     set_account_disable,
@@ -29,7 +28,8 @@ from src.server.models.mcp_server import (
     EnabledInput,
 )
 from src.server.services.mcp_config import builtin_names
-from src.server.services.plugins.bundled import component_owners
+from src.server.services.plugins.bundled import component_owners, server_icon_source
+from src.server.services.plugins.icons import component_mark
 from src.server.utils.api import CurrentUserId, handle_api_exceptions
 
 logger = logging.getLogger(__name__)
@@ -79,8 +79,12 @@ async def list_builtin_servers(
                 description=s.description or "",
                 transport=s.transport,
                 enabled=s.name not in disables.servers,
-                icon_url=await icon_url(
-                    connector.server_info if connector else None
+                # A server whose handshake names no mark wears the one its
+                # bundle declares for it, else the bundle's own. Ours declare
+                # none, and the frontend draws our mark.
+                icon_url=await component_mark(
+                    connector.server_info if connector else None,
+                    server_icon_source(owner, s.name) if owner is not None else None,
                 ),
                 plugin_name=owner,
                 plugin_enabled=(

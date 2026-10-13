@@ -200,13 +200,14 @@ async def update_plugin_row(
     source_ref: str | None,
     manifest: dict[str, Any],
     mcp_document: dict[str, Any] | None,
-    content_hash: str | None,
+    content_hash: str,
 ) -> dict[str, Any] | None:
     """Replace a plugin's manifests after a successful re-fetch. None if absent.
 
-    ``content_hash=None`` keeps the stored one: a reconcile that left a
-    component in error has not installed this tree, and the stale hash is what
-    makes the next update try again instead of reporting up to date.
+    ``content_hash=""`` is for a reconcile that left a component in error: it
+    has not installed this tree, nor still holds the one before, so it records
+    none, as an interrupted install does. The ref moves either way, so keeping
+    the old hash would read as current to a catalog that compares refs.
     """
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
@@ -215,7 +216,7 @@ async def update_plugin_row(
                 UPDATE user_plugins
                 SET version = %s, source_ref = COALESCE(%s, source_ref),
                     manifest = %s, mcp_document = %s,
-                    content_hash = COALESCE(%s, content_hash),
+                    content_hash = %s,
                     updated_at = NOW()
                 WHERE user_id = %s AND name = %s
                 RETURNING {_PLUGIN_COLUMNS}

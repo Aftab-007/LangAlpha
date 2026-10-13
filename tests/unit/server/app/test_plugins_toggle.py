@@ -24,6 +24,14 @@ from tests.conftest import create_test_app
 PLUGIN_ID = "22222222-2222-2222-2222-222222222222"
 
 
+@pytest.fixture(autouse=True)
+def _no_installed_plugin():
+    """No installed row unless a test says so: switching on reads it first,
+    to ask whether any of its servers lacks a sign-in."""
+    with patch("src.server.app.plugins.get_plugin", new=AsyncMock(return_value=None)):
+        yield
+
+
 @pytest_asyncio.fixture
 async def client():
     from src.server.app.plugins import router
@@ -38,6 +46,15 @@ async def client():
 def _patches(*, enabled: bool, servers, connection):
     revoke = AsyncMock()
     stack = [
+        # Switching on first asks whether any server lacks its sign-in; none
+        # here, which test_plugins_validate_first covers.
+        patch(
+            "src.server.app.plugins.get_plugin",
+            new=AsyncMock(
+                return_value={"user_plugin_id": PLUGIN_ID, "name": "demo", "enabled": False}
+            ),
+        ),
+        patch("src.server.app.plugins.list_catalog_servers", new=AsyncMock(return_value=[])),
         patch(
             "src.server.app.plugins.set_plugin_enabled",
             new=AsyncMock(
@@ -123,6 +140,11 @@ def _bundle_patches(*, servers, installed_row, connection):
     revoke = AsyncMock()
     disable = AsyncMock()
     stack = [
+        patch(
+            "src.server.app.plugins.get_plugin",
+            new=AsyncMock(return_value=installed_row),
+        ),
+        patch("src.server.app.plugins.list_catalog_servers", new=AsyncMock(return_value=[])),
         patch(
             "src.server.app.plugins.set_plugin_enabled",
             new=AsyncMock(return_value=installed_row),

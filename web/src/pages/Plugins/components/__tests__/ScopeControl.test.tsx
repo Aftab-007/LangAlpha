@@ -117,14 +117,11 @@ describe('ScopeControl: what a workspace created later starts with', () => {
     expect(screen.queryByText('On in new workspaces')).not.toBeInTheDocument();
   });
 
-  it('is not held by a locked checklist, only by a write in flight', () => {
-    // A locked checklist guards a workspace re-enable that would 409. This
-    // setting is stored on the row and involves no re-enable.
-    const { unmount } = renderControl({
-      checklistLocked: true,
-      onSetNewWorkspacesOn: vi.fn(),
-    });
-    expect(screen.getByRole('menuitemcheckbox', { name: 'Alpha' })).toHaveAttribute('aria-disabled', 'true');
+  it('stays live on a row that is off account-wide, held only by a write in flight', () => {
+    // The off row's checklist gives way, since a workspace re-enable would
+    // 409. This setting is stored on the row and involves no re-enable.
+    const { unmount } = renderControl({ off: 'self', onSetNewWorkspacesOn: vi.fn() });
+    expect(screen.queryByRole('menuitemcheckbox', { name: 'Alpha' })).not.toBeInTheDocument();
     expect(toggle()).not.toHaveAttribute('aria-disabled');
     unmount();
 
@@ -135,7 +132,7 @@ describe('ScopeControl: what a workspace created later starts with', () => {
   it('is offered on a row with no workspace to list yet', () => {
     // What the next workspace starts with is then the only scope the row has.
     renderControl({ workspaces: [], onSetNewWorkspacesOn: vi.fn() });
-    expect(screen.queryByText('Active in')).not.toBeInTheDocument();
+    expect(screen.queryByText('Use in these workspaces')).not.toBeInTheDocument();
     expect(toggle()).toBeInTheDocument();
   });
 });
@@ -171,5 +168,32 @@ describe('ScopeControl: the badge on a row new workspaces start without', () => 
   it('keeps the deny-list wording on a row new workspaces start with', () => {
     renderControl({ newWorkspacesOn: true, disabledWorkspaceIds: ['ws-b'] });
     expect(iconOf(trigger('All workspaces except 1'))).toContain('lucide-globe');
+  });
+});
+
+/**
+ * A row switched off account-wide is on in no workspace, whatever its
+ * deny-list says, so the pill cannot read as a reach and the checklist cannot
+ * be the first thing offered: no box in it can take until the row is back on.
+ */
+describe('ScopeControl: a row that is off before any workspace has a say', () => {
+  const trigger = (label: string) => screen.getByRole('button', { name: `Scope: ${label}` });
+
+  it('reads off everywhere and points at the switch instead of the checklist', () => {
+    renderControl({ off: 'self', disabledWorkspaceIds: ['ws-b'] });
+    expect(trigger('Off everywhere')).toBeInTheDocument();
+    expect(screen.getByText('Switch it on to choose workspaces.')).toBeInTheDocument();
+    expect(screen.queryByRole('menuitemcheckbox', { name: 'Alpha' })).not.toBeInTheDocument();
+  });
+
+  it('points at the plugin when the plugin is what holds it off', () => {
+    renderControl({ off: 'plugin' });
+    expect(trigger('Plugin off')).toBeInTheDocument();
+    expect(screen.getByText(/Switch the plugin on to choose workspaces/)).toBeInTheDocument();
+  });
+
+  it('leaves a workspace-tier row naming its workspace', () => {
+    renderControl({ scopeWorkspaceId: 'ws-a', off: 'self', onMove: vi.fn() });
+    expect(trigger('Alpha')).toBeInTheDocument();
   });
 });

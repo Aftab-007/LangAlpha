@@ -170,8 +170,11 @@ async def _connector_secret_literals(user_id: str) -> dict[str, str]:
         for key, value in (mapping or {}).items():
             if not isinstance(value, str) or key in _NON_SECRET_KEYS:
                 continue
-            if VAULT_REF_RE.fullmatch(value):
-                continue  # resolves to a vault value the scan already covers
+            # A value carrying a ref resolves to a vault value the scan already
+            # covers, and the text around it is a template (``Bearer ``), not
+            # a credential; ``search`` is the verdict vault extraction reaches.
+            if VAULT_REF_RE.search(value):
+                continue
             if len(value) < 8 or not looks_like_secret(key, value):
                 continue
             out[f"mcp:{server}:{key}"] = value

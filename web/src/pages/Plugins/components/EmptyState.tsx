@@ -19,9 +19,11 @@ export function EmptyState({
   compact?: boolean;
 }) {
   if (compact) {
+    // On a phone the action goes under the sentence: beside it, the sentence
+    // is squeezed into a column a few words wide.
     return (
       <div
-        className="flex items-center justify-between gap-4 rounded-lg border px-4 py-3"
+        className="flex flex-col items-start gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
         style={{ borderColor: 'var(--color-border-muted)' }}
       >
         <p className="min-w-0 flex-1 text-sm" style={{ color: 'var(--color-text-tertiary)' }}>

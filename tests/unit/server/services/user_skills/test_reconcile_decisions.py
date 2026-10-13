@@ -11,6 +11,8 @@ decided against (``expectTreeHash`` / ``expectAbsent``), and content beats
 deletion on both sides.
 """
 
+import io
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -559,3 +561,34 @@ class TestFailuresThatDependOnOtherRows:
                 self._pass(), "demo", _row(), conflict=False
             )
         assert exc.value.suppress is False
+
+
+@pytest.mark.asyncio
+async def test_a_skill_renamed_in_its_folder_is_not_pulled_up(monkeypatch):
+    """The agent edits ``name:`` in a linked skill's SKILL.md. Its archive is
+    rooted at the new name, so storing it under this row would leave the row
+    with no files and extract over the skill that does carry that name."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("demo/SKILL.md", "---\nname: other\ndescription: d\n---\n")
+    monkeypatch.setattr(
+        reconcile.skill_sync,
+        "download_tree",
+        _async_return((buf.getvalue(), "tree-2")),
+    )
+    monkeypatch.setattr(reconcile, "_store", _async_return((None, b"zip")))
+    monkeypatch.setattr(reconcile, "drop_archive_if_unused", _async_return(None))
+    writes: list[dict] = []
+
+    async def _write(*a, **k):
+        writes.append(k)
+        return {}, None
+
+    monkeypatch.setattr(reconcile, "update_user_skill_content_cas", _write)
+
+    with pytest.raises(reconcile._SyncFailure) as exc:
+        await reconcile._pull_up(
+            TestFailuresThatDependOnOtherRows._pass(), "demo", _row(), conflict=False
+        )
+    assert exc.value.suppress is True
+    assert writes == []

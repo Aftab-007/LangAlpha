@@ -1,74 +1,68 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router';
-import { Trans, useTranslation } from 'react-i18next';
-import { AnimatePresence } from '@/lib/framer';
+import { useTranslation } from 'react-i18next';
 import { toast } from '@/components/ui/use-toast';
 import {
   useBrokerages,
   useMcpCatalog,
   useDeleteMcpCatalogServer,
-  useSetMcpServerEnabledInWorkspace,
-  useSetMcpServerNewWorkspaces,
-  useToggleBrokerage,
 } from '@/hooks/useMcpServers';
 import {
   ConfirmStrip,
   ListEmpty,
-  ListError,
   ListSkeleton,
 } from '@/components/mcp/McpPrimitives';
-import { needsOauthConnect } from '@/pages/ChatAgent/components/mcp/mcpState';
-import { formatApiErrorDetail, type CatalogServer } from '@/pages/ChatAgent/utils/api';
-import {
-  brokerageForUrl,
-  connectBlock,
-  type Brokerage,
-} from '../brokerages';
+import { formatApiErrorDetail } from '@/pages/ChatAgent/utils/api';
+import { resolveBrokerages, type ResolvedBroker } from '../brokerages';
 import { useBrokerageConnect } from '../hooks/useBrokerageConnect';
 import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
 import { useDetailParam } from '../hooks/useDetailParam';
-import { withDetail } from '../utils/detailParam';
-import { BrokerageConsentDialog } from './BrokerageConsentDialog';
-import { BrokerageRow } from './BrokerageRow';
-import { DesktopDownloadLink } from './DesktopDownloadLink';
+import { useSectionNav } from '../hooks/useSectionNav';
+import { isPluginOwned } from '../utils/provenance';
+import { BrokerageCard } from './BrokerageCard';
 import { ServerDetail, type ServerDetailData } from './ServerDetail';
-import { TradingPermissionLine } from './TradingPermissionLine';
+import { TradingPermissionBlock } from './TradingPermissionBlock';
+import { LoadFailed } from './LoadFailed';
+import { AccountsLayout } from './surface/AccountsLayout';
 
 /**
- * The Plugins → Brokerages tab: every broker this build ships, listed whether
- * or not the user has one, with the whole lifecycle on the row.
+ * The Plugins → Brokerages section: every broker this build ships, listed
+ * whether or not the user has one, as cards, with the whole lifecycle on the
+ * card's menu and the broker's page. The cards are ordered by what each needs
+ * from the user, a sign-in first, and the trading permission sits beside them,
+ * read once rather than on every card.
  *
- * A tab rather than a section of the MCP list because a brokerage is not one
+ * A section rather than a group of the Connectors list because a brokerage is not one
  * more server — it is an account the agent can trade in, its address is ours
  * rather than the user's, and it is worth finding without knowing what MCP
  * stands for. The rows it creates are still ordinary catalog rows, so they go
  * on appearing under `Your servers` and count toward the same cap; this tab is
  * the front door, not a separate tier.
  *
- * Connecting from here is one click: the row is created and enabled on the way
- * to the vendor's consent screen, because those are only ever the steps
- * between wanting a broker connected and it being connected.
+ * Connecting from here is one click. A broker with no row yet is created by
+ * its sign-in, switched on, once the vendor has answered; nothing is written
+ * before then, so a sign-in that does not finish leaves nothing behind.
  */
 export function Brokerages() {
   const { t } = useTranslation();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const { data: brokerages, isLoading: loadingOffers, error } = useBrokerages();
-  const { data: catalog, isLoading: loadingCatalog, error: catalogError } = useMcpCatalog();
+  const { openDetail } = useSectionNav();
+  const { data: brokerages, isLoading: loadingOffers, error, refetch } = useBrokerages();
+  const {
+    data: catalog,
+    isLoading: loadingCatalog,
+    error: catalogError,
+    refetch: refetchCatalog,
+  } = useMcpCatalog();
   const { workspaces, loading: workspacesLoading } = useWorkspaceOptions();
   // Back to this tab, not the MCP one: the vendor round trip should return the
   // user to the page they left.
-  const { oauth, requestConnect: connectBrokerage } = useBrokerageConnect({
+  const { oauth, requestConnect: connectBrokerage, toggle } = useBrokerageConnect({
     returnTo: '/plugins?tab=brokerages',
   });
-  const toggleMutation = useToggleBrokerage();
   const deleteMutation = useDeleteMcpCatalogServer();
-  const wsEnableMutation = useSetMcpServerEnabledInWorkspace();
-  const newWorkspacesMutation = useSetMcpServerNewWorkspaces();
 
   // Held here rather than in the row so a click on one broker never greys out
   // the other's controls.
   const [togglingName, setTogglingName] = useState<string | null>(null);
-  const [scopeBusyName, setScopeBusyName] = useState<string | null>(null);
   // Removing is this tab's own question; the connect question belongs to the
   // connect lifecycle and is held by the hook, so that every surface that can
   // start one has to answer it. Each entry point closes the other, so only one
@@ -77,82 +71,21 @@ export function Brokerages() {
   const [removingName, setRemovingName] = useState<string | null>(null);
 
   const shipped = brokerages ?? [];
-  const rowsByName = new Map((catalog?.servers ?? []).map((s) => [s.name, s]));
-  // Resolved once, here, and handed down. The row and the tab paragraph ask the
-  // same question of this, and working it out in two places is how they came to
-  // disagree: the paragraph asked about the shipped vendor while the row asked
-  // about the one its URL actually points at, so a repointed row left the page
-  // warning "desktop only" with no row on it saying anything of the kind.
-  const rows = shipped.map((b) => {
-    const row = rowsByName.get(b.name) ?? null;
-    // Resolved against every shipped vendor, not just this row's own: a row is
-    // the user's to edit, and one repointed at the OTHER broker's host is that
-    // broker now. Matching only against `b` answered null for it, which reads
-    // as "no vendor here" and quietly drops the constraints that address
-    // carries -- including the one that costs the user a connection elsewhere.
-    return { b, row, vendor: row ? brokerageForUrl(row.url, shipped) : b };
-  });
+  const resolved = resolveBrokerages(shipped, catalog?.servers ?? []);
 
-  async function handleToggle(name: string, enabled: boolean) {
-    setTogglingName(name);
-    try {
-      await toggleMutation.mutateAsync({ name, enabled });
-    } catch (err) {
-      toast({
-        variant: 'destructive',
-        title: t('plugins.brokerages.toggleFailed'),
-        description: formatApiErrorDetail(err),
-      });
-    } finally {
-      setTogglingName(null);
-    }
+  async function handleToggle({ b, row }: ResolvedBroker, enabled: boolean) {
+    setTogglingName(b.name);
+    await toggle(b, row, enabled);
+    setTogglingName(null);
   }
 
   /**
    * Hand the connect to the shared brokerage connect, closing this tab's own
    * question first: only one question is ever open under the list.
    */
-  function requestConnect(
-    brokerage: Brokerage,
-    row: CatalogServer | null,
-    vendor: Brokerage | null,
-  ) {
+  function requestConnect({ b, row }: ResolvedBroker) {
     setRemovingName(null);
-    connectBrokerage(brokerage, row, vendor);
-  }
-
-  async function handleSetWorkspaceDisabled(
-    name: string,
-    workspaceId: string,
-    disabled: boolean,
-  ) {
-    setScopeBusyName(name);
-    try {
-      await wsEnableMutation.mutateAsync({ workspaceId, name, enabled: !disabled });
-    } catch (err) {
-      toast({
-        variant: 'destructive',
-        title: t('plugins.servers.toggleFailed'),
-        description: formatApiErrorDetail(err),
-      });
-    } finally {
-      setScopeBusyName(null);
-    }
-  }
-
-  async function handleSetNewWorkspacesOn(name: string, on: boolean) {
-    setScopeBusyName(name);
-    try {
-      await newWorkspacesMutation.mutateAsync({ name, enabled: on });
-    } catch (err) {
-      toast({
-        variant: 'destructive',
-        title: t('plugins.servers.toggleFailed'),
-        description: formatApiErrorDetail(err),
-      });
-    } finally {
-      setScopeBusyName(null);
-    }
+    connectBrokerage(b, row);
   }
 
   async function confirmRemove(name: string) {
@@ -176,7 +109,7 @@ export function Brokerages() {
   const detail = useDetailParam<ServerDetailData>(
     'brokerage',
     (ref) => {
-      const found = rows.find(({ b }) => b.name === ref.name);
+      const found = resolved.get(ref.name);
       return found
         ? { origin: 'brokerage' as const, brokerage: found.b, server: found.row }
         : null;
@@ -185,170 +118,129 @@ export function Brokerages() {
   );
   const detailData = detail.target;
 
-  /** The row's other home, where its address and headers are editable. */
-  function openInMcpTab(name: string) {
-    const next = withDetail(searchParams, { kind: 'server', name });
-    next.set('tab', 'mcp');
-    setSearchParams(next, { replace: true });
-  }
-
   // Re-derived at render rather than captured when the strip opened, so the row
   // it acts on is the one the list holds now.
-  const removing = removingName
-    ? (rows.find(({ b }) => b.name === removingName) ?? null)
-    : null;
-  // The same predicate on the same value the row uses, so the paragraph and the
-  // row cannot disagree: a revoked connection needs the authorize flow again,
-  // and this browser is no better at finishing it the second time. `unknown` is
-  // left out on purpose -- a registry that has not answered has nothing to
-  // explain yet, and a hint printed on it would be a guess.
-  const blockedHere =
-    rows
-      .filter(({ row }) => needsOauthConnect(row?.oauth_status ?? null))
-      .map(({ vendor }) => connectBlock(vendor))
-      .find((block) => block === 'shell-outdated' || block === 'native-only') ?? null;
+  const removing = removingName ? (resolved.get(removingName) ?? null) : null;
   // Either list failing leaves this tab unable to say anything true. Without the
-  // catalog every broker reads "Not added" and takes the filled primary Connect,
+  // catalog every broker reads "Not added" and offers Connect,
   // which for a vendor that allows one AI connection per account silently
   // replaces the one the user may still be relying on elsewhere -- and the note
   // that would warn them is suppressed exactly then, because it only renders on
   // a row believed unconnected. An error is the honest thing to show instead.
   const listError = error ?? catalogError;
 
+  const removeStrip = removing && (
+    <ConfirmStrip
+      message={t('plugins.brokerages.removeConfirm', { server: removing.b.label })}
+      confirmLabel={
+        deleteMutation.isPending ? t('common.loading') : t('plugins.servers.deleteConfirmYes')
+      }
+      cancelLabel={t('plugins.servers.deleteConfirmNo')}
+      pending={deleteMutation.isPending}
+      onConfirm={() => void confirmRemove(removing.b.name)}
+      onCancel={() => setRemovingName(null)}
+    />
+  );
+  // One grid, in the order the user has to act on them: a broker waiting on a
+  // sign-in, then the ones they have, then the rest. Each card says which it is
+  // in its corner; with four brokers, a heading per state left a lone card
+  // under each one. An offer has no row and sorts with the other offers,
+  // whatever it would need once added.
+  const rank = ({ row, needsSignIn }: ResolvedBroker) => (!row ? 2 : needsSignIn ? 0 : 1);
+  const ordered = [...resolved.values()].sort((x, y) => rank(x) - rank(y));
+
+  const detailBroker =
+    detailData?.origin === 'brokerage' ? resolved.get(detailData.brokerage.name) : undefined;
+
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-[0.6875rem]" style={{ color: 'var(--color-text-tertiary)' }}>
-        {t('plugins.brokerages.intro')}
-        {blockedHere === 'shell-outdated' && ` ${t('plugins.oauth.shellOutdatedHint')}`}
-        {blockedHere === 'native-only' && (
+    <>
+      {/* Hidden rather than unmounted while a broker's page is open, so Back
+          lands on the list as it was left. */}
+      <AccountsLayout
+        className="brokerages"
+        hidden={!!detailData}
+        // Why a broker cannot connect from here is said on its card, beside
+        // the button it stops; said again up here it was the same sentence
+        // twice on one screen.
+        lead={t('plugins.brokerages.intro')}
+        aside={<TradingPermissionBlock />}
+      >
+        {/* Where the column stacks, the aside falls below every card, and
+            what a brokerage connection is would be read after the choice it
+            explains. The same lead sits above the cards there instead. */}
+        <p className="accounts-lead-stacked">{t('plugins.brokerages.intro')}</p>
+        {listError ? (
+          <LoadFailed
+            what={t('plugins.loadFailed.brokerages')}
+            error={listError}
+            onRetry={() => {
+              if (error) void refetch();
+              if (catalogError) void refetchCatalog();
+            }}
+          />
+        ) : loadingOffers || loadingCatalog ? (
+          <ListSkeleton rows={2} />
+        ) : shipped.length === 0 ? (
+          <ListEmpty>{t('plugins.brokerages.none')}</ListEmpty>
+        ) : (
           <>
-            {' '}
-            <Trans
-              i18nKey="plugins.oauth.nativeHint"
-              // Not `link`: the Trans parser reads that as the void HTML
-              // element and drops the words inside it.
-              components={{ download: <DesktopDownloadLink /> }}
-            />
-          </>
-        )}
-      </p>
-
-      <TradingPermissionLine />
-
-      {listError ? (
-        <ListError>
-          {(listError as { message?: string })?.message || t('mcp.list.loadFailed')}
-        </ListError>
-      ) : loadingOffers || loadingCatalog ? (
-        <ListSkeleton rows={2} />
-      ) : shipped.length === 0 ? (
-        <ListEmpty>{t('plugins.brokerages.none')}</ListEmpty>
-      ) : (
-        // `mt` on siblings rather than `gap`, matching the three lists
-        // beside it: an exiting row keeps its gap for the whole animation.
-        <div className="flex flex-col [&>*+*]:mt-1.5">
-          <AnimatePresence initial={false}>
-            {rows.map(({ b, row, vendor }) => {
-              return (
-                <BrokerageRow
-                  key={b.name}
-                  brokerage={b}
-                  row={row}
-                  vendor={vendor}
+            <div className="broker-cards">
+              {ordered.map((broker) => (
+                <BrokerageCard
+                  key={broker.b.name}
+                  broker={broker}
                   workspaces={workspaces}
                   workspacesLoading={workspacesLoading}
-                  connecting={oauth.connectingName === b.name}
-                  refreshing={oauth.refreshingName === b.name}
-                  toggling={togglingName === b.name}
-                  scopeBusy={scopeBusyName === b.name}
-                  onConnect={(vendor) => requestConnect(b, row, vendor)}
-                  onDisconnect={() => oauth.disconnect(b.name)}
-                  onRefreshSchemas={() => oauth.refreshSchemas(b.name)}
-                  onToggle={(enabled) => handleToggle(b.name, enabled)}
+                  connecting={oauth.connectingName === broker.b.name}
+                  refreshing={oauth.refreshingName === broker.b.name}
+                  toggling={togglingName === broker.b.name}
+                  onConnect={() => requestConnect(broker)}
+                  onDisconnect={() => oauth.disconnect(broker.b.name)}
+                  onRefreshSchemas={() => oauth.refreshSchemas(broker.b.name)}
+                  onToggle={(enabled) => handleToggle(broker, enabled)}
                   onRequestRemove={() => {
                     oauth.cancelPending();
-                    setRemovingName(b.name);
+                    setRemovingName(broker.b.name);
                   }}
-                  onSetWorkspaceDisabled={(wsId, disabled) =>
-                    handleSetWorkspaceDisabled(b.name, wsId, disabled)
-                  }
-                  onSetNewWorkspacesOn={(on) => handleSetNewWorkspacesOn(b.name, on)}
-                  onOpenInMcpTab={() => openInMcpTab(b.name)}
-                  onOpen={() => detail.open(b.name)}
+                  // The row's other home, where its address and headers are
+                  // editable. Pushed like any detail, so Back returns here.
+                  onOpenInMcpTab={() => openDetail({ kind: 'server', name: broker.b.name })}
+                  onOpen={() => detail.open(broker.b.name)}
                 />
-              );
-            })}
-          </AnimatePresence>
-        </div>
-      )}
+              ))}
+            </div>
+            {!detailData && removeStrip}
+          </>
+        )}
+      </AccountsLayout>
 
-      {removing && (
-        <ConfirmStrip
-          message={t('plugins.brokerages.removeConfirm', { server: removing.b.label })}
-          confirmLabel={
-            deleteMutation.isPending
-              ? t('common.loading')
-              : t('plugins.servers.deleteConfirmYes')
+      {/* A page in the content column, not a dialog: no exit animation to
+          wait for, so it renders in the list's place and goes with it. */}
+      {detailData && detailBroker && (
+        <ServerDetail
+          key={`brokerage:${detailBroker.b.name}`}
+          data={detailData}
+          onClose={detail.close}
+          toggling={togglingName === detailBroker.b.name}
+          onToggle={(enabled) => void handleToggle(detailBroker, enabled)}
+          connecting={oauth.connectingName === detailBroker.b.name}
+          // The same call the card makes, so the consent dialog and the
+          // sign-in behind it are asked once and answered in one place,
+          // wherever the click came from.
+          onConnect={() => requestConnect(detailBroker)}
+          onRemove={
+            detailBroker.row && !isPluginOwned(detailBroker.row)
+              ? () => {
+                  oauth.cancelPending();
+                  setRemovingName(detailBroker.b.name);
+                }
+              : undefined
           }
-          cancelLabel={t('plugins.servers.deleteConfirmNo')}
-          pending={deleteMutation.isPending}
-          onConfirm={() => void confirmRemove(removing.b.name)}
-          onCancel={() => setRemovingName(null)}
+          removeConfirm={removing?.b.name === detailBroker.b.name ? removeStrip : undefined}
+          onRefreshTools={() => oauth.refreshSchemas(detailBroker.b.name)}
+          refreshingTools={oauth.refreshingName === detailBroker.b.name}
         />
       )}
-
-      {/* What the connection may do, and what making it costs elsewhere. Both
-          belong to the lifecycle rather than to this tab, so the same dialog
-          opens on the Connectors tab for the same row. */}
-      <AnimatePresence>
-        {oauth.pendingConfirm && (
-          <BrokerageConsentDialog
-            // Keyed by row, because the dialog seeds its toggles once from the
-            // grant it opened on. Reused across rows it would show the previous
-            // row's answer.
-            key={oauth.pendingConfirm.name}
-            vendor={oauth.pendingConfirm.vendor}
-            name={oauth.pendingConfirm.name}
-            granted={oauth.pendingConfirm.granted}
-            pending={oauth.connectingName === oauth.pendingConfirm.name}
-            // The hook still holds the whole request, prepare and rollback
-            // included, so resuming it needs only the answer.
-            onConfirm={oauth.confirmPending}
-            onCancel={oauth.cancelPending}
-          />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {detailData && (
-          <ServerDetail
-            key={`brokerage:${detailData.origin === 'brokerage' ? detailData.brokerage.name : ''}`}
-            data={detailData}
-            onClose={detail.close}
-            toggling={
-              detailData.origin === 'brokerage' &&
-              togglingName === detailData.brokerage.name
-            }
-            onToggle={(enabled) => {
-              if (detailData.origin === 'brokerage') {
-                void handleToggle(detailData.brokerage.name, enabled);
-              }
-            }}
-            connecting={
-              detailData.origin === 'brokerage' &&
-              oauth.connectingName === detailData.brokerage.name
-            }
-            // The same call the row makes, so the consent dialog and the
-            // create-then-connect steps behind it are asked once and answered
-            // in one place, wherever the click came from.
-            onConnect={() => {
-              if (detailData.origin !== 'brokerage') return;
-              const found = rows.find(({ b }) => b.name === detailData.brokerage.name);
-              if (found) requestConnect(found.b, found.row, found.vendor);
-            }}
-          />
-        )}
-      </AnimatePresence>
-    </div>
+    </>
   );
 }

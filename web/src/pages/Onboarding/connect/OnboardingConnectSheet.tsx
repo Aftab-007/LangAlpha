@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle } from 'lucide-react';
@@ -8,7 +8,6 @@ import { ModalShell } from '@/components/ui/ModalShell';
 import { Loader } from '@/components/ui/loader';
 import { toast } from '@/components/ui/use-toast';
 import {
-  ListError,
   ListSkeleton,
   ServerNameLine,
   ServerRowShell,
@@ -16,7 +15,6 @@ import {
 import {
   useBrokerages,
   useMcpCatalog,
-  useToggleBrokerage,
   waitForServerTools,
 } from '@/hooks/useMcpServers';
 import { FLASH_ROUTE_STATE, flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
@@ -26,21 +24,19 @@ import { formatList } from '@/lib/format';
 import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
 import { McpOauthPill } from '@/pages/ChatAgent/components/mcp/McpStatusPill';
 import { warmWorkspace } from '@/pages/ChatAgent/utils/warmWorkspace';
-import { brokerageForUrl, connectBlock } from '@/pages/Plugins/brokerages';
-import { BrokerageConsentDialog } from '@/pages/Plugins/components/BrokerageConsentDialog';
+import { connectBlock, resolveBrokerages, type ResolvedBroker } from '@/pages/Plugins/brokerages';
+import { LoadFailed } from '@/pages/Plugins/components/LoadFailed';
 import { ConnectButton, VendorNotes } from '@/pages/Plugins/components/OauthRowParts';
 import { RowNote } from '@/pages/Plugins/components/RowNote';
-import { readConnectOutcome } from '@/pages/Plugins/connectOutcome';
-import { connectStartedHere, useConnectReturn } from '@/pages/Plugins/connectReturn';
+import { CALLBACK_PARAMS } from '@/pages/Plugins/connectOutcome';
 import { useBrokerageConnect } from '@/pages/Plugins/hooks/useBrokerageConnect';
-import { isEffectivelyEnabled, isPluginSuppressed } from '@/pages/Plugins/utils/provenance';
+import { spendConnectLanding, useSheetLanding } from '@/pages/Plugins/hooks/useConnectLanding';
+import { isPluginSuppressed } from '@/pages/Plugins/utils/provenance';
 import { ONBOARDING_CONNECT, ONBOARDING_PARAM } from './useStartOnboarding';
 
 /** How long a connected brokerage may take to show its tools before the
  *  interview starts without them. */
 const TOOLS_WAIT_MS = 20_000;
-/** What the OAuth callback adds to the URL it lands on. */
-const CALLBACK_PARAMS = ['mcp_connected', 'mcp_error', 'server'] as const;
 
 interface Chosen {
   name: string;
@@ -75,25 +71,25 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
   const titleId = useId();
   const navigate = useNavigate();
   const location = useLocation();
-  const [, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const { data: brokerages, isLoading: loadingOffers, error: offersError } = useBrokerages();
-  const { data: catalog, isLoading: loadingCatalog, error: catalogError } = useMcpCatalog();
-  const standDownMutation = useToggleBrokerage();
+  const {
+    data: brokerages,
+    isLoading: loadingOffers,
+    error: offersError,
+    refetch: refetchOffers,
+  } = useBrokerages();
+  const {
+    data: catalog,
+    isLoading: loadingCatalog,
+    error: catalogError,
+    refetch: refetchCatalog,
+  } = useMcpCatalog();
 
-  // The callback's verdict, read during the first render: the effect below
-  // strips it from the URL so a refresh does not act on it twice.
-  const [landing] = useState(() => readConnectOutcome(new URLSearchParams(window.location.search)));
-  // Only a connect this tab started goes straight on to the chat. A link that
-  // carries the callback's params would otherwise open it and send its first
-  // turn without the user doing anything.
-  const [startedHere] = useState(
-    () => landing?.kind === 'connected' && connectStartedHere(landing.server),
-  );
-  const [failure, setFailure] = useState<{ server: string; reasonKey: string | null } | null>(() =>
-    landing?.kind === 'failed' && landing.server
-      ? { server: landing.server, reasonKey: landing.reasonKey }
-      : null,
+  // What came of a connect this sheet sent out, as the shell read it off the
+  // landing. A failure with no reason is one backed out of at the vendor.
+  const landed = useSheetLanding();
+  const [failure, setFailure] = useState<{ server: string; reasonKey: string | null } | null>(
+    null,
   );
   // The brokerages whose tools the chat is waiting on, or null while the user
   // is still choosing.
@@ -106,34 +102,12 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
   for (const key of CALLBACK_PARAMS) returnParams.delete(key);
   returnParams.set(ONBOARDING_PARAM, ONBOARDING_CONNECT);
   const [turningOn, setTurningOn] = useState<string | null>(null);
-  const { oauth, requestConnect, turnOn } = useBrokerageConnect({
+  const { oauth, requestConnect, toggle } = useBrokerageConnect({
     returnTo: `${location.pathname}?${returnParams}`,
+    // The desktop app signs in from the system browser, and its callback
+    // brings this page back with the sheet open on the answer.
+    onHandedOff: () => close(),
   });
-
-  useConnectReturn({
-    onAbandoned: (server) => setFailure({ server, reasonKey: null }),
-    // Silent, as on the Plugins page: the failure is already on screen.
-    onStandDown: (server) => {
-      void standDownMutation.mutateAsync({ name: server, enabled: false }).catch(() => {});
-    },
-  });
-
-  // Once, at mount. `setSearchParams` changes with every navigation, and a
-  // rerun on its account while the sheet animates out would replace the chat
-  // route it just opened, router state and all.
-  const stripCallbackParams = useEffectEvent(() => {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        for (const key of CALLBACK_PARAMS) next.delete(key);
-        return next;
-      },
-      { replace: true },
-    );
-  });
-  useEffect(() => {
-    if (landing) stripCallbackParams();
-  }, [landing]);
 
   // The interview runs on Home's computer, and starting one can take a minute.
   useEffect(() => {
@@ -159,42 +133,24 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
   useEffect(() => () => waitRef.current?.abort(), []);
 
   const shipped = brokerages ?? [];
-  const rowsByName = new Map((catalog?.servers ?? []).map((s) => [s.name, s]));
-  const rows = shipped.flatMap((b) => {
-    const row = rowsByName.get(b.name) ?? null;
-    // Resolved against every shipped vendor, as the Brokerages tab does: a row
-    // repointed at another broker's host is that broker's now.
-    const vendor = row ? brokerageForUrl(row.url, shipped) : b;
-    const connected = !!row && row.oauth_status === 'connected' && isEffectivelyEnabled(row);
-    // Left out rather than explained: a broker this app cannot connect here
-    // (Robinhood outside the desktop app), or a row whose plugin is switched
-    // off and so stays out of the agent's tools whatever this sheet does, is a
-    // detour from onboarding, and the Brokerages tab is where its reason is
-    // spelled out.
-    if (
-      !connected &&
-      (connectBlock(vendor) !== null || (row && (row.transport !== 'http' || isPluginSuppressed(row))))
-    ) {
-      return [];
-    }
-    // Named as the Brokerages tab names it: a row repointed elsewhere is no
-    // longer that broker, so neither the sheet nor the kickoff calls it one.
-    const label = row && vendor?.name !== b.name ? row.name : b.label;
-    // Connected, then switched off. Picking it here is the ask to use it, and
-    // its tokens are intact, so it comes back on without a second consent.
-    const switchedOff = !connected && !!row && row.oauth_status === 'connected' && !row.enabled;
-    return [{ b, row, vendor, connected, label, switchedOff }];
-  });
+  const resolved = resolveBrokerages(shipped, catalog?.servers ?? []);
+  // Left out rather than explained: a broker this app cannot connect here
+  // (Robinhood outside the desktop app), or a row whose plugin is switched off
+  // and so stays out of the agent's tools whatever this sheet does, is a detour
+  // from onboarding, and the Brokerages tab is where its reason is spelled out.
+  const rows = [...resolved.values()].filter(
+    ({ row, vendor, connected }) =>
+      connected ||
+      (connectBlock(vendor) === null &&
+        (!row || (row.transport === 'http' && !isPluginSuppressed(row)))),
+  );
   const connected: Chosen[] = rows
     .filter((r) => r.connected)
     .map(({ b, label }) => ({ name: b.name, label }));
   const listError = offersError ?? catalogError;
   const loading = loadingOffers || loadingCatalog;
   const busy = waitingFor !== null || oauth.connectingName !== null || turningOn !== null;
-  const labelFor = (name: string) =>
-    rows.find((r) => r.b.name === name)?.label ??
-    shipped.find((b) => b.name === name)?.label ??
-    name;
+  const labelFor = (name: string) => resolved.get(name)?.label ?? name;
   const failedLabel = failure ? labelFor(failure.server) : null;
 
   async function proceed(chosen: Chosen[]) {
@@ -208,7 +164,7 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
     // A thread's tools are fixed when it starts, so a turn sent before a fresh
     // connect's discovery lands would run without the brokerage. One already
     // showing its tools has nothing to wait for.
-    const pending = chosen.filter((c) => !((rowsByName.get(c.name)?.tool_count ?? 0) > 0));
+    const pending = chosen.filter((c) => !((resolved.get(c.name)?.row?.tool_count ?? 0) > 0));
     await Promise.all(
       pending.map((c) =>
         waitForServerTools(queryClient, c.name, {
@@ -245,9 +201,12 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
   // A connect that just came back connected goes straight on: connecting was
   // the user's answer to this sheet. Every connected brokerage is named, the
   // new one first, and the new one even before the catalog shows it.
-  const continueAfterConnect = useEffectEvent(() => {
-    if (landing?.kind !== 'connected' || !startedHere) return;
-    const fresh = shipped.find((b) => b.name === landing.server);
+  const take = useEffectEvent((taken: NonNullable<typeof landed>) => {
+    if (taken.outcome === 'failed') {
+      setFailure({ server: taken.server, reasonKey: taken.reasonKey });
+      return;
+    }
+    const fresh = shipped.find((b) => b.name === taken.server);
     const chosen = fresh
       ? [{ name: fresh.name, label: labelFor(fresh.name) }, ...connected.filter((c) => c.name !== fresh.name)]
       : connected;
@@ -255,18 +214,22 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
   });
   const ready = brokerages !== undefined && catalog !== undefined;
   useEffect(() => {
-    if (ready) continueAfterConnect();
-  }, [ready]);
+    // A connect waits for the lists, which name what the chat is told about.
+    if (!landed || (landed.outcome === 'connected' && !ready)) return;
+    if (spendConnectLanding(landed.id)) take(landed);
+  }, [landed, ready]);
 
   // The footnote promises a consent screen, which turning a row back on skips.
   const anyConnectable = rows.some((r) => !r.connected && !r.switchedOff);
 
-  async function handleTurnOn(name: string, label: string) {
+  // Picking a broker that was switched off is the ask to use it, and its
+  // tokens are intact, so it comes back on without a second consent.
+  async function handleTurnOn({ b, row, label }: ResolvedBroker) {
     setFailure(null);
-    setTurningOn(name);
-    const on = await turnOn(name);
+    setTurningOn(b.name);
+    const on = await toggle(b, row, true);
     setTurningOn(null);
-    if (on) void proceed([{ name, label }, ...connected.filter((c) => c.name !== name)]);
+    if (on) void proceed([{ name: b.name, label }, ...connected.filter((c) => c.name !== b.name)]);
   }
 
   const footer = (
@@ -315,15 +278,21 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
       >
         <div className="flex flex-col gap-3">
           {listError ? (
-            <ListError>
-              {(listError as { message?: string })?.message || t('mcp.list.loadFailed')}
-            </ListError>
+            <LoadFailed
+              what={t(offersError ? 'plugins.loadFailed.brokerages' : 'plugins.loadFailed.mcp')}
+              error={listError}
+              onRetry={() => {
+                if (offersError) void refetchOffers();
+                if (catalogError) void refetchCatalog();
+              }}
+            />
           ) : loading ? (
             <ListSkeleton rows={3} />
           ) : (
             <div className="flex flex-col">
               <AnimatePresence initial={false}>
-                {rows.map(({ b, row, vendor, connected: isConnected, label, switchedOff }) => {
+                {rows.map((broker) => {
+                  const { b, row, vendor, connected: isConnected, label, switchedOff } = broker;
                   const rowKey = `onboarding-brokerage-${b.name}`;
                   return (
                     <ServerRowShell
@@ -353,11 +322,11 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
                             label={switchedOff ? t('onboarding.connect.turnOn') : undefined}
                             onClick={() => {
                               if (switchedOff) {
-                                void handleTurnOn(b.name, label);
+                                void handleTurnOn(broker);
                                 return;
                               }
                               setFailure(null);
-                              requestConnect(b, row, vendor);
+                              requestConnect(b, row);
                             }}
                           />
                         )
@@ -402,23 +371,6 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
           )}
         </div>
       </ModalShell>
-
-      {/* Stacked above the sheet (PluginDialog sits one layer higher), and
-          keyed by row for the reason the Brokerages tab keys it: the toggles
-          seed once from the grant the dialog opened on. */}
-      <AnimatePresence>
-        {oauth.pendingConfirm && (
-          <BrokerageConsentDialog
-            key={oauth.pendingConfirm.name}
-            vendor={oauth.pendingConfirm.vendor}
-            name={oauth.pendingConfirm.name}
-            granted={oauth.pendingConfirm.granted}
-            pending={oauth.connectingName === oauth.pendingConfirm.name}
-            onConfirm={oauth.confirmPending}
-            onCancel={oauth.cancelPending}
-          />
-        )}
-      </AnimatePresence>
     </>
   );
 }

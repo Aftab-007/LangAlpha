@@ -6,6 +6,7 @@ import {
   deleteSkill,
   deleteWorkspaceSkill,
   getSkillContent,
+  getSkillLimits,
   getSkills,
   moveSkill,
   setSkillCommand,
@@ -36,7 +37,7 @@ export function invalidateSkillFanout(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: queryKeys.skills.all });
   // Same reason as the MCP fanout: a plugin card's component chips are these
   // rows, so a delete or a customize here changes what the Plugins tab shows.
-  qc.invalidateQueries({ queryKey: queryKeys.plugins.all });
+  qc.invalidateQueries({ queryKey: queryKeys.plugins.list() });
 }
 
 export function useSkills(
@@ -55,21 +56,33 @@ export function useSkills(
   });
 }
 
-/** Re-scope a skill (user tier ↔ one workspace). Whole-prefix invalidation:
- * a move changes the slash menu, the workspace views, and shadowing at once. */
+/** What an upload may hold here. The caps are the server's configuration, so
+ * one read serves the page; until it lands (or if it fails) the upload
+ * dialog checks against the stock caps and the server stays the judge. */
+export function useSkillLimits() {
+  return useQuery({
+    queryKey: queryKeys.skills.limits(),
+    queryFn: getSkillLimits,
+    staleTime: 60 * 60_000,
+  });
+}
+
 /** One skill's SKILL.md text — powers the detail overlay's source preview. */
 export function useSkillContent(
   name: string | null,
   workspaceId: string | null = null,
+  path = 'SKILL.md',
 ) {
   return useQuery({
-    queryKey: queryKeys.skills.content(name ?? '', workspaceId),
-    queryFn: () => getSkillContent(name!, workspaceId),
+    queryKey: queryKeys.skills.content(name ?? '', workspaceId, path),
+    queryFn: () => getSkillContent(name!, workspaceId, path),
     enabled: !!name,
     staleTime: 60_000,
   });
 }
 
+/** Re-scope a skill (user tier ↔ one workspace). Whole-prefix invalidation:
+ * a move changes the slash menu, the workspace views, and shadowing at once. */
 export function useMoveSkill() {
   const queryClient = useQueryClient();
   return useMutation({

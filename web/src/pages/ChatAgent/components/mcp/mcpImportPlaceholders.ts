@@ -33,25 +33,44 @@ const ANGLE = /^<[^<>]{1,80}>$/;
 // The same bracketed span, unanchored and global: `ANGLE` asks whether a value
 // is nothing but one, this finds each one wherever it sits inside a value.
 const ANGLE_SEGMENT = /<[^<>]{1,80}>/g;
-// Hint words that read as a stand-in wherever they sit in the value:
-// `your-api-key`, `REPLACE_ME`, `paste-token-here`.
-const HINT_WORDS = /\b(your[-_ ]?|replace[-_ ]?me|change[-_ ]?me|todo|placeholder|insert[-_ ]|paste[-_ ])/i;
-// Words that only read as a stand-in when they are the whole value. `xxx` is a
-// blank; `sk-live-xxxx9f8e` is a key. `example` is a blank; a real token or a
-// hostname that merely contains it is not.
-const HINT_ALONE = /^(x{3,}|example)$/i;
+// A bracketed name inside a longer value: `Bearer <your-api-key>`,
+// `<user>:<pass>`. No real credential carries one.
+const ANGLE_NAME = /<[A-Za-z][\w .-]{0,79}>/;
+// The scheme an Authorization value leads with, read past so the rest is
+// judged on its own.
+const SCHEME = /^(bearer|token|basic)\s+/i;
+// Words that are a blank only as the whole value. `xxx` is a blank and
+// `sk-live-xxxx9f8e` a key; `todo` is a blank and `my-todo-app` a name.
+const BLANK = /^(x{3,}|example|changeme|replaceme|todo|placeholder)$/i;
+// A phrase telling the reader what goes there opens on one of these and closes
+// on what goes there: `your-api-key`, `REPLACE_ME`, `paste-token-here`.
+const LEADS = new Set(['your', 'replace', 'insert', 'paste', 'enter', 'put']);
+const ENDS = new Set(['key', 'keys', 'token', 'secret', 'password', 'pass', 'pat', 'id', 'here', 'me', 'value']);
+// Words and separators only: a path, an address or a key's own punctuation is
+// never one of those phrases.
+const WORDS = /^[A-Za-z0-9]+(?:[-_ .][A-Za-z0-9]+)*$/;
 const VAULT_REF = /^\$\{vault:[^}]+\}$/;
 
-// Mirrors `looks_like_placeholder` in `src/ptc_agent/core/mcp_sanitize.py`, the
-// rule the backend import uses to keep a stand-in out of its cross-server value
-// dedupe. The vault-ref arm above has no counterpart there only because its
-// callers have already excluded refs by the time they ask.
-/** Whether a config value reads as a stand-in rather than a credential. */
+/**
+ * Whether a config value can only be a stand-in, never a credential.
+ *
+ * Narrower than `looks_like_placeholder` in `src/ptc_agent/core/mcp_sanitize.py`
+ * on purpose. There a hit only keeps a value out of the import's cross-server
+ * dedupe; here it stops a save or holds an import on a question, so a hint
+ * word that merely sits inside a real value (`/Users/alice/todo.md`,
+ * `https://api.todoist.com`, `YourCompany`) must not count.
+ */
 export function isPlaceholder(value: string): boolean {
-  const v = value.trim();
+  const v = value.trim().replace(SCHEME, '');
   if (!v || VAULT_REF.test(v)) return false;
-  if (ANGLE.test(v)) return true;
-  return v.length <= 64 && (HINT_ALONE.test(v) || HINT_WORDS.test(v));
+  if (ANGLE.test(v) || ANGLE_NAME.test(v)) return true;
+  if (v.length > 64 || !WORDS.test(v)) return false;
+  if (BLANK.test(v)) return true;
+  const words = v
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[-_ .]+/);
+  return words.length > 1 && LEADS.has(words[0]) && ENDS.has(words[words.length - 1]);
 }
 
 /**
@@ -101,6 +120,22 @@ function secretArgValues(args: string[]): Map<number, string> {
     }
     if (prevFlag && SECRET_FLAG.test(prevFlag)) found.set(i, arg);
     prevFlag = '';
+  });
+  return found;
+}
+
+/**
+ * The argv positions the add form flags as unfilled. Wider than the import's
+ * question below: the form has the user overwrite the argument where it
+ * stands rather than collect it for Secrets, so a bracketed positional is a
+ * blank to fill whatever it names, `<your-api-key>` included.
+ */
+export function placeholderArgIndexes(args: string[]): Set<number> {
+  const secrets = secretArgValues(args);
+  const found = new Set<number>();
+  args.forEach((value, i) => {
+    const secret = secrets.get(i);
+    if (secret !== undefined ? isPlaceholder(secret) : ANGLE.test(value.trim())) found.add(i);
   });
   return found;
 }

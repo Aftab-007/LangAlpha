@@ -38,13 +38,19 @@ function monogram(name: string): string {
 /** Geometry only, shared with `BrandMark` so a real logo and the monogram it
  *  falls back to occupy the same box on the same row. */
 export const TILE_SIZES = {
+  xs: 'h-[18px] w-[18px] rounded-[5px]',
   sm: 'h-7 w-7 rounded-md',
+  md: 'h-[34px] w-[34px] rounded-lg',
   lg: 'h-10 w-10 rounded-lg',
+  xl: 'h-14 w-14 rounded-[13px]',
 } as const;
 
 const TEXT_SIZES = {
+  xs: 'text-[0.625rem]',
   sm: 'text-[0.75rem]',
+  md: 'text-[0.8125rem]',
   lg: 'text-base',
+  xl: 'text-xl',
 } as const;
 
 export type TileSize = keyof typeof TILE_SIZES;

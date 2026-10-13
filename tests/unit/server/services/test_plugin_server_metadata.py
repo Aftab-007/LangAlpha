@@ -21,10 +21,8 @@ from src.server.services.plugins.extension import (
     LangalphaExtension,
     apply_server_metadata,
     parse_extension,
-    report_skill_metadata,
 )
 from src.server.services.plugins.mcp import McpEntryPlan
-from src.server.services.plugins.skills import SkillPlan
 
 
 def _plan(key: str, *, skip: str | None = None) -> McpEntryPlan:
@@ -142,76 +140,101 @@ class TestNamespaceParsing:
         assert [s.name for s in extension.secrets] == ["PROBE_TOKEN"]
         assert extension.servers["remote"].tool_exposure_mode == "detailed"
 
-    def test_an_unknown_key_still_costs_the_namespace(self):
-        diagnostics: list[Diagnostic] = []
-        extension = parse_extension({"nonsense": 1}, diagnostics)
-        assert [d.code for d in diagnostics] == ["extension_invalid"]
-        assert extension.servers == {}
-
-    def test_skills_describe_each_skill_by_its_directory(self):
+    def test_a_newer_contract_field_costs_only_itself(self):
+        # A key this build does not read used to fail extra=forbid and empty
+        # the namespace, so one new field in a newer package erased every
+        # secret, bind and server instruction on an older build.
         diagnostics: list[Diagnostic] = []
         extension = parse_extension(
             {
-                "skills": {
-                    "dcf-model": {"icon": "calculator"},
-                    "x-feed": {"icon": "x.com"},
-                    "bare": {},
-                }
-            },
-            diagnostics,
-        )
-        assert diagnostics == []
-        assert {k: m.icon for k, m in extension.skills.items()} == {
-            "dcf-model": "calculator",
-            "x-feed": "x.com",
-            "bare": None,
-        }
-
-    def test_an_unknown_glyph_is_not_a_defect_here(self):
-        # Which glyphs exist is the web app's set; it falls back from one it
-        # does not ship. Refusing here would cost the package its secrets.
-        diagnostics: list[Diagnostic] = []
-        extension = parse_extension(
-            {"skills": {"dcf-model": {"icon": "no-such-glyph"}}}, diagnostics
-        )
-        assert diagnostics == []
-        assert extension.skills["dcf-model"].icon == "no-such-glyph"
-
-    def test_an_unknown_key_in_a_skill_costs_the_namespace_like_a_server(self):
-        # Exactly as strict as ``servers``: extra=forbid at every level.
-        diagnostics: list[Diagnostic] = []
-        extension = parse_extension(
-            {
-                "skills": {"dcf-model": {"icon": "calculator", "colour": "red"}},
+                "theme": "dark",
+                "secrets": [
+                    {
+                        "name": "VENDOR_KEY",
+                        "label": "Vendor key",
+                        "bind": [
+                            {
+                                "server": "remote",
+                                "header": "Authorization",
+                                "scheme": "bearer",
+                            },
+                            {"server": "cli", "env": "VENDOR_KEY"},
+                        ],
+                    },
+                    {"name": "OTHER_KEY", "label": "Other key"},
+                ],
                 "servers": {"remote": {"tool_exposure_mode": "detailed"}},
             },
             diagnostics,
         )
-        assert [d.code for d in diagnostics] == ["extension_invalid"]
-        assert extension.servers == {}
+        assert [s.name for s in extension.secrets] == ["VENDOR_KEY", "OTHER_KEY"]
+        assert [
+            b.model_dump(exclude_none=True) for b in extension.secrets[0].bind
+        ] == [
+            {"server": "remote", "header": "Authorization"},
+            {"server": "cli", "env": "VENDOR_KEY"},
+        ]
+        assert extension.servers["remote"].tool_exposure_mode == "detailed"
+        assert [(d.level, d.code, d.message) for d in diagnostics] == [
+            (
+                "warning",
+                "extension_key_unknown",
+                "extensions.ai.langalpha.theme: unknown key; ignored",
+            ),
+            (
+                "warning",
+                "extension_key_unknown",
+                "extensions.ai.langalpha.secrets[0].bind[0].scheme: unknown key; "
+                "ignored",
+            ),
+        ]
 
-
-class TestSkillMetadataReport:
-    def _report(self, skills, dirs: list[str]) -> list[Diagnostic]:
+    def test_an_entry_that_does_not_validate_costs_only_that_entry(self):
         diagnostics: list[Diagnostic] = []
-        report_skill_metadata(
-            LangalphaExtension(skills=skills),
-            [SkillPlan(dir=d) for d in dirs],
+        extension = parse_extension(
+            {
+                "secrets": [
+                    {"name": "not a name", "label": "Bad"},
+                    {
+                        "name": "KEPT",
+                        "label": "Kept",
+                        "bind": [
+                            {"server": "remote", "env": "A", "header": "B"},
+                            {"server": "remote", "header": "X-Key"},
+                        ],
+                    },
+                ],
+                "servers": {
+                    "remote": {"tool_exposure_mode": "loud"},
+                    "other": {"description": "Reads the tape."},
+                },
+                "icon": 7,
+            },
             diagnostics,
         )
-        return diagnostics
+        assert [s.name for s in extension.secrets] == ["KEPT"]
+        assert [b.header for b in extension.secrets[0].bind] == ["X-Key"]
+        assert list(extension.servers) == ["other"]
+        assert extension.icon is None
+        assert {d.code for d in diagnostics} == {"extension_invalid"}
+        assert sorted(d.message.split(":")[0] for d in diagnostics) == [
+            "extensions.ai.langalpha.icon",
+            "extensions.ai.langalpha.secrets[0]",
+            "extensions.ai.langalpha.secrets[1].bind[0]",
+            "extensions.ai.langalpha.servers.remote",
+        ]
 
-    def test_a_key_naming_no_skill_is_a_warning_not_a_drop(self):
-        (diag,) = self._report(
-            {"dcf-model": {"icon": "calculator"}, "ghost": {"icon": "zap"}},
-            ["dcf-model"],
+    def test_a_skills_dict_carrying_icons_is_accepted_and_ignored(self):
+        # Manifests written while skills could name an icon still install:
+        # extra=forbid would otherwise cost the namespace over a key nothing
+        # reads.
+        diagnostics: list[Diagnostic] = []
+        extension = parse_extension(
+            {
+                "skills": {"dcf-model": {"icon": "calculator"}},
+                "servers": {"remote": {"tool_exposure_mode": "detailed"}},
+            },
+            diagnostics,
         )
-        assert (diag.level, diag.scope, diag.target, diag.code) == (
-            "warning", "skill", "ghost", "skill_meta_unknown",
-        )
-
-    def test_a_skill_the_package_carries_says_nothing(self):
-        assert self._report({"dcf-model": {"icon": "calculator"}}, ["dcf-model"]) == []
-
-    def test_the_older_list_form_is_not_checked(self):
-        assert self._report(["ghost"], ["dcf-model"]) == []
+        assert diagnostics == []
+        assert extension.servers["remote"].tool_exposure_mode == "detailed"

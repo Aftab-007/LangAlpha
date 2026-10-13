@@ -259,14 +259,14 @@ class TestHeaderValueRuleParity:
     def test_both_sides_accept_strip_or_refuse_the_same_values(
         self, monkeypatch, tmp_path, value
     ):
-        from src.server.services.mcp_oauth import discovery
+        from src.server.services.mcp_probe import RejectedHeaderValue, resolve_header_refs
 
         try:
-            host, _ = discovery.resolve_header_refs(
+            host, _ = resolve_header_refs(
                 {"X-Api-Key": "Bearer ${vault:K}"}, {"K": value}
             )
             host_outcome = host["X-Api-Key"]
-        except discovery.RejectedHeaderValue as e:
+        except RejectedHeaderValue as e:
             host_outcome = ("refused", e.header)
 
         cfg = TestResolvedHeaderValues._cfg_with_vault(

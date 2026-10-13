@@ -30,8 +30,8 @@ Four operations:
   those bytes are server-owned, so a copy can only be older.
 
 The tree hash is defined over exactly the validator/upload projection
-(``__pycache__`` dirs and ``LICENSE.txt`` excluded) so ignored files can
-never produce a false-dirty loop.
+(``__pycache__`` dirs, ``LICENSE.txt`` and macOS litter excluded) so ignored
+files can never produce a false-dirty loop.
 """
 
 from __future__ import annotations
@@ -162,7 +162,7 @@ def projected_files(skill_dir):
     for root, dirs, names in os.walk(skill_dir, followlinks=False):
         keep = []
         for d in dirs:
-            if d == "__pycache__":
+            if d in ("__pycache__", "__MACOSX"):
                 continue
             # os.walk sorts entries with is_dir(), which follows the link, so a
             # symlink pointing at a directory lands here and is then never
@@ -181,8 +181,10 @@ def projected_files(skill_dir):
         for n in names:
             # Mirror the host projection exactly (validate.py::_ignored): it
             # drops any path component named __pycache__, files included, so
-            # skipping only the directory here would false-dirty forever.
-            if n in ("LICENSE.txt", "__pycache__"):
+            # skipping only the directory here would false-dirty forever. The
+            # rest is the litter macOS leaves (os_litter.is_os_litter).
+            skipped = ("LICENSE.txt", "__pycache__", "__MACOSX", ".DS_Store")
+            if n in skipped or n.startswith("._"):
                 continue
             p = os.path.join(root, n)
             st = os.lstat(p)

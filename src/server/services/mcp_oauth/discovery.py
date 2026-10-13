@@ -25,7 +25,6 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
-from ptc_agent.core.mcp_sanitize import VAULT_REF_RE
 from src.server.database.mcp_config_version import bump_user_versions
 from src.server.database.mcp_oauth import SERVABLE, ConnectionStatus, get_connection
 from src.server.database.mcp_servers import (
@@ -37,7 +36,6 @@ from src.server.database.mcp_tool_schemas import (
     upsert_user_tool_schemas,
 )
 from src.server.database.pool import get_db_connection
-from src.server.database.user_vault_secrets import get_user_secrets_decrypted
 from src.server.models.mcp_server import OK_VERDICTS, ProbeResult
 from src.server.services.mcp_identity import bounded_identity
 from src.server.services.mcp_oauth.lifecycle import (
@@ -46,12 +44,10 @@ from src.server.services.mcp_oauth.lifecycle import (
 )
 from src.server.services.mcp_probe import (
     DISCOVERY_TIMEOUT_S,
-    INVALID_HEADER_VALUE,
     ProbeOutcome,
     bounded_probe,
-    missing_secrets_result,
+    probe_configured,
     probe_result,
-    rejected_header_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,57 +58,6 @@ REMOTE_TRANSPORTS = ("http", "sse")
 def _schema_digest(tools: list[dict]) -> str:
     canonical = json.dumps(tools, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def vault_ref_names(headers: dict[str, str] | None) -> list[str]:
-    """Every ``${vault:NAME}`` a header map refers to, first occurrence first."""
-    names: list[str] = []
-    for value in (headers or {}).values():
-        names.extend(n for n in VAULT_REF_RE.findall(value or "") if n not in names)
-    return names
-
-
-class RejectedHeaderValue(ValueError):
-    """A resolved header value this process will not put on the wire.
-
-    Raised rather than dropped, for the reason a missing ref is: a configured
-    header that silently goes missing comes back as a 401 and reads as the
-    wrong key. Each caller turns this into the refusal its own surface renders.
-    """
-
-    def __init__(self, header: str) -> None:
-        super().__init__(INVALID_HEADER_VALUE)
-        self.header = header
-
-
-def resolve_header_refs(
-    headers: dict[str, str] | None, secrets: dict[str, str]
-) -> tuple[dict[str, str], list[str]]:
-    """Expand ``${vault:NAME}`` in header values; also the names that had no value.
-
-    A header with a missing ref is dropped rather than sent with the literal
-    ref string: a server told ``Bearer ${vault:X}`` answers 401 and the row
-    would then read as "rejected the credentials" when the truth is that no
-    credential was configured yet.
-    """
-    resolved: dict[str, str] = {}
-    missing: list[str] = []
-    for key, value in (headers or {}).items():
-        names = VAULT_REF_RE.findall(value or "")
-        unknown = [n for n in names if n not in secrets]
-        if unknown:
-            missing.extend(n for n in unknown if n not in missing)
-            continue
-        expanded = VAULT_REF_RE.sub(lambda m: secrets[m.group(1)], value or "")
-        # This sink's own control-character rule, which storage no longer
-        # applies for it: a trailing newline came with the paste rather than
-        # with the key, while a break inside the value is a second header, and
-        # there is no reading of that worth guessing at.
-        expanded = expanded.rstrip()
-        if "\r" in expanded or "\n" in expanded:
-            raise RejectedHeaderValue(key)
-        resolved[key] = expanded
-    return resolved, missing
 
 
 def _discarded(server_name: str, write: SchemaWrite) -> TokenUnavailable:
@@ -352,9 +297,7 @@ async def refresh_user_tool_schemas(
     # row off the endpoint the user consented to (and the revoke that follows
     # such an edit is not atomic with it), so re-bind here rather than trust
     # that every write path got there first.
-    if connection.server_url and not same_consented_url(
-        connection.server_url, row.get("url")
-    ):
+    if not same_consented_url(connection.server_url, row.get("url")):
         raise TokenUnavailable("needs_reauth", "server URL changed since consent")
 
     writer = _SnapshotWriter(
@@ -438,21 +381,15 @@ async def discover_catalog_server(
         None,
         claimed_at,
     )
-    try:
-        headers, missing = resolve_header_refs(
-            row.get("headers"),
-            await get_user_secrets_decrypted(
-                user_id, vault_ref_names(row.get("headers"))
-            ),
-        )
-    except RejectedHeaderValue:
-        # Landed as the row's verdict rather than logged: the user changed a
-        # secret, and the page is where they will look for what it broke.
-        return await writer.fail(rejected_header_result())
-    if missing:
-        return await writer.fail(missing_secrets_result(missing))
-    outcome = await bounded_probe(
-        row["url"], headers, timeout_s=DISCOVERY_TIMEOUT_S, background=True
+    # A secret the headers cannot resolve lands as the row's verdict rather
+    # than a log line: the user changed a secret, and the page is where they
+    # will look for what it broke.
+    outcome = await probe_configured(
+        user_id,
+        row["url"],
+        row.get("headers"),
+        timeout_s=DISCOVERY_TIMEOUT_S,
+        background=True,
     )
     return await writer.settle(outcome)
 

@@ -25,17 +25,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import json
 import re
-from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Any, Literal, Mapping
-from urllib.parse import urlsplit
+from typing import Any, Iterable, Literal, Mapping
+from urllib.parse import unquote_plus, urlsplit
 
 import httpx2
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 
+from ptc_agent.core.mcp_sanitize import VAULT_REF_RE, looks_like_secret
+from src.server.database.user_vault_secrets import get_user_secrets_decrypted
 from src.server.models.mcp_server import (
     ProbeResult,
     ProbeTool,
@@ -96,6 +98,19 @@ _PREFLIGHT_BODY = (
     + '","capabilities":{},"clientInfo":{"name":"langalpha-probe","version":"1"}}}'
 ).encode()
 
+# A dial that never opened a connection sent nothing, so dialling again repeats
+# nothing the server saw. A save waits on the probe's answer, and a route that
+# drops a share of its connects would otherwise refuse a server a second try
+# reaches; one more try, after this pause and inside the same budget.
+CONNECT_RETRY_PAUSE_S = 0.5
+
+
+def _never_connected(e: BaseException) -> bool:
+    """Whether a failure happened before any request reached the server."""
+    while isinstance(e, BaseExceptionGroup) and e.exceptions:
+        e = e.exceptions[0]
+    return isinstance(e, (httpx2.ConnectError, httpx2.ConnectTimeout))
+
 
 @dataclass(frozen=True)
 class ProbeOutcome:
@@ -104,6 +119,8 @@ class ProbeOutcome:
     ``sent_credential`` is not decoration: a 401 means "connect this server"
     when we sent nothing and "your key is wrong" when we did, and the wire
     looks identical either way, so the verdict can only be read here.
+    ``missing_secrets`` marks a probe that never dialled, because a header
+    names a vault entry with no value.
     """
 
     ok: bool
@@ -114,38 +131,27 @@ class ProbeOutcome:
     error: str = ""
     http_status: int | None = None
     sent_credential: bool = False
+    missing_secrets: tuple[str, ...] = ()
 
 
-def probe_verdict(
-    outcome: ProbeOutcome, *, missing_secrets: Sequence[str] = ()
-) -> ProbeVerdict:
-    """Fold one probe into the single word every surface renders."""
-    if missing_secrets:
+def probe_verdict(outcome: ProbeOutcome) -> ProbeVerdict:
+    """Fold one probe into the single word every surface renders.
+
+    A sign-in challenge in answer to a credential is that credential turned
+    down: pointing the user at a sign-in would hide that the key they gave
+    did not work, so a save and its preview both say it was rejected.
+    """
+    if outcome.missing_secrets:
         # Nothing was dialled: the headers name a vault entry with no value,
         # and sending the literal ref would come back as a rejected key.
         return "missing_secrets"
     if outcome.ok:
         return "ok_authed" if outcome.sent_credential else "ok"
     if outcome.auth == "oauth":
-        return "oauth"
+        return "credential_rejected" if outcome.sent_credential else "oauth"
     if outcome.auth == "credential":
         return "credential_rejected" if outcome.sent_credential else "needs_credential"
     return "unreachable"
-
-
-def missing_secrets_result(missing: Sequence[str]) -> "ProbeResult":
-    """The verdict for headers that name a vault secret nobody has set.
-
-    One spelling for every path that notices it, so the add form, discovery
-    and the relay's log agree on what the user is being told to do.
-    """
-    return probe_result(
-        ProbeOutcome(
-            ok=False, auth="credential",
-            error="missing vault secret(s): " + ", ".join(missing),
-        ),
-        missing_secrets=missing,
-    )
 
 
 # One wording for a header value that cannot be framed, whoever catches it:
@@ -158,18 +164,82 @@ INVALID_HEADER_VALUE = (
 )
 
 
-def rejected_header_result() -> "ProbeResult":
-    """The verdict for a header this process refused to put on the wire."""
-    return probe_result(
-        ProbeOutcome(ok=False, auth="unknown", error=INVALID_HEADER_VALUE)
+def vault_ref_names(headers: Mapping[str, str] | None) -> list[str]:
+    """Every ``${vault:NAME}`` a header map refers to, first occurrence first."""
+    names: list[str] = []
+    for value in (headers or {}).values():
+        names.extend(n for n in VAULT_REF_RE.findall(value or "") if n not in names)
+    return names
+
+
+class RejectedHeaderValue(ValueError):
+    """A resolved header value this process will not put on the wire.
+
+    Raised rather than dropped, for the reason a missing ref is: a configured
+    header that silently goes missing comes back as a 401 and reads as the
+    wrong key. Each caller turns this into the refusal its own surface renders.
+    """
+
+    def __init__(self, header: str) -> None:
+        super().__init__(INVALID_HEADER_VALUE)
+        self.header = header
+
+
+def resolve_header_refs(
+    headers: Mapping[str, str] | None, secrets: Mapping[str, str]
+) -> tuple[dict[str, str], list[str]]:
+    """Expand ``${vault:NAME}`` in header values; also the names that had no value.
+
+    A header with a missing ref is dropped rather than sent with the literal
+    ref string: a server told ``Bearer ${vault:X}`` answers 401 and the row
+    would then read as "rejected the credentials" when the truth is that no
+    credential was configured yet.
+    """
+    resolved: dict[str, str] = {}
+    missing: list[str] = []
+    for key, value in (headers or {}).items():
+        names = VAULT_REF_RE.findall(value or "")
+        unknown = [n for n in names if n not in secrets]
+        if unknown:
+            missing.extend(n for n in unknown if n not in missing)
+            continue
+        expanded = VAULT_REF_RE.sub(lambda m: secrets[m.group(1)], value or "")
+        # This sink's own control-character rule, which storage no longer
+        # applies for it: a trailing newline came with the paste rather than
+        # with the key, while a break inside the value is a second header, and
+        # there is no reading of that worth guessing at.
+        expanded = expanded.rstrip()
+        if "\r" in expanded or "\n" in expanded:
+            raise RejectedHeaderValue(key)
+        resolved[key] = expanded
+    return resolved, missing
+
+
+# Header names that carry a credential beside the ones ``looks_like_secret``
+# reads as one: "key" anywhere in the name (its test wants the bare word), and
+# the cookie or session header a session rides on.
+_CREDENTIAL_HEADER_RE = re.compile(r"(?i)key|cookie|session")
+
+
+def sends_credential(headers: Mapping[str, str] | None) -> bool:
+    """Whether these headers carry a credential rather than only plain config.
+
+    The one reading of it: the probe's own verdict and every surface built
+    on it take it from here. Read off the configured values where there are
+    any, since a vault ref still marks a secret there, and only off the
+    headers that actually go out. ``X-Region: us`` is config, so a 401 in
+    answer to it means nothing was offered, not that a key was turned down.
+    """
+    return any(
+        VAULT_REF_RE.search(value or "")
+        or looks_like_secret(name, value or "")
+        or _CREDENTIAL_HEADER_RE.search(name)
+        for name, value in strip_configured_headers(headers).items()
     )
 
 
 def probe_result(
-    outcome: ProbeOutcome,
-    *,
-    missing_secrets: Sequence[str] = (),
-    include_tools: bool = False,
+    outcome: ProbeOutcome, *, include_tools: bool = False
 ) -> ProbeResult:
     """The wire/storage shape of one probe, verdict computed here and nowhere else.
 
@@ -178,7 +248,7 @@ def probe_result(
     probe that starts failing.
     """
     return ProbeResult(
-        verdict=probe_verdict(outcome, missing_secrets=missing_secrets),
+        verdict=probe_verdict(outcome),
         tools=(
             [
                 ProbeTool(
@@ -192,7 +262,7 @@ def probe_result(
         server_info=bounded_identity(outcome.identity),
         error=outcome.error,
         http_status=outcome.http_status,
-        missing_secrets=list(missing_secrets),
+        missing_secrets=list(outcome.missing_secrets),
         probed_at=datetime.now(UTC),
     )
 
@@ -235,34 +305,60 @@ def _bounded(text: str, limit: int = PROBE_ERROR_MAX_CHARS) -> str:
     return flat[: limit - len(_TRUNCATION_MARKER)].rstrip() + _TRUNCATION_MARKER
 
 
-def _scrub_sent_values(error: str, sent: Mapping[str, str]) -> str:
-    """Blank the credentials this probe sent out of an error quoting them back.
+# Shorter than this, a value is as likely to be a word of the message as a
+# credential, and blanking it would shred the reason. The vault redaction the
+# command check runs draws the same line.
+_MIN_SECRET_CHARS = 8
 
-    A server is free to echo the header it rejected, and what it answers with
-    lands on the row; the scheme word of a ``Bearer``/``Basic`` value is dropped
-    so the token half is caught on its own too.
+
+def _sent_secrets(
+    url: str, headers: Mapping[str, str], vault_values: Iterable[str] = ()
+) -> tuple[str, ...]:
+    """Every value this dial puts on the wire that a server could quote back.
+
+    A server echoes the part it rejected, not the field it sat in: a vault
+    value spliced into a longer header (``acct=42;key=${vault:K}``), the half
+    after any scheme word (``Token``, ``DeepL-Auth-Key``), one query value, or
+    a path segment that reads as a token. Longest first, so a value inside
+    another is never half-replaced.
     """
-    secrets: set[str] = set()
-    for value in sent.values():
-        v = value.strip()
-        if not v:
-            continue
-        secrets.add(v)
-        scheme, _, rest = v.partition(" ")
-        if scheme.lower() in ("bearer", "basic") and rest.strip():
-            secrets.add(rest.strip())
-    # Longest first: a value that contains another must not be half-replaced.
-    for secret in sorted(secrets, key=len, reverse=True):
-        error = error.replace(secret, _REDACTED)
-    return error
+    candidates = [*headers.values(), *vault_values]
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        parts = None
+    if parts is not None:
+        for pair in parts.query.split("&"):
+            value = pair.partition("=")[2]
+            candidates += (value, unquote_plus(value))
+        candidates += (s for s in parts.path.split("/") if looks_like_secret("", s))
+    found: set[str] = set()
+    for value in candidates:
+        value = value.strip()
+        rest = value.partition(" ")[2].strip()
+        found.update(v for v in (value, rest) if len(v) >= _MIN_SECRET_CHARS)
+    return tuple(sorted(found, key=len, reverse=True))
+
+
+def _scrub_sent_values(text: str, url: str, secrets: Iterable[str]) -> str:
+    """Cut the address we dialled to its host and blank every value we sent.
+
+    The address goes first: a query value blanked inside it would leave the
+    rest of the URL behind, where ``_scrub_url`` no longer matches it.
+    """
+    text = _scrub_url(text, url)
+    for secret in secrets:
+        text = text.replace(secret, _REDACTED)
+    return text
 
 
 def _describe(e: BaseException, url: str = "") -> str:
-    """A one-line reason a user can act on, from whatever the stack raised.
+    """A reason a user can act on, from whatever the stack raised.
 
     ``url`` is the address dialled, cut back to its host wherever the message
-    quotes it. The scrub runs before the cap, so a long message cannot leave
-    half a credentialled URL behind.
+    quotes it. Uncapped: the message may also quote a header value we sent,
+    and a cap applied before that scrub could cut the value in half and leave
+    a prefix no scrub matches, so callers cap with ``_bounded`` after it.
     """
     if isinstance(e, BaseExceptionGroup):
         leaves = e.exceptions
@@ -271,7 +367,7 @@ def _describe(e: BaseException, url: str = "") -> str:
     if isinstance(e, httpx2.ConnectTimeout):
         return "connection timed out"
     if isinstance(e, httpx2.ConnectError):
-        return f"could not connect: {_bounded(text) or 'connection refused'}"
+        return f"could not connect: {text or 'connection refused'}"
     if isinstance(e, httpx2.LocalProtocolError):
         # The message quotes the header it choked on, which on this path is the
         # resolved credential. This text is logged and stored on the row.
@@ -280,10 +376,10 @@ def _describe(e: BaseException, url: str = "") -> str:
         return "the server's answer was not valid HTTP"
     if isinstance(e, httpx2.HTTPError) and not text:
         return type(e).__name__
-    return _bounded(text) or type(e).__name__
+    return text or type(e).__name__
 
 
-async def _oauth_metadata_behind(url: str) -> bool:
+async def _oauth_metadata_behind(url: str, secrets: Iterable[str]) -> bool:
     """Whether RFC 9728/8414 discovery finds an authorization server for ``url``.
 
     The connect flow's own discovery, run for its verdict alone: it raises when
@@ -301,19 +397,21 @@ async def _oauth_metadata_behind(url: str) -> bool:
         # Host only: a row's URL may carry a credential in its query.
         logger.info(
             "[mcp_probe] OAuth discovery for %s failed: %s",
-            _host(url), _scrub_url(str(e), url),
+            _host(url), _scrub_sent_values(str(e), url, secrets),
         )
         return False
     return True
 
 
 async def _preflight(
-    url: str, headers: Mapping[str, str]
+    url: str, headers: Mapping[str, str], credential: bool, secrets: Iterable[str]
 ) -> tuple[ProbeOutcome | None, AuthRequirement]:
     """POST one ``initialize`` and read the status the SDK would hide.
 
     Returns a terminal outcome when the handshake cannot proceed, else None and
-    the auth requirement the answer implied.
+    the auth requirement the answer implied. ``credential`` is whether the
+    headers carry one (``sends_credential``), which is what a refusal means;
+    ``secrets`` is the dial's ``_sent_secrets``, for what this logs.
     """
     send = {**_PREFLIGHT_HEADERS, **headers}
     async with oauth_http_client() as client:
@@ -332,16 +430,16 @@ async def _preflight(
             except Exception as e:  # noqa: BLE001, best effort by definition
                 logger.debug(
                     "[mcp_probe] closing preflight session failed: %s",
-                    _describe(e, url),
+                    _bounded(_scrub_sent_values(_describe(e, url), url, secrets)),
                 )
     status = response.status_code
     if status in (401, 403):
         auth: AuthRequirement = (
-            "oauth" if await _oauth_metadata_behind(url) else "credential"
+            "oauth" if await _oauth_metadata_behind(url, secrets) else "credential"
         )
         if auth == "oauth":
             what = "it wants an OAuth connection"
-        elif headers:
+        elif credential:
             what = "it rejected the configured credentials"
         else:
             what = "it needs a credential"
@@ -355,6 +453,15 @@ async def _preflight(
                 error=f"server answered HTTP {status}: {what}{detail}",
             ),
             auth,
+        )
+    if status == 429:
+        return (
+            ProbeOutcome(
+                ok=False, auth="unknown", http_status=status,
+                error="server answered HTTP 429: it is limiting requests, "
+                "try again in a minute",
+            ),
+            "unknown",
         )
     if status >= 400:
         return (
@@ -373,7 +480,71 @@ async def _preflight(
             ),
             "unknown",
         )
-    return None, ("credential" if headers else "none")
+    if (refusal := _handshake_refusal(response.content)) is not None:
+        # Some servers check the key at the handshake and answer 200 with an
+        # error in place of the handshake's result. The SDK then fails to
+        # parse it and reports schema noise; the server's own words are what
+        # the user can act on.
+        auth = "credential" if credential else "unknown"
+        return (
+            ProbeOutcome(
+                ok=False, auth=auth, http_status=status,
+                error=f"the server refused the handshake: {refusal}",
+            ),
+            auth,
+        )
+    return None, ("credential" if credential else "none")
+
+
+def _handshake_refusal(body: bytes) -> str | None:
+    """The message of an error a server sent in answer to ``initialize``.
+
+    Covers a JSON-RPC ``error`` and a ``result`` flagged ``isError`` (a tool
+    result shape some servers reuse for a rejected key). None for a real
+    handshake reply or anything unreadable. Uncapped, since the message may
+    quote the key it refused: ``probe_remote_server`` caps after the scrub.
+    """
+    text = body[:8192].decode("utf-8", errors="replace")
+    candidates = [text]
+    # An SSE answer carries the message on its data lines.
+    candidates += [
+        line[5:].strip() for line in text.splitlines() if line.startswith("data:")
+    ]
+    for candidate in candidates:
+        try:
+            message = json.loads(candidate)
+        except ValueError:
+            continue
+        if not isinstance(message, dict):
+            continue
+        error = message.get("error")
+        if isinstance(error, dict):
+            return str(error.get("message") or "no reason given")
+        result = message.get("result")
+        if isinstance(result, dict) and result.get("isError") is True:
+            return _error_text(result.get("content"))
+    return None
+
+
+def _error_text(content: Any) -> str:
+    """The readable part of an ``isError`` result's content."""
+    texts = [
+        block.get("text", "")
+        for block in content if isinstance(block, dict)
+    ] if isinstance(content, list) else []
+    joined = " ".join(t for t in texts if isinstance(t, str)).strip()
+    try:
+        # Often a JSON document itself: {"error": {"message": "..."}}.
+        inner = json.loads(joined)
+    except ValueError:
+        return joined or "no reason given"
+    if isinstance(inner, dict):
+        error = inner.get("error", inner)
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            return error["message"].strip() or "no reason given"
+        if isinstance(error, str):
+            return error.strip() or "no reason given"
+    return joined or "no reason given"
 
 
 async def probe_remote_server(
@@ -381,11 +552,17 @@ async def probe_remote_server(
     headers: Mapping[str, str] | None = None,
     *,
     timeout_s: float = DISCOVERY_TIMEOUT_S,
+    credential: bool | None = None,
+    vault_values: Iterable[str] = (),
 ) -> ProbeOutcome:
     """List a remote server's tools with exactly the headers given.
 
     Never raises: every failure is an outcome with an ``error`` a user can
     read and an ``auth`` verdict as far as the wire allowed one.
+    ``credential`` is ``sends_credential`` of the headers as configured, for a
+    caller that resolved vault refs out of them; None reads the headers given.
+    ``vault_values`` are what those refs resolved to, which the headers alone
+    cannot tell apart from the text around them.
     """
     # Stripped once here, so the preflight, its DELETE and the SDK session all
     # see the same map: a row spelling ``host`` would otherwise put a second
@@ -393,11 +570,18 @@ async def probe_remote_server(
     # ``MCP-Protocol-Version`` would win the merge below against the version
     # this probe's own handshake body announces.
     sent = strip_configured_headers(headers)
-    outcome = await _probe(url, sent, timeout_s=timeout_s)
+    if credential is None:
+        credential = sends_credential(sent)
+    secrets = _sent_secrets(url, sent, vault_values)
+    outcome = await _probe(
+        url, sent, credential=credential, timeout_s=timeout_s, secrets=secrets
+    )
     return replace(
         outcome,
-        error=_scrub_sent_values(outcome.error, sent),
-        sent_credential=bool(sent),
+        # The one cap every error takes, after the scrub: capped first, a
+        # value straddling the cut would leave a prefix nothing matches.
+        error=_bounded(_scrub_sent_values(outcome.error, url, secrets)),
+        sent_credential=credential,
     )
 
 
@@ -407,6 +591,8 @@ async def bounded_probe(
     *,
     timeout_s: float = PROBE_TIMEOUT_S,
     background: bool = False,
+    credential: bool | None = None,
+    vault_values: Iterable[str] = (),
 ) -> ProbeOutcome:
     """A probe under the process-wide concurrency ceiling: the one way onto the
     network from here.
@@ -426,7 +612,13 @@ async def bounded_probe(
         async with asyncio.timeout(timeout_s):
             async with _background_lane if background else contextlib.nullcontext():
                 async with _gate:
-                    return await probe_remote_server(url, headers, timeout_s=timeout_s)
+                    return await probe_remote_server(
+                        url,
+                        headers,
+                        timeout_s=timeout_s,
+                        credential=credential,
+                        vault_values=vault_values,
+                    )
     except TimeoutError:
         # The same outcome a probe that ran and timed out returns: nothing was
         # learned about the server either way.
@@ -436,12 +628,78 @@ async def bounded_probe(
         )
 
 
+async def probe_configured(
+    user_id: str,
+    url: str,
+    headers: Mapping[str, str] | None,
+    *,
+    extra_secrets: Mapping[str, str] | None = None,
+    bearer: str | None = None,
+    timeout_s: float = PROBE_TIMEOUT_S,
+    background: bool = False,
+) -> ProbeOutcome:
+    """Probe ``url`` with a server's configured headers, vault refs resolved.
+
+    The one sequence behind the add form's preview, the check a save waits
+    on and a header row's discovery, so the three cannot read the same
+    server differently. ``extra_secrets`` are values the same request is
+    about to write, seen ahead of the stored ones and never stored here. A ref
+    with no value, or a value that cannot go on the wire, answers without
+    dialling.
+
+    ``bearer`` is a sign-in's token, sent in place of the headers: once a
+    server is signed in to, discovery and the relay send the token and
+    nothing else, so a check that sent the headers too could pass on a key
+    nothing will send, or refuse a row over a ref nothing reads.
+    """
+    if bearer is not None:
+        return await bounded_probe(
+            url,
+            {"Authorization": f"Bearer {bearer}"},
+            timeout_s=timeout_s,
+            background=background,
+            credential=True,
+        )
+    extra = dict(extra_secrets or {})
+    refs = vault_ref_names(headers)
+    names = [n for n in refs if n not in extra]
+    stored = await get_user_secrets_decrypted(user_id, names) if names else {}
+    values = {**stored, **extra}
+    try:
+        resolved, missing = resolve_header_refs(headers, values)
+    except RejectedHeaderValue:
+        return ProbeOutcome(ok=False, auth="unknown", error=INVALID_HEADER_VALUE)
+    if missing:
+        return ProbeOutcome(
+            ok=False,
+            auth="credential",
+            error="missing vault secret(s): " + ", ".join(missing),
+            missing_secrets=tuple(missing),
+        )
+    return await bounded_probe(
+        url,
+        resolved,
+        timeout_s=timeout_s,
+        background=background,
+        credential=sends_credential(headers),
+        vault_values=[values[n] for n in refs],
+    )
+
+
 async def _probe(
-    url: str, headers: dict[str, str], *, timeout_s: float
+    url: str,
+    headers: dict[str, str],
+    *,
+    credential: bool,
+    timeout_s: float,
+    secrets: tuple[str, ...],
 ) -> ProbeOutcome:
     from ptc_agent.core.mcp_schema import client_identity
     from src.server.services.mcp_discovery import sanitize_discovered_tools
 
+    # The first attempt's failure, when it never connected and a second one
+    # is under way: the reason to report if that one runs out of budget.
+    unconnected: BaseException | None = None
     try:
         async with asyncio.timeout(timeout_s):
             # Pinned inside the deadline, not before it: pinning resolves DNS
@@ -464,33 +722,56 @@ async def _probe(
                     ok=False, auth="unknown",
                     error=f"invalid url: {_scrub_url(str(e), url)}",
                 )
-            terminal, auth = await _preflight(url, headers)
-            if terminal is not None:
-                return terminal
-            async with pinned_discovery_client(target, headers=headers) as http_client:
-                # The streams context manager IS the SDK's Transport protocol.
-                transport = streamable_http_client(url, http_client=http_client)
-                async with Client(transport) as client:
-                    result = await client.list_tools(cache_mode="refresh")
-                    # The handshake already asked who this is; read it here
-                    # rather than reconnect later. Never raises.
-                    identity = client_identity(client)
+            while True:
+                try:
+                    terminal, auth = await _preflight(
+                        url, headers, credential, secrets
+                    )
+                    if terminal is not None:
+                        return terminal
+                    async with pinned_discovery_client(
+                        target, headers=headers
+                    ) as http_client:
+                        # The streams context manager IS the SDK's Transport
+                        # protocol.
+                        transport = streamable_http_client(url, http_client=http_client)
+                        async with Client(transport) as client:
+                            result = await client.list_tools(cache_mode="refresh")
+                            # The handshake already asked who this is; read it
+                            # here rather than reconnect later. Never raises.
+                            identity = client_identity(client)
+                    break
+                except Exception as e:
+                    if unconnected is not None or not _never_connected(e):
+                        raise
+                    unconnected = e
+                    logger.info(
+                        "[mcp_probe] %s did not connect (%s); dialling once more",
+                        _host(url),
+                        _bounded(_scrub_sent_values(_describe(e, url), url, secrets)),
+                    )
+                    await asyncio.sleep(CONNECT_RETRY_PAUSE_S)
     except TimeoutError:
+        if unconnected is not None:
+            # The second try ran out of budget, which says less than how the
+            # first one failed.
+            reason = _scrub_sent_values(_describe(unconnected, url), url, secrets)
+            return ProbeOutcome(
+                ok=False, auth="unknown", error=f"discovery failed: {reason}"
+            )
         return ProbeOutcome(
             ok=False, auth="unknown",
             error=f"{_host(url)} did not answer within {timeout_s:.0f}s",
         )
     except OAuthHopBlocked as e:
-        # Scrubbed before the cap: the URL leads these messages, so truncating
-        # first would leave a half-URL nothing can match.
-        return ProbeOutcome(
-            ok=False, auth="unknown", error=_bounded(_scrub_url(str(e), url))
-        )
+        # The URL leads these messages. Capped on the way out, after every
+        # scrub, since a half-URL is something nothing can match.
+        return ProbeOutcome(ok=False, auth="unknown", error=_scrub_url(str(e), url))
     except Exception as e:  # noqa: BLE001, the reason is the product here
         # Scrubbed here as well as on the outcome: a server that echoes the
         # header it rejected would otherwise put the credential in the log.
-        reason = _scrub_sent_values(_describe(e, url), headers)
-        logger.info("[mcp_probe] %s failed: %s", _host(url), reason)
+        reason = _scrub_sent_values(_describe(e, url), url, secrets)
+        logger.info("[mcp_probe] %s failed: %s", _host(url), _bounded(reason))
         return ProbeOutcome(
             ok=False, auth="unknown", error=f"discovery failed: {reason}"
         )

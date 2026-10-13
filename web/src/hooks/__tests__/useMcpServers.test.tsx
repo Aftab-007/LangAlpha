@@ -21,6 +21,7 @@ import type {
   ProbeVerdict,
 } from '../../pages/ChatAgent/utils/api';
 import { PROBE_KICK_WINDOW_MS } from '../../pages/ChatAgent/components/mcp/mcpState';
+import { catalogServer } from '../../test/factories';
 
 vi.mock('../../pages/ChatAgent/utils/api', () => ({
   getWorkspaceMcpServers: vi.fn(),
@@ -281,6 +282,43 @@ describe('mcp mutations — invalidation', () => {
     });
 
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.mcp.all });
+  });
+
+  it('catalog create settles only once the shown catalog holds the new row', async () => {
+    // The "Added" toast's Open goes straight to the new row's page, which a
+    // catalog that has not refetched yet reads as a dead link and closes.
+    const client = makeClient();
+    const row = catalogServer({ name: 't1' });
+    (getMcpCatalog as Mock).mockResolvedValueOnce({ servers: [], max_servers: 20 });
+    const { result } = renderHook(
+      () => ({ catalog: useMcpCatalog(), create: useCreateMcpCatalogServer() }),
+      { wrapper: wrapperFor(client) },
+    );
+    await waitFor(() => expect(result.current.catalog.data).toBeDefined());
+
+    let land!: (list: CatalogServerList) => void;
+    (getMcpCatalog as Mock).mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    (createMcpCatalogServer as Mock).mockResolvedValue(row);
+    let settled = false;
+    let created!: Promise<void>;
+    act(() => {
+      created = result.current.create
+        .mutateAsync({ name: 't1', transport: 'stdio', command: 'npx' })
+        .then(() => {
+          settled = true;
+        });
+    });
+    await waitFor(() => expect(getMcpCatalog).toHaveBeenCalledTimes(2));
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      land({ servers: [row], max_servers: 20 });
+      await created;
+    });
+    const held = client.getQueryData<CatalogServerList>(queryKeys.mcp.catalog());
+    expect(held?.servers.map((s) => s.name)).toEqual(['t1']);
+    // One refetch, joined rather than started twice.
+    expect(getMcpCatalog).toHaveBeenCalledTimes(2);
   });
 
   it('catalog import invalidates the user vault too — the backend auto-vaults inline secrets', async () => {

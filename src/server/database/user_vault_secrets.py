@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 MAX_SECRETS_PER_USER = 50
 
 
+class SecretExists(ValueError):
+    """The account already holds a secret by this name."""
+
+
+class SecretLimitReached(ValueError):
+    """The account already holds ``MAX_SECRETS_PER_USER`` secrets."""
+
+
 async def get_user_secrets(user_id: str) -> list[dict[str, Any]]:
     """List all secrets for a user (decrypted server-side for masking)."""
     enc_key = _get_encryption_key()
@@ -184,7 +192,7 @@ async def create_user_secret(
                 )
                 row = await cur.fetchone()
                 if row["cnt"] >= MAX_SECRETS_PER_USER:
-                    raise ValueError(
+                    raise SecretLimitReached(
                         f"Maximum of {MAX_SECRETS_PER_USER} secrets per user reached"
                     )
 
@@ -200,7 +208,7 @@ async def create_user_secret(
                 )
                 inserted = await cur.fetchone()
                 if not inserted:
-                    raise ValueError(f"Secret with name {name!r} already exists")
+                    raise SecretExists(f"Secret with name {name!r} already exists")
                 logger.info(
                     f"[user_vault_db] create_secret user_id={user_id} name={name}"
                 )

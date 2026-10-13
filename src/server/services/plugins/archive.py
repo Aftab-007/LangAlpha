@@ -35,6 +35,7 @@ import zipfile
 from collections.abc import Iterator
 
 from src.server.models.plugin import Diagnostic
+from src.server.services.os_litter import is_os_litter
 from src.server.services.plugins.errors import PluginFatal
 from src.server.services.plugins.paths import split_member
 
@@ -117,8 +118,10 @@ def _resolve_links(
 
     A link to a directory mirrors that subtree under the link's own path,
     which is how a package publishes the same skills under two vendor
-    directories. Mirrored bytes count against the uncompressed cap like any
-    other member, so a link cannot be used to multiply a tree past it.
+    directories. Mirrored bytes count against the uncompressed cap and
+    mirrored entries against the member cap, like any other member, so a link
+    cannot be used to multiply a tree past either: a chain of directory links
+    doubles at every level, and empty files cost no bytes.
     """
     unresolved: list[tuple[str, str]] = []
     budget = MAX_UNCOMPRESSED_BYTES - sum(len(b) for b in files.values())
@@ -145,6 +148,12 @@ def _resolve_links(
         if not payload:
             unresolved.append((path, links[path]))
             continue
+        if len(files) + len(payload) > MAX_MEMBERS:
+            raise _fatal(
+                f"archive has more than {MAX_MEMBERS} members once its links "
+                "are resolved",
+                code="too_many_members",
+            )
         budget -= sum(len(b) for b in payload.values())
         if budget < 0:
             raise _fatal(
@@ -203,7 +212,7 @@ def _extract_zip(raw: bytes) -> tuple[dict[str, bytes], dict[str, str]]:
         total = 0
         for info in infos:
             segments = _check_member_path(info.filename)
-            if info.is_dir() or not segments:
+            if info.is_dir() or not segments or is_os_litter(segments):
                 continue
             if info.flag_bits & 0x1:
                 raise _fatal(
@@ -364,7 +373,7 @@ def _extract_tar(raw: bytes) -> tuple[dict[str, bytes], dict[str, str]]:
                     code="too_many_members",
                 )
             segments = _check_member_path(member.name)
-            if member.isdir():
+            if member.isdir() or not segments or is_os_litter(segments):
                 continue
             if member.issym() or member.islnk():
                 links["/".join(segments)] = _link_target(

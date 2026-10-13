@@ -1,18 +1,14 @@
-import React, { type ComponentType } from 'react';
+import React from 'react';
 import { ModalShell } from '@/components/ui/ModalShell';
-import type { BrandArt } from '@/lib/brandArt';
-import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
-import type { MarkKind } from '@/pages/ChatAgent/components/mcp/KindTile';
 
 /**
- * The shared shell of the detail overlays (server / skill / plugin / order):
- * the house dialog shell at its wide size, with the identity header pinned
- * over a hairline and the body scrolling. The panel follows its content, so
- * a two-line plugin is a short card and a 28-tool server fills the viewport
- * and scrolls inside. Exit animations require an `AnimatePresence` around
- * the call site's conditional render.
+ * A detail as a dialog (an order): the house dialog shell at its wide size,
+ * with the header pinned over a hairline and the body scrolling. The panel
+ * follows its content, so a short detail is a short card and a long one
+ * fills the viewport and scrolls inside. Exit animations need an
+ * `AnimatePresence` around the call site's conditional render. The Plugins
+ * page shows its details as pages instead (`DetailPage`).
  */
-
 export function DetailOverlay({
   labelId,
   onClose,
@@ -41,62 +37,7 @@ export function DetailOverlay({
   );
 }
 
-/** Identity header: large tile, name + kind label, quiet meta line, and the
- *  overlay's primary control (usually the enabled toggle) on the right. */
-export function DetailHeader({
-  name,
-  labelId,
-  kind,
-  kindLabel,
-  art,
-  glyph,
-  meta,
-  controls,
-}: {
-  name: string;
-  labelId: string;
-  /** Which glyph stands in when there is no art. */
-  kind: MarkKind;
-  /** The item's kind, spelled out ("Skill", "MCP server", "Plugin"). */
-  kindLabel: string;
-  /** The item's own mark, or marks in order; falls back to `kind`'s glyph. */
-  art?: BrandArt | readonly BrandArt[];
-  /** A glyph chosen for this item, drawn on `kind`'s tile in place of its own. */
-  glyph?: ComponentType<{ className?: string }>;
-  meta?: React.ReactNode;
-  controls?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-start gap-3.5 pr-8">
-      <BrandMark name={name} kind={kind} art={art} glyph={glyph} size="lg" />
-      <div className="min-w-0 flex-1 flex flex-col gap-1">
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <h2
-            id={labelId}
-            className="text-lg font-semibold leading-tight truncate"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            {name}
-          </h2>
-          <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-            {kindLabel}
-          </span>
-        </div>
-        {meta && (
-          <div
-            className="flex items-center gap-2 flex-wrap text-xs"
-            style={{ color: 'var(--color-text-tertiary)' }}
-          >
-            {meta}
-          </div>
-        )}
-      </div>
-      {controls && <div className="flex items-center gap-2 shrink-0">{controls}</div>}
-    </div>
-  );
-}
-
-/** Section head inside an overlay body: small caps title + count, hairline. */
+/** Section head inside a dialog body: small caps title + count, hairline. */
 export function DetailSection({
   title,
   count,

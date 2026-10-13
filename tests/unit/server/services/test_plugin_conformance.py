@@ -16,18 +16,29 @@ import tracemalloc
 import zipfile
 from pathlib import Path
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from src.server.models.mcp_server import McpServerInput
 from src.server.services.plugins import archive
+from src.server.services.plugins.bare_skills import plugin_name_from_hint
 from src.server.services.plugins.errors import PluginAmbiguous, PluginFatal
+from src.server.services.plugins.source import (
+    PackageSource,
+    name_hint,
+    validate_source,
+)
 from src.server.services.plugins.fetch import (
     compose_subdir_url,
     normalize_forge_url,
 )
 from src.server.services.plugins import validate_package
 from src.server.services.mcp_import import plan_vault_extraction
-from src.server.services.plugins.extension import materialize_binds
+from src.server.services.plugins.export import export_plugin_zip
+from src.server.services.plugins.extension import SecretBind, materialize_binds
+from src.server.services.plugins.grants import secret_names_in, strip_refs
+from tests.unit.server.mcp_builders import zip_package
 
 FIXTURES = Path(__file__).parents[3] / "fixtures" / "plugins"
 
@@ -36,22 +47,13 @@ CANONICAL_PLUGIN_SCHEMA = (
 )
 
 
-def in_memory_zip(members: dict[str, bytes]) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        for name, data in members.items():
-            zf.writestr(name, data)
-    return buf.getvalue()
-
-
 def fixture_zip(name: str) -> bytes:
     root = FIXTURES / name
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        for path in sorted(root.rglob("*")):
-            if path.is_file():
-                zf.writestr(str(path.relative_to(root)), path.read_bytes())
-    return buf.getvalue()
+    return zip_package({
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    })
 
 
 def entry(package, key):
@@ -169,7 +171,7 @@ class TestMcpComponentLadder:
         # The bind is the package's own error, but it is an error in an
         # optional block of our own invention. Losing every server and every
         # skill over it was the wrong trade; the bind is dropped and named.
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": json.dumps({
                 "$schema": CANONICAL_PLUGIN_SCHEMA,
                 "name": "bind-typo",
@@ -205,12 +207,38 @@ class TestMcpComponentLadder:
         assert validate_package(fixture_zip("mcp-doc-invalid")).mcp_document_invalid
         assert not validate_package(fixture_zip("valid-full")).mcp_document_invalid
 
+    @pytest.mark.parametrize(
+        "document",
+        [
+            '{"mcpServers": ' + "[" * 100_000 + "]" * 100_000 + "}",
+            '{"mcpServers": {"api\\ud800": {"url": "https://api.example/mcp"}}}',
+        ],
+        ids=["nested-past-the-stack", "lone-surrogate"],
+    )
+    def test_an_mcp_json_no_parser_can_hold_drops_only_that_component(
+        self, document
+    ):
+        package = validate_package(zip_package({
+            "plugin.json": json.dumps({
+                "$schema": CANONICAL_PLUGIN_SCHEMA,
+                "name": "unreadable-mcp",
+                "version": "1.0.0",
+            }).encode(),
+            "mcp.json": document.encode(),
+        }))
+        assert package.mcp_document is None
+        assert package.mcp_document_invalid
+        assert any(
+            d.scope == "mcp" and d.code == "invalid_json"
+            for d in package.diagnostics
+        )
+
     def test_embedded_credential_never_reaches_the_stored_document(self):
         # The spec forbids embedded secrets; the import path vaults any it
         # finds, but it rewrites the entry plan, not the document we persist.
         # An unscrubbed document is a second plaintext copy that /export hands
         # straight back.
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": json.dumps({
                 "$schema": CANONICAL_PLUGIN_SCHEMA,
                 "name": "leaky",
@@ -253,7 +281,7 @@ class TestMcpComponentLadder:
         # space-separated pair was left alone on the grounds that nothing could
         # tell it from a positional, which the benign entries below disprove —
         # the flag naming the value is signal enough.
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": json.dumps({
                 "$schema": CANONICAL_PLUGIN_SCHEMA,
                 "name": "argleak",
@@ -308,7 +336,7 @@ class TestMcpComponentLadder:
         # ``Bearer ${vault:X}`` is a reference the user already set up, not an
         # embedded secret. Blanking it would silently break a working server on
         # every re-validation, so the scrub must match the extractor's verdict.
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": json.dumps({
                 "$schema": CANONICAL_PLUGIN_SCHEMA,
                 "name": "reffed",
@@ -351,7 +379,7 @@ class TestMcpComponentLadder:
         # The ref syntax in argv hands this account's secret to whatever the
         # command fetches. Scanning env and headers alone left that case, the
         # loudest one, with no diagnostic at all.
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": json.dumps({
                 "$schema": CANONICAL_PLUGIN_SCHEMA,
                 "name": "argref",
@@ -385,7 +413,7 @@ class TestMcpComponentLadder:
         # The key becomes a module name in the sandbox. A package author has
         # no reason to know that, so the entry lands under a legal name and
         # reports the rename instead of being skipped.
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": json.dumps({
                 "$schema": CANONICAL_PLUGIN_SCHEMA,
                 "name": "reserved-keys",
@@ -447,7 +475,7 @@ class TestMcpComponentLadder:
         """A hyphen is the usual typo, and it makes the text a literal rather
         than a reference. Reporting that as "kept as written and resolved" is
         the one sentence that stops the author from spotting it."""
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": json.dumps({
                 "$schema": CANONICAL_PLUGIN_SCHEMA, "name": "typo-ref",
                 "version": "1.0.0",
@@ -547,7 +575,7 @@ class TestDiscoveryAndDialects:
             validate_package(
                 fixture_zip("marketplace-mixed"), subdir="plugins/widget"
             )
-        raw = in_memory_zip({
+        raw = zip_package({
             "marketplace.json": json.dumps({
                 "plugins": [
                     {
@@ -567,7 +595,7 @@ class TestDiscoveryAndDialects:
         ]
 
     def test_external_entry_shadowed_by_vendored_copy(self):
-        raw = in_memory_zip({
+        raw = zip_package({
             "vendored/.codex-plugin/plugin.json": b'{"name": "dup"}',
             "other/.codex-plugin/plugin.json": b'{"name": "other"}',
             "marketplace.json": json.dumps({
@@ -659,7 +687,7 @@ class TestDiscoveryAndDialects:
             }
             for path, doc in documents.items():
                 members[path] = json.dumps(doc).encode()
-            package = validate_package(in_memory_zip(members))
+            package = validate_package(zip_package(members))
             plan = entry(package, "srv")
             assert plan.installable, label
             assert plan.config["command"] == "npx", label
@@ -681,7 +709,7 @@ class TestDiscoveryAndDialects:
         assert exc.value.candidates
 
     def test_root_plugin_shadows_nested_candidates(self):
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": TestArchiveHardening.MANIFEST,
             "skills/s/SKILL.md": SKILL_MD,
             "vendored/other/.claude-plugin/plugin.json": b"{}",
@@ -699,7 +727,7 @@ class TestDiscoveryAndDialects:
         to run. Nothing in the tree separates that from a genuine root plugin
         — only having validated it and found it empty does.
         """
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": TestArchiveHardening.MANIFEST,
             "plugins/real/.claude-plugin/plugin.json": b'{"name": "real"}',
             "plugins/real/skills/s/SKILL.md": SKILL_MD,
@@ -720,7 +748,7 @@ class TestDiscoveryAndDialects:
         """An editor extension or a hosted app, packaged as a plugin. There is
         no better candidate to fall through to, so the install stands and the
         report is the only place the user learns it is inert."""
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": TestArchiveHardening.MANIFEST,
             "assets/logo.png": b"\x89PNG",
         })
@@ -730,7 +758,7 @@ class TestDiscoveryAndDialects:
         assert "assets" in empty.message
 
     def test_nested_candidate_inside_a_candidate_is_dropped(self):
-        raw = in_memory_zip({
+        raw = zip_package({
             "a/.codex-plugin/plugin.json": b'{"name": "outer"}',
             "a/inner/.codex-plugin/plugin.json": b'{"name": "inner"}',
             "b/.codex-plugin/plugin.json": b'{"name": "b"}',
@@ -786,10 +814,6 @@ class TestForgeUrlSubpaths:
 class TestArchiveHardening:
     """Attacks that cannot be represented as fixture file trees."""
 
-    @staticmethod
-    def _zip(members: dict[str, bytes]) -> bytes:
-        return in_memory_zip(members)
-
     def test_a_corrupt_payload_is_a_refusal_not_a_crash(self):
         # An interrupted upload is the ordinary way to get a well-formed
         # archive with an unreadable member. zlib.error is not PluginFatal, so
@@ -841,13 +865,13 @@ class TestArchiveHardening:
                 pytest.fail(f"cut at {cut} escaped as {type(e).__name__}: {e}")
 
     def test_path_traversal_is_fatal(self):
-        raw = self._zip({"plugin.json": self.MANIFEST, "../evil.txt": b"x"})
+        raw = zip_package({"plugin.json": self.MANIFEST, "../evil.txt": b"x"})
         with pytest.raises(PluginFatal) as exc:
             validate_package(raw)
         assert any(d.code == "member_escape" for d in exc.value.diagnostics)
 
     def test_absolute_member_is_fatal(self):
-        raw = self._zip({"plugin.json": self.MANIFEST, "/etc/evil": b"x"})
+        raw = zip_package({"plugin.json": self.MANIFEST, "/etc/evil": b"x"})
         with pytest.raises(PluginFatal) as exc:
             validate_package(raw)
         assert any(d.code == "member_escape" for d in exc.value.diagnostics)
@@ -857,7 +881,7 @@ class TestArchiveHardening:
         # patching the raw headers (flags at offset 6 in the local header,
         # 8 in the central directory; the filename follows at 30/46).
         raw = bytearray(
-            self._zip({"plugin.json": self.MANIFEST, "secret.bin": b"x"})
+            zip_package({"plugin.json": self.MANIFEST, "secret.bin": b"x"})
         )
         for sig, flag_off, name_off in (
             (b"PK\x03\x04", 6, 30),
@@ -882,7 +906,7 @@ class TestArchiveHardening:
             {f"skills/x/f{i}.txt": b"" for i in range(MAX_MEMBERS + 1)}
         )
         with pytest.raises(PluginFatal) as exc:
-            validate_package(self._zip(members))
+            validate_package(zip_package(members))
         assert any(
             d.code == "too_many_members" for d in exc.value.diagnostics
         )
@@ -971,7 +995,7 @@ class TestArchiveHardening:
     def test_single_root_dir_is_stripped(self):
         """Forge tarballs wrap everything in <repo>-<sha>/ — install must
         see through it."""
-        raw = self._zip({
+        raw = zip_package({
             "repo-abc123/plugin.json": self.MANIFEST,
             "repo-abc123/skills/s/SKILL.md": (
                 b"---\nname: s\ndescription: d\n---\nbody\n"
@@ -980,6 +1004,20 @@ class TestArchiveHardening:
         package = validate_package(raw)
         assert package.name == "hardened"
         assert skill(package, "s").skip_code is None
+
+    def test_finder_litter_does_not_hide_the_wrapper(self):
+        """Finder's Compress adds a __MACOSX/ tree and .DS_Store files, which
+        read as a second root and kept the wrapper from being stripped."""
+        raw = zip_package({
+            "acme/plugin.json": self.MANIFEST,
+            "acme/skills/s/SKILL.md": b"---\nname: s\ndescription: d\n---\nbody\n",
+            "acme/.DS_Store": b"\x00\x00\x00\x01Bud1",
+            "__MACOSX/acme/._plugin.json": b"\x00\x05\x16\x07",
+            "__MACOSX/acme/skills/s/._SKILL.md": b"\x00\x05\x16\x07",
+        })
+        files, _ = archive.extract_plugin_archive(raw)
+        assert sorted(files) == ["plugin.json", "skills/s/SKILL.md"]
+        assert validate_package(raw).name == "hardened"
 
 
 SKILL_MD = b"---\nname: s\ndescription: d\n---\nbody\n"
@@ -1103,6 +1141,25 @@ class TestArchiveLinks:
             validate_package(raw)
         assert any(d.code == "too_large" for d in exc.value.diagnostics)
 
+    def test_mirrored_entries_count_against_the_member_cap(self):
+        """Two links per level to the level below double the tree each time,
+        so sixteen levels of a few hundred bytes would be 131k files, none of
+        them costing a byte against the size cap."""
+        links = {
+            f"d{k:02d}/{side}": (f"../d{k - 1:02d}", False)
+            for k in range(1, 17)
+            for side in "ab"
+        }
+        raw = tar_with_links(
+            {"plugin.json": self.MANIFEST, "d00/f": b""}, links
+        )
+        assert len(raw) < 64 * 1024
+        with pytest.raises(PluginFatal) as exc:
+            validate_package(raw)
+        assert any(
+            d.code == "too_many_members" for d in exc.value.diagnostics
+        )
+
 
 class TestSchemaMessages:
     """What a package author reads when the canonical schema refuses.
@@ -1115,7 +1172,7 @@ class TestSchemaMessages:
 
     @staticmethod
     def _package(entry_config: dict) -> object:
-        return validate_package(in_memory_zip({
+        return validate_package(zip_package({
             "plugin.json": json.dumps({
                 "$schema": CANONICAL_PLUGIN_SCHEMA, "name": "msgs",
                 "version": "1.0.0",
@@ -1152,7 +1209,7 @@ class TestSchemaMessages:
         assert "url" not in reason
 
     def test_a_bad_plugin_name_states_the_rule_not_the_regex(self):
-        raw = in_memory_zip({
+        raw = zip_package({
             "plugin.json": json.dumps({
                 "$schema": CANONICAL_PLUGIN_SCHEMA, "name": "My Plugin",
                 "version": "1.0.0",
@@ -1162,3 +1219,468 @@ class TestSchemaMessages:
             validate_package(raw)
         assert "lowercase letters" in str(exc.value)
         assert "(?!" not in str(exc.value)
+
+
+CANONICAL_MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+
+
+def bound_plugin(binds: list[dict]) -> bytes:
+    """A canonical package whose one declared secret binds where ``binds``
+    say, with one remote and one stdio server to bind onto."""
+    return zip_package({
+        "plugin.json": json.dumps({
+            "$schema": CANONICAL_PLUGIN_SCHEMA,
+            "name": "wind",
+            "version": "1.0.0",
+            "extensions": {"ai.langalpha": {"secrets": [{
+                "name": "WIND_API_KEY", "label": "Wind API key", "bind": binds,
+            }]}},
+        }).encode(),
+        "mcp.json": json.dumps({
+            "$schema": CANONICAL_MCP_SCHEMA,
+            "mcpServers": {
+                "wind_stock_data": {
+                    "type": "streamable-http",
+                    "url": "https://wind.example/mcp",
+                },
+                "wind_cli": {"type": "stdio", "command": "wind-mcp"},
+            },
+        }).encode(),
+    })
+
+
+class TestBindPrefix:
+    """``prefix`` on a secret bind: the ``Bearer `` nearly every vendor wants
+    in front of its key, which a bare ``${vault:NAME}`` cannot express."""
+
+    HEADER = {
+        "server": "wind_stock_data",
+        "header": "Authorization",
+        "prefix": "Bearer ",
+    }
+
+    @pytest.mark.parametrize(
+        "prefix", ["Bearer ", "Token token=", "Basic ", "x", "~" * 64]
+    )
+    def test_a_printable_prefix_is_accepted(self, prefix):
+        assert SecretBind(server="s", header="h", prefix=prefix).prefix == prefix
+
+    @pytest.mark.parametrize(
+        "prefix",
+        [
+            "",
+            "x" * 65,
+            "Bearer\r\nX-Injected: 1\r\n",
+            "Bearer\n",
+            "Bearer\x00",
+            "Bearer\t",
+            "Bearer \u00e9",
+            "${vault:OTHER} ",
+            "$OTHER ",
+        ],
+    )
+    def test_a_prefix_that_could_inject_or_reference_is_refused(self, prefix):
+        with pytest.raises(ValueError, match="prefix"):
+            SecretBind(server="s", header="h", prefix=prefix)
+
+    def test_a_refused_prefix_costs_its_bind_alone(self):
+        # Same scope as every other malformed bind: that bind is dropped with a
+        # warning naming it, the secret keeps its other binds, the servers
+        # still install, and nothing lands half-written.
+        package = validate_package(bound_plugin([
+            {**self.HEADER, "prefix": "Bearer\r\n"},
+            {"server": "wind_cli", "env": "WIND_AUTH"},
+        ]))
+        [secret] = package.extension.secrets
+        assert [b.server for b in secret.bind] == ["wind_cli"]
+        assert any(
+            d.code == "extension_invalid"
+            and "secrets[0].bind[0]" in d.message
+            and "prefix" in d.message
+            for d in package.diagnostics
+        )
+        assert entry(package, "wind_stock_data").installable
+        materialize_binds(package.extension, package.entry_plans, {"WIND_API_KEY"})
+        assert "Authorization" not in (
+            entry(package, "wind_stock_data").config.get("headers") or {}
+        )
+
+    def test_the_secret_is_written_behind_its_prefix(self):
+        package = validate_package(bound_plugin([
+            self.HEADER,
+            {"server": "wind_cli", "env": "WIND_AUTH", "prefix": "Token "},
+        ]))
+        assert not any(d.code == "extension_invalid" for d in package.diagnostics)
+        materialize_binds(package.extension, package.entry_plans, {"WIND_API_KEY"})
+
+        remote = entry(package, "wind_stock_data")
+        assert remote.config["headers"]["Authorization"] == (
+            "Bearer ${vault:WIND_API_KEY}"
+        )
+        assert entry(package, "wind_cli").config["env"]["WIND_AUTH"] == (
+            "Token ${vault:WIND_API_KEY}"
+        )
+        # The row accepts it, and the extractor reads the prefix as template
+        # text: vaulting "Bearer " whole would mint a secret holding a
+        # reference and never consult the user's key.
+        assert McpServerInput(**remote.config).headers["Authorization"] == (
+            "Bearer ${vault:WIND_API_KEY}"
+        )
+        extracted = plan_vault_extraction(
+            "wind_stock_data", remote.config, allocated={}, used_secret_names=set()
+        )
+        assert extracted.secrets == ()
+        # The portable document never learns the template.
+        assert "headers" not in package.mcp_document["mcpServers"][
+            "wind_stock_data"
+        ]
+
+    def test_an_ungranted_bind_writes_nothing_not_a_bare_prefix(self):
+        package = validate_package(bound_plugin([self.HEADER]))
+        materialize_binds(package.extension, package.entry_plans, set())
+        assert "Authorization" not in (
+            entry(package, "wind_stock_data").config.get("headers") or {}
+        )
+
+    def test_grant_scans_and_scrubs_read_a_prefixed_reference(self):
+        config = {
+            "transport": "http",
+            "url": "https://wind.example/mcp",
+            "headers": {
+                "Authorization": "Bearer ${vault:WIND_API_KEY}",
+                "Accept": "application/json",
+            },
+        }
+        assert secret_names_in(config) == {"WIND_API_KEY"}
+        # The whole header goes, not just the reference: "Bearer " alone is
+        # still a header the endpoint sees.
+        strip_refs(config, frozenset({"WIND_API_KEY"}))
+        assert config["headers"] == {"Accept": "application/json"}
+
+    def test_a_vendor_template_becomes_a_prefixed_bind(self):
+        raw = zip_package({
+            ".claude-plugin/plugin.json": json.dumps(
+                {"name": "wind", "description": "Wind market data"}
+            ).encode(),
+            ".mcp.json": json.dumps({"mcpServers": {
+                "wind_stock_data": {
+                    "type": "http",
+                    "url": "https://wind.example/mcp",
+                    "headers": {
+                        "Authorization": "Bearer ${WIND_API_KEY}",
+                        "Accept": "application/json",
+                    },
+                },
+                "wind_cli": {
+                    "command": "wind-mcp",
+                    "env": {"WIND_AUTH": "Token ${WIND_TOKEN:-}"},
+                },
+                "refused": {
+                    "type": "http",
+                    "url": "https://refused.example/mcp",
+                    "headers": {
+                        # Over the prefix cap, and a second variable in front:
+                        # neither is a prefix, so both stay as written.
+                        "X-Long": "x" * 65 + "${LONG_KEY}",
+                        "X-Two": "$OTHER ${TWO_KEY}",
+                    },
+                },
+            }}).encode(),
+        })
+        package = validate_package(raw)
+
+        doc = package.mcp_document["mcpServers"]
+        assert doc["wind_stock_data"]["headers"] == {"Accept": "application/json"}
+        assert "env" not in doc["wind_cli"]
+        # Left in the document as literals (where the stored copy's own scrub
+        # blanks what looks like a credential), and declared as nothing.
+        assert set(doc["refused"]["headers"]) == {"X-Long", "X-Two"}
+
+        binds = {
+            s.name: [b.model_dump(exclude_none=True) for b in s.bind]
+            for s in package.extension.secrets
+        }
+        assert binds == {
+            "WIND_API_KEY": [{
+                "server": "wind_stock_data",
+                "header": "Authorization",
+                "prefix": "Bearer ",
+            }],
+            "WIND_TOKEN": [
+                {"server": "wind_cli", "env": "WIND_AUTH", "prefix": "Token "}
+            ],
+        }
+        mapped = {
+            d.target: d.message
+            for d in package.diagnostics
+            if d.code == "env_ref_mapped"
+        }
+        assert set(mapped) == {"WIND_API_KEY", "WIND_TOKEN"}
+        assert "(after 'Bearer ')" in mapped["WIND_API_KEY"]
+
+        materialize_binds(
+            package.extension, package.entry_plans, {"WIND_API_KEY", "WIND_TOKEN"}
+        )
+        assert entry(package, "wind_stock_data").config["headers"] == {
+            "Accept": "application/json",
+            "Authorization": "Bearer ${vault:WIND_API_KEY}",
+        }
+        assert entry(package, "wind_cli").config["env"] == {
+            "WIND_AUTH": "Token ${vault:WIND_TOKEN}"
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_prefix_survives_export_and_reinstall(self):
+        package = validate_package(bound_plugin([self.HEADER]))
+        stored = {
+            "user_plugin_id": "p1",
+            "manifest": package.manifest,
+            "mcp_document": package.mcp_document,
+        }
+        with patch(
+            "src.server.services.plugins.export.list_plugin_skill_names",
+            new=AsyncMock(return_value=[]),
+        ):
+            exported = await export_plugin_zip("u1", stored)
+
+        with zipfile.ZipFile(io.BytesIO(exported)) as zf:
+            portable = json.loads(zf.read("mcp.json"))
+        # The template lives in the extension, never baked into mcp.json,
+        # where another host would send "Bearer ${vault:...}" verbatim.
+        assert "${vault:" not in json.dumps(portable)
+
+        again = validate_package(exported)
+        assert again.extension.secrets[0].bind[0].prefix == "Bearer "
+        materialize_binds(again.extension, again.entry_plans, {"WIND_API_KEY"})
+        assert entry(again, "wind_stock_data").config["headers"][
+            "Authorization"
+        ] == "Bearer ${vault:WIND_API_KEY}"
+
+
+def skill_md(name: str, description: str = "does a thing") -> bytes:
+    return f"---\nname: {name}\ndescription: {description}\n---\nbody\n".encode()
+
+
+def skill_files(package, directory) -> set[str]:
+    with zipfile.ZipFile(io.BytesIO(skill(package, directory).zip_bytes)) as zf:
+        return set(zf.namelist())
+
+
+class TestBareSkillRepos:
+    """A tree with no plugin anywhere installs as a folder of skills under a
+    synthesized plugin.json, instead of failing over a manifest skills do not
+    need."""
+
+    def test_a_root_skill_is_its_own_plugin(self):
+        package = validate_package(
+            zip_package({
+                "SKILL.md": skill_md("pdf-tools", "Read and fill PDFs"),
+                "scripts/fill.py": b"print('ok')\n",
+                ".github/workflows/ci.yml": b"on: push\n",
+                "node_modules/dep/index.js": b"",
+            }),
+            name_hint="my-pdf-repo",
+        )
+        assert package.synthesized
+        assert package.name == "pdf-tools"
+        assert package.manifest["description"] == "Read and fill PDFs"
+        assert package.manifest["version"] == "0.0.0"
+        assert package.manifest["$schema"] == CANONICAL_PLUGIN_SCHEMA
+        assert "extensions" not in package.manifest
+        assert skill(package, "pdf-tools").skip_code is None
+        files = skill_files(package, "pdf-tools")
+        assert any(f.endswith("scripts/fill.py") for f in files)
+        assert not any(".github" in f or "node_modules" in f for f in files)
+        first = package.diagnostics[0]
+        # info, not warning: the install report says it beside what landed.
+        assert (first.code, first.scope, first.level) == (
+            "synthesized_manifest",
+            "plugin",
+            "info",
+        )
+
+    def test_a_skills_folder_is_named_after_its_source(self):
+        package = validate_package(
+            zip_package({
+                "README.md": b"# skills\n",
+                "skills/alpha/SKILL.md": skill_md("alpha"),
+                "skills/beta/SKILL.md": skill_md("beta"),
+            }),
+            name_hint="Trading Skills",
+        )
+        assert package.name == "trading-skills"
+        assert package.manifest["description"] == "Skills from Trading Skills"
+        assert {p.dir for p in package.skill_plans} == {"alpha", "beta"}
+        assert all(p.skip_code is None for p in package.skill_plans)
+        assert "2 skills" in package.diagnostics[0].message
+
+    def test_nested_groups_flatten_and_a_skill_keeps_what_it_holds(self):
+        package = validate_package(
+            zip_package({
+                "finance/dcf/SKILL.md": skill_md("dcf"),
+                "a/b/folder-x/SKILL.md": skill_md("real-name"),
+                # Below a found skill: a file of that skill, not a second one.
+                "a/b/folder-x/reference/SKILL.md": skill_md("inner"),
+                # Not the collection's own skills.
+                ".claude/skills/hidden/SKILL.md": skill_md("hidden"),
+                "examples/demo/skills/dcf/SKILL.md": skill_md("dcf"),
+                "tests/fixtures/broken/SKILL.md": skill_md("broken"),
+            }),
+            name_hint="collection",
+        )
+        assert {p.dir for p in package.skill_plans} == {"dcf", "real-name"}
+        assert any(
+            f.endswith("reference/SKILL.md")
+            for f in skill_files(package, "real-name")
+        )
+        assert not any(d.code == "duplicate_skill" for d in package.diagnostics)
+
+    def test_an_invalid_declared_name_falls_back_to_the_folder(self):
+        package = validate_package(
+            zip_package({
+                "skills/good-folder/SKILL.md": skill_md("Not A Name"),
+                "skills/other/SKILL.md": skill_md("other"),
+            }),
+            name_hint="x",
+        )
+        # Laid out under the folder's name, so the fan-out refuses it with the
+        # specific reason, per skill, and its sibling is unaffected.
+        assert {p.dir for p in package.skill_plans} == {"good-folder", "other"}
+        assert package.name == "x"
+
+    def test_a_duplicate_name_keeps_the_shallower_skill(self):
+        package = validate_package(
+            zip_package({
+                "alpha/SKILL.md": skill_md("alpha", "the real one"),
+                "x/y/alpha/SKILL.md": skill_md("alpha", "a vendored copy"),
+                "beta/SKILL.md": skill_md("beta"),
+            }),
+            name_hint="dupes",
+        )
+        assert {p.dir for p in package.skill_plans} == {"alpha", "beta"}
+        with zipfile.ZipFile(
+            io.BytesIO(skill(package, "alpha").zip_bytes)
+        ) as zf:
+            body = next(
+                zf.read(n) for n in zf.namelist() if n.endswith("SKILL.md")
+            )
+        assert b"the real one" in body
+        dupes = [d for d in package.diagnostics if d.code == "duplicate_skill"]
+        assert [(d.scope, d.target) for d in dupes] == [("skill", "x/y/alpha")]
+
+    def test_a_subdir_reads_only_that_folder(self):
+        raw = zip_package({
+            "finance/dcf/SKILL.md": skill_md("dcf"),
+            "finance/comps/SKILL.md": skill_md("comps"),
+            "marketing/seo/SKILL.md": skill_md("seo"),
+        })
+        package = validate_package(raw, subdir="finance", name_hint="finance")
+        assert package.name == "finance"
+        assert {p.dir for p in package.skill_plans} == {"dcf", "comps"}
+
+    def test_a_plugin_json_anywhere_still_wins(self):
+        raw = zip_package({
+            "plugin.json": json.dumps({
+                "$schema": CANONICAL_PLUGIN_SCHEMA, "name": "declared",
+            }).encode(),
+            "skills/alpha/SKILL.md": skill_md("alpha"),
+            "elsewhere/beta/SKILL.md": skill_md("beta"),
+        })
+        package = validate_package(raw, name_hint="ignored")
+        assert not package.synthesized
+        assert package.name == "declared"
+        assert {p.dir for p in package.skill_plans} == {"alpha"}
+        assert not any(
+            d.code == "synthesized_manifest" for d in package.diagnostics
+        )
+
+    def test_a_vendor_manifest_still_wins(self):
+        raw = zip_package({
+            ".claude-plugin/plugin.json": json.dumps({"name": "vendored"}).encode(),
+            "skills/alpha/SKILL.md": skill_md("alpha"),
+        })
+        package = validate_package(raw, name_hint="ignored")
+        assert (package.synthesized, package.name) == (False, "vendored")
+
+    def test_past_the_cap_the_user_is_asked_to_link_a_folder(self):
+        raw = zip_package({
+            f"s/skill-{i:03d}/SKILL.md": skill_md(f"skill-{i:03d}")
+            for i in range(101)
+        })
+        with pytest.raises(PluginFatal) as exc:
+            validate_package(raw, name_hint="monorepo")
+        assert [d.code for d in exc.value.diagnostics] == ["too_many_skills"]
+
+    def test_a_rename_is_not_a_content_change(self):
+        raw = zip_package({
+            "skills/alpha/SKILL.md": skill_md("alpha"),
+            "skills/beta/SKILL.md": skill_md("beta"),
+        })
+        one = validate_package(raw, name_hint="one")
+        two = validate_package(raw, name_hint="two")
+        assert (one.name, two.name) == ("one", "two")
+        assert one.content_hash == two.content_hash
+        renamed = two.renamed("one")
+        assert (renamed.name, renamed.content_hash) == ("one", one.content_hash)
+        assert two.name == "two"  # a copy, not an edit
+
+    def test_only_a_synthesized_name_can_be_renamed(self):
+        package = validate_package(fixture_zip("valid-full"))
+        with pytest.raises(ValueError):
+            package.renamed("other")
+
+    @pytest.mark.asyncio
+    async def test_update_keeps_the_installed_name(self):
+        # Install named it after its one skill; a second skill since makes the
+        # guess the repository's name, which must not read as another plugin.
+        raw = zip_package({
+            "skills/alpha/SKILL.md": skill_md("alpha"),
+            "skills/beta/SKILL.md": skill_md("beta"),
+        })
+        source = PackageSource(
+            raw=raw, subdir=None, name_hint="repo", source_type="zip", source_ref=None
+        )
+        package = await validate_source(source, expected_name="alpha")
+        assert package.name == "alpha"
+        fresh = await validate_source(source)
+        assert fresh.name == "repo"
+
+    @pytest.mark.parametrize(
+        ("hint", "name"),
+        [
+            ("claude-trading-skills", "claude-trading-skills"),
+            ("Trading Skills", "trading-skills"),
+            ("Foo__Bar..baz", "foo-bar.baz"),
+            ("-.leading.and.trailing.-", "leading.and.trailing"),
+            ("x" * 80, "x" * 64),
+            ("\u91d1\u878d", "skills"),
+            ("---", "skills"),
+            ("", "skills"),
+            (None, "skills"),
+        ],
+    )
+    def test_a_hint_is_sanitized_to_the_name_rule(self, hint, name):
+        assert plugin_name_from_hint(hint) == name
+
+    @pytest.mark.parametrize(
+        ("source", "subdir", "hint"),
+        [
+            ("https://github.com/anthropics/skills", None, "skills"),
+            ("https://github.com/o/repo.git", None, "repo"),
+            ("https://github.com/o/repo/tree/main", None, "repo"),
+            (
+                "https://github.com/o/agents/tree/abc/plugins/quant",
+                "plugins/quant",
+                "quant",
+            ),
+            ("https://gitlab.com/g/sub/proj/-/tree/main", None, "proj"),
+            ("https://codeberg.org/o/repo/src/branch/main", None, "repo"),
+            ("https://example.com/dl/pack.tar.gz", None, "pack"),
+            ("my-skills.zip", None, "my-skills"),
+            ("C:\\Users\\me\\my-skills.tgz", None, "my-skills"),
+            ("bundle.zip", "inner/finance/", "finance"),
+            (None, None, None),
+        ],
+    )
+    def test_the_hint_comes_from_the_link_or_file(self, source, subdir, hint):
+        assert name_hint(source, subdir) == hint

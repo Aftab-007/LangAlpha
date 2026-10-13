@@ -114,7 +114,7 @@ async def _oauth_credential(grant: Mapping[str, Any]) -> VendorCredential:
 
 async def _header_credential(grant: Mapping[str, Any]) -> VendorCredential:
     from src.server.services.mcp_config import same_consented_url
-    from src.server.services.mcp_oauth.discovery import (
+    from src.server.services.mcp_probe import (
         RejectedHeaderValue,
         resolve_header_refs,
         vault_ref_names,

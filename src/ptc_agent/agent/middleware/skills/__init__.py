@@ -15,6 +15,7 @@ from ptc_agent.agent.middleware.skills.content import (
     build_skill_content,
     compute_already_loaded,
     load_skill_content,
+    resolve_skill_dir,
 )
 from ptc_agent.agent.middleware.skills.discovery import SkillMetadata
 from ptc_agent.agent.middleware.skills.lock import (
@@ -60,5 +61,6 @@ __all__ = [
     "get_sandbox_skill_names",
     "list_skills",
     "load_skill_content",
+    "resolve_skill_dir",
     "resolve_disabled_skills",
 ]

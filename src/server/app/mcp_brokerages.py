@@ -1,10 +1,10 @@
 """Brokerage connectors: the ones this build ships, off until switched on.
 
 The list is static and user-independent; what the user owns is a catalog row,
-created inert the first time they turn one on and toggled through the same
-apply every other switch on the page uses. These are the rows that can place
-orders, so a weaker disable than the server beside them is the last thing they
-should have.
+created by the brokerage's sign-in (``create_brokerage_row``, called from its
+callback) and from then on toggled through the same apply every other switch on
+the page uses. These are the rows that can place orders, so a weaker disable
+than the server beside them is the last thing they should have.
 
 Endpoints:
 - GET   /api/v1/mcp/brokerages
@@ -18,30 +18,18 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Response
 
-from src.server.app.mcp_catalog import (
-    apply_catalog_enabled,
-    decorated,
-    oauth_for_server,
-)
-from src.server.database.mcp_servers import (
-    create_catalog_server,
-    get_catalog_server,
-)
+from src.server.database.mcp_servers import get_catalog_server
 from src.server.models.mcp_server import (
     BrokerageList,
     CatalogServer,
     EnabledInput,
-    McpServerInput,
     brokerage_to_response,
-    sandbox_name_error,
 )
 from src.server.services.brand_icons import icon_response
-from src.server.services.brokerages import (
-    BROKERAGES,
-    Brokerage,
-    brokerage_by_name,
-)
-from src.server.services.mcp_config import builtin_names
+from src.server.services.brokerages import BROKERAGES, brokerage_by_name
+from src.server.services.mcp_catalog import apply_catalog_enabled
+from src.server.services.mcp_catalog_view import decorated, oauth_for_server
+from src.server.services.mcp_validation import SignInNeeded, check_http_error
 from src.server.utils.api import CurrentUserId, handle_api_exceptions
 
 logger = logging.getLogger(__name__)
@@ -63,49 +51,18 @@ async def list_brokerages(user_id: CurrentUserId) -> BrokerageList:
     return BrokerageList(brokerages=[brokerage_to_response(b) for b in BROKERAGES])
 
 
-async def _create_brokerage_row(user_id: str, brokerage: Brokerage) -> None:
-    """Bring a shipped brokerage into the user's catalog, inert.
-
-    Inert and then toggled, never created live: the switch is the only thing
-    that should decide a row's enabled state, and it is the one that already
-    knows what each direction owes an OAuth connection.
-    """
-    if brokerage.name in builtin_names():
-        raise HTTPException(
-            status_code=409,
-            detail=f"{brokerage.name!r} collides with a built-in server name",
-        )
-    # A create like any other, so the names the sandbox reserves hold here too.
-    if reason := sandbox_name_error(brokerage.name):
-        raise HTTPException(status_code=422, detail=reason)
-    try:
-        # Through the same validator every user-written row passes, so our own
-        # definition cannot be the one payload that skips the URL policy. Its
-        # ValidationError is a ValueError, so it answers here rather than
-        # escaping the decorator as an untyped 500.
-        server = McpServerInput(
-            name=brokerage.name,
-            transport="http",
-            url=brokerage.url,
-            description=brokerage.description,
-        )
-        await create_catalog_server(user_id, server.name, **server.to_catalog_fields())
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    logger.info(
-        "[mcp_catalog] brokerage %s configured for user %s", brokerage.name, user_id
-    )
-
-
 @router.patch("/brokerages/{name}/enabled")
 @handle_api_exceptions("toggle brokerage connector", logger)
 async def set_brokerage_enabled(
     name: str, body: EnabledInput, user_id: CurrentUserId
 ) -> CatalogServer:
-    """Turn a shipped brokerage on or off, creating its row the first time.
+    """Turn a configured brokerage on or off.
 
-    One route for both, so the page never has to know whether a row exists yet
-    and that also keeps it from being the thing that chooses the endpoint URL.
+    A brokerage with no row has never been connected, and its row is saved
+    only by its sign-in: enabling one answers 409 naming the shipped address,
+    and the client starts that sign-in, whose callback creates the row. A row
+    whose connection is gone (disconnected, or never repaired) answers the
+    same 409 from the switch below, naming the row's own address.
 
     An existing row is toggled and never rewritten. Once it is the user's, its
     URL is theirs to edit, and a row they built themselves under this name is
@@ -139,7 +96,7 @@ async def set_brokerage_enabled(
                 status_code=404,
                 detail=f"{name!r} is not configured, so there is nothing to disable",
             )
-        await _create_brokerage_row(user_id, brokerage)
+        raise check_http_error(SignInNeeded(server=brokerage.name, url=brokerage.url))
 
     # The same apply every other switch on this page goes through. These are the
     # rows that can place orders, so a weaker disable than the server beside them
@@ -149,7 +106,7 @@ async def set_brokerage_enabled(
         # Deleted between the read and the write.
         raise HTTPException(status_code=404, detail="MCP server not found")
 
-    # A recreate over a name whose OAuth connection outlived the old row is
+    # A row whose OAuth connection outlived an earlier row of the same name is
     # already connected, so read the status rather than assuming none. One row,
     # so one lookup: listing every connection to decorate a single response is
     # a second round trip that answers the same question.

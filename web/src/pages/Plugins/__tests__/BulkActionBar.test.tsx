@@ -33,7 +33,7 @@ describe('BulkActionBar with nothing selected', () => {
   it('asks for a selection instead of offering the zeroed actions', () => {
     render(<BulkActionBar count={0} selectionKey="" actions={zeroActions()} progress={null} onExit={vi.fn()} />);
 
-    expect(screen.getByText('Select rows to act on them')).toBeInTheDocument();
+    expect(screen.getByText('Select items to act on them')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Enable 0' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Delete 0' })).toBeNull();
     expect(screen.queryByText('0 selected')).toBeNull();
@@ -53,7 +53,7 @@ describe('BulkActionBar with nothing selected', () => {
 
     expect(screen.getByText('2 selected')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Enable 2' })).toBeInTheDocument();
-    expect(screen.queryByText('Select rows to act on them')).toBeNull();
+    expect(screen.queryByText('Select items to act on them')).toBeNull();
   });
 
   it('disarms a confirm the selection was emptied under', () => {
@@ -118,6 +118,24 @@ describe('BulkActionBar with nothing selected', () => {
     expect(screen.getByRole('button', { name: 'Delete 2' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Delete 2' }));
     expect(actions[1].run).not.toHaveBeenCalled();
+  });
+
+  it('leaves an Escape another control already answered alone', () => {
+    const onExit = vi.fn();
+    // The header search clears itself on Escape and says so with
+    // preventDefault, as a Radix menu does when it closes.
+    render(
+      <>
+        <input aria-label="search" onKeyDown={(e) => e.key === 'Escape' && e.preventDefault()} />
+        <BulkActionBar count={2} selectionKey="a,b" actions={twoActions()} progress={null} onExit={onExit} />
+      </>,
+    );
+
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'search' }), { key: 'Escape' });
+    expect(onExit).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onExit).toHaveBeenCalledTimes(1);
   });
 
   it('still confirms a destructive action, cancel first', () => {

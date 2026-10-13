@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { Blocks, BookOpen, Server } from 'lucide-react';
+import { Blocks, KeyRound, ScrollText, Server } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LangAlphaMark } from '@/components/brand/LangAlphaMark';
 import { TILE_SIZES, type TileSize } from './IdentityTile';
@@ -25,45 +25,48 @@ import { TILE_SIZES, type TileSize } from './IdentityTile';
  */
 const KIND_GLYPH: Record<MarkKind, ComponentType<{ className?: string }>> = {
   plugin: Blocks,
-  skill: BookOpen,
+  skill: ScrollText,
   server: Server,
+  secret: KeyRound,
   langalpha: LangAlphaMark,
 };
 
-export type MarkKind = 'plugin' | 'skill' | 'server' | 'langalpha';
+export type MarkKind = 'plugin' | 'skill' | 'server' | 'secret' | 'langalpha';
 
 const GLYPH_SIZES: Record<TileSize, string> = {
+  xs: 'h-3 w-3',
   sm: 'h-3.5 w-3.5',
+  md: 'h-4 w-4',
   lg: 'h-5 w-5',
+  xl: 'h-7 w-7',
 };
 
 /** Our mark is a logo, not a label for a category, so it fills the tile the way
  *  a vendor's favicon does. Inset at glyph size it collapses into a smudge: the
  *  artwork carries far more line than a 14px box can hold. */
 const MARK_SIZES: Record<TileSize, string> = {
+  xs: 'h-4 w-4',
   sm: 'h-6 w-6',
+  md: 'h-7 w-7',
   lg: 'h-8 w-8',
+  xl: 'h-11 w-11',
 };
 
 export function KindTile({
   kind,
-  glyph,
   size = 'sm',
   className = '',
 }: {
   kind: MarkKind;
-  /** A glyph the item's package chose, drawn in place of the kind's. Same
-   *  tile and treatment, so a row of chosen glyphs reads as one set. */
-  glyph?: ComponentType<{ className?: string }>;
   size?: TileSize;
   className?: string;
 }) {
-  const Glyph = glyph ?? KIND_GLYPH[kind];
+  const Glyph = KIND_GLYPH[kind];
   // A category glyph is a quiet label and stays out of the way. Our mark is
   // the identity of the row, so it takes the contrast a fetched logo would
   // have had, which is also what makes it read as white on dark and black on
   // light without either file existing.
-  const ours = !glyph && kind === 'langalpha';
+  const ours = kind === 'langalpha';
   return (
     <div
       aria-hidden

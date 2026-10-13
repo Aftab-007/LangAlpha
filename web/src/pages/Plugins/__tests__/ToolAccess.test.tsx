@@ -152,11 +152,14 @@ function row(over: Partial<CatalogServer> = {}): CatalogServer {
 
 async function renderDetail(over: Partial<CatalogServer> = {}) {
   const { ServerDetail } = await import('../components/ServerDetail');
+  const { DetailPageProvider } = await import('../components/DetailPage');
   return renderWithProviders(
-    <ServerDetail
-      data={{ origin: 'brokerage', brokerage: VENDOR, server: row(over) }}
-      onClose={() => {}}
-    />,
+    <DetailPageProvider value={{ section: 'Connectors' }}>
+      <ServerDetail
+        data={{ origin: 'brokerage', brokerage: VENDOR, server: row(over) }}
+        onClose={() => {}}
+      />
+    </DetailPageProvider>,
   );
 }
 
@@ -254,7 +257,9 @@ describe('the tool access section', () => {
   it('draws a switch per order kind the vendor has, live first', async () => {
     modes = ['paper', 'live'];
     await renderDetail();
-    const labels = screen
+    // The section's own switches: the page's aside carries a workspaces one too.
+    const section = screen.getByRole('heading', { name: 'Tool access' }).closest('section') as HTMLElement;
+    const labels = within(section)
       .getAllByRole('switch')
       .map((el) => el.getAttribute('aria-label'));
 
