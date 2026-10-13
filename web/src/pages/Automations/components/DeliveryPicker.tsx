@@ -31,7 +31,7 @@ import {
 } from '../utils/delivery';
 
 /** The apps in the order the reader knows them; any other after, by name. */
-const APP_ORDER = ['slack', 'discord', 'telegram', 'imessage'];
+const APP_ORDER = ['slack', 'discord', 'telegram', 'imessage', 'feishu'];
 
 const VIA_KEY: Record<DeliveryDefault['via'], string> = {
   workspace: 'automation.deliveryViaWorkspace',

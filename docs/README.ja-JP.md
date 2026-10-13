@@ -76,7 +76,7 @@ AI 金融ツールの多くは、質問に答えるためのものです。私�
 
 ### ⏰ 見張りを続ける Agent
 
-寄り付き前のブリーフを予約したり、株価がある価格を超えたときや 1 日で設定した割合だけ動いたときに agent を起動したりできます。結果は 1 つのフィードに届き、Slack、Discord、Telegram、iMessage を接続して配信先に選べばそちらにも届きます。
+寄り付き前のブリーフを予約したり、株価がある価格を超えたときや 1 日で設定した割合だけ動いたときに agent を起動したりできます。結果は 1 つのフィードに届き、Slack、Discord、Telegram、Feishu、iMessage を接続して配信先に選べばそちらにも届きます。
 
 > *「CBRS を見張っておいて。毎週月曜にモデルの前提を確認して、Q3 決算の後にモデルを更新して、株価が強気シナリオの価値を上抜けるか $95 を割り込んだら教えて。」*
 
@@ -189,7 +189,7 @@ make up       # Postgres, Redis, backend and web app
 | 市場データ | 米国株とオプションのリアルタイム相場、時間外取引にも対応。中国 A 株は近日対応予定 | Yahoo Finance または FMP の相場。60 秒ごとに更新され、遅延データとして表示 |
 | オプションと市場構造 | オプションチェーンとスナップショット、空売り残高、浮動株、値動き上位銘柄 | 利用不可 |
 | 価格トリガー | ライブのティックで発火 | 遅延株価に対して 30 秒ごとにポーリング |
-| チャネル | Slack、Discord、Telegram、Feishu、iMessage でチャットでき、automation の結果は Slack、Discord、Telegram、iMessage に届く | Web アプリとデスクトップアプリ。automation の結果は自分で運用する webhook（`AUTOMATION_WEBHOOK_URL`）に届く |
+| チャネル | Slack、Discord、Telegram、Feishu、iMessage でチャットでき、automation の結果もそこに届く | Web アプリとデスクトップアプリ。automation の結果は自分で運用する webhook（`AUTOMATION_WEBHOOK_URL`）に届く |
 | アカウント | サインインがあり、ユーザーごとにデータが分かれる | サインインのないローカルユーザー 1 人。アクセスできる人は誰でも、接続済みの証券口座も含めてあなたとして操作できる。自分のマシンかプライベートネットワークの中だけで使うこと |
 | モデル | プランに含まれるモデル、自分の key、または Claude と ChatGPT のサインイン | 自分の key、coding plan、ローカルモデル、または Claude と ChatGPT のサインイン |
 | 稼働 | AWS の US East で 24 時間 365 日稼働するので、手元の PC がスリープしていても automation と価格トリガーが発火する | 自分のマシンとその Docker スタックが起動している間だけ稼働 |

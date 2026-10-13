@@ -72,7 +72,8 @@ changes saving.
 An automation whose `delivery` names only an app posts to its workspace's
 `automation_output` on that app, else to the app's `preferred`, else to the
 user's direct messages. To always post to the direct messages, name them:
-`discord:@me`, `imessage:@me`, `telegram:@me`, or `slack:<team>` on Slack.
+`discord:@me`, `feishu:@me`, `imessage:@me`, `telegram:@me`, or
+`slack:<team>` on Slack.
 
 ## Editing rules
 

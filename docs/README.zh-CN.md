@@ -76,7 +76,7 @@
 
 ### ⏰ 替你盯盘的 Agent
 
-可以安排开盘前的简报，也可以在股价突破某个价位，或单日涨跌达到设定幅度时唤醒 Agent。结果都汇总在同一个动态流里；如果连接了 Slack、Discord、Telegram 或 iMessage 并选作推送目标，也会推送到那里。
+可以安排开盘前的简报，也可以在股价突破某个价位，或单日涨跌达到设定幅度时唤醒 Agent。结果都汇总在同一个动态流里；如果连接了 Slack、Discord、Telegram、飞书或 iMessage 并选作推送目标，也会推送到那里。
 
 > *“帮我盯着 CBRS。每周一检查一遍模型假设，Q3 财报出来后更新模型，股价突破我们的乐观情景估值或跌破 $95 时告诉我。”*
 
@@ -189,7 +189,7 @@ make up       # Postgres, Redis, backend and web app
 | 行情数据 | 美股及期权实时报价，含盘前盘后。中国 A 股即将上线 | Yahoo Finance 或 FMP 报价，每 60 秒刷新一次，标记为延迟行情 |
 | 期权与市场结构 | 期权链和快照、空头持仓、流通股和涨跌幅榜 | 不可用 |
 | 价格触发 | 基于实时逐笔数据触发 | 每 30 秒针对延迟报价轮询一次 |
-| 渠道 | 在 Slack、Discord、Telegram、飞书和 iMessage 中对话，自动化结果可发到 Slack、Discord、Telegram 和 iMessage | Web 应用和桌面应用。自动化结果发送到你自己运行的 webhook（`AUTOMATION_WEBHOOK_URL`） |
+| 渠道 | 在 Slack、Discord、Telegram、飞书和 iMessage 中对话，并接收自动化结果 | Web 应用和桌面应用。自动化结果发送到你自己运行的 webhook（`AUTOMATION_WEBHOOK_URL`） |
 | 账户 | 需要登录，每个用户的数据相互独立 | 只有一个无需登录的本地用户，任何能访问它的人都以你的身份操作，包括已连接的券商。请只在本机或私有网络中运行 |
 | 模型 | 套餐内含的模型、你自己的 key，或 Claude 和 ChatGPT 登录 | 你自己的 key、coding plan、本地模型，或 Claude 和 ChatGPT 登录 |
 | 可用性 | 在 AWS 美国东部全天候运行，你的电脑休眠时，自动化和价格触发也会照常执行 | 只在你的机器及其 Docker 栈运行时可用 |
