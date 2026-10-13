@@ -2,7 +2,8 @@
 task's checkpoints saved, and nothing else of the captured events.
 
 A subagent that failed streamed what it fetched in its last step, which its
-transcript never shows; a lane that settled normally keeps every source.
+transcript never shows; a lane that settled normally keeps every source, and
+so does a lane whose checkpoint cannot be read.
 """
 
 from __future__ import annotations
@@ -46,10 +47,10 @@ def _saved(*tool_call_ids: str) -> list:
     return messages
 
 
-async def _persist(events, task_messages, *, read_error=None, write=None):
+async def _persist(events, task_messages, *, write=None):
     async def task_history(thread_id, task_id):
-        if read_error is not None:
-            raise read_error
+        if isinstance(task_messages[task_id], Exception):
+            raise task_messages[task_id]
         return SimpleNamespace(messages=task_messages[task_id])
 
     reader = MagicMock()
@@ -105,14 +106,36 @@ async def test_a_lane_without_provenance_is_rewritten_without_a_checkpoint_read(
 
 
 @pytest.mark.asyncio
-async def test_a_failed_checkpoint_read_is_retried_then_keeps_the_streams():
+async def test_a_lane_whose_checkpoint_read_fails_keeps_every_source():
+    unread = [
+        _source("task:k1", "tc-a", "https://a.test"),
+        _source("task:k1", "tc-b", "https://b.test"),
+    ]
+    read = [
+        _source("task:k2", "tc-c", "https://c.test"),
+        _source("task:k2", "tc-d", "https://d.test"),
+    ]
+
+    ok, write, _ = await _persist(
+        [*unread, *read], {"k1": RuntimeError("pool closed"), "k2": _saved("tc-c")}
+    )
+
+    assert ok is True
+    write.assert_awaited_once_with(
+        "resp-1", [*unread, read[0]], {"task:k1": "k1", "task:k2": "k2"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_write_is_retried_then_keeps_the_streams():
     events = [_source("task:k1", "tc-a", "https://a.test")]
 
-    ok, write, reader = await _persist(events, {}, read_error=RuntimeError("pool closed"))
+    ok, write, _ = await _persist(
+        events, {"k1": _saved("tc-a")}, write=AsyncMock(side_effect=RuntimeError("down"))
+    )
 
     assert ok is False
-    write.assert_not_awaited()
-    assert reader.aget_task_history.await_count == 2
+    assert write.await_count == 2
 
 
 @pytest.mark.asyncio

@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager, contextmanager, suppress
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import ToolMessage
 
 from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTaskRegistry,
@@ -35,6 +37,7 @@ USAGE_SERVICE = "src.server.services.persistence.usage.UsagePersistenceService"
 REGISTRY = "ptc_agent.agent.middleware.background_subagent.registry"
 COORDINATOR = "src.server.services.runs.coordinator.RunCoordinator"
 FINALIZATION = "src.server.services.runs.finalization"
+READER = "src.server.services.history.reader.CheckpointHistoryReader"
 COLLECTION = "src.server.services.runs.subagent_collection"
 TEARDOWN = "src.server.services.runs.teardown"
 
@@ -139,12 +142,28 @@ def _lanes(events: list[dict]) -> set[str]:
 
 
 async def _capture_stream(_thread_id, task):
-    """A capture stream holding one record of the round that spawned the task."""
+    """A capture stream holding one record of the round that spawned the task,
+    from a tool call its checkpoint saved (``_saved_fetches``)."""
     yield {
         "event": "provenance",
-        "data": {"agent": f"task:{task.task_id}", "identifier": "https://x.example"},
+        "data": {
+            "agent": f"task:{task.task_id}",
+            "identifier": "https://x.example",
+            "tool_call_id": f"fetch-{task.task_id}",
+        },
         "run": task.spawned_run_id,
     }
+
+
+def _saved_fetches():
+    """Every task's checkpoint holding the result of its one fetch."""
+    reader = MagicMock()
+    reader.aget_task_history = AsyncMock(
+        side_effect=lambda _thread, task_id: SimpleNamespace(
+            messages=[ToolMessage(content="page", tool_call_id=f"fetch-{task_id}")]
+        )
+    )
+    return reader
 
 
 @contextmanager
@@ -223,6 +242,7 @@ def _run(
          patch(f"{FINALIZATION}.get_token_usage_from_callback", return_value=(None, [])), \
          patch(f"{FINALIZATION}.get_tool_usage_from_handler", return_value={}), \
          patch(f"{FINALIZATION}.calculate_execution_time", return_value=1.0), \
+         patch(f"{READER}.get_instance", return_value=_saved_fetches()), \
          _archive_writes(btm, archive):
         yield info
 

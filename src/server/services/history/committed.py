@@ -11,11 +11,15 @@ A lane whose stream outlived its checkpoints (a worker lost mid-turn, a
 subagent that failed) keeps the provenance of only the tool calls whose
 results were saved: what replay shows of the lane is what the checkpoints
 hold, and a source no saved result came from is one nothing shown ever read.
+A source no tool call read (market watch injects prices into the model's
+context) has no result to lose, so it is kept.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections import Counter
 from collections.abc import Collection, Iterable, Mapping
 from typing import Any
 
@@ -163,16 +167,89 @@ def saved_tool_calls(messages: Iterable[Any]) -> frozenset[str]:
 def saved_provenance(
     events: Iterable[dict[str, Any]], saved: Collection[str]
 ) -> list[dict[str, Any]]:
-    """The ``provenance`` events of the tool calls in ``saved``."""
-    kept: list[dict[str, Any]] = []
-    for event in events:
-        if not isinstance(event, dict) or event.get("event") != "provenance":
-            continue
-        data = event.get("data")
-        source = data if isinstance(data, dict) else event
-        if source.get("tool_call_id") in saved:
-            kept.append(event)
-    return kept
+    """The ``provenance`` events of the tool calls in ``saved``, and those
+    no tool call read."""
+    return [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and event.get("event") == "provenance"
+        and _kept(event, saved)
+    ]
+
+
+async def saved_lane_provenance(
+    thread_id: str,
+    events: Iterable[dict[str, Any]],
+    *,
+    run_id: str | None = None,
+    log_tag: str,
+) -> list[dict[str, Any]]:
+    """The ``provenance`` events among ``events`` whose tool call was saved,
+    in order: a ``task:{id}`` lane's by that task's newest checkpoint and,
+    given ``run_id``, the main agent's by the run's (without it, the main
+    agent's are left out). A lane whose read fails keeps them all: these rows
+    are the only record of its sources, and listing one it never read costs
+    less than losing the ones it did."""
+    provenance = [
+        (_lane(event), event)
+        for event in events
+        if isinstance(event, dict) and event.get("event") == "provenance"
+    ]
+    lanes = [
+        lane
+        for lane in dict.fromkeys(lane for lane, _ in provenance)
+        if lane != "main" or run_id is not None
+    ]
+    reads = await asyncio.gather(
+        *(
+            run_saved_tool_calls(thread_id, run_id)
+            if lane == "main"
+            else task_saved_tool_calls(thread_id, lane.removeprefix("task:"))
+            for lane in lanes
+        ),
+        return_exceptions=True,
+    )
+    saved: dict[str, frozenset[str] | None] = {}
+    for lane, read in zip(lanes, reads):
+        if isinstance(read, BaseException):
+            logger.error(
+                f"{log_tag} {lane}: checkpoint read failed; its provenance is "
+                f"recorded unchecked",
+                exc_info=read,
+            )
+            read = None
+        saved[lane] = read
+    kept = [
+        (lane, event)
+        for lane, event in provenance
+        if lane in saved and (saved[lane] is None or _kept(event, saved[lane]))
+    ]
+    found = Counter(lane for lane, _ in provenance)
+    left = Counter(lane for lane, _ in kept)
+    for lane in saved:
+        if left[lane] < found[lane]:
+            logger.info(
+                f"{log_tag} {lane}: kept {left[lane]} of {found[lane]} "
+                f"provenance entries, the rest from tool calls it never saved"
+            )
+    return [event for _, event in kept]
+
+
+def _kept(event: dict[str, Any], saved: Collection[str]) -> bool:
+    tool_call_id = _source(event).get("tool_call_id")
+    return not tool_call_id or tool_call_id in saved
+
+
+def _lane(event: dict[str, Any]) -> str:
+    """``task:{id}`` for a subagent's event, else ``main``."""
+    agent = _source(event).get("agent")
+    return agent if isinstance(agent, str) and agent.startswith("task:") else "main"
+
+
+def _source(event: dict[str, Any]) -> dict[str, Any]:
+    data = event.get("data")
+    return data if isinstance(data, dict) else event
 
 
 async def run_saved_tool_calls(thread_id: str, run_id: str) -> frozenset[str]:

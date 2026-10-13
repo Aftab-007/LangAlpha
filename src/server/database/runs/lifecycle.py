@@ -154,10 +154,11 @@ class FinalizeResult:
 class ProducerRecord:
     """What a run's stream kept apart for its row, beside the status.
 
-    ``provenance`` is every provenance record the stream held: the main
-    lane's, plus the task lanes a stop drained. ``reasoning_ms`` is None when
-    nothing could time the main agent's thinking (a recovered run whose
-    stream or checkpoint could not be read), so the row's facts stay unset.
+    ``provenance`` is the provenance the stream held, the main lane's plus
+    the task lanes a stop drained, less what a stopped or failed run never
+    saved. ``reasoning_ms`` is None when nothing could time the main agent's
+    thinking (a recovered run whose stream or checkpoint could not be read),
+    so the row's facts stay unset.
     """
 
     provenance: List[Dict[str, Any]] = field(default_factory=list)

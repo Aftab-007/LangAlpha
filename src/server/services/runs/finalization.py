@@ -9,7 +9,7 @@ table, no locks.
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Optional
 
 from src.config.settings import get_checkpoint_flush_timeout
@@ -199,21 +199,55 @@ async def assemble_finalize_artifacts(
         execution_time=execution_time,
         per_call_records=per_call_records,
         tool_usage=tool_usage,
-        record=_producer_record(key, handler, stop_events),
+        record=await _producer_record(key, handler, stop_events, status),
     )
 
 
-def _producer_record(key: tuple, handler, stop_events) -> Optional[ProducerRecord]:
+async def _producer_record(
+    key: tuple, handler, stop_events, status: str
+) -> Optional[ProducerRecord]:
     """The producer's record, or None when it cannot be read: a raise here
     would leave the row in_progress, where a missing record only costs the
     row its replay facts."""
+    from src.server.services.history.committed import UNSAVED_RESULT_ENDINGS
+
     if handler is None:
         return None
     try:
-        return handler.record(stop_events)
+        record = handler.record(stop_events)
+        if status in UNSAVED_RESULT_ENDINGS and record.provenance:
+            record = replace(
+                record, provenance=await _saved_provenance(key, record.provenance)
+            )
+        return record
     except Exception:
         logger.warning(f"[Finalize] producer record unavailable for {key}", exc_info=True)
         return None
+
+
+async def _saved_provenance(key: tuple, provenance: list[dict]) -> list[dict]:
+    """A stopped or failed run's provenance for the tool calls its
+    checkpoints saved. The stop can land after one of a step's parallel calls
+    streamed its sources and before the step saved its result, which the
+    turn then never shows. Reads that outlast the flush timeout keep them
+    all, as a lane whose read fails does."""
+    from src.server.services.history.committed import saved_lane_provenance
+
+    thread_id, run_id = key
+    try:
+        return await asyncio.wait_for(
+            saved_lane_provenance(
+                thread_id, provenance, run_id=run_id, log_tag="[Finalize]"
+            ),
+            timeout=get_checkpoint_flush_timeout(),
+        )
+    except Exception:
+        logger.error(
+            f"[Finalize] checkpoint reads failed for {key}; its provenance is "
+            f"recorded unchecked",
+            exc_info=True,
+        )
+        return provenance
 
 
 async def drive_finalize_cas(

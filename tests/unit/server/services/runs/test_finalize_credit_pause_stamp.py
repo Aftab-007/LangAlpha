@@ -9,9 +9,10 @@ cannot be read costs the row its facts, never its finalize.
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import ToolMessage
 from langgraph.types import Interrupt
 
 from src.server.contracts.status import (
@@ -348,10 +349,15 @@ def test_the_stamp_is_read_only_for_a_credit_pause():
 # ─── The producer's record ────────────────────────────────────────────
 
 
-def _provenance(agent, identifier):
+def _provenance(agent, identifier, tool_call_id=None):
     return {
         "event": "provenance",
-        "data": {"source_type": "web_search", "identifier": identifier, "agent": agent},
+        "data": {
+            "source_type": "web_search",
+            "identifier": identifier,
+            "agent": agent,
+            "tool_call_id": tool_call_id,
+        },
     }
 
 
@@ -365,19 +371,41 @@ async def test_the_outcome_carries_the_record_with_the_stop_drains_provenance():
                 "type": "provenance",
                 "source_type": "web_search",
                 "identifier": "https://example.test/a",
+                "tool_call_id": "call-a",
                 "agent": None,
             },
         )
     )
     main = handler.provenance_events
     assert [e["data"]["agent"] for e in main] == ["main"]
-    drained = _provenance("task:k7", "https://example.test/b")
-
-    outcome = await _outcome(
-        handler,
-        "cancelled",
-        stop_events=[{"event": "message_chunk", "data": {}}, drained, "not an event"],
+    drained = _provenance("task:k7", "https://example.test/b", "call-b")
+    # Both fetches' results were saved, the main agent's by the run and the
+    # subagent's by its task.
+    reader = MagicMock()
+    reader.aget_run_state = AsyncMock(
+        return_value=SimpleNamespace(
+            values={"messages": [ToolMessage(content="a", tool_call_id="call-a")]}
+        )
     )
+    reader.aget_task_history = AsyncMock(
+        return_value=SimpleNamespace(
+            messages=[ToolMessage(content="b", tool_call_id="call-b")]
+        )
+    )
+
+    with patch(
+        "src.server.services.history.reader.CheckpointHistoryReader.get_instance",
+        return_value=reader,
+    ):
+        outcome = await _outcome(
+            handler,
+            "cancelled",
+            stop_events=[
+                {"event": "message_chunk", "data": {}},
+                drained,
+                "not an event",
+            ],
+        )
 
     assert outcome.record == ProducerRecord(
         provenance=[*main, drained], reasoning_ms={}

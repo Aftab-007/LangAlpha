@@ -4,9 +4,9 @@ durations of the saved messages, keyed by the saved message ids.
 
 A run that stopped or failed may have streamed past its last save, which the
 turn it leaves never shows, so those sources are dropped. An interrupted
-run's finished calls are committed by its resume, so it keeps them all. With
-no stream nothing is recorded; with no checkpoint to check against, every
-source is.
+run's finished calls are committed by its resume, so it keeps them all, and a
+source no tool call read (market watch) is always kept. With no stream
+nothing is recorded; with no checkpoint to check against, every source is.
 """
 
 import json
@@ -185,6 +185,23 @@ async def test_a_message_without_tool_calls_is_matched_by_its_text():
     record, _ = await _salvage(_STREAM + final, _reader(saved))
 
     assert record.reasoning_ms == {"ai-1": [291], "ai-2": [117], "ai-3": [40]}
+
+
+@pytest.mark.asyncio
+async def test_a_source_no_tool_call_read_is_kept():
+    watched = {
+        **_source("", "AAPL"),
+        "tool_call_id": None,
+        "source_type": "market_data",
+    }
+    stream = _STREAM + [(b"8-0", _wire("provenance", watched))]
+
+    record, _ = await _salvage(stream, _reader(_SAVED_STATE))
+
+    assert [e["data"]["identifier"] for e in record.provenance] == [
+        "https://one.test",
+        "AAPL",
+    ]
 
 
 @pytest.mark.asyncio

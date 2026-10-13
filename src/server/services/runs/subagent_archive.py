@@ -173,12 +173,19 @@ async def persist_collected_events(
     lanes = _task_lanes(events)
     if not lanes:
         return True
+    from src.server.services.history.committed import saved_lane_provenance
+
     # One bounded retry: a transiently failed write must not cost the lanes
     # their provenance. The write replaces each lane's rows whole, so a
-    # repeat never duplicates them.
+    # repeat never duplicates them. A failed checkpoint read is no failure
+    # here: that lane's sources are written unchecked.
     for attempt in (1, 2):
         try:
-            provenance = await _saved_lane_provenance(events, thread_id, lanes)
+            # A subagent that failed streamed what it fetched in its last
+            # step, which its transcript never shows.
+            provenance = await saved_lane_provenance(
+                thread_id, events, log_tag="[SubagentCollector]"
+            )
             if await replace_lane_provenance(response_id, provenance, lanes):
                 logger.info(
                     f"[SubagentCollector] Recorded {len(provenance)} provenance "
@@ -207,39 +214,6 @@ def _task_lanes(events: list[dict]) -> dict[str, str]:
         if isinstance(agent, str) and agent.startswith("task:"):
             lanes[agent] = agent.removeprefix("task:")
     return lanes
-
-
-async def _saved_lane_provenance(
-    events: list[dict], thread_id: str, lanes: dict[str, str]
-) -> list[dict]:
-    """The lanes' provenance for the tool calls their tasks' checkpoints
-    saved. A subagent that failed streamed what it fetched in its last step,
-    which its transcript never shows. A failed read raises."""
-    from src.server.services.history.committed import (
-        saved_provenance,
-        task_saved_tool_calls,
-    )
-
-    by_lane: dict[str, list[dict]] = {}
-    for event in events:
-        data = event.get("data")
-        if event.get("event") != "provenance" or not isinstance(data, dict):
-            continue
-        agent = data.get("agent")
-        if agent in lanes:
-            by_lane.setdefault(agent, []).append(event)
-    kept: list[dict] = []
-    for agent, provenance in by_lane.items():
-        saved = await task_saved_tool_calls(thread_id, lanes[agent])
-        lane_kept = saved_provenance(provenance, saved)
-        if len(lane_kept) < len(provenance):
-            logger.info(
-                f"[SubagentCollector] {agent}: kept {len(lane_kept)} of "
-                f"{len(provenance)} provenance entries, the rest from tool "
-                f"calls it never saved"
-            )
-        kept.extend(lane_kept)
-    return kept
 
 
 async def _capture_lane_images(
