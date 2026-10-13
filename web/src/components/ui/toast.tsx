@@ -16,11 +16,15 @@ function ToastViewport({
   // dimmed under its backdrop. The empty viewport still spans its padding, so it
   // passes pointer events through and only the toasts themselves take them.
   // Being above them is also why an open dialog lets a toast keep focus.
+  //
+  // `--toast-lift` is written by `useToastInset` for any element floating at
+  // the bottom of the page, so a toast stacks above its buttons rather than
+  // over them. Unset everywhere else, which leaves the edge at 0.
   return (
     <ToastPrimitives.Viewport
       {...aboveDialogs}
       className={cn(
-        "pointer-events-none fixed top-0 z-1050 flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]",
+        "pointer-events-none fixed top-0 z-1050 flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-[var(--toast-lift,0px)] sm:right-0 sm:top-auto sm:flex-col sm:transition-[bottom] sm:duration-200 motion-reduce:transition-none md:max-w-[420px]",
         className
       )}
       {...props}
@@ -78,6 +82,8 @@ function ToastAction({
   )
 }
 
+// Revealed by hovering the toast, which a touch screen cannot do: there, and
+// while anything in the toast holds focus, it is simply shown.
 function ToastClose({
   className,
   ...props
@@ -85,7 +91,7 @@ function ToastClose({
   return (
     <ToastPrimitives.Close
       className={cn(
-        "absolute right-2 top-2 rounded-md p-1 text-foreground/50 opacity-0 transition-opacity hover:text-foreground focus:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100 group-[.destructive]:text-red-300 hover:group-[.destructive]:text-red-50 focus-visible:group-[.destructive]:ring-red-400",
+        "absolute right-2 top-2 rounded-md p-1 text-foreground/50 opacity-0 transition-opacity hover:text-foreground focus:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 group-[.destructive]:text-red-300 hover:group-[.destructive]:text-red-50 focus-visible:group-[.destructive]:ring-red-400",
         className
       )}
       toast-close=""

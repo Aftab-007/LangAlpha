@@ -2,6 +2,7 @@
  * MCP server config: the account's servers, and each workspace's view of them.
  */
 import { api } from '@/api/client';
+import { apiErrorCoded } from './errors';
 import { foldToolName } from '@/pages/ChatAgent/utils/directTools';
 import type { OrderAction, OrderMode } from '@/types/orders';
 import type { TradingLevel } from '@/types/api';
@@ -461,9 +462,91 @@ export interface McpImportResultRow {
   name: string;
   original_name: string;
   renamed: boolean;
-  status: 'created' | 'exists' | 'skipped' | 'invalid' | 'error';
+  /** `check_failed` and `sign_in_required` saved nothing: the first failed its
+   *  check (`reason` says why), the second is saved only by its sign-in. */
+  status:
+    | 'created'
+    | 'exists'
+    | 'skipped'
+    | 'invalid'
+    | 'error'
+    | 'check_failed'
+    | 'sign_in_required';
   reason?: string;
   error?: string;
+  verdict?: McpCheckVerdict;
+  missing_secrets?: string[];
+  /** The address a `sign_in_required` entry signs in to. */
+  url?: string;
+}
+
+/** How a failed check reads: the probe's verdicts, plus a command that would
+ *  not start and a transport nothing here can run. */
+export type McpCheckVerdict =
+  | 'needs_credential'
+  | 'credential_rejected'
+  | 'missing_secrets'
+  | 'unreachable'
+  | 'command_failed'
+  | 'unsupported';
+
+const CHECK_VERDICTS: Record<McpCheckVerdict, true> = {
+  needs_credential: true,
+  credential_rejected: true,
+  missing_secrets: true,
+  unreachable: true,
+  command_failed: true,
+  unsupported: true,
+};
+
+function isCheckVerdict(word: unknown): word is McpCheckVerdict {
+  return typeof word === 'string' && Object.hasOwn(CHECK_VERDICTS, word);
+}
+
+/** One server that did not pass the check a save runs first. */
+export interface McpCheckFailure {
+  server: string;
+  verdict: McpCheckVerdict;
+  /** A sentence from the server's side, safe to show as text. */
+  reason: string;
+  missing_secrets: string[];
+}
+
+/** A server that is saved, or switched on, only by its sign-in. */
+export interface McpSignInNeeded {
+  server: string;
+  url: string;
+}
+
+/**
+ * The servers a 422 `mcp_check_failed` names, or null for any other error.
+ * Nothing was saved: a failure is only changed by a different input. A
+ * verdict this build does not know reads as unreachable, the one every
+ * surface can say something true about.
+ */
+export function mcpCheckFailures(err: unknown): McpCheckFailure[] | null {
+  const failures = apiErrorCoded(err, 'mcp_check_failed')?.failures;
+  if (!Array.isArray(failures)) return null;
+  return failures.map((f: Partial<Record<keyof McpCheckFailure, unknown>>) => ({
+    server: String(f.server ?? ''),
+    verdict: isCheckVerdict(f.verdict) ? f.verdict : 'unreachable',
+    reason: String(f.reason ?? ''),
+    missing_secrets: Array.isArray(f.missing_secrets) ? f.missing_secrets.map(String) : [],
+  }));
+}
+
+/**
+ * The servers a 409 `mcp_sign_in_required` names, or null for any other
+ * error. The same input passes once the user has signed in, so the caller
+ * offers the sign-in rather than an error.
+ */
+export function mcpSignInNeeded(err: unknown): McpSignInNeeded[] | null {
+  const servers = apiErrorCoded(err, 'mcp_sign_in_required')?.servers;
+  if (!Array.isArray(servers)) return null;
+  return servers.map((s: Partial<Record<keyof McpSignInNeeded, unknown>>) => ({
+    server: String(s.server ?? ''),
+    url: String(s.url ?? ''),
+  }));
 }
 
 /**

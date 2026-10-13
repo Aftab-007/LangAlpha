@@ -8,7 +8,8 @@ export interface BuiltinMcpServer {
   description: string;
   transport: string;
   enabled: boolean;
-  /** Path on this origin to the mark the server declared in its handshake. */
+  /** Path on this origin to the server's handshake mark, else the brand its
+   *  wrapper bundle wraps. Absent for our own bundles: `builtinServerMark`. */
   icon_url?: string | null;
   /** The bundle that ships this server, and whether that bundle is on: the
    *  same provenance pair a catalog row carries, so both group and explain

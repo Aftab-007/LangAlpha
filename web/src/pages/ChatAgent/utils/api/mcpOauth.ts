@@ -3,6 +3,7 @@
  * desktop shell's loopback callback. Per-server OAuth *state* lives in mcp.ts.
  */
 import { api } from '@/api/client';
+import type { McpServerInput } from './mcp';
 import {
   beginMcpOAuth,
   bindMcpOAuth,
@@ -46,6 +47,8 @@ export interface McpOauthStart {
   state?: string;
   /** The callback the flow was really minted against; see `startMcpOauth`. */
   redirect_uri?: string;
+  /** Seconds until no callback can finish this flow; absent from an older build. */
+  expires_in?: number;
 }
 
 /**
@@ -114,22 +117,18 @@ export interface StartMcpOauthOptions {
 }
 
 /**
- * Phase 1 of the connect flow; the caller navigates to `authorize_url`.
- *
- * Everything past `returnTo` is named rather than positional. Three of the four
- * are optional and two of them are a boolean beside a callback, which is the
- * shape an argument gets silently passed in the wrong slot.
+ * Arm the shell's listener where there is one, run the start request, and hand
+ * back its answer bound to that listener, or null once the caller no longer
+ * wants it. Shared by the reconnect of a saved row and the sign-in that saves
+ * one, which differ only in the request they send.
  */
-export async function startMcpOauth(
-  name: string,
-  returnTo = '/plugins',
+async function armedStart<T extends McpOauthStart>(
+  send: (redirectUri: string | undefined) => Promise<T>,
   {
     vendorRefusesHostedCallback = false,
-    expectedUrl,
     stillWanted,
-    grantedCapabilities,
-  }: StartMcpOauthOptions = {},
-): Promise<McpOauthStart | null> {
+  }: Pick<StartMcpOauthOptions, 'vendorRefusesHostedCallback' | 'stillWanted'>,
+): Promise<T | null> {
   // Asked unconditionally, because asking is free: `loopbackFlow` answers
   // undefined wherever there is no shell, so this arms a listener exactly where
   // one exists and changes nothing in a browser.
@@ -162,23 +161,10 @@ export async function startMcpOauth(
     }
   }
   try {
-    const { data } = await api.post<McpOauthStart>(
-      `/api/v1/mcp/servers/${name}/oauth/start`,
-      // One guard, and it is `loopbackFlow` above: every way of not having a
-      // URI already arrives here as undefined. A second truthiness check would
-      // read as belt and braces and is really a place for the two to disagree.
-      {
-        return_to: returnTo,
-        ...(flow ? { redirect_uri: flow.redirectUri } : {}),
-        ...(expectedUrl ? { expected_url: expectedUrl } : {}),
-        // Presence, not truthiness, unlike the two above: an empty selection is
-        // a decision the user made and has to be sent, and it is the one value
-        // here that a shorthand check would drop.
-        ...(grantedCapabilities !== undefined
-          ? { granted_capabilities: grantedCapabilities }
-          : {}),
-      },
-    );
+    // One guard, and it is `loopbackFlow` above: every way of not having a URI
+    // already arrives here as undefined. A second truthiness check would read
+    // as belt and braces and is really a place for the two to disagree.
+    const data = await send(flow?.redirectUri);
     if (flow) {
       // Did the flow actually get minted against the listener we armed? A build
       // that predates the field ignores it and mints the hosted callback, and
@@ -217,6 +203,192 @@ export async function startMcpOauth(
     if (flow) await cancelMcpOAuth(flow.flowId);
     throw err;
   }
+}
+
+/**
+ * The fields every start sends beside its own: where the callback lands, the
+ * listener it comes home to, and the capability answer.
+ */
+function startFields(
+  returnTo: string,
+  redirectUri: string | undefined,
+  grantedCapabilities: string[] | undefined,
+) {
+  return {
+    return_to: returnTo,
+    ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+    // Presence, not truthiness: an empty selection is a decision the user made
+    // and has to be sent, and it is the one value here that a shorthand check
+    // would drop.
+    ...(grantedCapabilities !== undefined
+      ? { granted_capabilities: grantedCapabilities }
+      : {}),
+  };
+}
+
+/**
+ * Phase 1 of the reconnect of a saved row; the caller navigates to
+ * `authorize_url`.
+ *
+ * Everything past `returnTo` is named rather than positional. Three of the four
+ * are optional and two of them are a boolean beside a callback, which is the
+ * shape an argument gets silently passed in the wrong slot.
+ */
+export async function startMcpOauth(
+  name: string,
+  returnTo = '/plugins',
+  { expectedUrl, grantedCapabilities, ...arming }: StartMcpOauthOptions = {},
+): Promise<McpOauthStart | null> {
+  return armedStart(async (redirectUri) => {
+    const { data } = await api.post<McpOauthStart>(
+      `/api/v1/mcp/servers/${name}/oauth/start`,
+      {
+        ...startFields(returnTo, redirectUri, grantedCapabilities),
+        ...(expectedUrl ? { expected_url: expectedUrl } : {}),
+      },
+    );
+    return data;
+  }, arming);
+}
+
+/**
+ * A save that waits for its sign-in: the same body the ordinary route would
+ * have taken, which the callback saves once the user has signed in and the
+ * server accepts the token. Nothing is written before then.
+ */
+export type PendingSignIn =
+  | { kind: 'server'; server: McpServerInput }
+  | { kind: 'workspace_server'; workspaceId: string; server: McpServerInput }
+  | {
+      kind: 'server_edit';
+      /** The row being edited, which the body may rename. */
+      name: string;
+      server: McpServerInput;
+      workspaceId?: string;
+      /** The address the form was opened on, so an edit made meanwhile from
+       *  another tab is refused rather than overwritten. */
+      expectedUrl?: string | null;
+    }
+  | { kind: 'brokerage'; name: string }
+  | {
+      kind: 'plugin';
+      sourceUrl: string;
+      subdir?: string | null;
+      secrets?: Record<string, string>;
+    }
+  | {
+      kind: 'plugin_upload';
+      file: File;
+      subdir?: string | null;
+      secrets?: Record<string, string>;
+    };
+
+/**
+ * What did not happen while a sign-in is out, by what was waiting on it: the
+ * one reading of a pending kind, for the step before the vendor's page and for
+ * a sign-in that came back unfinished. `catalog` is a Discover install and
+ * `other` a connect with no save behind it.
+ */
+export function pendingIntent(
+  kind: PendingSignIn['kind'] | 'catalog' | 'other' | undefined,
+): 'install' | 'add' | 'edit' | 'other' {
+  switch (kind) {
+    case 'catalog':
+    case 'plugin':
+    case 'plugin_upload':
+      return 'install';
+    case 'server':
+    case 'workspace_server':
+    case 'brokerage':
+      return 'add';
+    case 'server_edit':
+      return 'edit';
+    default:
+      return 'other';
+  }
+}
+
+/** The pending start's answer: the reconnect's, plus the row name the callback
+ *  reports in `mcp_connected` or `server`, and for a plugin the plugin. An
+ *  upload answers as `plugin`. */
+export type McpPendingStart = McpOauthStart &
+  (
+    | { kind: 'plugin'; server: string; plugin: string }
+    | { kind: Exclude<PendingSignIn['kind'], 'plugin' | 'plugin_upload'>; server: string }
+  );
+
+function pendingBody(request: Exclude<PendingSignIn, { kind: 'plugin_upload' }>) {
+  switch (request.kind) {
+    case 'server':
+      return { kind: 'server', server: request.server };
+    case 'workspace_server':
+      return {
+        kind: 'workspace_server',
+        workspace_id: request.workspaceId,
+        server: request.server,
+      };
+    case 'server_edit':
+      return {
+        kind: 'server_edit',
+        name: request.name,
+        server: request.server,
+        ...(request.workspaceId ? { workspace_id: request.workspaceId } : {}),
+        ...(request.expectedUrl ? { expected_url: request.expectedUrl } : {}),
+      };
+    case 'brokerage':
+      return { kind: 'brokerage', name: request.name };
+    case 'plugin':
+      return {
+        kind: 'plugin',
+        source_url: request.sourceUrl,
+        ...(request.subdir ? { subdir: request.subdir } : {}),
+        ...(request.secrets && Object.keys(request.secrets).length > 0
+          ? { secrets: request.secrets }
+          : {}),
+      };
+  }
+}
+
+/**
+ * Phase 1 of a sign-in that saves its server; the caller navigates to
+ * `authorize_url`. Refusals arrive in the ordinary route's shapes (a 422
+ * `mcp_check_failed`, a 409 string for a taken name), since everything that
+ * can be refused without the user's token is refused here.
+ */
+export async function startPendingMcpOauth(
+  request: PendingSignIn,
+  returnTo = '/plugins',
+  { grantedCapabilities, ...arming }: Omit<StartMcpOauthOptions, 'expectedUrl'> = {},
+): Promise<McpPendingStart | null> {
+  // A brokerage is refused without a selection, and `[]` is the selection of a
+  // connect that was never asked: nothing granted.
+  const granted =
+    request.kind === 'brokerage' ? (grantedCapabilities ?? []) : grantedCapabilities;
+  return armedStart(async (redirectUri) => {
+    if (request.kind === 'plugin_upload') {
+      const form = new FormData();
+      form.append('file', request.file);
+      if (request.subdir) form.append('subdir', request.subdir);
+      if (request.secrets && Object.keys(request.secrets).length > 0) {
+        form.append('secrets', JSON.stringify(request.secrets));
+      }
+      form.append('return_to', returnTo);
+      if (redirectUri) form.append('redirect_uri', redirectUri);
+      if (granted !== undefined) {
+        form.append('granted_capabilities', JSON.stringify(granted));
+      }
+      const { data } = await api.post<McpPendingStart>(
+        '/api/v1/mcp/oauth/start-pending/upload',
+        form,
+      );
+      return data;
+    }
+    const { data } = await api.post<McpPendingStart>('/api/v1/mcp/oauth/start-pending', {
+      ...pendingBody(request),
+      ...startFields(returnTo, redirectUri, granted),
+    });
+    return data;
+  }, arming);
 }
 
 export async function disconnectMcpOauth(name: string) {

@@ -14,48 +14,96 @@ export function apiErrorDetail(err: unknown): unknown {
 }
 
 /**
+ * The detail when it is a structured object, the shape every coded refusal
+ * and the platform's quota payload take; null for a string, a validation
+ * list, or no detail at all.
+ */
+export function apiErrorObject(err: unknown): Record<string, unknown> | null {
+  const detail = apiErrorDetail(err);
+  return detail && typeof detail === 'object' && !Array.isArray(detail)
+    ? (detail as Record<string, unknown>)
+    : null;
+}
+
+/** The structured detail of a refusal that carries `code`, or null for any
+ *  other error. */
+export function apiErrorCoded(err: unknown, code: string): Record<string, unknown> | null {
+  const detail = apiErrorObject(err);
+  return detail?.code === code ? detail : null;
+}
+
+/**
  * Extract the `message` from a structured object-shaped `detail` (e.g. the
  * platform's 429 quota payload `{ message, type, current, limit, remaining }`).
  * Returns null for string/array/absent details so callers can fall back to
  * their own copy.
  */
 export function apiErrorDetailMessage(err: unknown): string | null {
+  const message = apiErrorObject(err)?.message;
+  return typeof message === 'string' && message ? message : null;
+}
+
+/** One entry of a FastAPI 422: where the request was refused, and why. */
+export interface ApiValidationError {
+  /** The innermost named field, or null for the request body as a whole. */
+  field: string | null;
+  /** The whole location as FastAPI wrote it, `body.tier`; '' when it gave none. */
+  loc: string;
+  /** Pydantic's sentence, without the "Value error, " a model validator
+   *  puts before its own text. */
+  message: string;
+}
+
+/** The entries of a FastAPI validation refusal; empty for any other error. */
+export function apiValidationErrors(err: unknown): ApiValidationError[] {
   const detail = apiErrorDetail(err);
-  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
-    const message = (detail as { message?: unknown }).message;
-    if (typeof message === 'string' && message) return message;
-  }
-  return null;
+  if (!Array.isArray(detail)) return [];
+  return detail.flatMap((entry: { loc?: unknown; msg?: unknown } | null) => {
+    const msg = entry?.msg;
+    if (typeof msg !== 'string' || !msg) return [];
+    const loc: unknown[] = Array.isArray(entry?.loc) ? entry.loc : [];
+    const named = loc.filter((part): part is string => typeof part === 'string' && part !== 'body');
+    return [
+      {
+        field: named.at(-1) ?? null,
+        loc: loc.map(String).join('.'),
+        message: msg.replace(/^Value error,\s*/, ''),
+      },
+    ];
+  });
 }
 
 /**
  * Normalize an API client or fetch error into a readable message.
  *
- * Reads `err.response.data.detail`. FastAPI emits a string for most errors,
- * but validation failures come back as a list of `{ loc, msg }` entries — those
- * are flattened to `loc.path: msg` joined with `'; '` so the UI never renders
+ * Reads `err.response.data.detail`. A validation list is flattened to
+ * `loc.path: msg` joined with `'; '` so the UI never renders
  * `[object Object]`. A structured object detail (e.g. the platform quota
  * payload) surfaces its `message` field. Falls back to `err.message` then a
  * generic label.
  */
 export function formatApiErrorDetail(err: unknown): string {
-  const detail = apiErrorDetail(err);
-  if (Array.isArray(detail)) {
-    const parts = detail
-      .map((entry) => {
-        const e = entry as { loc?: unknown[]; msg?: unknown };
-        const loc = Array.isArray(e?.loc) ? e.loc.map(String).join('.') : '';
-        const msg = typeof e?.msg === 'string' ? e.msg : JSON.stringify(entry);
-        return loc ? `${loc}: ${msg}` : msg;
-      })
-      .filter(Boolean);
-    if (parts.length > 0) return parts.join('; ');
+  const invalid = apiValidationErrors(err);
+  if (invalid.length > 0) {
+    return invalid.map((e) => (e.loc ? `${e.loc}: ${e.message}` : e.message)).join('; ');
   }
   const objectMessage = apiErrorDetailMessage(err);
   if (objectMessage) return objectMessage;
+  const detail = apiErrorDetail(err);
   if (typeof detail === 'string' && detail) return detail;
   const message = (err as { message?: unknown })?.message;
   return typeof message === 'string' && message ? message : 'Request failed';
+}
+
+/**
+ * The reason the server gave, or null when it gave none. A surface that leads
+ * with its own sentence wants only this: the client's own message ("Request
+ * failed with status code 500") restates the failure rather than explaining it.
+ */
+export function apiErrorReason(err: unknown): string | null {
+  if (apiErrorDetail(err) == null) return null;
+  const reason = formatApiErrorDetail(err);
+  return reason === (err as { message?: unknown })?.message ? null : reason;
 }
 
 /** Extract the HTTP status code from an API client error, or null if absent. */

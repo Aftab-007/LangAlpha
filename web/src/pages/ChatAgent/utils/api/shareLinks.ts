@@ -6,7 +6,7 @@
  * working without naming these.
  */
 import { api } from '@/api/client';
-import { apiErrorDetail, apiErrorStatus } from './errors';
+import { apiErrorObject, apiErrorStatus } from './errors';
 import type {
   FileGrant,
   ShareLink,
@@ -57,8 +57,7 @@ export type ShareConflict = 'files_changed' | 'link_changed';
 
 export function shareConflictIn(err: unknown): ShareConflict | null {
   if (apiErrorStatus(err) !== 409) return null;
-  const detail = apiErrorDetail(err);
-  const code = detail && typeof detail === 'object' ? (detail as { code?: unknown }).code : undefined;
+  const code = apiErrorObject(err)?.code;
   return code === 'files_changed' || code === 'link_changed' ? code : null;
 }
 
@@ -71,9 +70,7 @@ export interface ShareCap {
 /** The cap a 422 names, or null for any other error. */
 export function shareCapIn(err: unknown): ShareCap | null {
   if (apiErrorStatus(err) !== 422) return null;
-  const detail = apiErrorDetail(err);
-  if (!detail || typeof detail !== 'object') return null;
-  const { code, limit } = detail as { code?: unknown; limit?: unknown };
+  const { code, limit } = apiErrorObject(err) ?? {};
   if (code !== 'too_many_files' && code !== 'too_many_bytes') return null;
   return { code, limit: typeof limit === 'number' ? limit : 0 };
 }

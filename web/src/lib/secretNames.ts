@@ -23,3 +23,21 @@ export function normalizeSecretName(raw: string): string {
     .replace(/^[0-9]+/, '')
     .slice(0, MAX_SECRET_NAME_LENGTH);
 }
+
+/** The vault's own rule for a name: what it stores, as spelled. */
+export function isLegalSecretName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name);
+}
+
+/**
+ * The name a typed or prefilled name is stored under. A legal name is kept as
+ * it stands, so a lowercase name a connector asks for by a deep link is
+ * stored under the spelling that connector reads; anything else takes the
+ * spelling every name field types in.
+ */
+export function savedSecretName(raw: string): string {
+  return isLegalSecretName(raw) ? raw : normalizeSecretName(raw);
+}
+
+/** The longest value the vault stores. */
+export const MAX_SECRET_VALUE_LENGTH = 4096;
