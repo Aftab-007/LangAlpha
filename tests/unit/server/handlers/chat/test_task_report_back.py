@@ -3,8 +3,8 @@
 Jobs are born on the run ledger's terminal CAS; the EXECUTOR arbitrates at
 claim time against the durable row (result_delivered_at → drop; live or
 interrupted parent → park until the thread's next completed finalize).
-The notification turn announces completion and directs the agent to
-TaskOutput — the result rides the durable archive, never the payload.
+The notification turn announces the outcome; the result rides the durable
+archive, never the payload.
 """
 
 import contextlib
@@ -14,17 +14,17 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.server.services.report_back.subagent import (
-    _build_notification_message,
-    _task_report,
-    publish_cleared_wake_if_no_open_job,
     execute_task_report_back,
+    publish_cleared_wake_if_no_open_job,
+    task_report,
+    task_report_message,
 )
 
 WAKE_MOD = "src.server.services.report_back.flash.wake"
 
 
 # ---------------------------------------------------------------------------
-# _build_notification_message
+# task_report_message
 # ---------------------------------------------------------------------------
 
 
@@ -42,7 +42,7 @@ def _payload(**over) -> dict:
 
 class TestTaskReport:
     def test_a_failed_run_without_a_display_id_names_the_task(self):
-        report = _task_report(
+        report = task_report(
             _payload(display_id=None, description="", final_status="error")
         )
         assert report.model_dump(exclude_none=True) == {
@@ -55,18 +55,25 @@ class TestTaskReport:
 
 class TestBuildNotificationMessage:
     def test_carries_only_the_event(self):
-        msg = _build_notification_message(_task_report(_payload()), "research")
+        """Posted, it names no time: a task that settled after the turn's last
+        model call is posted too, so "after your previous turn ended" could be
+        false."""
+        msg = task_report_message(task_report(_payload()), "research")
         assert msg == (
             "<system>\n"
-            "Background subagent Task-abc123 (research) finished after your "
-            "previous turn ended.\n"
+            "Background subagent Task-abc123 (research) finished.\n"
             "Task description: look things up\n"
             "</system>"
         )
 
+    def test_a_posted_failure_says_so(self):
+        report = task_report(_payload(final_status="error"))
+        msg = task_report_message(report, "research")
+        assert "Background subagent Task-abc123 (research) FAILED.\n" in msg
+
     def test_a_failure_taken_in_mid_turn_says_so(self):
-        report = _task_report(_payload(final_status="error"))
-        msg = _build_notification_message(report, "research", steered=True)
+        report = task_report(_payload(final_status="error"))
+        msg = task_report_message(report, "research", steered=True)
         assert "Task-abc123 (research) FAILED while you were working." in msg
 
 
@@ -144,8 +151,10 @@ def _arb_env(
     defer=None,
     release=None,
     wake=None,
+    parent_run=None,
 ):
-    """Patch set for the executor's pre-dispatch arbitration."""
+    """Patch set for the executor's pre-dispatch arbitration. ``parent_run``
+    is the attempt row the task's ``parent_run_id`` names."""
     # A plain string is the status alone; a dict is the whole attempt row, for
     # the arms that read more of it than its status.
     latest = AsyncMock(
@@ -161,6 +170,10 @@ def _arb_env(
         ),
         patch(
             "src.server.database.runs.lifecycle.get_latest_attempt", new=latest
+        ),
+        patch(
+            "src.server.database.runs.lifecycle.get_run",
+            new=AsyncMock(return_value=parent_run),
         ),
         patch(
             "src.server.services.report_back.notify_turn.post_notification_turn",
@@ -347,7 +360,7 @@ async def test_dispatch_posts_the_report_as_its_own_turn():
 
     assert len(posted) == 1
     content = posted[0]["messages"][0]["content"]
-    assert "Task-abc123 (research) finished after your previous turn ended." in content
+    assert "Background subagent Task-abc123 (research) finished.\n" in content
     # The message is hidden, so history labels the turn from this.
     assert posted[0]["report_source"] == {
         "kind": "task",
@@ -575,18 +588,28 @@ async def test_a_failed_run_status_read_keeps_the_job_owed():
 
 # ---------------------------------------------------------------------------
 # a cancel releases every parked job on the thread — but a stop must not be
-# the thing that starts a turn
+# the thing that starts a turn. Read off the task's own parent attempt.
 # ---------------------------------------------------------------------------
 
 _STOPPED_AT = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
 _STOPPED_RUN = "attempt-stopped"
 
 
-def _cancelled_attempt() -> dict:
+def _cancelled_attempt(**over) -> dict:
     return {
         "status": "cancelled",
         "cancel_requested_at": _STOPPED_AT,
         "conversation_response_id": _STOPPED_RUN,
+        **over,
+    }
+
+
+def _settled_run(*, settled_at, parent_run_id=_STOPPED_RUN) -> dict:
+    return {
+        "status": "completed",
+        "result_delivered_at": None,
+        "parent_run_id": parent_run_id,
+        "finalized_at": settled_at,
     }
 
 
@@ -598,12 +621,8 @@ async def test_dispatch_drops_when_the_users_own_stop_released_it():
     """
     post, wake = AsyncMock(), AsyncMock()
     with _arb_env(
-        run_row={
-            "status": "completed",
-            "result_delivered_at": None,
-            "parent_run_id": _STOPPED_RUN,
-            "finalized_at": _STOPPED_AT - timedelta(seconds=30),
-        },
+        run_row=_settled_run(settled_at=_STOPPED_AT - timedelta(seconds=30)),
+        parent_run=_cancelled_attempt(),
         latest_statuses=[_cancelled_attempt()],
         post=post,
         wake=wake,
@@ -611,6 +630,28 @@ async def test_dispatch_drops_when_the_users_own_stop_released_it():
         await execute_task_report_back(_arb_job())
 
     post.assert_not_awaited()
+    assert wake.await_args.kwargs.get("cleared") is True
+
+
+@pytest.mark.asyncio
+async def test_the_stop_still_covers_it_once_the_user_starts_another_turn():
+    """Whether the drainer reached the job before the user's next turn
+    started must not decide whether the stop opens a turn: the drop is read
+    off the task's own parent, so it holds while the next turn runs (no park
+    behind it) and after it ends."""
+    post, defer, wake = AsyncMock(), AsyncMock(return_value="pending"), AsyncMock()
+    with _arb_env(
+        run_row=_settled_run(settled_at=_STOPPED_AT - timedelta(seconds=30)),
+        parent_run=_cancelled_attempt(),
+        latest_statuses=[{"status": "in_progress", "conversation_response_id": "next"}],
+        post=post,
+        defer=defer,
+        wake=wake,
+    ):
+        await execute_task_report_back(_arb_job())
+
+    post.assert_not_awaited()
+    defer.assert_not_awaited()
     assert wake.await_args.kwargs.get("cleared") is True
 
 
@@ -623,12 +664,11 @@ async def test_dispatch_announces_a_task_the_stopped_turn_did_not_launch():
     """
     post = AsyncMock(return_value=("dispatched", "rb-run-1"))
     with _arb_env(
-        run_row={
-            "status": "completed",
-            "result_delivered_at": None,
-            "parent_run_id": "attempt-earlier",
-            "finalized_at": _STOPPED_AT - timedelta(seconds=30),
-        },
+        run_row=_settled_run(
+            settled_at=_STOPPED_AT - timedelta(seconds=30),
+            parent_run_id="attempt-earlier",
+        ),
+        parent_run={"status": "completed", "conversation_response_id": "attempt-earlier"},
         latest_statuses=[_cancelled_attempt()],
         post=post,
     ):
@@ -645,11 +685,8 @@ async def test_dispatch_still_announces_a_result_that_landed_after_the_stop():
     """
     post = AsyncMock(return_value=("dispatched", "rb-run-1"))
     with _arb_env(
-        run_row={
-            "status": "completed",
-            "result_delivered_at": None,
-            "finalized_at": _STOPPED_AT + timedelta(minutes=5),
-        },
+        run_row=_settled_run(settled_at=_STOPPED_AT + timedelta(minutes=5)),
+        parent_run=_cancelled_attempt(),
         latest_statuses=[_cancelled_attempt()],
         post=post,
     ):
@@ -665,8 +702,9 @@ async def test_dispatch_announces_when_the_stop_carries_no_timestamp():
     """
     post = AsyncMock(return_value=("dispatched", "rb-run-1"))
     with _arb_env(
-        run_row={"status": "completed", "result_delivered_at": None},
-        latest_statuses=[{"status": "cancelled", "cancel_requested_at": None}],
+        run_row=_settled_run(settled_at=_STOPPED_AT - timedelta(seconds=30)),
+        parent_run=_cancelled_attempt(cancel_requested_at=None),
+        latest_statuses=[_cancelled_attempt(cancel_requested_at=None)],
         post=post,
     ):
         await execute_task_report_back(_arb_job())

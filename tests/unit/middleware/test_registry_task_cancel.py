@@ -78,9 +78,9 @@ async def test_wait_for_all_reports_a_stop_instead_of_cancelling_its_waiter():
     with pytest.raises(asyncio.CancelledError):
         await task.asyncio_task
 
-    results = await registry.wait_for_all(timeout=5)
+    await registry.wait_for_all(timeout=5)
 
-    assert results[task.tool_call_id]["status"] == "cancelled"
+    assert task.terminal_status == "cancelled"
 
 
 @pytest.mark.asyncio

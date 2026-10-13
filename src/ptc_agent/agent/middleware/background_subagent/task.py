@@ -35,6 +35,11 @@ _TERMINAL_STATUSES = frozenset(
     ("completed", "error", "cancelled", "timeout", "never_started")
 )
 
+# Shared by ``BackgroundTask.display_id`` and its inverse, ``bare_task_id``,
+# so the name the agent is shown is always one it can pass back.
+_DISPLAY_PREFIX = "Task-"
+
+
 def bare_task_id(task_id: str | None) -> str | None:
     """The task id the agent means, from either name it is shown.
 
@@ -46,8 +51,8 @@ def bare_task_id(task_id: str | None) -> str | None:
     if task_id is None:
         return None
     task_id = task_id.strip()
-    if task_id.startswith("Task-") and len(task_id) > 6:
-        return task_id[len("Task-"):]
+    if task_id.startswith(_DISPLAY_PREFIX) and len(task_id) > 6:
+        return task_id.removeprefix(_DISPLAY_PREFIX)
     return task_id
 
 
@@ -112,7 +117,7 @@ class BackgroundTask:
     by reading the old boolean as success."""
 
     result_seen: bool = False
-    """Whether the agent has seen this task's result (via task_output, wait, or notification)."""
+    """Whether the agent has seen this task's result (via TaskOutput or a notification)."""
 
     # Tool call tracking
     tool_call_counts: dict[str, int] = field(default_factory=dict)
@@ -123,12 +128,6 @@ class BackgroundTask:
 
     current_tool: str = ""
     """Name of the tool currently being executed."""
-
-    last_checked_at: float = field(default_factory=time.time)
-    """Epoch seconds. Bumped whenever the agent inspects this task via the
-    Task tool (status/list/update/resume/cancel actions) or via TaskOutput.
-    Surfaced to the LLM so it can gauge how recently it polled, independent
-    of whether anything changed."""
 
     last_updated_at: float = field(default_factory=time.time)
     """Epoch seconds. Bumped only on meaningful transitions:
@@ -328,7 +327,7 @@ class BackgroundTask:
     @property
     def display_id(self) -> str:
         """Return Task-<id> format for display."""
-        return f"Task-{self.task_id}"
+        return f"{_DISPLAY_PREFIX}{self.task_id}"
 
     @property
     def is_pending(self) -> bool:

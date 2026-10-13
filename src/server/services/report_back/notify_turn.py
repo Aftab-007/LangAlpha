@@ -3,16 +3,18 @@
 Two dispatch relationships post system-authored turns into a watching
 thread when background work finishes: flash←PTC report-backs and
 PTC←background-subagent task report-backs. Both need the same transport
-discipline — an admission-aware POST defer loop bounded by the outbox
-lease, and a terminal wait that holds the job (and thus the per-thread
-ordering chain) open until the notification turn settles. The
-pending-registries deliberately stay separate (Redis reserve machinery for
-flash, open outbox rows for tasks); only this turn machinery is shared.
+discipline: a park while the receiving thread is busy, an admission-aware
+POST defer loop bounded by the outbox lease, and a terminal wait that holds
+the job (and thus the per-thread ordering chain) open until the
+notification turn settles. The pending-registries deliberately stay
+separate (Redis reserve machinery for flash, open outbox rows for tasks);
+only this turn machinery is shared.
 """
 
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,60 @@ logger = logging.getLogger(__name__)
 DEFER_STATUSES = {402, 403, 429}
 
 _TERMINAL_POLL = 5.0
+
+# A thread whose latest attempt is one of these cannot take a notification
+# turn: a live turn takes the report in as a steer, and a POST into an
+# interrupted one would collide with its pending HITL checkpoint.
+_BUSY_STATUSES = ("interrupted", "in_progress")
+
+
+@dataclass(frozen=True)
+class NotOwed:
+    """A report nothing is owed for any more: its executor drops it, and a
+    live turn may close it without a word."""
+
+    reason: str
+    # Whether watchers riding the report's pending chip are told to reconcile
+    # now rather than at the drainer's close.
+    wake: bool = True
+
+
+async def park_while_thread_busy(
+    job_id: str, attempts: int, thread_id: str, *, log_prefix: str, subject: str
+) -> bool:
+    """Park a claimed report-back while the thread it reports to is live or
+    interrupted, until that thread's next dead-turn finalize releases it;
+    True when the caller must stop.
+
+    The re-read closes the race where that finalize landed between the
+    status read and the park (its release pass saw no deferred row yet),
+    releasing the job itself.
+    """
+    from src.server.database.pool import get_db_connection
+    from src.server.database.runs import lifecycle as tl_db
+    from src.server.database.runs import outbox as outbox_db
+    from src.server.services.hook_outbox import MAX_ATTEMPTS, HookOutboxDrainer
+
+    latest = await tl_db.get_latest_attempt(thread_id)
+    if not latest or latest.get("status") not in _BUSY_STATUSES:
+        return False
+    parked = await outbox_db.defer_claimed_job(
+        job_id, attempts=attempts, max_attempts=MAX_ATTEMPTS
+    )
+    logger.info(
+        f"{log_prefix} Parked job {job_id} for {subject} while thread "
+        f"{thread_id} is {latest.get('status')} (status={parked})"
+    )
+    if parked == "pending":
+        latest = await tl_db.get_latest_attempt(thread_id)
+        if not latest or latest.get("status") not in _BUSY_STATUSES:
+            async with get_db_connection() as conn:
+                await outbox_db.release_deferred_report_backs(conn, thread_id)
+            try:
+                HookOutboxDrainer.get_instance().nudge()
+            except Exception:
+                pass
+    return True
 
 
 async def post_notification_turn(

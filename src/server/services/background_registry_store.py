@@ -112,8 +112,7 @@ class BackgroundRegistryStore:
                     bill_resumed_round,
                 )
                 from src.server.services.report_back.steer import (
-                    claim_steered_reports,
-                    confirm_steered_reports,
+                    SteeredReportInbox,
                 )
                 from src.server.services.subagent_run_coordinator import SubagentRunCoordinator
 
@@ -122,8 +121,7 @@ class BackgroundRegistryStore:
                 registry.archived_result_resolver = resolve_archived_result_text
                 registry.run_ledger = SubagentRunCoordinator(thread_id)
                 registry.usage_biller = bill_resumed_round
-                registry.report_inbox = claim_steered_reports
-                registry.report_confirm = confirm_steered_reports
+                registry.report_inbox = SteeredReportInbox()
                 self._registries[thread_id] = registry
                 logger.debug(
                     "Created background registry",

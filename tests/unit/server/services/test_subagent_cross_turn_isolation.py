@@ -364,21 +364,19 @@ class TestRegistryRemoveEntry:
 
     @pytest.mark.asyncio
     async def test_remove_entry_drops_all_mappings(self):
-        """_remove_entry_unlocked evicts the task, its task_id lookup, and results."""
+        """_remove_entry_unlocked evicts the task and its task_id lookup."""
         registry = BackgroundTaskRegistry(thread_id="t")
         task = _make_subagent_task(
             tool_call_id="tc1", task_id="id1", spawned_run_id="r1",
         )
         registry._tasks["tc1"] = task
         registry._task_id_to_tool_call_id["id1"] = "tc1"
-        registry._results["tc1"] = {"success": True}
 
         async with registry._lock:
             registry._remove_entry_unlocked("tc1")
 
         assert "tc1" not in registry._tasks
         assert "id1" not in registry._task_id_to_tool_call_id
-        assert "tc1" not in registry._results
 
     @pytest.mark.asyncio
     async def test_remove_missing_entry_is_noop(self):

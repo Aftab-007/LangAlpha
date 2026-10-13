@@ -1,20 +1,20 @@
 // @vitest-environment node
 /**
  * A report a live turn took in mid-turn arrives as a `steering_delivered`
- * entry with a `report_source` and no words. It is drawn as the report's
- * caption row, and it is not the user's own steer: it must neither deliver the
- * bubble the user is still waiting on nor spend the boundary that steer's
- * acceptance set.
+ * entry with a `report_source` and no words. It is not the user's own steer:
+ * it must not spend the boundary that steer's acceptance set. The rows are
+ * the fold's (`steeringDelivery.test.ts`); this pins the stream around it.
  */
 import { describe, expect, it, vi } from 'vitest';
+import type { ReportSource } from '@/types/api';
 import type { ChatMessage, UserMessage } from '@/types/chat';
+import type { SteeringDeliveredEntry } from '@/types/sse';
 import type { SSEEvent } from '../../types';
 import { createStreamEventProcessor } from '../processStreamEvent';
 
 type Processor = Parameters<typeof createStreamEventProcessor>;
 
-const TASK = { kind: 'task', task_id: 'k3', display_id: 'Task-k3', description: 'Pull filings', failed: false };
-const TASK_PROVENANCE = { kind: 'task_report', taskId: 'k3', displayId: 'Task-k3', description: 'Pull filings', failed: false };
+const TASK: ReportSource = { kind: 'task', task_id: 'k3', display_id: 'Task-k3', description: 'Pull filings', failed: false };
 
 function setup(initial: ChatMessage[]) {
   let messages = initial;
@@ -45,7 +45,7 @@ function setup(initial: ChatMessage[]) {
     refs as unknown as Processor[3],
     (event) => (event.agent as string) ?? null,
   );
-  const deliver = (entries: Record<string, unknown>[]) =>
+  const deliver = (entries: SteeringDeliveredEntry[]) =>
     process({ event: 'steering_delivered', messages: entries } as unknown as SSEEvent);
   return { deliver, steeringAtOrderRef, messages: () => messages };
 }
@@ -68,15 +68,27 @@ describe('live: a report the turn took in as a steer', () => {
 
     deliver([{ content: '', report_source: TASK, timestamp: 1_700_000_000 }]);
 
-    const rows = messages();
-    expect(rows.find((m) => m.id === 's1')).toMatchObject({ steering: true });
-    expect(rows.find((m) => m.id === 's1')).not.toHaveProperty('steeringDelivered');
-    const report = rows.find((m) => m.id.startsWith('steering-report-')) as UserMessage;
-    expect(report).toMatchObject({ content: '', steeringDelivered: true, provenance: TASK_PROVENANCE, turnIndex: 0 });
+    expect(messages().find((m) => m.id === 's1')).toMatchObject({ steering: true });
     expect(steeringAtOrderRef.current).toBe(7);
   });
 
-  it('delivers the user\'s steer with the report, the row just before its bubble', () => {
+  it('opens the reply to the reports above the steer still waiting, where replay draws it', () => {
+    const { deliver, messages } = setup([
+      ...transcript(),
+      user('s1', { content: 'also check margins', steering: true, turnIndex: 0 }),
+    ]);
+
+    deliver([{ content: '', report_source: TASK }]);
+    expect(messages().map((m) => m.id)).toEqual(['u0', 'a1', expect.stringMatching(/^steering-report-/),
+      expect.stringMatching(/^assistant-/), 's1']);
+
+    deliver([{ content: 'also check margins' }]);
+    const rows = messages();
+    expect(rows[4]).toMatchObject({ id: 's1', steeringDelivered: true });
+    expect(rows[5]).toMatchObject({ role: 'assistant', isSteering: true });
+  });
+
+  it('spends the boundary when the user\'s steer comes with the report', () => {
     const { deliver, steeringAtOrderRef, messages } = setup([
       ...transcript(),
       user('s1', { content: 'also check margins', steering: true, turnIndex: 0 }),
@@ -87,16 +99,11 @@ describe('live: a report the turn took in as a steer', () => {
       { content: 'also check margins' },
     ]);
 
-    const rows = messages();
-    const at = rows.findIndex((m) => m.id === 's1');
-    expect(rows[at]).toMatchObject({ steering: false, steeringDelivered: true });
-    expect(rows[at - 1]).toMatchObject({ provenance: TASK_PROVENANCE, steeringDelivered: true, content: '' });
-    // Only the pending bubble exists for the user's words; none is made from the payload.
-    expect(rows.filter((m) => m.role === 'user' && m.content === 'also check margins')).toHaveLength(1);
+    expect(messages().find((m) => m.id === 's1')).toMatchObject({ steering: false, steeringDelivered: true });
     expect(steeringAtOrderRef.current).toBeNull();
   });
 
-  it('draws report then user rows in payload order when nothing is pending (reconnect)', () => {
+  it('draws the reports ahead of the user\'s rows, then the continuation (reconnect)', () => {
     const { deliver, messages } = setup(transcript());
 
     deliver([
@@ -105,15 +112,10 @@ describe('live: a report the turn took in as a steer', () => {
     ]);
 
     const rows = messages();
-    const added = rows.slice(2, 4) as UserMessage[];
-    expect(added[0]).toMatchObject({
-      content: '',
-      steeringDelivered: true,
-      turnIndex: 0,
-      provenance: { kind: 'analyst_report', threadId: 'th-a', workspaceId: null, workspaceName: 'Semis' },
-    });
-    expect(added[1]).toMatchObject({ content: 'and margins', steeringDelivered: true, turnIndex: 0 });
-    // Then the steering continuation's assistant placeholder.
+    expect(rows[2].id).toMatch(/^steering-report-/);
+    expect(rows[2]).toMatchObject({ content: '', steeringDelivered: true, turnIndex: 0 });
+    expect(rows[3].id).toMatch(/^steering-user-/);
+    expect(rows[3]).toMatchObject({ content: 'and margins', steeringDelivered: true, turnIndex: 0 });
     expect(rows[4]).toMatchObject({ role: 'assistant', isSteering: true });
   });
 });

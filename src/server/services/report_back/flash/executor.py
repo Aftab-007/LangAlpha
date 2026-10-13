@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.server.services import automation_delivery
@@ -21,6 +22,7 @@ from src.server.services.report_back.flash.keys import (
     flash_watch_key,
     ptc_origin_key,
 )
+from src.server.services.report_back.notify_turn import NotOwed
 
 if TYPE_CHECKING:
     from src.server.models.chat import AnalystReport
@@ -32,6 +34,69 @@ logger = logging.getLogger("src.server.handlers.chat_handler")
 # Deterministic per job, so a crash-and-reclaim re-POST dedups to the original
 # summary run instead of starting a second one.
 RB_REQUEST_NS = uuid.UUID("6f7a2b1c-9d3e-4f50-8a61-c2d4e5f60718")
+
+
+def analyst_request_key(job_id: str) -> str:
+    """One deterministic request identity per job: dedups the POST at the DB
+    layer AND scopes the run-pointer claim/re-assert to this job."""
+    return str(uuid.uuid5(RB_REQUEST_NS, job_id))
+
+
+@dataclass(frozen=True)
+class OwedAnalystReport:
+    """An analyst's report still owed: the origin it reports under and the
+    thread it reports to."""
+
+    origin: dict
+    flash_thread_id: str
+    ptc_thread_id: str
+    final_status: str
+
+    def steerable_into(self, thread_id: str) -> bool:
+        """Whether a live turn on ``thread_id`` can take this report in. A
+        steer carries no automation run's delivery stamp, and an outcome the
+        report has no words for is its executor's to fail."""
+        return (
+            str(self.flash_thread_id) == str(thread_id)
+            and self.final_status in _OUTCOME_INSTRUCTIONS
+            and not requested_from.deliveries(self.origin)
+        )
+
+
+async def analyst_report_verdict(cache, job: dict) -> OwedAnalystReport | NotOwed:
+    """Whether the pair a ``report_back`` job names still reports back to a
+    thread: the one eligibility its executor and a live turn decide by.
+
+    Strict reads: raises on ANY unavailable state (blip, failed startup
+    connect, config-off), so the drainer nacks instead of acking a dropped
+    dispatch as "not report-back".
+    """
+    payload = job.get("payload") or {}
+    ptc_thread_id = payload.get("ptc_thread_id")
+    if not ptc_thread_id:
+        return NotOwed("it names no analyst thread", wake=False)
+    origin = await cache.get_strict(ptc_origin_key(ptc_thread_id))
+    if (
+        not isinstance(origin, dict)
+        or origin.get("origin") != "flash"
+        or not origin.get("report_back")
+    ):
+        return NotOwed("its analyst reports to no thread", wake=False)
+    flash_thread_id = origin.get("flash_thread_id")
+    if not flash_thread_id or not origin.get("user_id"):
+        return NotOwed("its origin names no thread or owner", wake=False)
+    # Already terminal-cleared (duplicate completion event, or a reclaimed job
+    # whose summary turn already finished and watch-cleared): nothing to do.
+    if not await cache.client.sismember(flash_watch_key(flash_thread_id), ptc_thread_id):
+        return NotOwed("its pair was already cleared", wake=False)
+    return OwedAnalystReport(
+        origin=origin,
+        flash_thread_id=flash_thread_id,
+        ptc_thread_id=ptc_thread_id,
+        # Rows enqueued before the field existed carry none, and only
+        # completed runs were enqueued then.
+        final_status=payload.get("final_status") or "completed",
+    )
 
 
 async def execute_report_back(job: dict) -> None:
@@ -55,14 +120,9 @@ async def execute_report_back(job: dict) -> None:
     payload = job.get("payload") or {}
     ptc_thread_id = payload["ptc_thread_id"]
     dispatch_gen = payload.get("dispatch_gen")
-    # Rows enqueued before the field existed carry none, and only completed
-    # runs were enqueued then.
-    final_status = payload.get("final_status") or "completed"
     job_id = str(job["hook_outbox_id"])
     attempts = job["attempts"]
-    # One deterministic request identity per job: dedups the POST at the DB
-    # layer AND scopes the run-pointer claim/re-assert to this job.
-    job_request_key = str(uuid.uuid5(RB_REQUEST_NS, job_id))
+    job_request_key = analyst_request_key(job_id)
 
     async def _fence() -> bool:
         """Heartbeat + ownership check in one: extends our lease iff we still
@@ -72,20 +132,12 @@ async def execute_report_back(job: dict) -> None:
         )
 
     cache = get_cache_client()
-    # Strict read: raises on ANY unavailable state — blip, failed startup
-    # connect, config-off — so the drainer nacks instead of acking a dropped
-    # dispatch as "not report-back".
-    origin = await cache.get_strict(ptc_origin_key(ptc_thread_id))
-    if not origin or origin.get("origin") != "flash" or not origin.get("report_back"):
+    owed = await analyst_report_verdict(cache, job)
+    if isinstance(owed, NotOwed):
         return
-    flash_thread_id = origin.get("flash_thread_id")
+    origin, flash_thread_id = owed.origin, owed.flash_thread_id
+    final_status = owed.final_status
     user_id = origin.get("user_id")
-    if not flash_thread_id or not user_id:
-        return
-    # Already terminal-cleared (duplicate completion event, or a reclaimed job
-    # whose summary turn already finished and watch-cleared): nothing to do.
-    if not await cache.client.sismember(flash_watch_key(flash_thread_id), ptc_thread_id):
-        return
     # Claimed under a stale ordering key (pre-deploy row that finalized
     # unstamped, keyed on its own PTC thread): requeue onto the real flash
     # chain instead of executing here — N such jobs would busy-wait their
@@ -116,12 +168,19 @@ async def execute_report_back(job: dict) -> None:
         )
     else:
         # A live turn on the thread takes the report in as a steer before its
-        # next model call (``report_back.steer``), and a POST into an
-        # interrupted one would discard its pending HITL checkpoint. Both
-        # park the job until the thread's next dead-turn finalize releases
-        # it (``release_deferred_report_backs``), as a task's report-back
+        # next model call (``report_back.steer``), as a task's report-back
         # does.
-        if await _park_while_busy(job_id, attempts, flash_thread_id):
+        from src.server.services.report_back.notify_turn import (
+            park_while_thread_busy,
+        )
+
+        if await park_while_thread_busy(
+            job_id,
+            attempts,
+            flash_thread_id,
+            log_prefix="[FLASH_REPORT_BACK]",
+            subject=f"PTC thread {ptc_thread_id}",
+        ):
             return
 
         async def _still_due() -> bool:
@@ -266,42 +325,6 @@ async def execute_report_back(job: dict) -> None:
     )
 
 
-async def _park_while_busy(job_id: str, attempts: int, flash_thread_id: str) -> bool:
-    """Park the claimed job while the thread it reports to is live or
-    interrupted; True when the caller must stop.
-
-    The re-read closes the race where the thread's finalize landed between
-    the status read and the park (its release pass saw no deferred row
-    yet), releasing the job itself.
-    """
-    from src.server.database.pool import get_db_connection
-    from src.server.database.runs import lifecycle as tl_db
-    from src.server.database.runs import outbox as outbox_db
-    from src.server.services.hook_outbox import MAX_ATTEMPTS, HookOutboxDrainer
-
-    busy = ("interrupted", "in_progress")
-    latest = await tl_db.get_latest_attempt(flash_thread_id)
-    if not latest or latest.get("status") not in busy:
-        return False
-    parked = await outbox_db.defer_claimed_job(
-        job_id, attempts=attempts, max_attempts=MAX_ATTEMPTS
-    )
-    logger.info(
-        f"[FLASH_REPORT_BACK] Parked job {job_id} while thread "
-        f"{flash_thread_id} is {latest.get('status')} (status={parked})"
-    )
-    if parked == "pending":
-        latest = await tl_db.get_latest_attempt(flash_thread_id)
-        if not latest or latest.get("status") not in busy:
-            async with get_db_connection() as conn:
-                await outbox_db.release_deferred_report_backs(conn, flash_thread_id)
-            try:
-                HookOutboxDrainer.get_instance().nudge()
-            except Exception:
-                pass
-    return True
-
-
 async def _await_run_terminal(
     job_id: str,
     attempts: int,
@@ -391,11 +414,12 @@ _OUTCOME_INSTRUCTIONS = {
 
 
 async def report_message(
-    ptc_thread_id: str, origin: dict, final_status: str
+    ptc_thread_id: str, origin: dict, final_status: str, *, steered: bool = False
 ) -> tuple[str, "AnalystReport"]:
     """What the report says to the agent, as its own turn or as a steer, and
     the source history labels it with: the message is model-facing and
-    hidden, so the label is all a reader sees."""
+    hidden, so the label is all a reader sees. A steer carries the request's
+    reminder inline, where its own turn sends it as additional context."""
     from src.server.models.chat import AnalystReport
 
     ptc_workspace_id = origin.get("ptc_workspace_id")
@@ -407,6 +431,12 @@ async def report_message(
         f"{_OUTCOME_INSTRUCTIONS[final_status]}\n"
         "</system>"
     )
+    reminder = requested_from.reminder(origin) if steered else None
+    if reminder:
+        from src.server.models.additional_context import DirectiveContext
+        from src.server.utils.directive_context import build_directive_reminder
+
+        message += build_directive_reminder([DirectiveContext(content=reminder)]) or ""
     report_source = AnalystReport(
         kind="analyst",
         thread_id=ptc_thread_id,
@@ -482,6 +512,37 @@ async def _post_report_back(
     )
 
 
+async def summary_started(
+    cache, flash_thread_id: str, ptc_thread_id: str, request_key: str
+) -> bool:
+    """Whether this job's summary run already started: a run row under its
+    request key, or the run pointer its executor claims before posting. A
+    started summary is past admission, to be awaited, never abandoned or
+    taken in again."""
+    from src.server.database.runs import lifecycle as tl_db
+
+    if await tl_db.find_run_by_request_key(request_key):
+        return True
+    claim = await cache.get_strict(flash_rb_run_key(flash_thread_id, ptc_thread_id))
+    return isinstance(claim, dict) and claim.get("request_key") == request_key
+
+
+async def overtaking_run(run_id, ptc_thread_id: str) -> str | None:
+    """The newer run on the analyst's thread that took over ``run_id``'s
+    report-back, if one started: the summary turn names only the thread, and
+    ``agent_output`` reads its latest turns, so a summary posted after a
+    newer run starts would describe that run's output as this one's. The
+    newer run carries the same pair and reports back when it ends."""
+    from src.server.database.runs import lifecycle as tl_db
+
+    if not run_id:
+        return None
+    latest = await tl_db.get_latest_attempt(ptc_thread_id)
+    if not latest or str(latest["conversation_response_id"]) == str(run_id):
+        return None
+    return str(latest["conversation_response_id"])
+
+
 async def _superseded(
     cache,
     run_id,
@@ -489,30 +550,16 @@ async def _superseded(
     flash_thread_id: str,
     request_key: str,
 ) -> bool:
-    """Whether a newer run on the thread has taken over this run's report-back.
-
-    The summary turn names only the thread, and ``agent_output`` reads its
-    latest turns, so a summary posted after a newer run starts would describe
-    that run's output as this one's. The newer run carries the same pair and
-    reports back when it ends. A summary this job already started (a run row
-    or a pointer claim under its request key) is due regardless: it is past
-    admission and must be awaited, not abandoned.
-    """
-    from src.server.database.runs import lifecycle as tl_db
-
-    if not run_id:
-        return False
-    latest = await tl_db.get_latest_attempt(ptc_thread_id)
-    if not latest or str(latest["conversation_response_id"]) == str(run_id):
-        return False
-    if await tl_db.find_run_by_request_key(request_key):
-        return False
-    claim = await cache.get_strict(flash_rb_run_key(flash_thread_id, ptc_thread_id))
-    if claim and claim.get("request_key") == request_key:
+    """Whether a newer run on the thread has taken over this run's report-back
+    and this job's own summary never started."""
+    newer = await overtaking_run(run_id, ptc_thread_id)
+    if newer is None or await summary_started(
+        cache, flash_thread_id, ptc_thread_id, request_key
+    ):
         return False
     logger.info(
         f"[FLASH_REPORT_BACK] Run {run_id} on {ptc_thread_id} is superseded by "
-        f"run {latest['conversation_response_id']}; its report-back is owed there"
+        f"run {newer}; its report-back is owed there"
     )
     return True
 

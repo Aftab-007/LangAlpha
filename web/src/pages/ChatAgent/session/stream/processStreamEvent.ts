@@ -10,19 +10,19 @@ import { readRetryNotice } from './autoRetry';
 import { noteLiveRun } from '../latestRun';
 import { isUpstreamHint, type StructuredError } from '@/utils/rateLimitError';
 import { applyAnnotationArtifact } from '@/pages/MarketView/stores/chartAnnotationStore';
-import type { ReportSource } from '@/types/api';
-import type { AssistantMessage, ChatMessage } from '@/types/chat';
-import { CREDIT_STOP_ERROR_TYPE } from '@/types/sse';
+import type { AssistantMessage } from '@/types/chat';
+import { CREDIT_STOP_ERROR_TYPE, isDeliveredReport } from '@/types/sse';
 import { setStoredThreadId } from '../../hooks/utils/threadStorage';
-import { createAssistantMessage, appendMessage, updateMessage } from '../../hooks/utils/messageHelpers';
+import { createAssistantMessage, updateMessage } from '../../hooks/utils/messageHelpers';
 import { turnOf } from '../../components/messageList/turnProjection';
-import { senderProvenance, steeredReportRow, withLiveReportRow } from '../provenance';
+import { withLiveReportRow } from '../provenance';
 import { stampRunTurn } from './runTurn';
 import type { HtmlWidgetData } from '../../hooks/utils/types';
 import {
   ZERO_USAGE, extractTokenUsageDelta, accumulateTokenUsage,
 } from '../../utils/tokenUsage';
 import { computeSteeringBoundary, keepSegmentsThrough, shouldSkipSteeringRollback } from './steeringRollback';
+import { foldSteeringDelivery, steeringDeliveredEntries, withContinuation } from './steeringDelivery';
 import {
   buildModelFallbackSegment, appendNotificationSegmentOnce,
   isWorkspaceChangingToolSuccess, mapToolCallIdToAgentId,
@@ -48,43 +48,6 @@ import { dispatchResultFields, setCardFields, settleProposalFromResult } from '.
 import { projectLiveInterrupt } from '../interrupts/fromLiveEvent';
 import type { StreamRuntime } from '../runtime';
 import { preapprovedReportBack } from '../../utils/preapprovedCards';
-
-/**
- * Marks delivered the steers of the steered turn that a delivery names. The
- * server delivers a steer only to the run it was sent to, and hands back at
- * that run's end any it did not deliver, so a steer another turn holds, or one
- * the server has yet to queue, is not this delivery's. Each text claims the
- * oldest steer still waiting with it, then the oldest failed with no refusal:
- * the server may have taken that one and lost only the POST's answer, so the
- * run delivering it is that answer. A refused steer was never queued, so no
- * delivery is its. Returns the entries no steer claimed too: one batch can
- * carry steers sent from another tab or a channel beside this view's own.
- */
-function claimDeliveredSteers(
-  messages: ChatMessage[],
-  delivered: readonly Record<string, unknown>[],
-  turn: number | undefined,
-): { messages: ChatMessage[]; unclaimed: Record<string, unknown>[] } {
-  const unclaimed = [...delivered];
-  const texts = unclaimed.map((q) => String(q.content ?? '').trim());
-  let next = messages;
-  for (const waiting of [true, false]) {
-    for (let i = 0; i < next.length && texts.length > 0; i++) {
-      const m = next[i] as ChatMessage & { queueError?: unknown };
-      if (m.role !== 'user' || (turn !== undefined && m.turnIndex !== turn)) continue;
-      if (waiting ? !m.steering : (m.isHistory || !m.queueError || m.queueRefused || m.steeringDelivered)) continue;
-      const at = texts.indexOf(String(m.content ?? '').trim());
-      if (at === -1) continue;
-      texts.splice(at, 1);
-      unclaimed.splice(at, 1);
-      const claimed: typeof m = { ...m, steering: false, steeringDelivered: true };
-      delete claimed.queueError;
-      if (next === messages) next = [...messages];
-      next[i] = claimed;
-    }
-  }
-  return { messages: next, unclaimed };
-}
 
 export interface StreamRouterDeps {
   /** Fold a model-fallback event into the fallback banner state. */
@@ -138,6 +101,15 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
   // old bubble due to stream-mode multiplexing (custom events can arrive after
   // message chunks from the post-injection model call).
   let steeringAtOrder: number | null = null;
+  // The boundary is spent by the delivery that takes the steer which set it.
+  // The closure copy is typically null: steering_accepted only arrives on the
+  // secondary POST stream, and handleSendSteering sets the shared ref there.
+  const takeSteeringBoundary = (): number | null => {
+    const boundary = steeringAtOrder ?? refs.steeringAtOrderRef?.current ?? null;
+    steeringAtOrder = null;
+    if (refs.steeringAtOrderRef) refs.steeringAtOrderRef.current = null;
+    return boundary;
+  };
   // Whether this stream has carried the run's `metadata`, which the server
   // writes only once the run is with the background executor.
   let metadataSeen = false;
@@ -303,20 +275,12 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
     // Subagent steering_delivered events are handled in the isSubagent block below.
     if (eventType === 'steering_delivered' && !isSubagent) {
       const oldAssistantId = assistantMessageId;
-      // A report the turn took in carries `report_source` and no words of the
-      // user's. A delivery of reports alone leaves the user's own steer, and
-      // the boundary its acceptance set, for the delivery that takes it.
-      const delivered = event.messages || [];
-      const takesUserSteer = delivered.some((m) => !m.report_source);
-      // Use closure-local snapshot or fall back to the shared ref
-      // (steering_accepted only arrives on the secondary POST stream, so
-      // the closure-local steeringAtOrder is typically null — the shared
-      // ref is set by handleSendSteering on the secondary stream). Read
-      // here, not in the updater: both are nulled below, before React runs
-      // an updater it did not compute eagerly.
-      const effectiveSteeringAtOrder = takesUserSteer
-        ? steeringAtOrder ?? refs.steeringAtOrderRef?.current ?? null
-        : null;
+      const entries = steeringDeliveredEntries(event);
+      // A delivery of reports alone leaves the user's own steer, and the
+      // boundary its acceptance set, for the delivery that takes it. Read
+      // here, not in the rollback updater, which React may run after the
+      // take has nulled both.
+      const effectiveSteeringAtOrder = entries.some((e) => !isDeliveredReport(e)) ? takeSteeringBoundary() : null;
 
       // 1. Roll back old assistant message to the snapshot taken at steering_accepted
       //    time, removing any content that leaked due to stream-mode multiplexing.
@@ -399,74 +363,32 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
           };
         })
       );
-      if (takesUserSteer) {
-        steeringAtOrder = null;
-        if (refs.steeringAtOrderRef) refs.steeringAtOrderRef.current = null;
-      }
 
       // The bubble being steered: every bubble this creates joins its turn,
       // read from the projection because a report-back's bubble has no stamp.
       const steeredId = assistantMessageId;
-      // 2. Mark delivered the steers it names, and create the rest from event
-      //    data: this view never held them (sent elsewhere), or lost them on
-      //    a reconnect. Reports are drawn as their caption rows, ahead of the
-      //    user's words as the model reads them, and claim no steer.
-      // The banners those failed steers raised, which no failed steer holds now.
-      let deliveredErrors: unknown[] = [];
-      let deliveredCopies: ChatMessage[] = [];
+      // 2. Mark delivered the steers it names and draw the rest, reports
+      //    ahead of the user's words.
+      let clearedErrors: unknown[] = [];
+      let settledKeys: string[] = [];
       rt.setMessages((prev) => {
-        const turnIndex = turnOf(prev, steeredId);
-        // A steer of this view's it names gets no copy.
-        const { messages: claimed, unclaimed } = claimDeliveredSteers(
-          prev, delivered.filter((qMsg) => !qMsg.report_source), turnIndex);
-        const errorOf = (m: ChatMessage) => (m as { queueError?: unknown }).queueError;
-        deliveredCopies = prev.filter((m, i) => claimed[i] !== m);
-        deliveredErrors = deliveredCopies.map(errorOf)
-          .filter((e) => !claimed.some((m) => errorOf(m) === e));
-        const rowOf = (qMsg: Record<string, unknown>): ChatMessage | null => {
-          const timestamp = qMsg.timestamp ? new Date((qMsg.timestamp as number) * 1000) : new Date();
-          const source = qMsg.report_source as ReportSource | undefined;
-          const id = `steering-${source ? 'report' : 'user'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          if (source) return steeredReportRow(source, id, timestamp, turnIndex);
-          if (typeof qMsg.content !== 'string' || !qMsg.content) return null;
-          const provenance = senderProvenance({ platform: typeof qMsg.platform === 'string' ? qMsg.platform : undefined });
-          return {
-            id,
-            role: 'user' as const,
-            content: qMsg.content,
-            contentType: 'text' as const,
-            timestamp,
-            isStreaming: false as const,
-            steeringDelivered: true,
-            turnIndex,
-            ...(provenance ? { provenance } : {}),
-          };
-        };
-        const rows = (entries: readonly Record<string, unknown>[]) =>
-          entries.map(rowOf).filter((m): m is ChatMessage => m !== null);
-        const reportRows = rows(delivered.filter((qMsg) => qMsg.report_source));
-        const newUserMessages = rows(unclaimed);
-        if (reportRows.length === 0 && newUserMessages.length === 0) return claimed;
-        const firstClaimed = claimed.findIndex((m, i) => m !== prev[i]);
-        if (firstClaimed === -1) return [...claimed, ...reportRows, ...newUserMessages];
-        return [
-          ...claimed.slice(0, firstClaimed), ...reportRows,
-          ...claimed.slice(firstClaimed), ...newUserMessages,
-        ];
+        const fold = foldSteeringDelivery(prev, entries, turnOf(prev, steeredId), (kind) =>
+          `steering-${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+        clearedErrors = fold.clearedErrors;
+        settledKeys = fold.settledKeys;
+        return fold.messages;
       });
-      if (deliveredErrors.length > 0) rt.setMessageError((prev) => (deliveredErrors.includes(prev) ? null : prev));
-      // The server holds each of them now, so a later send of its text is new.
-      for (const m of deliveredCopies) {
-        const key = (m as { requestKey?: string }).requestKey;
-        if (key) rt.requestKeyRef.current.settle(key);
-      }
+      if (clearedErrors.length > 0) rt.setMessageError((prev) => (clearedErrors.includes(prev) ? null : prev));
+      for (const key of settledKeys) rt.requestKeyRef.current.settle(key);
 
-      // 3. Create new assistant message placeholder (steering continuation — not a new backend turn).
-      //    Random suffix: the turn's first bubble uses the same Date.now() scheme,
-      //    and two ids minted in the same millisecond would collide.
+      // 3. Create new assistant message placeholder (steering continuation — not a new backend turn),
+      //    above any steer still waiting. Random suffix: the turn's first bubble uses the same
+      //    Date.now() scheme, and two ids minted in the same millisecond would collide.
       const newAssistantId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      rt.setMessages((prev) =>
-        appendMessage(prev, { ...createAssistantMessage(newAssistantId, turnOf(prev, steeredId)), isSteering: true }));
+      rt.setMessages((prev) => {
+        const turn = turnOf(prev, steeredId);
+        return withContinuation(prev, { ...createAssistantMessage(newAssistantId, turn), isSteering: true }, turn);
+      });
 
       // 4. Switch closure & refs to new assistant message
       assistantMessageId = newAssistantId;

@@ -8,6 +8,7 @@ import type { SubagentTaskRecord, SubagentTaskSegment } from '@/types/chat';
 import { isToolResultFailure } from './subagentStatus';
 import { normalizeAction } from '../../hooks/utils/eventUtils';
 import { WORKFLOW_TASK_TYPE } from './workflowRunState';
+import { bareTaskId, isTaskAgentId } from '../../utils/agentId';
 
 interface ToolCallLike {
   name?: string;
@@ -75,9 +76,10 @@ export function deriveTaskSegment(
   }
 
   // Resume/follow-up call — a new card with a "resumed" indicator, pointing at
-  // the original task. Normalized to "task:xxx" to match floating card keys.
-  const rawTargetId = (args.task_id as string) || '';
-  const resumeTargetId = rawTargetId.startsWith('task:') ? rawTargetId : `task:${rawTargetId}`;
+  // the original task. Normalized to "task:xxx" to match floating card keys,
+  // which carry the bare id whichever name the model wrote.
+  const rawTargetId = bareTaskId((args.task_id as string) || '');
+  const resumeTargetId = isTaskAgentId(rawTargetId) ? rawTargetId : `task:${rawTargetId}`;
   return {
     segment: { type: 'subagent_task', subagentId: toolCallId, resumeTargetId, order },
     record: {

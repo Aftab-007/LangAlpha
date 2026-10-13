@@ -234,9 +234,6 @@ async def _handle_update(
         return resolved
     task = resolved
 
-    # The agent just looked at this task — bump last_checked_at.
-    task.last_checked_at = time.time()
-
     if task.cancelled:
         return ToolMessage(
             content=f"Error: Task-{target_task_id} was cancelled and cannot be updated.",
@@ -359,9 +356,6 @@ async def _handle_resume(
     if isinstance(resolved, ToolMessage):
         return resolved
     task = resolved
-
-    # The agent just looked at this task — bump last_checked_at.
-    task.last_checked_at = time.time()
 
     # A credit stop spells itself as a cancel everywhere else on purpose, but
     # it is the one kind of stop whose checkpoint is meant to be re-entered:

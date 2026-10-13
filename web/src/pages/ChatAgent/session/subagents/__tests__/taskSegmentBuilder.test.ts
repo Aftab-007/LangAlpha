@@ -67,6 +67,17 @@ describe('deriveTaskSegment', () => {
     expect(derived?.record.action).toBe('resume');
   });
 
+  it('points a resume by display id at the task\'s card', () => {
+    // The server resumes `Task-k7Xm2p` as `k7Xm2p`, and cards key on the bare id.
+    const derived = deriveTaskSegment(
+      { name: 'Task', args: { action: 'resume', task_id: 'Task-k7Xm2p' } },
+      'tc-2',
+      1
+    );
+    expect(derived?.segment.resumeTargetId).toBe('task:k7Xm2p');
+    expect(derived?.record.resumeTargetId).toBe('task:k7Xm2p');
+  });
+
   it('leaves an already-prefixed target id alone', () => {
     // Double-prefixing yields "task:task:abc", which matches no floating card.
     const derived = deriveTaskSegment(

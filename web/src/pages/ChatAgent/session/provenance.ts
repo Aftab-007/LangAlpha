@@ -87,48 +87,30 @@ export function withLiveReportRow(
   beforeId: string | null,
   turnIndex?: number,
 ): ChatMessage[] {
-  const provenance = reportRowProvenance(source);
-  if (!provenance) return messages;
+  const row = reportRow(source, {
+    id: `report-${runId}`,
+    timestamp: new Date(),
+    runId,
+    ...(turnIndex !== undefined ? { turnIndex } : {}),
+  });
+  if (!row) return messages;
   if (messages.some((m) => m.role === 'user' && m.runId === runId)) return messages;
   const found = beforeId ? messages.findIndex((m) => m.id === beforeId) : -1;
   const at = found === -1 ? messages.length : found;
-  const row: UserMessage = {
-    id: `report-${runId}`,
-    role: 'user',
-    content: '',
-    contentType: 'text',
-    timestamp: new Date(),
-    isStreaming: false,
-    provenance,
-    runId,
-    ...(turnIndex !== undefined ? { turnIndex } : {}),
-  };
   return [...messages.slice(0, at), row, ...messages.slice(at)];
 }
 
+/** What each place a report is drawn sets on its row beside the caption. */
+type ReportRowFields = Pick<UserMessage, 'id' | 'timestamp'>
+  & Partial<Pick<UserMessage, 'turnIndex' | 'runId' | 'isHistory' | 'steeringDelivered'>>;
+
 /**
- * A report a live turn took in as a steer, drawn as a report-back's row is: the
- * caption alone, in the turn it landed in. Delivered steering, so it opens no
- * turn and offers no edit. Null without a source (a share drops it), which
- * leaves it out as a share leaves out a report-back's row.
+ * A report's row: the caption alone, whether the report opened its own turn
+ * or a live turn took it in. Null for a kind of report this build does not
+ * know, which stays hidden as a report with no source does.
  */
-export function steeredReportRow(
-  source: ReportSource | undefined,
-  id: string,
-  timestamp: Date,
-  turnIndex?: number,
-): UserMessage | null {
+export function reportRow(source: ReportSource, fields: ReportRowFields): UserMessage | null {
   const provenance = reportRowProvenance(source);
   if (!provenance) return null;
-  return {
-    id,
-    role: 'user',
-    content: '',
-    contentType: 'text',
-    timestamp,
-    isStreaming: false,
-    provenance,
-    steeringDelivered: true,
-    ...(turnIndex !== undefined ? { turnIndex } : {}),
-  };
+  return { role: 'user', content: '', contentType: 'text', isStreaming: false, provenance, ...fields };
 }

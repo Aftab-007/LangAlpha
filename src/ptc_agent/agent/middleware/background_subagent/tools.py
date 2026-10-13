@@ -138,13 +138,12 @@ async def _delivered_result_text(registry, task) -> str:
     return _format_result(result)
 
 
-async def _settled_reply(registry, task: BackgroundTask) -> str:
-    """A settled task as a single-task reply.
+async def _settled_text(registry, task: BackgroundTask, *, listed: bool) -> str:
+    """A settled task as a single-task reply, or as its entry in the listing.
 
-    The rule every settled render shares: a stopped or never-started task has
-    no result to show, so its notice IS the reply; anything else renders its
-    delivered result. Reading the notice first also skips a pointless durable
-    read for a task that produced nothing.
+    A stopped or never-started task has no result to show, so its notice IS
+    the reply; anything else renders its delivered result. Reading the notice
+    first also skips a pointless durable read for a task that produced nothing.
     """
     notice = _terminal_notice(task)
     if notice is not None:
@@ -153,24 +152,11 @@ async def _settled_reply(registry, task: BackgroundTask) -> str:
     # Named, not hardcoded "completed": a task that settled with terminal_status
     # 'error' reaches here (only stop/timeout/never-started have notices), and
     # announcing its error text as finished work is the one thing that must not
-    # happen. Same label the aggregate entry uses, so both renders agree.
-    return (
-        f"**{task.display_id}** ({task.subagent_type}) "
-        f"{_settled_label(task)}:\n\n{body}"
-    )
-
-
-async def _settled_entry(registry, task: BackgroundTask) -> str:
-    """A settled task as one entry in an aggregate listing — same rule as
-    ``_settled_reply``, list shape, and the outcome named in the heading."""
-    notice = _terminal_notice(task)
-    if notice is not None:
-        return notice
-    body = await _delivered_result_text(registry, task)
-    return (
-        f"### {task.display_id} ({task.subagent_type}) - {_settled_label(task)}\n"
-        f"{body}"
-    )
+    # happen.
+    label = _settled_label(task)
+    if listed:
+        return f"### {task.display_id} ({task.subagent_type}) - {label}\n{body}"
+    return f"**{task.display_id}** ({task.subagent_type}) {label}:\n\n{body}"
 
 
 def _archived_reply(task_id: str, text: str) -> str:
@@ -212,13 +198,14 @@ async def _compose_missing_reply(registry, task_id: str, run: dict | None) -> st
                 f"Task-{task_id} completed but its result text is no longer "
                 f"available; recover it from the workspace files it produced."
             )
-        # No run row and nothing archived: the fate was never recorded. The
-        # legacy copy here guessed "cancelled by a user stop", which reads as
-        # a decision somebody made — say only what is known.
+        # The id arrives normalized, so nothing recorded means it names no
+        # task. Read as a fate ("never recorded", "cannot be resumed"), a
+        # ``Task-`` prefixed id that missed every lookup once sent the agent
+        # away from a task that had completed with a stored result.
         return (
-            f"Task-{task_id} produced no result and is not running; its "
-            f"outcome was never recorded. It cannot be resumed — check with "
-            f"the user before re-dispatching it."
+            f"No task Task-{task_id} is known on this thread: nothing is running "
+            f"under that id, and no run or result was recorded for it. Check the "
+            f"id against the launch result that named it."
         )
     if status == "cancelled":
         # The one *why* the ledger can prove, and the one that changes the
@@ -344,6 +331,33 @@ async def _resolve_task_reply(
     return (is_terminal, await _missing_task_reply(registry, task.task_id, run=run))
 
 
+async def _task_reply(registry, task: BackgroundTask, *, listed: bool) -> tuple[bool, str]:
+    """One task's TaskOutput answer, and whether the task is still pending.
+
+    A stale cross-worker shell (or a run settled or superseded on another
+    worker) defers to the durable ledger; past that the local object is
+    authoritative. A listed entry carries the listing's separator: a progress
+    block ends in one newline, anything else in a blank line.
+    """
+    _sync_task_completion(task)
+    resolved = await _resolve_task_reply(registry, task)
+    if resolved is not None:
+        is_terminal, text = resolved
+        pending, end = not is_terminal, "\n\n"
+    elif not task.completed:
+        pending, text, end = True, _format_task_progress(task), "\n"
+    else:
+        # Marked seen even when the reply is a stop notice: that notice IS
+        # this task's delivery, and without it the orchestrator's
+        # settled-but-unseen sweep announces the task all over again and the
+        # agent re-reports a stop it already reported.
+        task.result_seen = True
+        await registry.mark_result_delivered(task)
+        pending, end = False, "\n\n"
+        text = await _settled_text(registry, task, listed=listed)
+    return pending, text + end if listed else text
+
+
 def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> StructuredTool:
     """Create the TaskOutput tool.
 
@@ -367,33 +381,8 @@ def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> Structu
             task = await registry.get_by_task_id(task_id)
             if not task:
                 return await _missing_task_reply(registry, task_id)
-
-            # Sync completion status from asyncio task
-            _sync_task_completion(task)
-            task.last_checked_at = time.time()
-
-            # Ledger-authoritative reconciliation: a stale cross-worker shell (or
-            # a run completed/superseded on another worker) must defer to the
-            # durable ledger instead of reporting its own stale [RUNNING] view.
-            # Past this point the local object is authoritative — no ledger
-            # (CLI/legacy) or we provably hold the live writer for the current run.
-            resolved = await _resolve_task_reply(registry, task)
-            if resolved is not None:
-                return resolved[1]
-
-            if task.completed:
-                # Marked seen even when the reply is a stop notice: that
-                # notice IS this task's delivery, and without it the
-                # orchestrator's settled-but-unseen sweep announces the task
-                # all over again and the agent re-reports a stop it already
-                # reported.
-                task.result_seen = True
-                await registry.mark_result_delivered(task)
-                return await _settled_reply(registry, task)
-
-            return _format_task_progress(task)
-
-        # --- All tasks ---
+            _, reply = await _task_reply(registry, task, listed=False)
+            return reply
 
         # Workflow-owned children are hidden from the aggregate view (their
         # results belong to the driver) but remain individually addressable
@@ -402,43 +391,19 @@ def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> Structu
         if not all_tasks:
             return "No background tasks have been assigned yet."
 
-        now = time.time()
-        # Reconcile each task against the durable ledger before counting or
-        # formatting — a stale cross-worker shell must not be counted/shown as
-        # running when the ledger already settled it (Codex: counts must
-        # precede formatting, or the header disagrees with the body).
-        resolved_by_tcid: dict[str, tuple[bool, str]] = {}
-        for task in all_tasks:
-            _sync_task_completion(task)
-            task.last_checked_at = now
-            resolved = await _resolve_task_reply(registry, task)
-            if resolved is not None:
-                resolved_by_tcid[task.tool_call_id] = resolved
-
-        def _is_pending(t: BackgroundTask) -> bool:
-            r = resolved_by_tcid.get(t.tool_call_id)
-            return (not r[0]) if r is not None else (not t.completed)
-
-        pending_count = sum(1 for t in all_tasks if _is_pending(t))
-        completed_count = len(all_tasks) - pending_count
-
-        output = (
+        # Each entry and its pending flag come from one reading of the task, so
+        # the header's counts cannot disagree with the body.
+        entries = [
+            await _task_reply(registry, task, listed=True)
+            for task in sorted(all_tasks, key=lambda t: t.task_id)
+        ]
+        pending_count = sum(1 for pending, _ in entries if pending)
+        completed_count = len(entries) - pending_count
+        header = (
             f"**Background Tasks** ({len(all_tasks)} total: "
             f"{completed_count} completed, {pending_count} running)\n\n"
         )
-
-        for task in sorted(all_tasks, key=lambda t: t.task_id):
-            resolved = resolved_by_tcid.get(task.tool_call_id)
-            if resolved is not None:
-                output += resolved[1] + "\n\n"
-            elif task.completed:
-                task.result_seen = True
-                await registry.mark_result_delivered(task)
-                output += await _settled_entry(registry, task) + "\n\n"
-            else:
-                output += _format_task_progress(task) + "\n"
-
-        return output
+        return header + "".join(entry for _, entry in entries)
 
     return StructuredTool.from_function(
         name="TaskOutput",
@@ -543,12 +508,9 @@ def _format_task_progress(task: BackgroundTask) -> str:
     if not task.completed and task.current_tool:
         activity = f"\n  Currently executing: `{task.current_tool}`"
 
-    # Staleness summary — surfaces how long since the agent last polled vs.
-    # how long since anything meaningful changed (see Part 5 in plan).
-    staleness = (
-        f"\n  _checked {_fmt_ago(task.last_checked_at)} · "
-        f"last changed {_fmt_ago(task.last_updated_at)}_"
-    )
+    # Staleness summary: how long since anything meaningful changed (see
+    # Part 5 in plan).
+    staleness = f"\n  _last changed {_fmt_ago(task.last_updated_at)}_"
 
     return (
         f"### {task.display_id}: {task.subagent_type}\n"

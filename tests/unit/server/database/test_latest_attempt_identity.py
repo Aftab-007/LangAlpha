@@ -3,10 +3,10 @@
 turn_index is reused by retries and LOWERED by branch rewinds, so a
 turn_index-ordered "latest" diverges from the run_seq one exactly there;
 created_at ties under clock skew. Three queries define "latest" and they must
-agree — the post-#339 stakes are the stop path: ``_stop_already_covered``
-compares a parked report-back against ``get_latest_attempt``'s row, so a
-divergent definition would either drop a result the stop was never about or
-open a billable synthetic turn after the user asked for none.
+agree. Among the stakes is the report-back park: an executor parks a report
+while ``get_latest_attempt``'s row reads live or interrupted, so a divergent
+definition would either post into a live turn or park a report behind a turn
+that already ended.
 """
 
 import uuid

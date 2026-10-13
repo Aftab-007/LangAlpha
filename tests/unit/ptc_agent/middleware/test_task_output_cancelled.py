@@ -3,8 +3,8 @@
 A missing registry entry does not mean the result is gone — it may be
 evicted, wiped by a stop, lost to a restart, or held by another worker while
 the subagent's answer sits in its ``task:{id}`` checkpoint namespace. The
-tool must recover from the archive first, and only report "cancelled by a
-user stop" (never "not found") when the archive has nothing either.
+tool must recover from the archive first, and only when nothing was recorded
+anywhere say that the id names no task.
 """
 
 from types import SimpleNamespace
@@ -53,7 +53,7 @@ async def test_missing_task_recovers_from_durable_archive():
 async def test_the_display_id_reads_the_same_task_as_the_bare_id():
     """Launch results and reports name a task ``Task-<id>``, and the agent
     passes that name back. Read as a literal id it matches nothing, and the
-    agent is told the outcome was never recorded."""
+    agent is told the task does not exist."""
     middleware = _middleware("Paris is the capital.")
     tool = create_task_output_tool(middleware)
 
@@ -64,18 +64,46 @@ async def test_the_display_id_reads_the_same_task_as_the_bare_id():
     assert "Task-Task-" not in result
 
 
+_UNKNOWN_REPLY = (
+    "No task Task-k7Xm2p is known on this thread: nothing is running under "
+    "that id, and no run or result was recorded for it. Check the id against "
+    "the launch result that named it."
+)
+
+
 @pytest.mark.asyncio
-async def test_missing_task_with_empty_archive_reports_no_recorded_outcome():
-    """No ledger row and nothing archived is an unknown fate, not a stop —
-    naming a cause the code cannot know tells the agent the wrong thing about
-    whether re-dispatching is safe."""
+async def test_missing_task_with_empty_archive_names_no_task():
+    """No ledger row and nothing archived means the id names no task. Read as
+    a fate instead ("never recorded", "cannot be resumed"), it once sent the
+    agent away from a finished task whose prefixed id missed every lookup."""
     tool = create_task_output_tool(_middleware(None))
 
     result = await tool.coroutine(task_id="k7Xm2p")
 
-    assert "outcome was never recorded" in result.lower()
-    assert "cancelled" not in result.lower()
-    assert "not found" not in result.lower()
+    assert result == _UNKNOWN_REPLY
+
+
+@pytest.mark.asyncio
+async def test_a_prefixed_id_reads_a_completed_task_and_an_unknown_one_reads_once():
+    """The ``Task-`` name the agent is shown reaches the task it names, and an
+    id that names nothing is echoed back with the prefix once."""
+    registry = BackgroundTaskRegistry(thread_id="")
+    task = await registry.register(
+        tool_call_id="tc-1", description="d", prompt="p", subagent_type="research"
+    )
+    task.result = {"success": True, "result": "Paris is the capital."}
+    task.terminal_status = "completed"
+    middleware = MagicMock()
+    middleware.registry = registry
+    tool = create_task_output_tool(middleware)
+
+    found = await tool.coroutine(task_id=f"Task-{task.task_id}")
+    unknown = await tool.coroutine(task_id="Task-k7Xm2p")
+
+    assert found == (
+        f"**Task-{task.task_id}** (research) completed:\n\nParis is the capital."
+    )
+    assert unknown == _UNKNOWN_REPLY
 
 
 @pytest.mark.asyncio
@@ -178,7 +206,6 @@ async def test_a_stopped_task_counts_as_delivered():
         asyncio_task=None,
         result={"success": False, "status": "cancelled", "error": "Cancelled"},
         result_seen=False,
-        last_checked_at=0.0,
     )
 
     registry = MagicMock()

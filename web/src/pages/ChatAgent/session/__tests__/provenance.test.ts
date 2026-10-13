@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { reportRowProvenance, senderProvenance, steeredReportRow, withLiveReportRow } from '../provenance';
+import { reportRowProvenance, senderProvenance, withLiveReportRow } from '../provenance';
 import { handleHistorySteeringDelivered, handleHistoryUserMessage } from '../history/historyHandlers';
 import { buildEntries } from '../../components/minimapEntries';
 import { createAssistantMessage } from '../../hooks/utils/messageHelpers';
@@ -71,38 +71,6 @@ describe('reportRowProvenance', () => {
   it('keeps a report-back without a source hidden', () => {
     // A share's replay drops the source; older rows never had one.
     expect(reportRowProvenance(undefined)).toBeNull();
-  });
-});
-
-describe('steeredReportRow', () => {
-  const at = new Date(1_700_000_000_000);
-
-  it('draws a task report as its caption row, delivered steering in the turn it landed in', () => {
-    const source: ReportSource = { kind: 'task', task_id: 'k3', display_id: 'Task-k3', description: 'Pull filings', failed: true };
-    expect(steeredReportRow(source, 'row-1', at, 2)).toEqual({
-      id: 'row-1',
-      role: 'user',
-      content: '',
-      contentType: 'text',
-      timestamp: at,
-      isStreaming: false,
-      provenance: { kind: 'task_report', taskId: 'k3', displayId: 'Task-k3', description: 'Pull filings', failed: true },
-      steeringDelivered: true,
-      turnIndex: 2,
-    });
-  });
-
-  it('draws an analyst report the same way, and leaves the turn unstamped when unknown', () => {
-    const row = steeredReportRow({ kind: 'analyst', thread_id: 'th-a', workspace_name: 'Semis' }, 'row-2', at);
-    expect(row).toMatchObject({
-      provenance: { kind: 'analyst_report', threadId: 'th-a', workspaceId: null, workspaceName: 'Semis' },
-      steeringDelivered: true,
-    });
-    expect(row).not.toHaveProperty('turnIndex');
-  });
-
-  it('draws nothing without a source', () => {
-    expect(steeredReportRow(undefined, 'row-3', at, 2)).toBeNull();
   });
 });
 
@@ -261,8 +229,8 @@ describe('handleHistorySteeringDelivered provenance', () => {
 });
 
 describe('handleHistorySteeringDelivered report entries', () => {
-  const replay = (messagesIn: Record<string, unknown>[]) => {
-    const messages: MessageRecord[] = [];
+  const replay = (messagesIn: Record<string, unknown>[], live: MessageRecord[] = []) => {
+    const messages: MessageRecord[] = [...live];
     handleHistorySteeringDelivered({
       event: { event: 'steering_delivered', messages: messagesIn },
       pairIndex: 4,
@@ -284,7 +252,7 @@ describe('handleHistorySteeringDelivered report entries', () => {
       { content: 'and margins', timestamp: 1_700_000_001 },
     ]);
     expect(rows).toHaveLength(3);
-    expect(rows[0].id).toMatch(/^history-steering-report-4-\d+-0$/);
+    expect(rows[0].id).toBe('history-steering-report-4-1-0');
     expect(rows[0]).toMatchObject({
       role: 'user',
       content: '',
@@ -294,13 +262,19 @@ describe('handleHistorySteeringDelivered report entries', () => {
       provenance: { kind: 'task_report', taskId: 'k3', displayId: 'Task-k3', description: null, failed: false },
     });
     expect(rows[1]).toMatchObject({ role: 'user', content: 'and margins', steeringDelivered: true });
-    expect(rows[1].id).toMatch(/^history-steering-user-4-\d+-1$/);
+    expect(rows[1].id).toBe('history-steering-user-4-1-1');
     expect(rows[2]).toMatchObject({ role: 'assistant', isSteering: true });
   });
 
   it('skips an entry with neither a report source nor words', () => {
     const rows = replay([{ content: '' }]);
     expect(rows.filter((m) => m.role === 'user')).toEqual([]);
+  });
+
+  it('takes no live steer\'s place, even one with no words', () => {
+    const steer = { id: 's1', role: 'user', content: '', steering: true, turnIndex: 4 };
+    const rows = replay([{ content: '', report_source: { kind: 'task', task_id: 'k3', display_id: 'Task-k3', failed: false } }], [steer]);
+    expect(rows.map((m) => m.id)).toEqual(['history-steering-report-4-1-0', 'history-assistant-steering-4-1', 's1']);
   });
 });
 

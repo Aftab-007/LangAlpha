@@ -564,8 +564,10 @@ class PTCAgent:
         _bg_registry = background_registry or BackgroundTaskRegistry()
 
         # Must be first: steering context must be visible before any other
-        # middleware. The registry carries the server's report inbox.
-        main_only_middleware.append(SteeringMiddleware(registry=_bg_registry))
+        # middleware. Without subagents there is no TaskOutput to read a
+        # task report's result with, so no report is taken in.
+        report_inbox = None if disable_subagents else _bg_registry.report_inbox
+        main_only_middleware.append(SteeringMiddleware(report_inbox=report_inbox))
 
         # Right after steering, so a steer and a flip sent together reach the
         # model in that order, with the operator-role row last. Its tool hook
