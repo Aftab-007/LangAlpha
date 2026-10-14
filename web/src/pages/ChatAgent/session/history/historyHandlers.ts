@@ -15,6 +15,7 @@ import { isDeliveredReport } from '@/types/sse';
 import type { SubagentTaskRecord, TextSegment } from '@/types/chat';
 import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from '../../hooks/utils/types';
 import type { PairState } from '../types';
+import type { StructuredError } from '@/utils/rateLimitError';
 
 
 /** Shape of an SSE history event. */
@@ -489,19 +490,19 @@ export function handleHistoryTextContent({ assistantMessageId, content, finishRe
 
 /**
  * A failed turn replays its error the way the live failure left the reply:
- * marked failed and, when it holds no text of its own, worded by the error.
- * Without the mark a reload shows an empty reply with no Retry, though the
- * turn's status says it failed.
+ * marked failed, with what it streamed still its reply and the failure kept
+ * apart for the bubble's one card. Without the mark a reload shows an empty
+ * reply with no Retry, though the turn's status says it failed.
  */
-export function handleHistoryError({ assistantMessageId, errorText, setMessages }: {
+export function handleHistoryError({ assistantMessageId, failure, setMessages }: {
   assistantMessageId: string;
-  errorText: string;
+  failure: StructuredError;
   setMessages: SetMessages;
 }): void {
   setMessages((prev: MessageRecord[]) =>
     prev.map((msg: MessageRecord) =>
       msg.id === assistantMessageId
-        ? { ...msg, isStreaming: false, error: true, content: (msg.content as string) || errorText, contentType: 'text' }
+        ? { ...msg, isStreaming: false, error: true, structuredError: failure }
         : msg
     )
   );

@@ -14,6 +14,8 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.types import Command
 
+from ptc_agent.agent.limits import pending_read
+from src.server.contracts.status import is_live
 from src.tools.secretary._commands import (
     InjectedToolCallId,
     decline_command,
@@ -83,7 +85,10 @@ async def _get_thread_output(
         logger.error(f"Failed to extract text from thread {thread_id}: {e}")
         return error_command("failed to retrieve thread output", tool_call_id)
 
-    return success_command(result, tool_call_id)
+    # A read of a thread mid-run is marked for the loop guard, which cannot
+    # tell a poll from the text: a live run's text grows between reads.
+    running = result.get("status") == "running"
+    return success_command(result, tool_call_id, pending_read() if running else None)
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +402,9 @@ async def manage_threads(
         return error_command("user_id not found in config", tool_call_id)
 
     if action == "list":
-        return await threads_list(user_id, workspace_id, tool_call_id)
+        return await threads_list(
+            user_id, workspace_id, tool_call_id, configurable.get("thread_id")
+        )
     elif action == "get_output":
         return await _threads_get_output(
             user_id, thread_id, tool_call_id, turns, _timezone(configurable)
@@ -412,9 +419,20 @@ async def manage_threads(
 
 
 async def threads_list(
-    user_id: str, workspace_id: str | None, tool_call_id: str
+    user_id: str,
+    workspace_id: str | None,
+    tool_call_id: str,
+    own_thread_id: str | None = None,
 ) -> Command:
-    """List threads, optionally filtered by workspace."""
+    """List threads, optionally filtered by workspace.
+
+    A listing that shows another thread mid-run is marked for the loop guard,
+    as a read of that thread is. The caller's own thread is always running,
+    so it does not count.
+    """
+    from src.server.utils.pg_sanitize import normalize_uuid
+
+    artifact = None
     try:
         if workspace_id:
             if err := await verify_workspace_owner(workspace_id, user_id, tool_call_id):
@@ -440,6 +458,13 @@ async def threads_list(
             },
             default=str,
         )
+        own = normalize_uuid(own_thread_id) if own_thread_id else None
+        if any(
+            is_live(row.get("current_status"))
+            and normalize_uuid(row.get("conversation_thread_id")) != own
+            for row in threads
+        ):
+            artifact = pending_read()
     except Exception as e:
         logger.error(f"Failed to list threads: {e}")
         content = json.dumps({"success": False, "error": "failed to list threads"})
@@ -447,7 +472,9 @@ async def threads_list(
     return Command(
         update={
             "messages": [
-                ToolMessage(content=content, tool_call_id=tool_call_id),
+                ToolMessage(
+                    content=content, tool_call_id=tool_call_id, artifact=artifact
+                ),
             ],
         }
     )

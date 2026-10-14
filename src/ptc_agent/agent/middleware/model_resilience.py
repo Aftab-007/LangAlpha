@@ -33,6 +33,7 @@ from src.llms.error_classification import (
     extract_status_code,
     is_mid_stream_error,
     is_retryable_error,
+    is_stalled_stream,
 )
 from src.llms.reasoning_payload import strip_all_reasoning
 
@@ -326,8 +327,16 @@ class ModelResilienceMiddleware(AgentMiddleware):
         bills the tokens it emitted a second time. Content rejected by an input
         filter is the case that made this concrete: every attempt is refused
         identically, so the call is pure latency before the fallback that works.
+
+        A stream that went silent past its chunk bound gets one retry, not the
+        full count, whether or not its first chunk had arrived: each attempt
+        waits out the whole bound before failing, so the full count held one
+        candidate for most of an hour before its fallback, and stalls seen in
+        prod repeated at the same point on every attempt.
         """
         status, retryable = self._classify(exc)
+        if retryable and is_stalled_stream(exc) and attempts > 1:
+            retryable = False
         if retryable and attempts <= self.max_retries:
             return status, _Recovery(delay=self._calculate_delay(attempts - 1))
         if not escalated and status == 400 and not is_mid_stream_error(exc):

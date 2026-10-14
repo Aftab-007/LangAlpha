@@ -9,7 +9,8 @@ import { visibleParagraphPrefix } from '@/lib/paragraphGate';
 import { useTranscriptDisplay } from '@/lib/transcriptDisplay';
 import { CitationMetadataProvider } from '../CitationMetadataContext';
 import { CreditPausePendingProvider } from '../CreditPausePendingContext';
-import TextMessageContent from '../TextMessageContent';
+import TextMessageContent, { TurnErrorCard } from '../TextMessageContent';
+import type { StructuredError } from '@/utils/rateLimitError';
 import { countDedupedSources, type CreditPauseState, type MessageProvenance, type ProvenanceRecord, type SubagentTaskRecord, type ToolApprovalState } from '@/types/chat';
 import { TextShimmer } from '@/components/ui/text-shimmer';
 import type { SelectionPreviewShape } from '../SelectionContextPreview';
@@ -196,6 +197,8 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   // labels each time while hidden. The two handlers read it when clicked.
   const messageId = message.id as string;
   const hasError = !!message.error;
+  const failure = hasError ? message.structuredError as StructuredError | undefined : undefined;
+  const hasBody = !(projection.textCount === 0 && projection.blocks.every((block) => block.type === 'text'));
   const isSteering = isSteeringUserMessage(message);
   const resizeTextarea = () => {
     const el = editTextareaRef.current;
@@ -403,8 +406,6 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
           questionProposals={(message.questionProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
           pendingToolCallChunks={(message.pendingToolCallChunks as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
           isStreaming={message.isStreaming as boolean}
-          hasError={message.error as boolean}
-          structuredError={message.structuredError as import('@/utils/rateLimitError').StructuredError | undefined}
           fold={fold}
           isTurnTail={isTurnTail}
           isSubagentView={isSubagentView}
@@ -425,8 +426,6 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
           <TextMessageContent
             content={message.content as string}
             isStreaming={message.isStreaming as boolean}
-            hasError={message.error as boolean}
-            structuredError={message.structuredError as import('@/utils/rateLimitError').StructuredError | undefined}
             onOpenFile={onOpenFile}
           />
         )
@@ -434,6 +433,14 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
       </>
       )}
       </OverflowCollapse>
+
+      {/* The failure, once, after what the turn produced, which still reads as
+          its reply. A turn that produced nothing has the card for its reply. */}
+      {failure && (
+        <div className={hasBody ? 'mt-3' : undefined}>
+          <TurnErrorCard err={failure} />
+        </div>
+      )}
 
       {/* Streaming indicator. Stays mounted for the whole stream and only
           fades: while text is landing it is invisible (the text is the

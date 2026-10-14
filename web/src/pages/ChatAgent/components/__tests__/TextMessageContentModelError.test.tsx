@@ -31,18 +31,11 @@ vi.mock('@/components/ui/animated-text', () => ({
   useAnimatedText: (text: string) => text,
 }));
 
-import TextMessageContent from '../TextMessageContent';
+import { TurnErrorCard } from '../TextMessageContent';
 import type { StructuredError } from '@/utils/rateLimitError';
 
 function renderErr(structured: StructuredError) {
-  return render(
-    <TextMessageContent
-      content={structured.message}
-      isStreaming={false}
-      hasError={true}
-      structuredError={structured}
-    />,
-  );
+  return render(<TurnErrorCard err={structured} />);
 }
 
 describe('StructuredErrorDisplay — model-aware headline + "Also tried"', () => {

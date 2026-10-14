@@ -23,7 +23,9 @@ TerminalStatus = Literal[
 
 Deliberately not the durable ledger's vocabulary: this is one task's local
 view, the ledger's terminal CAS is the durable truth, and ``run_executor``
-maps between them (a timeout, for instance, is a cancel to the ledger). The
+maps between them (a timeout, for instance, is a cancel to the ledger when the
+workflow driver kills a child, and an error when a run outruns its own clock,
+so that one still reports back). The
 ledger's ``interrupted`` has no in-memory counterpart — an interrupt leaves
 the task pending, and ``never_started`` has none either — a run that never
 spawned either has no row or already settled its own as ``error``.
@@ -142,6 +144,14 @@ class BackgroundTask:
     are deliberately excluded — they're high-volume pacing noise. The
     OrphanCollector liveness check falls back to ``cur_events > prev_events``
     for tool-only progression, so idle detection still works."""
+
+    alive_at: float = field(default_factory=time.time)
+    """Epoch seconds of the last stream heartbeat, which beats only while a
+    model call runs. The OrphanCollector reads it as progress too: a model
+    can go ``STREAM_CHUNK_TIMEOUT_S`` without a chunk, on each of two
+    attempts, and a task with no event for the collector's idle timeout
+    reads as abandoned and loses the claim that bills it and keeps its
+    events."""
 
     agent_id: str = ""
     """Stable unique identity: '{subagent_type}:{uuid4}'."""

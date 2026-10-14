@@ -19,6 +19,7 @@ from ptc_agent.agent.backends import SandboxBackend
 from ptc_agent.core.paths import SandboxLayout, WorkspaceLayout
 from ptc_agent.core.project_context import ProjectContext
 from ptc_agent.agent.middleware import SubAgentMiddleware
+from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.agent.main_state import MainAgentState
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
@@ -49,6 +50,7 @@ from ptc_agent.agent.middleware import (
     SubagentSteeringMiddleware,
     ReasoningCompatibilityMiddleware,
     StreamHeartbeatMiddleware,
+    RepeatCallGuardMiddleware,
 )
 from ptc_agent.agent.middleware.compaction.notes import (
     NotesDueMiddleware,
@@ -82,6 +84,7 @@ from ptc_agent.agent.middleware.openai_prompt_caching import OpenAIPromptCaching
 from ptc_agent.agent.middleware.runtime_context import (
     FrozenPromptMiddleware,
     TailEnvelopeMiddleware,
+    TimeUpToolStopMiddleware,
     TurnContext,
     TurnContextMiddleware,
 )
@@ -466,6 +469,9 @@ class PTCAgent:
                 # shared placement gives subagent lanes the same gate. Inert
                 # unless the server installed a gate state for the lane.
                 CreditGateMiddleware(),
+                # Ahead of every tool wrapper below, so a call it refuses as
+                # a repeat reaches none of them.
+                RepeatCallGuardMiddleware(),
                 ToolArgumentParsingMiddleware(),
                 ProtectedPathMiddleware(
                     denied_directories=self.config.filesystem.denied_directories,
@@ -767,13 +773,17 @@ class PTCAgent:
             m
             for m in [
                 SubagentSteeringMiddleware(registry=background_middleware.registry),
+                # Outside every tool wrapper below, so a call refused in the
+                # last minutes of the run's clock reaches none of them.
+                TimeUpToolStopMiddleware(),
                 # The turn row a subagent can act on: when its turn opened,
                 # and that it is a child rather than the main agent. The user's
-                # context stays out, a subagent works from its brief. It writes
-                # into history at the turn boundary, so its position among the
-                # middlewares below does not matter. No clock is injected: this
-                # stack is built once per parent turn and run for every
-                # subagent, so the row reads the clock when its own turn opens.
+                # context stays out, a subagent works from its brief. Its rows
+                # go into history from the agent and model hooks, so where it
+                # sits among the tool wrappers below does not matter. No clock
+                # is injected: this stack is built once per parent turn and run
+                # for every subagent, so the row reads the clock when its own
+                # turn opens.
                 TurnContextMiddleware(
                     timezone=timezone_str or "UTC",
                     is_subagent=True,
@@ -938,6 +948,11 @@ class PTCAgent:
                     files_mounted=files_mounted,
                     render=lambda mounted: render_prompt(files_mounted=mounted),
                 ),
+                # Outside every tool wrapper below, so a call refused in the
+                # last minutes of the turn reaches none of them: not the Task
+                # interceptor, which would spawn the subagent, nor the file-op
+                # stream, which would show a refused write as done.
+                TimeUpToolStopMiddleware(),
                 LargeResultEvictionMiddleware(
                     backend=backend, eviction_dir=eviction_dir
                 ),
@@ -991,7 +1006,7 @@ class PTCAgent:
             checkpointer=checkpointer,
             store=store,
             state_schema=MainAgentState,
-        ).with_config({"recursion_limit": 2000})
+        ).with_config({"recursion_limit": UNBOUNDED_RECURSION_LIMIT})
 
         return BackgroundSubagentOrchestrator(
             agent=agent,

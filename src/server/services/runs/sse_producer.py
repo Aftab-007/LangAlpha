@@ -18,6 +18,11 @@ from langgraph.types import Overwrite
 
 from ptc_agent.agent.middleware.image_capture import collect_sandbox_paths
 
+from ptc_agent.agent.middleware.runtime_context.turn import (
+    TURN_DEADLINE_KEY,
+    TURN_TIME_LIMIT_KEY,
+)
+
 from src.server.utils.content_normalizer import (
     normalize_text_content,
     is_thinking_status_signal,
@@ -30,6 +35,7 @@ from src.server.services.runs.credit_usage import build_credit_usage_data
 from src.server.services.runs.reasoning_facts import ReasoningDurations
 from src.server.services.runs.stream_errors import error_event_data
 from src.server.utils.text_phase import TextPhaseTracker
+from src.utils.concurrency import aclose_within
 from src.utils.stream_coalescing import (
     HEARTBEAT_EVENT_TYPE,
     DeltaCoalescer,
@@ -53,6 +59,19 @@ logger = logging.getLogger(__name__)
 sse_logger = logging.getLogger("sse_events")
 
 WORKFLOW_TIMEOUT = get_workflow_timeout()  # seconds
+
+# 30s: enough for model calls and tools to cancel, and short of the two minutes
+# a tool's cleanup can retry against a sick sandbox while the finalize waits.
+GRAPH_CLOSE_TIMEOUT_S = 30.0
+
+
+class TurnTimeLimitError(asyncio.TimeoutError):
+    """The turn reached its wall clock. Its own error frame has gone out by the
+    time this is raised, so the generic one is not sent after it: that one
+    reads as an internal failure, which the client shows as a banner in place
+    of the turn and its answer."""
+
+
 SSE_EVENT_LOG_ENABLED = is_sse_event_log_enabled()
 
 DEFAULT_TOKEN_THRESHOLD = 120000
@@ -154,6 +173,18 @@ def fallback_from_frame(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
 
 
+def kept_error_frame(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A main-lane ``error`` frame as its response row keeps it, so a reload
+    shows the failure as the live stream did: the row alone lacks the model,
+    the hints and the live wording. None for a subagent's, whose failure
+    belongs to its card."""
+    from src.server.services.history.replay.lanes import MAIN_LANE, agent_lane
+
+    if agent_lane(data.get("agent")) != MAIN_LANE:
+        return None
+    return {key: value for key, value in data.items() if key != "thread_id"}
+
+
 class RunSSEProducer:
     """LangGraph workflow SSE producer with reasoning lifecycle tracking, tool-call dedup, and content normalisation."""
 
@@ -217,6 +248,9 @@ class RunSSEProducer:
         # The main agent's model_fallback ui records as emitted: a step that
         # fails or is stopped after one never commits it.
         self._model_fallbacks: List[Dict[str, Any]] = []
+        # The last error frame the main agent's stream sent, for the finalize
+        # of a failed run to keep.
+        self._error_frame: Optional[Dict[str, Any]] = None
         # The sandbox image paths each message the main graph saved still
         # names, by message id: a later write of the message replaces its
         # entry.
@@ -391,6 +425,7 @@ class RunSSEProducer:
             "chat.turn.stream",
             attributes={"thread_id_hash": (self.thread_id or "")[:16]},
         )
+        graph_stream = None
         try:
             # First event of every stream: ``metadata`` payload announcing
             # the canonical run_id for this turn. Mirrors the
@@ -411,6 +446,18 @@ class RunSSEProducer:
                     result, "tools", {"langgraph_node": "tools"}
                 ):
                     yield event
+
+            # The agent reads when this stop lands, so it can answer before it
+            # rather than be cut off by it.
+            if self.workflow_timeout > 0:
+                config = {
+                    **config,
+                    "configurable": {
+                        **(config.get("configurable") or {}),
+                        TURN_DEADLINE_KEY: workflow_start_time + self.workflow_timeout,
+                        TURN_TIME_LIMIT_KEY: self.workflow_timeout,
+                    },
+                }
 
             # Create graph stream. durability="sync" awaits each checkpoint
             # put before the next step — necessary but NOT sufficient for
@@ -466,12 +513,13 @@ class RunSSEProducer:
                                 "timeout_seconds": self.workflow_timeout,
                             }
                         )
+                        self._error_frame = kept_error_frame(timeout_error.data)
                         yield timeout_error
                         logger.error(
                             f"[TIMEOUT_ERROR] thread_id={self.thread_id} "
                             f"exceeded timeout of {self.workflow_timeout}s"
                         )
-                        raise asyncio.TimeoutError(
+                        raise TurnTimeLimitError(
                             f"Workflow exceeded timeout of {self.workflow_timeout} seconds"
                         )
 
@@ -849,10 +897,18 @@ class RunSSEProducer:
             # Don't yield error event - this is expected behavior
             raise
         except Exception as e:
-            logger.exception(f"Error in stream generator for thread_id={self.thread_id}: {e}")
+            if isinstance(e, TurnTimeLimitError):
+                # A planned stop the [TIMEOUT_ERROR] line has already named;
+                # its traceback is only this generator's own raise.
+                logger.warning(
+                    f"Turn stopped at its time limit for thread_id={self.thread_id}: {e}"
+                )
+            else:
+                logger.exception(f"Error in stream generator for thread_id={self.thread_id}: {e}")
             _stream_span.record_exception(e)
             _stream_span.set_status(Status(StatusCode.ERROR))
-            yield self._build_error_event(str(e), exc=e)
+            if not isinstance(e, TurnTimeLimitError):
+                yield self._build_error_event(str(e), exc=e)
             raise  # Re-raise so the run executor finalizes as failed
         finally:
             # Safety net: if the stream ends (timeout / error / CancelledError /
@@ -877,6 +933,22 @@ class RunSSEProducer:
             if timeout_warning_sent:
                 _stream_span.set_attribute("timeout_warning", True)
             _stream_span.end()
+            # Leaving the loop does not close the graph's stream, and until it
+            # closes, the model calls and tools in flight keep running. Left to
+            # the garbage collector, a turn stopped at its time limit ran on
+            # past its finalize, and a model call finishing then was spent with
+            # no usage recorded. Closing it here cancels and awaits them before
+            # the run's ending reaches the executor, within a bound, since
+            # LangGraph waits on its cancelled tasks without one. Last, so a
+            # cancel landing mid-close skips nothing above.
+            await aclose_within(
+                graph_stream,
+                GRAPH_CLOSE_TIMEOUT_S,
+                label=(
+                    f"the graph stream for thread_id={self.thread_id} "
+                    f"run_id={self.run_id}"
+                ),
+            )
 
     async def _verify_interrupt_durable(self, graph) -> bool:
         """True iff the checkpoint tip carries a pending __interrupt__ matching
@@ -1619,6 +1691,7 @@ class RunSSEProducer:
             ],
             reasoning_ms=self._reasoning.as_facts(),
             model_fallbacks=list(self._model_fallbacks),
+            error_frame=self._error_frame,
         )
 
     def _format_sse_event(self, event_type: str, data: dict[str, Any]) -> str:
@@ -1672,7 +1745,7 @@ class RunSSEProducer:
     ) -> StreamFrame:
         """Build an error frame; ``exc`` enables the classification
         ``error_event_data`` describes."""
-        return self._build_sse_event(
+        frame = self._build_sse_event(
             "error",
             error_event_data(
                 self.thread_id,
@@ -1681,6 +1754,8 @@ class RunSSEProducer:
                 credential_source=getattr(self.agent_config, "credential_source", None),
             ),
         )
+        self._error_frame = kept_error_frame(frame.data)
+        return frame
 
     def _build_credit_usage_event(
         self,

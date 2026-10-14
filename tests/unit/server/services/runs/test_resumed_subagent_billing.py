@@ -33,6 +33,7 @@ from src.server.services.runs.subagent_usage import bill_resumed_round
 
 THREAD = "thread-resume"
 COLLECTION = "src.server.services.runs.subagent_collection"
+REGISTRY = "ptc_agent.agent.middleware.background_subagent.registry"
 RUN_ENDING = "src.server.database.runs.lifecycle.get_run_ending"
 
 COMPLETED = {"status": "completed", "metadata": {"is_byok": False}}
@@ -306,6 +307,52 @@ async def test_a_round_a_collector_gave_up_on_is_billed_when_resumed():
     assert [(task_id, *rest) for task_id, *rest in thread.billed] == [
         (task.task_id, [{"round": 1}], "run-1", "tr-t-1")
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_whose_model_call_still_beats_is_waited_out():
+    """A model call can stream nothing for as long as its chunk timeout, and
+    only its heartbeat says it is still running. The collector waits it out
+    and bills it, where with no beat it gives up at its idle timeout."""
+    thread = _Thread([])
+    registry = thread.registry
+    with thread.patches(), patch(f"{REGISTRY}._ALIVE_STAMP_INTERVAL_S", 0.0):
+        task = await registry.register("tc-t", "d", "p", "general-purpose", run_id="run-1")
+        task.task_run_id = "tr-t-1"
+
+        async def silent_call():
+            # Twice the idle timeout without an event, beating all along.
+            for _ in range(6):
+                await asyncio.sleep(0.1)
+                await registry.note_alive(task)
+            _merge_subagent_usage(task, *_trackers([{"round": 1}]))
+            return {"success": True}
+
+        task.asyncio_task = asyncio.create_task(silent_call())
+        claimed = await registry.claim_run_subagents("run-1", "run-1")
+        await subagent_collection.collect_orphaned_subagent_results(
+            THREAD, "run-1", [], claimed, "ws-1", "user-1"
+        )
+
+    assert [(task_id, *rest) for task_id, *rest in thread.billed] == [
+        (task.task_id, [{"round": 1}], "run-1", "tr-t-1")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_childs_beat_keeps_its_owner_alive():
+    """The collector watches a workflow owner alone, so a child's beat is
+    stamped on the owner as well."""
+    registry = BackgroundTaskRegistry(thread_id=THREAD)
+    owner = await registry.register("tc-o", "d", "p", "workflow", run_id="run-1")
+    child = await registry.register("tc-c", "d", "p", "general-purpose", run_id="run-1")
+    child.owner_task_id = owner.task_id
+    owner.alive_at = child.alive_at = 0.0
+
+    with patch(f"{REGISTRY}._ALIVE_STAMP_INTERVAL_S", 0.0):
+        await registry.note_alive(child)
+
+    assert owner.alive_at == child.alive_at > 0.0
 
 
 @pytest.mark.asyncio

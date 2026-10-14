@@ -59,10 +59,6 @@ interface MessageContentSegmentsProps {
   questionProposals?: Record<string, Record<string, unknown>>;
   pendingToolCallChunks?: Record<string, Record<string, unknown>>;
   isStreaming?: boolean;
-  hasError?: boolean;
-  /** Classified error data from the backend, used by TextMessageContent so
-   *  inline error cards can render hints without re-parsing the raw text. */
-  structuredError?: import('@/utils/rateLimitError').StructuredError;
   /** How much of the turn this bubble draws; `unfolded` is the full transcript. */
   fold?: FoldState;
   /** The last visible bubble of its backend turn: the only one with an answer. */
@@ -80,8 +76,6 @@ interface MessageContentSegmentsProps {
 interface TextBlockProps {
   block: TextRenderBlock;
   isStreaming: boolean;
-  hasError: boolean;
-  structuredError?: import('@/utils/rateLimitError').StructuredError;
   isSubagentView: boolean;
   /** The message's last prose block: where a turn-end landing puts the viewport top. */
   isReplyStart: boolean;
@@ -111,20 +105,19 @@ function isPillBlock(block: RenderBlock): boolean {
   return isPillArtifactType((result?.artifact as Record<string, unknown> | undefined)?.type);
 }
 
-function TextBlock({ block, isStreaming, hasError, structuredError, isSubagentView, isReplyStart, onOpenFile, onRevealed }: TextBlockProps): React.ReactElement | null {
+function TextBlock({ block, isStreaming, isSubagentView, isReplyStart, onOpenFile, onRevealed }: TextBlockProps): React.ReactElement | null {
   const report = useCallback((done: boolean) => onRevealed?.(block.key, done), [onRevealed, block.key]);
   const { streamingMode } = useTranscriptDisplay();
   const raw = block.segment.content ?? '';
   // A schema-constrained subagent answers with one JSON object, which the
   // transcript would otherwise show as a raw dump. Mid-stream text is excluded
-  // because a partial answer can parse as valid JSON and then change shape, and
-  // an error payload already has its own display.
+  // because a partial answer can parse as valid JSON and then change shape.
   const structured = useMemo(
     () =>
-      isSubagentView && !isStreaming && !hasError
+      isSubagentView && !isStreaming
         ? parseStructuredResult(raw)
         : null,
-    [isSubagentView, isStreaming, hasError, raw]
+    [isSubagentView, isStreaming, raw]
   );
   const textContent = isSubagentView && !structured ? normalizeSubagentText(raw) : raw;
   const textEl = structured ? (
@@ -133,8 +126,6 @@ function TextBlock({ block, isStreaming, hasError, structuredError, isSubagentVi
     <TextMessageContent
       content={textContent}
       isStreaming={isStreaming}
-      hasError={hasError}
-      structuredError={structuredError}
       onOpenFile={onOpenFile}
       onRevealed={report}
     />
@@ -146,12 +137,12 @@ function TextBlock({ block, isStreaming, hasError, structuredError, isSubagentVi
   // the first boundary lands. The wrapper keys on this rather than on the raw
   // content, so it is never left standing around an empty child.
   const rendersNow = !!textContent
-    && (!isStreaming || hasError || streamingMode === 'token' || visibleParagraphPrefix(textContent) !== '');
+    && (!isStreaming || streamingMode === 'token' || visibleParagraphPrefix(textContent) !== '');
   // An empty block has no line to land on; the landing falls back to the bubble.
   return isReplyStart && rendersNow ? <div data-reply-start="">{textEl}</div> : textEl;
 }
 
-export const MessageContentSegments = memo(function MessageContentSegments({ segments, contentProjection, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, structuredError, fold = 'unfolded', isTurnTail = false, isSubagentView = false, readOnly = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
+export const MessageContentSegments = memo(function MessageContentSegments({ segments, contentProjection, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, fold = 'unfolded', isTurnTail = false, isSubagentView = false, readOnly = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
   const { turnDisplay } = useTranscriptDisplay();
   const {
     onOpenSubagentTask, onOpenFile, onToolCallDetailClick, onOpenChart,
@@ -299,8 +290,6 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
               block={block as TextRenderBlock}
               isStreaming={blockIdx === streamingTextIdx}
               isReplyStart={blockIdx === lastTextBlockIdx}
-              hasError={!!hasError}
-              structuredError={structuredError}
               isSubagentView={isSubagentView}
               onOpenFile={onOpenFile}
               onRevealed={onRevealed}

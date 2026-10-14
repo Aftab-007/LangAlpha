@@ -261,6 +261,31 @@ async def test_token_accrual_is_read_only() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_child_starts_on_the_clock_the_driver_kills_it_by() -> None:
+    """Its own clock is its cap, so its wrap-up comes before the kill."""
+    driver, _, dispatcher, _ = await _make_driver(
+        _script("await agent('one'); return 'done';"),
+        caps=_caps(child_timeout=1800, run_timeout=16200),
+    )
+
+    await driver.run()
+
+    assert dispatcher.calls[0]["time_limit"] == 1800
+
+
+@pytest.mark.asyncio
+async def test_a_child_late_in_the_run_starts_on_what_is_left_of_it() -> None:
+    driver, _, dispatcher, _ = await _make_driver(
+        _script("await agent('one'); return 'done';"),
+        caps=_caps(child_timeout=1800, run_timeout=600),
+    )
+
+    await driver.run()
+
+    assert 590 < dispatcher.calls[0]["time_limit"] <= 600
+
+
+@pytest.mark.asyncio
 async def test_a_timed_out_child_still_reports_the_tokens_it_spent() -> None:
     """A timeout must not zero a child's usage on the run card.
 

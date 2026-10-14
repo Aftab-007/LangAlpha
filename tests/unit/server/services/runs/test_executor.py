@@ -880,6 +880,135 @@ class TestStopPathFlushGating:
 
 
 # ---------------------------------------------------------------------------
+# The graph's stream is closed before the executor flushes or finalizes
+# ---------------------------------------------------------------------------
+
+class _InFlightGraph:
+    """LangGraph stand-in: a model call in flight, cancelled and awaited when
+    its stream closes, as LangGraph's background executor does."""
+
+    def __init__(self):
+        self.call: asyncio.Task | None = None
+        self.closed = False
+
+    def astream(self, _input_state, config=None, **_kwargs):
+        async def _gen():
+            self.call = asyncio.ensure_future(asyncio.sleep(30))
+            try:
+                while True:
+                    yield ((), "custom", {"type": "context_window", "action": "offload"})
+                    await asyncio.sleep(0.01)
+            finally:
+                self.call.cancel()
+                await asyncio.gather(self.call, return_exceptions=True)
+                self.closed = True
+
+        return _gen()
+
+
+def _ptc_workflow(graph: _InFlightGraph):
+    """A PTC turn's stream as ptc_run composes it, over the real orchestrator."""
+    from ptc_agent.agent.middleware.background_subagent.orchestrator import (
+        BackgroundSubagentOrchestrator,
+    )
+    from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
+    from ptc_agent.core.project_context import ProjectContext, run_with_project
+    from src.server.services.egress.direct_tools import DirectMCPBinding
+    from src.server.services.runs.sse_producer import RunSSEProducer
+
+    producer = RunSSEProducer(thread_id="t-close", run_id="r-close")
+    return run_with_project(
+        ProjectContext(workspace_id="ws-close", dir_name="close"),
+        run_with_credit_gate(
+            None,
+            DirectMCPBinding(user_id=None).drive(
+                producer.stream_workflow(
+                    BackgroundSubagentOrchestrator(graph, MagicMock()),
+                    {},
+                    {"configurable": {}},
+                )
+            ),
+        ),
+    )
+
+
+class TestGraphClosedBeforeTheExecutorGoesOn:
+    """Each way out of ``consume_workflow`` closes the turn's stream through
+    every wrapper before the flush or finalize: work still running then could
+    finish after its usage was read."""
+
+    async def _drive(self, *, on_third_write, stop=None):
+        from src.server.services.runs.stream_writer import TransportLostError
+
+        btm = _make_btm()
+        btm.enable_storage = True
+        graph = _InFlightGraph()
+        key = ("t-close", "r-close")
+        task_info = _make_task_info(thread_id=key[0], run_id=key[1])
+        btm.executions[key] = task_info
+        seen: dict[str, bool] = {}
+        writes = 0
+        in_write = asyncio.Event()
+
+        async def buffer(_thread_id, _run_id, _event):
+            nonlocal writes
+            writes += 1
+            if writes == 3:
+                if on_third_write == "lose transport":
+                    raise TransportLostError("stream gone")
+                if on_third_write == "flag a stop":
+                    # Seen at the next event, with no task cancel behind it.
+                    task_info.explicit_cancel = True
+                    task_info.cancel_event.set()
+                    return
+                in_write.set()
+                await asyncio.sleep(30)
+
+        async def flush(*_args):
+            seen["flush"] = graph.closed
+
+        async def finalize(*_args, kind, **_kwargs):
+            seen[kind] = graph.closed
+
+        with patch.object(btm, "_buffer_event_redis", side_effect=buffer), \
+             patch.object(btm, "_flush_checkpoint", side_effect=flush), \
+             patch.object(btm, "_finalize_run", side_effect=finalize), \
+             patch.object(btm, "_teardown_subagents_on_stop", new_callable=AsyncMock):
+            outer = asyncio.create_task(
+                btm._run_workflow(
+                    key[0], key[1], _ptc_workflow(graph),
+                    cancel_event=task_info.cancel_event,
+                )
+            )
+            if stop is not None:
+                await in_write.wait()
+                task_info.explicit_cancel = True
+                task_info.cancel_event.set()
+                stop(task_info)
+            with suppress(asyncio.CancelledError):
+                await outer
+        assert graph.call.cancelled()
+        return seen
+
+    @pytest.mark.asyncio
+    async def test_a_lost_transport_closes_the_graph_before_the_finalize(self):
+        seen = await self._drive(on_third_write="lose transport")
+        assert seen == {"failed": True}
+
+    @pytest.mark.asyncio
+    async def test_a_stop_during_a_write_closes_the_graph_before_the_flush(self):
+        seen = await self._drive(
+            on_third_write="hang", stop=lambda info: info.inner_task.cancel()
+        )
+        assert seen == {"flush": True, "cancelled": True}
+
+    @pytest.mark.asyncio
+    async def test_a_cooperative_cancel_closes_the_graph_before_the_flush(self):
+        seen = await self._drive(on_third_write="flag a stop")
+        assert seen == {"flush": True, "cancelled": True}
+
+
+# ---------------------------------------------------------------------------
 # Single-owner teardown ordering (decision 1A): drain BEFORE cancel_run_tasks,
 # everything scoped to the stopped run.
 # ---------------------------------------------------------------------------

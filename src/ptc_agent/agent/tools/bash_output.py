@@ -6,6 +6,7 @@ import structlog
 from langchain_core.tools import BaseTool, tool
 
 from ptc_agent.agent.backends.sandbox import SandboxBackend
+from ptc_agent.agent.limits import pending_read
 from ptc_agent.core.sandbox import livefs_mount
 
 logger = structlog.get_logger(__name__)
@@ -92,6 +93,9 @@ def create_bash_output_tool(
             # Format status line
             if is_running:
                 status = "RUNNING"
+                # How the loop guard tells a poll from progress: stdout
+                # grows, so no two reads of a running command look alike.
+                artifact = pending_read(artifact)
             elif exit_code == 0:
                 status = "COMPLETED (success)"
             else:

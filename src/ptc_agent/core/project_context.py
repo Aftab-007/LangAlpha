@@ -96,13 +96,17 @@ async def run_with_project(
     caller with no workspace folder of its own (Flash, the OSS shape).
     """
     if project is None:
-        async for event in stream:
-            yield event
+        async with contextlib.aclosing(stream):
+            async for event in stream:
+                yield event
         return
     token = set_project(project)
     try:
-        async for event in stream:
-            yield event
+        # Closed here, so closing this stream closes the turn's within the
+        # same await rather than whenever the garbage collector reaches it.
+        async with contextlib.aclosing(stream):
+            async for event in stream:
+                yield event
     finally:
         # A generator finalized from a task other than the one that started
         # it cannot reset the token, and that is not worth failing a turn for.

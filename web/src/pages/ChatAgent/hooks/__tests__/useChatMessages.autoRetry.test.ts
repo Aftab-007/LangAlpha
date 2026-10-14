@@ -222,7 +222,7 @@ describe('useChatMessages: a turn the server ends with `retry`', () => {
     // Failed rather than settled empty: `error` is what puts Retry on the bubble.
     const replies = assistants(result.current.messages);
     expect(replies).toHaveLength(1);
-    expect(replies[0]).toMatchObject({ isStreaming: false, error: true, content: 'chat.autoRetryExhausted' });
+    expect(replies[0]).toMatchObject({ isStreaming: false, error: true, structuredError: { message: 'chat.autoRetryExhausted' } });
     expect(result.current.isLoading).toBe(false);
     expect(published.some(settledEmpty)).toBe(false);
 
@@ -387,7 +387,7 @@ describe('useChatMessages: a turn the server ends with `retry`', () => {
     expect(assistants(result.current.messages)[0]).toMatchObject({
       isStreaming: false,
       error: true,
-      content: 'chat.autoRetryExhausted',
+      structuredError: { message: 'chat.autoRetryExhausted' },
     });
   });
 

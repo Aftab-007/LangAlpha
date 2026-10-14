@@ -134,7 +134,6 @@ const baseProps = {
   toolCallProcesses: {},
   todoListProcesses: {},
   subagentTasks: {},
-  hasError: false,
 } satisfies Partial<SegmentsProps>;
 
 function completedToolProc(createdAt: number, over: Record<string, unknown> = {}): Record<string, unknown> {

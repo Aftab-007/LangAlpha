@@ -456,7 +456,7 @@ describe('useChatMessages – /turns entries named by turn_index', () => {
     expect(result.current.messages.at(-1)).toMatchObject({
       error: true,
       unadmitted: true,
-      content: 'chat.busyRunningSend',
+      content: '',
       structuredError: { message: 'chat.busyRunningSend', kind: 'notice' },
     });
     expect(result.current.messageError).toBeNull();
@@ -560,7 +560,7 @@ describe('useChatMessages – /turns entries named by turn_index', () => {
     const { result } = hook;
     expect(result.current.messageError).toBeNull();
     const replies = result.current.messages.filter((m) => m.role === 'assistant') as AssistantMessage[];
-    expect(replies.map((m) => [m.content, !!m.error])).toEqual([
+    expect(replies.map((m) => [m.structuredError?.message, !!m.error])).toEqual([
       ['Failed to send message. Please try again.', true],
       ['Failed to send message. Please try again.', true],
     ]);

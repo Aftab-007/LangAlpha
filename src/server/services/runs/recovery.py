@@ -432,6 +432,7 @@ class RecoveryScanner:
                 "content": "the worker running this turn was lost",
                 "error_type": "worker_lost",
                 "error": "worker_lost",
+                "error_kind": "internal",
             },
         )
         if result.applied:
@@ -548,7 +549,8 @@ class RecoveryScanner:
         """What the dead run streamed that its checkpoints do not keep, and
         how much of its stream was read: the provenance of the tool calls
         they saved, how long the main agent thought over the messages they
-        saved, and the main agent's fallback notices.
+        saved, the main agent's fallback notices, and the error frame a
+        failed run sent.
 
         A run that stopped or failed may have streamed past its last save.
         The turn it leaves never shows the calls of that step, so their
@@ -567,7 +569,10 @@ class RecoveryScanner:
         )
         from src.server.services.history.reader import CheckpointHistoryReader
         from src.server.services.runs.reasoning_facts import saved_durations
-        from src.server.services.runs.sse_producer import fallback_from_frame
+        from src.server.services.runs.sse_producer import (
+            fallback_from_frame,
+            kept_error_frame,
+        )
 
         frames, quality = await self._read_stream(thread_id, run_id)
         if not frames:
@@ -592,6 +597,19 @@ class RecoveryScanner:
             if status in UNSAVED_RESULT_ENDINGS
             else []
         )
+        error_frame = (
+            next(
+                (
+                    kept
+                    for event_type, data in reversed(frames)
+                    if event_type == "error"
+                    and (kept := kept_error_frame(data)) is not None
+                ),
+                None,
+            )
+            if status == "error"
+            else None
+        )
         try:
             state = await CheckpointHistoryReader.get_instance().aget_run_state(
                 thread_id, run_id
@@ -603,7 +621,11 @@ class RecoveryScanner:
                 exc_info=True,
             )
             return (
-                ProducerRecord(provenance=provenance, model_fallbacks=fallbacks),
+                ProducerRecord(
+                    provenance=provenance,
+                    model_fallbacks=fallbacks,
+                    error_frame=error_frame,
+                ),
                 quality,
             )
         messages = (state.values or {}).get("messages") or () if state else ()
@@ -624,6 +646,7 @@ class RecoveryScanner:
                 provenance=kept,
                 reasoning_ms=saved_durations(frames, messages),
                 model_fallbacks=fallbacks,
+                error_frame=error_frame,
             ),
             quality,
         )

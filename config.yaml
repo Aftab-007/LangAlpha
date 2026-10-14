@@ -15,8 +15,6 @@ cli:
 
 # Application Settings
 debug: false
-ptc_recursion_limit: 2000
-flash_recursion_limit: 500
 
 # Prompt scaffolding level. Frontier models perform better with less procedural
 # instruction; smaller models need the expanded version.

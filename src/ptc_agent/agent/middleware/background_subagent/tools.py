@@ -12,7 +12,11 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from langchain_core.tools import StructuredTool
 
-from ptc_agent.agent.middleware.background_subagent.outcomes import is_credit_stop
+from ptc_agent.agent.limits import pending_read
+from ptc_agent.agent.middleware.background_subagent.outcomes import (
+    is_credit_stop,
+    is_time_limit_stop,
+)
 from ptc_agent.agent.middleware.background_subagent.task import bare_task_id
 from src.server.contracts.status import REPORT_BACK_STATUSES
 
@@ -248,6 +252,14 @@ async def _compose_missing_reply(registry, task_id: str, run: dict | None) -> st
     if archived:
         return _archived_reply(task_id, archived)
     failure = run.get("failure") if isinstance(run, dict) else None
+    if is_time_limit_stop(failure):
+        # The local notice's advice, so it does not hang on which worker
+        # answers: a run that outran its clock wants a narrower retry.
+        return (
+            f"Task-{task_id} ran past its time limit and was stopped; no "
+            f"result was produced. Narrow the task or split it before "
+            f"re-dispatching."
+        )
     detail = ""
     if isinstance(failure, dict) and failure.get("error"):
         detail = f" Error: {str(failure['error'])[:300]}"
@@ -257,9 +269,11 @@ async def _compose_missing_reply(registry, task_id: str, run: dict | None) -> st
     )
 
 
-async def _missing_task_reply(registry, task_id: str, run: dict | None = None) -> str:
+async def _missing_task_reply(
+    registry, task_id: str, run: dict | None = None
+) -> tuple[bool, str]:
     """Reply for a task_id with no authoritative live registry entry, answered
-    from the run ledger.
+    from the run ledger, and whether that run is still going.
 
     ``run`` may be a pre-fetched latest-run row (from ``_resolve_task_reply``)
     to avoid a redundant ledger read; when None it is fetched here.
@@ -285,7 +299,7 @@ async def _missing_task_reply(registry, task_id: str, run: dict | None = None) -
             await ledger.mark_result_delivered(str(run["task_run_id"]))
         except Exception:
             pass
-    return reply
+    return run is not None and str(run["status"]) == "in_progress", reply
 
 
 async def _resolve_task_reply(
@@ -328,7 +342,8 @@ async def _resolve_task_reply(
         # agent this run's fate, so local views (progress formatting, the
         # ledger-less sweep) must stop treating it as undelivered.
         task.result_seen = True
-    return (is_terminal, await _missing_task_reply(registry, task.task_id, run=run))
+    _, reply = await _missing_task_reply(registry, task.task_id, run=run)
+    return (is_terminal, reply)
 
 
 async def _task_reply(registry, task: BackgroundTask, *, listed: bool) -> tuple[bool, str]:
@@ -365,7 +380,7 @@ def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> Structu
     agent on its own, mid-turn as a steer or as a new turn once the turn ends.
     """
 
-    async def task_output(task_id: str | None = None) -> str:
+    async def task_output(task_id: str | None = None) -> tuple[str, dict | None]:
         """Get background task output.
 
         Args:
@@ -374,6 +389,13 @@ def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> Structu
         Returns:
             Result if completed, progress if still running
         """
+        # A read that finds work still running is marked on the artifact, which
+        # is how the loop guard tells polling from progress: the progress text
+        # itself changes on every read.
+        pending, reply = await _read(task_id)
+        return reply, pending_read() if pending else None
+
+    async def _read(task_id: str | None) -> tuple[bool, str]:
         registry = middleware.registry
         task_id = bare_task_id(task_id)
 
@@ -381,15 +403,14 @@ def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> Structu
             task = await registry.get_by_task_id(task_id)
             if not task:
                 return await _missing_task_reply(registry, task_id)
-            _, reply = await _task_reply(registry, task, listed=False)
-            return reply
+            return await _task_reply(registry, task, listed=False)
 
         # Workflow-owned children are hidden from the aggregate view (their
         # results belong to the driver) but remain individually addressable
         # via TaskOutput(task_id=...) as the drill-in escape hatch.
         all_tasks = await registry.get_turn_visible_tasks()
         if not all_tasks:
-            return "No background tasks have been assigned yet."
+            return False, "No background tasks have been assigned yet."
 
         # Each entry and its pending flag come from one reading of the task, so
         # the header's counts cannot disagree with the body.
@@ -403,12 +424,13 @@ def create_task_output_tool(middleware: BackgroundSubagentMiddleware) -> Structu
             f"**Background Tasks** ({len(all_tasks)} total: "
             f"{completed_count} completed, {pending_count} running)\n\n"
         )
-        return header + "".join(entry for _, entry in entries)
+        return pending_count > 0, header + "".join(entry for _, entry in entries)
 
     return StructuredTool.from_function(
         name="TaskOutput",
         description=TASK_OUTPUT_DESCRIPTION,
         coroutine=task_output,
+        response_format="content_and_artifact",
     )
 
 

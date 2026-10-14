@@ -9,7 +9,7 @@
  * reply failed, with Retry on it, once it stops.
  */
 
-import { finalizeAssistantMessage } from './finalizeMessage';
+import { failAssistantMessage } from './finalizeMessage';
 import { updateMessage } from '../../hooks/utils/messageHelpers';
 import type { ChatMessage } from '@/types/chat';
 import type { SSEEvent, SetMessages } from '../types';
@@ -134,7 +134,7 @@ export interface RetrySettlerDeps {
   wasStoppedRef: { readonly current: boolean };
   sessionEpochRef: { readonly current: number };
   threadIdRef: { readonly current: string | null };
-  /** Shown on a reply that failed before it said anything. */
+  /** The failure a reply shows once the client stops retrying it. */
   failedText: string;
   /** The same, once the client's own resends of it are spent. */
   exhaustedText: string;
@@ -144,7 +144,7 @@ const failReply = (deps: RetrySettlerDeps, bubbleId: string, text: string): void
   deps.setMessages((prev) =>
     updateMessage(prev, bubbleId, (msg) =>
       msg.role === 'assistant' && msg.isStreaming
-        ? { ...finalizeAssistantMessage(msg, 'failed'), content: msg.content || text }
+        ? failAssistantMessage(msg, { message: text })
         : msg,
     ),
   );

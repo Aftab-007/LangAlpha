@@ -70,7 +70,8 @@ class TestBashOutputMcpTraceArtifact:
             )
         )
         msg = await tool.ainvoke(_tool_call("cmd-1"))
-        assert msg.artifact == {"mcp_trace": []}
+        # Marked as a read of work still running, which the loop guard counts.
+        assert msg.artifact == {"mcp_trace": [], "pending_read": True}
         assert "RUNNING" in msg.content
 
     @pytest.mark.asyncio

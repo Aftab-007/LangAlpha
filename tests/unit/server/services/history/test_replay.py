@@ -2857,9 +2857,9 @@ async def test_provenance_synthesized_from_rows_anchored(monkeypatch):
 
 
 async def test_terminal_error_synthesized_on_both_paths(monkeypatch):
-    """An errored response row reconstructs the terminal error event — on the
-    checkpoint path and the sse path alike (stored events never contain it:
-    live it is yielded after the persist snapshot)."""
+    """An errored response row whose stored events archived no error frame
+    reconstructs the terminal error event, on the checkpoint path and the sse
+    path alike."""
     response = _response(0, status="error")
     response["errors"] = ["boom exploded"]
     response["metadata"] = {"error_type": "llm_provider_error", "error_class": "RuntimeError"}

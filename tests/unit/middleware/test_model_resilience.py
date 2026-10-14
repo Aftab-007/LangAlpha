@@ -169,6 +169,62 @@ class TestRetryBehavior:
         assert fallbacks[0]["status_code"] == 404
 
 
+class TestStalledStream:
+    @pytest.mark.asyncio
+    async def test_a_stall_after_the_stream_started_is_retried_once(self, events):
+        from langchain_openai.chat_models._client_utils import StreamChunkTimeoutError
+
+        client = _FakeModel("primary-model")
+        fallback_client = _FakeModel("fallback-a")
+        mw = _make_middleware(client, fallbacks=[("fallback-a", fallback_client)])
+        calls = []
+
+        async def handler(req):
+            calls.append(req.model)
+            if req.model is client:
+                raise StreamChunkTimeoutError(600.0, chunks_received=231)
+            return "ok-from-fallback"
+
+        assert await mw.awrap_model_call(_FakeRequest(client), handler) == "ok-from-fallback"
+        assert calls == [client, client, fallback_client]
+
+    @pytest.mark.asyncio
+    async def test_a_stall_before_any_chunk_is_retried_once(self, events):
+        # Four attempts at the full bound each held a candidate 40 minutes
+        # before its fallback.
+        from langchain_openai.chat_models._client_utils import StreamChunkTimeoutError
+
+        client = _FakeModel("primary-model")
+        fallback_client = _FakeModel("fallback-a")
+        mw = _make_middleware(
+            client, fallbacks=[("fallback-a", fallback_client)], max_retries=3
+        )
+        calls = []
+
+        async def handler(req):
+            calls.append(req.model)
+            if req.model is client:
+                raise StreamChunkTimeoutError(600.0, chunks_received=0)
+            return "ok-from-fallback"
+
+        assert await mw.awrap_model_call(_FakeRequest(client), handler) == "ok-from-fallback"
+        assert calls == [client, client, fallback_client]
+
+    @pytest.mark.asyncio
+    async def test_another_timeout_keeps_the_full_retries(self, events):
+        client = _FakeModel("primary-model")
+        mw = _make_middleware(client, max_retries=3)
+        calls = []
+
+        async def handler(req):
+            calls.append(req)
+            raise TimeoutError("read timed out")
+
+        with pytest.raises(TimeoutError):
+            await mw.awrap_model_call(_FakeRequest(client), handler)
+        assert len(calls) == 4
+
+
 class TestFallbackChain:
     @pytest.mark.asyncio
     async def test_second_fallback_emits_non_primary_switch(self, events):

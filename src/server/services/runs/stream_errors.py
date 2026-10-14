@@ -156,7 +156,9 @@ def classify_stream_exception(exc: BaseException) -> Dict[str, Any]:
         for prefix in _UPSTREAM_MODULE_PREFIXES:
             if module == prefix or module.startswith(prefix + "."):
                 status = getattr(current, "status_code", None)
-                if not isinstance(status, int):
+                # A timeout's message carries counts, never a status: a
+                # stall's ``chunks_received=413`` is not a refused payload.
+                if not isinstance(status, int) and not isinstance(current, TimeoutError):
                     status = _parse_status_from_message(str(current))
                 return {
                     "kind": "upstream",
@@ -166,6 +168,49 @@ def classify_stream_exception(exc: BaseException) -> Dict[str, Any]:
         current = current.__cause__ or current.__context__
 
     return {"kind": "internal", "status_code": None, "provider_module": None}
+
+
+def failure_kind(exc: BaseException) -> Dict[str, Any]:
+    """``classify_stream_exception``, read with the resilience trace.
+
+    The trace proves the failure happened inside a model call, so a generic
+    wrapper exception (no recognizable SDK module in the chain) must not
+    demote it to ``internal``: the frontend routes internal errors to a
+    generic banner that drops the model / attempted-models context.
+    """
+    info = classify_stream_exception(exc)
+    if info["kind"] != "internal":
+        return info
+    trace = find_resilience_trace(exc)
+    if trace is None:
+        return info
+    primary_status: Any = None
+    attempted_raw = trace.get("attempted_models")
+    if isinstance(attempted_raw, list) and attempted_raw and isinstance(attempted_raw[0], dict):
+        primary_status = attempted_raw[0].get("status_code")
+    return {
+        "kind": "upstream",
+        "status_code": primary_status if isinstance(primary_status, int) else None,
+        "provider_module": None,
+    }
+
+
+def failure_kind_metadata(exc: BaseException) -> Dict[str, Any]:
+    """Ledger metadata naming whose fault a failed run was, as its ``error``
+    frame names it. A reload replays the frame the run sent with this kind
+    stamped on it, so the failure reads as it did live. A run whose stream
+    could carry no frame (its quota spent) sent none, and the row's own
+    error item is then the only place the failure is worded.
+
+    ``{}`` for the turn's time limit: its own frame is worded for the user and
+    carries no kind, and the reload replays it unchanged.
+    """
+    # Lazy: sse_producer imports this module.
+    from src.server.services.runs.sse_producer import TurnTimeLimitError
+
+    if isinstance(exc, TurnTimeLimitError):
+        return {}
+    return {"error_kind": failure_kind(exc)["kind"]}
 
 
 def error_event_data(
@@ -191,29 +236,8 @@ def error_event_data(
         "message": "An error occurred during processing",
     }
     if exc is not None:
-        info = classify_stream_exception(exc)
+        info = failure_kind(exc)
         trace = find_resilience_trace(exc)
-        if trace is not None and info["kind"] == "internal":
-            # The trace proves the failure happened inside a model call.
-            # A generic wrapper exception (no recognizable SDK module in
-            # the chain) must not demote it to "internal" — the frontend
-            # routes internal errors to a generic banner that drops the
-            # model / attempted-models context.
-            primary_status: Any = None
-            attempted_raw = trace.get("attempted_models")
-            if (
-                isinstance(attempted_raw, list)
-                and attempted_raw
-                and isinstance(attempted_raw[0], dict)
-            ):
-                primary_status = attempted_raw[0].get("status_code")
-            info = {
-                "kind": "upstream",
-                "status_code": primary_status
-                if isinstance(primary_status, int)
-                else None,
-                "provider_module": None,
-            }
         data["error_kind"] = info["kind"]
         if info["status_code"] is not None:
             data["status_code"] = info["status_code"]

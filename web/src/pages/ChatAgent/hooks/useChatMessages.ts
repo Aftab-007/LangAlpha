@@ -4,7 +4,7 @@
  * and streaming updates.
  */
 
-import { finalizeAssistantMessage } from '../session/stream/finalizeMessage';
+import { failAssistantMessage, finalizeAssistantMessage } from '../session/stream/finalizeMessage';
 import type React from 'react';
 import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
@@ -2058,10 +2058,8 @@ export function useChatMessages(
         // Demoted path: the failure belongs to the new turn's assistant, not the steering badge.
         const finalAssistantId = demotedAssistantId;
         setMessages((prev) =>
-          updateMessage(prev, finalAssistantId, (msg) => ({
-            ...finalizeAssistantMessage(msg, 'failed'),
-            content: msg.content || 'Failed to send message. Please try again.',
-          }))
+          updateMessage(prev, finalAssistantId, (msg) =>
+            failAssistantMessage(msg, { message: 'Failed to send message. Please try again.' }))
         );
         demotedAdmission.current?.unadmit();
         const { banner } = refusalBanner(err);
@@ -2437,10 +2435,8 @@ export function useChatMessages(
             setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
           } else {
             setMessages((prev) =>
-              updateMessage(prev, assistantMessageId, (msg) => ({
-                ...finalizeAssistantMessage(msg, 'failed'),
-                content: msg.content || 'Failed to send message. Please try again.',
-              }))
+              updateMessage(prev, assistantMessageId, (msg) =>
+                failAssistantMessage(msg, { message: 'Failed to send message. Please try again.' }))
             );
           }
         } finally {
@@ -2682,10 +2678,8 @@ export function useChatMessages(
         const { banner } = refusalBanner(err);
         if (banner !== null) setMessageError(banner);
         setMessages((prev) =>
-          updateMessage(prev, assistantMessageId, (msg) => ({
-            ...finalizeAssistantMessage(msg, 'failed'),
-            content: msg.content || 'Failed to resume this turn. Please try again.',
-          }))
+          updateMessage(prev, assistantMessageId, (msg) =>
+            failAssistantMessage(msg, { message: 'Failed to resume this turn. Please try again.' }))
         );
       }
     } finally {
@@ -3066,10 +3060,8 @@ export function useChatMessages(
       const { banner } = refusalBanner(err);
       if (banner !== null) setMessageError(banner);
       setMessages((prev) =>
-        updateMessage(prev, assistantMessageId, (msg) => ({
-          ...finalizeAssistantMessage(msg, 'failed'),
-          content: msg.content || 'Failed to process request. Please try again.',
-        }))
+        updateMessage(prev, assistantMessageId, (msg) =>
+          failAssistantMessage(msg, { message: 'Failed to process request. Please try again.' }))
       );
     } finally {
       if (mainStreamAbortRef.current === abortController) {
@@ -3360,6 +3352,7 @@ export function useChatMessages(
       const counted = turnOf(liveMessages.get(), bubbleId);
       if (counted !== undefined && counted !== turn) requestThreadReload();
     },
+    readMessage: (bubbleId) => liveMessages.get().find((m) => m.id === bubbleId),
   };
 
   /** Composition-level callbacks for the recovery/ownership lifecycle; direct

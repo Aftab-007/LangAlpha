@@ -61,11 +61,11 @@ def build_sse_replay_items(
     """Replay items sourced verbatim from persisted ``sse_events`` (the fallback).
 
     Same ``{"event", "data"}`` shape as the checkpoint path, so the endpoint
-    emits either source through one loop. The terminal error event is
-    synthesized from the response row here too — it is yielded live *after*
-    the persist snapshot, so stored events never contain it. So is a user
-    stop's close when the archive lacks one. ``open_runs`` names the run of a
-    turn still going (``ThreadRows.open_runs``).
+    emits either source through one loop. The response row closes the turn
+    here too, by the same rule: its error stamps its kind on the stored
+    frame, or stands in for a frame the stored events lack, and a user
+    stop's close is added when they have none. ``open_runs`` names the run of
+    a turn still going (``ThreadRows.open_runs``).
     """
     open_runs = open_runs or {}
     out: list[dict[str, Any]] = []

@@ -384,3 +384,44 @@ async def test_a_stopped_or_failed_runs_notices_are_kept_as_its_finalize_keeps_t
     assert [r["id"] for r in finalized] == ["fb-main"]
     assert "sekret" not in json.dumps(finalized)
     assert record.model_fallbacks == (finalized if kept else [])
+
+
+# ─── The error frame ──────────────────────────────────────────────────
+
+
+class _FailingGraph:
+    def astream(
+        self, _input_state, config=None, stream_mode=None, subgraphs=None,
+        durability=None,
+    ):
+        async def _gen():
+            raise RuntimeError("boom")
+            yield  # pragma: no cover
+
+        return _gen()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "kept"), [("error", True), ("cancelled", False)])
+async def test_a_failed_runs_error_frame_is_kept_as_its_finalize_keeps_it(
+    status, kept
+):
+    handler = RunSSEProducer(thread_id=THREAD, run_id=RUN)
+    frames = []
+    with pytest.raises(RuntimeError):
+        async for frame in handler.stream_workflow(
+            _FailingGraph(), input_state={}, config={}
+        ):
+            frames.append(frame)
+    entries = [
+        (f"{100 + i}-0".encode(), {b"event": frame.encode()})
+        for i, frame in enumerate(frames)
+    ]
+    # Another lane's failure belongs to its own card.
+    entries.append((b"200-0", _wire("error", {"agent": "task:k7", "error": "lane"})))
+
+    record, _ = await _salvage(entries, _reader(_SAVED_STATE), status=status)
+
+    finalized = handler.record().error_frame
+    assert finalized["error"] == "boom"
+    assert record.error_frame == (finalized if kept else None)

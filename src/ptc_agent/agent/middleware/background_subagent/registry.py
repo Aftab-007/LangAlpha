@@ -50,6 +50,10 @@ CANCEL_UNWIND_TIMEOUT = 15.0
 # a hung ledger call must not block the user-facing local cancel.
 _CANCEL_INTENT_STAMP_TIMEOUT_S = 2.0
 
+# How often a heartbeat restamps ``alive_at``. Beats come every 0.1s, and the
+# orphan collector polls every 30s at most, so finer stamps buy nothing.
+_ALIVE_STAMP_INTERVAL_S = 5.0
+
 # Strong refs for shielded bills: one a cancelled resume no longer awaits is
 # otherwise eligible for GC mid-flight.
 _in_flight_bills: set[asyncio.Task] = set()
@@ -631,6 +635,23 @@ class BackgroundTaskRegistry:
             return frames
 
         await self._emit(task, offer, terminal=terminal)
+
+    async def note_alive(self, task: "BackgroundTask") -> None:
+        """Stamp a heartbeat from the task's model call on it and its owner.
+
+        A child's liveness is its owner's, as its text is, since the orphan
+        collector watches the owner alone. Looks before taking the lock, as
+        ``flush_held_delta`` does, since beats come on every tenth of a second.
+        """
+        now = time.time()
+        if now - task.alive_at < _ALIVE_STAMP_INTERVAL_S:
+            return
+        task.alive_at = now
+        if task.owner_task_id:
+            async with self._lock:
+                owner = self._locked_get_by_task_id(task.owner_task_id)
+            if owner is not None:
+                owner.alive_at = now
 
     async def flush_held_delta(
         self, task: "BackgroundTask", *, due_only: bool = False

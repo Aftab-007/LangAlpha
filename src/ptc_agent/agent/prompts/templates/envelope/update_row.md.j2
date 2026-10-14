@@ -58,6 +58,14 @@
    summaries, once a run of tool calls has gone by with no write to the
    notes, and splits its words the same way.
 
+   A `turn_time_up` row (`turn.TIME_UP_ROW_KIND`) asks the main agent for its
+   answer once the turn's wall clock is near its end. Its text carries the
+   minutes; the ask is here.
+   A `turn_time_up_withdrawn` row (`turn.TIME_UP_WITHDRAWN_ROW_KIND`) takes that
+   ask back on the first call of a later run with a clock of its own, since
+   the ask outlives the run it was about. Its text is empty and every word is
+   here.
+
    A `turn_opened` row (`turn.TURN_ROW_KIND`) renders bare: it is the turn's own
    anchor, already prose with its own stamp, so a header would only label the
    clock with a second copy of the time.
@@ -113,6 +121,14 @@ This conversation will be summarized soon
 Your checkpoint notes have not been written for a while
 
 {{ update.text }} If something significant has happened since, add it to the note of the task it belongs to, starting that note if there is none, one terse line each: what the user decided or told you, an approach you took or dropped and why, a finding with its source, a step finished and what it produced, a hand-off sent or reported back. Correct in place, or remove, any line that is no longer true, a plan line included. If nothing significant happened, or this is a quick answer, carry on without writing: a line that only says the work continues adds nothing.
+{% elif update.kind == "turn_time_up" %}
+This turn is almost out of time
+
+{{ update.text }} Start nothing new. In your next reply, give the user your answer from what you have: what you found and produced, what is left undone, and that they can reply to have you continue from here.
+{% elif update.kind == "turn_time_up_withdrawn" %}
+The earlier time limit no longer applies
+
+This turn has a new time limit, so the note above about it running out is withdrawn, and your tools run again.
 {% elif update.kind == "workspace_changed" %}
 The workspace was renamed or redescribed after the copy in <workspace> was frozen
 

@@ -23,6 +23,7 @@ from .ask_user import AskUserMiddleware
 # is re-exported: the lease, the lane state and the ContextVar are the gate's
 # own wiring and their callers import them from the module directly.
 from .credit_gate import CreditGateMiddleware
+from .repeat_guard import RepeatCallGuardMiddleware
 
 # Tool middleware (argument parsing, error handling, result normalization, leak detection, code validation, empty call retry)
 from .tool import (
@@ -131,6 +132,7 @@ __all__ = [
     # Ask user
     "AskUserMiddleware",
     "CreditGateMiddleware",
+    "RepeatCallGuardMiddleware",
     # Multimodal middleware (for read_file image/PDF support)
     "MultimodalMiddleware",
     "MultimodalStripMiddleware",

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.config import LLMConfig
 
 PREP = "src.server.handlers.chat.request_prep"
@@ -313,7 +314,6 @@ class TestBuildGraphConfig:
                 platform=None,
             ),
             effective_model="gpt-4o",
-            recursion_limit=100,
         )
         defaults.update(kwargs)
         with (
@@ -323,15 +323,15 @@ class TestBuildGraphConfig:
             return build_graph_config(**defaults)
 
     def test_basic_flash_config(self):
-        config = self._build(mode="flash", recursion_limit=500)
+        config = self._build(mode="flash")
         assert config["configurable"]["agent_mode"] == "flash"
         assert config["configurable"]["thread_id"] == "t-1"
-        assert config["recursion_limit"] == 500
+        assert config["recursion_limit"] == UNBOUNDED_RECURSION_LIMIT
 
     def test_ptc_config(self):
-        config = self._build(mode="ptc", recursion_limit=2000)
+        config = self._build(mode="ptc")
         assert config["configurable"]["agent_mode"] == "ptc"
-        assert config["recursion_limit"] == 2000
+        assert config["recursion_limit"] == UNBOUNDED_RECURSION_LIMIT
 
     def test_checkpoint_id_added(self):
         request = MagicMock(
@@ -372,6 +372,29 @@ class TestBuildGraphConfig:
         config = self._build(token_callback=None)
         assert "callbacks" not in config
 
+    @pytest.mark.parametrize("token_callback", [MagicMock(), None])
+    def test_traced_turn_names_a_tracer_that_drops_its_tree(self, token_callback):
+        """A turn has no step cap, so the tracer langchain_core would build
+        holds a tree that grows for as long as the turn runs."""
+        from langsmith.run_helpers import tracing_context
+
+        from src.observability.langsmith_tracer import NonRetainingTracer
+
+        with tracing_context(enabled=True, client=MagicMock()):
+            config = self._build(token_callback=token_callback)
+
+        *rest, tracer = config["callbacks"]
+        assert rest == ([token_callback] if token_callback else [])
+        assert type(tracer) is NonRetainingTracer
+
+    def test_untraced_turn_names_no_tracer(self):
+        from langsmith.run_helpers import tracing_context
+
+        cb = MagicMock()
+        with tracing_context(enabled=False):
+            config = self._build(token_callback=cb)
+        assert config["callbacks"] == [cb]
+
     def test_extra_configurable_merged(self):
         config = self._build(extra_configurable={"custom_flag": True})
         assert config["configurable"]["custom_flag"] is True
@@ -399,7 +422,6 @@ class TestBuildGraphConfig:
                     fast_mode=True, platform=None,
                 ),
                 effective_model="claude-sonnet-5",
-                recursion_limit=100,
             )
 
         metadata = config["metadata"]

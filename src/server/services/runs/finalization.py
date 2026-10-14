@@ -20,7 +20,10 @@ from src.server.contracts.status import (
     is_user_stop,
 )
 from src.server.database.runs.lifecycle import ProducerRecord, RunOutcome
-from src.server.services.runs.stream_errors import model_call_failure
+from src.server.services.runs.stream_errors import (
+    failure_kind_metadata,
+    model_call_failure,
+)
 from src.server.utils.persistence_utils import (
     calculate_execution_time,
     get_token_usage_from_callback,
@@ -160,6 +163,8 @@ async def assemble_finalize_artifacts(
                 ),
             )
         )
+        if status == "error":
+            persist_metadata.update(failure_kind_metadata(exc))
     # The pause's own words, which settling the run's automation relays. A
     # pause without words is stamped null, so settling knows there is
     # nothing to relay.
@@ -226,6 +231,9 @@ async def _producer_record(
         return None
     try:
         record = handler.record(stop_events)
+        if status != "error":
+            # Replay shows the frame only beside the failure the row records.
+            record = replace(record, error_frame=None)
         if status not in UNSAVED_RESULT_ENDINGS:
             # Every step of a run that ended otherwise committed its notices.
             return replace(record, model_fallbacks=[])

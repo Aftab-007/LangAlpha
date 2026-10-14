@@ -139,7 +139,9 @@ async def chief_of_staff_threads(
     if not user_id:
         return error_command("user_id not found in config", tool_call_id)
     if action == "list":
-        return await threads_list(user_id, workspace_id, tool_call_id)
+        return await threads_list(
+            user_id, workspace_id, tool_call_id, configurable.get("thread_id")
+        )
     if action == "stop":
         return await threads_stop(
             user_id,

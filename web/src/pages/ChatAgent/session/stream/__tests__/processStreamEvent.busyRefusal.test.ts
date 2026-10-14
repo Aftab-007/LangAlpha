@@ -71,7 +71,7 @@ describe('live: a send refused because the chat was busy', () => {
 
     process(refusal(code, CLI_WORDS));
 
-    expect(bubble()).toMatchObject({ error: true, content: key, structuredError: { message: key, kind: 'notice' } });
+    expect(bubble()).toMatchObject({ error: true, content: '', structuredError: { message: key, kind: 'notice' } });
   });
 
   it('keeps the server\'s words for a refusal that is not about a busy chat', () => {
@@ -79,7 +79,7 @@ describe('live: a send refused because the chat was busy', () => {
 
     process(refusal('turn_conflict', 'A concurrent request already wrote a different query at this turn; refresh the thread and resend.'));
 
-    expect(bubble().content).toBe('A concurrent request already wrote a different query at this turn; refresh the thread and resend.');
-    expect(bubble().structuredError).toBeUndefined();
+    expect(bubble().content).toBe('');
+    expect(bubble().structuredError).toEqual({ message: 'A concurrent request already wrote a different query at this turn; refresh the thread and resend.' });
   });
 });

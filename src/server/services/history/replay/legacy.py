@@ -108,9 +108,10 @@ PASSTHROUGH_EVENTS = (
 # Projected/synthesized event types the stored stream also carries in full.
 # A turn with stored events drops its projected copies and replays the stored
 # ones (richer historical payloads, proven anchoring); a turn without them
-# keeps the projected copies. The terminal ``error`` event is NOT here —
-# stored events never contain it (persisted before it is yielded), so it is
-# synthesized from the response row on both paths unconditionally.
+# keeps the projected copies. The terminal ``error`` is not here: nothing
+# projects it. The stored frame passes through (PASSTHROUGH_EVENTS), and the
+# response row adds its own item after the merge only for a turn whose
+# stored events hold none (``items.terminal_items``).
 STORED_PREFERRED_EVENTS = (
     "steering_delivered",
     "context_window",

@@ -308,7 +308,7 @@ describe('MessageList — Retry on the newest reply only', () => {
   const retryBtn = (container: HTMLElement, id: string) =>
     bubble(container, id)?.querySelector('[title="chat.actions.retry"]') ?? null;
   const failed = (id: string, turnIndex: number) =>
-    assistant(id, { turnIndex, error: true, content: 'Failed to send message. Please try again.', contentSegments: [] });
+    assistant(id, { turnIndex, error: true, content: '', contentSegments: [], structuredError: { message: 'Failed to send message. Please try again.' } });
 
   it('offers Retry on the newest failed reply and not on an older one', () => {
     const { container } = renderList(
@@ -325,5 +325,49 @@ describe('MessageList — Retry on the newest reply only', () => {
       { onRetry: vi.fn() },
     );
     expect(retryBtn(container, 'a0')).toBeNull();
+  });
+});
+
+describe('MessageList: a failed turn', () => {
+  const PROSE = 'Revenue grew 12% on the quarter.';
+  const FAILURE = 'Error code: 503 - overloaded';
+  const streamedThenFailed = (overrides: Msg = {}) => assistant('a0', {
+    turnIndex: 0,
+    error: true,
+    content: PROSE,
+    contentSegments: [{ type: 'text', content: PROSE, order: 0 }],
+    ...overrides,
+  });
+  const prose = (container: HTMLElement) =>
+    [...(bubble(container, 'a0')?.querySelectorAll('[data-testid="markdown-content"]') ?? [])].map((el) => el.textContent);
+
+  it('keeps what it streamed as its reply and shows the failure once, after it', () => {
+    const { container, getAllByText } = renderList(
+      [userMsg('u0', { turnIndex: 0 }), streamedThenFailed({ structuredError: { message: FAILURE, kind: 'upstream', statusCode: 503 } })],
+      { onRetry: vi.fn() },
+    );
+    expect(prose(container)).toEqual([PROSE]);
+    expect(getAllByText(FAILURE)).toHaveLength(1);
+    expect(getAllByText('chat.errorUpstreamHeadlineStatus')).toHaveLength(1);
+    expect(bubble(container, 'a0')?.querySelector('[title="chat.actions.retry"]')).not.toBeNull();
+  });
+
+  it('draws no card for a failure the banner reports', () => {
+    const { container, queryByText } = renderList(
+      [userMsg('u0', { turnIndex: 0 }), streamedThenFailed()],
+      { onRetry: vi.fn() },
+    );
+    expect(prose(container)).toEqual([PROSE]);
+    expect(queryByText('chat.errorInternalHeadline')).toBeNull();
+    expect(bubble(container, 'a0')?.querySelector('[title="chat.actions.retry"]')).not.toBeNull();
+  });
+
+  it('shows the card in place of a reply when the turn produced nothing', () => {
+    const { container, getAllByText } = renderList(
+      [userMsg('u0', { turnIndex: 0 }), streamedThenFailed({ content: '', contentSegments: [], structuredError: { message: '', kind: 'internal' } })],
+      { onRetry: vi.fn() },
+    );
+    expect(prose(container)).toEqual([]);
+    expect(getAllByText('chat.errorInternalHeadline')).toHaveLength(1);
   });
 });

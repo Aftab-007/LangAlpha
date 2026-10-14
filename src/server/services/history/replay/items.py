@@ -7,7 +7,9 @@ from typing import Any
 
 from src.server.contracts.status import TERMINAL_STATUSES
 from src.server.database.provenance import provenance_row_to_event
+from src.server.services.history.replay import facts as replay_facts
 from src.server.services.history.replay import stopped
+from src.server.services.history.replay.lanes import MAIN_LANE, agent_lane
 from src.server.services.runs.credit_usage import build_credit_usage_data
 from src.server.utils.error_sanitization import (
     sanitize_error_text as _sanitize_error_text,
@@ -215,22 +217,35 @@ def _error_item(
     marks the turn failed on a reload and offers its Retry, and a failure whose
     exception had no message (or a row from before errors were stored) is as
     failed as any other. The client words an empty one.
+
+    The row's ``error_kind`` rides along, as the live frame carried it. A
+    fault of this service's own (``internal``) replays with no text: the
+    stored error is a diagnostic, naming the run and its stream, and the
+    client words that failure by its kind.
     """
     if not response or response.get("status") != "error":
         return None
     errors = response.get("errors")
     last = errors[-1] if isinstance(errors, list) and errors else ""
-    metadata = response.get("metadata") or {}
+    metadata = response.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    kind = metadata.get("error_kind")
     data: dict[str, Any] = {
         "thread_id": thread_id,
         # Rows may predate persistence-side sanitization. Scrub again at the
         # trust boundary so historical secrets never reach the replay wire.
-        "error": _sanitize_error_text(str(last)) if last else "",
+        "error": _sanitize_error_text(str(last)) if last and kind != "internal" else "",
         "type": "workflow_error",
     }
     for key in ("error_type", "error_class"):
-        if isinstance(metadata, dict) and metadata.get(key):
+        if metadata.get(key):
             data[key] = metadata[key]
+    if kind in ("upstream", "internal"):
+        data["error_kind"] = kind
+        status = metadata.get("error_status_code")
+        if kind == "upstream" and isinstance(status, int):
+            data["status_code"] = status
     return {"event": "error", "data": data}
 
 
@@ -241,13 +256,47 @@ def terminal_items(
 ) -> list[dict[str, Any]]:
     """The closing events a turn's response row owes its replay, in wire order.
 
-    Neither is in the stored events (both are yielded live after the persist
-    snapshot). The stop close reads ``turn_items``, so it is computed before
-    the error item is appended by the caller.
+    A client shows one failure per turn (the web the last error, older
+    clients the first), and the ``error`` frame the user saw has the model,
+    hints and words the row lacks. So a failed turn replays that frame with
+    the row's kind stamped on it: in place, when an older turn's stored
+    events hold it, or as its row's replay facts kept it. Only a failure
+    that sent no frame (its stream quota spent, a fault outside the
+    producer) gets the row's own item. Both read ``turn_items``, so the
+    caller appends after.
     """
     stop = stopped.stop_close_item(thread_id, response, turn_items)
     error = _error_item(thread_id, response)
+    if error is not None:
+        stored = _stored_error(turn_items)
+        frame = stored or replay_facts.error_frame(thread_id, response)
+        if frame is not None:
+            _stamp_row_kind(frame["data"], error["data"])
+            error = None if stored else frame
     return [item for item in (stop, error) if item]
+
+
+def _stored_error(turn_items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The main lane's last ``error`` frame: a subagent's failure belongs to
+    its card, not to the turn."""
+    for item in reversed(turn_items):
+        if item["event"] == "error" and agent_lane(item["data"].get("agent")) == MAIN_LANE:
+            return item
+    return None
+
+
+def _stamp_row_kind(frame: dict[str, Any], row: dict[str, Any]) -> None:
+    """The row's kind and status over the frame's own, as finalize read them
+    off the same exception. An ``internal`` frame then drops its text by
+    ``_error_item``'s rule, also one whose row predates kinds: its own kind
+    names the same fault, and its text is the same diagnostic."""
+    for key in ("error_kind", "status_code"):
+        if key in row:
+            frame[key] = row[key]
+    if frame.get("error_kind") == "internal":
+        frame["error"] = ""
+    elif isinstance(frame.get("error"), str):
+        frame["error"] = _sanitize_error_text(frame["error"])
 
 
 def _enrich(

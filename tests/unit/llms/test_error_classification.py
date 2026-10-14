@@ -2,10 +2,13 @@
 
 import pytest
 
+from langchain_openai.chat_models._client_utils import StreamChunkTimeoutError
+
 from src.llms.error_classification import (
     NON_RETRYABLE_STATUSES,
     extract_status_code,
     is_retryable_error,
+    is_stalled_stream,
 )
 
 
@@ -151,3 +154,27 @@ class TestDashScopeFailureStatus:
         # rather than assert a wrong status.
         assert self._error(code, message).status_code is None
         assert is_retryable_error(self._error(code, message)) is True
+
+
+class TestStreamTimeouts:
+    def test_chunk_count_in_a_timeout_message_is_not_a_status(self):
+        exc = StreamChunkTimeoutError(120.0, model_name="m", chunks_received=413)
+        assert extract_status_code(exc) is None
+        assert is_retryable_error(exc)
+
+    def test_a_timeout_wrapped_by_another_error_is_still_skipped(self):
+        try:
+            try:
+                raise StreamChunkTimeoutError(120.0, chunks_received=422)
+            except TimeoutError as e:
+                raise RuntimeError("model call failed") from e
+        except RuntimeError as outer:
+            assert extract_status_code(outer) is None
+
+    def test_stalled_whether_or_not_the_stream_had_started(self):
+        # The bound also covers the wait for the first chunk, so a stream that
+        # never started costs each attempt the whole bound as well.
+        assert is_stalled_stream(StreamChunkTimeoutError(120.0, chunks_received=1))
+        assert is_stalled_stream(StreamChunkTimeoutError(120.0, chunks_received=0))
+        assert not is_stalled_stream(TimeoutError("read timed out"))
+        assert not is_stalled_stream(Exception("chunks_received=5"))

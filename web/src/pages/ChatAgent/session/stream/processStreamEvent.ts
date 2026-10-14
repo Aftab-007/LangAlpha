@@ -4,13 +4,14 @@
  * StreamRuntime lane port plus cross-lane orchestration callbacks.
  */
 
-import { finalizeAssistantMessage } from './finalizeMessage';
-import { settleStoppedBubble } from './stopBubble';
+import { settleFailedBubble, settleStoppedBubble } from './stopBubble';
+import { readStreamFailure } from './streamFailure';
+import { continuationChain } from './continuedBubbles';
 import { readRetryNotice } from './autoRetry';
 import { noteLiveRun } from '../latestRun';
-import { isUpstreamHint, type StructuredError } from '@/utils/rateLimitError';
+import type { StructuredError } from '@/utils/rateLimitError';
 import { applyAnnotationArtifact } from '@/pages/MarketView/stores/chartAnnotationStore';
-import type { AssistantMessage } from '@/types/chat';
+import type { AssistantMessage, ChatMessage } from '@/types/chat';
 import { CREDIT_STOP_ERROR_TYPE, isDeliveredReport } from '@/types/sse';
 import { setStoredThreadId } from '../../hooks/utils/threadStorage';
 import { createAssistantMessage, updateMessage } from '../../hooks/utils/messageHelpers';
@@ -68,6 +69,8 @@ export interface StreamRouterDeps {
   /** Hears the turn the server admitted the run to, before the run's bubbles
    *  take it, while they still carry the turn the view counted. */
   onAdmittedTurn?: (bubbleId: string, turnIndex: number) => void;
+  /** The bubble as the transcript holds it now, writes included. */
+  readMessage?: (bubbleId: string) => ChatMessage | undefined;
 }
 
 /**
@@ -110,9 +113,23 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
     if (refs.steeringAtOrderRef) refs.steeringAtOrderRef.current = null;
     return boundary;
   };
+  // Whether one of this stream's `error` frames showed the turn's failure. A
+  // turn shows one failure, so a later internal frame for it shows nothing.
+  let failureShown = false;
   // Whether this stream has carried the run's `metadata`, which the server
   // writes only once the run is with the background executor.
   let metadataSeen = false;
+  // Whether the turn shows its failure already, which a later internal signal
+  // for it (a second frame, the run's closing outcome) must not show again.
+  // After a drop the failure sits on a bubble of the turn's chain
+  // (continuedBubbles.ts), which is all a reconnect's processor, never having
+  // seen the frame, can go by.
+  const turnShowsFailure = (): boolean => {
+    if (failureShown) return true;
+    const read = deps.readMessage;
+    if (!read) return false;
+    return continuationChain((id) => read(id) as AssistantMessage | undefined, assistantMessageId).some((msg) => msg.error);
+  };
 
   // FIFO queue for matching Task tool call IDs to artifact 'spawned' events.
   // Populated by the tool_calls handler, drained by the artifact/spawned handler.
@@ -233,6 +250,15 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       if (counted) rt.setTokenUsage((prev) => withServerTotals(prev, counted));
       if (event.outcome === 'cancelled') {
         settleStoppedBubble({ assistantMessageId, refs, setMessages: setMessagesForHandlers });
+      } else if (event.outcome === 'error' && !refs.retryNotice && !turnShowsFailure()) {
+        // A run can fail where no `error` frame can be written for it: the
+        // stream's own quota is spent, or its owner died and recovery closed
+        // the row. The outcome is all this stream hears, so the turn settles
+        // as an internal failure would, banner and all, over any notice.
+        deps.clearModelStatus();
+        rt.setFallbackSuggestion(null);
+        rt.setMessageError({ message: '', kind: 'internal' });
+        settleFailedBubble({ assistantMessageId, refs, setMessages: setMessagesForHandlers, internal: true });
       }
       return;
     }
@@ -779,61 +805,38 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       //     the transcript; the user's model choice is what triggered it)
       //   - internal → banner near the chat input (our service failed;
       //     don't pollute the conversation history)
+      // Either way what the turn streamed stays its reply: the failure rides
+      // apart from the content, so the reply never renders as the error.
       const kind = event.error_kind as 'upstream' | 'internal' | undefined;
-      // Models the resilience middleware tried this turn (primary + fallbacks).
-      // Type-filtered defensively — the backend fields may be absent or partial.
-      const attemptedModels = Array.isArray(event.attempted_models)
-        ? (event.attempted_models as unknown[])
-            .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
-            .map((m) => ({
-              model: typeof m.model === 'string' ? (m.model as string) : '',
-              error: typeof m.error === 'string' ? (m.error as string) : undefined,
-              statusCode: typeof m.status_code === 'number'
-                ? (m.status_code as number)
-                : (m.status_code === null ? null : undefined),
-              attempts: typeof m.attempts === 'number' ? (m.attempts as number) : undefined,
-            }))
-            .filter((m) => m.model)
-        : undefined;
       const structured: StructuredError | undefined = busyCode !== null
         ? { message: errorMessage as string, kind: 'notice' }
-        : kind === 'upstream' || kind === 'internal'
-          ? {
-              message: errorMessage as string,
-              kind,
-              statusCode: typeof event.status_code === 'number' ? event.status_code : undefined,
-              // ``hints`` are only meaningful for upstream provider errors
-              // (the bullets say "check your API key / plan / provider
-              // status"). An internal error doesn't get hints even if the
-              // backend ever starts emitting them for some future variant.
-              hints: kind === 'upstream' && Array.isArray(event.hints)
-                ? (event.hints.filter(isUpstreamHint) as StructuredError['hints'])
-                : undefined,
-              // User-configured model + the full attempt list, so the display
-              // can show a model-aware headline and an "Also tried" line.
-              model: typeof event.model === 'string' ? event.model : undefined,
-              attemptedModels: attemptedModels && attemptedModels.length > 0 ? attemptedModels : undefined,
-            }
-          : undefined;
+        : readStreamFailure(event, errorMessage as string);
 
+      // A server older than this view frames its time limit, then the same
+      // stop again as an internal error: the card already says it, and a
+      // banner on top would report one failure twice.
+      if (kind === 'internal' && turnShowsFailure()) return;
+      failureShown = true;
       if (kind === 'internal') {
-        // Banner only — drop the optimistic assistant bubble entirely so the
-        // transcript stays clean. Matches the 429 rate-limit path; leaving a
-        // content-less bubble under the banner looks broken.
-        rt.setMessageError(structured ?? (errorMessage as string));
-        rt.setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
+        // Banner, and the bubble stays: an internal error can land after the
+        // turn streamed for minutes (a stream quota stop), and edit/regenerate
+        // map UI position to turn_index by counting assistant bubbles, so none
+        // may leave state. One that produced something shows as a failed turn
+        // with it; an empty one (the reconnect cleanup's test: no segments, no
+        // content) settles without `error`, which the render-time orphan skip
+        // hides, as it does the 429 path's.
+        // The headline alone, as a reload shows it: the frame's text is the
+        // server's raw exception and stays on the wire for other readers.
+        rt.setMessageError({ message: '', kind: 'internal' });
+        settleFailedBubble({ assistantMessageId, refs, setMessages: setMessagesForHandlers, internal: true });
       } else {
         // Upstream (or unclassified legacy) — render inline. Clear any
         // stale banner from a prior turn so the error lives in one place.
         rt.setMessageError(null);
-        rt.setMessages((prev) =>
-          updateMessage(prev, assistantMessageId, (msg) => ({
-            ...finalizeAssistantMessage(msg, 'failed'),
-            content: msg.content || errorMessage,
-            contentType: 'text',
-            ...(structured ? { structuredError: structured } : {}),
-          }))
-        );
+        settleFailedBubble({
+          assistantMessageId, refs, setMessages: setMessagesForHandlers,
+          failure: structured ?? { message: errorMessage as string },
+        });
       }
     } else if (eventType === 'tool_call_chunks') {
       handleToolCallChunks({
