@@ -387,6 +387,175 @@ async def test_a_second_compact_does_not_show_the_first_as_the_turns_own(monkeyp
     ] == [("agent", "first"), ("agent", "second")]
 
 
+def _compacted(message, summary):
+    """``message`` as the response to a call that compacted to ``summary``,
+    stamped as the compaction middleware stamps it."""
+    from ptc_agent.agent.middleware.compaction.utils import stamp_compaction_summary
+    from src.server.services.history.projector import summarize_payload
+
+    fields = summarize_payload(summary)
+    del fields["action"], fields["signal"]
+    stamp_compaction_summary(message, summary.id, fields)
+    return message
+
+
+def _signals(items, turn_index=0):
+    """Each of the turn's rows, a summarize notice by its text."""
+    return [
+        i["data"]["summary_text"]
+        if i["event"] == "context_window" and i["data"].get("action") == "summarize"
+        else i["event"]
+        for i in items
+        if i["data"].get("turn_index") == turn_index
+    ]
+
+
+async def test_a_mid_turn_compaction_replays_between_the_calls_it_fell_between(
+    monkeypatch,
+):
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+
+    summary = build_summary_message("condensed", None, original_message_count=30)
+    turn = _turn(
+        0,
+        [
+            AIMessage(
+                content="",
+                id="ai-1",
+                tool_calls=[{"name": "Bash", "args": {"command": "ls"}, "id": "tc-1"}],
+            ),
+            ToolMessage(content="out", tool_call_id="tc-1", name="Bash", id="tm-1"),
+            _compacted(AIMessage(content="answer", id="ai-2"), summary),
+        ],
+    )
+    turn.new_summarization_event = {"summary_message": summary, "cutoff_index": 2}
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _response(0) | {"sse_events": None}}),
+    )
+
+    assert _signals(items) == [
+        "user_message",
+        "tool_calls",
+        "tool_call_result",
+        "condensed",
+        "message_chunk",
+    ]
+
+
+async def test_every_compaction_in_a_turn_replays_where_it_fired(monkeypatch):
+    # The state diff sees only the last summary; each response keeps its own.
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+
+    first = build_summary_message("first", None, original_message_count=30)
+    second = build_summary_message("second", None, original_message_count=12)
+    turn = _turn(
+        0,
+        [
+            AIMessage(content="one", id="ai-1"),
+            _compacted(AIMessage(content="two", id="ai-2"), first),
+            _compacted(AIMessage(content="three", id="ai-3"), second),
+        ],
+    )
+    turn.new_summarization_event = {"summary_message": second, "cutoff_index": 2}
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _response(0) | {"sse_events": None}}),
+    )
+
+    assert _signals(items) == [
+        "user_message",
+        "message_chunk",
+        "first",
+        "message_chunk",
+        "second",
+        "message_chunk",
+    ]
+
+
+async def test_a_compact_after_the_turn_keeps_its_inline_summary_once(monkeypatch):
+    # The compact's record keeps the summary the agent wrote during the turn,
+    # which its response already replays where it fired.
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+    from src.server.services.history.projector import context_window_record
+
+    own_summary = build_summary_message("the turn's own", None, original_message_count=30)
+    manual_summary = build_summary_message("condensed", None, original_message_count=9)
+    compact = context_window_record(
+        {"action": "summarize", "signal": "complete"},
+        summary_message_id=manual_summary.id,
+        replaced=own_summary,
+    )
+    turn = _turn(
+        0,
+        [
+            AIMessage(content="one", id="ai-1"),
+            _compacted(AIMessage(content="two", id="ai-2"), own_summary),
+        ],
+        new_ui_records=[compact],
+    )
+    turn.new_summarization_event = {"summary_message": manual_summary, "cutoff_index": 1}
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _response(0) | {"sse_events": None}}),
+    )
+
+    assert _signals(items) == [
+        "user_message",
+        "message_chunk",
+        "the turn's own",
+        "message_chunk",
+        "condensed",
+    ]
+
+
+async def test_a_subagents_first_run_keeps_its_compaction_notice(monkeypatch):
+    # A notice at the head of a task's first run comes before any assistant
+    # message the client could hang it on; a stamped one follows the run's
+    # earlier responses, where it fired.
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+
+    task_artifact = {"task_id": "tsk1", "action": "init", "description": "d", "prompt": "p"}
+    turn_msgs = [
+        AIMessage(
+            content="",
+            id="ai-1",
+            tool_calls=[{"name": "Task", "args": {}, "id": "tc-t"}],
+        ),
+        ToolMessage(
+            content="dispatched",
+            tool_call_id="tc-t",
+            name="Task",
+            id="tm-1",
+            additional_kwargs={"task_artifact": task_artifact},
+        ),
+    ]
+    summary = build_summary_message("task summary", None, original_message_count=12)
+    _mock_reader(
+        monkeypatch,
+        ThreadHistory(thread_id=THREAD, turns=[_turn(0, turn_msgs)]),
+        task_history=TaskHistory(
+            messages=[
+                HumanMessage(content="p", id="sub-h-1"),
+                AIMessage(content="looking", id="sub-ai-1"),
+                _compacted(AIMessage(content="task answer", id="sub-ai-2"), summary),
+            ],
+            new_summarization_event={"summary_message": summary, "cutoff_index": 2},
+        ),
+    )
+
+    items = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: _response(0)}),
+    )
+
+    assert _signals(
+        [i for i in items if i["data"].get("agent") == "task:tsk1"]
+    ) == ["user_message", "message_chunk", "task summary", "message_chunk"]
+
+
 async def test_manual_marker_survives_the_stored_events_merge(monkeypatch):
     # A row written before the column stopped is replayed from its stored
     # events, which drop projected context_window rows. A compact run after

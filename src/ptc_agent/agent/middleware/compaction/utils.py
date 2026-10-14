@@ -711,6 +711,34 @@ def context_threshold(message: Any) -> int | None:
     return value if isinstance(value, int) and value > 0 else None
 
 
+#: The ``response_metadata`` key holding the summary a model call compacted
+#: to before it ran. The summary message lives only in
+#: ``_summarization_event``, which the next compaction overwrites, so each
+#: summary, and where in the turn it fired, rides on the response that
+#: answered from it.
+COMPACTION_SUMMARY_KEY = "context_summary"
+
+
+def stamp_compaction_summary(
+    message: AIMessage, summary_message_id: str, fields: Mapping[str, Any]
+) -> None:
+    """Stamp ``fields``, the summarize complete signal's payload, on the
+    response to the call that compacted to ``summary_message_id``."""
+    message.response_metadata = {
+        **(message.response_metadata or {}),
+        COMPACTION_SUMMARY_KEY: {"summary_message_id": summary_message_id, **fields},
+    }
+
+
+def compaction_summary(message: Any) -> dict[str, Any] | None:
+    """The summary stamped on ``message``, or None for a response whose call
+    did not compact or that was saved before the stamp."""
+    value = (getattr(message, "response_metadata", None) or {}).get(COMPACTION_SUMMARY_KEY)
+    if isinstance(value, dict) and isinstance(value.get("summary_message_id"), str):
+        return value
+    return None
+
+
 def build_summary_message(
     summary: str,
     transcript: TranscriptTarget | None = None,

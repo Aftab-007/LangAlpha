@@ -108,10 +108,11 @@ def project_turn(
             messages_to_history_events(messages), thread_id=thread_id
         ),
     )
-    # Compaction signals (offload counts, the summarize event) live in
-    # private state keys, not the messages channel — re-emit them at the
-    # head of the turn they landed in (live they fire before the first
-    # post-compaction model call).
+    # Compaction signals the turn's messages do not carry live in private
+    # state keys: offload counts, which fire as the turn starts, and a
+    # summary saved before its response was stamped with it, whose place in
+    # the turn is lost. Both open the turn. A stamped summary already sits
+    # before the response that answered from it.
     turn_items[:0] = projector.context_signal_items(thread_id, turn)
     durations = replay_facts.reasoning_durations(response)
     if durations is not None:
