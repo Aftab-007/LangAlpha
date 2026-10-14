@@ -139,11 +139,14 @@ function SubagentStatusBar({ agent, onSendInstruction }: SubagentStatusBarProps)
 
   return (
     <div className="space-y-2">
+      {/* Every row here sits in the composer's slot, over the transcript, so
+          each fill is opaque: a translucent one lets the messages read
+          through it. */}
       <div
         className="flex items-center gap-3 px-4 py-3 rounded-lg"
         style={{
-          backgroundColor: 'var(--color-border-muted)',
-          border: '1px solid var(--color-border-muted)',
+          backgroundColor: 'var(--color-bg-card)',
+          border: '1px solid var(--color-border-input)',
         }}
       >
         {/* Agent avatar */}
@@ -238,7 +241,8 @@ function SubagentStatusBar({ agent, onSendInstruction }: SubagentStatusBarProps)
         <div
           className="flex items-start gap-2 px-4 py-2.5 rounded-lg"
           style={{
-            backgroundColor: isError ? 'var(--color-loss-soft)' : 'var(--color-bg-tool-card)',
+            backgroundColor: isError ? 'var(--color-bg-card)' : 'var(--color-bg-tool-card)',
+            backgroundImage: isError ? 'linear-gradient(var(--color-loss-soft), var(--color-loss-soft))' : undefined,
             border: `1px solid ${isError ? 'var(--color-border-loss)' : 'var(--color-border-muted)'}`,
           }}
         >
@@ -262,11 +266,14 @@ function SubagentStatusBar({ agent, onSendInstruction }: SubagentStatusBarProps)
       {/* Expandable instruction input — canSend gates it so an input left
           open when the task reaches terminal (e.g. errors) disappears. */}
       {inputOpen && canSend && (
+        // The field is borderless inside this box, so the box takes its focus
+        // edge (owns-its-edge) and its keyboard ring (rings-within); left on
+        // the field, both draw as a rectangle inside the card.
         <div
-          className="flex items-center gap-2 px-3 py-2 rounded-lg"
+          className="rings-within owns-its-edge flex items-center gap-2 px-3 py-2 rounded-lg"
           style={{
-            backgroundColor: 'var(--color-border-muted)',
-            border: '1px solid var(--color-border-elevated)',
+            backgroundColor: 'var(--color-bg-card)',
+            border: '1px solid var(--color-border-input)',
           }}
         >
           <input

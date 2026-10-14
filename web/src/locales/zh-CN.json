@@ -1534,10 +1534,6 @@
       "overflowAria_other": "{{count}} 项已加入上下文 — 打开聊天",
       "overflowLabel": "上下文"
     },
-    "running": "运行中: {{tool}}",
-    "completed": "已完成",
-    "runningStatus": "运行中",
-    "initializing": "初始化中",
     "worker": "工作者",
     "agentNotFound": "未找到 Agent",
     "stoppedChip": "已停止",

@@ -82,10 +82,9 @@ const PreviewViewer = React.lazy(() => import('./viewers/PreviewViewer'));
 
 import type {
   MessageRecord, LocationState,
-  SubagentMessage, SlashCommand, ModelOptions, ActionCommand,
+  SlashCommand, ModelOptions, ActionCommand,
   MsgSelectionTooltipData, ChatViewProps,
 } from './chatView/types';
-import SubagentStatusIndicator from './chatView/SubagentStatusIndicator';
 import { TranscriptStatus } from './chatView/TranscriptStatus';
 import { FallbackSuggestionPill } from './chatView/FallbackSuggestionPill';
 import { ThreadOffers } from './chatView/ThreadNotices';
@@ -1600,13 +1599,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                           </UserBubble>
                         </div>
                       )}
-                      {/* Status indicator */}
-                      <SubagentStatusIndicator
-                        status={activeAgent.status}
-                        currentTool={activeAgent.currentTool}
-                        toolCalls={activeAgent.toolCalls}
-                        messages={(activeAgent.messages || []) as SubagentMessage[]}
-                      />
                       {/* Messages — reuse MessageList */}
                       {(activeAgent.messages?.length ?? 0) > 0 && (
                         <div style={{ borderTop: '0.5px solid var(--color-border-muted)', paddingTop: '8px' }}>

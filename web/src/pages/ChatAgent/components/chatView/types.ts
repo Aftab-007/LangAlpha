@@ -172,10 +172,3 @@ export interface ChatViewProps {
   // chat message — owns the sandbox start.
   warmingState?: false | 'starting' | 'archived';
 }
-
-export interface SubagentStatusIndicatorProps {
-  status: string;
-  currentTool: string;
-  toolCalls?: number;
-  messages?: SubagentMessage[];
-}
