@@ -962,7 +962,8 @@
       "env_key": "DEEPSEEK_API_KEY",
       "access_type": "api_key",
       "byok_eligible": true,
-      "display_name": "DeepSeek"
+      "display_name": "DeepSeek",
+      "tool_turns_need_reasoning": true
     },
     "groq": {
       "sdk": "openai",
