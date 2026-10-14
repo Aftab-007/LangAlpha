@@ -105,7 +105,7 @@ def selection_sql(args: argparse.Namespace) -> tuple[list[str], dict[str, Any]]:
 @dataclass
 class Tally:
     done: int = 0
-    unavailable: int = 0  # replays from stored events instead; nothing to do
+    unavailable: int = 0  # replays as stubs instead; nothing to do
     failed: int = 0
 
 
