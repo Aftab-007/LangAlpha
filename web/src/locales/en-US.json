@@ -1536,10 +1536,6 @@
       "overflowAria_other": "{{count}} items in context — open chat",
       "overflowLabel": "in context"
     },
-    "running": "Running: {{tool}}",
-    "completed": "Completed",
-    "runningStatus": "Running",
-    "initializing": "Initializing",
     "worker": "Worker",
     "agentNotFound": "Agent not found",
     "stoppedChip": "Stopped",
