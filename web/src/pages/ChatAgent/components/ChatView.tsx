@@ -64,6 +64,7 @@ import { DispatchStatusProvider } from '../hooks/usePTCDispatchStatus';
 import JumpToLatestPill from './JumpToLatestPill';
 import ShareButton from './ShareButton';
 import { WorkspaceProvider } from '../contexts/WorkspaceContext';
+import { ShareLinkOpenerContext } from '../contexts/ShareLinkOpenerContext';
 import { RouteLeaveGuardContext } from '../contexts/RouteLeaveGuardContext';
 import SubagentStatusBar from './SubagentStatusBar';
 import TodoDrawer from './TodoDrawer';
@@ -868,6 +869,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     activeTabKind,
     leaveFiles,
     handleOpenPreview,
+    handleOpenShareLink,
     handleOpenChart,
     handleOpenInMarketView,
     detailToolCall,
@@ -1362,6 +1364,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
         panel beside it, so it leaves through the panel's guard like the
         panel's own exits do. */}
     <RouteLeaveGuardContext value={leaveFiles}>
+    <ShareLinkOpenerContext value={handleOpenShareLink}>
     {/* `h-full`, never `h-screen`: this fills the shell's content column, which
         is the viewport only when nothing else is in it. Pinning it to 100vh
         pushes it out of its own box the moment anything is (the offline
@@ -1928,6 +1931,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       )}
 
     </div>
+    </ShareLinkOpenerContext>
     </RouteLeaveGuardContext>
     </WorkspaceProvider>
   );

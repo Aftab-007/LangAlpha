@@ -13,6 +13,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { useTheme } from '@/contexts/ThemeContext';
 import { FONT_SCALES, getFontScale, setFontScale, type FontScale } from '@/lib/fontScale';
+import { isDesktopShell } from '@/lib/desktop';
+import { getShareLinkOpen, setShareLinkOpen, type ShareLinkOpen } from '@/lib/shareLinkOpen';
 import { turnEndScrollPatch, readTurnEndScroll, type TurnEndScroll } from '@/lib/turnEndScroll';
 import {
   readStreamingMode,
@@ -43,9 +45,11 @@ export function UserInfoTab() {
   const queryClient = useQueryClient();
   const { theme: _theme, preference, setTheme: setThemePref } = useTheme();
   const [fontScale, setFontScaleState] = useState(getFontScale);
+  const [shareLinkOpen, setShareLinkOpenState] = useState(getShareLinkOpen);
   const themeLabelId = useId();
   const fontSizeLabelId = useId();
   const turnEndLabelId = useId();
+  const shareLinkOpenLabelId = useId();
   const turnDisplayLabelId = useId();
   const streamingModeLabelId = useId();
   const { t, i18n } = useTranslation();
@@ -333,6 +337,27 @@ export function UserInfoTab() {
           options={FONT_SCALES.map((scale) => ({ value: String(scale), label: `${Math.round(scale * 100)}%` }))}
         />
       </div>
+
+      {/* Desktop only: the browser has tabs, and keeps them for these links */}
+      {isDesktopShell() && (
+        <div className="settings-row flex-wrap">
+          <div className="flex-1 basis-64">
+            <label id={shareLinkOpenLabelId} className="text-[0.8125rem] font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.shareLinkOpen')}</label>
+            <p className="mt-0.5 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.shareLinkOpenDesc')}</p>
+          </div>
+          <div className="flex shrink-0">
+            <SegmentedControl
+              labelledBy={shareLinkOpenLabelId}
+              value={shareLinkOpen}
+              onChange={(v: ShareLinkOpen) => { setShareLinkOpen(v); setShareLinkOpenState(v); }}
+              options={[
+                { value: 'panel', label: t('settings.shareLinkOpenPanel') },
+                { value: 'browser', label: t('settings.shareLinkOpenBrowser') },
+              ]}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Voice Input Toggle */}
       <div className="settings-row">

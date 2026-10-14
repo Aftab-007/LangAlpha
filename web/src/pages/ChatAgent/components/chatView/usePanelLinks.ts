@@ -42,6 +42,9 @@ export function usePanelAsks() {
   const askPanel = useCallback((target: UnsequencedTarget) => {
     setPanelTarget(stampTarget(target, ++targetSeqRef.current));
   }, []);
+  // The asks so far, so an open that waits on a fetch can drop itself when a
+  // newer ask landed first.
+  const askCount = useCallback(() => targetSeqRef.current, []);
   // Stable handlers: these land in useEffect deps in MemoryPanel/MemoPanel/
   // FilePanel. Inline arrows would create a new identity on every host
   // render, re-triggering those effects on every streaming chunk (the
@@ -71,6 +74,7 @@ export function usePanelAsks() {
   return {
     panelTarget,
     askPanel,
+    askCount,
     handleTargetHandled,
     handleTargetMemoryHandled,
     handleTargetMemoHandled,

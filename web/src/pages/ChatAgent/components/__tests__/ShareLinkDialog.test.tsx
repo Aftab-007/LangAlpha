@@ -44,6 +44,7 @@ const HREF = `${window.location.origin}/a/${CODE}`;
 function link(overrides: Partial<FileShareLink> = {}): FileShareLink {
   return {
     code: CODE,
+    workspace_id: WS,
     url: `/a/${CODE}`,
     kind: 'file',
     path: ENTRY,

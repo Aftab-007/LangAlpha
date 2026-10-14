@@ -38,6 +38,7 @@ const OTHER_CODE = 'p3d8w1n6v2b5';
 function link(overrides: Partial<FileShareLink> = {}): FileShareLink {
   return {
     code: CODE,
+    workspace_id: WS,
     url: `/a/${CODE}`,
     kind: 'file',
     path: 'results/report.html',

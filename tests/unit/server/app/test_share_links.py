@@ -5,7 +5,8 @@ patched where ``share_links`` imports them. What is locked here is the HTTP
 contract the dialog relies on: the 409s that refuse a silently widened share
 and a share that would undo a Stop, the order-insensitive equality that
 accepts a reviewed list, the refusals for app links and hidden paths, and the
-owner check.
+owner check, including the lookup by code that answers for any of the
+owner's workspaces and for no one else's.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from src.server.app.share_links import owner_router as share_link_owner_router
 from src.server.app.share_links import router as share_links_router
 from src.server.app.share_manifest import (
     ManifestEntry,
@@ -83,14 +85,14 @@ _ENTRIES = [
 
 @pytest_asyncio.fixture
 async def client():
-    app = create_test_app(share_links_router)
+    app = create_test_app(share_links_router, share_link_owner_router)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
 
 
 @pytest_asyncio.fixture
 async def stranger_client():
-    app = create_test_app(share_links_router)
+    app = create_test_app(share_links_router, share_link_owner_router)
     app.dependency_overrides[get_current_user_id] = lambda: "someone-else"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
@@ -313,3 +315,38 @@ async def test_link_of_another_workspace_is_404(client):
         resp = await client.patch(f"{_BASE}/{_CODE}", json={"shared": False})
     assert resp.status_code == 404
     set_private.assert_not_awaited()
+
+
+# --- GET by code: any of the owner's workspaces --------------------------
+
+
+async def test_lookup_answers_for_a_sibling_workspace_with_its_id(client):
+    sibling = _workspace(workspace_id="ws-fake-0002")
+    with (
+        patch(_GET_LINK, AsyncMock(return_value=_app_link(workspace_id="ws-fake-0002"))),
+        patch(_DBWS, AsyncMock(return_value=sibling)) as get_ws,
+    ):
+        resp = await client.get(f"/api/v1/share-links/{_CODE}")
+    assert resp.status_code == 200
+    assert resp.json()["workspace_id"] == "ws-fake-0002"
+    assert resp.json()["port"] == 8080
+    get_ws.assert_awaited_once_with("ws-fake-0002")
+
+
+async def test_lookup_of_another_users_link_is_404(stranger_client):
+    with (
+        patch(_GET_LINK, AsyncMock(return_value=_link())),
+        patch(_DBWS, AsyncMock(return_value=_workspace())),
+    ):
+        resp = await stranger_client.get(f"/api/v1/share-links/{_CODE}")
+    assert resp.status_code == 404
+
+
+async def test_lookup_of_an_unknown_code_is_404(client):
+    with (
+        patch(_GET_LINK, AsyncMock(return_value=None)),
+        patch(_DBWS, AsyncMock()) as get_ws,
+    ):
+        resp = await client.get(f"/api/v1/share-links/{_CODE}")
+    assert resp.status_code == 404
+    get_ws.assert_not_awaited()
