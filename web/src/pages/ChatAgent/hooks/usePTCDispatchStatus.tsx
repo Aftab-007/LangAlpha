@@ -95,6 +95,10 @@ interface DispatchSlice {
   status: PTCDispatchStatus;
   /** Start of the live run (epoch ms), when the ledger has one. */
   startedAt?: number;
+  /** The thread's title, once it is named. */
+  title?: string;
+  /** The current name of the thread's workspace. */
+  workspaceName?: string;
 }
 
 interface DispatchStatusContextValue {
@@ -205,6 +209,8 @@ export function DispatchStatusProvider({ children }: { children: ReactNode }) {
       slices.set(row.thread_id, {
         status: mapLivenessStatus(row.status),
         startedAt: Number.isFinite(startedAt) ? startedAt : undefined,
+        title: row.title?.trim() || undefined,
+        workspaceName: row.workspace_name?.trim() || undefined,
       });
     }
     return slices;
@@ -247,12 +253,13 @@ export function mapLifecycleStatus(s: PublicRunStatus): PTCDispatchStatus | null
  * pre-ledger fallback: a just-dispatched run has no lifecycle row yet, and
  * only the poll can distinguish "still registering" from "never registered".
  * Registers the id while `enabled` so the provider's batched query covers it;
- * returns 'starting' when neither source has resolved the id yet.
+ * returns 'starting' when neither source has resolved the id yet. The thread's
+ * title and its workspace's current name come from the poll alone.
  */
 export function useDispatchStatus(
   threadId: string | undefined,
   enabled: boolean,
-): { status: PTCDispatchStatus; startedAt?: number } {
+): { status: PTCDispatchStatus; startedAt?: number; title?: string; workspaceName?: string } {
   const ctx = useContext(DispatchStatusContext);
   // Pull the stable register fns out of the context value (whose identity
   // changes every poll) so this effect doesn't re-run — and re-register — on
@@ -269,5 +276,10 @@ export function useDispatchStatus(
 
   const pushed = mapLifecycleStatus(useThreadRunStatus(threadId ?? ''));
   const slice = ctx && threadId ? ctx.slices.get(threadId) : undefined;
-  return { status: pushed ?? slice?.status ?? 'starting', startedAt: slice?.startedAt };
+  return {
+    status: pushed ?? slice?.status ?? 'starting',
+    startedAt: slice?.startedAt,
+    title: slice?.title,
+    workspaceName: slice?.workspaceName,
+  };
 }
