@@ -75,7 +75,7 @@ export function PluginDetail({
   const navigate = useNavigate();
   const { data: catalog } = useMcpCatalog();
   const { data: builtinData } = useBuiltinMcpServers();
-  const { data: skillList } = useSkills(null, { includeDisabled: true, allScopes: true });
+  const { data: skillList } = useSkills({ includeDisabled: true, allScopes: true });
   const { data: subagentList } = useSubagents();
   const vendorOf = useVendorOf();
   const { openDetail } = useSectionNav();

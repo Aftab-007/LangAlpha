@@ -103,7 +103,6 @@ export function useChatMessages(
   finalizePendingTodos: (() => void) | null = null,
   onFileArtifact: ((event: SSEEvent) => void) | null = null,
   onPreviewUrl: ((data: PreviewData) => void) | null = null,
-  agentMode: string = 'ptc',
   clearSubagentCards: (() => void) | null = null,
   onWorkspaceCreated: ((info: { workspaceId: string; question: string }) => void) | null = null,
   platform: string | null = null,
@@ -252,12 +251,6 @@ export function useChatMessages(
   const setMessagesForHandlers = setMessages as unknown as (
     updater: (prev: Record<string, unknown>[]) => Record<string, unknown>[]
   ) => void;
-
-  // The agent mode the latest run in view was started in. The server picks the
-  // graph that resumes a checkpoint by agent_mode, so a resume answers in this
-  // mode rather than the one the composer shows now. Null for a run this view
-  // only attached to; the resume then sends the current mode.
-  const runAgentModeRef = useRef<string | null>(null);
 
   // Track last-used model options so HITL resume can forward them
   const lastModelOptionsRef = useRef<ModelOptions>({ model: null, reasoningEffort: null, fastMode: null });
@@ -440,12 +433,11 @@ export function useChatMessages(
   // content from zero, and its run_id comes from its own metadata frame unless
   // the response header already named it. A stale one would bias a reconnect
   // into the previous run's stream key.
-  const beginRun = (mode: string, runId: string | null = null): void => {
+  const beginRun = (runId: string | null = null): void => {
     contentOrderCounterRef.current = 0;
     currentReasoningIdRef.current = null;
     currentToolCallIdRef.current = null;
     currentRunIdRef.current = runId;
-    runAgentModeRef.current = mode;
   };
   // Highest turn_index this view has RENDERED, compared against
   // /status.latest_turn_index by the reactivation staleness check (a run that
@@ -857,7 +849,6 @@ export function useChatMessages(
         // exotic — resolving one means leaving to buy credits, so wandering off
         // to another thread with it unanswered is the expected way to meet it.
         setPendingInterrupt(null);
-        runAgentModeRef.current = null;
         // Edit text on its way to the composer is the old thread's. Its open
         // edit boxes stay with it, found by thread.
         setReturnedEdit(null);
@@ -2013,7 +2004,6 @@ export function useChatMessages(
           if (event.event === 'error' && !answered.refusal) answered.refusal = event;
         },
         additionalContext,
-        agentMode,
         locale: userLocale,
         timezone: userTimezone,
         platform,
@@ -2341,7 +2331,7 @@ export function useChatMessages(
 
     // Create assistant message placeholder
     const assistantMessageId = `assistant-${Date.now()}`;
-    beginRun(agentMode);
+    beginRun();
     // Fresh AbortController so stopWorkflow can abort this stream's reader.
     const abortController = new AbortController();
     mainStreamAbortRef.current = abortController;
@@ -2361,7 +2351,6 @@ export function useChatMessages(
       threadId,
       workspaceId,
       message,
-      agentMode,
       platform,
       timezone: userTimezone,
       subagentsAllowed,
@@ -2404,7 +2393,6 @@ export function useChatMessages(
       const result = await sendChatMessageStream(message, workspaceId, effectiveThreadId, {
         onEvent: processEvent,
         additionalContext,
-        agentMode,
         locale: userLocale,
         timezone: userTimezone,
         llmModel: model || null,
@@ -2591,8 +2579,6 @@ export function useChatMessages(
    * on it, and has to use the current runtime, callbacks and model options.
    */
   const resumeWithHitlResponse = useStableHandler(async (hitlResponse: HitlResponseBody) => {
-    // The resume opens the next run, in the same mode.
-    const resumeAgentMode = runAgentModeRef.current ?? agentMode;
     // Ahead of beginResume, so the settler's fence captures this run's own
     // epoch rather than the previous one (which it would already fail).
     sessionEpochRef.current += 1;
@@ -2616,7 +2602,7 @@ export function useChatMessages(
     const assistantMessageId = `assistant-hitl-${Date.now()}`;
     // HITL resume always opens a fresh run on the backend (1:1 with
     // ``conversation_response_id``).
-    beginRun(resumeAgentMode);
+    beginRun();
 
     // A resume is a turn of its own on the backend, with no user bubble.
     const assistantMessage = createAssistantMessage(assistantMessageId, newestKnownTurn() + 1);
@@ -2661,7 +2647,6 @@ export function useChatMessages(
         llmModel: model,
         reasoningEffort,
         fastMode,
-        agentMode: resumeAgentMode,
         // Latch the fresh run_id from response headers before the first SSE
         // body byte. Without this, an early disconnect (between the pre-POST
         // clear above and the metadata frame) would let
@@ -2910,10 +2895,8 @@ export function useChatMessages(
 
     // Truncate messages and add new user message (if editing) + assistant placeholder
     const assistantMessageId = `assistant-${Date.now()}`;
-    // Edit/regenerate opens a fresh backend run. The retry route takes no
-    // agent_mode, so the server starts it from its default; answering in that
-    // same default resolves to the same graph.
-    beginRun(viaRetryEndpoint ? 'ptc' : agentMode);
+    // Edit/regenerate opens a fresh backend run.
+    beginRun();
     // A fork truncates persisted turns > forkFromTurn server-side; pin the
     // rendered-turn watermark to the fork turn so the reactivation staleness
     // check compares against the post-truncation reality (a stale-high
@@ -3070,7 +3053,6 @@ export function useChatMessages(
         : await sendChatMessageStream(message || '', workspaceId, threadId, {
             onEvent: processEvent,
             additionalContext: request.additionalContext,
-            agentMode,
             locale: userLocale,
             timezone: userTimezone,
             checkpointId,
@@ -3411,7 +3393,7 @@ export function useChatMessages(
   // rewrites the dir_name and previous_dir_names that agent paths fold
   // against, siblings' too: a folder one lands on stops being another's former
   // folder. Cached rows would keep the old folders for minutes.
-  const refreshWorkspaceFolder = agentMode === 'ptc' && workspaceId
+  const refreshWorkspaceFolder = workspaceId
     ? () => { void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.details() }); }
     : null;
 
@@ -3451,7 +3433,7 @@ export function useChatMessages(
     markTranscriptPersisted,
     clearModelStatus,
     finalizePendingTodos,
-    refreshComputerAfterTurn: agentMode === 'ptc' ? () => refreshComputersAfterTurn(queryClient) : null,
+    refreshComputerAfterTurn: () => refreshComputersAfterTurn(queryClient),
     refreshWorkspaceFolder,
     reportBackWatch,
   };

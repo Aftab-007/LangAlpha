@@ -573,7 +573,7 @@ export function PreferredBlock({ view, data, write }: AsideProps) {
 }
 
 function usePreferredSkillOptions(): PreferredSkillOption[] {
-  const { data } = useSkills(null, { includeDisabled: true, allScopes: true });
+  const { data } = useSkills({ includeDisabled: true, allScopes: true });
   return useMemo(() => preferredSkillOptions(data ?? []), [data]);
 }
 

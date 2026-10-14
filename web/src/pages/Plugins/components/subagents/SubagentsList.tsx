@@ -7,7 +7,6 @@ import { ConfirmStrip, HeaderButton } from '@/components/mcp/McpPrimitives';
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/use-toast';
 import { useAllModels } from '@/hooks/useAllModels';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { FLASH_ROUTE_STATE, flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
 import { usePlugins } from '@/hooks/usePlugins';
 import {
@@ -83,7 +82,6 @@ export function SubagentsList() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const allWorkspaces = useAllWorkspacesAgent();
   const catalogPlugins = useCatalogPlugins();
   const { openDetail } = useSectionNav();
   const subagentsQuery = useSubagents();
@@ -123,7 +121,6 @@ export function SubagentsList() {
   // write the file, which a workspace's analyst could too but would leave in
   // that workspace's thread list rather than the user's own.
   async function startChat() {
-    if (!allWorkspaces) return;
     try {
       const home = await qc.fetchQuery(flashWorkspaceQuery(qc));
       navigate('/chat/t/__default__', {

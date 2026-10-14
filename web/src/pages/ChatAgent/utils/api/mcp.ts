@@ -317,9 +317,6 @@ export interface CatalogServer {
   remembered_capabilities?: string[] | null;
   /** Per-tool binding overrides; a name here beats the preset and the group. */
   tool_binding?: Record<string, McpToolBinding>;
-  /** Whether any tool on this row binds directly, and so whether the row can
-   * reach Flash at all. */
-  has_direct_tools?: boolean;
   /**
    * The host-side probe's last word on the row under its current config, or
    * null when nothing has probed it yet (a stdio row never is, and stays

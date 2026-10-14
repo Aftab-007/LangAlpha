@@ -5,7 +5,7 @@ import { useNow } from '@/hooks/useNow';
 import { LayoutGrid, ArrowUpRight, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
-import { useWorkspaceText } from '@/hooks/useAllWorkspacesAgent';
+import { useWorkspaceText } from '@/hooks/useWorkspaceLabel';
 import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
 import { clearChatSession } from '@/pages/ChatAgent/hooks/utils/chatSessionRestore';
 import type { Workspace } from '@/types/api';
@@ -65,7 +65,6 @@ function WorkspaceTile({
             <FlashRowIcon
               className="h-3.5 w-3.5 shrink-0"
               style={{ color: 'var(--color-accent-primary)' }}
-              solid
             />
           ) : (
             <span
@@ -103,7 +102,7 @@ function WorkspaceTile({
             className="text-[0.7188rem] italic"
             style={{ color: 'var(--color-text-tertiary)', opacity: 0.7 }}
           >
-            {isFlash ? t('dashboard.widgets.workspacePicker.flashDesc') : t('dashboard.widgets.workspacePicker.noDescription')}
+            {t('dashboard.widgets.workspacePicker.noDescription')}
           </div>
         )}
         {relative ? (

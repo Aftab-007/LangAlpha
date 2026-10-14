@@ -10,7 +10,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { cn } from '@/lib/utils';
 import { useStartOnboarding } from '../connect/useStartOnboarding';
 import { useOnboarding } from '../OnboardingProvider';
@@ -22,8 +21,6 @@ import { useOnboarding } from '../OnboardingProvider';
  */
 export function GettingStartedCard() {
   const { gettingStarted } = useOnboarding();
-  // Words the tasks for a user on the all-workspaces agent.
-  const allWorkspaces = useAllWorkspacesAgent();
   const navigate = useNavigate();
   // The same start as the dashboard banner: the brokerage connect sheet, then
   // the Chief of Staff's interview in Home.
@@ -138,14 +135,14 @@ export function GettingStartedCard() {
                     color: done ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
                   }}
                 >
-                  {t((allWorkspaces && def.allWorkspaces?.titleKey) || def.titleKey)}
+                  {t(def.titleKey)}
                 </span>
                 {!done && (
                   <span
                     className="mt-0.5 block text-xs leading-relaxed"
                     style={{ color: 'var(--color-text-tertiary)' }}
                   >
-                    {t((allWorkspaces && def.allWorkspaces?.descKey) || def.descKey)}
+                    {t(def.descKey)}
                   </span>
                 )}
               </span>

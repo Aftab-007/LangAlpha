@@ -36,7 +36,6 @@ export function ownModelNames(
 
 export interface QuickAccessParams {
   preferredModel: string | null | undefined;
-  preferredFlashModel: string | null | undefined;
   starredModels: string[];
   /** Models from the user's own keys and connected accounts. */
   ownModels: string[];
@@ -48,15 +47,14 @@ export interface QuickAccessParams {
 }
 
 /**
- * Quick-access models for the chat model menu: the current primary + flash
- * defaults, the user's manual stars, then the models of their own keys and
+ * Quick-access models for the chat model menu: the current default, the
+ * user's manual stars, then the models of their own keys and
  * connected accounts, less the ones they removed, gated by availability
  * (drops removed/revoked models). Derived per-render so switching a default
  * or connecting an account never leaves the list behind.
  */
 export function deriveQuickAccessModels({
   preferredModel,
-  preferredFlashModel,
   starredModels,
   ownModels,
   hiddenModels,
@@ -67,7 +65,7 @@ export function deriveQuickAccessModels({
   const union = [...new Set(
     // typeof check (not just `!!m`) so a malformed pref with non-string entries
     // can't reach getModelDisplayName's `key.startsWith` and crash the composer.
-    [preferredModel, preferredFlashModel, ...starredModels, ...ownModels].filter(
+    [preferredModel, ...starredModels, ...ownModels].filter(
       (m): m is string => typeof m === 'string' && m.length > 0,
     ),
   )];

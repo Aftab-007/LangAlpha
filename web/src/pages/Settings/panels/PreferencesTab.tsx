@@ -145,7 +145,7 @@ export function PreferencesTab() {
   return (
     <>
     <div className="space-y-4">
-      {onboarding.available && authUser?.onboarding_completed !== true && (
+      {authUser?.onboarding_completed !== true && (
         <div
           className="rounded-lg p-3 flex items-center justify-between gap-3"
           style={{
@@ -325,11 +325,9 @@ export function PreferencesTab() {
         </div>
       )}
 
-      {onboarding.available && (
-        <p className="text-xs pt-1" style={{ color: 'var(--color-text-tertiary)' }}>
-          {t('settings.preferencesDesc')}
-        </p>
-      )}
+      <p className="text-xs pt-1" style={{ color: 'var(--color-text-tertiary)' }}>
+        {t('settings.preferencesDesc')}
+      </p>
 
       <div className="flex gap-3 justify-between pt-4" style={{ borderTop: '1px solid var(--color-border-muted)' }}>
         <button
@@ -340,21 +338,19 @@ export function PreferencesTab() {
         >
           <Trash2 className="h-4 w-4" /> {t('settings.resetPreferences')}
         </button>
-        {onboarding.available && (
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleModifyPreferences}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-opacity hover:opacity-90"
-              style={{
-                backgroundColor: 'var(--color-btn-primary-bg)',
-                color: 'var(--color-btn-primary-text)',
-              }}
-            >
-              <MessageSquareText className="h-4 w-4" /> {t('settings.modifyWithAgent')}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleModifyPreferences}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-opacity hover:opacity-90"
+            style={{
+              backgroundColor: 'var(--color-btn-primary-bg)',
+              color: 'var(--color-btn-primary-text)',
+            }}
+          >
+            <MessageSquareText className="h-4 w-4" /> {t('settings.modifyWithAgent')}
+          </button>
+        </div>
       </div>
     </div>
 

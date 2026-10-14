@@ -7,21 +7,16 @@ import type { RouteLeaveGuard } from '../../contexts/RouteLeaveGuardContext';
 
 /**
  * The workspace override the file panel holds after a routed open; null shows
- * the view's own workspace. PTC and Home have files of their own and name a
- * sibling's only through a link that names that workspace, so an open that
- * names no other workspace returns to their own. Flash has none, so its panel
- * stays on the sibling it last showed.
+ * the view's own workspace. A view names a sibling's files only through a
+ * link that names that workspace, so an open that names no other workspace
+ * returns to its own.
  */
 export function nextPanelOverride(
   routing: Pick<AgentArtifactRouting, 'clearWorkspaceId' | 'setWorkspaceId'>,
-  current: string | null,
-  homeWorkspaceId: string | null,
+  ownWorkspaceId: string,
 ): string | null {
   if (routing.clearWorkspaceId) return null;
-  if (homeWorkspaceId) {
-    return routing.setWorkspaceId && routing.setWorkspaceId !== homeWorkspaceId ? routing.setWorkspaceId : null;
-  }
-  return routing.setWorkspaceId ?? current;
+  return routing.setWorkspaceId && routing.setWorkspaceId !== ownWorkspaceId ? routing.setWorkspaceId : null;
 }
 
 /**
@@ -90,7 +85,7 @@ export function usePanelAsks() {
  * computed by computeAgentArtifactRouting; the result becomes the one panel
  * target, which replaces whatever ask was pending.
  */
-export function usePanelLinkOpen({ workspaceId, folders, override, setOverride, ownFiles, land, leave }: {
+export function usePanelLinkOpen({ workspaceId, folders, override, setOverride, land, leave }: {
   /** The view's own workspace. */
   workspaceId: string;
   /** The view's folders, which a path naming a sibling by its folder is read against. */
@@ -98,8 +93,6 @@ export function usePanelLinkOpen({ workspaceId, folders, override, setOverride, 
   /** The sibling the panel shows in place of the view's own (usePanelFiles). */
   override: string | null;
   setOverride: (workspaceId: string | null) => void;
-  /** The view has files of its own: PTC and Home, not Flash. */
-  ownFiles: boolean;
   /** Points the panel at the target and opens it. */
   land: (target: UnsequencedTarget) => void;
   /** The panel's leave guard (usePanelAsks). */
@@ -132,12 +125,12 @@ export function usePanelLinkOpen({ workspaceId, folders, override, setOverride, 
     // change in the workspace the panel shows does that; clearing an unset
     // override keeps the strip.
     const shown = (id: string | null) => id || workspaceId;
-    const nextOverride = nextPanelOverride(r, override, ownFiles ? workspaceId : null);
+    const nextOverride = nextPanelOverride(r, workspaceId);
     const switching = shown(nextOverride) !== shown(override);
     const go = () => {
       if (nextOverride !== override) setOverride(nextOverride);
       land(target);
     };
     if (switching) leave(go); else go();
-  }, [land, setOverride, folders, leave, ownFiles, workspaceId, override]);
+  }, [land, setOverride, folders, leave, workspaceId, override]);
 }

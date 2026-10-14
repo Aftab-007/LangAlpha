@@ -21,7 +21,6 @@ import { Loader } from '@/components/ui/loader';
 import { queryKeys } from '@/lib/queryKeys';
 import { useLocale } from '@/hooks/useLocale';
 import { useNow } from '@/hooks/useNow';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { getWorkspaceThreads } from '../../ChatAgent/utils/api';
 
 interface ThreadRecord {
@@ -64,10 +63,7 @@ export default function MarketChatHistoryButton({
 }: MarketChatHistoryButtonProps): React.ReactElement {
   const { t } = useTranslation();
   const locale = useLocale();
-  const allWorkspaces = useAllWorkspacesAgent();
-  const missingThreadHint = allWorkspaces
-    ? t('agents.market.missingThreadHint')
-    : t('marketView.chatHistory.missingThreadHint');
+  const missingThreadHint = t('agents.market.missingThreadHint');
   const [open, setOpen] = React.useState(false);
   const [page, setPage] = React.useState(0);
   // The row times only render while the menu is open.

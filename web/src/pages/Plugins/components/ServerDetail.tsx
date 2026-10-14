@@ -6,7 +6,7 @@ import { oauthLabelKey } from '@/pages/ChatAgent/components/mcp/McpStatusPill';
 import { probeRowState } from '@/pages/ChatAgent/components/mcp/mcpState';
 import { useMcpCatalogServerTools } from '@/hooks/useMcpServers';
 import { useUserVaultSecrets } from '@/hooks/useUserVault';
-import { useFlashScope } from '@/hooks/useFlashWorkspace';
+import { useFlashWorkspace } from '@/hooks/useFlashWorkspace';
 import { brokerageArt, mcpServerArt } from '@/lib/brandArt';
 import { builtinServerMark } from '../utils/pluginSurface';
 import { settledGrant, type Brokerage } from '../brokerages';
@@ -102,7 +102,7 @@ export function ServerDetail({
   const labelId = useId();
   const { openDetail } = useSectionNav();
   const openPlugin = (plugin: string) => openDetail({ kind: 'plugin', name: plugin });
-  const flashScopeFor = useFlashScope();
+  const home = useFlashWorkspace();
   const { workspaces, loading: workspacesLoading } = useWorkspaceOptions();
   const { data: vault } = useUserVaultSecrets();
   const { origin } = data;
@@ -272,7 +272,7 @@ export function ServerDetail({
                 scopeWorkspaceId={null}
                 disabledWorkspaceIds={(catalog ?? builtin)?.disabled_workspace_ids ?? []}
                 off={scopeOff(catalog ?? builtin ?? {})}
-                flashWorkspace={catalog ? flashScopeFor(catalog.has_direct_tools) : undefined}
+                flashWorkspace={catalog ? home : undefined}
                 newWorkspacesOn={catalog?.enabled_in_new_workspaces}
                 loading={workspacesLoading}
                 busy={scope.busy}

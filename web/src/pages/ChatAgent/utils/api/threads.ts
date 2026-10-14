@@ -24,7 +24,6 @@ export interface ThreadCreatedInfo {
 export async function createThreadWithTitle(opts: {
   workspaceId?: string | null;
   firstQuery: string;
-  agentMode?: 'flash' | 'ptc';
   platform?: string | null;
   /** Lets title generation resolve relative dates ("today") on the user's
    *  wall clock; the server reads UTC without it. */
@@ -33,9 +32,9 @@ export async function createThreadWithTitle(opts: {
   subagentsAllowed?: boolean;
   timeoutMs?: number;
 }): Promise<ThreadCreatedInfo> {
-  const { workspaceId, firstQuery, agentMode = 'ptc', platform, timezone, subagentsAllowed, timeoutMs = 8000 } = opts;
+  const { workspaceId, firstQuery, platform, timezone, subagentsAllowed, timeoutMs = 8000 } = opts;
 
-  const body: Record<string, unknown> = { first_query: firstQuery, agent_mode: agentMode };
+  const body: Record<string, unknown> = { first_query: firstQuery, agent_mode: 'ptc' };
   if (workspaceId) body.workspace_id = workspaceId;
   if (platform) body.platform = platform;
   if (timezone) body.timezone = timezone;

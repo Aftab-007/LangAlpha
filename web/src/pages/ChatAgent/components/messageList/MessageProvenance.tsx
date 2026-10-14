@@ -11,7 +11,6 @@ import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { ArrowUpRight, Bot, CircleCheck, CircleX, Clock, CornerDownRight, Inbox, MessageCircle, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import type { MessageProvenance } from '@/types/chat';
 import { useRouteLeaveGuard } from '../../contexts/RouteLeaveGuardContext';
 import { useOpenDispatchedThread, type DispatcherContext } from '../../hooks/useOpenDispatchedThread';
@@ -55,16 +54,15 @@ export function MessageProvenanceLabel({ provenance, readOnly, flashContext, cla
 
   switch (provenance.kind) {
     case 'agent': {
-      // A hand-off with no recorded dispatcher is named by the viewer's own
-      // flags, which a share's viewer does not share with its owner; it stays
-      // unlabelled there, as shares showed it before.
+      // A hand-off with no recorded dispatcher stays unlabelled in a share,
+      // as shares have always shown it.
       if (!provenance.agent && readOnly) return null;
       Icon = Bot;
-      label = provenance.agent === 'chief_of_staff'
-        ? t('chat.provenance.fromChiefOfStaff')
-        : provenance.agent === 'flash'
-          ? t('chat.provenance.fromFlash')
-          : <UnrecordedDispatcher />;
+      // A hand-off recorded before the row named its dispatcher reads as the
+      // Chief of Staff, the same reading the thread's back button makes.
+      label = provenance.agent === 'flash'
+        ? t('chat.provenance.fromFlash')
+        : t('chat.provenance.fromChiefOfStaff');
       const { threadId } = provenance;
       if (threadId && onOpenDispatcher) open = () => guardLeave(() => onOpenDispatcher(threadId));
       break;
@@ -134,15 +132,4 @@ export function MessageProvenanceLabel({ provenance, readOnly, flashContext, cla
       {content}
     </span>
   );
-}
-
-/**
- * A hand-off recorded before the row named its dispatcher. Whichever agent
- * runs outside a workspace for this user now is the best reading, the same
- * one the thread's back button makes.
- */
-function UnrecordedDispatcher(): React.ReactElement {
-  const { t } = useTranslation();
-  const allWorkspaces = useAllWorkspacesAgent();
-  return <>{allWorkspaces ? t('chat.provenance.fromChiefOfStaff') : t('chat.provenance.fromFlash')}</>;
 }

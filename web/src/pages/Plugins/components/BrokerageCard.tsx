@@ -16,7 +16,7 @@ import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdow
 import { Loader } from '@/components/ui/loader';
 import { brokerageArt } from '@/lib/brandArt';
 import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
-import { useFlashScope } from '@/hooks/useFlashWorkspace';
+import { useFlashWorkspace } from '@/hooks/useFlashWorkspace';
 import {
   activeRungs,
   connectBlock,
@@ -88,7 +88,7 @@ export function BrokerageCard({
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
-  const flashScopeFor = useFlashScope();
+  const home = useFlashWorkspace();
   const {
     b: brokerage,
     row,
@@ -126,7 +126,7 @@ export function BrokerageCard({
   // An offer says nothing here: its section already says it is not added.
   const reach =
     row && enabled && !workspacesLoading
-      ? partialReachText(t, row, workspaces, flashScopeFor(row.has_direct_tools))
+      ? partialReachText(t, row, workspaces, home)
       : null;
 
   // The corner says where the broker stands, on every card, so the four read

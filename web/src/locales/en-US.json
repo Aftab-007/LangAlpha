@@ -255,8 +255,6 @@
     "startOnboarding": "Start Onboarding",
     "defaultModel": "Default Model",
     "defaultModelDesc": "Used for workspace conversations (code execution, sandbox).",
-    "flashModel": "Flash Model",
-    "flashModelDesc": "Used for quick queries without sandbox (web search, market data).",
     "defaultModelChange": {
       "title": "Make {{model}} your default model?",
       "title_pair": "Make {{model}} your default models?",
@@ -368,7 +366,6 @@
     "starredModels": "Quick-access models",
     "starredModelsDesc": "Shown in the chat input for quick switching. Your default models and the models of your own API keys and connected accounts are added for you; remove any you don't use.",
     "fallbackModels": "Fallback models",
-    "fallbackModelsDesc": "Tried in order when your primary or flash model is unavailable. Only add models you have access to. With none selected, no fallback is used.",
     "fallbackModelsEmpty": "No models found",
     "removeModel": "Remove {{model}}",
     "addModels": "Add",
@@ -440,7 +437,6 @@
       "fetchModelDesc": "Used for web page extraction.",
       "compactionModel": "Compaction model",
       "compactionModelDesc": "Used for compacting long conversation context.",
-      "defaultsToFlash": "Defaults to flash model",
       "defaultsToConversationModel": "Same as the conversation's model",
       "subagentsLink": "Each subagent's model and effort are set in <pane>Plugins → Subagents</pane>."
     },
@@ -457,7 +453,6 @@
     "approvals": "Approvals",
     "autoApproveHandoffs": "Hand off work without asking",
     "autoApproveHandoffsDesc": "Tasks go to a workspace's Analyst without an approval card. Each hand-off still shows as a card you can follow or stop.",
-    "autoApproveHandoffsDescPtc": "Tasks go to a PTC workspace without an approval card. Each hand-off still shows as a card you can follow or stop.",
     "autoApproveWorkspaceCreation": "Create workspaces without asking",
     "autoApproveWorkspaceCreationDesc": "A workspace for new work is created without an approval card."
   },
@@ -1055,9 +1050,7 @@
         "header": "Workspaces",
         "viewAll": "View all",
         "untitled": "Untitled workspace",
-        "flashDesc": "Instant answers, no sandbox.",
         "noDescription": "No description",
-        "tagFlash": "flash",
         "tagWorkspace": "workspace",
         "empty": "No workspaces yet",
         "emptyCta": "Start your first one →"
@@ -1071,7 +1064,6 @@
         "bucket_thisWeek": "Earlier this week",
         "bucket_older": "Older",
         "untitled": "Untitled thread",
-        "flash": "Flash",
         "empty": "No recent threads",
         "emptyHint": "Start a conversation to fill this log."
       },
@@ -1509,7 +1501,6 @@
   "chat": {
     "backToWorkflow": "Back to workflow",
     "backToMain": "Back to main",
-    "backToFlash": "Back to Flash",
     "reconnecting": "Reconnecting…",
     "offlineHistoryLoad": "You are offline, so this conversation could not be refreshed. It will catch up when your connection returns.",
     "jumpToLatest": {
@@ -1638,7 +1629,6 @@
       "makeDefault": "Make {{model}} my default"
     },
     "backgroundTasksRunning": "Background tasks are still running",
-    "reportBackPending": "Waiting for PTC Agent to report back",
     "taskReportBackPending": "Waiting for subagent results to report back",
     "tray": {
       "tasks_one": "{{count}} task",
@@ -1752,8 +1742,7 @@
       "ctaAnswerContinue": "Answer & continue",
       "ctaViewThread": "View thread",
       "alwaysApprove": "Always allow",
-      "alwaysApproveHint": "Hand this and later work to Analysts without asking. Turn it off in Settings.",
-      "alwaysApproveHintPtc": "Hand this and later tasks to PTC workspaces without asking. Turn it off in Settings."
+      "alwaysApproveHint": "Hand this and later work to Analysts without asking. Turn it off in Settings."
     },
     "marketWatch": {
       "watching": "Watching {{symbols}}",
@@ -2224,8 +2213,6 @@
       "tooLarge": "Too large to preview",
       "tooLargeHint": "This file is too large to open in the browser, but you can download it.",
       "tooLargeNoDownloadHint": "This file is too large to open in the browser.",
-      "noSandbox": "No sandbox available",
-      "noSandboxHint": "Flash mode workspaces do not have file storage.",
       "accessDenied": "Access denied",
       "accessDeniedHint": "This file is outside the allowed directories.",
       "unknown": "Failed to load file",
@@ -2336,10 +2323,7 @@
     "once": "Once",
     "cronHelp": "5-field cron: minute hour day-of-month month day-of-week",
     "agentMode": "Agent",
-    "flash": "Flash",
-    "ptcSandbox": "PTC (sandbox)",
     "selectWorkspace": "Select workspace...",
-    "workspaceRequired": "PTC mode requires a workspace. Please select one.",
     "instruction": "Instruction",
     "showAll": "Show all",
     "showLess": "Show less",
@@ -2497,7 +2481,6 @@
     "failedServerError": "The server ran into a problem with this run. Your automation didn't cause it, and nothing needs changing.",
     "failedInterrupted": "The server stopped this run before it finished. Your automation didn't cause it, and nothing needs changing.",
     "skipRun": "Skip",
-    "ptc": "PTC",
     "runNow": "Run now",
     "pause": "Pause",
     "resume": "Resume",
@@ -2577,7 +2560,6 @@
     "instructionSymbolUnfilled": "Replace {symbol} in the instruction with the company or ticker to cover.",
     "priceValuePositive": "Enter a level above zero.",
     "pctFrom": "from",
-    "ptcInWorkspace": "PTC in {{workspace}}",
     "quoteToday": "today",
     "quoteSinceOpen": "since open",
     "freqDays": "Days of the week",
@@ -2725,7 +2707,6 @@
     "next": "Next: {{time}}",
     "instruction": "Instruction",
     "configuration": "Configuration",
-    "agentMode": "Agent Mode",
     "triggerType": "Trigger Type",
     "trigger": "Trigger",
     "retrigger": "Retrigger",
@@ -3116,18 +3097,6 @@
     "continueToDefaults": "Continue to defaults",
     "defaultsTitle": "Set your default models",
     "defaultsSubtitle": "Pick the models that power your research",
-    "primaryModel": "Primary Model",
-    "primaryDescription": "For deep research with code execution and data analysis",
-    "primaryPlaceholder": "Select primary model...",
-    "flashModel": "Flash Model",
-    "flashDescription": "For quick answers without a sandbox",
-    "flashPlaceholder": "Select flash model...",
-    "flashSameAsPrimary": "Same as Primary model",
-    "explainerTitle": "Two agent modes",
-    "explainerDeepTitle": "PTC Mode (Primary)",
-    "explainerDeepBody": "The full agent with a sandboxed environment for code execution, charts, and data analysis. Powered by your primary model.",
-    "explainerFlashTitle": "Flash Mode",
-    "explainerFlashBody": "A lightweight agent for quick answers without a sandbox. Powered by your flash model for speed.",
     "doneTitle": "You're all set!",
     "doneSummary": "Your AI research assistant is configured and ready to go.",
     "goToDashboard": "Go to Dashboard",
@@ -3281,11 +3250,8 @@
     "addAnother": "+ Add",
     "errorSaveModels": "Failed to save model selection.",
     "chooseYourModels": "Choose your models",
-    "chooseYourModelsDesc": "Select which models to use for deep research and quick answers. You can change these anytime.",
     "errorSavePrefs": "Failed to save model preferences.",
     "providerLabel": "Provider",
-    "primaryModelLabel": "Primary model",
-    "flashModelLabel": "Flash model",
     "notSet": "Not set",
     "notConfigured": "Not configured"
   },
@@ -3356,7 +3322,6 @@
       "openTyped": "Press Enter to open {{symbol}}"
     },
     "chatHistory": {
-      "missingThreadHint": "Don't see a thread? Threads are scoped to mode and workspace. Try switching between Flash and PTC, or pick a different workspace.",
       "triggerLabel": "Chat history",
       "newChat": "New chat",
       "recent": "Recent",
@@ -3370,14 +3335,11 @@
       "nextPage": "Next page"
     },
     "chatPanel": {
-      "ptcDisabledReason": "Create a workspace in /chat to use PTC mode",
       "noWorkspacePrompt": "No workspace selected. Pick one in the chat input.",
       "startConversation": "Start a conversation by typing a message below",
       "defaultPlaceholder": "What would you like to know?",
       "returnToChat": "Return to Chat",
       "openInChat": "Open in Chat",
-      "noWorkspaceToast": "Please create a workspace first to use PTC mode.",
-      "ptcSetupFailed": "Failed to set up PTC mode. Please try again.",
       "askStockPlaceholder": "Ask about this stock..."
     },
     "chart": {
@@ -3482,25 +3444,8 @@
     "intros": {
       "chat": {
         "steps": {
-          "modes": {
-            "title": "Two modes: Flash and PTC",
-            "body": "The agent works in two modes: Flash for everyday coordination and quick questions, and PTC for deep analysis that produces real deliverables. The next steps show what each one is best at."
-          },
           "workspace": {
-            "title": "Meet workspaces",
-            "body": "Every workspace is a project desk: the conversations about one task live there together, sharing the same files, data, and results — completely separate from other workspaces. The built-in Flash workspace collects all your quick questions; every workspace you create yourself runs PTC."
-          },
-          "flash": {
-            "title": "Flash — your personal assistant",
-            "body": "Flash keeps the whole desk running: just say what you need, and it creates and manages workspaces for you, dispatches heavy tasks to a PTC workspace to run, and manages your automations. It also handles quick questions — a stock price, a news lookup, a fast fact-check — in seconds. Every Flash thread is collected in the first workspace card, so past sessions are always easy to find."
-          },
-          "ptc": {
-            "title": "PTC — where the real work happens",
-            "body": "PTC workspaces host our most capable agent. Every thread inside shares the same files, data, and prior work, so research compounds. It processes large datasets, coordinates teams of subagents — something Flash can't do — and produces any deliverable: Excel models, Word docs, PDFs, dashboards."
-          },
-          "create": {
-            "title": "Give real tasks a PTC workspace",
-            "body": "If it involves data work or ends in a deliverable, don't leave it in Flash. Hit \"New workspace\", name it after the task — the agent boots a dedicated sandbox and brings its full capability to it."
+            "title": "Meet workspaces"
           }
         }
       },
@@ -3558,8 +3503,7 @@
           "desc": "Set your risk tolerance, investing style, and how you want answers framed."
         },
         "createWorkspace": {
-          "title": "Create your first workspace",
-          "desc": "Spin up a dedicated PTC workspace — the agent gets a full sandbox for real research."
+          "title": "Create your first workspace"
         },
         "firstChat": {
           "title": "Run your first analysis",
@@ -4342,8 +4286,6 @@
       "onlyIn": "Only in {{name}}",
       "someWorkspaces_one": "{{count}} workspace",
       "someWorkspaces_other": "{{count}} workspaces",
-      "flash": "Flash",
-      "flashNote": "Flash reaches only the tools bound as Direct; PTC tools need the PTC agent.",
       "moveToAll": "Move to all workspaces",
       "moveToAnother": "Move to another workspace",
       "moveShadowBlocked": "This name already exists at the account tier. Delete or rename one of the two first",
@@ -5368,7 +5310,6 @@
       "create": "Create",
       "availableNextTurn": "Available from the next turn.",
       "copyStartsOff": "Starts switched off, like {{name}}. Switch it on after creating.",
-      "copyReachesNoAgent": "Like {{name}}, it is available only to the Chief of Staff, which is off. Choose Workspace analyst under Available to after creating.",
       "atLimit": "You have {{count}} subagents of your own, the most there can be. Remove one to add another."
     }
   },

@@ -7,6 +7,7 @@ import {
   setWorkspaceSkillEnabled,
 } from '@/pages/ChatAgent/utils/api';
 import type { SkillInfo } from '@/pages/ChatAgent/utils/api';
+import { useHomeWorkspaceId } from '@/hooks/useHomeWorkspace';
 import type { BulkScopeSpec } from '../components/BulkScopeMenu';
 import { scopeLocked, type ScopeWorkspace } from '../components/ScopeControl';
 import { buildBulkActions, type BulkActions } from '../utils/bulkActions';
@@ -23,6 +24,7 @@ export function useSkillBulkActions(
   workspaces: ScopeWorkspace[],
 ): BulkActions & { scope: BulkScopeSpec } {
   const { t } = useTranslation();
+  const homeId = useHomeWorkspaceId() ?? null;
   const selected = visibleSkills.filter((s) =>
     surface.selection.selected.has(skillRowKey(s)),
   );
@@ -40,6 +42,8 @@ export function useSkillBulkActions(
     name: (s) => s.name,
     denyMarkers: (s) =>
       s.origin !== 'workspace' && !scopeLocked(s) ? (s.disabled_workspace_ids ?? []) : null,
+    // Home, which every deny checklist lists.
+    homeWorkspaceId: () => homeId,
     setWorkspaceEnabled: (s, workspaceId, enabled) =>
       setWorkspaceSkillEnabled(workspaceId, s.name, enabled),
     promote: (s) =>

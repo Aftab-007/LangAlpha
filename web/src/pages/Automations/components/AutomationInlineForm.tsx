@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import type { Automation, AutomationPayload, AutomationUpdatePayload } from '@/types/automation';
 import { type DeliveryProblem, deliveryProblems } from '../utils/delivery';
 import { PANE_ENTER } from '../utils/motion';
@@ -62,7 +61,6 @@ export default function AutomationInlineForm({
   const [refused, setRefused] = useState<DeliveryProblem[]>([]);
   const uid = useId();
   const ids = { name: `${uid}-name`, instruction: `${uid}-instruction` };
-  const allWorkspaces = useAllWorkspacesAgent();
 
   const patch: FormPatch = (key, value) => {
     if (key === 'delivery_methods') setRefused([]);
@@ -77,7 +75,7 @@ export default function AutomationInlineForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const problem = validateForm(form, Date.now(), isEdit ? opened.values : undefined, { allWorkspaces });
+    const problem = validateForm(form, Date.now(), isEdit ? opened.values : undefined);
     if (problem) {
       // A field folded away cannot be fixed, so its section opens.
       if (problem.section === 'more') setMoreOpen(true);

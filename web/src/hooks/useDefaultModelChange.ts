@@ -8,16 +8,17 @@ import {
   splitPreferenceWrite,
   threadsMoved,
   type ApplyDefaultTo,
-  type ComposerMode,
+  type ModelSlot,
   type FlashFollows,
   type PreferencePatch,
 } from '@/lib/modelPreferences';
-import { useModeDefaultModels } from './useModeDefaultModel';
+import { useSlotDefaultModels } from './useSlotDefaultModels';
 import { usePreferences } from './usePreferences';
 import { useUpdatePreferences } from './useUpdatePreferences';
 
-/** What each default becomes: fast names the flash default, PTC the primary one. */
-type DefaultModelChoice = Partial<Record<ComposerMode, string>>;
+/** What each default becomes: background names the second slot's default,
+ *  default the first's. */
+type DefaultModelChoice = Partial<Record<ModelSlot, string>>;
 
 /** The question a parked change asks, as `DefaultModelScopeChoice` takes it. */
 export interface DefaultModelQuestion {
@@ -31,15 +32,15 @@ export interface DefaultModelQuestion {
   onCancel: () => void;
 }
 
-const MODES: ComposerMode[] = ['ptc', 'fast'];
+const SLOTS: ModelSlot[] = ['default', 'background'];
 
 interface Draft {
   /** Every default the answer writes, including any that already resolve to
    *  the model named. */
   models: DefaultModelChoice;
-  /** The default each changing mode replaces, which names the threads the
-   *  change can move. Only modes whose default actually changes appear. */
-  previous: Partial<Record<ComposerMode, string | null>>;
+  /** The default each changing slot replaces, which names the threads the
+   *  change can move. Only slots whose default actually changes appear. */
+  previous: Partial<Record<ModelSlot, string | null>>;
 }
 
 /** One model, or a pair joined as "A and B", with the i18next `context` that
@@ -54,13 +55,13 @@ export function namePhrase(t: TFunction, names: string[]): { text: string; conte
  *  ones they replace, each named once, primary first. A draft that changes no
  *  default names what it writes. */
 function describe(draft: Draft, label: (model: string) => string): { models: string[]; previous: string[] } {
-  const changing = MODES.filter((mode) => mode in draft.previous);
+  const changing = SLOTS.filter((slot) => slot in draft.previous);
   const models = new Set<string>();
   const previous = new Set<string>();
-  for (const mode of changing.length > 0 ? changing : MODES) {
-    const model = draft.models[mode];
+  for (const slot of changing.length > 0 ? changing : SLOTS) {
+    const model = draft.models[slot];
     if (model) models.add(label(model));
-    const replaced = draft.previous[mode];
+    const replaced = draft.previous[slot];
     if (replaced) previous.add(label(replaced));
   }
   return { models: [...models], previous: [...previous] };
@@ -85,7 +86,7 @@ function describe(draft: Draft, label: (model: string) => string): { models: str
 export function useDefaultModelChange(label: (model: string) => string) {
   const { t } = useTranslation();
   const { preferences } = usePreferences();
-  const defaults = useModeDefaultModels();
+  const defaults = useSlotDefaultModels();
   const { mutate, mutateAsync, isPending: saving } = useUpdatePreferences();
   const [pending, setPending] = useState<Draft | null>(null);
 
@@ -96,18 +97,18 @@ export function useDefaultModelChange(label: (model: string) => string) {
     remember: boolean,
     answers: Draft | null,
   ) => {
-    // Every default goes in one write, so the server moves each mode's
+    // Every default goes in one write, so the server moves each slot's
     // threads against the final pair rather than a half-applied one.
     // Remembering the answer saves it as the scope too; `apply_default_to`
     // is a one-shot answer for this write and is never stored.
-    // A saved flash model makes Auto moot, so the pick drops it rather than
+    // A saved background model makes Auto moot, so the pick drops it rather than
     // leave it to resurface if the model is ever cleared.
     const patch: PreferencePatch = {};
-    for (const mode of MODES) {
-      const model = change.models[mode];
-      if (model) patch[defaultModelKey(mode)] = model;
+    for (const slot of SLOTS) {
+      const model = change.models[slot];
+      if (model) patch[defaultModelKey(slot)] = model;
     }
-    if (change.models.fast) patch.flash_follows = null;
+    if (change.models.background) patch.flash_follows = null;
     if (remember) patch.default_model_scope = applyTo;
     let result: Record<string, unknown> | undefined;
     try {
@@ -141,33 +142,34 @@ export function useDefaultModelChange(label: (model: string) => string) {
 
   const request = useCallback((models: DefaultModelChoice) => {
     const draft: Draft = { models: { ...pending?.models, ...models }, previous: {} };
-    for (const mode of MODES) {
-      const model = draft.models[mode];
-      if (model && model !== defaults[mode]) draft.previous[mode] = defaults[mode];
+    for (const slot of SLOTS) {
+      const model = draft.models[slot];
+      if (model && model !== defaults[slot]) draft.previous[slot] = defaults[slot];
     }
-    // Naming the models the defaults already resolve to (the primary model a
-    // flash default inherits, say) moves no thread, so there is nothing to ask.
+    // Naming the models the defaults already resolve to (the Default model the
+    // Background default inherits, say) moves no thread, so there is nothing to ask.
     const scope = Object.keys(draft.previous).length === 0 ? 'new_threads' : readDefaultModelScope(preferences);
     if (scope === 'ask') setPending(draft);
     else void apply(draft, scope, false, pending);
   }, [pending, defaults, preferences, apply]);
 
   /** Clearing a default skips the question: the server still applies a saved
-   *  answer to it, and with none moves no thread. A cleared primary runs the
-   *  deployment's model; a cleared flash runs the primary, or with `follows`
-   *  of `deployment` (Auto) the deployment's flash model. The cleared mode
+   *  answer to it, and with none moves no thread. A cleared Default runs the
+   *  deployment's model; a cleared Background runs the Default, or with `follows`
+   *  of `deployment` (Auto) the deployment's background model. The cleared slot
    *  leaves the draft, so its control shows the clear rather than the pick it
    *  replaces. */
-  const clear = useCallback((mode: ComposerMode, follows: FlashFollows = 'primary') => {
-    mutate(splitPreferenceWrite(mode === 'fast'
-      ? { preferred_flash_model: null, flash_follows: follows === 'deployment' ? follows : null }
-      : { preferred_model: null }));
+  const clear = useCallback((slot: ModelSlot, follows: FlashFollows = 'primary') => {
+    mutate(splitPreferenceWrite({
+      [defaultModelKey(slot)]: null,
+      ...(slot === 'background' && { flash_follows: follows === 'deployment' ? follows : null }),
+    }));
     setPending((current) => {
-      if (!current || !(mode in current.models)) return current;
+      if (!current || !(slot in current.models)) return current;
       const models = { ...current.models };
       const previous = { ...current.previous };
-      delete models[mode];
-      delete previous[mode];
+      delete models[slot];
+      delete previous[slot];
       return Object.keys(models).length > 0 ? { models, previous } : null;
     });
   }, [mutate]);

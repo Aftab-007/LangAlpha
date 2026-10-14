@@ -44,9 +44,6 @@ export interface PageIntroStepDef {
   titleKey: string;
   bodyKey: string;
   visual: IntroVisualId;
-  /** Copy for a user on the all-workspaces agent, who has no Flash or PTC to
-   *  pick between; a key left out keeps the one above. */
-  allWorkspaces?: { titleKey?: string; bodyKey?: string };
 }
 
 /**
@@ -68,14 +65,9 @@ export interface GettingStartedTaskDef {
   id: string;
   titleKey: string;
   descKey: string;
-  /** Copy for a user on the all-workspaces agent; a key left out keeps the one above. */
-  allWorkspaces?: { titleKey?: string; descKey?: string };
   /** Where clicking the task navigates (router path, or a full URL when external). */
   to: string;
-  /**
-   * Starts onboarding (`useStartOnboarding`) instead of a plain navigation,
-   * and is offered only where the Chief of Staff runs it.
-   */
+  /** Starts onboarding (`useStartOnboarding`) instead of a plain navigation. */
   interview?: boolean;
   /** Cross-app destination: opens in a new tab and is stamped done on click. */
   external?: boolean;

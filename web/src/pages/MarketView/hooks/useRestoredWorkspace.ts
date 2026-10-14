@@ -67,7 +67,7 @@ export function useRestoredWorkspace({
 
   // Reconcile the restored selection against the list, once per mount. If the
   // selected workspace is gone (deleted between visits), drop back to a clean
-  // default state (Flash mode + new chat) instead of silently picking a
+  // default state (All workspaces + new chat) instead of silently picking a
   // different PTC workspace the user didn't ask for. Resolve both decisions
   // before calling either setter so neither updater runs a side effect on the
   // other piece of state.

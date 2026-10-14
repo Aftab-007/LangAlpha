@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { ArrowLeft, Folder, FileText, Archive } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useAllWorkspacesAgent, useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
+import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
 import { FLASH_ROUTE_STATE, FlashRowIcon } from '@/hooks/useFlashWorkspace';
 import { useNavigate, useParams, useLocation } from 'react-router';
 import { useTranslation } from 'react-i18next';
@@ -60,7 +60,7 @@ interface RenameModalState {
 interface ThreadGalleryProps {
   workspaceId: string;
   onBack: () => void;
-  onThreadSelect: (workspaceId: string, threadId: string, agentMode?: string | null) => void;
+  onThreadSelect: (workspaceId: string, threadId: string) => void;
 }
 
 /**
@@ -83,12 +83,9 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
   const workspaceStatus = (wsData?.status || locationState?.workspaceStatus || null) as string | null;
   const label = useWorkspaceLabel();
   const workspaceName = (label(wsData) || locationState?.workspaceName || '') as string;
-  const allWorkspaces = useAllWorkspacesAgent();
-  const isFlash = workspaceStatus === 'flash';
-  // Under the all-workspaces agent the flash row is Home: the full agent with
-  // a folder of its own, so its threads open without Flash's mode and its
+  // The flash row is Home: the full agent with a folder of its own, so its
   // files show. It still has no machine controls of its own.
-  const flashMode = isFlash && !allWorkspaces;
+  const isFlash = workspaceStatus === 'flash';
 
   // Archived view toggle. Both views live under the byWorkspace prefix
   // (queryKeys.threads.gallery), so prefix invalidations refresh both — and
@@ -191,7 +188,7 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
   // no overflow the sentinel is simply already on screen.
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
 
-  // Shared workspace files for the FilePanel (skip for Flash -- no sandbox).
+  // Shared workspace files for the FilePanel.
   // A link in one of them can open a sibling's files read-only in their
   // place; the composer and the Files card keep listing the workspace's own.
   const {
@@ -205,8 +202,7 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
     mentionFiles: ownFiles,
     panelAccess,
   } = usePanelFiles({
-    isHome: isFlash && allWorkspaces,
-    isFlashMode: flashMode,
+    isHome: isFlash,
     workspaceId,
     workspaceName,
     includeSystem: showSystemFiles,
@@ -230,7 +226,6 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
     folders,
     override: panelOverride,
     setOverride: setPanelOverride,
-    ownFiles: !flashMode,
     land: askPanel,
     leave: leaveFiles,
   });
@@ -319,9 +314,9 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
   // closure per render would defeat the memo for the whole list.
   const handleThreadClick = useCallback((thread: Record<string, unknown>) => {
     if (onThreadSelect) {
-      onThreadSelect(workspaceId, thread.thread_id as string, flashMode ? 'flash' : null);
+      onThreadSelect(workspaceId, thread.thread_id as string);
     }
-  }, [onThreadSelect, workspaceId, flashMode]);
+  }, [onThreadSelect, workspaceId]);
 
   /**
    * Handles delete icon click - opens confirmation modal
@@ -715,7 +710,6 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
                 disabled={isSendingMessage || !workspaceId}
                 files={ownFiles}
                 dropdownDirection="down"
-                mode={flashMode ? 'fast' : 'ptc'}
                 // The turn this composer sends lands in this workspace, so the
                 // slash menu has to be scoped to it too: without this it lists
                 // the account-level skills, hiding the workspace's own and
@@ -725,8 +719,8 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
               />
             </div>
 
-            {/* Files Card -- hidden for Flash (no sandbox) */}
-            {!flashMode && <div className="w-full enter-fade-up enter-fade-up-d3">
+            {/* Files Card */}
+            <div className="w-full enter-fade-up enter-fade-up-d3">
               <div
                 className="flex-1 min-w-0 flex flex-col ps-[16px] pt-[12px] pb-[14px] pe-[20px] rounded-[12px] border cursor-pointer hover:bg-foreground/5 transition-colors"
                 style={{
@@ -777,7 +771,7 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
                   </div>
                 )}
               </div>
-            </div>}
+            </div>
 
             {/* Threads Section */}
             <div className="w-full flex flex-col gap-4 pb-8 enter-fade-up enter-fade-up-d4">
@@ -876,9 +870,9 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
         </div>
       </div>
 
-      {/* Right Side: File Panel -- hidden for Flash */}
+      {/* Right Side: File Panel */}
       <AnimatePresence>
-        {showFilePanel && !flashMode && (
+        {showFilePanel && (
           <motion.div
             initial={isMobile ? { x: '100%' } : { width: 0, opacity: 0 }}
             animate={isMobile ? { x: 0 } : { width: filePanelWidth + DIVIDER_WIDTH, opacity: 1 }}

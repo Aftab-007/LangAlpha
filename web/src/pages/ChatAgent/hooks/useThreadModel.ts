@@ -3,9 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { resolveComposerModel } from '@/components/ui/chat-input.models';
 import { useAllModels } from '@/hooks/useAllModels';
-import { useModeDefaultModel } from '@/hooks/useModeDefaultModel';
+import { useDefaultModel } from '@/hooks/useSlotDefaultModels';
 import { useSeededModel } from '@/hooks/useSeededModel';
-import type { ComposerMode } from '@/lib/modelPreferences';
 import { queryKeys } from '@/lib/queryKeys';
 import { threadFieldMutationKey } from '@/lib/threadFieldMutations';
 import { userSessionStorage } from '@/lib/userStorage';
@@ -22,7 +21,7 @@ export interface RetiredModel {
   fallback: string;
 }
 
-/** A pick the user may make the account default for the mode. */
+/** A pick the user may make the account default. */
 export interface DefaultModelOffer {
   model: string;
   defaultModel: string;
@@ -31,7 +30,6 @@ export interface DefaultModelOffer {
 interface UseThreadModelOptions {
   /** The view's thread; `__default__` until the first send creates one. */
   threadId: string | null | undefined;
-  mode: ComposerMode;
   /** Whether a turn is running. Its end is when the send's model reaches the row. */
   isLoading: boolean;
   /** The model a navigation's first message went out with, which the thread
@@ -44,7 +42,7 @@ interface UseThreadModelOptions {
  * next send names, and the one place a pick on it is saved.
  *
  * The thread row is the source. The model starts on the row's model while it
- * is reachable (else the mode default) and follows the row when it moves; a
+ * is reachable (else the account default) and follows the row when it moves; a
  * pick holds in between and is saved on the row (`useThreadFieldSave`). A
  * thread not created yet has no row to write, so its pick is held here and
  * goes out with the first send, which stores it.
@@ -54,14 +52,13 @@ interface UseThreadModelOptions {
  */
 export function useThreadModel({
   threadId,
-  mode,
   isLoading,
   initialModel = null,
 }: UseThreadModelOptions) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { catalogModelNames } = useAllModels();
-  const defaultModel = useModeDefaultModel(mode);
+  const defaultModel = useDefaultModel();
   const liveThreadId = threadId && threadId !== '__default__' ? threadId : null;
 
   const { data: thread } = useQuery({
@@ -73,10 +70,10 @@ export function useThreadModel({
   // and the send would store the default over the model the thread holds.
   // With no model named, the server runs the thread's own.
   const unread = !!liveThreadId && !thread && !initialModel;
-  // A Flash thread in a full-agent composer is one Home is taking over. Its
-  // model was picked for Flash's slot, and the takeover forgets it, so the
-  // composer starts on the default rather than naming that model once more.
-  const rowModel = thread?.msg_type === 'flash' && mode !== 'fast' ? null : thread?.llm_model;
+  // A thread Flash ran is one Home is taking over. Its model was picked for
+  // Flash's slot, and the takeover forgets it, so the composer starts on the
+  // default rather than naming that model once more.
+  const rowModel = thread?.msg_type === 'flash' ? null : thread?.llm_model;
   const { seed, retired: retiredName } = unread
     ? { seed: null, retired: null }
     : resolveComposerModel(

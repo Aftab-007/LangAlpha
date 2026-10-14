@@ -2,7 +2,7 @@ import { MoreHorizontal, Pin, Cpu, Server, Infinity as InfinityIcon } from 'luci
 import { useTranslation } from 'react-i18next';
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { useWorkspaceText } from '@/hooks/useAllWorkspacesAgent';
+import { useWorkspaceText } from '@/hooks/useWorkspaceLabel';
 import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useLocale } from '@/hooks/useLocale';

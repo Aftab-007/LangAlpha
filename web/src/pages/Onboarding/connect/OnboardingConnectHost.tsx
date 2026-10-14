@@ -1,6 +1,5 @@
 import { Suspense, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { lazyWithMotion } from '@/lib/lazyWithMotion';
 import { ONBOARDING_CONNECT, ONBOARDING_PARAM } from './useStartOnboarding';
 
@@ -14,9 +13,8 @@ const OnboardingConnectLayer = lazyWithMotion(() => import('./OnboardingConnectS
  * out rather than unmounting.
  */
 export function OnboardingConnectHost() {
-  const available = useAllWorkspacesAgent();
   const [searchParams, setSearchParams] = useSearchParams();
-  const open = available && searchParams.get(ONBOARDING_PARAM) === ONBOARDING_CONNECT;
+  const open = searchParams.get(ONBOARDING_PARAM) === ONBOARDING_CONNECT;
   const [needed, setNeeded] = useState(false);
   if (open && !needed) setNeeded(true);
   if (!needed) return null;

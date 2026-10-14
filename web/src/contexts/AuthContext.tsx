@@ -4,7 +4,6 @@ import { supabase } from '../lib/supabase';
 import { publishSession, sessionAdopter, clearAuthToken } from '../lib/authToken';
 import { queryKeys } from '../lib/queryKeys';
 import { AUTH_BROADCAST_CHANNEL, OAUTH_POPUP_WINDOW_NAME, OAUTH_POPUP_FEATURES } from '../lib/oauthPopup';
-import { clearFlashWorkspaceCache } from '@/pages/MarketView/utils/flashWorkspace';
 import { resetNavPanelExpansion } from '@/pages/ChatAgent/components/navExpansionStore';
 import { resetStableNavOrder } from '@/pages/ChatAgent/hooks/useNavigationData';
 import { resetSharedWorkspaceThreads } from '@/lib/navThreadsStore';
@@ -193,7 +192,6 @@ function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
       // new user against the old user's cached data.
       if (sess?.user && lastUserIdRef.current && sess.user.id !== lastUserIdRef.current) {
         queryClient.clear();
-        clearFlashWorkspaceCache();
         resetNavPanelExpansion();
         resetStableNavOrder();
         resetSharedWorkspaceThreads();
@@ -213,7 +211,6 @@ function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
       } else {
         // Logged out — wipe all cached data
         queryClient.clear();
-        clearFlashWorkspaceCache();
         // Module-level nav stores live on globalThis (no page reload on logout),
         // so they'd otherwise leak one user's folders/thread lists into the next
         // user's session on a shared tab. Reset them on every sign-out.

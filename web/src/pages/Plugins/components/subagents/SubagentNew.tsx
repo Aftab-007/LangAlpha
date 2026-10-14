@@ -1,7 +1,6 @@
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { useLocale } from '@/hooks/useLocale';
 import { useCreateSubagent } from '@/hooks/useSubagents';
 import { formatBytes } from '@/lib/format';
@@ -35,7 +34,6 @@ import {
   memoryText,
   modelMeta,
   modelName,
-  reachesNoAgent,
   toolsSummary,
   textLimits,
   type SubagentText,
@@ -74,7 +72,6 @@ export function SubagentNew({
   const locale = useLocale();
   const labelId = useId();
   const nameId = useId();
-  const allWorkspaces = useAllWorkspacesAgent();
   const create = useCreateSubagent();
 
   // Bases the user can copy, and the one custom subagent being duplicated.
@@ -135,11 +132,9 @@ export function SubagentNew({
     failure ??
     (full
       ? t('plugins.subagents.atLimit', { count: maxCustom })
-      : source && reachesNoAgent(source.available_to, allWorkspaces)
-        ? t('plugins.subagents.copyReachesNoAgent', { name: source.name })
-        : source && !source.enabled
-          ? t('plugins.subagents.copyStartsOff', { name: source.name })
-          : t('plugins.subagents.availableNextTurn'));
+      : source && !source.enabled
+        ? t('plugins.subagents.copyStartsOff', { name: source.name })
+        : t('plugins.subagents.availableNextTurn'));
 
   function submit() {
     setFailure(null);
@@ -218,7 +213,7 @@ export function SubagentNew({
           <DetailAsideBlock
             title={source ? t('plugins.subagents.copiedFrom', { name: source.name }) : t('plugins.subagents.startsWith')}
           >
-            <CopyFacts source={source} models={models} allWorkspaces={allWorkspaces} />
+            <CopyFacts source={source} models={models} />
             <p className="sa-hint">
               {source && (source.edited || isCustom(source))
                 ? t('plugins.subagents.copyIncludesEdits', { name: source.name })
@@ -337,11 +332,9 @@ function StartCard({
 function CopyFacts({
   source,
   models,
-  allWorkspaces,
 }: {
   source: SubagentView | null;
   models: SubagentModels;
-  allWorkspaces: boolean;
 }) {
   const { t } = useTranslation();
   const locale = useLocale();
@@ -367,7 +360,7 @@ function CopyFacts({
           ],
           // A blank one reads memory, as every subagent of the user's own starts.
           [t('plugins.subagents.memory'), memoryText(t, source ? source.memory : true)],
-          [t('plugins.subagents.availableTo'), allWorkspaces ? audienceFacts(t, audiences) : null],
+          [t('plugins.subagents.availableTo'), audienceFacts(t, audiences)],
         ]}
       />
     </div>

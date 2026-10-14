@@ -139,9 +139,8 @@ function Dashboard({ layoutToggle }: DashboardProps = {}) {
             )}
           </div>
 
-          {/* Personalize your experience: dismissible banner, offered only where
-              the Chief of Staff runs onboarding */}
-          {showPersonalizationBanner && onboarding.available && (
+          {/* Personalize your experience: dismissible banner */}
+          {showPersonalizationBanner && (
             <div
               className="mb-6 rounded-lg border px-4 py-3 flex items-center gap-3"
               style={{

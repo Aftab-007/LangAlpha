@@ -74,7 +74,7 @@ export default function MoreOptions({
 
   const workspaces = useWorkspaceOptions();
   const workspaceName = workspaceNameOf(workspaces, form.workspace_id);
-  const agentModes = useAgentModeLabels();
+  const { label: modeLabel } = useAgentModeLabels();
   const delivery = useDeliveryOptions({ agentMode: form.agent_mode, workspaceId: form.workspace_id });
   // With no messaging service, or before its chats load, the form offers the
   // apps alone, as it always has.
@@ -88,7 +88,7 @@ export default function MoreOptions({
 
   // What the folded options are set to, so they can stay folded.
   const summary = [
-    agentModes.label(form.agent_mode, workspaceName),
+    modeLabel(form.agent_mode, workspaceName),
     t(form.thread_strategy === 'continue' ? 'automation.continueExisting' : 'automation.newThreadEachRun'),
     form.delivery_methods.length
       ? t('automation.deliversTo', { method: form.delivery_methods.map(entryName).join(', ') })
@@ -119,8 +119,8 @@ export default function MoreOptions({
             value={form.agent_mode}
             onChange={(mode) => patch('agent_mode', mode)}
             options={[
-              { value: 'flash', label: agentModes.options.flash },
-              { value: 'ptc', label: agentModes.options.ptc },
+              { value: 'flash', label: modeLabel('flash') },
+              { value: 'ptc', label: modeLabel('ptc') },
             ]}
           />
         </FormRow>

@@ -52,7 +52,6 @@ type OnStreamEvent = (event: Record<string, unknown>) => void;
 /** What a send and a resume both carry besides their message. */
 interface StreamTurnOptions {
   onEvent?: OnStreamEvent;
-  agentMode?: string;
   llmModel?: string | null;
   reasoningEffort?: string | null;
   fastMode?: boolean | null;
@@ -108,7 +107,6 @@ export async function sendChatMessageStream(
   {
     onEvent = () => {},
     additionalContext = null,
-    agentMode = 'ptc',
     locale = 'en-US',
     timezone = 'America/New_York',
     checkpointId = null,
@@ -130,7 +128,7 @@ export async function sendChatMessageStream(
   const body: Record<string, unknown> = {
     workspace_id: workspaceId,
     messages,
-    agent_mode: agentMode,
+    agent_mode: 'ptc',
     locale,
     timezone,
   };
@@ -726,7 +724,6 @@ export async function sendHitlResponse(
   threadId: string,
   {
     onEvent = () => {},
-    agentMode = 'ptc',
     llmModel = null,
     reasoningEffort = null,
     fastMode = null,
@@ -739,7 +736,7 @@ export async function sendHitlResponse(
     workspace_id: workspaceId,
     messages: [],
     hitl_response: hitlResponse,
-    agent_mode: agentMode,
+    agent_mode: 'ptc',
   };
   if (llmModel) body.llm_model = llmModel;
   if (reasoningEffort) body.reasoning_effort = reasoningEffort;

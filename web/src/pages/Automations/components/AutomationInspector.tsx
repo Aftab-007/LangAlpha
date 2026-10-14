@@ -67,7 +67,7 @@ export default function AutomationInspector({
   const deliveryMethods = a.delivery_config?.methods ?? [];
   const { executions, loading } = useExecutions(a.automation_id, deliveryMethods.length > 0);
   const workspaceName = workspaceNameOf(useWorkspaceOptions(), a.workspace_id);
-  const agentModes = useAgentModeLabels();
+  const { label: modeLabel } = useAgentModeLabels();
   const runsAs = useRunsAs();
   const delivery = useDeliveryOptions({
     agentMode: a.agent_mode,
@@ -109,7 +109,7 @@ export default function AutomationInspector({
     reportRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
   }, [runId]);
 
-  const kicker = [t(ui.labelKey), ...agentModes.kicker(runsAs(a.agent_mode, a.workspace_id), workspaceName)];
+  const kicker = [t(ui.labelKey), modeLabel(runsAs(a.agent_mode, a.workspace_id), workspaceName)];
 
   return (
     <article className="automation-inspector">

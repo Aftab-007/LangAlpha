@@ -6,8 +6,7 @@
  */
 import { useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
-import { useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
-import { FLASH_ROUTE_STATE } from '@/hooks/useFlashWorkspace';
+import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
 import { useNavigationData } from './useNavigationData';
 import type { NavWorkspace } from './useNavigationData';
 import type { SidebarAgentRow } from '../session/subagents/subagentStatus';
@@ -74,7 +73,7 @@ export function useNavTreeProps({
   );
 
   // Route-state contract: the workspace name/status ride along so ChatAgent
-  // skips the workspace refetch, and flash workspaces carry their agent mode.
+  // skips the workspace refetch.
   const onNavigateThread = useCallback((wsId: string, threadId: string) => {
     const ws = findWorkspace(wsId);
     navigate(`/chat/t/${threadId}`, {
@@ -82,7 +81,6 @@ export function useNavTreeProps({
         workspaceId: wsId,
         workspaceName: label(ws) || fallbackWorkspaceName || '',
         workspaceStatus: ws?.status || null,
-        ...(ws?.status === 'flash' ? FLASH_ROUTE_STATE : {}),
       },
     });
   }, [findWorkspace, navigate, fallbackWorkspaceName, label]);

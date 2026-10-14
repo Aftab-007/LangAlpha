@@ -20,6 +20,7 @@ import { ScopeControl, type ScopeWorkspace } from './ScopeControl';
 import { MetaLine, OnOffControl, PageButton } from './pluginsPage/parts';
 import { sourceLabel } from './pluginsPage/pluginStatus';
 import { useCatalogPlugins } from '../hooks/useCatalogPlugins';
+import { useHomeOption } from '../hooks/useWorkspaceOptions';
 import { SkillDocument } from './pluginsPage/SkillDocument';
 import { SkillFiles } from './pluginsPage/SkillFiles';
 
@@ -63,6 +64,7 @@ export function SkillDetail({
   const { t } = useTranslation();
   const locale = useLocale();
   const catalogPlugins = useCatalogPlugins();
+  const home = useHomeOption();
   const labelId = useId();
   const [file, setFile] = useState('SKILL.md');
   // SKILL.md carries the folder's listing; the open file is fetched on its own.
@@ -113,6 +115,7 @@ export function SkillDetail({
         scopeWorkspaceId={null}
         disabledWorkspaceIds={skill.disabled_workspace_ids ?? []}
         off={scopeOff(skill)}
+        homeWorkspace={home}
         busy={toggling || actions.movingName === key}
         moveBlockedReason={
           // A package's skills live at the account tier; moving one into a

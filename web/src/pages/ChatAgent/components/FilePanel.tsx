@@ -126,9 +126,6 @@ interface FilePanelProps {
   onActiveTabKindChange?: ((kind: FileTab['kind'] | null) => void) | null;
   /** Offer the open file's share dialog in its header: the owner's own panel only. */
   canShare?: boolean;
-  /** The panel shows Home's own files: the flash row under the all-workspaces
-   *  agent, which has files once it is bound to the user's computer. */
-  isHome?: boolean;
   /** Set while a Home or analyst panel shows a sibling's files in place of
    *  its own: the panel names that workspace and offers the way back, asking
    *  first about unsaved edits as its own close does. */
@@ -167,7 +164,6 @@ function FilePanel({
   onLeaveGuardChange = null,
   onActiveTabKindChange = null,
   canShare = false,
-  isHome = false,
   onReturnHome = null,
   returnLabel = null,
 }: FilePanelProps): React.ReactElement {
@@ -255,13 +251,7 @@ function FilePanel({
   useEffect(() => () => dropBodies(), []);
 
   const downloads = useFileDownloads({ workspaceId, triggerDownloadFn, workspaceStatus: wsData?.status });
-  const rawFileError = downloads.errorFor(selectedFile) ?? readError;
-  // The server refuses a file read on a flash row it has not bound yet, which
-  // for Flash means it has no files at all. Home binds on its first start, so
-  // there the refusal means the computer is on its way.
-  const fileError = isHome && rawFileError?.category === 'no_sandbox'
-    ? { ...rawFileError, category: 'sandbox_starting' as const }
-    : rawFileError;
+  const fileError = downloads.errorFor(selectedFile) ?? readError;
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [pageCounts, setPageCounts] = useState<Record<string, number>>({});

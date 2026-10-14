@@ -60,9 +60,9 @@ export interface ReadyAttachment {
 }
 
 /**
- * Where a send goes under the all-workspaces agent: All workspaces, which the
- * Chief of Staff answers in Home, or the selected workspace's analyst. Both run
- * the full agent, so the scope is a target, not a mode.
+ * Where a send goes: All workspaces, which the Chief of Staff answers in Home,
+ * or the selected workspace's analyst. Both run the full agent, so the scope
+ * is a target, not a mode.
  */
 export type ComposerScope = 'all' | 'workspace';
 

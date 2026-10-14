@@ -98,16 +98,14 @@ export default function DoneStep() {
         </Button>
         {/* Over the dashboard: the wizard sits outside the app shell, which
             is where the connect sheet lives. */}
-        {onboarding.available && (
-          <button
-            type="button"
-            className="text-sm font-medium transition-colors"
-            style={{ color: 'var(--color-accent-primary)' }}
-            onClick={() => onboarding.start({ at: '/dashboard', replace: true })}
-          >
-            {t('setup.personalizeLink')}
-          </button>
-        )}
+        <button
+          type="button"
+          className="text-sm font-medium transition-colors"
+          style={{ color: 'var(--color-accent-primary)' }}
+          onClick={() => onboarding.start({ at: '/dashboard', replace: true })}
+        >
+          {t('setup.personalizeLink')}
+        </button>
       </div>
     </div>
   );

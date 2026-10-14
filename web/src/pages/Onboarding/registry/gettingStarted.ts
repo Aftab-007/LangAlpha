@@ -13,8 +13,7 @@ const PLATFORM_URL = (import.meta.env.VITE_PLATFORM_URL as string | undefined) |
  * The two interview tasks both start onboarding (the brokerage connect sheet,
  * then the Chief of Staff's interview in Home): it covers watchlist/portfolio
  * and preferences in one conversation, but each half has its own completion
- * signal so a partial interview shows what's still missing. Offered only with
- * the Chief of Staff on.
+ * signal so a partial interview shows what's still missing.
  */
 export const GETTING_STARTED_TASKS: GettingStartedTaskDef[] = [
   {
@@ -50,8 +49,7 @@ export const GETTING_STARTED_TASKS: GettingStartedTaskDef[] = [
   {
     id: 'createWorkspace',
     titleKey: 'onboarding.gettingStarted.tasks.createWorkspace.title',
-    descKey: 'onboarding.gettingStarted.tasks.createWorkspace.desc',
-    allWorkspaces: { descKey: 'agents.tour.createWorkspaceTask' },
+    descKey: 'agents.tour.createWorkspaceTask',
     to: '/chat',
     doneWhen: 'hasWorkspace',
   },

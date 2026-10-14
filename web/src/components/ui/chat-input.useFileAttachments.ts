@@ -2,28 +2,19 @@ import { useCallback, useState } from 'react';
 import type { FileAttachment } from './chat-input.types';
 import { MAX_FILES, MAX_FILE_SIZE } from './chat-input.helpers';
 
-/** Attachment handling for the chat composer: validation (count, size, and
- * flash-mode type restrictions), dataUrl reading with previews, drag & drop,
- * and paste capture. */
-export function useFileAttachments({ mode }: { mode?: 'fast' | 'ptc' }) {
+/** Attachment handling for the chat composer: validation (count and size),
+ * dataUrl reading with previews, drag & drop, and paste capture. */
+export function useFileAttachments() {
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
   const handleFiles = useCallback((newFilesList: FileList | File[]) => {
     const currentCount = attachedFiles.length;
     const fileArray = Array.from(newFilesList);
-    const isFlashMode = mode === 'fast';
 
     const validFiles = [];
     for (const file of fileArray) {
       if (currentCount + validFiles.length >= MAX_FILES) break;
-      if (isFlashMode) {
-        // Flash: only images and PDFs
-        const isImage = file.type.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp)$/i.test(file.name);
-        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
-        if (!isImage && !isPdf) continue;
-      }
-      // PTC: accept any file
       if (file.size > MAX_FILE_SIZE) continue;
       validFiles.push(file);
     }
@@ -58,7 +49,7 @@ export function useFileAttachments({ mode }: { mode?: 'fast' | 'ptc' }) {
       };
       reader.readAsDataURL(f.file);
     });
-  }, [attachedFiles.length, mode]);
+  }, [attachedFiles.length]);
 
   const removeFile = useCallback((id: string) => {
     setAttachedFiles((prev) => {

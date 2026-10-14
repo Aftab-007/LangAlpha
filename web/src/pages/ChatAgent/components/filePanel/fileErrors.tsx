@@ -12,7 +12,6 @@ export type FileErrorCategory =
   | 'sandbox_unavailable'
   | 'binary_file'
   | 'too_large'
-  | 'no_sandbox'
   | 'access_denied'
   | 'unknown';
 
@@ -28,7 +27,6 @@ const ERROR_I18N_KEY: Record<FileErrorCategory, string> = {
   sandbox_unavailable: 'sandboxUnavailable',
   binary_file: 'binaryFile',
   too_large: 'tooLarge',
-  no_sandbox: 'noSandbox',
   access_denied: 'accessDenied',
   unknown: 'unknown',
 };
@@ -56,8 +54,10 @@ export function categorizeFileError(err: unknown, wsStatus?: string): FileError 
       }
       return { category: 'sandbox_unavailable', detail };
     case 400:
-      if (detail.toLowerCase().includes('flash')) {
-        return { category: 'no_sandbox', detail };
+      // Home before its first start or turn has no computer; the open that
+      // led here is starting one.
+      if (detail.toLowerCase().includes('not on a computer')) {
+        return { category: 'sandbox_starting', detail };
       }
       return { category: 'unknown', detail };
     case 403:

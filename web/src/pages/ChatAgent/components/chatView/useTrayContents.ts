@@ -24,8 +24,8 @@ interface TrayInputs {
   hasActiveSubagents: boolean;
   reportBackOwed: boolean;
   owedThreads: ReportBackOwedThread[] | null;
-  /** Who reports back here: Analysts to Home, PTC agents to a Flash thread, subagents to a workspace thread. */
-  mode: 'home' | 'flash' | 'ptc';
+  /** Who reports back here: Analysts to Home, subagents to a workspace thread. */
+  isHome: boolean;
 }
 
 /** The tasks chip: the rows it lists, and whether a task no row names runs
@@ -71,7 +71,7 @@ export function trayWorking({ tasks, analysts, reportBackLabel }: TrayContents):
  * tray and its folded dock show the same thing.
  */
 export function useTrayContents({
-  marketWatch, cards, taskHistory, messages, isLoading, hasActiveSubagents, reportBackOwed, owedThreads, mode,
+  marketWatch, cards, taskHistory, messages, isLoading, hasActiveSubagents, reportBackOwed, owedThreads, isHome,
 }: TrayInputs): TrayContents | null {
   const { t } = useTranslation();
 
@@ -83,7 +83,7 @@ export function useTrayContents({
     taskRoster({ cards, history: taskHistory, messages, turnStarts, workRunning: hasActiveSubagents || isLoading }),
     rosterTasksEqual,
   );
-  const analysts = useAnalystRoster(mode === 'home' ? analystCandidates(messages, owedThreads) : NO_CANDIDATES, turnStarts);
+  const analysts = useAnalystRoster(isHome ? analystCandidates(messages, owedThreads) : NO_CANDIDATES, turnStarts);
 
   // An open task channel that no running row accounts for still shows, beside
   // the rows the tray keeps.
@@ -96,7 +96,7 @@ export function useTrayContents({
   const working = hasActiveSubagents || tasks.some((task) => task.running)
     || analysts.some((analyst) => analyst.running || analyst.status === 'needs_input');
   const reportBackLabel = reportBackOwed && !working
-    ? t(mode === 'home' ? 'agents.reportBackPending' : mode === 'flash' ? 'chat.reportBackPending' : 'chat.taskReportBackPending')
+    ? t(isHome ? 'agents.reportBackPending' : 'chat.taskReportBackPending')
     : null;
 
   if (!watch && !taskChip && !analystChip && !reportBackLabel) return null;

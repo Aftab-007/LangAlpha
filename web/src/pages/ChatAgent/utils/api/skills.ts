@@ -47,13 +47,11 @@ function uploadConfig(onProgress: ((percent: number) => void) | null) {
 }
 
 export async function getSkills(opts?: {
-  mode?: string | null;
   includeDisabled?: boolean;
   workspaceId?: string | null;
   allScopes?: boolean;
 }): Promise<SkillInfo[]> {
   const params: Record<string, string | boolean> = {};
-  if (opts?.mode) params.mode = opts.mode;
   if (opts?.includeDisabled) params.include_disabled = true;
   if (opts?.workspaceId) params.workspace_id = opts.workspaceId;
   if (opts?.allScopes) params.all_scopes = true;

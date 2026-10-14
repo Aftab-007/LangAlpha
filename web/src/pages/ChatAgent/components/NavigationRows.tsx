@@ -22,7 +22,7 @@ import { Loader } from '@/components/ui/loader';
 import { useTitleFade } from '@/hooks/useTitleFade';
 import { useLocale } from '@/hooks/useLocale';
 import { useNow } from '@/hooks/useNow';
-import { useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
+import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
 import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
 import { useThreadFlags } from '@/lib/threadLifecycle/store';
 import { sidebarAgentRowLabel, type SidebarAgentRow } from '../session/subagents/subagentStatus';

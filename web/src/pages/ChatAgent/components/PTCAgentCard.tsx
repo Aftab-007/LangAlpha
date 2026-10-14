@@ -6,7 +6,6 @@ import { useDispatchStatus, type PTCDispatchStatus } from '../hooks/usePTCDispat
 import { DispatchStatusIndicator } from './dispatchStatusUi';
 import { useOpenDispatchedThread, type DispatcherContext } from '../hooks/useOpenDispatchedThread';
 import { AUTO_APPROVE, useApproveAlways } from '@/hooks/useAutoApprove';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import Markdown from './Markdown';
 import { OverflowCollapse } from './messageList/OverflowCollapse';
 
@@ -171,8 +170,6 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
   const [collapsed, setCollapsed] = useState(true);
   const [reportBack, setReportBack] = useState(proposalData?.report_back ?? true);
   const { approveAlways, saving } = useApproveAlways(AUTO_APPROVE.handoffs);
-  // Flash proposes hand-offs too, to a PTC workspace rather than an Analyst.
-  const allWorkspaces = useAllWorkspacesAgent();
   const openDispatchedThread = useOpenDispatchedThread(flashContext);
   const detailId = useId();
 
@@ -325,7 +322,7 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
         </button>
         <button
           disabled={saving}
-          title={t(allWorkspaces ? 'chat.ptcCard.alwaysApproveHint' : 'chat.ptcCard.alwaysApproveHintPtc')}
+          title={t('chat.ptcCard.alwaysApproveHint')}
           onClick={(e: React.MouseEvent) => { e.stopPropagation(); approveAlways(() => onApprove?.({ report_back: reportBack })); }}
           className="rounded-md px-3.5 py-1.5 text-[0.8125rem] font-medium transition-colors hover:bg-(--color-bg-hover)"
           style={{ border: '1px solid var(--color-border-default)', color: 'var(--color-text-secondary)' }}

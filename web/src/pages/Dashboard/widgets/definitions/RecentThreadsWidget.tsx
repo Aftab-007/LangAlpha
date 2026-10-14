@@ -7,7 +7,7 @@ import { MessagesSquare, ArrowUpRight, MessageSquareText } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
-import { useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
+import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
 import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
 import { getRecentThreads } from '@/pages/ChatAgent/utils/api';
 import { workspaceThreadsQuery } from '@/pages/ChatAgent/utils/threadQueries';
@@ -108,7 +108,6 @@ function ThreadRow({
         <FlashRowIcon
           className="h-3 w-3 shrink-0"
           style={{ color: 'var(--color-accent-primary)' }}
-          solid
         />
       ) : (
         <span
@@ -169,7 +168,6 @@ function BucketSection({
   workspaceMap: Map<string, Workspace>;
   instanceId: string;
 }) {
-  const { t } = useTranslation();
   const wsLabel = useWorkspaceLabel();
   if (threads.length === 0) return null;
   return (
@@ -201,16 +199,14 @@ function BucketSection({
         {threads.map((thread) => {
           const wsId = (thread as { workspace_id?: string }).workspace_id;
           const ws = wsId ? workspaceMap.get(wsId) : undefined;
-          const isFlash = ws?.status === 'flash';
-          const workspaceLabel = isFlash ? wsLabel(ws) || t('dashboard.widgets.recentThreads.flash') : ws?.name;
           return (
             <ThreadRow
               key={thread.thread_id}
               thread={thread}
               bucket={bucket}
               onOpen={() => onOpen(thread)}
-              workspaceLabel={workspaceLabel}
-              isFlash={isFlash}
+              workspaceLabel={wsLabel(ws)}
+              isFlash={ws?.status === 'flash'}
               instanceId={instanceId}
             />
           );
@@ -284,9 +280,7 @@ function RecentThreadsWidget({ instance }: WidgetRenderProps<RecentThreadsConfig
             th.title ||
             ((th as { first_query_content?: string }).first_query_content as string | undefined) ||
             t('dashboard.widgets.recentThreads.untitled'),
-          workspace: ws?.status === 'flash'
-            ? label(ws) || t('dashboard.widgets.recentThreads.flash')
-            : ws?.name ?? '',
+          workspace: ws?.status === 'flash' ? label(ws) : ws?.name ?? '',
           when: th.updated_at ?? '',
           thread_id: th.thread_id,
         };

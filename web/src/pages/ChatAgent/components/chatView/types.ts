@@ -6,7 +6,6 @@ import type { SubagentTokenUsage } from '../../utils/tokenUsage';
 export type { MessageRecord } from '../../hooks/utils/types';
 
 export interface LocationState {
-  agentMode?: string;
   workspaceStatus?: string | null;
   initialMessage?: string;
   additionalContext?: Record<string, unknown>[] | null;

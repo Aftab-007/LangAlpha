@@ -62,7 +62,7 @@ export function pluginReachText(t: TFunction, reach: PluginReach): string {
  * A cell's reach, said only when it is not everywhere, in the badge's words
  * ("All except 2", "Only in Research"): the exception is the only thing worth
  * reading on a cell, and a part that is off already says so in its state.
- * `flash` is the Flash row the part's own checklist offers, when it has one.
+ * `flash` is Home, when the part's own checklist offers it.
  */
 export function partialReachText(
   t: TFunction,

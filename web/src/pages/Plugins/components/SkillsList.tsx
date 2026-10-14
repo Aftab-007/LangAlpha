@@ -22,7 +22,7 @@ import { useSectionNav } from '../hooks/useSectionNav';
 import { usePluginListSurface } from '../hooks/usePluginListSurface';
 import { useSkillActions } from '../hooks/useSkillActions';
 import { useSkillBulkActions } from '../hooks/useSkillBulkActions';
-import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
+import { useHomeOption, useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
 import { CatalogStart } from './CatalogStart';
 import { EmptyState } from './EmptyState';
 import { PluginListFrame } from './PluginListFrame';
@@ -50,7 +50,7 @@ export function SkillsList() {
   const { t } = useTranslation();
   const catalogPlugins = useCatalogPlugins();
   const { openDetail } = useSectionNav();
-  const skillsQuery = useSkills(null, {
+  const skillsQuery = useSkills({
     includeDisabled: true,
     allScopes: true,
   });
@@ -62,6 +62,7 @@ export function SkillsList() {
   // box already open.
   const [editCommandOf, setEditCommandOf] = useState<string | null>(null);
   const { workspaces: wsOptions, loading: wsLoading, nameById: wsNameById } = useWorkspaceOptions();
+  const home = useHomeOption();
   const actions = useSkillActions();
 
   useAddIntent({ skill: () => setUploadOpen(true) });
@@ -124,7 +125,7 @@ export function SkillsList() {
         ? (wsNameById.get(skill.workspace_id ?? '') ?? t('plugins.scope.unknownWorkspace'))
         : wsLoading
           ? null
-          : partialReachText(t, skill, wsOptions);
+          : partialReachText(t, skill, wsOptions, home);
     return (
       <CellModeProvider key={key} value={list.cellMode(skill)}>
         <SkillListCell

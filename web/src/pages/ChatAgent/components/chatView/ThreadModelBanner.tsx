@@ -6,7 +6,6 @@ import { getModelDisplayName } from '@/components/ui/chat-input.helpers';
 import { DefaultModelScopeChoice } from '@/components/model/DefaultModelScopeChoice';
 import { useAllModels } from '@/hooks/useAllModels';
 import { useDefaultModelChange } from '@/hooks/useDefaultModelChange';
-import type { ComposerMode } from '@/lib/modelPreferences';
 import { ThreadOfferRow } from './ThreadOfferRow';
 import { StatusLine } from './StatusLine';
 
@@ -24,7 +23,6 @@ function useComposerModelLabel(): (model: string) => string {
 interface ThreadModelBannerProps {
   model: string;
   defaultModel: string;
-  mode: ComposerMode;
   onDismiss: () => void;
 }
 
@@ -32,10 +30,10 @@ interface ThreadModelBannerProps {
    open question is about the model picked before, so confirming it would make
    that one the default while the thread runs another. */
 export function ThreadModelBanner(props: ThreadModelBannerProps): React.ReactElement {
-  return <ThreadModelOffer key={`${props.mode}:${props.model}`} {...props} />;
+  return <ThreadModelOffer key={props.model} {...props} />;
 }
 
-function ThreadModelOffer({ model, defaultModel, mode, onDismiss }: ThreadModelBannerProps): React.ReactElement {
+function ThreadModelOffer({ model, defaultModel, onDismiss }: ThreadModelBannerProps): React.ReactElement {
   const { t } = useTranslation();
   const label = useComposerModelLabel();
   const { question, saving, request } = useDefaultModelChange(label);
@@ -52,7 +50,7 @@ function ThreadModelOffer({ model, defaultModel, mode, onDismiss }: ThreadModelB
       action={t('chat.threadModel.makeDefault', { model: name })}
       onAction={() => {
         setAsked(true);
-        request({ [mode]: model });
+        request({ default: model });
       }}
       busy={saving}
       focusAction={asked}
@@ -62,7 +60,7 @@ function ThreadModelOffer({ model, defaultModel, mode, onDismiss }: ThreadModelB
 }
 
 /* The thread's own model has left the catalog, so the composer fell back to
-   the mode default; the next send stores that one on the thread and this row
+   the account default; the next send stores that one on the thread and this row
    goes with it. A status line, not a banner: there is nothing to decide. */
 export function RetiredModelNotice({
   model,

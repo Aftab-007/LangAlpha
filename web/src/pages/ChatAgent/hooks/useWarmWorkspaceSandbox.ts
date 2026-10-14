@@ -19,7 +19,7 @@
  * spinner the chat path shows, even when a background warm — not a chat
  * message — owns the start.
  *
- * Home, the flash row under the all-workspaces agent, warms differently: its
+ * Home, the flash row, warms differently: its
  * start binds it to the user's computer and its events report that computer.
  * Its row keeps the 'flash' marker throughout, so the stream's statuses drive
  * the spinner but are never written onto the row.
@@ -28,8 +28,6 @@ import { useEffect, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
-import { useFeatures } from '@/hooks/useFeatures';
 import { useWorkspace } from '@/hooks/useWorkspace';
 
 import { streamWorkspaceEvents } from '../utils/api';
@@ -41,18 +39,14 @@ const TERMINAL_STATUSES = new Set(['running', 'error', 'deleted']);
 export type WarmingState = false | 'starting' | 'archived';
 
 /**
- * Whether the workspace is Home, or null until its row says, and for a flash
- * row until the flag has loaded too. Deciding once keeps a cold entry into
- * Home from warming it as a plain workspace first, then again as Home with a
- * second events stream.
+ * Whether the workspace is Home, or null until its row says. Deciding once
+ * keeps a cold entry into Home from warming it as a plain workspace first,
+ * then again as Home with a second events stream.
  */
 function useIsHome(workspaceId: string | null): boolean | null {
   const { data: row } = useWorkspace(workspaceId);
-  const { isPending: flagPending } = useFeatures();
-  const allWorkspaces = useAllWorkspacesAgent();
   if (!row) return null;
-  if (row.status !== 'flash') return false;
-  return flagPending ? null : allWorkspaces;
+  return row.status === 'flash';
 }
 
 export function useWarmWorkspaceSandbox(workspaceId: string | null): WarmingState {

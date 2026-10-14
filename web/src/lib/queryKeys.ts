@@ -184,13 +184,12 @@ export const queryKeys = {
     // (workspace-effective view), or 'all-scopes' (the Plugins inventory) —
     // allScopes and workspaceId are mutually exclusive on the wire.
     list: (
-      mode: string | null,
       includeDisabled = false,
       workspaceId: string | null = null,
       allScopes = false,
     ) =>
       [
-        ...queryKeys.skills.all, 'list', mode ?? 'all', includeDisabled,
+        ...queryKeys.skills.all, 'list', includeDisabled,
         allScopes ? 'all-scopes' : (workspaceId ?? 'user'),
       ],
     // One file of a skill, SKILL.md by default (the detail view).

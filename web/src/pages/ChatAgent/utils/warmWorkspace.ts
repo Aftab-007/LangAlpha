@@ -167,11 +167,9 @@ export function warmWorkspace(
   queryClient: QueryClient,
   { home = false }: {
     /**
-     * The per-user flash row under the all-workspaces agent. Its row reads
-     * 'flash' whatever its computer is doing, so the status gate below would
-     * skip it; the start itself binds Home to the computer and answers from
-     * the computer's state. Leave unset with the flag off, where a start on
-     * that row is refused.
+     * The per-user flash row, Home. Its row reads 'flash' whatever its
+     * computer is doing, so the status gate below would skip it; the start
+     * itself binds Home to the computer and answers from the computer's state.
      */
     home?: boolean;
   } = {},

@@ -20,7 +20,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { ConnectedAccounts } from './ConnectedAccounts';
 import { FLASH_AUTO, flashDefaultChoice, modelPrefs, readDefaultModelScope, splitPreferenceWrite } from '@/lib/modelPreferences';
 import { useModelSlotCopy } from '@/components/model/useModelSlotCopy';
-import type { ComposerMode, DefaultModelScope, PreferencePatch, PreferencesLike } from '@/lib/modelPreferences';
+import type { ModelSlot, DefaultModelScope, PreferencePatch, PreferencesLike } from '@/lib/modelPreferences';
 
 type ModelTabMode = 'simple' | 'advanced';
 
@@ -118,12 +118,12 @@ export function ModelTab() {
 
   // While the question is open each select shows the model the answer would
   // write, and a cancel puts both back on the saved ones.
-  const shownDefault = (agent: ComposerMode) => draftDefaults?.[agent]
-    ?? (agent === 'fast' ? flashDefaultChoice(mPref) : mPref.preferred_model ?? '');
-  const setDefault = (agent: ComposerMode) => (model: string) => {
-    if (model === FLASH_AUTO) clearDefault(agent, 'deployment');
-    else if (model) requestDefault({ [agent]: model });
-    else clearDefault(agent);
+  const shownDefault = (slot: ModelSlot) => draftDefaults?.[slot]
+    ?? (slot === 'background' ? flashDefaultChoice(mPref) : mPref.preferred_model ?? '');
+  const setDefault = (slot: ModelSlot) => (model: string) => {
+    if (model === FLASH_AUTO) clearDefault(slot, 'deployment');
+    else if (model) requestDefault({ [slot]: model });
+    else clearDefault(slot);
   };
   // What each slot runs on Auto. A deployment with no flash model runs flash
   // on its primary one.
@@ -216,10 +216,10 @@ export function ModelTab() {
           <ModelTierConfig
             models={visibleModels}
             metadata={modelMetadata}
-            primaryModel={shownDefault('ptc')}
-            onPrimaryModelChange={setDefault('ptc')}
-            flashModel={shownDefault('fast')}
-            onFlashModelChange={setDefault('fast')}
+            primaryModel={shownDefault('default')}
+            onPrimaryModelChange={setDefault('default')}
+            flashModel={shownDefault('background')}
+            onFlashModelChange={setDefault('background')}
             modelAccess={modelAccessMap}
             auto={autoModels}
           />

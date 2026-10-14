@@ -19,7 +19,7 @@ import { isEffectivelyPinned } from '../hooks/useNavigationData';
 import { pinWorkspaceRow } from '../hooks/workspaceRowActions';
 import { useCreateWorkspace } from '../hooks/useCreateWorkspace';
 import { flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
-import { useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
+import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
 import { clearChatSession } from '../hooks/utils/chatSessionRestore';
 import { useWorkspaceMutation } from '../hooks/useWorkspaceMutation';
 import { useComputers } from '../hooks/useComputers';

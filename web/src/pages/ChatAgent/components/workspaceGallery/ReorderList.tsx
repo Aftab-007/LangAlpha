@@ -17,7 +17,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Loader } from '@/components/ui/loader';
-import { useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
+import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
 import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
 import { queryKeys } from '@/lib/queryKeys';
 

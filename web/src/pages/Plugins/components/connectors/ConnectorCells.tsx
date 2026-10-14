@@ -8,7 +8,7 @@ import { oauthLabelKey } from '@/pages/ChatAgent/components/mcp/McpStatusPill';
 import { probeStillLanding } from '@/pages/ChatAgent/components/mcp/mcpState';
 import type { BuiltinMcpServer, CatalogServer } from '@/pages/ChatAgent/utils/api';
 import { brokerageArt, mcpServerArt } from '@/lib/brandArt';
-import { useFlashScope } from '@/hooks/useFlashWorkspace';
+import { useFlashWorkspace } from '@/hooks/useFlashWorkspace';
 import { useNow } from '@/hooks/useNow';
 import { connectBlock, type Brokerage } from '../../brokerages';
 import { connectorState, switchOnBlock } from '../../utils/connectorState';
@@ -56,7 +56,7 @@ export function ConnectorCell({
   menu?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const flashScopeFor = useFlashScope();
+  const home = useFlashWorkspace();
   const state = connectorState(server);
   const now = useNow(5_000, (at) => probeStillLanding(server, at));
   const checking = probeStillLanding(server, now);
@@ -107,7 +107,7 @@ export function ConnectorCell({
   const meta = checking
     ? t('plugins.connectorsPage.lineChecking')
     : state.kind === 'on' && !workspacesLoading
-      ? partialReachText(t, server, workspaces, flashScopeFor(server.has_direct_tools))
+      ? partialReachText(t, server, workspaces, home)
       : null;
 
   const trailing =

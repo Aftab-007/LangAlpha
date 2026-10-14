@@ -10,7 +10,7 @@ import type { ScopeWorkspace } from '../components/ScopeControl';
  */
 
 export interface WorkspaceOptions {
-  /** Real workspaces only. Flash is never a member: a surface that folds it in
+  /** Real workspaces only. Home is never a member: a surface that folds it in
    * here offers it as a move target and as a bulk destination, neither of
    * which it can be. */
   workspaces: ScopeWorkspace[];
@@ -22,7 +22,7 @@ export interface WorkspaceOptions {
    * has to say why and offer the retry. */
   loadFailed: boolean;
   retry: () => void;
-  /** Both tiers, so a deck header still resolves a Flash-scoped name. */
+  /** Both tiers, so a deck header still resolves a Home-scoped name. */
   nameById: Map<string, string>;
 }
 

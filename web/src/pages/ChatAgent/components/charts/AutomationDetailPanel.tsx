@@ -11,6 +11,7 @@ import { cronToHuman } from '../../../Automations/utils/cron';
 import { isPriceTriggerConfig, formatPriceTrigger, formatRetriggerMode } from '../../../Automations/utils/price';
 import type { PriceTriggerConfig } from '@/types/automation';
 import { formatDateTime, formatDuration } from '../../../Automations/utils/time';
+import { useAgentModeLabels, useRunsAs } from '../../../Automations/hooks/useAgentModeLabels';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -201,6 +202,8 @@ interface ListPanelProps {
 
 function ListPanel({ automations, total }: ListPanelProps): React.ReactElement {
   const { t } = useTranslation();
+  const { label: modeLabel } = useAgentModeLabels();
+  const runsAs = useRunsAs();
   const locale = useLocale();
   const now = useNow();
   if (automations.length === 0) {
@@ -253,11 +256,9 @@ function ListPanel({ automations, total }: ListPanelProps): React.ReactElement {
                     borderRadius: 4,
                     backgroundColor: 'var(--color-bg-surface)',
                     color: 'var(--color-text-tertiary)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.03em',
                   }}
                 >
-                  {a.agent_mode as string}
+                  {modeLabel(runsAs(a.agent_mode as string, a.workspace_id as string | undefined))}
                 </span>
               )}
             </div>
@@ -279,6 +280,8 @@ interface DetailPanelProps {
 
 function DetailPanel({ automation, executions, totalExecutions }: DetailPanelProps): React.ReactElement | null {
   const { t } = useTranslation();
+  const { label: modeLabel } = useAgentModeLabels();
+  const runsAs = useRunsAs();
   const locale = useLocale();
   const now = useNow();
   if (!automation) return null;
@@ -366,7 +369,7 @@ function DetailPanel({ automation, executions, totalExecutions }: DetailPanelPro
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
           {!!automation.agent_mode && (
-            <ConfigRow label={t('toolArtifact.agentMode')} value={(automation.agent_mode as string).toUpperCase()} />
+            <ConfigRow label={t('automation.agentMode')} value={modeLabel(runsAs(automation.agent_mode as string, automation.workspace_id as string | undefined))} />
           )}
           <ConfigRow label={t('toolArtifact.triggerType')} value={isPrice ? t('toolArtifact.priceTrigger') : isCron ? t('toolArtifact.recurringCron') : t('toolArtifact.oneTime')} />
         </div>
