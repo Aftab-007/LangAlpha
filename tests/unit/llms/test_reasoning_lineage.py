@@ -14,6 +14,7 @@ from src.llms.reasoning_lineage import (
     UNKNOWN_LINEAGE,
     lineage_for_model_id,
     lineage_for_route,
+    tool_turns_need_reasoning,
 )
 
 # Where an SDK points when a provider declares no base_url of its own. Only the
@@ -194,3 +195,22 @@ class TestModelIdFallback:
         config = LLM.get_model_config()
         assert _model_id_index(config) is _model_id_index(config)
         assert _model_id_index(ModelConfig()) is not _model_id_index(config)
+
+
+class TestToolTurnsNeedReasoning:
+    """Which routes get an empty thinking block on every tool-calling turn."""
+
+    def test_deepseek_declares_it(self):
+        assert tool_turns_need_reasoning("deepseek")
+
+    def test_only_deepseek_declares_it(self):
+        flagged = [k for k in _providers() if tool_turns_need_reasoning(k)]
+        assert flagged == ["deepseek"]
+
+    def test_a_redirected_route_does_not_inherit_it(self):
+        assert not tool_turns_need_reasoning(
+            f"deepseek{ROUTE_ENDPOINT_SEP}https://gateway.example"
+        )
+
+    def test_no_route(self):
+        assert not tool_turns_need_reasoning(None)
