@@ -251,9 +251,7 @@ def run_failure_message(run: Dict[str, Any]) -> Optional[str]:
     """
     if run.get("interrupt_reason") == INTERRUPT_REASON_CREDIT_PAUSE:
         stamped = (run.get("metadata") or {}).get("credit_pause_message")
-        if isinstance(stamped, str):
-            return stamped
-        return stored_pause_message(run.get("sse_events"))
+        return stamped if isinstance(stamped, str) else None
     errors = run.get("errors")
     if errors:
         return clean_error_text(str(errors[-1]))
@@ -261,29 +259,6 @@ def run_failure_message(run: Dict[str, Any]) -> Optional[str]:
         f"workflow run finished as '{run['status']}' "
         f"(run_id={run['conversation_response_id']})"
     )
-
-
-def stored_pause_message(events: Any) -> Optional[str]:
-    """A credit pause's denial, read off its stored ``interrupt`` event.
-
-    For rows a release before the stamp finalized: turns an old worker
-    drains across a deploy, and older rows the replay-facts backfill has not
-    reached yet. Both still settle through here, so this goes with the
-    stored events column, after the backfill's last run.
-    """
-    for event in reversed(events if isinstance(events, list) else []):
-        if not isinstance(event, dict) or event.get("event") != "interrupt":
-            continue
-        data = event.get("data")
-        requests = data.get("action_requests") if isinstance(data, dict) else None
-        for request in requests if isinstance(requests, list) else ():
-            if (
-                isinstance(request, dict)
-                and request.get("type") == INTERRUPT_REASON_CREDIT_PAUSE
-                and isinstance(request.get("message"), str)
-            ):
-                return request["message"]
-    return None
 
 
 def _one_shot_price(automation: Dict[str, Any]) -> bool:
