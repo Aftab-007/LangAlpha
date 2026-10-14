@@ -156,10 +156,10 @@ def _fingerprint_key(fingerprint: Any) -> str | None:
         return repr(fingerprint)
 
 
-def extract_provenance_from_sse_events(
-    sse_events: list[dict[str, Any]] | None,
+def extract_provenance(
+    events: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """Return normalized provenance rows from accumulated SSE events.
+    """Return normalized provenance rows from SSE events.
 
     Filters entries with top-level ``event == "provenance"`` and dedups within
     one tool call: the same source with the same content and args collapses to
@@ -173,12 +173,12 @@ def extract_provenance_from_sse_events(
     int-or-None — a malformed entry is dropped, never allowed to fail the insert
     (which runs inside the turn-persist transaction).
     """
-    if not sse_events:
+    if not events:
         return []
 
     records: list[dict[str, Any]] = []
     seen: set[tuple] = set()
-    for entry in sse_events:
+    for entry in events:
         if not isinstance(entry, dict) or entry.get("event") != "provenance":
             continue
         data = entry.get("data")
@@ -372,11 +372,12 @@ async def sync_provenance_for_response(
     conversation_response_id: str,
     conversation_thread_id: str,
     turn_index: int,
-    sse_events: list[dict[str, Any]] | None,
+    provenance: list[dict[str, Any]] | None,
     strict: bool = False,
     lanes: Collection[str],
 ) -> int:
-    """Extract provenance from sse_events and (re)write rows for one response.
+    """Extract provenance from ``provenance`` events and (re)write rows for
+    one response.
 
     Single entry point for both persistence hook sites. Best-effort by
     default so a provenance failure can't break a standalone persist;
@@ -386,7 +387,7 @@ async def sync_provenance_for_response(
     ``insert_provenance_records``.
     """
     try:
-        records = extract_provenance_from_sse_events(sse_events)
+        records = extract_provenance(provenance)
         return await insert_provenance_records(
             conn,
             conversation_response_id=conversation_response_id,

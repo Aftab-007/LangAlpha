@@ -60,18 +60,15 @@ def stored_subagents_allowed(value_sql: str, workspace_id_sql: str) -> str:
 # estimate, which measures from before the row existed.
 #
 # Replay reads every settled row of a thread on each open, but needs a row's
-# ``sse_events`` and ``replay_facts`` only for a turn it projects afresh. Those
-# re-read their rows whole by id (``get_replay_responses``), so a cached open
-# never moves the stored events, or the legacy facts backfilled from them, of
-# its whole history over the wire. A row read without ``sse_events`` has them
-# still to read. Only older rows hold stored events; a new row leaves the
-# column null.
+# ``replay_facts`` only for a turn it projects afresh. Those re-read their rows
+# by id (``get_replay_responses``), so a cached open never moves the facts of
+# its whole history over the wire, the legacy facts of an older turn among
+# them. A row read without ``replay_facts`` has them still to read.
 _LIGHT_RESPONSE_COLUMNS = (
     "conversation_response_id, conversation_thread_id, turn_index, status, "
     "interrupt_reason, metadata, warnings, errors, execution_time, created_at, "
     "usage_settled_at, attempt_no, retry_of_run_id"
 )
-_RESPONSE_COLUMNS = f"{_LIGHT_RESPONSE_COLUMNS}, sse_events, replay_facts"
 
 # 1.6: retries append attempt rows at the SAME turn_index, and the live run is
 # an in_progress row. History readers must see ONE row per turn — the newest
@@ -82,9 +79,9 @@ _RESPONSE_COLUMNS = f"{_LIGHT_RESPONSE_COLUMNS}, sse_events, replay_facts"
 #
 # ``xmin`` rides along for the replay projection cache, which fingerprints a
 # turn's table-sourced inputs: every one of them lives on this row, and any
-# UPDATE (the finalize, a backfill of its facts) writes a new tuple version. It is a tuple-header read, so it costs
-# nothing — and a subquery cannot expose it, which is why it belongs here
-# rather than at the replay call site.
+# UPDATE (the finalize among them) writes a new tuple version. It is a
+# tuple-header read, so it costs nothing — and a subquery cannot expose it,
+# which is why it belongs here rather than at the replay call site.
 def settled_attempts(columns: str, thread: str = "%s") -> str:
     """The query for the row each turn of a thread reads. ``thread`` is what
     the thread id is matched against: a bound parameter, or an outer column
