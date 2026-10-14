@@ -301,8 +301,7 @@ async def extract_text_from_thread(
     """Extract the text each run of a thread committed, one labeled block per run.
 
     Reads from Redis if the thread is actively running, otherwise reads
-    from the database: each settled run's text comes from its turn slice,
-    falling back to the main lane of its stored events.
+    from the database: each settled run's text comes from its turn slice.
 
     Args:
         thread_id: The conversation thread ID
@@ -464,33 +463,11 @@ async def _extract_from_redis(thread_id: str, run_id: str) -> str:
     return "".join(chunks)
 
 
-def _text_from_response(response: dict[str, Any]) -> str:
-    """The fallback text of one turn: its stored main-lane ``message_chunk`` events."""
-    chunks: list[str] = []
-    for event in response.get("sse_events") or []:
-        if not isinstance(event, dict):
-            continue
-        if event.get("event") != "message_chunk":
-            continue
-        data = event.get("data", {})
-        if not isinstance(data, dict):
-            continue
-        agent = data.get("agent")
-        if isinstance(agent, str) and agent.startswith("task:"):
-            continue  # a subagent lane, not what the main agent said
-        if data.get("content_type") == "text":
-            content = data.get("content", "")
-            if content:
-                chunks.append(content)
-    return "".join(chunks)
-
-
 async def _with_main_text(
     thread_id: str, runs: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """Copies of ``runs`` each carrying ``main_text``, what the turn committed
-    (``committed_texts``). A run that has no slice to read falls back to its
-    stored events' main lane, read for those runs alone."""
+    (``committed_texts``). A run with no committed text to read has none."""
     if not runs:
         return []
     # Local import: this module loads at agent import time.
@@ -500,30 +477,10 @@ async def _with_main_text(
         thread_id,
         {str(run["conversation_response_id"]): run.get("turn_index") for run in runs},
     )
-    events = await _stored_events_of(
-        [
-            response_id
-            for run in runs
-            if (response_id := str(run["conversation_response_id"])) not in texts
-        ]
-    )
-    out: list[dict[str, Any]] = []
-    for run in runs:
-        response_id = str(run["conversation_response_id"])
-        text = texts.get(response_id)
-        if text is None:
-            text = _text_from_response({"sse_events": events.get(response_id)})
-        out.append({**run, "main_text": text})
-    return out
-
-
-async def _stored_events_of(response_ids: list[str]) -> dict[str, Any]:
-    if not response_ids:
-        return {}
-    from src.server.database.conversation.replay_rows import get_replay_responses
-
-    rows = await get_replay_responses(response_ids)
-    return {response_id: row.get("sse_events") for response_id, row in rows.items()}
+    return [
+        {**run, "main_text": texts.get(str(run["conversation_response_id"]), "")}
+        for run in runs
+    ]
 
 
 async def _runs_to_read(thread_id: str, turns: int = 1) -> list[dict[str, Any]]:
