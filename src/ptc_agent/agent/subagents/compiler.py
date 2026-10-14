@@ -9,6 +9,7 @@ The compiler handles:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -17,9 +18,11 @@ from ptc_agent.agent.middleware.runtime_context.profile import TRADING_KEYS
 from ptc_agent.agent.middleware.skills.content import load_skill_content
 from ptc_agent.agent.middleware.skills.registry import SKILL_REGISTRY, SkillDefinition
 from ptc_agent.agent.prompts import (
+    RegistryTools,
     build_tool_summary_from_registry,
     get_loader,
     guidance_template_vars,
+    read_registry_tools,
     resolve_prompt_guidance,
     workspace_path_vars,
 )
@@ -30,6 +33,8 @@ if TYPE_CHECKING:
     from ptc_agent.core.project_context import ProjectContext
 
 logger = structlog.get_logger(__name__)
+
+_UNREAD = object()
 
 # ── Section toggle defaults per mode ──────────────────────────────────
 # True = section included, False = excluded.
@@ -89,6 +94,8 @@ class SubagentCompiler:
         skill_dirs: list[str] | None = None,
         default_model: Any | None = None,
         project: ProjectContext | None = None,
+        search_tool: Callable[..., Any] | None = None,
+        sandbox_tools: Callable[[frozenset[str]], list[Any]] | None = None,
     ) -> None:
         self._sandbox = sandbox
         # A subagent runs in the parent turn's workspace folder, so its copy of
@@ -119,6 +126,16 @@ class SubagentCompiler:
         # global-registry behavior.
         self._skill_registry = skill_registry
         self._skill_dirs = skill_dirs
+        # A subagent whose search or connector access differs from the main
+        # agent's runs its own copy of those tools. The builders take the
+        # setting (``search_tool(provider=, depth=)``, ``sandbox_tools(allowed)``);
+        # without them every subagent shares the main agent's. Copies are
+        # made once per distinct setting for this build.
+        self._make_search_tool = search_tool
+        self._make_sandbox_tools = sandbox_tools
+        self._search_tools: dict[tuple[str, str], Any] = {}
+        self._sandbox_tools: dict[frozenset[str], dict[str, Any]] = {}
+        self._registry_tools: Any = _UNREAD
 
     # ── Public API ────────────────────────────────────────────────────
 
@@ -199,7 +216,13 @@ class SubagentCompiler:
         # 3. Base template + role prompt (default path)
         sections = self._compute_sections(defn)
         if sections.get("tool_guide", False):
-            template_kwargs["tool_summary"] = self._build_tool_summary()
+            tool_summary = self._build_tool_summary(defn)
+            if tool_summary is None:
+                # Nothing left to guide it to. With an empty summary the
+                # guide would point at a runtime block subagents never get.
+                sections["tool_guide"] = False
+            else:
+                template_kwargs["tool_summary"] = tool_summary
 
         return loader.get_subagent_base_prompt(
             identity_line=self._identity_line(defn),
@@ -266,9 +289,53 @@ class SubagentCompiler:
         base.update(defn.sections)
         return base
 
-    def _build_tool_summary(self) -> str:
-        """Build MCP tool summary if mcp_registry is available."""
-        return build_tool_summary_from_registry(self._mcp_registry, mode="full")
+    def _registry(self) -> RegistryTools | None:
+        """This build's registry, read on first use and shared by every subagent."""
+        if self._registry_tools is _UNREAD:
+            self._registry_tools = read_registry_tools(self._mcp_registry)
+        return self._registry_tools
+
+    def _allowed_servers(self, defn: SubagentDefinition) -> frozenset[str] | None:
+        """The servers this subagent's code may call, or None for all of them.
+
+        Taken from this turn's registry, which already holds only what the
+        workspace selected. A brokerage connection is told apart by its
+        address, the one identity its rules are keyed on.
+        """
+        if defn.connectors and defn.brokerages != "off":
+            return None
+        registry = self._registry()
+        if registry is None:
+            return frozenset()
+        from src.server.services.brokerage_capabilities import vendor_for_url
+
+        allowed: set[str] = set()
+        for name in {*registry.tools_by_server, *registry.server_configs}:
+            config = registry.server_configs.get(name)
+            if vendor_for_url(getattr(config, "url", None)) is not None:
+                if defn.brokerages != "off":
+                    allowed.add(name)
+            elif defn.connectors:
+                allowed.add(name)
+        return frozenset(allowed)
+
+    def _build_tool_summary(self, defn: SubagentDefinition) -> str | None:
+        """The MCP tool summary this subagent reads, or None when it can reach
+        no server this workspace offers. Code is its one way to reach one: a
+        shell's limit is empty, and the direct tools stay with the main agent."""
+        if "execute_code" not in defn.tools:
+            return None
+        registry = self._registry()
+        allowed = self._allowed_servers(defn)
+        if allowed is not None and (
+            registry is None or not allowed & registry.tools_by_server.keys()
+        ):
+            return None
+        if registry is None:
+            return ""
+        return build_tool_summary_from_registry(
+            registry, mode="full", servers=allowed, preferred=defn.preferred_connectors
+        )
 
     def _load_preloaded_skills(self, defn: SubagentDefinition) -> str:
         """Load SKILL.md content for preloaded skills."""
@@ -287,15 +354,49 @@ class SubagentCompiler:
 
     # ── Tool resolution ───────────────────────────────────────────────
 
+    def _own_tools(self, defn: SubagentDefinition) -> dict[str, Any]:
+        """Tools this subagent runs in place of the main agent's, by tool name."""
+        own: dict[str, Any] = {}
+        config = self._config
+        if (
+            self._make_search_tool is not None
+            and config is not None
+            and "web_search" in defn.tools
+            and (defn.search_provider or defn.search_depth)
+        ):
+            main = (config.search_api, config.search_depth)
+            pair = (defn.search_provider or main[0], defn.search_depth or main[1])
+            if pair != main:
+                search = self._search_tools.get(pair)
+                if search is None:
+                    search = self._make_search_tool(provider=pair[0], depth=pair[1])
+                    self._search_tools[pair] = search
+                own[search.name] = search
+        if self._make_sandbox_tools is not None and (
+            "execute_code" in defn.tools or "bash" in defn.tools
+        ):
+            # Connectors are a Code capability, as the settings show them: a
+            # shell alone reaches none, though it could start Python.
+            allowed = self._allowed_servers(defn) if "execute_code" in defn.tools else frozenset()
+            if allowed is not None:
+                limited = self._sandbox_tools.get(allowed)
+                if limited is None:
+                    limited = {t.name: t for t in self._make_sandbox_tools(allowed)}
+                    self._sandbox_tools[allowed] = limited
+                own.update(limited)
+        return own
+
     def _resolve_tools(self, defn: SubagentDefinition) -> list[Any]:
         """Resolve tool-set identifiers + skills to tool objects."""
         tools: list[Any] = []
+        own = self._own_tools(defn)
 
-        # 1. Resolve tool-set identifiers
+        # 1. Resolve tool-set identifiers, with this subagent's own copy in
+        # place of any shared tool it has one of
         for tool_id in defn.tools:
             tool_list = self._tool_sets.get(tool_id)
             if tool_list is not None:
-                tools.extend(tool_list)
+                tools.extend(own.get(getattr(t, "name", None), t) for t in tool_list)
             else:
                 logger.warning(
                     "unknown tool set identifier",

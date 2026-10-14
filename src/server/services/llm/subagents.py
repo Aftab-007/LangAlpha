@@ -23,7 +23,7 @@ from ptc_agent.config.agent import SubagentsConfig
 
 from . import logger, user_models
 from .availability import model_resolves
-from .capabilities import TierPermits
+from .capabilities import TierPermits, gate_search
 
 
 @dataclass
@@ -46,10 +46,15 @@ async def resolve_user_subagents(
     model_pref: dict,
     permits: TierPermits,
     is_byok: bool,
+    search_api: str,
+    search_depth: str,
     requested: list[str] | None = None,
     conn=None,
 ) -> ResolvedSubagents:
     """The roster this user's turn compiles, before any client is built.
+
+    ``search_api`` and ``search_depth`` are the user's own pair, already
+    gated, which a subagent's search settings inherit and fall back to.
 
     A failed read of the rows raises rather than resolving without them: a
     user's off-switch is a restriction, and a turn that silently drops it
@@ -75,9 +80,59 @@ async def resolve_user_subagents(
         logger.info(
             f"[CHAT] Dropping requested subagents not on user={user_id}'s roster: {dropped}"
         )
-    return await _demote_unservable(
+    resolved = await _demote_unservable(
         user_id, resolved, bases, model_pref=model_pref, permits=permits, is_byok=is_byok,
     )
+    return await _gate_search(
+        user_id, resolved, search_api=search_api, search_depth=search_depth, permits=permits,
+    )
+
+
+async def _gate_search(
+    user_id: str,
+    resolved: ResolvedSubagents,
+    *,
+    search_api: str,
+    search_depth: str,
+    permits: TierPermits,
+) -> ResolvedSubagents:
+    """Each searching subagent's provider and depth, as this turn can run them.
+
+    The pair is written only where it differs from the user's own, so a
+    subagent that inherits, or names the pair the user already runs, shares
+    the main agent's search tool and its build is unchanged. A subagent
+    without web keeps its saved values, unused.
+    """
+    same = await gate_search(
+        None, None, effective_provider=search_api, effective_depth=search_depth, permits=None,
+    )
+    inherited = (same.provider, same.depth)
+    definitions = dict(resolved.definitions)
+    changed = False
+    for name in resolved.enabled:
+        defn = definitions[name]
+        if "web_search" not in defn.tools or (
+            defn.search_provider is None and defn.search_depth is None
+        ):
+            continue
+        gate = await gate_search(
+            defn.search_provider, defn.search_depth,
+            effective_provider=search_api, effective_depth=search_depth, permits=permits,
+        )
+        if gate.provider_fallback or gate.depth_fallback:
+            logger.info(
+                f"[CHAT] Subagent {name!r} searches with {gate.provider}/{gate.depth} "
+                f"for user={user_id}: provider {gate.provider_fallback or 'kept'}, "
+                f"depth {gate.depth_fallback or 'kept'}"
+            )
+        pair = (gate.provider, gate.depth)
+        provider, depth = (None, None) if pair == inherited else pair
+        if (provider, depth) != (defn.search_provider, defn.search_depth):
+            definitions[name] = replace(defn, search_provider=provider, search_depth=depth)
+            changed = True
+    if not changed:
+        return resolved
+    return replace(resolved, definitions=definitions)
 
 
 async def _demote_unservable(

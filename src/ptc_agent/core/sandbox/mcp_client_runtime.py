@@ -1692,6 +1692,10 @@ def _require_enabled(server_name: str) -> None:
     reaching ``_call_mcp_tool`` directly hits. Explicit refusal rather than a
     silent pass: a workspace that quietly reached a sibling's connector would
     be indistinguishable from one that had it enabled all along.
+
+    ``PTC_ALLOWED_SERVERS``, when set, narrows that further for a subagent the
+    user limited. A sibling agent shares these wrappers, so the limit is
+    checked here at call time, never by withholding a module.
     """
     view = _workspace_view()
     if view is None:
@@ -1701,6 +1705,13 @@ def _require_enabled(server_name: str) -> None:
     servers = view.get("servers")
     if isinstance(servers, dict) and server_name not in servers:
         msg = f"MCP server '{server_name}' is not enabled for this workspace"
+        raise RuntimeError(msg)
+    allowed = os.environ.get("PTC_ALLOWED_SERVERS")
+    if allowed is not None and server_name not in allowed.split(","):
+        msg = (
+            f"MCP server '{server_name}' is not available to this subagent; "
+            "say so in your result so the main agent can do this step."
+        )
         raise RuntimeError(msg)
 
 
@@ -1838,12 +1849,17 @@ def _start_supervisor(path: str) -> bool:
     with _supervisor_start_lock:
         if _socket_alive(path):
             return True
-        # PTC_TURN_CWD is dropped with the trace file: both name this one
-        # caller, and the daemon outlives it serving every workspace on the
-        # computer, so inheriting either would pin it to whichever turn
-        # happened to start it. (_shared.TURN_CWD_ENV; this file ships into
-        # the sandbox and cannot import it.)
-        _CALLER_ONLY_ENV = ("MCP_TRACE_FILE", "PTC_TURN_CWD", "PTC_WORKSPACE_CONFIG")
+        # PTC_TURN_CWD is dropped with the trace file and the subagent's
+        # server limit: each names this one caller, and the daemon outlives it
+        # serving every workspace on the computer, so inheriting any would pin
+        # it to whichever turn happened to start it. (_shared.TURN_CWD_ENV;
+        # this file ships into the sandbox and cannot import it.)
+        _CALLER_ONLY_ENV = (
+            "MCP_TRACE_FILE",
+            "PTC_TURN_CWD",
+            "PTC_WORKSPACE_CONFIG",
+            "PTC_ALLOWED_SERVERS",
+        )
         env = {k: v for k, v in os.environ.items() if k not in _CALLER_ONLY_ENV}
         existing = env.get("PYTHONPATH") or ""
         env["PYTHONPATH"] = src_root + (":" + existing if existing else "")

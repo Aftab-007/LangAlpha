@@ -4,8 +4,11 @@ These functions generate dynamic content based on runtime data
 and are kept in Python rather than templates.
 """
 
-import structlog
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from typing import Any
+
+import structlog
 
 from ptc_agent.core.mcp_sanitize import (
     is_untrusted_server,
@@ -469,29 +472,26 @@ def _format_tool_summary_detailed(
     return "\n".join(lines)
 
 
-def build_tool_summary_from_registry(
-    mcp_registry: Any,
-    *,
-    mode: str = "full",
-) -> str:
-    """Build a formatted MCP tool summary from a registry instance.
+@dataclass(frozen=True)
+class RegistryTools:
+    """One read of an MCP registry: its tools per server and its server configs.
 
-    Shared by PTCAgent and SubagentCompiler to avoid duplicating
-    the registry-to-string conversion logic.
-
-    Args:
-        mcp_registry: MCP registry instance (or None/falsy).
-        mode: Tool exposure mode ("summary", "detailed", or "full").
-
-    Returns:
-        Formatted tool summary string, or "" on failure.
+    A build that formats the registry once per subagent reads it once and
+    filters this, rather than asking the registry again for each.
     """
+
+    tools_by_server: dict[str, list[dict]]
+    server_configs: dict[str, Any]
+
+
+def read_registry_tools(mcp_registry: Any) -> RegistryTools | None:
+    """The registry's tools and enabled server configs, or None when it has none."""
     if not mcp_registry:
-        return ""
+        return None
     try:
         tools_by_server = mcp_registry.get_all_tools()
         if not tools_by_server:
-            return ""
+            return None
         tools_dict = {
             server_name: [tool.to_dict() for tool in tools]
             for server_name, tools in tools_by_server.items()
@@ -501,7 +501,61 @@ def build_tool_summary_from_registry(
             server_configs = {
                 s.name: s for s in mcp_registry.config.mcp.servers if s.enabled
             }
-        return format_tool_summary(tools_dict, mode=mode, server_configs=server_configs)
+        return RegistryTools(tools_dict, server_configs)
+    except Exception:
+        logger.warning("failed to build MCP tool summary", exc_info=True)
+        return None
+
+
+def build_tool_summary_from_registry(
+    mcp_registry: Any,
+    *,
+    mode: str = "full",
+    servers: Collection[str] | None = None,
+    preferred: Sequence[str] = (),
+) -> str:
+    """Build a formatted MCP tool summary from a registry instance.
+
+    Shared by PTCAgent and SubagentCompiler to avoid duplicating
+    the registry-to-string conversion logic.
+
+    Args:
+        mcp_registry: MCP registry instance (or None/falsy), or one already
+            read with ``read_registry_tools``.
+        mode: Tool exposure mode ("summary", "detailed", or "full").
+        servers: Only these servers are listed; None lists every one.
+        preferred: Servers listed first, under a line saying to reach for
+            them first. A name not listed otherwise is skipped.
+
+    Returns:
+        Formatted tool summary string, or "" on failure.
+    """
+    registry = (
+        mcp_registry
+        if isinstance(mcp_registry, RegistryTools)
+        else read_registry_tools(mcp_registry)
+    )
+    if registry is None:
+        return ""
+    try:
+        tools_dict = registry.tools_by_server
+        if servers is not None:
+            tools_dict = {n: t for n, t in tools_dict.items() if n in servers}
+        lead = [n for n in dict.fromkeys(preferred) if n in tools_dict]
+        if lead:
+            tools_dict = {
+                **{n: tools_dict[n] for n in lead},
+                **{n: t for n, t in tools_dict.items() if n not in lead},
+            }
+        summary = format_tool_summary(
+            tools_dict, mode=mode, server_configs=registry.server_configs
+        )
+        if lead:
+            summary = (
+                f"\nPrefer these servers: {', '.join(lead)}. Use another only when "
+                f"these don't cover what you need.\n{summary}"
+            )
+        return summary
     except Exception:
         logger.warning("failed to build MCP tool summary", exc_info=True)
         return ""

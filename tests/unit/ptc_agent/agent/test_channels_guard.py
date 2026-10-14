@@ -46,7 +46,7 @@ class _Mounted:
         self.ran.append(command)
         return {"success": True, "stdout": "ok", "stderr": "", "exit_code": 0}
 
-    async def aexecute_code(self, code, *, thread_id=None, call_id=None):
+    async def aexecute_code(self, code, *, thread_id=None, call_id=None, **_):
         self.ran.append(code)
         return SimpleNamespace(success=True, stdout="ok", stderr="", mcp_trace=[])
 

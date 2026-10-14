@@ -2209,6 +2209,25 @@ class TestSearchDepthPreference:
         tier_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_inherited_depth_the_provider_lacks_reads_as_its_default(
+        self, base_config, monkeypatch
+    ):
+        """The deployment's depth, inherited onto a provider without it, is
+        stored as the depth the search tool will run, since the main agent's
+        shown settings read the config."""
+        from src.server.services.llm.config import resolve_llm_config
+
+        monkeypatch.setattr("src.config.settings.HOST_MODE", "oss")
+        base_config.search_depth = "deep"
+
+        p1, p2, p3 = self._patches({"search_provider": "serper"})
+        with p1, p2, p3:
+            config = await resolve_llm_config(base_config, "user-1", None, False)
+
+        assert config.search_api == "serper"
+        assert config.search_depth == "standard"
+
+    @pytest.mark.asyncio
     async def test_provider_and_depth_share_a_single_tier_fetch(self, base_config, monkeypatch):
         """Platform mode with both prefs set fetches the platform tier once."""
         from src.server.services.llm.config import resolve_llm_config

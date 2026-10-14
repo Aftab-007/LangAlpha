@@ -1627,9 +1627,10 @@ class PTCSandbox:
         max_retries: int = 2,
         thread_id: str | None = None,
         call_id: str | None = None,
+        allowed_servers: frozenset[str] | None = None,
         _carry_mcp_trace: list[dict] | None = None,
     ) -> ExecutionResult:
-        return await _execution.execute(self, code, timeout, auto_install=auto_install, max_retries=max_retries, thread_id=thread_id, call_id=call_id, _carry_mcp_trace=_carry_mcp_trace)
+        return await _execution.execute(self, code, timeout, auto_install=auto_install, max_retries=max_retries, thread_id=thread_id, call_id=call_id, allowed_servers=allowed_servers, _carry_mcp_trace=_carry_mcp_trace)
 
     async def execute_bash_command(
         self,
@@ -1640,8 +1641,9 @@ class PTCSandbox:
         background: bool = False,
         thread_id: str | None = None,
         call_id: str | None = None,
+        allowed_servers: frozenset[str] | None = None,
     ) -> dict[str, Any]:
-        return await _execution.execute_bash_command(self, command, working_dir, timeout, background=background, thread_id=thread_id, call_id=call_id)
+        return await _execution.execute_bash_command(self, command, working_dir, timeout, background=background, thread_id=thread_id, call_id=call_id, allowed_servers=allowed_servers)
 
     def _build_trace_env_command(
         self,
@@ -1650,9 +1652,10 @@ class PTCSandbox:
         call_id: str | None = None,
         trace_path: str | None = None,
         own_shell: bool = False,
+        allowed_servers: frozenset[str] | None = None,
     ) -> tuple[str, str]:
         return _execution._build_trace_env_command(
-            self, bash_id, full_command, call_id, trace_path, own_shell
+            self, bash_id, full_command, call_id, trace_path, own_shell, allowed_servers
         )
 
     # -- sessions --

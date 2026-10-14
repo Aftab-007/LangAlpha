@@ -261,6 +261,8 @@ async def _search_problems(ctx: SubagentContext, defn: SubagentDefinition) -> li
     problems: list[dict[str, Any]] = []
     if gate.provider_fallback == "not_on_plan":
         problems.append({"code": "search_not_on_plan", "detail": defn.search_provider})
+    elif gate.provider_fallback == "unknown":
+        problems.append({"code": "search_unavailable", "detail": defn.search_provider})
     if gate.depth_fallback == "not_offered":
         problems.append({"code": "depth_not_offered", "detail": gate.provider})
     elif gate.depth_fallback == "not_on_plan":

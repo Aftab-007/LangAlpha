@@ -372,8 +372,10 @@ class PTCAgent:
         # The folders only the file tools reach, which Bash and code refuse.
         file_tools_only = (SandboxLayout.CHANNELS_DIR,) if gates.channels else ()
 
-        # Create the execute_code tool for MCP invocation
-        execute_code_tool = create_execute_code_tool(
+        # Create the execute_code tool for MCP invocation. The builders are
+        # kept for a subagent limited to some servers, which gets its own.
+        code_tool = partial(
+            create_execute_code_tool,
             backend,
             mcp_registry,
             thread_id=short_thread_id,
@@ -381,14 +383,17 @@ class PTCAgent:
             call_context=call_context,
             file_tools_only=file_tools_only,
         )
+        execute_code_tool = code_tool()
 
         # Create the Bash tool for shell command execution
-        bash_tool = create_execute_bash_tool(
+        shell_tool = partial(
+            create_execute_bash_tool,
             backend,
             thread_id=short_thread_id,
             call_context=call_context,
             file_tools_only=file_tools_only,
         )
+        bash_tool = shell_tool()
         bash_output_tool = create_bash_output_tool(backend, call_context=call_context)
 
         # Create the preview URL tool for sandbox service previews
@@ -426,12 +431,12 @@ class PTCAgent:
         ]
         tools.extend(filesystem_tools)
 
-        web_search_tool = get_web_search_tool(
-            max_search_results=10,
-            time_range=None,
-            verbose=False,
-            provider=self.config.search_api,
-            depth=self.config.search_depth,
+        # Kept for a subagent set to another provider or depth.
+        search_tool = partial(
+            get_web_search_tool, max_search_results=10, time_range=None, verbose=False
+        )
+        web_search_tool = search_tool(
+            provider=self.config.search_api, depth=self.config.search_depth
         )
         tools.append(web_search_tool)
         tools.append(web_fetch_tool)
@@ -652,6 +657,11 @@ class PTCAgent:
                 d for d, _ in self.config.skills.local_skill_dirs_with_sandbox()
             ],
             project=project,
+            search_tool=search_tool,
+            sandbox_tools=lambda allowed: [
+                code_tool(allowed_servers=allowed),
+                shell_tool(allowed_servers=allowed),
+            ],
         )
         if disable_subagents:
             # Recursion gate: no subagents compiled, none advertised in the

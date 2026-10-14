@@ -14,6 +14,7 @@ ProblemCode = Literal[
     "skill_missing",
     "connector_missing",
     "search_not_on_plan",
+    "search_unavailable",
     "depth_not_offered",
     "effort_not_offered",
     "description_matches",

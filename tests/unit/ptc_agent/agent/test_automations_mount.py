@@ -188,7 +188,7 @@ class _Mounted:
         self.mount.events.append(("run", call_id))
         return {"success": True, "stdout": "ok", "stderr": "", "exit_code": 0}
 
-    async def aexecute_code(self, code, *, thread_id=None, call_id=None):
+    async def aexecute_code(self, code, *, thread_id=None, call_id=None, **_):
         self.mount.events.append(("run", call_id))
         return SimpleNamespace(success=True, stdout="ok", stderr="", mcp_trace=[])
 

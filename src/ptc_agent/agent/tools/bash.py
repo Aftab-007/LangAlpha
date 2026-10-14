@@ -54,6 +54,7 @@ def create_execute_bash_tool(
     *,
     call_context: livefs_mount.CallContext | None = None,
     file_tools_only: tuple[str, ...] = (),
+    allowed_servers: frozenset[str] | None = None,
 ) -> BaseTool:
     """Factory function to create Bash tool with injected dependencies.
 
@@ -64,6 +65,8 @@ def create_execute_bash_tool(
             mount reads its defaults from
         file_tools_only: Directories under the sandbox root only the file
             tools reach; a command naming one is refused before it runs
+        allowed_servers: The only MCP servers a script it runs may call, for
+            a subagent the user limited; None leaves the workspace's whole set
 
     Returns:
         Configured Bash tool function
@@ -140,6 +143,7 @@ def create_execute_bash_tool(
                 background=bool(run_in_background),
                 thread_id=thread_id or None,
                 call_id=call_id,
+                allowed_servers=allowed_servers,
             )
 
             # Provenance for any MCP calls a script run here made (foreground

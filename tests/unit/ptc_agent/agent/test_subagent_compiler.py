@@ -131,7 +131,7 @@ def _base_path_defn(tools: list[str] | None = None) -> SubagentDefinition:
         name="research",
         description="test subagent",
         role_prompt="Do research.",
-        tools=list(tools) if tools is not None else ["finance", "web_search"],
+        tools=list(tools) if tools is not None else ["execute_code", "finance", "web_search"],
     )
 
 
@@ -182,7 +182,7 @@ class TestSubagentPromptFeatureGating:
 
     def test_finance_tier_present_when_bound(self):
         compiler = _compiler(config=_config(features={"market_watch": False}))
-        prompt = compiler.compile(_base_path_defn(tools=["finance"]))["system_prompt"]
+        prompt = compiler.compile(_base_path_defn(tools=["execute_code", "finance"]))["system_prompt"]
 
         assert "Financial Tools (Direct)" in prompt
         assert "get_quote" in prompt

@@ -354,7 +354,8 @@ async def resolve_llm_config(
         if resolved is None:
             resolved = await resolve_user_subagents(
                 user_id, config.subagents, model_pref=model_pref, permits=permits,
-                is_byok=is_byok, requested=enabled_subagents,
+                is_byok=is_byok, search_api=config.search_api,
+                search_depth=config.search_depth, requested=enabled_subagents,
             )
             if turn_subagents is not None:
                 turn_subagents.result = resolved
