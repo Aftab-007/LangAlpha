@@ -9,13 +9,20 @@ import logging
 from contextlib import asynccontextmanager
 
 import anyio
+import psycopg
 from psycopg import AsyncConnection
-from psycopg_pool import AsyncConnectionPool, PoolTimeout
+from psycopg_pool import AsyncConnectionPool
 
 from src.config.env import DB_SSLMODE
 from src.config.settings import get_conversation_pool_max
 
 logger = logging.getLogger(__name__)
+
+# A database that is busy or unreachable, from either pool: ``PoolTimeout`` is
+# an ``OperationalError``, as are a refused connection and a cancelled query.
+# Every read behind it fails alike, so the request is retried whole rather
+# than answered in part.
+DATABASE_UNAVAILABLE = (psycopg.OperationalError, psycopg.InterfaceError)
 
 # Module-level connection pool cache for conversation database operations
 # This ensures we reuse connections across operations, reducing connection overhead
@@ -103,20 +110,6 @@ async def _configure_postgres_connection(conn):
     )
 
 
-class AppDataPoolTimeout(PoolTimeout):
-    """No app-data connection came free in time. Told apart from the
-    checkpointer pool's timeout, which leaves a reader that falls back to
-    stored rows a pool to read them through."""
-
-
-class _AppDataPool(AsyncConnectionPool):
-    async def getconn(self, timeout: float | None = None) -> AsyncConnection:
-        try:
-            return await super().getconn(timeout)
-        except PoolTimeout as e:
-            raise AppDataPoolTimeout(*e.args) from e
-
-
 def get_or_create_pool() -> AsyncConnectionPool:
     """
     Get or create the shared connection pool for conversation database operations.
@@ -135,7 +128,7 @@ def get_or_create_pool() -> AsyncConnectionPool:
             f"Creating PostgreSQL connection pool for conversations (max_size={pool_max})"
         )
         # Create pool with minimal configuration matching LangGraph pool
-        _conversation_db_pool_cache[db_uri] = _AppDataPool(
+        _conversation_db_pool_cache[db_uri] = AsyncConnectionPool(
             conninfo=db_uri,
             min_size=1,
             max_size=pool_max,

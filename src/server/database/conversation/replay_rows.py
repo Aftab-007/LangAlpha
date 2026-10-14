@@ -8,7 +8,7 @@ from psycopg.rows import dict_row
 
 from src.server.database import pool
 from src.server.database.conversation import _sql
-from src.server.database.replay_facts import LEGACY_VERSION_SQL, RUN_FACTS_SQL
+from src.server.database.replay_facts import RUN_FACTS_SQL
 from src.server.utils.pg_sanitize import normalize_uuid
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ class ThreadRows:
     # and ``latest_run_id`` the thread's newest run (its latest attempt).
     thread: dict[str, Any]
     queries: list[dict[str, Any]]
-    # One settled response per turn, without its stored events.
+    # One settled response per turn, without its replay facts.
     responses_by_turn: dict[Any, dict[str, Any]]
     # Main-workflow usage rows.
     usages: list[dict[str, Any]]
@@ -137,8 +137,8 @@ async def get_replay_thread_data(thread_id: str) -> ThreadRows | None:
 
             # 4b. Responses — one settled row per turn; an in_progress slot or
             # superseded attempt must never drive replay rendering. Without
-            # their stored events: a turn replay projects afresh re-reads its
-            # row whole (see get_replay_responses).
+            # their replay facts: a turn replay projects afresh re-reads its
+            # row with them (see get_replay_responses).
             await cur.execute(
                 _sql.settled_attempts(_sql._LIGHT_RESPONSE_COLUMNS),
                 (thread_id,),
@@ -192,19 +192,12 @@ async def get_replay_thread_data(thread_id: str) -> ThreadRows | None:
     )
 
 
-async def get_replay_responses(
-    response_ids: list[str], *, legacy_facts: int | None = None
-) -> dict[str, dict]:
-    """Response rows by id, whole: ``sse_events``, ``replay_facts`` and
-    ``xmin`` included.
+async def get_replay_responses(response_ids: list[str]) -> dict[str, dict]:
+    """Response rows by id, with their ``replay_facts`` and ``xmin``.
 
-    One read per row keeps a row's stored events and its version (the
-    projection cache's key) from the same tuple, so a projection keyed by
-    ``xmin`` was built from exactly that version's events.
-
-    ``legacy_facts``: a row backfilled with legacy facts of this version
-    comes without its stored events, which those facts stand in for. The
-    events are never detoasted for it.
+    One read per row keeps a row's facts and its version (the projection
+    cache's key) from the same tuple, so a projection keyed by ``xmin`` was
+    built from exactly that version's facts.
     """
     ids = [normalize_uuid(r) for r in response_ids]
     ids = [r for r in ids if r]
@@ -213,18 +206,36 @@ async def get_replay_responses(
     async with pool.get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
-                f"""SELECT {_sql._LIGHT_RESPONSE_COLUMNS}, replay_facts,
-                          CASE WHEN %(version)s::text IS NULL
-                                 OR ({LEGACY_VERSION_SQL})
-                                    IS DISTINCT FROM %(version)s::text
-                               THEN sse_events END AS sse_events,
-                          xmin
+                f"""SELECT {_sql._LIGHT_RESPONSE_COLUMNS}, replay_facts, xmin
                    FROM conversation_responses
                    WHERE conversation_response_id = ANY(%(ids)s::uuid[])""",
-                {
-                    "ids": ids,
-                    "version": None if legacy_facts is None else str(legacy_facts),
-                },
+                {"ids": ids},
             )
             rows = await cur.fetchall()
     return {str(r["conversation_response_id"]): dict(r) for r in rows}
+
+
+async def with_replay_facts(
+    responses_by_turn: dict[Any, dict[str, Any]], turn_indexes: list[Any]
+) -> dict[Any, dict[str, Any]]:
+    """``responses_by_turn`` with these turns' rows re-read with their
+    ``replay_facts``.
+
+    Replay rows arrive without them; only a turn projected afresh, or a
+    stub, needs them. The re-read replaces the row rather than
+    adding the column, so the facts and the ``xmin`` the lines key carries
+    come from one tuple.
+    """
+    wanted = {
+        str(row["conversation_response_id"]): ti
+        for ti in turn_indexes
+        if (row := responses_by_turn.get(ti)) and "replay_facts" not in row
+    }
+    if not wanted:
+        return responses_by_turn
+    whole = await get_replay_responses(list(wanted))
+    out = dict(responses_by_turn)
+    for response_id, ti in wanted.items():
+        if response_id in whole:
+            out[ti] = whole[response_id]
+    return out

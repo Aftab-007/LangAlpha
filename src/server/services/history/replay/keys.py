@@ -29,13 +29,12 @@ _SRC = _HERE.parents[3]
 # The package modules that decide what a turn's lines hold. The others decide
 # only whether and when lines are stored and read: the root (pairing, paging,
 # serving stored lines), cold (batching and stores), keys, errors, refresh,
-# and stored_events (the fallback, whose lines are never stored).
+# and stubs (the fallback, whose lines are never stored).
 _PROJECTION_MODULES = (
     "turn",
     "items",
     "facts",
     "legacy",
-    "stored_merge",
     "run_lane",
     "lines",
     "widgets",

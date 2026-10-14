@@ -1,7 +1,7 @@
 """Thread messaging: send/stream SSE, reconnect/replay, control, retry, mux."""
 
 import json
-from typing import Optional
+from typing import Literal, Optional
 from uuid import uuid4
 
 import asyncio
@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from src.server.utils import api as auth_api
 from src.server.utils.api import (
     CurrentUserId,
+    database_unavailable,
     service_token_matches,
 )
 from src.server.models.chat import ChatRequest
@@ -26,7 +27,7 @@ from src.server.database.conversation import (
     lookup_thread_by_external_id,
     get_replay_thread_data,
 )
-from psycopg_pool import PoolTimeout
+from src.server.database.pool import DATABASE_UNAVAILABLE
 from src.server.dependencies.usage_limits import ChatRateLimited
 
 from src.observability import (
@@ -878,14 +879,14 @@ async def watch_thread(thread_id: str, x_user_id: CurrentUserId):
 async def replay_thread_messages(
     thread_id: str,
     x_user_id: CurrentUserId,
-    source: str = Query(
+    source: Literal["auto", "checkpoint"] = Query(
         "auto",
-        pattern="^(auto|checkpoint|sse)$",
         description=(
             "Replay source: 'checkpoint' projects the transcript from LangGraph "
-            "checkpoints, 'sse' replays persisted sse_events, 'auto' prefers "
-            "checkpoint, replaying from sse a turn it cannot project, or the "
-            "whole thread when coverage is incomplete."
+            "checkpoints and answers 409 when they cannot cover it; 'auto' "
+            "replays a turn it cannot project as its user message and closing "
+            "rows, and every turn that way when the thread's coverage is "
+            "incomplete."
         ),
     ),
     limit: int | None = Query(
@@ -911,8 +912,8 @@ async def replay_thread_messages(
     Stream includes:
     - history_page: first, only when ``limit`` or ``before_turn`` is given
     - user_message: emitted once per turn_index (query content)
-    - message_chunk/tool_* events: projected from checkpoints or emitted from
-      stored sse_events, per ``source``
+    - message_chunk/tool_* events: projected from checkpoints; a turn they
+      cannot cover sends only its closing rows (``source=auto``)
     - snapshot: cursors for the runs replay could not project (newest page only)
     - replay_done: terminal sentinel; on the newest page it also names the
       thread's newest run (``latest_run_id``), read before the transcript
@@ -1005,12 +1006,10 @@ async def replay_thread_messages(
             },
         )
 
-    except PoolTimeout:
-        raise HTTPException(
-            status_code=503,
-            detail="Database connection pool busy, please retry",
-            headers={"Retry-After": "2"},
-        )
+    except DATABASE_UNAVAILABLE as e:
+        # Replay ends the read on a database fault rather than show the
+        # thread as stubs.
+        raise database_unavailable(f"replaying thread {thread_id}", logger, e)
     except HTTPException:
         raise
     except Exception as e:

@@ -164,16 +164,16 @@ def _without_user_id_pairs(text: str) -> str:
 
 
 class ShareRedaction:
-    """One shared thread's queries and stored events as a viewer may read them.
+    """One shared thread's queries and replayed events as a viewer may read them.
 
-    Built from every stored event of the thread, then fed the events in stream
-    order, since a call's name is known only once its ``tool_calls`` event has
-    passed. One instance serves one replay.
+    Built from every event of the thread's replay, then fed the events in
+    stream order, since a call's name is known only once its ``tool_calls``
+    event has passed. One instance serves one replay.
     """
 
-    def __init__(self, stored_events: list[dict[str, Any]]) -> None:
-        self._order_calls = _order_call_ids(stored_events)
-        self._cleared_calls = _cleared_call_ids(stored_events)
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self._order_calls = _order_call_ids(events)
+        self._cleared_calls = _cleared_call_ids(events)
         # The latest name each call id was made under, None once a result has
         # answered it. A result names only its call id, which a provider may
         # repeat later, so this follows the stream rather than reading the
@@ -208,16 +208,17 @@ class ShareRedaction:
         """
         if event_type in _DROPPED_EVENTS:
             return None
-        # Stored workspace_status events carry the workspace id at the top
-        # level, tool artifacts (chart annotations) nest it, and a steering
-        # event names the user on each message, so the owner's ids go at every
-        # depth. sandbox_state is server-side runtime state.
+        # An archived workspace_status event a legacy turn replays verbatim
+        # carries the workspace id at the top level, tool artifacts (chart
+        # annotations) nest it, and a steering event names the user on each
+        # message, so the owner's ids go at every depth. sandbox_state is
+        # server-side runtime state.
         data = without_keys(data, _OWNER_ID_KEYS)
+        data.pop("sandbox_state", None)
         if event_type == "steering_delivered":
             # A report a live turn took in names its source as a report
             # turn's query metadata does; a share keeps neither.
             data = without_keys(data, {"report_source"})
-        data.pop("sandbox_state", None)
         if event_type in _ERROR_TEXT_EVENTS:
             data.pop("error", None)
         if event_type == "tool_calls":

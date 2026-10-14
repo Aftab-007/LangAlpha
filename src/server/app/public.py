@@ -26,6 +26,7 @@ Endpoints:
 """
 
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -46,10 +47,13 @@ from src.server.app.workspace_sandbox import (
     with_preview_path,
 )
 from src.server.database.conversation.replay_rows import get_replay_thread_data
+from src.server.database.pool import DATABASE_UNAVAILABLE
 from src.server.database.share_links import KIND_APP
 from src.server.services.file_grants import grant_prefix, mint_file_grant, seconds_left
-from src.server.utils.api import PageViewer, Viewer
+from src.server.utils.api import PageViewer, Viewer, database_unavailable
 from src.server.services.share_redaction import ShareRedaction
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/public", tags=["Public Sharing"])
 # The file routes live next door and mount here, so the token prefix and the
@@ -162,18 +166,21 @@ async def replay_shared_thread(share_token: str):
     """
     from src.server.services.history.replay import finish_lines, read_replay_page
 
-    thread = await get_shared_thread(share_token)
-    thread_id = str(thread["conversation_thread_id"])
-
-    rows = await get_replay_thread_data(thread_id)
-    if rows is None:
-        raise HTTPException(status_code=404, detail="Shared thread not found")
-    page, _ = await read_replay_page(rows)
-    # Public replay has no /status reconciliation at all, so without the
-    # stamp its task cards would be stuck "running" forever (see
-    # history/task_status.py). Only the whitelisted status value is added,
-    # which redaction leaves as it is.
-    await finish_lines(thread_id, page.lines, status_only=True)
+    try:
+        thread = await get_shared_thread(share_token)
+        thread_id = str(thread["conversation_thread_id"])
+        rows = await get_replay_thread_data(thread_id)
+        if rows is None:
+            raise HTTPException(status_code=404, detail="Shared thread not found")
+        page, _ = await read_replay_page(rows)
+        # Public replay has no /status reconciliation at all, so without the
+        # stamp its task cards would be stuck "running" forever (see
+        # history/task_status.py). Only the whitelisted status value is added,
+        # which redaction leaves as it is.
+        await finish_lines(thread_id, page.lines, status_only=True)
+    except DATABASE_UNAVAILABLE as e:
+        # As the owner's replay answers it.
+        raise database_unavailable("replaying a shared thread", logger, e)
     items = [line.item() for line in page.lines]
     redaction = ShareRedaction(items)
 

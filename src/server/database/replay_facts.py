@@ -2,10 +2,12 @@
 checkpoint does not keep.
 
 Both ledgers carry it. A response row holds its main agent's reasoning
-durations (written by the finalize CAS) and, once backfilled, the facts its
-stored events resolve to under ``LEGACY_KEY``. A subagent run's row holds the
-captured URLs of the images its lane referenced (``images``) and the steering
-it handed back unread (``steering_returned``), both learned after its settle.
+durations (written by the finalize CAS) and, for a turn settled while its live
+stream was archived, what that archive added under ``LEGACY_KEY``, or, for one
+its checkpoints could not cover, the archive itself under ``ARCHIVE_KEY``
+(migration 069). A subagent run's row holds the captured URLs of the images
+its lane referenced (``images``) and the steering it handed back unread
+(``steering_returned``), both learned after its settle.
 """
 
 from typing import Any, Dict, List, Optional
@@ -16,9 +18,7 @@ from src.server.database import pool
 from src.server.utils.pg_sanitize import SafeJson
 
 LEGACY_KEY = "legacy"
-
-# The version a row's legacy facts were resolved at, as text.
-LEGACY_VERSION_SQL = f"replay_facts #>> '{{{LEGACY_KEY},v}}'"
+ARCHIVE_KEY = "archive"
 
 
 async def append_returned_steering(

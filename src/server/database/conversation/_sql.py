@@ -60,10 +60,10 @@ def stored_subagents_allowed(value_sql: str, workspace_id_sql: str) -> str:
 # estimate, which measures from before the row existed.
 #
 # Replay reads every settled row of a thread on each open, but needs a row's
-# ``replay_facts`` only for a turn it projects afresh. Those re-read their rows
-# by id (``get_replay_responses``), so a cached open never moves the facts of
-# its whole history over the wire, the legacy facts of an older turn among
-# them. A row read without ``replay_facts`` has them still to read.
+# ``replay_facts`` only for a turn it projects afresh or stubs. Those re-read
+# their rows by id (``get_replay_responses``), so a cached open never moves the
+# facts of its whole history over the wire, the legacy facts of an older turn
+# among them. A row read without ``replay_facts`` has them still to read.
 _LIGHT_RESPONSE_COLUMNS = (
     "conversation_response_id, conversation_thread_id, turn_index, status, "
     "interrupt_reason, metadata, warnings, errors, execution_time, created_at, "

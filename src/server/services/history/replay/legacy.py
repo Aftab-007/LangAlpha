@@ -1,18 +1,14 @@
-"""Legacy facts: what a turn's stored events add to its projection, resolved.
+"""Legacy facts: what a turn's archived live stream adds to its projection.
 
 A turn settled while the live stream was archived replays some rows only that
 archive kept: widget data files, a tool result the checkpoint holds as an
 eviction pointer, reasoning durations, signal rows (provenance, context
 window, credit usage, steering, interrupts, errors) in their streamed
-positions, and the URLs its sandbox images were captured to.
-``stored_merge.derive_turn`` resolves those against the turn's projection
-into facts, and ``apply_turn`` places them.
-
-A row not yet backfilled derives its facts from its stored events on every
-projection. A backfilled row carries them in ``replay_facts.legacy``, so its
-replay never reads the stored events. A row with no stored events is
-backfilled with ``{"v": FACTS_VERSION}`` alone: facts known empty, which is
-not the same as no facts.
+positions, and the URLs its sandbox images were captured to. Those were
+resolved once against the turn's projection, into its row's
+``replay_facts.legacy``, and ``apply_turn`` places them. A row whose archive
+added nothing holds ``{"v": FACTS_VERSION}`` alone, and a row with no facts
+of this version replays as its projection.
 
 Backfilled facts outlive the projection code they were resolved against, so
 they name projected rows by what the checkpoint gives them, never by where
@@ -28,14 +24,16 @@ row.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any, Required, TypedDict
 
 from src.server.database.replay_facts import LEGACY_KEY
 from src.server.services.history.replay import facts as replay_facts
 from src.server.services.history.replay import widgets
-from src.server.services.history.replay.lanes import agent_lane
+from src.server.services.history.replay.lanes import MAIN_LANE, agent_lane
 
+# Facts are data: ``facts_of`` drops any other version and nothing derives
+# them again, so a change to their shape reads both versions instead of
+# bumping this.
 FACTS_VERSION = 3
 
 
@@ -64,8 +62,23 @@ Signal = EventSignal | WidgetSignal
 
 
 class Merge(TypedDict, total=False):
-    """The parts ``stored_merge.derive_merge`` documents. Row keys are
-    stored as lists: they round-trip through JSONB."""
+    """What a turn's archive adds to its projection, by the projected rows
+    it names. Row keys are stored as lists: they round-trip through JSONB.
+
+    - ``widgets``: ``[projected artifact id, payload]`` per archived widget,
+      in streamed order, the payload carrying the data files the checkpoint
+      leaves out; the id is null for a payload no projected widget took.
+    - ``results``: the archived content of each tool result the checkpoint
+      holds only as an eviction pointer, by call id.
+    - ``durations``: ``[row key, ms]`` per projected reasoning close.
+    - ``anchors``: the keys of the projected rows the archived rows found,
+      in streamed order, and ``["widget", k]`` for a payload none took.
+    - ``signals``: signal rows and archived widgets, in streamed order.
+      ``at`` indexes the newest anchor streamed since the previous signal,
+      and the signal follows it, or the newest earlier one since then that
+      the projection still holds. Without ``at`` a signal follows the
+      previous one.
+    """
 
     widgets: list[list[Any]]
     results: dict[str, StoredResult]
@@ -78,40 +91,19 @@ class LegacyFacts(TypedDict, total=False):
     """A response row's ``replay_facts[LEGACY_KEY]``."""
 
     v: Required[int]
-    # Sandbox image path -> the URL its stored copy was captured to.
+    # Sandbox image path -> the URL its archived copy was captured to.
     images: dict[str, str]
     merge: Merge
     verbatim: list[StoredRow]
 
 
-# Stored events replayed verbatim (anchored to their original position):
-# non-derivable payloads, plus resolved-interrupt cards and error markers —
-# `interrupt` renders answered HITL cards on replay (a pending interrupt is
-# also re-emitted from the checkpoint tip; the frontend dedups by
-# interrupt_id), and `error` keeps wire parity with sse replay.
-# `context_window` and `steering_delivered` are checkpoint-projected, but a
-# turn with stored events prefers those verbatim (see STORED_PREFERRED_EVENTS).
-PASSTHROUGH_EVENTS = (
-    "context_window",
-    "provenance",
-    "steering_delivered",
-    # A run's replay facts place it on its run lane; a stored copy is kept
-    # only for a run settled before those existed.
-    "steering_returned",
-    "credit_usage",
-    "interrupt",
-    "error",
-    "model_fallback",
-)
-
-
-# Projected/synthesized event types the stored stream also carries in full.
-# A turn with stored events drops its projected copies and replays the stored
+# Projected/synthesized event types a turn's merge facts carry in full. A
+# turn with merge facts drops its projected copies and places the archived
 # ones (richer historical payloads, proven anchoring); a turn without them
 # keeps the projected copies. The terminal ``error`` is not here: nothing
-# projects it. The stored frame passes through (PASSTHROUGH_EVENTS), and the
-# response row adds its own item after the merge only for a turn whose
-# stored events hold none (``items.terminal_items``).
+# projects it. An archived frame is placed as a signal row, and the response
+# row stamps its kind on it, adding its own item only for a turn whose facts
+# hold none (``items.terminal_items``).
 STORED_PREFERRED_EVENTS = (
     "steering_delivered",
     "context_window",
@@ -123,14 +115,14 @@ STORED_PREFERRED_EVENTS = (
 
 
 # Content types the projector emits: a message's anchorable chunks. Live-only
-# accumulation chunks (content_type=None) and tool-only messages have none, so
-# both streams enumerate the same messages when keyed on these.
-ANCHORABLE_CONTENT_TYPES = frozenset({"reasoning_signal", "reasoning", "text"})
+# accumulation chunks (content_type=None) and tool-only messages have none.
+# Stored facts name messages by these, so the set is fixed with them.
+_ANCHORABLE_CONTENT_TYPES = frozenset({"reasoning_signal", "reasoning", "text"})
 
 
 def facts_of(response: dict[str, Any] | None) -> LegacyFacts | None:
-    """The row's legacy facts, or None when it has not been backfilled (or
-    was backfilled by a version this code does not read)."""
+    """The row's legacy facts, or None when it holds none of the version
+    this code reads."""
     facts = (response or {}).get("replay_facts")
     legacy = facts.get(LEGACY_KEY) if isinstance(facts, dict) else None
     if isinstance(legacy, dict) and legacy.get("v") == FACTS_VERSION:
@@ -138,12 +130,26 @@ def facts_of(response: dict[str, Any] | None) -> LegacyFacts | None:
     return None
 
 
-# How a row key names an anchorable message chunk, from its lane, its data
-# and how often its id recurred in that lane after another row (``row_keys``).
-MessageKey = Callable[[str, dict[str, Any], int], tuple | None]
+def archived_error(
+    thread_id: str, response: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """The main lane's last error frame a legacy turn's archive held, as a
+    replay item of its own: what a stub, which places no facts, closes on."""
+    facts = facts_of(response)
+    if facts is None:
+        return None
+    rows = (
+        facts["verbatim"]
+        if "verbatim" in facts
+        else (facts.get("merge") or {}).get("signals") or ()
+    )
+    for row in reversed(rows):
+        if row.get("event") == "error" and agent_lane(row["data"].get("agent")) == MAIN_LANE:
+            return {"event": "error", "data": {**row["data"], "thread_id": thread_id}}
+    return None
 
 
-def own_message_key(lane: str, data: dict[str, Any], occurrence: int) -> tuple:
+def _message_key(lane: str, data: dict[str, Any], occurrence: int) -> tuple:
     """A message chunk by its id and content type, the key facts name it by.
     The projector gives every message without an id the same placeholder, so
     a recurring id also carries its occurrence: a message's own chunks are
@@ -152,12 +158,10 @@ def own_message_key(lane: str, data: dict[str, Any], occurrence: int) -> tuple:
     return key + (occurrence,) if occurrence else key
 
 
-def row_keys(
-    turn_items: list[dict[str, Any]], message_key: MessageKey = own_message_key
-) -> list[tuple | None]:
+def row_keys(turn_items: list[dict[str, Any]]) -> list[tuple | None]:
     """The key of each row, or None for a row no key names: a tool call
     round by its first call id, a result by its call id, an artifact by its
-    id, and a message chunk by ``message_key``."""
+    id, and a message chunk by ``_message_key``."""
     keys: list[tuple | None] = []
     running: dict[str, Any] = {}
     occurrences: dict[tuple[str, Any], int] = {}
@@ -165,12 +169,12 @@ def row_keys(
         event, data = item["event"], item["data"]
         lane = agent_lane(data.get("agent"))
         key: tuple | None = None
-        if event == "message_chunk" and data.get("content_type") in ANCHORABLE_CONTENT_TYPES:
+        if event == "message_chunk" and data.get("content_type") in _ANCHORABLE_CONTENT_TYPES:
             message_id = data.get("id")
             if lane not in running or running[lane] != message_id:
                 running[lane] = message_id
                 occurrences[lane, message_id] = occurrences.get((lane, message_id), -1) + 1
-            key = message_key(lane, data, occurrences[lane, message_id])
+            key = _message_key(lane, data, occurrences[lane, message_id])
         else:
             running.pop(lane, None)
             if event == "tool_calls":
@@ -184,18 +188,17 @@ def row_keys(
     return keys
 
 
-def key_index(
-    turn_items: list[dict[str, Any]], message_key: MessageKey = own_message_key
-) -> dict[tuple, int]:
+def _key_index(turn_items: list[dict[str, Any]]) -> dict[tuple, int]:
     """Projected position of each row key.
 
     The last occurrence wins, so a message key covers its whole group (a
     reasoning start and close share one key, and the close is the one a
     duration lands on). The checkpoint holds a parallel round as one row,
-    the live archive as one row per call, so any of its calls names it.
+    and facts resolved against the archive's row per call name it by any of
+    its calls.
     """
     index: dict[tuple, int] = {}
-    for idx, key in enumerate(row_keys(turn_items, message_key)):
+    for idx, key in enumerate(row_keys(turn_items)):
         if key is None:
             continue
         index[key] = idx
@@ -236,13 +239,13 @@ def apply(
 ) -> list[dict[str, Any]]:
     """Place a turn's merge facts into its projection.
 
-    ``merge`` is None for a turn with no stored events, whose projected
-    signal rows stand. Otherwise those are replaced by the stored ones, in
-    this order: widget payloads upgrade the widgets they were paired with,
-    evicted results are restored, reasoning durations land on their closes,
-    and each signal row follows the newest of its anchors that the
-    projection still holds. Returned steering a run's own facts already
-    placed is not placed twice.
+    ``merge`` is None for a turn whose archive added nothing, whose
+    projected signal rows stand. Otherwise those are replaced by the
+    archived ones, in this order: widget payloads upgrade the widgets they
+    were paired with, evicted results are restored, reasoning durations land
+    on their closes, and each signal row follows the newest of its anchors
+    that the projection still holds. Returned steering a run's own facts
+    already placed is not placed twice.
     """
     if merge is None:
         return turn_items
@@ -250,7 +253,7 @@ def apply(
 
     turn_items = [i for i in turn_items if i["event"] not in STORED_PREFERRED_EVENTS]
     # Keyed before the widget upgrade: facts name a widget by its projected id.
-    index = key_index(turn_items)
+    index = _key_index(turn_items)
 
     stored_widgets = merge.get("widgets") or []
     upgraded = _upgrade_widgets(turn_items, stored_widgets)

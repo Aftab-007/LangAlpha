@@ -8,6 +8,7 @@ from typing import Any
 from src.server.contracts.status import TERMINAL_STATUSES
 from src.server.database.provenance import provenance_row_to_event
 from src.server.services.history.replay import facts as replay_facts
+from src.server.services.history.replay import legacy
 from src.server.services.history.replay import stopped
 from src.server.services.history.replay.lanes import MAIN_LANE, agent_lane
 from src.server.services.runs.credit_usage import build_credit_usage_data
@@ -332,17 +333,21 @@ def terminal_items(
     A client shows one failure per turn (the web the last error, older
     clients the first), and the ``error`` frame the user saw has the model,
     hints and words the row lacks. So a failed turn replays that frame with
-    the row's kind stamped on it: in place, when an older turn's stored
-    events hold it, or as its row's replay facts kept it. Only a failure
-    that sent no frame (its stream quota spent, a fault outside the
-    producer) gets the row's own item. Both read ``turn_items``, so the
-    caller appends after.
+    the row's kind stamped on it: in place, when a legacy turn's facts
+    placed its archived copy, or as its row's replay facts kept it or its
+    archive held it (a stub places no facts). Only a failure that sent no
+    frame (its stream quota spent, a fault outside the producer) gets the
+    row's own item. Both read ``turn_items``, so the caller appends after.
     """
     stop = stopped.stop_close_item(thread_id, response, turn_items)
     error = _error_item(thread_id, response)
     if error is not None:
         stored = _stored_error(turn_items)
-        frame = stored or replay_facts.error_frame(thread_id, response)
+        frame = (
+            stored
+            or replay_facts.error_frame(thread_id, response)
+            or legacy.archived_error(thread_id, response)
+        )
         if frame is not None:
             _stamp_row_kind(frame["data"], error["data"])
             error = None if stored else frame
@@ -384,31 +389,3 @@ def _enrich(
     if response_id is not None:
         data["response_id"] = response_id
 
-
-def _stub_turn_items(
-    thread_id: str,
-    turn_index: Any,
-    queries_by_turn: dict[Any, list[dict[str, Any]]],
-    responses_by_turn: dict[Any, dict[str, Any]],
-    open_run: str | None = None,
-) -> list[dict[str, Any]]:
-    """A persisted turn with no committed boundary: the in-flight active turn
-    (frontend attaches to the live run via /status + run_id, ``open_run``) or
-    a run that never checkpointed. The user_message stub, plus the terminal
-    error or stop close the response row records, is the whole replay. Never
-    cached.
-
-    Output the turn streamed before it stopped or failed is not on the
-    committed branch, so it is not in the model's context either, and replay
-    leaves it out.
-    """
-    response = responses_by_turn.get(turn_index)
-    response_id = str(response.get("conversation_response_id")) if response else None
-    items = [
-        _user_message_item(thread_id, q, response, open_run)
-        for q in queries_by_turn.get(turn_index, [])
-    ]
-    turn_items = terminal_items(thread_id, response, [])
-    for item in turn_items:
-        _enrich(item, thread_id, turn_index, response_id)
-    return items + turn_items

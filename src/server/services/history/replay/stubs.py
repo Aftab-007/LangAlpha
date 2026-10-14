@@ -1,108 +1,65 @@
-"""Replay from a turn's stored ``sse_events``, and the re-read that brings
-them to a turn projected afresh.
+"""What a turn replays as when its checkpoints cannot project it.
 
-A turn that cannot be projected replays from its stored events, and its
-lines are never stored, so nothing here is digested into the lines epoch.
-Only turns settled before #533 have stored events; a newer one replays as
-unavailable (``unavailable_item``).
+Every stub comes through ``stub_lines``: a turn with no committed boundary
+yet (``build_replay_page``), a turn that fails on its own (``cold``) and a
+thread whose turns cannot be paired at all (``read_replay_page``), so what
+such a turn shows is decided in one place. Its lines are never stored, so
+nothing here is digested into the lines epoch.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from src.server.database import conversation as conversation_db
+from src.server.database.conversation.replay_rows import with_replay_facts
+from src.server.database.replay_facts import ARCHIVE_KEY
 from src.server.services.history.replay import items
-from src.server.services.history.replay import legacy
-from src.server.services.history.replay import stored_merge
 from src.server.services.history.replay.lines import Line, line_of
-from src.server.services.history.replay.turn import Inputs
 
 
-async def with_stored_events(
-    responses_by_turn: dict[Any, dict[str, Any]],
-    turn_indexes: list[Any],
-    *,
-    verbatim: bool = False,
-) -> dict[Any, dict[str, Any]]:
-    """``responses_by_turn`` with these turns' rows re-read whole.
-
-    Replay rows arrive without ``sse_events`` and ``replay_facts``; only a
-    turn projected afresh (or replayed from storage) needs them. The re-read
-    replaces the row rather than adding the columns, so the events, the
-    facts and the ``xmin`` the lines key carries come from one tuple.
-
-    A row whose legacy facts stand in for its stored events comes without
-    them, unless ``verbatim``: a replay of the stored events themselves (the
-    fallbacks, a parity check).
-    """
-    wanted = {
-        str(row["conversation_response_id"]): ti
-        for ti in turn_indexes
-        if (row := responses_by_turn.get(ti)) and "sse_events" not in row
-    }
-    if not wanted:
-        return responses_by_turn
-    whole = await conversation_db.get_replay_responses(
-        list(wanted), legacy_facts=None if verbatim else legacy.FACTS_VERSION
-    )
-    out = dict(responses_by_turn)
-    for response_id, ti in wanted.items():
-        if response_id in whole:
-            out[ti] = whole[response_id]
-    return out
-
-
-def build_sse_replay_items(
+async def stub_lines(
     thread_id: str,
-    queries: list[dict[str, Any]],
+    turn_indexes: list[Any],
+    queries_by_turn: dict[Any, list[dict[str, Any]]],
     responses_by_turn: dict[Any, dict[str, Any]],
     open_runs: dict[Any, str] | None = None,
-) -> list[dict[str, Any]]:
-    """Replay items sourced verbatim from persisted ``sse_events`` (the fallback).
+) -> tuple[dict[Any, list[Line]], list[Any]]:
+    """Each turn as its user message, the stream its row archived when it
+    kept one, and the terminal error or stop close the row records; and the
+    turns among them that answered with nothing here to show for it, for the
+    caller's log. ``open_runs`` names the run of a turn still going
+    (``ThreadRows.open_runs``), which the client attaches to live.
 
-    Same ``{"event", "data"}`` shape as the checkpoint path, so the endpoint
-    emits either source through one loop. The response row closes the turn
-    here too, by the same rule: its error stamps its kind on the stored
-    frame, or stands in for a frame the stored events lack, and a user
-    stop's close is added when they have none. A settled turn with no
-    stored events closes on ``unavailable_item`` when it answered (see
-    ``_lost``). ``open_runs`` names the run of a turn still going
-    (``ThreadRows.open_runs``).
+    Without an archive, output a turn with no committed boundary streamed
+    before it stopped or failed is not on the branch, so it is not in the
+    model's context either, and its stub leaves it out. The rows are re-read
+    with their replay facts, which hold the archive and the error frame a
+    failed turn's stream sent.
     """
     open_runs = open_runs or {}
-    out: list[dict[str, Any]] = []
-    terminals_emitted: set[str] = set()
-    for query in queries:
-        if not isinstance(query, dict):
-            continue
-        turn_index = query.get("turn_index")
-        response = responses_by_turn.get(turn_index)
-        response_id = (
-            str(response.get("conversation_response_id")) if response else None
-        )
-        out.append(
-            items._user_message_item(
-                thread_id, query, response, open_runs.get(turn_index)
+    responses_by_turn = await with_replay_facts(responses_by_turn, turn_indexes)
+    lines = {
+        ti: [
+            line_of(item)
+            for item in _stub_items(
+                thread_id,
+                ti,
+                queries_by_turn.get(ti, []),
+                responses_by_turn.get(ti),
+                open_runs.get(ti),
             )
-        )
-        turn_items = _valid_events(response)
-        if response_id and response_id not in terminals_emitted:
-            terminals = items.terminal_items(thread_id, response, turn_items)
-            if not terminals and _lost(response, open_runs.get(turn_index)):
-                terminals.append(unavailable_item(thread_id))
-            if terminals:
-                terminals_emitted.add(response_id)
-                turn_items += terminals
-        for item in turn_items:
-            items._enrich(item, thread_id, turn_index, response_id)
-        out.extend(turn_items)
-    return out
+        ]
+        for ti in turn_indexes
+    }
+    lost = [
+        ti for ti in turn_indexes if _lost(responses_by_turn.get(ti), open_runs.get(ti))
+    ]
+    return lines, lost
 
 
 def unavailable_item(thread_id: str) -> dict[str, Any]:
-    """The close of a turn replay has nothing for: no projection, no stored
-    events. Without it the turn reads as an answer of nothing. An ``error``
+    """The close of a turn replay has nothing for: no projection, no
+    archive. Without it the turn reads as an answer of nothing. An ``error``
     frame is what a client already shows on the turn's reply; ``internal``
     words it as this service's fault, which it is, whatever the run did. Its
     ``type`` tells the client the run did not fail, so the reply offers a
@@ -118,28 +75,26 @@ def unavailable_item(thread_id: str) -> dict[str, Any]:
     }
 
 
-def lost_turns(
-    responses_by_turn: dict[Any, dict[str, Any]],
-    turn_indexes: list[Any],
-    open_runs: dict[Any, str] | None = None,
-) -> list[Any]:
-    """The turns whose fallback replay carries none of their content, for the
-    caller's log: the fallback is quiet otherwise, and the turns it loses are
-    the reason to look."""
-    open_runs = open_runs or {}
+def _stub_items(
+    thread_id: str,
+    turn_index: Any,
+    queries: list[dict[str, Any]],
+    response: dict[str, Any] | None,
+    open_run: str | None,
+) -> list[dict[str, Any]]:
+    response_id = str(response.get("conversation_response_id")) if response else None
+    # A turn still going shows what its run streams; an archive on its row is
+    # an earlier attempt's.
+    archived = [] if open_run else _archive(response) or []
+    closing = items.terminal_items(thread_id, response, archived)
+    if not closing and _lost(response, open_run):
+        closing.append(unavailable_item(thread_id))
+    turn_items = archived + closing
+    for item in turn_items:
+        items._enrich(item, thread_id, turn_index, response_id)
     return [
-        ti
-        for ti in turn_indexes
-        if _lost(responses_by_turn.get(ti), open_runs.get(ti))
-    ]
-
-
-def _valid_events(response: dict[str, Any] | None) -> list[dict[str, Any]]:
-    return [
-        {"event": event["event"], "data": dict(event["data"])}
-        for event in stored_merge._stored_events(response)
-        if stored_merge._valid_stored(event)
-    ]
+        items._user_message_item(thread_id, q, response, open_run) for q in queries
+    ] + turn_items
 
 
 # A turn is interrupted only by a pause the checkpoint holds, raised by a
@@ -150,38 +105,32 @@ _ANSWERED = ("completed", "interrupted")
 
 def _lost(response: dict[str, Any] | None, open_run: str | None) -> bool:
     """A turn that answered, or paused on an interrupt after answering,
-    whose stored events were never written: the answer is not here. A turn
-    that failed or was stopped may have produced nothing (a stop before its
-    first checkpoint), and its row closes it on its error or stop, so it
-    reads as ended. A turn still going replays its stub and attaches live,
-    so it has nothing to lose yet."""
+    whose row archived no stream: the answer is not here. A turn that failed
+    or was stopped may have produced nothing (a stop before its first
+    checkpoint), and its row closes it on its error or stop, so it reads as
+    ended. A turn still going replays its stub and attaches live, so it has
+    nothing to lose yet."""
     return (
         response is not None
         and open_run is None
         and response.get("status") in _ANSWERED
-        and not isinstance(response.get("sse_events"), list)
+        and _archive(response) is None
     )
 
 
-async def fallback_lines(
-    inputs: Inputs, turn_indexes: list[Any]
-) -> tuple[dict[Any, list[Line]], list[Any]]:
-    """Each turn's replay from its stored events, or its user message and
-    ``unavailable_item`` without them; and the turns replayed so
-    (``lost_turns``)."""
-    responses = await with_stored_events(
-        inputs.responses_by_turn, turn_indexes, verbatim=True
-    )
-    lines = {
-        ti: [
-            line_of(item)
-            for item in build_sse_replay_items(
-                inputs.thread_id,
-                inputs.queries_by_turn.get(ti, []),
-                {ti: responses[ti]} if ti in responses else {},
-                inputs.open_runs,
-            )
-        ]
-        for ti in turn_indexes
-    }
-    return lines, lost_turns(responses, turn_indexes, inputs.open_runs)
+def _archive(response: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """The live stream a legacy turn's row kept whole (``ARCHIVE_KEY``), or
+    None for a row that kept none. A row keeps it only when its checkpoints
+    could not cover its turn, so there was no projection to resolve legacy
+    facts against. The rows are copies: the stub stamps them in place."""
+    facts = (response or {}).get("replay_facts")
+    rows = facts.get(ARCHIVE_KEY) if isinstance(facts, dict) else None
+    if not isinstance(rows, list):
+        return None
+    return [
+        {"event": row["event"], "data": dict(row["data"])}
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("event")
+        and isinstance(row.get("data"), dict)
+    ]

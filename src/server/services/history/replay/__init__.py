@@ -1,40 +1,31 @@
-"""Assemble checkpoint-sourced replay for the replay endpoint.
+"""Assemble a thread's replay for the replay endpoint.
 
-Produces the same ``{"event": type, "data": dict}`` stream as the stored
-``sse_events`` path, sourcing the transcript from checkpoints (via
-``CheckpointHistoryReader`` + the pure projector) and merging the
-non-derivable remainder from persisted events:
+Produces the live wire's ``{"event": type, "data": dict}`` stream, sourcing
+the transcript from checkpoints (via ``CheckpointHistoryReader`` + the pure
+projector) and the non-derivable remainder from table rows:
 
 - ``steering_delivered`` and ``context_window`` (token_usage, summarize,
   offload) are projected from checkpoint state — steering payloads and
   summarize fields are stamped into message ``additional_kwargs`` at emit
   time, token usage comes from ``usage_metadata``, offload counts and the
-  summarize event from private-state deltas. A turn settled while stored
-  events were still written replays those verbatim instead (richer
-  historical payloads, exact mid-turn positions).
+  summarize event from private-state deltas.
 - ``provenance`` / ``credit_usage`` are table-sourced (provenance_records /
   conversation_usages rows, written at persist time); answered ``interrupt``
   cards project from the resume boundary's ``__interrupt__`` pending writes;
-  the terminal ``error`` event replays the frame the live stream sent, from
-  the turn's stored events or its response row's replay facts, with the row's
-  kind stamped on it, and reconstructs from the row when neither holds one
-  (both replay paths). A turn with stored events replays the stored copies
-  instead.
-- ``html_widget`` artifacts carry their resolved data in the checkpointed
-  artifact, inline or as a ``data_ref`` resolved on the way out
-  (``widgets``); an older turn's stored event still supplies it when the
-  artifact has neither.
+  the terminal ``error`` event replays the frame the live stream sent, kept
+  in the response row's replay facts (or placed by a legacy turn's facts),
+  with the row's kind stamped on it, and is rebuilt from the row when
+  neither holds one.
 - Sandbox image paths in projected text resolve through the replay facts of
   the run that wrote them (the turn's response row, a subagent run's row),
-  through ``image_capture`` ui records for a turn settled before its row held
-  them, and through the URLs an older turn's stored events were captured to
-  (``legacy``).
+  and through ``image_capture`` ui records for a turn settled before its row
+  held them.
 - What only the live stream measured or returned (reasoning durations, a
   subagent run's returned steering) comes from the run's replay facts
-  (``facts``), and from the stored events for a run settled before those.
-- A row backfilled with its legacy facts (``legacy``) takes everything the
-  stored events gave it from those facts instead, and its stored events are
-  never read.
+  (``facts``).
+- A turn settled while its live stream was archived carries what only that
+  archive kept in its row's legacy facts (``legacy``): widget data files,
+  evicted results, signal rows in their streamed positions, image URLs.
 
 A settled turn is projected once: its slice (what the turn added to the
 checkpoint) and its projected lines are stored with its response row, and a
@@ -42,11 +33,12 @@ read streams the lines while their key still matches the inputs. Only a turn
 whose key moved is projected again, from its stored slice when the branch
 still agrees with it, and from checkpoints otherwise.
 
-A turn that cannot be projected replays from its stored events on the read
-paths that ask for it, so one bad turn costs only itself. Nothing writes
-stored events since #533, so a newer turn has none: it replays as its user
-message closed by an error frame (``stored_events.unavailable_item``), never
-as a turn the assistant silently left unanswered.
+A turn that cannot be projected replays as a stub (its user message, the
+stream its row archived if it kept one, and its closing rows) on the read
+paths that ask for it, so one bad turn costs only itself. A stub of a turn
+that answered and archived nothing closes on an error frame
+(``stubs.unavailable_item``), never as a turn the assistant silently left
+unanswered.
 
 Package layout:
 
@@ -54,14 +46,13 @@ Package layout:
   serves the stored lines whose key still matches;
 - ``cold`` projects and stores the rest, a batch at a time;
 - ``turn`` projects one turn: ``items`` builds its table-sourced events,
-  ``run_lane`` its background-task runs, ``stored_merge`` resolves its
-  persisted payloads into legacy facts, ``legacy`` applies them, and
-  ``facts`` applies what runs recorded on their rows;
+  ``run_lane`` its background-task runs, ``legacy`` applies its legacy
+  facts, and ``facts`` applies what runs recorded on their rows;
 - ``lines`` holds the stored wire format, and ``widgets`` inlines offloaded
   payloads on the way out;
-- ``keys`` decides whether stored lines still stand, ``stored_events``
-  replays a turn from its stored events, ``refresh`` projects turns as they
-  settle, and ``errors`` says why a read gives up.
+- ``keys`` decides whether stored lines still stand, ``stubs`` is what a
+  turn that cannot be projected replays as, ``refresh`` projects turns as
+  they settle, and ``errors`` says why a read gives up.
 
 Only the modules that decide what lines hold are digested into the lines
 key (``keys.projection_sources``).
@@ -72,13 +63,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any
-
+from typing import Any, Literal
 
 from src.server.database import conversation as conversation_db
 from src.server.database.conversation import turn_slices as slices_db
 from src.server.database.conversation.replay_rows import ThreadRows
-from src.server.database.pool import AppDataPoolTimeout
+from src.server.database.pool import DATABASE_UNAVAILABLE
 from src.server.services.history import slices
 from src.server.services.history import task_status
 from src.server.services.history.reader import (
@@ -96,22 +86,15 @@ from src.server.services.history.replay.errors import (
 )
 from src.server.services.history.replay.keys import lines_epoch, lines_key
 from src.server.services.history.replay.lines import Line, line_of
-from src.server.services.history.replay.stored_events import (
-    build_sse_replay_items,
-    lost_turns,
-    with_stored_events,
-)
-from src.server.services.history.replay.turn import Derive, Inputs
+from src.server.services.history.replay.stubs import stub_lines
+from src.server.services.history.replay.turn import Inputs, group_queries
 from src.server.utils.checkpoint_helpers import CheckpointBranchTipNotFound
 
 __all__ = [
     "CheckpointReplayUnavailable",
     "ClaimsPassNeeded",
-    "Derive",
     "ReplayPage",
-    "build_checkpoint_replay_items",
     "build_replay_page",
-    "build_sse_replay_items",
     "ThreadRows",
     "finish_lines",
     "lines_epoch",
@@ -119,9 +102,8 @@ __all__ = [
     "pair_anchors",
     "project_turns",
     "read_replay_page",
-    "stored_events_page",
+    "stub_page",
     "unserved_turns",
-    "with_stored_events",
 ]
 
 logger = logging.getLogger(__name__)
@@ -147,12 +129,11 @@ async def load_thread_inputs(thread_id: str) -> tuple[ThreadRows, str] | None:
 
 async def build_replay_page(
     rows: ThreadRows,
-    branch_tip_checkpoint_id: str | None = None,
+    branch_tip_checkpoint_id: str,
     *,
     before_turn: Any | None = None,
     limit: int | None = None,
     turn_fallback: bool = False,
-    cache: bool = True,
 ) -> ReplayPage:
     """Replay lines for one page of the thread: with ``limit``, the newest N
     checkpointed turns before ``before_turn`` (all of them without it), plus
@@ -160,19 +141,18 @@ async def build_replay_page(
 
     Turns pair to persisted query rows by stamped ``turn_index`` metadata
     (the next persisted turn for a resume or a pre-stamping thread, see
-    ``pair_turns``); a persisted turn with no
-    committed boundary — the in-flight active turn — replays as its
-    user_message stub only. Raises ``CheckpointReplayUnavailable`` when
+    ``pair_turns``); a persisted turn with no committed boundary (the
+    in-flight active turn) replays as its stub. Raises ``CheckpointReplayUnavailable`` when
     coverage cannot be established (missing checkpoints, inconsistent
-    pairing) — the endpoint's ``auto`` mode falls back to stored events on
-    that signal. Steered threads replay natively (the steering message is
-    checkpointed mid-slice); legacy steering-*backfilled* turns have a
-    completed response with no boundary, so pairing raises and they stay on
-    the sse path.
+    pairing); the endpoint's ``auto`` mode falls back to stubs on that
+    signal. Steered threads replay natively (the steering message is
+    checkpointed mid-slice). A completed turn with no boundary (a legacy
+    steering-*backfilled* turn) raises too, unless ``turn_fallback``, which
+    replays that turn alone as its stub.
 
     Lines are wire-ready but not final: task cards and offloaded widget data
     are stamped on the way out (``finish_lines``). ``turn_fallback``: see
-    ``cold.project_stale``; ``cache``: see ``cold.Policy``.
+    ``cold.project_stale``.
     """
     reader = CheckpointHistoryReader.get_instance()
     branch = await _branch(reader, rows, branch_tip_checkpoint_id)
@@ -180,13 +160,22 @@ async def build_replay_page(
         raise CheckpointReplayUnavailable("no checkpoint turns found")
     inputs, anchored, tip_id = branch
     page, has_more = _select_page(anchored, inputs, before_turn, limit)
+    for turn_index, anchor in page:
+        # A completed turn persists its boundary, so checkpoints cannot cover
+        # one without it. The pairing that placed every other turn held, so
+        # under ``turn_fallback`` only that turn is a stub.
+        response = inputs.responses_by_turn.get(turn_index) or {}
+        if anchor is None and response.get("status") == "completed" and not turn_fallback:
+            raise CheckpointReplayUnavailable(
+                f"persisted turn {turn_index} completed but has no checkpoint boundary"
+            )
 
     lines = _turn_lines(
         reader,
         inputs,
         anchored,
         [(ti, a) for ti, a in page if a is not None],
-        cold.Policy(turn_fallback=turn_fallback, cache=cache),
+        cold.Policy(turn_fallback=turn_fallback),
     )
     tip_interrupts: list[dict[str, Any]] = []
     if before_turn is None:
@@ -204,21 +193,23 @@ async def build_replay_page(
         lines_by_turn, tip_interrupts = results
     else:
         lines_by_turn = await lines
+    stubs, lost = await stub_lines(
+        rows.thread_id,
+        [turn_index for turn_index, anchor in page if anchor is None],
+        inputs.queries_by_turn,
+        inputs.responses_by_turn,
+        rows.open_runs,
+    )
+    if lost:
+        logger.error(
+            "[REPLAY] turns %s of %s have no checkpoint boundary and archived "
+            "no stream; they replay without their answer",
+            lost,
+            rows.thread_id,
+        )
     out: list[Line] = []
     for turn_index, anchor in page:
-        if anchor is None:
-            out.extend(
-                line_of(item)
-                for item in items._stub_turn_items(
-                    rows.thread_id,
-                    turn_index,
-                    inputs.queries_by_turn,
-                    inputs.responses_by_turn,
-                    rows.open_runs.get(turn_index),
-                )
-            )
-        else:
-            out.extend(lines_by_turn[turn_index])
+        out.extend(stubs[turn_index] if anchor is None else lines_by_turn[turn_index])
     for interrupt in tip_interrupts:
         out.append(line_of(items._interrupt_item(rows.thread_id, interrupt)))
     return ReplayPage(
@@ -231,135 +222,102 @@ async def build_replay_page(
 async def read_replay_page(
     rows: ThreadRows,
     *,
-    source: str = "auto",
+    source: Literal["auto", "checkpoint"] = "auto",
     before_turn: Any | None = None,
     limit: int | None = None,
 ) -> tuple[ReplayPage, str]:
-    """The page a thread replays as, and its source (``checkpoint`` or ``sse``).
+    """The page a thread replays as, and its source (``checkpoint`` or ``stub``).
 
     One assembly for every reader that shows a thread, so the owner and a
     share viewer see the same turns. ``auto`` projects from checkpoints and
-    replays only a turn that cannot be projected from its stored events; the
-    whole page goes to storage only when the page cannot be projected at all
-    (its turns cannot be paired, or a read every turn shares failed), since
-    a turn paired wrongly would show another turn's answer. ``checkpoint``
-    raises ``CheckpointReplayUnavailable`` rather than fall back, and ``sse``
-    reads storage alone. Either fallback shows a turn with no stored events
-    as unavailable.
+    replays only a turn that cannot be projected as its stub; the whole page
+    goes to stubs only when the thread's turns cannot be paired at all.
+    ``checkpoint`` raises ``CheckpointReplayUnavailable`` rather than fall
+    back.
     """
     cause: BaseException | None = None
-    if source in ("auto", "checkpoint"):
-        try:
-            if rows.thread.get("latest_checkpoint_id") is None:
-                # The commit pointer (stamped at turn persist) is the only tip
-                # checkpoint replay may read: without it the reader would walk
-                # the newest checkpoint, which mid-run is uncommitted state.
-                raise CheckpointReplayUnavailable(
-                    "thread has no committed checkpoint pointer"
-                )
-            page = await build_replay_page(
-                rows,
-                rows.thread.get("latest_checkpoint_id"),
-                before_turn=before_turn,
-                limit=limit,
-                turn_fallback=source == "auto",
+    try:
+        if rows.thread.get("latest_checkpoint_id") is None:
+            # The commit pointer (stamped at turn persist) is the only tip
+            # checkpoint replay may read: without it the reader would walk
+            # the newest checkpoint, which mid-run is uncommitted state.
+            raise CheckpointReplayUnavailable(
+                "thread has no committed checkpoint pointer"
             )
-            return page, "checkpoint"
-        except AppDataPoolTimeout:
-            # Storage is read through this same pool, so a fallback would wait
-            # on it again before failing the same way. A checkpointer pool
-            # timeout falls back like any other failure.
+        page = await build_replay_page(
+            rows,
+            rows.thread.get("latest_checkpoint_id"),
+            before_turn=before_turn,
+            limit=limit,
+            turn_fallback=source == "auto",
+        )
+        return page, "checkpoint"
+    except DATABASE_UNAVAILABLE:
+        # A database that is busy or unreachable, either pool, is not a thread
+        # checkpoints cannot cover: stubs would show every answer missing, so
+        # the reader is told to retry instead.
+        raise
+    except CheckpointReplayUnavailable as e:
+        if source == "checkpoint":
             raise
-        except CheckpointReplayUnavailable as e:
-            if source == "checkpoint":
-                raise
-            cause = e
-            logger.info(
-                "[REPLAY] Checkpoint replay unavailable for %s, falling back "
-                "to sse: %s",
-                rows.thread_id,
-                e,
-            )
-        except Exception as e:
-            if source == "checkpoint":
-                raise
-            cause = e
-            logger.warning(
-                "[REPLAY] Checkpoint replay failed for %s, falling back to sse",
-                rows.thread_id,
-                exc_info=True,
-            )
-    return await stored_events_page(rows, before_turn, limit, cause=cause), "sse"
+        cause = e
+        logger.info(
+            "[REPLAY] Checkpoint replay unavailable for %s, falling back to stubs: %s",
+            rows.thread_id,
+            e,
+        )
+    except Exception as e:
+        if source == "checkpoint":
+            raise
+        cause = e
+        logger.warning(
+            "[REPLAY] Checkpoint replay failed for %s, falling back to stubs",
+            rows.thread_id,
+            exc_info=True,
+        )
+    return await stub_page(rows, before_turn, limit, cause=cause), "stub"
 
 
-async def stored_events_page(
+async def stub_page(
     rows: ThreadRows,
     before_turn: Any | None = None,
     limit: int | None = None,
     *,
     cause: BaseException | None = None,
 ) -> ReplayPage:
-    """A page replayed from stored events alone, over the same window the
+    """A page of stubs (``stubs.stub_lines``), over the same window the
     checkpoint path pages by, counted in persisted turns.
 
-    Turns with no stored events replay as unavailable and are logged as an
-    error with ``cause``, the failure that sent the read here: a thread
-    whose turns cannot pair is logged only at info, as older threads
-    legitimately are."""
+    Turns that answered and archived nothing are logged as an error with
+    ``cause``, the failure that sent the read here: a thread whose turns
+    cannot pair is logged only at info, as older threads legitimately are."""
+    queries_by_turn = group_queries(rows.queries)
     turns = sorted(
-        {
-            q["turn_index"]
-            for q in rows.queries
-            if isinstance(q, dict)
-            and q.get("turn_index") is not None
-            and (before_turn is None or q["turn_index"] < before_turn)
-        }
+        ti
+        for ti in queries_by_turn
+        if ti is not None and (before_turn is None or ti < before_turn)
     )
-    page_turns = set(turns[-limit:] if limit is not None else turns)
-    page_queries = [
-        q
-        for q in rows.queries
-        if isinstance(q, dict) and q.get("turn_index") in page_turns
-    ]
-    responses = await with_stored_events(
-        rows.responses_by_turn, sorted(page_turns), verbatim=True
+    page_turns = turns[-limit:] if limit is not None else turns
+    lines, lost = await stub_lines(
+        rows.thread_id,
+        page_turns,
+        queries_by_turn,
+        rows.responses_by_turn,
+        rows.open_runs,
     )
-    lost = lost_turns(responses, sorted(page_turns), rows.open_runs)
     if lost:
         logger.error(
-            "[REPLAY] %s replays from stored events, which turns %s do not "
-            "have; they replay without their content",
+            "[REPLAY] %s replays as stubs, and turns %s archived no stream; "
+            "they replay without their answer",
             rows.thread_id,
             lost,
             exc_info=cause,
         )
     return ReplayPage(
-        lines=[
-            line_of(item)
-            for item in build_sse_replay_items(
-                rows.thread_id, page_queries, responses, rows.open_runs
-            )
-        ],
-        first_turn_index=min(page_turns) if page_turns else None,
+        lines=[line for ti in page_turns for line in lines[ti]],
+        first_turn_index=page_turns[0] if page_turns else None,
         has_more=len(page_turns) < len(turns),
     )
-
-
-async def build_checkpoint_replay_items(
-    rows: ThreadRows,
-    branch_tip_checkpoint_id: str | None = None,
-    last_n_turns: int | None = None,
-    *,
-    cache: bool = True,
-) -> list[dict[str, Any]]:
-    """The newest ``last_n_turns`` (or every turn) as decoded replay items,
-    widget data inlined. Task cards are left unstamped."""
-    page = await build_replay_page(
-        rows, branch_tip_checkpoint_id, limit=last_n_turns, cache=cache
-    )
-    out = [line.item() for line in page.lines]
-    await widgets._resolve_widget_data_refs(out)
-    return out
 
 
 async def finish_lines(
@@ -393,16 +351,12 @@ async def project_turns(
     *,
     turn_indexes: list[Any] | None = None,
     last_n_turns: int | None = None,
-    derive: Derive | None = None,
-    reproject: bool = False,
     claims_pass: bool = True,
 ) -> dict[Any, list[Line]]:
     """Bring the given turns' stored lines up to date (or the newest
     ``last_n_turns``), so the next read streams them without projecting.
     Returns the lines of every selected turn with a checkpoint boundary.
 
-    ``reproject`` projects every selected turn, current lines or not, as
-    ``derive`` does, which only sees the turns it projects (see ``Derive``).
     Without ``claims_pass``, turns that need the thread's run launches placed
     raise ``ClaimsPassNeeded`` rather than read the whole thread for them."""
     reader = CheckpointHistoryReader.get_instance()
@@ -422,8 +376,7 @@ async def project_turns(
         inputs,
         anchored,
         selected,
-        cold.Policy(claims_pass=claims_pass, derive=derive),
-        reproject=reproject or derive is not None,
+        cold.Policy(claims_pass=claims_pass),
     )
 
 
@@ -490,10 +443,8 @@ def _select_page(
 
     A ``None`` anchor is a persisted turn with no committed boundary (the
     in-flight active turn, or a run that never checkpointed), replayed as its
-    user_message stub. One older than the page's oldest checkpointed turn
-    belongs to an earlier page. A *completed* response with no boundary
-    raises: a completed turn always persists its boundary pointer, so
-    checkpoints can't cover it.
+    stub. One older than the page's oldest checkpointed turn belongs to an
+    earlier page.
     """
     in_range = [
         (ti, a) for ti, a in anchored if before_turn is None or ti < before_turn
@@ -512,10 +463,6 @@ def _select_page(
             continue
         if before_turn is not None and ti >= before_turn:
             continue
-        if (inputs.responses_by_turn.get(ti) or {}).get("status") == "completed":
-            raise CheckpointReplayUnavailable(
-                f"persisted turn {ti} completed but has no checkpoint boundary"
-            )
         chosen.append((ti, None))
     chosen.sort(key=lambda p: p[0])
     return chosen, has_more
@@ -550,18 +497,12 @@ async def _turn_lines(
     anchored: list[tuple[Any, TurnAnchor]],
     selected: list[tuple[Any, TurnAnchor]],
     policy: cold.Policy,
-    *,
-    reproject: bool = False,
 ) -> dict[Any, list[Line]]:
-    """Lines for the selected turns: stored ones whose key still matches
-    (unless ``reproject`` or the policy reads no cache), the rest projected
-    (and stored when final)."""
+    """Lines for the selected turns: stored ones whose key still matches,
+    the rest projected (and stored when final)."""
     if not selected:
         return {}
-    if reproject or not policy.cache:
-        out, stale = {}, selected
-    else:
-        out, stale = await _stored_lines(inputs, selected)
+    out, stale = await _stored_lines(inputs, selected)
     if stale:
         out.update(await cold.project_stale(reader, inputs, anchored, stale, policy))
     return out

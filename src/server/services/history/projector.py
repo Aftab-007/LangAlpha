@@ -107,8 +107,8 @@ def history_events_to_sse(
 ) -> list[dict[str, Any]]:
     """Render history events as ``{"event": type, "data": dict}`` items.
 
-    Output items match the persisted ``sse_events`` shape, so the replay
-    endpoint emits checkpoint-sourced and stored events identically.
+    Output items take the live wire's shape, which table-sourced rows and
+    legacy facts share, so the replay endpoint emits every source alike.
     """
     items: list[dict[str, Any]] = []
     for event in events:

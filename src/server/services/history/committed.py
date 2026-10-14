@@ -27,6 +27,7 @@ from langchain_core.messages import ToolMessage
 
 from src.server.database.conversation import turn_slices as slices_db
 from src.server.database.conversation.replay_rows import get_branch_pointer
+from src.server.database.pool import DATABASE_UNAVAILABLE
 from src.server.services.history import slices
 from src.server.services.history.projector import (
     history_events_to_sse,
@@ -52,8 +53,9 @@ async def committed_texts(thread_id: str, turns: Mapping[str, Any]) -> dict[str,
     projected first, as its settle would have. A turn whose lanes wait on the
     thread's claims pass is read straight from its checkpoints instead: the
     pass places subagent launches, which its main lane never needs. A
-    response left out has no checkpoint boundary or its read failed, so its
-    stored events are the caller's to read."""
+    response left out has no checkpoint boundary or its read failed. A
+    database fault raises instead: its turns would read as ones that said
+    nothing."""
     from src.server.services.history.replay.refresh import refresh_thread
 
     anchors = await _anchors(thread_id, turns)
@@ -90,10 +92,10 @@ async def _anchors(
     except (CheckpointBranchTipNotFound, CheckpointReplayUnavailable) as e:
         logger.debug("no branch to read for %s: %s", thread_id, e)
         return {}
+    except DATABASE_UNAVAILABLE:
+        raise
     except Exception:
-        logger.warning(
-            "branch read failed for %s; using stored events", thread_id, exc_info=True
-        )
+        logger.warning("branch read failed for %s", thread_id, exc_info=True)
         return {}
     return {rid: paired[ti] for rid, ti in turns.items() if ti in paired}
 
@@ -108,7 +110,7 @@ async def _slice_texts(
         serde = CheckpointHistoryReader.get_instance().serde
         rows = await slices_db.get_turn_slices(list(anchors))
     except Exception:
-        logger.warning("turn slice read failed; using stored events", exc_info=True)
+        logger.warning("turn slice read failed", exc_info=True)
         return {}
     return _span_texts(thread_id, slices.stored_spans(serde, anchors, rows))
 
@@ -121,8 +123,10 @@ async def _checkpoint_texts(
         turns = await CheckpointHistoryReader.get_instance().aget_turn_slices(
             thread_id, list(anchors.values())
         )
+    except DATABASE_UNAVAILABLE:
+        raise
     except Exception:
-        logger.warning("turn read failed; using stored events", exc_info=True)
+        logger.warning("turn read failed", exc_info=True)
         return {}
     return _span_texts(thread_id, dict(zip(anchors, turns)))
 
@@ -138,7 +142,7 @@ def _span_texts(
             )
         except Exception:
             logger.warning(
-                "turn slice projection failed for response %s; using stored events",
+                "turn slice projection failed for response %s",
                 response_id,
                 exc_info=True,
             )

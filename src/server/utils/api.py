@@ -189,6 +189,30 @@ async def get_stamp_auth(
 StampThreadAuth = Annotated[Optional[str], Depends(get_stamp_auth)]
 
 
+def database_unavailable(
+    action: str, logger: logging.Logger, error: Exception
+) -> HTTPException:
+    """The 503 a route answers for a database that is busy or unreachable
+    (``pool.DATABASE_UNAVAILABLE``), which a retry can clear.
+
+    The driver's text names the database host, so it stays in the log, and
+    the log keeps of a server's error what ``failure`` allows.
+    """
+    fields, trace = failure(error)
+    if trace is None:
+        logger.warning(
+            f"Database unavailable {action}: {fields['error_type']} "
+            f"(sqlstate {fields['sqlstate']})"
+        )
+    else:
+        logger.warning(f"Database unavailable {action}: {error}")
+    return HTTPException(
+        status_code=503,
+        detail="Database unavailable, please retry",
+        headers={"Retry-After": "2"},
+    )
+
+
 def handle_api_exceptions(
     action: str,
     logger: logging.Logger,
