@@ -494,15 +494,16 @@ export function handleHistoryTextContent({ assistantMessageId, content, finishRe
  * apart for the bubble's one card. Without the mark a reload shows an empty
  * reply with no Retry, though the turn's status says it failed.
  */
-export function handleHistoryError({ assistantMessageId, failure, setMessages }: {
+export function handleHistoryError({ assistantMessageId, failure, unloaded = false, setMessages }: {
   assistantMessageId: string;
   failure: StructuredError;
+  unloaded?: boolean;
   setMessages: SetMessages;
 }): void {
   setMessages((prev: MessageRecord[]) =>
     prev.map((msg: MessageRecord) =>
       msg.id === assistantMessageId
-        ? { ...msg, isStreaming: false, error: true, structuredError: failure }
+        ? { ...msg, isStreaming: false, error: true, structuredError: failure, ...(unloaded ? { unloaded } : {}) }
         : msg
     )
   );

@@ -540,6 +540,10 @@ export type AssistantMessage = {
    *  streamed still renders as its reply. Absent when the failure shows in
    *  the chat input's banner instead. */
   structuredError?: StructuredError;
+  /** A reply replay could not load (`replay_unavailable`). Its turn ran to
+   *  the end, so it offers a Regenerate: the server refuses a Retry for a
+   *  run that did not fail. */
+  unloaded?: boolean;
   // Set when the user hard-stopped this turn (live finalize or history replay
   // of a stopped turn). Drives the per-message "⏹ Stopped" chip.
   stopped?: boolean;

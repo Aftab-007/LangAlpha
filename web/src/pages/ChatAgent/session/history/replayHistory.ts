@@ -327,6 +327,7 @@ export async function loadConversationHistory(
             assistantMessageId: msgId,
             failure: readStreamFailure(event, text)
               ?? { message: text || 'An error occurred while processing your request.' },
+            unloaded: event.type === 'replay_unavailable',
             setMessages: setMessagesForHandlers,
           });
         }
