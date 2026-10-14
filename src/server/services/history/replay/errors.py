@@ -16,7 +16,8 @@ class ClaimsPassNeeded(CheckpointReplayUnavailable):
 
 class ClaimsUnavailable(CheckpointReplayUnavailable):
     """The whole-thread claims pass failed, or ran and still left a launch
-    unplaced: no turn of the read can be told apart by retrying it alone."""
+    unplaced: a turn that launched a run cannot be projected, though one
+    that launched none still can, alone."""
 
 
 class ClaimsNeeded(Exception):

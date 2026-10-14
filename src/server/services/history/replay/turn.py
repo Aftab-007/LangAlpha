@@ -58,6 +58,8 @@ class Inputs:
     usage_by_response: dict[str, Any]
     provenance_by_response: dict[str, Any]
     run_facts: replay_facts.RunFacts
+    # The run of each turn still going (``ThreadRows.open_runs``).
+    open_runs: dict[Any, str]
 
     @classmethod
     def of(cls, rows: ThreadRows) -> Inputs:
@@ -73,6 +75,7 @@ class Inputs:
             usage_by_response=items._usage_rows_by_response(rows.usages),
             provenance_by_response=items._rows_by_response(rows.provenance, many=True),
             run_facts=replay_facts.RunFacts.of(rows.run_facts),
+            open_runs=rows.open_runs,
         )
 
     def response_id(self, turn_index: Any) -> str | None:

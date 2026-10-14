@@ -552,8 +552,9 @@ def _answers(page):
 
 async def test_a_failed_claims_pass_runs_once_per_read(monkeypatch):
     """Retrying turn by turn cannot place a run the whole-thread pass could
-    not: the batches that need it replay from storage, the one that does not
-    projects, and the pass is never run again in the read."""
+    not: only the turns that launched one replay from storage, every other
+    turn of their batches projects, and the pass is never run again in the
+    read."""
     store = _slice_store(monkeypatch)
     _seal_evidence(monkeypatch)
     size, n = _three_batches(monkeypatch)
@@ -563,9 +564,10 @@ async def test_a_failed_claims_pass_runs_once_per_read(monkeypatch):
 
     page = await build_replay_page(thread_rows(queries, responses), turn_fallback=True)
 
+    projected = [i for i in range(n) if i not in (0, 2 * size)]
     assert place.await_count == 1
-    assert _answers(page) == {f"answer {i}" for i in range(size, 2 * size)}
-    assert sorted(store.lined) == sorted(f"tail-{i}" for i in range(size, 2 * size))
+    assert _answers(page) == {f"answer {i}" for i in projected}
+    assert sorted(store.lined) == sorted(f"tail-{i}" for i in projected)
 
 
 async def test_a_failed_claims_pass_is_unavailable_without_turn_fallback(

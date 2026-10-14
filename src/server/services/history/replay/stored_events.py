@@ -1,9 +1,10 @@
 """Replay from a turn's stored ``sse_events``, and the re-read that brings
 them to a turn projected afresh.
 
-A turn that cannot be projected replays from its stored events (or as a
-stub), and its lines are never stored, so nothing here is digested into the
-lines epoch.
+A turn that cannot be projected replays from its stored events, and its
+lines are never stored, so nothing here is digested into the lines epoch.
+Only turns settled before #533 have stored events; a newer one replays as
+unavailable (``unavailable_item``).
 """
 
 from __future__ import annotations
@@ -64,8 +65,10 @@ def build_sse_replay_items(
     emits either source through one loop. The response row closes the turn
     here too, by the same rule: its error stamps its kind on the stored
     frame, or stands in for a frame the stored events lack, and a user
-    stop's close is added when they have none. ``open_runs`` names the run of
-    a turn still going (``ThreadRows.open_runs``).
+    stop's close is added when they have none. A settled turn with no
+    stored events closes on ``unavailable_item`` when it answered (see
+    ``_lost``). ``open_runs`` names the run of a turn still going
+    (``ThreadRows.open_runs``).
     """
     open_runs = open_runs or {}
     out: list[dict[str, Any]] = []
@@ -83,13 +86,11 @@ def build_sse_replay_items(
                 thread_id, query, response, open_runs.get(turn_index)
             )
         )
-        turn_items = [
-            {"event": event["event"], "data": dict(event["data"])}
-            for event in stored_merge._stored_events(response)
-            if stored_merge._valid_stored(event)
-        ]
+        turn_items = _valid_events(response)
         if response_id and response_id not in terminals_emitted:
             terminals = items.terminal_items(thread_id, response, turn_items)
+            if not terminals and _lost(response, open_runs.get(turn_index)):
+                terminals.append(unavailable_item(thread_id))
             if terminals:
                 terminals_emitted.add(response_id)
                 turn_items += terminals
@@ -99,21 +100,88 @@ def build_sse_replay_items(
     return out
 
 
+def unavailable_item(thread_id: str) -> dict[str, Any]:
+    """The close of a turn replay has nothing for: no projection, no stored
+    events. Without it the turn reads as an answer of nothing. An ``error``
+    frame is what a client already shows on the turn's reply; ``internal``
+    words it as this service's fault, which it is, whatever the run did. Its
+    ``type`` tells the client the run did not fail, so the reply offers a
+    Regenerate rather than a Retry, which reruns only a failed run."""
+    return {
+        "event": "error",
+        "data": {
+            "thread_id": thread_id,
+            "error": "This response could not be loaded.",
+            "type": "replay_unavailable",
+            "error_kind": "internal",
+        },
+    }
+
+
+def lost_turns(
+    responses_by_turn: dict[Any, dict[str, Any]],
+    turn_indexes: list[Any],
+    open_runs: dict[Any, str] | None = None,
+) -> list[Any]:
+    """The turns whose fallback replay carries none of their content, for the
+    caller's log: the fallback is quiet otherwise, and the turns it loses are
+    the reason to look."""
+    open_runs = open_runs or {}
+    return [
+        ti
+        for ti in turn_indexes
+        if _lost(responses_by_turn.get(ti), open_runs.get(ti))
+    ]
+
+
+def _valid_events(response: dict[str, Any] | None) -> list[dict[str, Any]]:
+    return [
+        {"event": event["event"], "data": dict(event["data"])}
+        for event in stored_merge._stored_events(response)
+        if stored_merge._valid_stored(event)
+    ]
+
+
+# A turn is interrupted only by a pause the checkpoint holds, raised by a
+# tool call the model made or by the credit gate past spend the turn already
+# made, so it always streamed something.
+_ANSWERED = ("completed", "interrupted")
+
+
+def _lost(response: dict[str, Any] | None, open_run: str | None) -> bool:
+    """A turn that answered, or paused on an interrupt after answering,
+    whose stored events were never written: the answer is not here. A turn
+    that failed or was stopped may have produced nothing (a stop before its
+    first checkpoint), and its row closes it on its error or stop, so it
+    reads as ended. A turn still going replays its stub and attaches live,
+    so it has nothing to lose yet."""
+    return (
+        response is not None
+        and open_run is None
+        and response.get("status") in _ANSWERED
+        and not isinstance(response.get("sse_events"), list)
+    )
+
+
 async def fallback_lines(
     inputs: Inputs, turn_indexes: list[Any]
-) -> dict[Any, list[Line]]:
-    """Each turn's replay from its stored events, or its stub without them."""
+) -> tuple[dict[Any, list[Line]], list[Any]]:
+    """Each turn's replay from its stored events, or its user message and
+    ``unavailable_item`` without them; and the turns replayed so
+    (``lost_turns``)."""
     responses = await with_stored_events(
         inputs.responses_by_turn, turn_indexes, verbatim=True
     )
-    return {
+    lines = {
         ti: [
             line_of(item)
             for item in build_sse_replay_items(
                 inputs.thread_id,
                 inputs.queries_by_turn.get(ti, []),
                 {ti: responses[ti]} if ti in responses else {},
+                inputs.open_runs,
             )
         ]
         for ti in turn_indexes
     }
+    return lines, lost_turns(responses, turn_indexes, inputs.open_runs)
