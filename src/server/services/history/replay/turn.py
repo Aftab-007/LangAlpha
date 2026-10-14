@@ -202,10 +202,9 @@ def _collect_image_url_map(records: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def _fill_token_thresholds(turn_items: list[dict[str, Any]]) -> None:
-    """Stamp the UI-ring threshold on projected token_usage events.
-
-    The live handler adds it server-side (config, not graph state); replay
-    uses the same resolver so both wires carry the same value.
+    """Stamp the UI-ring threshold on projected token_usage events that lack
+    one: a message saved before the compaction middleware stamped the
+    threshold it ran under carries none, so it gets the deployment default.
     """
     for item in turn_items:
         data = item["data"]

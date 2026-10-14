@@ -51,6 +51,7 @@ from ptc_agent.agent.middleware.compaction.utils import (
     find_group_safe_cutoff,
     get_effective_messages,
     measured_tokens,
+    stamp_context_threshold,
 )
 from ptc_agent.agent.middleware.compaction.offloading import (
     is_idle,
@@ -266,7 +267,8 @@ class CompactionMiddleware(AgentMiddleware):
 
     def _extract_token_usage(self, response: ModelResponse) -> tuple[int, int]:
         """The (input, output) tokens the newest AI message reports, emitted
-        to the frontend, or (0, 0) when none does."""
+        to the frontend with the threshold they fill and stamped with it for
+        replay, or (0, 0) when none does."""
         for msg in reversed(response.result or ()):
             if not isinstance(msg, AIMessage):
                 continue
@@ -277,12 +279,14 @@ class CompactionMiddleware(AgentMiddleware):
                 logger.debug(
                     "[Compaction] Token usage: input=%d, output=%d", input_tokens, output_tokens
                 )
+                stamp_context_threshold(msg, self._token_threshold)
                 self._emit_context_signal(
                     "token_usage",
                     "complete",
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     total_tokens=input_tokens + output_tokens,
+                    threshold=self._token_threshold,
                 )
                 return (input_tokens, output_tokens)
         return (0, 0)

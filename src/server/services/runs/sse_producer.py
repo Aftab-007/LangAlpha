@@ -564,11 +564,12 @@ class RunSSEProducer:
                                         "total_tokens", "summary_length", "summary_text",
                                         "original_message_count", "source",
                                         "summary_tokens", "truncated_count", "error",
-                                        "kind", "offloaded_args", "offloaded_reads"):
+                                        "kind", "offloaded_args", "offloaded_reads",
+                                        "threshold"):
                                 if key in event_data:
                                     cw_data[key] = event_data[key]
                             if event_data.get("action") == "token_usage":
-                                cw_data["threshold"] = self._resolve_token_threshold()
+                                cw_data.setdefault("threshold", self._resolve_token_threshold())
 
                             action = event_data.get("action", "")
                             signal = event_data.get("signal", "")

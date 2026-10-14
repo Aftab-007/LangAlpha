@@ -638,6 +638,23 @@ def test_token_usage_projected_after_message_content():
     assert data["input_tokens"] == 900
     assert data["output_tokens"] == 100
     assert data["total_tokens"] == 1000
+    # Saved before the stamp: replay fills in the deployment default.
+    assert "threshold" not in data
+
+
+def test_token_usage_carries_the_threshold_its_call_ran_under():
+    # The turn's own preset, not the deployment default: the threshold is per
+    # turn and only the checkpoint outlives it.
+    from ptc_agent.agent.middleware.compaction.utils import stamp_context_threshold
+
+    message = AIMessage(
+        content="answer",
+        id="ai-1",
+        usage_metadata={"input_tokens": 900, "output_tokens": 100, "total_tokens": 1000},
+    )
+    stamp_context_threshold(message, 300000)
+    items = _sse([message])
+    assert items[1]["data"]["threshold"] == 300000
 
 
 def test_workflow_run_items_whitelists_fields_and_sanitizes_errors():
