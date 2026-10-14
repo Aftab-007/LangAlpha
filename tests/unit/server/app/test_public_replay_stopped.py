@@ -26,35 +26,6 @@ _THREAD_BY_TOKEN = "src.server.app.share_access.get_thread_by_share_token"
 _REPLAY_DATA = "src.server.app.public.get_replay_thread_data"
 _TASK_DETAILS = "src.server.services.history.task_status.resolve_task_details"
 
-_TEXT = {
-    "event": "message_chunk",
-    "data": {
-        "agent": "model:t1",
-        "id": "lc-1",
-        "role": "assistant",
-        "content_type": "text",
-        "content": "I'll grab current yields.",
-    },
-}
-_SEARCH = {
-    "event": "tool_calls",
-    "data": {
-        "agent": "model:t1",
-        "id": "lc-1",
-        "role": "assistant",
-        "tool_calls": [{"name": "web_search", "args": {}, "id": "tc-1"}],
-    },
-}
-_CLOSE = {
-    "event": "message_chunk",
-    "data": {
-        "agent": "model:t1",
-        "id": "lc-1",
-        "role": "assistant",
-        "finish_reason": "stopped",
-    },
-}
-
 
 @pytest_asyncio.fixture
 async def client():
@@ -67,7 +38,7 @@ async def client():
         yield c
 
 
-async def _closes(client, sse_events: list[dict], metadata: dict) -> list[dict]:
+async def _closes(client, metadata: dict) -> list[dict]:
     thread = {
         "conversation_thread_id": _THREAD_ID,
         "workspace_id": "ws-1",
@@ -79,8 +50,9 @@ async def _closes(client, sse_events: list[dict], metadata: dict) -> list[dict]:
         "conversation_response_id": _RESPONSE_ID,
         "status": "cancelled",
         "metadata": metadata,
-        "sse_events": sse_events,
     }
+    # No commit pointer, so the turn replays as its stub and the close names
+    # no message.
     with (
         patch(_THREAD_BY_TOKEN, new=AsyncMock(return_value=thread)),
         patch(
@@ -113,32 +85,8 @@ async def _closes(client, sse_events: list[dict], metadata: dict) -> list[dict]:
     return closes
 
 
-async def test_stop_between_messages_is_closed_on_the_shared_stream(client):
-    closes = await _closes(client, [_TEXT, _SEARCH], {"cancelled_by_user": True})
-
-    assert closes == [
-        {
-            "thread_id": _THREAD_ID,
-            "id": "lc-1",
-            "role": "assistant",
-            "finish_reason": "stopped",
-            "agent": "model:t1",
-            "turn_index": 0,
-            "response_id": _RESPONSE_ID,
-        }
-    ]
-
-
-async def test_an_archived_close_is_not_doubled(client):
-    closes = await _closes(
-        client, [_TEXT, _SEARCH, _CLOSE], {"cancelled_by_user": True}
-    )
-
-    assert len(closes) == 1
-
-
-async def test_a_stop_before_any_assistant_event_is_closed(client):
-    closes = await _closes(client, [], {"cancelled_by_user": True})
+async def test_a_user_stop_is_closed_on_the_shared_stream(client):
+    closes = await _closes(client, {"cancelled_by_user": True})
 
     assert closes == [
         {
@@ -152,6 +100,6 @@ async def test_a_stop_before_any_assistant_event_is_closed(client):
 
 
 async def test_a_system_cancel_gets_no_close(client):
-    closes = await _closes(client, [_TEXT, _SEARCH], {"cancelled_by_user": False})
+    closes = await _closes(client, {"cancelled_by_user": False})
 
     assert closes == []

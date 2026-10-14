@@ -85,7 +85,7 @@ async def test_a_lane_write_replaces_its_lane_only(response_row, db_conn):
             conversation_response_id=response_row,
             conversation_thread_id=(await _row(db_conn, response_row))["thread_id"],
             turn_index=0,
-            sse_events=[MAIN_PROVENANCE],
+            provenance=[MAIN_PROVENANCE],
             strict=True,
             lanes=(MAIN_PROVENANCE_LANE,),
         )

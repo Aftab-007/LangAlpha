@@ -1,23 +1,21 @@
-"""The legacy facts backfill against real Postgres.
+"""Legacy facts against real Postgres.
 
-A backfill write races the run's own writers, so only a real database can show
-that it keeps the keys they set, lands only on the row version it derived
-from, and is not repeated; and that a backfilled row's events are left out of
-the replay read. The checkpoint side is the unit suites' mocked reader: the rows
-are what is under test here.
+A legacy row's facts reach its projection only through the replay read, which
+must return them with the version of the row they came from; the checkpoint
+side is the unit suites' mocked reader. A credit pause settles on the words
+its finalize stamped.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections import Counter
 from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from langchain_core.messages import AIMessage
 
-from scripts.utils import backfill_replay_facts as backfill
+from src.server.database.replay_facts import LEGACY_KEY
 from src.server.services.history.replay import legacy
 from tests.unit.server.services.history.replay_builders import (
     ThreadHistory,
@@ -34,13 +32,23 @@ STORED = [
     {"event": "message_chunk", "data": {"id": "lc-1", "content_type": "text", "content": "answer"}},
     {"event": "context_window", "data": {"action": "offload", "kind": "tool_args"}},
 ]
-LATER = {"event": "provenance", "data": {"source_type": "web", "identifier": "https://a.example"}}
+# What STORED adds to the turn's projection, by the projected row it follows.
+LEGACY = {
+    "v": legacy.FACTS_VERSION,
+    "merge": {
+        "anchors": [["message_chunk", "main", "ai-1", "text"]],
+        "signals": [
+            {"event": "context_window", "data": {"action": "offload", "kind": "tool_args"}, "at": 0}
+        ],
+    },
+}
 
 
 @pytest_asyncio.fixture
 async def turn(seed_workspace, seed_response, patched_get_db_connection, monkeypatch):
-    """A one-turn thread whose completed row has stored events and the run
-    facts its finalize wrote, over a checkpoint that projects the turn."""
+    """A one-turn legacy thread over a checkpoint that projects the turn: its
+    completed row keeps its archived events, the run facts its finalize
+    wrote, and the legacy facts those events were resolved to."""
     from src.server.database.conversation import create_query, create_thread
 
     thread_id = str(uuid.uuid4())
@@ -73,7 +81,7 @@ async def turn(seed_workspace, seed_response, patched_get_db_connection, monkeyp
     await sql(
         "UPDATE conversation_responses SET replay_facts = %s::jsonb "
         "WHERE conversation_response_id = %s",
-        (_json(RUN_FACTS), response_id),
+        (_json({**RUN_FACTS, LEGACY_KEY: LEGACY}), response_id),
     )
     _cache_probe(monkeypatch)
     _mock_reader(
@@ -83,7 +91,7 @@ async def turn(seed_workspace, seed_response, patched_get_db_connection, monkeyp
 
     async def row():
         return await sql(
-            "SELECT replay_facts, sse_events, metadata, xmin::text AS xmin "
+            "SELECT xmin::text AS xmin "
             "FROM conversation_responses WHERE conversation_response_id = %s",
             (response_id,),
         )
@@ -97,185 +105,47 @@ def _json(value) -> str:
     return json.dumps(value)
 
 
-async def _backfill(thread_id: str) -> Counter:
-    stats: Counter = Counter()
-    mismatched: list[str] = []
-    await backfill._backfill_thread(thread_id, stats, mismatched)
-    assert mismatched == []
-    return stats
-
-
 async def _lines(thread_id: str):
     """The thread's turn 0 as a replay projects it now, from its rows."""
     from src.server.database.conversation import get_replay_thread_data
     from src.server.services.history.replay import project_turns
 
     rows = await get_replay_thread_data(thread_id)
-    lines = await project_turns(rows, TIP, turn_indexes=[0], reproject=True)
+    lines = await project_turns(rows, TIP, turn_indexes=[0])
     return lines[0]
 
 
-async def test_a_backfill_keeps_live_keys_runs_once_and_ends_event_reads(turn):
+async def test_a_legacy_row_replays_with_the_facts_its_read_returns(turn):
     from src.server.database.conversation import get_replay_responses
 
-    before = await _lines(turn.thread_id)
+    read = (await get_replay_responses([turn.response_id]))[turn.response_id]
 
-    stats = await _backfill(turn.thread_id)
-
-    assert (stats["turns/written"], stats["turns/refreshed"]) == (1, 1)
-    facts = (await turn.row())["replay_facts"]
-    assert {k: facts[k] for k in RUN_FACTS} == RUN_FACTS
-    assert facts["legacy"]["v"] == legacy.FACTS_VERSION
-    assert [s["event"] for s in facts["legacy"]["merge"]["signals"]] == ["context_window"]
-
-    # A rerun finds nothing pending and leaves the row's version alone.
-    version = (await turn.row())["xmin"]
-    assert await _backfill(turn.thread_id) == Counter()
-    assert (await turn.row())["xmin"] == version
-
-    backfilled = await get_replay_responses(
-        [turn.response_id], legacy_facts=legacy.FACTS_VERSION
-    )
-    assert backfilled[turn.response_id]["sse_events"] is None
-    verbatim = await get_replay_responses([turn.response_id])
-    assert verbatim[turn.response_id]["sse_events"] == STORED
-
-    # With the column gone the turn replays the same.
-    await turn.sql(
-        "UPDATE conversation_responses SET sse_events = NULL "
-        "WHERE conversation_response_id = %s",
-        (turn.response_id,),
-    )
-    assert await _lines(turn.thread_id) == before
+    assert read["replay_facts"] == {**RUN_FACTS, LEGACY_KEY: LEGACY}
+    assert str(read["xmin"]) == (await turn.row())["xmin"]
+    assert "sse_events" not in read
+    assert [line.event for line in await _lines(turn.thread_id)] == [
+        "user_message",
+        "message_chunk",
+        "context_window",
+    ]
 
 
-async def test_a_row_without_stored_events_is_marked_known_empty(turn):
-    await turn.sql(
-        "UPDATE conversation_responses SET sse_events = NULL "
-        "WHERE conversation_response_id = %s",
-        (turn.response_id,),
-    )
-
-    await _backfill(turn.thread_id)
-
-    facts = (await turn.row())["replay_facts"]
-    assert facts["legacy"] == {"v": legacy.FACTS_VERSION}
-    assert await backfill._pending_rows(turn.thread_id) == {}
-
-
-@pytest.mark.parametrize("events", [None, STORED], ids=["no_events", "with_events"])
-async def test_a_turn_without_a_boundary_is_marked_only_when_it_stored_nothing(
-    turn, seed_response, events
-):
-    """A turn the checkpoints do not cover yet replays as its stub; facts
-    known empty would hide its events from the projection that covers it."""
-    stub_id = str(uuid.uuid4())
-    await seed_response(stub_id, turn.thread_id, 1, status="interrupted", sse_events=events)
-
-    stats = await _backfill(turn.thread_id)
-
-    facts = await turn.sql(
-        "SELECT replay_facts FROM conversation_responses WHERE conversation_response_id = %s",
-        (stub_id,),
-    )
-    if events is None:
-        assert stats["turns/stub"] == 1
-        assert facts["replay_facts"]["legacy"] == {"v": legacy.FACTS_VERSION}
-        assert set(await backfill._pending_rows(turn.thread_id)) == set()
-    else:
-        assert stats["turns/stub_with_events"] == 1
-        assert "legacy" not in (facts["replay_facts"] or {})
-        assert set(await backfill._pending_rows(turn.thread_id)) == {1}
-
-
-async def test_a_row_written_meanwhile_is_left_for_the_next_run(turn, monkeypatch):
-    real_write = backfill._write_facts
-
-    async def after_a_live_append(rows):
-        # An older server's append during a cutover, which moves the row.
-        await turn.sql(
-            "UPDATE conversation_responses "
-            "SET sse_events = COALESCE(sse_events, '[]'::jsonb) || %s::jsonb "
-            "WHERE conversation_thread_id = %s AND turn_index = 0",
-            (_json([LATER]), turn.thread_id),
-        )
-        return await real_write(rows)
-
-    monkeypatch.setattr(backfill, "_write_facts", after_a_live_append)
-    stats = await _backfill(turn.thread_id)
-
-    assert (stats["turns/written"], stats["turns/moved"]) == (0, 1)
-    assert stats["turns/refreshed"] == 0
-    assert "legacy" not in (await turn.row())["replay_facts"]
-
-    monkeypatch.setattr(backfill, "_write_facts", real_write)
-    assert (await _backfill(turn.thread_id))["turns/written"] == 1
-    signals = (await turn.row())["replay_facts"]["legacy"]["merge"]["signals"]
-    assert [s["event"] for s in signals] == ["context_window", "provenance"]
-
-
-async def test_facts_that_would_replay_differently_are_never_written(turn, monkeypatch):
-    """A row cannot hold a NUL, so facts carrying one would lose it."""
-    from src.server.services.history.replay import stored_merge
-
-    real_derive = stored_merge.derive_turn
-
-    def derive_with_a_nul(*args, **kwargs):
-        facts = real_derive(*args, **kwargs)
-        facts["merge"]["signals"][0]["data"]["kind"] = "tool\x00args"
-        return facts
-
-    monkeypatch.setattr(stored_merge, "derive_turn", derive_with_a_nul)
-    stats: Counter = Counter()
-    mismatched: list[str] = []
-    await backfill._backfill_thread(turn.thread_id, stats, mismatched)
-
-    assert mismatched == [f"{turn.thread_id} turn 0"]
-    assert (stats["turns/mismatch"], stats["turns/written"]) == (1, 0)
-    assert (await turn.row())["replay_facts"] == RUN_FACTS
-    assert set(await backfill._pending_rows(turn.thread_id)) == {0}
-
-
-async def test_credit_pauses_are_stamped_once(turn, seed_response):
+async def test_a_credit_pause_settles_on_its_stamped_words(turn, seed_response):
     from src.server.contracts.status import INTERRUPT_REASON_CREDIT_PAUSE
     from src.server.database.automation_executions import get_settling_run
+    from src.server.services.automation_settlement import run_failure_message
 
-    def pause(message):
-        request = {"type": INTERRUPT_REASON_CREDIT_PAUSE}
-        if message is not None:
-            request["message"] = message
-        return [{"event": "interrupt", "data": {"action_requests": [request]}}]
+    response_id = str(uuid.uuid4())
+    await seed_response(response_id, turn.thread_id, 1, status="interrupted")
+    await turn.sql(
+        "UPDATE conversation_responses SET interrupt_reason = %s, "
+        "metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb "
+        "WHERE conversation_response_id = %s",
+        (
+            INTERRUPT_REASON_CREDIT_PAUSE,
+            _json({"credit_pause_message": "Stamped."}),
+            response_id,
+        ),
+    )
 
-    ids = {}
-    for turn_index, (name, events, metadata) in enumerate(
-        [
-            ("worded", pause("Out of credits."), None),
-            ("wordless", pause(None), None),
-            ("finalized", pause("Older words."), {"credit_pause_message": "Stamped."}),
-        ],
-        start=1,
-    ):
-        ids[name] = str(uuid.uuid4())
-        await seed_response(
-            ids[name], turn.thread_id, turn_index, status="interrupted", sse_events=events
-        )
-        await turn.sql(
-            "UPDATE conversation_responses SET interrupt_reason = %s, "
-            "metadata = metadata || %s::jsonb WHERE conversation_response_id = %s",
-            (INTERRUPT_REASON_CREDIT_PAUSE, _json(metadata or {}), ids[name]),
-        )
-
-    args = SimpleNamespace(thread=[turn.thread_id], workspace=None, user=None, days=None)
-    pending = await backfill._pause_rows(args)
-    assert sorted(pending) == sorted([ids["worded"], ids["wordless"]])
-
-    assert await backfill._stamp_pauses(pending) == (2, 1)
-    assert await backfill._pause_rows(args) == []
-    assert await backfill._stamp_pauses(pending) == (0, 0)
-
-    stamps = {}
-    for name, response_id in ids.items():
-        run = await get_settling_run(response_id)
-        assert run["sse_events"] is None  # settling no longer reads them
-        stamps[name] = run["metadata"]["credit_pause_message"]
-    assert stamps == {"worded": "Out of credits.", "wordless": None, "finalized": "Stamped."}
+    assert run_failure_message(await get_settling_run(response_id)) == "Stamped."

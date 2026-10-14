@@ -20,6 +20,9 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from src.server.services.history.replay import ReplayPage
+from src.server.services.history.replay.items import _user_message_item
+from src.server.services.history.replay.lines import line_of
 from tests.conftest import create_test_app
 from tests.unit.server.services.history.replay_builders import replay_rows
 
@@ -30,6 +33,7 @@ _THREAD_ID = "44444444-4444-4444-8444-444444444444"
 
 _THREAD_BY_TOKEN = "src.server.app.share_access.get_thread_by_share_token"
 _REPLAY_DATA = "src.server.app.public.get_replay_thread_data"
+_READ_PAGE = "src.server.services.history.replay.read_replay_page"
 _TASK_DETAILS = "src.server.services.history.task_status.resolve_task_details"
 
 _RECEIPT = {
@@ -39,16 +43,7 @@ _RECEIPT = {
     "outcome": {"vendor_order_id": "900104"},
 }
 
-_SSE_EVENTS = [
-    {
-        "event": "tool_call_chunks",
-        "data": {
-            "id": "msg-1",
-            "tool_call_chunks": [
-                {"args": "{\"acc_id\": \"1234567\"", "index": 0, "type": "tool_call_chunk"}
-            ],
-        },
-    },
+_TURN_EVENTS = [
     {
         "event": "tool_calls",
         "data": {
@@ -103,8 +98,12 @@ _SSE_EVENTS = [
         "data": {"tool_call_id": "call_abc", "args": {"acc_id": "1234567"}},
     },
     {
-        "event": "message",
-        "data": {"content": "Placed.", "workspace_id": "should-be-stripped"},
+        "event": "message_chunk",
+        "data": {
+            "content_type": "text",
+            "content": "Placed.",
+            "workspace_id": "should-be-stripped",
+        },
     },
 ]
 
@@ -146,24 +145,24 @@ async def client():
 
 async def _replay(
     client,
-    sse_events: list[dict] | None = None,
+    events: list[dict] | None = None,
     later_events: list[dict] | None = None,
     later_metadata: dict | None = None,
     later_query: dict | None = None,
 ) -> tuple[str, list[dict]]:
+    """The shared stream of a page holding ``events`` as turn 0, and
+    ``later_events`` as a turn 1 the owner's ``later_metadata`` resumed
+    (``later_query`` overriding its query row's fields).
+
+    The page is handed over as the owner's assembly returns it, so these pin
+    what the route sends of it, not how it was projected."""
     thread = {
         "conversation_thread_id": _THREAD_ID,
         "workspace_id": "ws-1",
         "share_permissions": {},
     }
     queries = [{"turn_index": 0, "content": "buy one share", "metadata": {}}]
-    responses = [
-        {
-            "turn_index": 0,
-            "conversation_response_id": "55555555-5555-4555-8555-555555555555",
-            "sse_events": sse_events if sse_events is not None else _SSE_EVENTS,
-        }
-    ]
+    turns = [events if events is not None else _TURN_EVENTS]
     if later_events is not None:
         queries.append(
             {
@@ -173,13 +172,15 @@ async def _replay(
                 **(later_query or {}),
             }
         )
-        responses.append(
-            {
-                "turn_index": 1,
-                "conversation_response_id": "66666666-6666-4666-8666-666666666666",
-                "sse_events": later_events,
-            }
-        )
+        turns.append(later_events)
+    items = [
+        item
+        for query, turn in zip(queries, turns)
+        for item in (_user_message_item(_THREAD_ID, query), *turn)
+    ]
+    page = ReplayPage(
+        lines=[line_of(item) for item in items], first_turn_index=0, has_more=False
+    )
     with (
         patch(_THREAD_BY_TOKEN, new=AsyncMock(return_value=thread)),
         patch(
@@ -188,13 +189,14 @@ async def _replay(
                 return_value=replay_rows(
                     {
                         "conversation_thread_id": _THREAD_ID,
-                        "latest_checkpoint_id": None,
+                        "latest_checkpoint_id": "cp-1",
                     },
                     queries,
-                    responses,
+                    [],
                 )
             ),
         ),
+        patch(_READ_PAGE, new=AsyncMock(return_value=(page, "checkpoint"))),
         patch(_TASK_DETAILS, new=AsyncMock(return_value={})),
     ):
         resp = await client.get(f"/api/v1/public/shared/{_SHARE_TOKEN}/replay")
@@ -216,7 +218,7 @@ async def _replay(
 async def test_replay_carries_no_identifier_of_the_order(client):
     body, events = await _replay(client)
     kinds = {e["event"] for e in events}
-    assert not kinds & {"provenance", "tool_call_chunks", "interrupt"}
+    assert not kinds & {"provenance", "interrupt"}
     result = next(e for e in events if e["event"] == "tool_call_result")
     assert result["data"]["content"] == ""
     assert "order_receipt" not in result["data"]["artifact"]
@@ -295,9 +297,9 @@ async def test_replay_still_carries_the_rest_of_the_turn(client):
     _, events = await _replay(client)
     kinds = [e["event"] for e in events]
     assert kinds.count("user_message") == 1
-    assert "message" in kinds
+    assert "message_chunk" in kinds
     assert kinds[-1] == "replay_done"
-    message = next(e for e in events if e["event"] == "message")
+    message = next(e for e in events if e["event"] == "message_chunk")
     assert message["data"]["content"] == "Placed."
     assert "workspace_id" not in message["data"]
 
@@ -326,13 +328,19 @@ async def test_replay_drops_every_interrupt(client, request_):
             "finish_reason": "interrupt",
         },
     }
-    before = {"event": "message", "data": {"content": "Checking."}}
-    after = {"event": "message", "data": {"content": "Done."}}
+    before = {
+        "event": "message_chunk",
+        "data": {"content_type": "text", "content": "Checking."},
+    }
+    after = {
+        "event": "message_chunk",
+        "data": {"content_type": "text", "content": "Done."},
+    }
     body, events = await _replay(client, [before, interrupt, after])
     assert [e["event"] for e in events] == [
         "user_message",
-        "message",
-        "message",
+        "message_chunk",
+        "message_chunk",
         "replay_done",
     ]
     assert request_["type"] not in body

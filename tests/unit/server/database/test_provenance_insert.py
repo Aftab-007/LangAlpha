@@ -216,7 +216,7 @@ class TestSyncProvenanceForResponse:
             conversation_response_id=RESPONSE_ID,
             conversation_thread_id=THREAD_ID,
             turn_index=0,
-            sse_events=events,
+            provenance=events,
             lanes=(MAIN_PROVENANCE_LANE,),
         )
         assert n == 1
@@ -244,7 +244,7 @@ class TestSyncProvenanceForResponse:
                 conversation_response_id=RESPONSE_ID,
                 conversation_thread_id=THREAD_ID,
                 turn_index=0,
-                sse_events=events,
+                provenance=events,
                 lanes=(MAIN_PROVENANCE_LANE,),
             )
         assert n == 0  # swallowed, never re-raised

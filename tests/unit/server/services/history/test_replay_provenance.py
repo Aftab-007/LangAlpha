@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from src.server.services.history.replay import build_checkpoint_replay_items
 from tests.unit.server.services.history.replay_builders import (
     THREAD,
     ThreadHistory,
@@ -20,6 +19,7 @@ from tests.unit.server.services.history.replay_builders import (
     _query,
     _response,
     _turn,
+    build_checkpoint_replay_items,
     thread_rows,
 )
 

@@ -2,8 +2,7 @@
 turn's event archive.
 
 A credit pause's denial is stamped into the run row's metadata, which is what
-settling the run's automation relays; rows a release before the stamp
-finalized still answer from the pause's stored interrupt. The producer's record
+settling the run's automation relays. The producer's record
 (its reasoning durations and provenance) rides the outcome, and a record that
 cannot be read costs the row its facts, never its finalize.
 """
@@ -261,8 +260,7 @@ def test_the_last_credit_pause_with_words_wins():
         )
         == _DENIAL
     )
-    # A later pause without words does not erase the earlier one's, as the
-    # stored-event reader never did either.
+    # A later pause without words does not erase the earlier one's.
     assert (
         _words(
             [_payload(_credit_pause(_DENIAL)), _payload(_credit_pause(message=None))]
@@ -298,41 +296,7 @@ def test_no_credit_pause_words_is_none(interrupts):
     assert _words(interrupts) is None
 
 
-# ─── run_failure_message reads the stamp first ────────────────────────
-
-
-def _paused_row(metadata, *events):
-    return {
-        "status": "interrupted",
-        "interrupt_reason": INTERRUPT_REASON_CREDIT_PAUSE,
-        "conversation_response_id": _KEY[1],
-        "errors": None,
-        "metadata": metadata,
-        "sse_events": list(events) if events else None,
-    }
-
-
-def _pause_event(message):
-    return {"event": "interrupt", "data": {"action_requests": [_credit_pause(message)]}}
-
-
-def test_the_stamp_is_preferred_over_the_stored_events():
-    row = _paused_row({"credit_pause_message": _DENIAL}, _pause_event("Older words."))
-    assert run_failure_message(row) == _DENIAL
-
-
-def test_the_stamp_needs_no_stored_events():
-    # The settlement read leaves the archive out once the stamp is there.
-    assert (
-        run_failure_message(_paused_row({"credit_pause_message": _DENIAL})) == _DENIAL
-    )
-
-
-@pytest.mark.parametrize(
-    "metadata", [{}, None, {"deepthinking": False}], ids=["empty", "none", "unstamped"]
-)
-def test_an_older_row_still_answers_from_its_stored_pause(metadata):
-    assert run_failure_message(_paused_row(metadata, _pause_event(_DENIAL))) == _DENIAL
+# ─── run_failure_message reads the stamp ──────────────────────────────
 
 
 def test_the_stamp_is_read_only_for_a_credit_pause():

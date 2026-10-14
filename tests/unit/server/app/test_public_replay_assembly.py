@@ -24,6 +24,8 @@ _THREAD_BY_TOKEN = "src.server.app.share_access.get_thread_by_share_token"
 _REPLAY_DATA = "src.server.app.public.get_replay_thread_data"
 _READ_PAGE = "src.server.services.history.replay.read_replay_page"
 _TASK_DETAILS = "src.server.services.history.task_status.resolve_task_details"
+# A failed turn's stub re-reads its row for the frame its stream sent.
+_ROW_FACTS = "src.server.database.conversation.replay_rows.get_replay_responses"
 
 
 @pytest_asyncio.fixture
@@ -119,20 +121,23 @@ def _events(body: str) -> list[tuple[str, dict]]:
     return out
 
 
+_QUERIES = [{"turn_index": 0, "content": "hi", "metadata": {}}]
+
+
 async def _shared(client, row: dict, responses: list[dict], read_page=None) -> str:
     thread = {
         "conversation_thread_id": _THREAD_ID,
         "workspace_id": "ws-1",
         "share_permissions": {},
     }
-    queries = [{"turn_index": 0, "content": "hi", "metadata": {}}]
     patches = [
         patch(_THREAD_BY_TOKEN, new=AsyncMock(return_value=thread)),
         patch(
             _REPLAY_DATA,
-            new=AsyncMock(return_value=replay_rows(row, queries, responses)),
+            new=AsyncMock(return_value=replay_rows(row, _QUERIES, responses)),
         ),
         patch(_TASK_DETAILS, new=AsyncMock(return_value={})),
+        patch(_ROW_FACTS, new=AsyncMock(return_value={})),
     ]
     if read_page is not None:
         patches.append(patch(_READ_PAGE, new=read_page))
@@ -218,36 +223,21 @@ async def test_a_projected_failure_reaches_a_share_without_its_text(client):
     ]
 
 
-async def test_a_stored_failure_reaches_a_share_without_its_text(client):
-    """The same for a turn replayed from its stored events."""
-    response = {
-        **_FAILED_TURN,
-        "sse_events": [
-            {
-                "event": "workflow_lifecycle",
-                "data": {
-                    "agent": "task:wf-1",
-                    "run_id": "wf-1",
-                    "phase": "run_completed",
-                    "status": "failed",
-                    "error": _FAULT,
-                },
-            },
-            {"event": "model_fallback", "data": {"to_model": "b", "error": _FAULT}},
-            {"event": "error", "data": {"error": _FAULT}},
-        ],
-    }
+async def test_a_stub_failure_reaches_a_share_without_its_text(client):
+    """The same for a turn replayed as its stub: the error its row records
+    closes it for the owner, and a viewer gets the question alone."""
+    from src.server.services.history.replay import stub_page
 
-    body = await _shared(
-        client,
-        {"conversation_thread_id": _THREAD_ID, "latest_checkpoint_id": None},
-        [response],
-    )
+    row = {"conversation_thread_id": _THREAD_ID, "latest_checkpoint_id": None}
+    with patch(_ROW_FACTS, new=AsyncMock(return_value={})):
+        stubs = await stub_page(replay_rows(row, _QUERIES, [_FAILED_TURN]))
+    assert [line.event for line in stubs.lines] == ["user_message", "error"]
+    assert _FAULT in stubs.lines[1].data_json
+
+    body = await _shared(client, row, [_FAILED_TURN])
 
     assert _FAULT not in body
-    kinds = [k for k, _ in _events(body)]
-    assert "error" not in kinds
-    assert "workflow_lifecycle" in kinds
+    assert [k for k, _ in _events(body)] == ["user_message", "replay_done"]
 
 
 async def test_a_shared_task_card_gets_its_status_and_never_the_failure(client):

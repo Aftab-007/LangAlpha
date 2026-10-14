@@ -16,12 +16,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
 
-from tests.conftest import create_test_app
 from src.server.utils.secret_redactor import SecretRedactor
-from tests.unit.server.services.history.replay_builders import replay_rows
 
 pytestmark = pytest.mark.asyncio
 
@@ -102,19 +98,6 @@ def mock_redactor():
     r = SecretRedactor.__new__(SecretRedactor)
     r._secrets = [(_SECRET_NAME, _SECRET_VALUE)]
     return r
-
-
-@pytest_asyncio.fixture
-async def public_client():
-    """httpx client wired to public router."""
-    from src.server.app.public import router
-
-    app = create_test_app(router)
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        yield client
 
 
 # ---------------------------------------------------------------------------
@@ -792,89 +775,6 @@ class TestPublicReadTruncation:
             )
         assert resp.status_code == 200
         assert resp.json()["truncated"] is False
-
-
-# ---------------------------------------------------------------------------
-# TestReplayStripsWorkspaceId — workspace_id is a bearer credential
-# ---------------------------------------------------------------------------
-
-_REPLAY_DATA = "src.server.app.public.get_replay_thread_data"
-
-
-def _parse_sse_events(body: str):
-    """Parse an SSE text body into a list of (event, data-dict) tuples."""
-    out = []
-    for block in body.split("\n\n"):
-        event = None
-        data = None
-        for line in block.splitlines():
-            if line.startswith("event: "):
-                event = line[len("event: ") :]
-            elif line.startswith("data: "):
-                import json as _json
-
-                data = _json.loads(line[len("data: ") :])
-        if event and data is not None:
-            out.append((event, data))
-    return out
-
-
-class TestReplayStripsWorkspaceId:
-    """The public replay must not leak workspace_id (the bearer credential for
-    /api/v1/wsfiles/{workspace_id}/{path}) from stored workspace_status events."""
-
-    async def test_replay_strips_workspace_id_from_stored_events(self, public_client):
-        stored = {
-            "turn_index": 0,
-            "conversation_response_id": "resp-1",
-            "sse_events": [
-                {
-                    "event": "workspace_status",
-                    "data": {
-                        "status": "ready",
-                        "workspace_id": _WORKSPACE_ID,
-                        "sandbox_state": "archived",
-                    },
-                },
-                {
-                    "event": "message_chunk",
-                    "data": {"content": "hello"},
-                },
-            ],
-        }
-        # A deep copy guards the assertion that we never mutate the stored object.
-        import copy
-
-        original = copy.deepcopy(stored)
-        query = {"turn_index": 0, "content": "hi", "created_at": "2026-01-01T00:00:00Z"}
-        with (
-            patch(_THREAD_BY_TOKEN, AsyncMock(return_value=_make_thread())),
-            patch(
-                _REPLAY_DATA,
-                AsyncMock(
-                    return_value=replay_rows(
-                        {
-                            "conversation_thread_id": _THREAD_ID,
-                            "latest_checkpoint_id": None,
-                        },
-                        [query],
-                        [stored],
-                    )
-                ),
-            ),
-        ):
-            resp = await public_client.get(
-                f"/api/v1/public/shared/{_SHARE_TOKEN}/replay"
-            )
-        assert resp.status_code == 200
-        events = _parse_sse_events(resp.text)
-        ws_status = [d for e, d in events if e == "workspace_status"]
-        assert ws_status, "expected a replayed workspace_status event"
-        for d in ws_status:
-            assert "workspace_id" not in d
-            assert "sandbox_state" not in d
-        # The stored event object must be untouched (no in-place mutation).
-        assert stored == original
 
 
 # ---------------------------------------------------------------------------

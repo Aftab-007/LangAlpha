@@ -2,10 +2,9 @@
 
 Reasoning durations, captured subagent images and returned steering are
 measured or learned around the graph, so they reach replay through the run
-rows' ``replay_facts`` rather than the stored events. A row settled before
-those existed keeps replaying from its stored events, and a turn holding both
-must replay the same either way. Run facts land after a run settles, so a
-turn's stored lines are keyed on them.
+rows' ``replay_facts``. Run facts land after a run settles, so a turn's
+stored lines are keyed on them. A turn that cannot be projected replays as
+its stub.
 """
 
 from __future__ import annotations
@@ -17,17 +16,14 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.server.services.history.replay import (
     CheckpointReplayUnavailable,
-    build_checkpoint_replay_items,
     build_replay_page,
     read_replay_page,
 )
 from src.server.services.history.replay import cold
 from src.server.services.history.replay import facts as replay_facts
-from src.server.services.history.replay import legacy
-from src.server.services.history.replay.stored_merge import derive_merge
 from tests.unit.server.services.history.replay_builders import (
-    thread_rows,
     THREAD,
+    TIP,
     ThreadHistory,
     _cache_probe,
     _mock_reader,
@@ -35,14 +31,12 @@ from tests.unit.server.services.history.replay_builders import (
     _response,
     _slice_store,
     _turn,
+    build_checkpoint_replay_items,
+    thread_rows,
 )
 
 
-def _merged(projected, stored, **kwargs):
-    return legacy.apply(projected, derive_merge(projected, stored, **kwargs))
-
-
-def _signal(message_id, content, agent="main", **extra):
+def _signal(message_id, content, agent="main"):
     return {
         "event": "message_chunk",
         "data": {
@@ -52,7 +46,6 @@ def _signal(message_id, content, agent="main", **extra):
             "role": "assistant",
             "content": content,
             "content_type": "reasoning_signal",
-            **extra,
         },
     }
 
@@ -111,28 +104,6 @@ def test_durations_ignore_untimed_and_malformed_spans():
     replay_facts.apply_reasoning_durations(items, {"m1": [True, "9"], "m2": "900"})
     assert "elapsed_ms" not in items[0]["data"]
     assert "elapsed_ms" not in items[1]["data"]
-
-
-def test_known_durations_are_not_carried_again_from_stored_events():
-    """With the row's facts applied, the stored copy of the same closes is
-    not summed on top."""
-    projected = [_signal("ai-1", "start"), _signal("ai-1", "complete")]
-    replay_facts.apply_reasoning_durations(projected, {"ai-1": [1200, 800]})
-    stored = [
-        _signal("lc-1", "start"),
-        _signal("lc-1", "complete", elapsed_ms=1200),
-        _signal("lc-1", "start"),
-        _signal("lc-1", "complete", elapsed_ms=800),
-    ]
-    merged = _merged(projected, stored, main_durations_known=True)
-    assert merged[1]["data"]["elapsed_ms"] == 2000
-
-
-def test_stored_durations_still_carry_for_a_row_without_facts():
-    projected = [_signal("ai-1", "start"), _signal("ai-1", "complete")]
-    stored = [_signal("lc-1", "start"), _signal("lc-1", "complete", elapsed_ms=4200)]
-    merged = _merged(projected, stored)
-    assert merged[1]["data"]["elapsed_ms"] == 4200
 
 
 # ------------------------------------------------------------ run facts
@@ -221,21 +192,6 @@ def test_run_images_resolve_the_runs_text():
     )
 
 
-def test_a_placed_return_is_not_merged_again_from_stored_events():
-    projected = [_text("a1", "first", agent="task:tsk1"), _returned("in-1")]
-    stored = [
-        _text("lc-a1", "first", agent="task:tsk1"),
-        _returned("in-1"),
-        _returned("in-2"),
-    ]
-    merged = _merged(projected, stored)
-    # A run settled before facts keeps its stored returns; one with facts
-    # shows each of its returns once.
-    assert sorted(
-        i["data"]["input_id"] for i in merged if i["event"] == "steering_returned"
-    ) == ["in-1", "in-2"]
-
-
 # ------------------------------------------------------------ through replay
 
 
@@ -322,10 +278,9 @@ def _task_lane(items):
 async def test_run_facts_reach_the_projected_run(monkeypatch):
     _cache_probe(monkeypatch)
     _task_reader(monkeypatch)
-    stored_copy = _response(0, [_returned("in-1")])
 
     items = await build_checkpoint_replay_items(
-        thread_rows([_query(0)], {0: stored_copy}, run_facts=[_RUN_FACTS]),
+        thread_rows([_query(0)], {0: _response(0)}, run_facts=[_RUN_FACTS]),
     )
 
     assert _task_lane(items) == [
@@ -358,8 +313,8 @@ async def test_run_facts_landing_later_reproject_a_stored_turn(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_turn_with_facts_and_stored_events_replays_the_same(monkeypatch):
-    """The dual-write guarantee: the facts reproduce the stored durations."""
+async def test_reasoning_facts_reach_the_projected_close(monkeypatch):
+    """Two timed thinking blocks, one projected close: it owns both."""
     reasoning = AIMessage(
         content=[
             {"type": "thinking", "thinking": "weighing it"},
@@ -367,41 +322,21 @@ async def test_a_turn_with_facts_and_stored_events_replays_the_same(monkeypatch)
         ],
         id="msg_1",
     )
-    stored = [
-        _signal("lc-1", "start"),
-        _signal("lc-1", "complete", elapsed_ms=1500),
-        _signal("lc-1", "start"),
-        _signal("lc-1", "complete", elapsed_ms=500),
-        _text("lc-1", "the answer"),
-    ]
+    _mock_reader(
+        monkeypatch, ThreadHistory(thread_id=THREAD, turns=[_turn(0, [reasoning])])
+    )
+    response = _response(0)
+    response["replay_facts"] = {"v": 1, "reasoning_ms": {"msg_1": [1500, 500]}}
 
-    def closes(items):
-        return [
-            i["data"].get("elapsed_ms")
-            for i in items
-            if i["event"] == "message_chunk"
-            and i["data"].get("content_type") == "reasoning_signal"
-            and i["data"].get("content") == "complete"
-        ]
+    items = await build_checkpoint_replay_items(thread_rows([_query(0)], {0: response}))
 
-    async def replay_with(response):
-        _mock_reader(
-            monkeypatch, ThreadHistory(thread_id=THREAD, turns=[_turn(0, [reasoning])])
-        )
-        return await build_checkpoint_replay_items(
-            thread_rows([_query(0)], {0: response}),
-        )
-
-    legacy = await replay_with(_response(0, stored))
-    with_facts = _response(0, stored)
-    with_facts["replay_facts"] = {"v": 1, "reasoning_ms": {"msg_1": [1500, 500]}}
-    dual = await replay_with(with_facts)
-    facts_only = _response(0, [])
-    facts_only["replay_facts"] = with_facts["replay_facts"]
-    alone = await replay_with(facts_only)
-
-    assert closes(legacy) == closes(dual) == closes(alone) == [2000]
-    assert legacy == dual
+    assert [
+        i["data"].get("elapsed_ms")
+        for i in items
+        if i["event"] == "message_chunk"
+        and i["data"].get("content_type") == "reasoning_signal"
+        and i["data"].get("content") == "complete"
+    ] == [2000]
 
 
 # ------------------------------------------------------------ per-turn fallback
@@ -420,33 +355,40 @@ def _two_turns(monkeypatch):
     )
     real = cold.project_turn
 
-    def flaky(inputs, turn_index, turn, response, lane, derive=None):
+    def flaky(inputs, turn_index, turn, response, lane):
         if turn_index == 1:
             raise ValueError("a turn this build cannot project")
-        return real(inputs, turn_index, turn, response, lane, derive)
+        return real(inputs, turn_index, turn, response, lane)
 
     monkeypatch.setattr(cold, "project_turn", flaky)
-    return (
-        [_query(0), _query(1, content="next")],
-        {0: _response(0), 1: _response(1, [_text("lc-1", "one, as stored")])},
-    )
+    return [_query(0), _query(1, content="next")], {0: _response(0), 1: _response(1)}
 
 
-def _texts(lines):
+def _rows(lines):
     return [
-        (line.item()["data"].get("turn_index"), line.item()["data"]["content"])
+        (
+            line.item()["data"].get("turn_index"),
+            line.event,
+            line.item()["data"]["content"],
+        )
         for line in lines
-        if line.event == "message_chunk"
+        if line.event in ("user_message", "message_chunk")
     ]
 
 
 @pytest.mark.asyncio
-async def test_a_turn_that_cannot_project_replays_alone_from_storage(monkeypatch):
+async def test_a_turn_that_cannot_project_replays_alone_as_its_stub(monkeypatch):
     queries, responses = _two_turns(monkeypatch)
-    page = await build_replay_page(thread_rows(queries, responses), turn_fallback=True)
-    assert _texts(page.lines) == [(0, "zero"), (1, "one, as stored")]
-    # The stored-events copy is never stored as the turn's lines: the next
-    # read projects it again.
+    page = await build_replay_page(
+        thread_rows(queries, responses), TIP, turn_fallback=True
+    )
+    assert _rows(page.lines) == [
+        (0, "user_message", "hello"),
+        (0, "message_chunk", "zero"),
+        (1, "user_message", "next"),
+    ]
+    # The stub is never stored as the turn's lines: the next read projects
+    # it again.
     assert "resp-1" not in _slice_store(monkeypatch).turns or not (
         _slice_store(monkeypatch).turns["resp-1"].get("lines")
     )
@@ -456,20 +398,20 @@ async def test_a_turn_that_cannot_project_replays_alone_from_storage(monkeypatch
 async def test_without_turn_fallback_the_failure_reaches_the_caller(monkeypatch):
     queries, responses = _two_turns(monkeypatch)
     with pytest.raises(ValueError):
-        await build_replay_page(thread_rows(queries, responses))
+        await build_replay_page(thread_rows(queries, responses), TIP)
 
 
 # ------------------------------------------------------------ read_replay_page
 
 
 @pytest.mark.asyncio
-async def test_auto_falls_back_to_storage_when_turns_cannot_pair(monkeypatch):
+async def test_auto_falls_back_to_stubs_when_turns_cannot_pair(monkeypatch):
     _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[]))
     page, source = await read_replay_page(
-        thread_rows([_query(0)], {0: _response(0, [_text("lc-0", "stored")])}),
+        thread_rows([_query(0)], {0: _response(0)}),
     )
-    assert source == "sse"
-    assert _texts(page.lines) == [(0, "stored")]
+    assert source == "stub"
+    assert _rows(page.lines) == [(0, "user_message", "hello")]
 
 
 @pytest.mark.asyncio
@@ -483,21 +425,21 @@ async def test_checkpoint_source_never_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_thread_without_a_commit_pointer_replays_from_storage(monkeypatch):
+async def test_a_thread_without_a_commit_pointer_replays_as_stubs(monkeypatch):
     reader = _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[]))
     page, source = await read_replay_page(
         thread_rows(
-            [_query(0), _query(1), _query(2)],
-            {
-                0: _response(0, [_text("lc-0", "zero")]),
-                1: _response(1, [_text("lc-1", "one")]),
-                2: _response(2, [_text("lc-2", "two")]),
-            },
+            [
+                _query(0, content="zero"),
+                _query(1, content="one"),
+                _query(2, content="two"),
+            ],
+            {0: _response(0), 1: _response(1), 2: _response(2)},
             tip=None,
         ),
         limit=2,
     )
-    assert source == "sse"
+    assert source == "stub"
     reader.thread_history.assert_not_awaited()
-    assert _texts(page.lines) == [(1, "one"), (2, "two")]
+    assert _rows(page.lines) == [(1, "user_message", "one"), (2, "user_message", "two")]
     assert (page.first_turn_index, page.has_more) == (1, True)

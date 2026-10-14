@@ -143,7 +143,7 @@ async def test_the_sync_entry_point_passes_its_lanes_through(
         conversation_response_id=RESPONSE_ID,
         conversation_thread_id=THREAD_ID,
         turn_index=0,
-        sse_events=events,
+        provenance=events,
         strict=True,
         lanes=("task:k7",),
     )
