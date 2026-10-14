@@ -219,7 +219,7 @@ class BaselineEpoch:
     # is the cached prefix, so the mount coming up or going down mid-epoch
     # would miss the whole prefix; the value holds until the next rebuild,
     # and the tools work either way. None for a build that states nothing
-    # about the mount (Flash) or an epoch stored before the value was.
+    # about the mount (no sandbox) or an epoch stored before the value was.
     files_mounted: bool | None = None
     # Whether the block states the chat-app settings folder, held the same
     # way, since the block is cached per thread. None for a build that says
@@ -354,9 +354,9 @@ class Observations:
     # is measured either way.
     profile_available: bool = True
     workspace_available: bool = True
-    # False for a build with no workspace to read at all (Flash). Such a build
-    # is not blind to the workspace, it has none, so a rebuild drops the one
-    # an earlier PTC epoch froze instead of carrying it forward.
+    # False for a build with no workspace to read at all (a subagent). Such a
+    # build is not blind to the workspace, it has none, so a rebuild drops
+    # any workspace an earlier epoch froze instead of carrying it forward.
     workspace_configured: bool = True
     # Whether the file mount serves as this turn's agent was built. None for
     # a build whose prompt says nothing about it.
@@ -528,9 +528,9 @@ def _rebuild_reason(epoch: BaselineEpoch, obs: Observations) -> str | None:
         return "new_source"
     if epoch.source_kinds() - {read.kind for read in obs.reads}:
         # The inverse: the stored epoch froze a source this build does not
-        # read (a PTC thread continued in flash mode has no agent.md, no
-        # workspace memory and no roster). The block would keep rendering it
-        # and the change detector would never look at it again.
+        # read (a deploy retired it, or a block an earlier build stated, such
+        # as the scratchpad, this one does not). The block would keep rendering
+        # it and the change detector would never look at it again.
         return "source_removed"
     if obs.compaction is not None and epoch.compaction_seen != obs.compaction:
         return "compaction"
@@ -576,7 +576,7 @@ def _freeze(
     # instead of losing the source for the life of the epoch.
     if obs.memo_configured and obs.memo_count is None:
         incomplete = True
-    # A build with no memo source (Flash) has none to carry: the pointer an
+    # A build with no memo source has none to carry: the pointer an
     # earlier PTC epoch froze names a path this build cannot reach.
     memo = previous.memo if obs.memo_configured else None
     memo_carried = memo is not None and obs.memo_count is None

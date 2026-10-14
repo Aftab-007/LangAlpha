@@ -257,7 +257,7 @@ async def create_workspace_catalog_server(
     """Create a live user server that is switched on only in ``workspace_id``.
 
     One transaction for the row, a tombstone in every other live workspace of
-    the user (Flash included) and the version fan-out: a workspace that
+    the user (Home included) and the version fan-out: a workspace that
     re-resolved between a separate create and its tombstone would start the
     server where the user never asked for it. The tombstone overwrites
     whatever holds the slot, because the name is the user's own and nothing

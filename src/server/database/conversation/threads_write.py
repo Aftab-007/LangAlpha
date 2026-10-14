@@ -80,7 +80,7 @@ async def create_thread(
     conversation_thread_id: str,
     workspace_id: str,
     current_status: str,
-    msg_type: Optional[str] = None,
+    msg_type: str = "ptc",
     thread_index: Optional[int] = None,
     title: Optional[str] = None,
     external_id: Optional[str] = None,
@@ -92,6 +92,8 @@ async def create_thread(
     """
     Create a thread entry (thread_index auto-calculated if not provided).
 
+    `msg_type` names the agent the thread runs on: 'ptc', the full agent, for
+    every new thread. Only threads the retired Flash agent started carry 'flash'.
     `platform` records the user surface the chat originated from. Conventions:
       - "web"                   — main ChatAgent page
       - "market_view:<SYMBOL>"  — MarketView side panel, symbol uppercased
@@ -99,10 +101,11 @@ async def create_thread(
       - NULL                    — no user surface (system-initiated threads)
     `metadata` is the general thread annotation column. Known keys:
       - "origin": {"type": "agent"|"automation"|"system", "id": "<initiator id>"}
-        — who initiated the thread ('agent' id = dispatching flash thread,
+        — who initiated the thread ('agent' id = the dispatching thread,
         'automation' id = automation). Absent origin key = user-initiated.
         Display-only extras: "name" (the automation's) and "agent" (which
-        agent dispatched: "chief_of_staff" or "flash").
+        agent dispatched: "chief_of_staff", or "flash" on threads the retired
+        Flash agent dispatched).
     `external_id` is only set by channel integrations and combined with platform
     is unique-indexed for dedup. Web-originated threads have external_id NULL.
     `subagents_allowed` None, or the side the owner's default is on, stores
@@ -379,7 +382,6 @@ async def ensure_thread_exists(
     user_id: str,
     initial_query: str,
     initial_status: str = "in_progress",
-    msg_type: Optional[str] = None,
     external_id: Optional[str] = None,
     platform: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -397,7 +399,6 @@ async def ensure_thread_exists(
         user_id: User ID for logging
         initial_query: Initial query text (used as thread title)
         initial_status: Initial thread status
-        msg_type: Message type (e.g., 'ptc')
         external_id: Optional external thread identifier (e.g. "chat_id:topic_id")
         platform: Optional platform identifier (e.g. "telegram", "slack")
         metadata: Optional thread metadata (see create_thread; e.g. origin
@@ -487,7 +488,6 @@ async def ensure_thread_exists(
                 conversation_thread_id=conversation_thread_id,
                 workspace_id=workspace_id,
                 current_status=initial_status,
-                msg_type=msg_type,
                 thread_index=None,  # Will be calculated inside create_thread using same conn
                 title=title,
                 external_id=external_id,

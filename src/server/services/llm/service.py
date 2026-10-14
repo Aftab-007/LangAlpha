@@ -3,8 +3,7 @@
 ``LLMService.complete`` is the single entry point every server-layer utility
 should use when it needs a single-shot LLM invocation (structured output or
 free-form text). It delegates credential resolution to
-``resolve_llm_config`` — the same function the main PTC and Flash chat
-workflows use — so BYOK, Anthropic/Codex OAuth, custom providers, and
+``resolve_llm_config`` — the same function the chat workflow uses — so BYOK, Anthropic/Codex OAuth, custom providers, and
 user-preferred models are all respected automatically. Contrast with direct
 ``create_llm(model_name)`` calls, which always bill through the platform key
 regardless of what the user has configured.

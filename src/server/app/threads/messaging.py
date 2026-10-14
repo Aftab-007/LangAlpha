@@ -351,16 +351,9 @@ async def _handle_send_message(
     /retry route passes it. Whatever the public body carried is overwritten
     — a forged value could chain a new attempt onto an arbitrary failed run.
     """
-    from src.server.handlers.chat import (
-        astream_flash_workflow,
-        astream_ptc_workflow,
-    )
+    from src.server.handlers.chat import astream_ptc_workflow
     from src.server.handlers.chat.error_handling import end_after_failure_frame
-    from src.server.services.turn_runtime import (
-        ensure_home,
-        requested_workspace,
-        resolve_turn_route,
-    )
+    from src.server.services.turn_runtime import requested_workspace, turn_route
 
     # Canonical run_id generation site. Each POST gets a fresh UUID that
     # flows through every downstream key: BTM ``(tid, rid)``, persistence
@@ -425,16 +418,15 @@ async def _handle_send_message(
         # request that will 403 anyway shouldn't do that work first. In oss mode
         # with no INTERNAL_SERVICE_TOKEN configured there is nothing to
         # authenticate against, so the self-dispatch is trusted; a configured
-        # token is enforced in every mode. This single is_internal value is
-        # reused by both dispatch branches below.
+        # token is enforced in every mode. Past this check a dispatch is
+        # always the server's own, so ``is_dispatch`` alone says so below.
         _req_token = (raw_request.headers.get("X-Service-Token", "") if raw_request else "")
         _svc_token = _get_service_token()
         is_internal = _is_service_request(raw_request)
-        if (
-            not is_internal
-            and raw_request
-            and raw_request.headers.get("X-Dispatch") == "background"
-        ):
+        is_dispatch = bool(
+            raw_request and raw_request.headers.get("X-Dispatch") == "background"
+        )
+        if is_dispatch and not is_internal:
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -474,16 +466,14 @@ async def _handle_send_message(
                 detail="PTC Agent not initialized. Check server startup logs.",
             )
 
-        # A flash request, or any turn in the flash workspace (a HITL resume
-        # whose client didn't resend agent_mode='flash'), runs on Flash, or in
-        # Home when the user has the all-workspaces agent. The workspace guard
-        # comes first: it pairs with the thread guard above. Home is bound once
-        # the admission gates below pass.
+        # A flash request naming no workspace, or any turn in the flash
+        # workspace (a HITL resume whose client didn't resend
+        # agent_mode='flash'), runs in Home. The workspace guard comes first:
+        # it pairs with the thread guard above. Home is bound once the
+        # admission gates below pass.
         workspace = await requested_workspace(user_id, agent_mode, workspace_id)
-        route = await resolve_turn_route(
-            user_id, agent_mode, workspace_id, workspace, bind_home=False
-        )
-        runtime, workspace_id = route.agent, route.workspace_id
+        route = turn_route(user_id, workspace)
+        workspace_id = route.workspace_id
 
         # Extract user input
         user_input = ""
@@ -498,9 +488,9 @@ async def _handle_send_message(
                         break
 
         logger.info(
-            f"[{'FLASH' if runtime == 'flash' else 'PTC'}_CHAT] New request: "
+            f"[PTC_CHAT] New request: "
             f"workspace_id={workspace_id} thread_id={thread_id} user_id={user_id} "
-            f"mode={agent_mode} runtime={runtime}"
+            f"mode={agent_mode} role={route.role}"
         )
 
         # Resolve LLM config eagerly — credit check must happen before SSE stream starts
@@ -514,12 +504,10 @@ async def _handle_send_message(
         # turns, which never pass through this route, keep their own model.
         requested_model = request.llm_model or None
         held_model = thread_meta.get("llm_model") if thread_meta else None
-        # A Flash thread the full agent takes over holds a model picked for
-        # Flash's slot. Its promotion forgets it, but only once the turn runs,
-        # so this first turn passes it over too.
-        taken_over = (
-            runtime == "ptc" and bool(thread_meta) and thread_meta.get("msg_type") == "flash"
-        )
+        # A thread Flash started holds a model picked for Flash's slot. Its
+        # promotion forgets it, but only once the turn runs, so this first
+        # turn passes it over too.
+        taken_over = bool(thread_meta) and thread_meta.get("msg_type") == "flash"
         named_model = (
             thread_model.NamedModel(requested_model, seen=held_model)
             if requested_model
@@ -532,7 +520,6 @@ async def _handle_send_message(
                 user_id,
                 model,
                 is_byok,
-                mode=runtime,
                 reasoning_effort=getattr(request, "reasoning_effort", None),
                 fast_mode=getattr(request, "fast_mode", None),
                 thread_id=thread_id,
@@ -545,11 +532,7 @@ async def _handle_send_message(
         # reconnect an account, and a refusal would drop it. A person's send
         # names no model while its client has not read the thread yet, and
         # gets the refusal rather than an answer from a model it never chose.
-        from_service = service_token_matches(_req_token, _svc_token) or bool(
-            is_internal
-            and raw_request
-            and raw_request.headers.get("X-Dispatch") == "background"
-        )
+        from_service = service_token_matches(_req_token, _svc_token) or is_dispatch
         config = await thread_model.resolve_turn_config(
             user_id,
             thread_id,
@@ -574,16 +557,14 @@ async def _handle_send_message(
         # failed(transport_lost) anyway — refuse cheaply instead.
         await _assert_stream_transport_ready()
 
-        if route.role == "chief_of_staff":
-            await ensure_home(user_id, workspace)
+        await route.bind(user_id, workspace)
 
     except BaseException:
         await scope.release_slot()
         raise
 
     # Resolve model name for observability labels (bounded by models.json keys).
-    _llm = getattr(config, "llm", None)
-    _model = (getattr(_llm, "flash", None) if runtime == "flash" else getattr(_llm, "name", None)) or ""
+    _model = getattr(getattr(config, "llm", None), "name", None) or ""
 
     # Content-Location header advertises the reconnect URL for this run.
     # Mirrors langgraph_sdk's protocol so reconnects target the exact run.
@@ -592,57 +573,35 @@ async def _handle_send_message(
         "Content-Location": f"/api/v1/threads/{thread_id}/messages/stream?run_id={run_id}",
     }
 
-    is_dispatch = bool(
-        is_internal
-        and raw_request
-        and raw_request.headers.get("X-Dispatch") == "background"
+    gen = astream_ptc_workflow(
+        request=request,
+        thread_id=thread_id,
+        run_id=run_id,
+        user_input=user_input,
+        user_id=user_id,
+        route=route,
+        is_byok=is_byok,
+        config=config,
+        dispatched=is_dispatch,
+        named_model=named_model,
+        # A report-back summary owes its pair's watch clear, so its finalize
+        # must see the pair.
+        run_metadata=(
+            {
+                "report_back_ptc_thread_id": request.report_back_ptc_thread_id,
+                "origin_dispatch_gen": request.origin_dispatch_gen,
+            }
+            if request.report_back_ptc_thread_id
+            else None
+        ),
+        extra_configurable=_automation_configurable(request),
     )
-    # Route to appropriate streaming function based on the runtime
-    if runtime == "flash":
-        gen = astream_flash_workflow(
-            request=request,
-            thread_id=thread_id,
-            run_id=run_id,
-            user_input=user_input,
-            user_id=user_id,
-            is_byok=is_byok,
-            config=config,
-            dispatched=is_dispatch,
-            flash_workspace=route.flash_workspace,
-            named_model=named_model,
-        )
-    else:
-        gen = astream_ptc_workflow(
-            request=request,
-            thread_id=thread_id,
-            run_id=run_id,
-            user_input=user_input,
-            user_id=user_id,
-            workspace_id=workspace_id,
-            role=route.role,
-            is_byok=is_byok,
-            config=config,
-            dispatched=is_dispatch,
-            named_model=named_model,
-            # A report-back summary owes its pair's watch clear whichever
-            # agent answers it, so its finalize must see the pair.
-            run_metadata=(
-                {
-                    "report_back_ptc_thread_id": request.report_back_ptc_thread_id,
-                    "origin_dispatch_gen": request.origin_dispatch_gen,
-                }
-                if request.report_back_ptc_thread_id
-                else None
-            ),
-            extra_configurable=_automation_configurable(request),
-        )
 
     if not is_dispatch:
         return StreamingResponse(
             end_after_failure_frame(
                 observe_chat_stream(
                     gen,
-                    mode=runtime,
                     model=_model,
                     user_id=user_id,
                     workspace_id=workspace_id,
@@ -653,6 +612,36 @@ async def _handle_send_message(
             headers=sse_headers_with_loc,
         )
 
+    return await _prime_dispatch(
+        gen,
+        scope,
+        request,
+        thread_id=thread_id,
+        run_id=run_id,
+        user_id=user_id,
+        workspace_id=workspace_id,
+        model=_model,
+    )
+
+
+async def _prime_dispatch(
+    gen,
+    scope,
+    request: ChatRequest,
+    *,
+    thread_id: str,
+    run_id: str,
+    user_id: str,
+    workspace_id: str,
+    model: str,
+) -> JSONResponse:
+    """Drive a background dispatch's turn to its START, answer with the run
+    and the workspace the turn resolved to, then drain ``gen`` in the
+    background.
+
+    Every exit that does not hand ``gen`` to that drain releases ``scope``'s
+    slot.
+    """
     from src.server.database.runs.lifecycle import DuplicateRequestError
     from src.server.handlers.chat.request_prep import (
         DISPATCH_STARTED_MARKER,
@@ -660,25 +649,20 @@ async def _handle_send_message(
     )
     from src.server.services.report_back.flash import pointer, reserve
 
-    label = f"{runtime.upper()}_DISPATCH"
-    # The PTC response names the workspace, since a dispatch may have made it.
-    reply_extra = {"workspace_id": workspace_id} if runtime == "ptc" else {}
     # Report-back idempotency: a lost-response retry of the drainer's POST
-    # must NOT start a second summary run, whichever agent the summary lands
-    # on. The claim CM SET-NXs the per-(flash, ptc) run pointer (atomic on
-    # its own — no outer lock needed); a prior admission's incumbent run_id
-    # is returned instead, and a non-consummated exit (e.g. a priming failure
-    # below) releases the claim. No-op unless report_back_ptc_thread_id is set.
+    # must NOT start a second summary run. The claim CM SET-NXs the
+    # per-(flash, ptc) run pointer (atomic on its own — no outer lock needed);
+    # a prior admission's incumbent run_id is returned instead, and a
+    # non-consummated exit (e.g. a priming failure below) releases the claim.
+    # No-op unless report_back_ptc_thread_id is set.
     rb_ptc = request.report_back_ptc_thread_id
     rb_cache = None
     if rb_ptc:
         from src.utils.cache.redis_cache import get_cache_client
         rb_cache = get_cache_client()
-    # A flash→PTC dispatch generation is gated on the PTC thread it starts;
+    # A dispatch generation is gated on the PTC thread it starts;
     # a report-back summary carries its pair's generation for the claim above.
-    gated_gen = (
-        request.origin_dispatch_gen if runtime == "ptc" and not rb_ptc else None
-    )
+    gated_gen = request.origin_dispatch_gen if not rb_ptc else None
 
     async def steered(target_run_id: str) -> JSONResponse:
         # The hand-off went into a running turn as a steer: this request's
@@ -688,14 +672,14 @@ async def _handle_send_message(
         if gated_gen:
             await reserve.retract_dispatch_gen(thread_id, gated_gen, run_id)
         logger.info(
-            f"[{label}] Hand-off steered into running run {target_run_id} "
+            f"[PTC_DISPATCH] Hand-off steered into running run {target_run_id} "
             f"on thread {thread_id}"
         )
         return JSONResponse({
             "status": "steered",
             "thread_id": thread_id,
             "run_id": target_run_id,
-            **reply_extra,
+            "workspace_id": workspace_id,
         })
 
     async with pointer.claim(
@@ -706,7 +690,7 @@ async def _handle_send_message(
         if rb_claim.incumbent is not None:
             await scope.release_slot()
             logger.info(
-                f"[{label}] Idempotent report-back: returning "
+                "[PTC_DISPATCH] Idempotent report-back: returning "
                 f"in-flight run {rb_claim.incumbent} for ptc={rb_ptc} on "
                 f"flash thread {thread_id} (no second run)"
             )
@@ -714,12 +698,12 @@ async def _handle_send_message(
                 "status": "dispatched",
                 "thread_id": thread_id,
                 "run_id": rb_claim.incumbent,
-                **reply_extra,
+                "workspace_id": workspace_id,
             })
         if rb_claim.pair_gone:
             await scope.release_slot()
             logger.warning(
-                f"[{label}] Report-back pair for ptc={rb_ptc} on "
+                f"[PTC_DISPATCH] Report-back pair for ptc={rb_ptc} on "
                 f"flash thread {thread_id} was already settled; refusing "
                 "to schedule an orphan summary"
             )
@@ -736,7 +720,7 @@ async def _handle_send_message(
         if rb_claim.in_flight:
             await scope.release_slot()
             logger.info(
-                f"[{label}] Report-back for ptc={rb_ptc} on "
+                f"[PTC_DISPATCH] Report-back for ptc={rb_ptc} on "
                 f"flash thread {thread_id} has a rowless incumbent "
                 "inside its priming lease; deferring (503 retriable)"
             )
@@ -788,14 +772,14 @@ async def _handle_send_message(
                 return await steered(existing)
             await scope.release_slot()
             logger.info(
-                f"[{label}] Retransmit adopted existing run {existing} "
+                f"[PTC_DISPATCH] Retransmit adopted existing run {existing} "
                 f"for thread {thread_id}"
             )
             return JSONResponse({
                 "status": "dispatched",
                 "thread_id": thread_id,
                 "run_id": existing,
-                **reply_extra,
+                "workspace_id": workspace_id,
             })
         except HTTPException:
             await scope.release_slot()
@@ -824,24 +808,23 @@ async def _handle_send_message(
 
     _track_task(asyncio.create_task(
         observe_background_chat_turn(
-            _consume_background_gen(gen, label, thread_id, run_id),
-            mode=runtime,
-            model=_model,
+            _consume_background_gen(gen, "PTC_DISPATCH", thread_id, run_id),
+            model=model,
             user_id=user_id,
             workspace_id=workspace_id,
             thread_id=thread_id,
         ),
-        name=f"{runtime}-dispatch-{thread_id}-{run_id[:8]}",
+        name=f"ptc-dispatch-{thread_id}-{run_id[:8]}",
     ))
     logger.info(
-        f"[{label}] Started background workflow: "
+        "[PTC_DISPATCH] Started background workflow: "
         f"thread_id={thread_id} run_id={run_id} workspace_id={workspace_id}"
     )
     return JSONResponse({
         "status": "dispatched",
         "thread_id": thread_id,
         "run_id": run_id,
-        **reply_extra,
+        "workspace_id": workspace_id,
     })
 
 

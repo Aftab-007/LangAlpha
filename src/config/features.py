@@ -94,26 +94,6 @@ FEATURES: dict[str, FeatureSpec] = {
             "behavior and pricing may change."
         ),
     ),
-    # On for every user who has not turned it off. It runs on the user's
-    # computer, so a deployment with no sandbox provider turns it off in
-    # config.yaml and keeps Flash.
-    "all_workspaces_agent": FeatureSpec(
-        key="all_workspaces_agent",
-        label="Chief of Staff",
-        description=(
-            "Runs chats outside a workspace as the full agent on your "
-            "computer, in a Home folder of its own, built to coordinate your "
-            "workspaces and hand tasks to the analyst in each."
-        ),
-        enabled=True,
-        gate=FeatureGate.OPT_OUT,
-        tradeoffs=(
-            "Every chat carries extra context about your recent workspaces and "
-            "activity, so each turn uses more tokens. The first message starts "
-            "your computer if it is stopped, which can take a minute, and these "
-            "chats run on your Default model."
-        ),
-    ),
     "todo_write": FeatureSpec(
         key="todo_write",
         label="Task checklist (legacy)",

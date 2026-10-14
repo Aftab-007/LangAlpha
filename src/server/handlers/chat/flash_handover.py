@@ -1,10 +1,9 @@
-"""A step one agent left waiting on the user, resumed by the other.
+"""A step the retired Flash agent left waiting on the user, resumed by the Chief of Staff.
 
-With the all-workspaces agent on, Flash's threads continue in Home, and the
-user can turn it off and on again, which moves Home's threads between Flash
-and the Chief of Staff. A step left waiting on the user (dispatching work,
-deleting a workspace) can name a tool the agent resuming it does not have, so
-it is answered as cancelled before that agent resumes the thread.
+Threads Flash ran continue in Home, and so do Home threads it ran while the
+all-workspaces agent was switched off. A step Flash left waiting on the user
+(dispatching work, deleting a workspace) can name a tool the Chief of Staff
+does not have, so it is answered as cancelled before the thread resumes.
 """
 
 from __future__ import annotations

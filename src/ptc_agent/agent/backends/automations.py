@@ -1,8 +1,7 @@
 """AutomationsBackend: each of the user's automations as a file in `.agents/user/automations/`.
 
 The rows live in Postgres; ``services.automations.file`` serializes each one
-and turns a save of its file into a create, update or delete. Flash, which has
-no filesystem, manages the same rows through the automation tools.
+and turns a save of its file into a create, update or delete.
 """
 
 from __future__ import annotations
@@ -82,7 +81,7 @@ first, which is refused or becomes an automation of its own.
   "cron_expression": "0 9 * * 1-5",
   "timezone": "America/New_York",
   "instruction": "Summarize overnight moves for my watchlist: top movers, news, one line each.",
-  "agent_mode": "flash",
+  "agent_mode": "all_workspaces",
   "workspace_id": null,
   "thread": "new",
   "llm_model": null,
@@ -107,7 +106,7 @@ A new one needs only what has no default, e.g. `aapl-below-200.json`:
     "conditions": [{"type": "price_below", "value": 200}]
   },
   "instruction": "AAPL just fell below $200. Summarize the news and analyst moves behind it.",
-  "agent_mode": "flash"
+  "agent_mode": "all_workspaces"
 }
 ```
 
@@ -124,7 +123,7 @@ A new one needs only what has no default, e.g. `aapl-below-200.json`:
 | trigger_config | price | See Price alerts. |
 | timezone       | no  | IANA region name, e.g. `America/New_York` (not `EST`, which ignores daylight saving). Defaults to the user's timezone. Changing it keeps a one-time automation's moment, since `next_run_at` carries its offset. |
 | instruction    | yes | The prompt each run executes. |
-| agent_mode     | no  | `ptc` (default here): runs as you do, in `workspace_id`, with code execution. `flash`: fast, no sandbox; best for price alerts and quick lookups. |
+| agent_mode     | no  | `ptc` (default here): runs as you do, in `workspace_id`, with code execution. `all_workspaces`: the Chief of Staff runs it from the user's Home rather than in one workspace; best for price alerts and quick lookups. |
 | workspace_id   | ptc | Defaults to this workspace. |
 | thread         | no  | `new` (default): a fresh thread each run. `persistent`: one thread that every run continues, created by the first run (`state.last_run.thread_id` names it). `current`: continue in this conversation. A thread id: continue in that thread. |
 | llm_model      | no  | A model the user can run; `null` uses their default. An unknown name is refused with the list. |

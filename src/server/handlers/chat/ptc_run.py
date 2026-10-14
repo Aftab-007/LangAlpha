@@ -62,7 +62,6 @@ from src.server.utils.multimodal_context import (
     parse_multimodal_contexts,
 )
 
-from ptc_agent.agent.agent import AgentRole
 from ptc_agent.agent.graph import build_ptc_graph_with_session
 from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
 
@@ -97,6 +96,7 @@ from src.server.services.runs.admission import (
     begin_run,
     dedup_retransmit_or_raise,
 )
+from src.server.services.turn_runtime import TurnRoute
 
 from .admission_gate import agent_steer_of, steer_allowed, wait_or_steer
 from .attachments import attach_request_files
@@ -160,7 +160,7 @@ async def _resolve_origin_meta(request, thread_id: str) -> dict:
     if not meta.get("origin_flash_thread_id"):
         # Only a thread a dispatch started has an origin. A generation without
         # one is a report-back's, stamped by the summary turn that answered it
-        # (on Flash, or in Home), and is that pair's, not the thread's.
+        # (in Home, or on Flash before it), and is that pair's, not the thread's.
         meta = {}
     return {
         "origin_flash_thread_id": meta.get("origin_flash_thread_id"),
@@ -190,7 +190,7 @@ async def astream_ptc_workflow(
     run_id: str,
     user_input: str,
     user_id: str,
-    workspace_id: str,
+    route: TurnRoute,
     is_byok: bool = False,
     config=None,
     dispatched: bool = False,
@@ -198,7 +198,6 @@ async def astream_ptc_workflow(
     run_metadata: dict | None = None,
     extra_configurable: dict | None = None,
     named_model: NamedModel | None = None,
-    role: AgentRole = "analyst",
 ):
     """Async generator that streams PTC agent workflow events.
 
@@ -216,9 +215,12 @@ async def astream_ptc_workflow(
     the turn's tools read it.
 
     ``named_model`` is the model a client named for this thread, kept on it
-    once the turn is admitted; automations never pass one. ``role`` is the
-    turn route's, so the flag decides it in one place.
+    once the turn is admitted; automations never pass one. ``route`` comes
+    from ``turn_route`` and has no default, so routing decides the workspace
+    and the role in one place and no caller runs Home as an analyst by
+    leaving one out.
     """
+    workspace_id = route.workspace_id
     start_time = time.time()
     handler = None
     run_handle = None
@@ -301,7 +303,6 @@ async def astream_ptc_workflow(
             # A hand-off into a running turn answers the dispatch primer
             # with DISPATCH_STEERED_MARKER and that run's id.
             agent=agent_steer_of(request, dispatched=dispatched, run_id=run_id),
-            agent_mode=request.agent_mode,
             can_steer=steer_allowed(
                 request, dispatched=dispatched, steerable=steerable
             ),
@@ -325,7 +326,6 @@ async def astream_ptc_workflow(
             thread_id,
             workspace_id,
             user_id,
-            msg_type="ptc",
             initial_query=user_input,
         )
         # /retry builds its attempt with no surface: it runs where the
@@ -359,13 +359,12 @@ async def astream_ptc_workflow(
                 user_id,
                 request.llm_model,
                 is_byok,
-                mode="ptc",
                 reasoning_effort=getattr(request, "reasoning_effort", None),
                 fast_mode=getattr(request, "fast_mode", None),
                 thread_id=thread_id,
                 enabled_subagents=request.subagents_enabled,
                 workspace_id=workspace_id,
-                role=role,
+                role=route.role,
             )
 
         # Persist query start
@@ -377,16 +376,15 @@ async def astream_ptc_workflow(
         # passes it false while still paying its own vendor bill.
         own_key = is_own_key_turn(config)
         query_metadata = {
-            # The resolved one: a request may name none, or name Flash's.
+            # The resolved one: a request may name none, or a former flash row.
             "workspace_id": workspace_id,
-            "msg_type": "ptc",
         }
         if effective_model:
             query_metadata["llm_model"] = effective_model
         query_metadata.update(provenance_metadata(request))
 
         # Extract attachment and context metadata for display in history
-        # (PTC skips this block for HITL resumes — contrast with Flash)
+        # (skipped for HITL resumes)
         widget_ctxs = parse_widget_contexts(request.additional_context)
         chart_selections = parse_chart_selection_contexts(request.additional_context)
         if request.additional_context and not request.hitl_response:
@@ -414,9 +412,8 @@ async def astream_ptc_workflow(
                 request,
                 query_metadata,
                 user_input,
-                mode="ptc",
                 extra_commands=user_skill_commands(config),
-                allowed_skills=turn_skill_names(config, "ptc"),
+                allowed_skills=turn_skill_names(config),
             )
 
         if request.hitl_response:
@@ -447,7 +444,6 @@ async def astream_ptc_workflow(
             scope=scope,
             thread_id=thread_id,
             run_id=run_id,
-            msg_type="ptc",
             workspace_id=workspace_id,
             user_id=user_id,
             is_byok=is_byok,
@@ -619,7 +615,7 @@ async def astream_ptc_workflow(
 
         _mark_phase("session")
 
-        if role == "chief_of_staff":
+        if route.role == "chief_of_staff":
             # Home is often the workspace whose turn recreated the sandbox,
             # and its agent reads and edits the other workspaces' folders.
             await workspace_manager.restore_sibling_folders(session, workspace_id)
@@ -707,7 +703,7 @@ async def astream_ptc_workflow(
             turn_context=turn_context,
             project=project,
             tool_view=tool_view,
-            role=role,
+            role=route.role,
             # A port, not a value: the switch can flip mid-turn from any
             # worker, so the agent re-reads the row on every call.
             subagent_switch=partial(read_thread_subagents_allowed, thread_id),
@@ -730,7 +726,7 @@ async def astream_ptc_workflow(
                 base=base_checkpoint_id,
             )
         elif (
-            role == "chief_of_staff"
+            route.role == "chief_of_staff"
             and request.hitl_response
             and not request.checkpoint_id
         ):
@@ -762,9 +758,8 @@ async def astream_ptc_workflow(
             skill_contexts = prepare_skill_contexts(
                 messages,
                 request,
-                mode="ptc",
                 extra_commands=user_skill_commands(config),
-                allowed_skills=turn_skill_names(config, "ptc"),
+                allowed_skills=turn_skill_names(config),
             )
         else:
             skill_contexts = None
@@ -865,7 +860,6 @@ async def astream_ptc_workflow(
             thread_id=thread_id,
             user_id=user_id,
             workspace_id=workspace_id,
-            mode="ptc",
             timezone_str=turn_context.tool_timezone,
             token_callback=token_callback,
             request=request,
@@ -918,7 +912,7 @@ async def astream_ptc_workflow(
         # _finalize_run before this callback fires. A failure here is logged
         # by the caller and never changes the run's outcome.
         async def on_background_workflow_complete(task_info):
-            # Flash report-back moved to the hook outbox (1.7): finalize
+            # Report-back moved to the hook outbox (1.7): finalize
             # enqueues a durable report_back job, so a crash right here can
             # no longer drop the dispatch. This callback keeps only
             # best-effort sandbox housekeeping.
@@ -981,7 +975,6 @@ async def astream_ptc_workflow(
                 "sandbox": session.sandbox if session else None,
                 "started_at": datetime.now().isoformat(),
                 "start_time": start_time,
-                "msg_type": "ptc",
                 "is_byok": is_byok,
                 "burst_slot_id": request.burst_slot_id,
                 "locale": request.locale,
@@ -1074,8 +1067,6 @@ async def astream_ptc_workflow(
             start_time=start_time,
             request=request,
             is_byok=is_byok,
-            msg_type="ptc",
-            log_prefix="PTC_CHAT",
             turn_context=turn_context,
         ):
             yield event

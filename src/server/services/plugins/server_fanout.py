@@ -208,8 +208,8 @@ async def fan_out_servers(
         )
     # These rows land ENABLED, so they are in delivery the moment they commit
     # and nothing else on this path probes them. A remote row with no verdict
-    # of its own earns no egress grant, which leaves its direct tools and Flash
-    # dark until a catalog listing self-heals it.
+    # of its own earns no egress grant, which leaves its direct tools dark
+    # until a catalog listing self-heals it.
     for result in mcp_report.results:
         if result["status"] == "created":
             schedule_catalog_discovery(

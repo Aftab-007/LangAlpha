@@ -1,9 +1,9 @@
-"""The three runtime-context middlewares, built once for both agent flavors.
+"""The three runtime-context middlewares, built together.
 
-PTC and Flash assemble different tools and different baselines, but the three
-middlewares that tell the model what world it is running in are the same three
-in the same relative order. Built here, a change to that wiring cannot land in
-one stack and miss the other.
+They tell the model what world it is running in, and each has a position in
+the stack it has to take relative to the others (see ``ContextMiddleware``).
+Built here as one unit, a change to that wiring cannot land in one of them and
+miss the rest.
 """
 
 from __future__ import annotations
@@ -54,7 +54,6 @@ def build_context_middleware(
     model_name: str | None,
     turn_context: TurnContext | None = None,
     user_profile: dict | None = None,
-    sandbox_enabled: bool,
     session: Any | None = None,
     workspace_name: str | None = None,
     workspace_description: str | None = None,
@@ -67,12 +66,11 @@ def build_context_middleware(
 ) -> ContextMiddleware:
     """Wire the turn row, the per-thread baseline and the tail envelope.
 
-    Everything from ``session`` down is the baseline's own material, which is
-    where the two flavors differ: PTC reads a workspace and a sandbox, Flash
-    carries the user's identity and the memory index alone. ``blocks`` is the
-    same split for the harness-authored text: both flavors state their skills
-    manifest, only PTC has an MCP roster to state. ``role`` reaches the blocks
-    whose wording differs by role; a build that names none is the analyst.
+    Everything from ``session`` down is the baseline's own material: the
+    workspace and its sandbox to read, the store-backed tiers, and in
+    ``blocks`` the harness-authored text the build states. ``role`` reaches
+    the blocks whose wording differs by role; a build that names none is the
+    analyst.
     """
     turn = turn_context or TurnContext()
     preferred_market = _preferred_market(user_profile, user_data_counts)
@@ -98,7 +96,6 @@ def build_context_middleware(
             blocks=blocks,
             user_profile=user_profile,
             user_data_counts=user_data_counts,
-            sandbox_enabled=sandbox_enabled,
             preferred_market=preferred_market,
             timezone=turn.timezone,
             guidance=guidance,

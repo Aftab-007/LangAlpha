@@ -12,10 +12,6 @@ from typing import TYPE_CHECKING, Any
 
 from ptc_agent.agent.context_stack import SubagentContext
 from ptc_agent.agent.middleware import SubAgentMiddleware
-from ptc_agent.agent.middleware.skills.registry import (
-    SUBAGENT_WITHHELD_SKILLS,
-    build_effective_skill_registry,
-)
 from ptc_agent.agent.subagents import SubagentCompiler, create_subagents
 from ptc_agent.agent.subagents.merge import turn_roster
 from ptc_agent.agent.tools import think_tool
@@ -26,6 +22,7 @@ if TYPE_CHECKING:
         BlockReader,
         TurnContext,
     )
+    from ptc_agent.agent.middleware.skills.registry import SkillDefinition
     from ptc_agent.agent.roles import AgentRole
     from ptc_agent.config.agent import AgentConfig
     from ptc_agent.core.project_context import ProjectContext
@@ -53,6 +50,7 @@ def compile_subagents(
     project: ProjectContext | None,
     sources: BaselineSources | None,
     skills: BlockReader,
+    skill_registry: dict[str, SkillDefinition],
     scratchpad: str | None,
 ) -> list[dict[str, Any]]:
     """The turn's roster for ``role``, as the specs ``SubAgentMiddleware`` takes.
@@ -61,6 +59,7 @@ def compile_subagents(
     unless its settings call for a copy (``search_tool``, ``sandbox_tools``).
     ``sources``, ``skills`` and ``scratchpad`` are the main agent's, which
     each subagent's baseline narrows to what its definition reaches.
+    ``skill_registry`` is the build's, less the skills no subagent gets.
     """
     tool_sets: dict[str, list[Any]] = {
         "execute_code": [execute_code],
@@ -71,20 +70,6 @@ def compile_subagents(
         "think": [think_tool],
         "todo": todo,
     }
-    # The compiler gets its own registry: same per-user gates, but
-    # mode-unfiltered, since subagent definitions may be flash-mode and preload
-    # flash-only skills the ptc-filtered registry excludes. It drops the chart
-    # guide for the same reason the subagent manifest does.
-    skill_registry = build_effective_skill_registry(
-        None,
-        feature_resolver=config.feature_enabled,
-        disabled_skills=config.disabled_skills,
-        user_skills=config.user_skills,
-        user_skill_dir=config.user_skill_dir,
-        workspace_skill_dir=config.workspace_skill_dir,
-    )
-    for name in SUBAGENT_WITHHELD_SKILLS:
-        skill_registry.pop(name, None)
     compiler = SubagentCompiler(
         sandbox=sandbox,
         mcp_registry=mcp_registry,

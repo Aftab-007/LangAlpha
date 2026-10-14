@@ -81,11 +81,8 @@ def steer_payload(
     platform: str | None = None,
     request_key: str | None = None,
     origin: dict | None = None,
-    agent_mode: str | None = None,
 ) -> dict[str, Any]:
-    """A main-thread steer job's payload, before any lifecycle key.
-    ``agent_mode`` is the send's own, so a turn the steer becomes is routed
-    as the send was."""
+    """A main-thread steer job's payload, before any lifecycle key."""
     # Half a surrogate pair gets through the request's JSON parser but cannot
     # be stored as JSONB or encoded for the wire.
     content = content.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
@@ -100,7 +97,6 @@ def steer_payload(
         "chat_app": is_chat_app(platform),
         "request_key": request_key,
         "origin": origin,
-        "agent_mode": agent_mode,
     }
 
 

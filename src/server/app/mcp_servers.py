@@ -487,10 +487,6 @@ async def set_enabled(
     workspace_id: str, name: str, body: EnabledInput, user_id: CurrentUserId
 ) -> dict:
     workspace = await _require_owned_workspace(workspace_id, user_id)
-    # The flash workspace has no sandbox to warm: its next turn re-resolves
-    # on its own, and the toggle only decides whether Flash binds the
-    # server's direct tools.
-    is_flash = workspace.get("status") == "flash"
 
     if name in builtin_names():
         # Built-ins are toggled by an explicit (source='builtin', enabled=false)
@@ -507,11 +503,7 @@ async def set_enabled(
             await upsert_workspace_server(
                 workspace_id, name, source="builtin", enabled=False, config=None
             )
-        if not is_flash:
-            await _sync_sandbox_grants_now(workspace_id, user_id)
-            schedule_proactive_apply(workspace_id, user_id)
-        else:
-            await _sync_flash_grants_now(workspace_id, user_id)
+        await _apply_toggle_now(workspace, workspace_id, user_id)
         return {"name": name, "enabled": body.enabled}
 
     ref = await classify_server_name(workspace_id, user_id, name)
@@ -553,12 +545,24 @@ async def set_enabled(
         case _:
             # A disable-marker whose built-in no longer exists: nothing to toggle.
             raise HTTPException(status_code=404, detail=NOT_FOUND)
-    if not is_flash:
-        await _sync_sandbox_grants_now(workspace_id, user_id)
-        schedule_proactive_apply(workspace_id, user_id)
-    else:
-        await _sync_flash_grants_now(workspace_id, user_id)
+    await _apply_toggle_now(workspace, workspace_id, user_id)
     return {"name": name, "enabled": body.enabled}
+
+
+async def _apply_toggle_now(
+    workspace: dict, workspace_id: str, user_id: str
+) -> None:
+    """Retire the toggled-off grants now, and warm the change in if there is a sandbox.
+
+    A flash row (Home before its first turn, or a former one) is on no
+    computer, so there is no sandbox to warm, and the acquire would only fail;
+    the turn that binds Home applies the config then. Its grants are still
+    synced: they are scoped to the row while it has no computer, and the order
+    reconcile reads through any active grant of the user's.
+    """
+    await _sync_sandbox_grants_now(workspace_id, user_id)
+    if workspace.get("status") != "flash":
+        schedule_proactive_apply(workspace_id, user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -651,52 +655,8 @@ async def discover_server(
     return {"server": _discovery_row_to_dict(row)}
 
 
-async def _sync_flash_grants_now(workspace_id: str, user_id: str) -> None:
-    """Bring a flash workspace's relay grants to its new scope before replying.
-
-    The flash workspace has no sandbox, so ``schedule_proactive_apply`` has
-    nothing to warm and is skipped for it. Its grants still need retiring: a
-    Flash turn already in flight holds the set it bound with, and the per-call
-    ``DirectMCPBinding.check`` rereads connection status and consent but not
-    workspace scope, so the grant is the *only* thing standing between a
-    narrowed scope and a turn that keeps reaching the vendor.
-
-    Awaited rather than scheduled, unlike its sibling: that sibling warms a
-    sandbox and is safe to be late, while this one enforces a revocation, and a
-    200 on the toggle has to mean the revocation happened. It costs a few local
-    reads (``resolve_mcp_config`` reads rows, it does not dial anyone), and a
-    failure surfaces on the request that caused it instead of in a task nobody
-    is waiting on.
-    """
-    from src.server.app import setup
-
-    base_config = setup.agent_config
-    if base_config is None:
-        return
-    from src.server.services.egress.flash_binding import sync_flash_grants
-    from src.server.services.egress.grant_resync import GrantSyncSuperseded
-
-    try:
-        await sync_flash_grants(
-            base_config, user_id=user_id, workspace_id=workspace_id
-        )
-    except GrantSyncSuperseded:
-        # 503 rather than 500: nothing is broken, a burst of concurrent config
-        # writes simply kept winning the version race. The row change itself
-        # committed already, and repeating the same toggle runs this sync again
-        # (it is driven unconditionally, not off a change in value), so a retry
-        # is what closes it.
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Could not retire this workspace's connector grants while other "
-                "changes were saving. Please try again."
-            ),
-        ) from None
-
-
 async def _sync_sandbox_grants_now(workspace_id: str, user_id: str) -> None:
-    """Retire a sandbox workspace's out-of-scope relay grants before replying.
+    """Retire a workspace's out-of-scope relay grants before replying.
 
     ``schedule_proactive_apply`` converges these too, but it sleeps first and
     swallows its own failures, so between the 200 and that task a turn already
@@ -708,8 +668,7 @@ async def _sync_sandbox_grants_now(workspace_id: str, user_id: str) -> None:
 
     The kept set is the one ``sync_egress_relay`` keeps, which is why it is
     read from the same ``grant_scope``: narrowing it to the directly bound
-    servers, as the flash path does, would retire the grants the sandbox
-    wrappers dial through.
+    servers would retire the grants the sandbox wrappers dial through.
     """
     from src.server.app import setup
 
@@ -720,10 +679,11 @@ async def _sync_sandbox_grants_now(workspace_id: str, user_id: str) -> None:
     from src.server.services.egress.grant_scope import grant_refs, user_snapshots
 
     snapshots = await user_snapshots(user_id)
-    # Unlike the flash sibling this one does not raise when the retries are
-    # exhausted: ``schedule_proactive_apply`` runs behind it and re-resolves,
-    # so the retirement has somewhere else to land, and failing the toggle
-    # would be the harsher answer to a race that fixes itself.
+    # Not raised when the retries are exhausted: ``schedule_proactive_apply``
+    # runs behind it and re-resolves, so the retirement has somewhere else to
+    # land, and failing the toggle would be the harsher answer to a race that
+    # fixes itself. A row on no computer has no apply behind it, but no turn
+    # holds its grants either: the turn that binds it syncs the whole set.
     await sync_grants_until_current(
         base_config,
         user_id=user_id,

@@ -10,6 +10,7 @@ user's to confirm on its own card, never approved in advance. ``agent_output``
 is how it reads a thread, so its ``manage_threads`` has no second way to.
 """
 
+import logging
 from typing import Annotated
 
 from langchain.tools import InjectedState
@@ -17,18 +18,30 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.types import Command
 
-from src.tools.secretary._commands import InjectedToolCallId, error_command
+from ptc_agent.agent.limits import pending_read
+from src.tools.secretary._commands import (
+    InjectedToolCallId,
+    error_command,
+    success_command,
+    verify_thread_owner,
+)
 from src.tools.secretary.approvals import preapproved
 from src.tools.secretary.dispatch import dispatch
 from src.tools.secretary.tools import (
     _workspaces_delete,
-    agent_output,
     threads_delete,
     threads_list,
     threads_stop,
     workspaces_create,
     workspaces_list,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _timezone(configurable: dict) -> str:
+    """The user's zone, which a run's label states its start time in."""
+    return configurable.get("timezone") or "UTC"
 
 
 @tool("manage_workspaces")
@@ -57,11 +70,7 @@ async def chief_of_staff_workspaces(
     if not user_id:
         return error_command("user_id not found in config", tool_call_id)
     if action == "list":
-        from src.server.database.home_workspace import get_flash_workspace_id
-
-        return await workspaces_list(
-            user_id, tool_call_id, home_id=get_flash_workspace_id(user_id)
-        )
+        return await workspaces_list(user_id, tool_call_id)
     if action == "create":
         return await workspaces_create(
             user_id, name, description, tool_call_id,
@@ -110,8 +119,51 @@ async def delegate_to_analyst(
     return await dispatch(
         question, config, workspace_id, thread_id, report_back, tool_call_id,
         preapproved=preapproved(state, tool_call_id),
-        dispatcher="chief_of_staff",
     )
+
+
+@tool("agent_output")
+async def agent_output(
+    thread_id: str,
+    config: RunnableConfig,
+    turns: int = 1,
+    tool_call_id: Annotated[str, InjectedToolCallId] = "",
+) -> Command:
+    """Read what a thread's agent wrote, in any of the user's workspaces, while it runs or after.
+
+    Args:
+        thread_id: The thread to read.
+        turns: How many of the most-recent turns to return. Default 1 (only the
+            latest turn's output). Pass a larger N for the last N turns, or 0
+            for recent history (up to the 50 most recent turns); multiple turns
+            are separated by '---'. A turn still streaming returns only that
+            live turn.
+
+    Returns:
+        The agent's reply text, not its tool calls, each run under a line with its start time, how it ended and whether it was a report-back, and whether the thread is still running.
+    """
+    configurable = config.get("configurable", {})
+    user_id = configurable.get("user_id")
+    if not user_id:
+        return error_command("user_id not found in config", tool_call_id)
+
+    if err := await verify_thread_owner(thread_id, user_id, tool_call_id):
+        return err
+
+    from src.tools.secretary.utils import extract_text_from_thread
+
+    try:
+        result = await extract_text_from_thread(
+            thread_id, turns, timezone=_timezone(configurable)
+        )
+    except Exception as e:
+        logger.error(f"Failed to extract text from thread {thread_id}: {e}")
+        return error_command("failed to retrieve thread output", tool_call_id)
+
+    # A read of a thread mid-run is marked for the loop guard, which cannot
+    # tell a poll from the text: a live run's text grows between reads.
+    running = result.get("status") == "running"
+    return success_command(result, tool_call_id, pending_read() if running else None)
 
 
 @tool("manage_threads")

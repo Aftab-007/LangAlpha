@@ -666,39 +666,6 @@ async def _reap_orphan_members(
     return removed
 
 
-async def check_dispatch_capacity(flash_thread_id: str | None, user_id: str) -> str | None:
-    """Advisory cap read for callers about to do expensive pre-dispatch work.
-
-    Returns the cap error ``reserve()`` would raise for a NEW dispatch right
-    now, else None. Takes no reservation — ``reserve()`` stays the atomic
-    authority — and fails open like it (report_back off / Redis off / error
-    -> None). An over-cap read reaps orphaned members once and re-checks, so
-    a stranded membership can't wedge the pre-check permanently.
-    """
-    if not flash_thread_id:
-        return None
-    try:
-        from src.utils.cache.redis_cache import get_cache_client
-
-        cache = get_cache_client()
-        if not (cache.enabled and cache.client):
-            return None
-        for attempt in range(2):
-            error = None
-            if await cache.client.scard(flash_watch_key(flash_thread_id)) >= MAX_DISPATCH_PER_FLASH:
-                error = _cap_error_flash()
-            elif await cache.client.scard(flash_user_pending_key(user_id)) >= MAX_DISPATCH_PER_USER:
-                error = _cap_error_user()
-            if error is None:
-                return None
-            if attempt == 0 and await _reap_orphan_members(cache, flash_thread_id, user_id):
-                continue
-            return error
-    except Exception as e:
-        logger.warning(f"Dispatch capacity pre-check failed: {e}")
-        return None
-
-
 # In-process serialization of same-pair reservation lifecycles (reserve →
 # dispatch → commit/rollback). Without it, two overlapping cycles for ONE
 # ptc pair can interleave so the later one's rollback restores the earlier

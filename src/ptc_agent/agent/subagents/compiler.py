@@ -3,7 +3,7 @@
 The compiler handles:
   * Prompt rendering (custom_prompt > custom_prompt_template > base + role)
   * Tool-set resolution from string identifiers
-  * Skill integration (runtime + preload)
+  * Preloaded skill bodies
   * Section-toggle computation (mode defaults + definition overrides)
 """
 
@@ -17,7 +17,7 @@ import structlog
 
 from ptc_agent.agent.middleware.runtime_context.profile import TRADING_KEYS
 from ptc_agent.agent.middleware.skills.content import load_skill_content
-from ptc_agent.agent.middleware.skills.registry import SKILL_REGISTRY, SkillDefinition
+from ptc_agent.agent.middleware.skills.registry import SkillDefinition
 from ptc_agent.agent.prompts import (
     RegistryTools,
     format_registry_tools,
@@ -451,12 +451,12 @@ class SubagentCompiler:
         return own
 
     def _resolve_tools(self, defn: SubagentDefinition) -> list[Any]:
-        """Resolve tool-set identifiers + skills to tool objects."""
+        """Resolve tool-set identifiers to tool objects."""
         tools: list[Any] = []
         own = self._own_tools(defn)
 
-        # 1. Resolve tool-set identifiers, with this subagent's own copy in
-        # place of any shared tool it has one of
+        # Each tool-set identifier, with this subagent's own copy in place of
+        # any shared tool it has one of
         for tool_id in defn.tools:
             tool_list = self._tool_sets.get(tool_id)
             if tool_list is not None:
@@ -469,18 +469,6 @@ class SubagentCompiler:
                     available=list(self._tool_sets),
                 )
 
-        # 2. Add the tools of each skill in ``skills``. A preloaded skill binds
-        # none: ``preload_skills`` is also the user's preferred list, which
-        # changes what a subagent reaches for, never what it can use. The
-        # per-build registry keeps a skill the main agent dropped (feature
-        # gate, user disable) from handing its tools to a subagent anyway.
-        registry = self._skill_registry if self._skill_registry is not None else SKILL_REGISTRY
-        for skill_name in dict.fromkeys(defn.skills):
-            skill = registry.get(skill_name)
-            if skill and skill.tools:
-                tools.extend(skill.tools)
-
-        # 3. Add extra raw tool objects
         tools.extend(defn.extra_tools)
 
         return tools

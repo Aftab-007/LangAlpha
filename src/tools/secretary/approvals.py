@@ -21,27 +21,18 @@ AUTO_APPROVE_HANDOFFS = "auto_approve_handoffs"
 AUTO_APPROVE_WORKSPACE_CREATION = "auto_approve_workspace_creation"
 AUTO_APPROVE_KEYS = (AUTO_APPROVE_HANDOFFS, AUTO_APPROVE_WORKSPACE_CREATION)
 
-_HANDOFF_TOOLS = frozenset({"delegate_to_analyst", "ptc_agent"})
 
-
-def _settings_for(call: dict[str, Any]) -> frozenset[str]:
-    """The settings that, all granted, let ``call`` run without its card.
-
-    A hand-off naming neither a workspace nor a thread creates a workspace
-    first (Flash's ``ptc_agent``; ``delegate_to_analyst`` refuses it), so it
-    needs the yes to new workspaces as well as the one to hand-offs.
-    """
+def _settings_for(call: dict[str, Any]) -> str | None:
+    """The setting that, granted, lets ``call`` run without its card."""
     args = call.get("args")
     if not isinstance(args, dict):
         args = {}
     name = call.get("name")
-    if name in _HANDOFF_TOOLS:
-        if args.get("workspace_id") or args.get("thread_id"):
-            return frozenset({AUTO_APPROVE_HANDOFFS})
-        return frozenset(AUTO_APPROVE_KEYS)
+    if name == "delegate_to_analyst":
+        return AUTO_APPROVE_HANDOFFS
     if name == "manage_workspaces" and args.get("action") == "create":
-        return frozenset({AUTO_APPROVE_WORKSPACE_CREATION})
-    return frozenset()
+        return AUTO_APPROVE_WORKSPACE_CREATION
+    return None
 
 
 async def _granted(user_id: str) -> set[str]:
@@ -92,7 +83,7 @@ class StandingApprovalMiddleware(AgentMiddleware):
         granted = await _granted(self._user_id)
         return {
             "preapproved_calls": [
-                call_id for call_id, needed in wanted.items() if needed <= granted
+                call_id for call_id, needed in wanted.items() if needed in granted
             ]
         }
 

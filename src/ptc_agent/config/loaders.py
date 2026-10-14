@@ -28,7 +28,6 @@ from typing import Any
 from ptc_agent.config.agent import (
     AgentConfig,
     CompactionConfig,
-    FlashConfig,
     LLMConfig,
     SkillsConfig,
     SubagentConfig,
@@ -328,13 +327,6 @@ def load_from_dict(
         ),
     )
 
-    # Load Flash configuration (optional section)
-    # Flash LLM is now in llm.flash; compaction uses main compaction config
-    flash_data = config_data.get("flash") or {}
-    flash_config = FlashConfig(
-        enabled=flash_data.get("enabled", True),
-    )
-
     # Load Compaction configuration (optional section)
     compaction_data = config_data.get("compaction") or {}
     compaction_config = CompactionConfig(**compaction_data) if compaction_data else CompactionConfig()
@@ -352,7 +344,6 @@ def load_from_dict(
         mcp=mcp_config,
         filesystem=filesystem_config,
         skills=skills_config,
-        flash=flash_config,
         subagents=subagents_config,
         compaction=compaction_config,
         search_api=search_api,
@@ -382,7 +373,7 @@ cli:
 # Model name from src/llms/manifest/models.json
 llm:
   name: "your-model-name"       # Required: primary model from models.json
-  # flash: "your-flash-model"   # Optional: model for flash agent
+  # flash: "your-flash-model"   # Optional: model for background work
   # compaction: "your-model"    # Optional: model for context compaction
   # fetch: "your-model"         # Optional: model for web content extraction
   # fallback:                   # Optional: fallback models when primary fails

@@ -273,7 +273,7 @@ async def aoffload_base64_content(
     2. Upload to ``.agents/threads/{thread_id}/`` via ``backend.aupload_files``
     3. Replace the block with a text reference to the saved file
 
-    When ``backend`` is None (e.g. flash agent with no sandbox), falls back to
+    When ``backend`` is None (a build with no sandbox), falls back to
     :func:`strip_base64_from_messages` which replaces base64 with simple
     ``[Image]`` / ``[PDF: name]`` placeholders.
 

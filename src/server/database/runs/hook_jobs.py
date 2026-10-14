@@ -169,9 +169,7 @@ def build_finalize_jobs(
             # failed or stopped one wakes the watcher so the card reconciles.
             # An interrupted summary is waiting on the user, not over: the
             # next turn on its thread takes the pair over and owes the
-            # release instead (see ``carried_pair``). It may run on either
-            # agent: Home answers it when the user has the all-workspaces
-            # agent.
+            # release instead (see ``carried_pair``).
             if final_status != "interrupted":
                 jobs.append(
                     HookJob(
@@ -212,9 +210,9 @@ def build_finalize_jobs(
                         ordering_key=okey,
                     )
                 )
-        # Any other run is a Flash turn outside a report-back and owes
-        # neither: a pair is keyed on the dispatched PTC thread, never on a
-        # Flash one.
+        # Any other run is one the retired Flash agent started, finalized
+        # after the release that removed it, and owes neither: a pair is keyed
+        # on the dispatched PTC thread, never on the thread watching it.
         return jobs
 
     return _jobs

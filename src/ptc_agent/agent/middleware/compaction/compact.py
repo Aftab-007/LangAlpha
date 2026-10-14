@@ -131,6 +131,9 @@ class Summarizer:
     #: model when one picked for compaction writes it, else the model the
     #: turn falls back to.
     fallback: BaseChatModel | None = None
+    #: The user's own skill names, which the reload note may send the agent
+    #: back to even under a retired built-in's name.
+    user_skills: frozenset[str] = frozenset()
 
     @classmethod
     def for_agent(cls, config: AgentConfig) -> Summarizer:
@@ -144,6 +147,7 @@ class Summarizer:
             model,
             config.compaction.token_threshold + _SUMMARY_HEADROOM,
             fallback=_summary_fallback(config),
+            user_skills=frozenset(spec.name for spec in config.user_skills),
         )
 
     async def compact(
@@ -223,8 +227,8 @@ class Summarizer:
             to_summarize=to_summarize,
             preserved=preserved,
             original_count=len(view),
-            skill_files=backend is not None,
             notes=notes,
+            user_skills=self.user_skills,
         )
         return Compaction(event, summary, len(view), preserved)
 
@@ -248,16 +252,15 @@ def build_summary_event(
     to_summarize: Sequence[AnyMessage],
     preserved: list[AnyMessage],
     original_count: int,
-    skill_files: bool = False,
     notes: str = "",
+    user_skills: frozenset[str] = frozenset(),
 ) -> CompactionEvent:
     """The event putting ``summary`` in place of ``to_summarize``, pointing
     at the transcript ``turns`` numbers when there is one.
 
     The skills whose instructions go with ``to_summarize`` are listed from the
     messages, not from the summary: a summarizer may drop a name, and the
-    agent mid-procedure needs every one to reload. ``skill_files`` says how
-    the agent reloads one (see ``skill_reload_note``).
+    agent mid-procedure needs every one to reload.
     """
     # A summary of an earlier summary alone stands in for the same turns.
     earlier = summarized_span(to_summarize[0]) if to_summarize else None
@@ -272,8 +275,7 @@ def build_summary_event(
         original_count,
         span=span,
         index=turns.index(span.last) if turns is not None and span is not None else (),
-        skills=compacted_skills(to_summarize, preserved),
-        skill_files=skill_files,
+        skills=compacted_skills(to_summarize, preserved, user_skills),
         source=summary.source,
         notes=notes,
     )

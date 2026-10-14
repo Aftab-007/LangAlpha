@@ -33,7 +33,7 @@ from src.server.services.automation_settlement import (
 )
 from src.server.services.runs.admission import BUSY_STATES
 from src.server.services.thread_lifecycle_feed import publish_automation_wait
-from src.server.services.turn_runtime import TurnRoute, resolve_turn_route
+from src.server.services.turn_runtime import TurnRoute, ensure_home, turn_route
 from src.server.services.webhook_client import WebhookClient
 from src.observability.tracing import hash_id as _obs_hash_id, tracer as _otel_tracer
 
@@ -68,13 +68,11 @@ class _Firing:
     reached whichever way it ends.
 
     ``automation`` is re-read after every wait, and ``delivery`` follows its
-    entries as they then stand. ``agent_mode`` stays the one the thread and
-    workspace were resolved for, and ``route`` is where that resolution sent
-    the turn.
+    entries as they then stand. ``route`` is where the turn was sent, resolved
+    once for the automation as it stood then.
     """
 
     automation: Dict[str, Any]
-    agent_mode: str
     route: Optional[TurnRoute] = None
     thread_id: Optional[str] = None
     run_id: Optional[str] = None
@@ -253,32 +251,54 @@ async def _credentials(user_id: str) -> tuple[bool, bool]:
     return has_byok, has_byok or has_oauth
 
 
-async def _resolve_route(
-    automation: Dict[str, Any], *, bind_home: bool = True
-) -> TurnRoute:
-    """Where the automation's turn runs, asked where every other turn asks.
+def _pinned_thread(automation: Dict[str, Any]) -> Optional[str]:
+    """The thread a 'continue' automation runs on, once it has one."""
+    thread_id = automation.get("conversation_thread_id")
+    if automation.get("thread_strategy") != "continue" or not thread_id:
+        return None
+    return str(thread_id)
 
-    Flash runs in the user's shared flash workspace, created on demand, or in
-    Home under the all-workspaces agent. PTC runs in the stored workspace,
-    whose ownership was verified when the automation was written, unless that
-    is the flash workspace: the Chief of Staff stores its automations there,
-    and with the flag off they run on Flash like any other turn there.
-    ``bind_home`` False asks where without binding Home, for a firing that
-    will not run.
+
+async def _turn_workspace(automation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The workspace row the automation's turn names; None runs it in Home.
+
+    A flash automation names the workspace of the thread it continues, so it
+    runs there as a message sent on that thread would, and names none until
+    it has one. A PTC one names its stored workspace, whose ownership was
+    verified when the automation was written; for the Chief of Staff's own
+    automations that is its flash row, which routes Home.
     """
+    from src.server.database.workspace import get_workspace
+
     if automation["agent_mode"] == "flash":
-        return await resolve_turn_route(
-            automation["user_id"], "flash", None, bind_home=bind_home
-        )
+        thread_id = _pinned_thread(automation)
+        if thread_id is None:
+            return None
+        from src.server.database.conversation import get_thread_auth_meta
+
+        meta = await get_thread_auth_meta(thread_id)
+        if meta is None:
+            return None
+        # The turn runs on the pinned thread wherever it is routed, so a
+        # thread another account holds fails the firing.
+        if str(meta["user_id"]) != str(automation["user_id"]):
+            raise ValueError("The automation's thread belongs to another account")
+        return await get_workspace(str(meta["workspace_id"]))
     ws_id = automation.get("workspace_id")
     if not ws_id:
         raise ValueError(
             "PTC mode requires a workspace_id, but automation has none "
             "(workspace may have been deleted)"
         )
-    return await resolve_turn_route(
-        automation["user_id"], "ptc", str(ws_id), bind_home=bind_home
-    )
+    workspace = await get_workspace(str(ws_id))
+    if workspace is None:
+        # Refused here, before a thread is made in it: the turn could never
+        # start there.
+        raise ValueError(
+            "The automation's workspace was not found "
+            "(workspace may have been deleted)"
+        )
+    return workspace
 
 
 class AutomationExecutor:
@@ -308,7 +328,6 @@ class AutomationExecutor:
         automation: Dict[str, Any],
         thread_id: str,
         workspace_id: str,
-        msg_type: str,
     ) -> None:
         """Pre-create the run's thread titled "<automation name> — <date>".
 
@@ -330,7 +349,6 @@ class AutomationExecutor:
                 conversation_thread_id=thread_id,
                 workspace_id=workspace_id,
                 current_status="completed",
-                msg_type=msg_type,
                 thread_index=None,
                 title=f"{name} — {run_date}"[:255],
                 metadata={
@@ -345,22 +363,20 @@ class AutomationExecutor:
             logger.warning(f"[AUTOMATION_EXEC] Thread pre-create failed: {e}")
 
     async def _resolve_thread(
-        self, automation: Dict[str, Any], workspace_id: str, runtime: str
+        self, automation: Dict[str, Any], workspace_id: str
     ) -> str:
         """The pinned thread under 'continue', else a new titled one, which
         'continue' pins when it has none yet."""
-        strategy = automation.get("thread_strategy", "new")
-        if strategy == "continue" and automation.get("conversation_thread_id"):
-            return str(automation["conversation_thread_id"])
+        pinned = _pinned_thread(automation)
+        if pinned is not None:
+            return pinned
         thread_id = str(uuid4())
-        if strategy == "continue":
+        if automation.get("thread_strategy") == "continue":
             await auto_db.update_automation(
                 str(automation["automation_id"]), automation["user_id"],
                 conversation_thread_id=thread_id,
             )
-        await self._precreate_titled_thread(
-            automation, thread_id, workspace_id, runtime
-        )
+        await self._precreate_titled_thread(automation, thread_id, workspace_id)
         return thread_id
 
     async def _wait_for_thread(
@@ -539,16 +555,23 @@ class AutomationExecutor:
         run the messaging service takes ends there, its targets told it
         didn't finish, rather than by webhook.
 
-        An Analyst's route is resolved for the workspace an app-only entry
-        falls to; a Flash or Home run names none, so its route is left alone,
-        and nothing is bound for a firing that won't run. Never raises: the
-        firing settles either way, by webhook when nothing was started.
+        The route is resolved for the workspace an app-only entry falls to,
+        which only an Analyst's names, and nothing is bound for a firing that
+        won't run. Never raises: the firing settles either way, by webhook
+        when nothing was started.
         """
         if firing.delivery_starts:
             return
         try:
-            if firing.route is None and firing.agent_mode != "flash":
-                firing.route = await _resolve_route(firing.automation, bind_home=False)
+            if firing.route is None:
+                automation = firing.automation
+                route = turn_route(
+                    automation["user_id"], await _turn_workspace(automation)
+                )
+                # A flash automation names no workspace of its own, so one
+                # that never started reports none unless its thread is in one.
+                if route.role == "analyst" or automation["agent_mode"] != "flash":
+                    firing.route = route
         except Exception as e:
             logger.warning(
                 f"[AUTOMATION_EXEC] No route for the delivery of a firing that "
@@ -663,10 +686,7 @@ class AutomationExecutor:
         # TODO(layering): sanctioned services→handlers residual: automation
         # is an alternate run driver; fixing this means moving the run
         # entrypoints into services/runs/ with handlers as thin adapters.
-        from src.server.handlers.chat import (
-            astream_flash_workflow,
-            astream_ptc_workflow,
-        )
+        from src.server.handlers.chat import astream_ptc_workflow
 
         while True:
             automation = firing.automation
@@ -678,9 +698,7 @@ class AutomationExecutor:
                 "automation_id": str(automation["automation_id"]),
             }
             extra_configurable = None
-            # Flash has no messaging tools, so it is not told to send; the
-            # run's finish posts its answer to every target.
-            if firing.held and firing.route.agent != "flash":
+            if firing.held:
                 additional_context = [
                     *(additional_context or []),
                     {
@@ -692,7 +710,7 @@ class AutomationExecutor:
             if firing.delivery is not None:
                 run_metadata.update(automation_delivery.run_metadata(firing.delivery))
             request = ChatRequest(
-                agent_mode=firing.route.agent,
+                agent_mode="ptc",
                 workspace_id=firing.workspace_id,
                 messages=[ChatMessage(role="user", content=instruction)],
                 llm_model=automation.get("llm_model"),
@@ -708,34 +726,25 @@ class AutomationExecutor:
             # BTM / persistence / Redis stream.
             firing.run_id = str(uuid4())
             firing.admitted = admission_known = False
-            turn_args = dict(
+            turn = astream_ptc_workflow(
                 request=request,
                 thread_id=firing.thread_id,
                 run_id=firing.run_id,
                 user_input=instruction,
                 user_id=user_id,
+                route=firing.route,
                 is_byok=has_byok,
                 steerable=False,
                 # Stamped on the run at START, so its finalize settles this
                 # firing whichever worker is left to drain the job, and
                 # delivers the way its start chose.
                 run_metadata=run_metadata,
+                # Tools read the turn from the graph's config:
+                # ``send_message`` names the run the service holds, so its
+                # sends reach its targets, and a hand-off records them for
+                # the turn that reports its result back.
+                extra_configurable=extra_configurable,
             )
-            if firing.route.agent == "flash":
-                turn = astream_flash_workflow(
-                    **turn_args, flash_workspace=firing.route.flash_workspace
-                )
-            else:
-                turn = astream_ptc_workflow(
-                    **turn_args,
-                    workspace_id=firing.workspace_id,
-                    role=firing.route.role,
-                    # Tools read the turn from the graph's config:
-                    # ``send_message`` names the run the service holds, so
-                    # its sends reach its targets, and a hand-off records
-                    # them for the turn that reports its result back.
-                    extra_configurable=extra_configurable,
-                )
 
             # Drain the async generator: no HTTP client to consume SSE
             event_count = 0
@@ -816,21 +825,17 @@ class AutomationExecutor:
             name=f"automation_heartbeat_{execution_id[:8]}",
         )
 
-        firing = _Firing(automation=automation, agent_mode=agent_mode)
+        firing = _Firing(automation=automation)
         wait_deadline = time.monotonic() + _WAIT_CAP_SECONDS
         try:
             # ─── Wait out a running turn ──────────────────────────
             # A run on a pinned thread is a turn of its own, so it waits for
             # the reader's turn to end rather than steering into it. It waits
             # before the credit gate, whose verdict a long wait would outlive.
-            pinned = (
-                automation.get("conversation_thread_id")
-                if automation.get("thread_strategy") == "continue"
-                else None
-            )
-            if pinned and await _thread_busy(str(pinned)):
+            pinned = _pinned_thread(automation)
+            if pinned and await _thread_busy(pinned):
                 fresh = await self._wait_for_thread(
-                    automation, execution_id, str(pinned), wait_deadline
+                    automation, execution_id, pinned, wait_deadline
                 )
                 if fresh is None:
                     _exec_span.set_attribute("status", "skipped")
@@ -838,16 +843,19 @@ class AutomationExecutor:
                 # Nothing is resolved yet, so the run takes the automation
                 # as it now stands, its mode and thread included.
                 firing.automation = fresh
-                firing.agent_mode = fresh["agent_mode"]
 
             # ─── Credential check + credit gate ───────────────────
             has_byok, has_cred = await _credentials(user_id)
             await enforce_credit_limit(user_id, byok=has_cred)
 
             # ─── Resolve workspace + thread ───────────────────────
-            firing.route = await _resolve_route(firing.automation)
+            workspace = await _turn_workspace(firing.automation)
+            route = turn_route(user_id, workspace)
+            if route.role == "chief_of_staff":
+                await ensure_home(user_id, workspace)
+            firing.route = route
             firing.thread_id = await self._resolve_thread(
-                firing.automation, firing.workspace_id, firing.route.agent
+                firing.automation, firing.workspace_id
             )
             # The thread exists from here on, so record it on the run now: a
             # live run can then be opened and watched while it streams, not

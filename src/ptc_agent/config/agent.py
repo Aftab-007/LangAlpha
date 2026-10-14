@@ -88,15 +88,6 @@ COMPACTION_PROFILES: dict[str, dict[str, int]] = {
 }
 
 
-class FlashConfig(BaseModel):
-    """Flash agent configuration.
-
-    Flash agent is a lightweight agent optimized for speed
-    """
-
-    enabled: bool = True
-
-
 #: The operator's own drop-in directory, and the one place to override a
 #: shipped skill. Absolute rather than relative to the working directory, so it
 #: means the same thing whether the server was started from the repo or from
@@ -169,7 +160,6 @@ class SubagentConfig(BaseModel):
     custom_prompt_template: str | None = None
     custom_prompt: str | None = None
     tools: list[str] = Field(default_factory=lambda: ["execute_code", "filesystem"])
-    skills: list[str] = Field(default_factory=list)
     preload_skills: list[str] = Field(default_factory=list)
     sections: dict[str, bool] = Field(default_factory=dict)
     reasoning_effort: str | None = None
@@ -248,18 +238,17 @@ class LLMConfig(BaseModel):
     """LLM configuration - references an LLM from models.json."""
 
     name: str  # Name/alias from src/llms/manifest/models.json
-    flash: str | None = None  # LLM for flash agent, defaults to main llm if None
+    flash: str | None = None  # Background model, defaults to main llm if None
     compaction: str | None = None  # LLM for context compaction (summarization step)
     fetch: str | None = None  # LLM for web content extraction (fetch tool)
     fallback: list[str] | None = None  # Fallback model names for retry exhaustion
 
     @property
     def flash_name(self) -> str:
-        """The model a flash turn actually runs on, resolving the ``name`` fallback.
+        """The Background model, resolving the ``name`` fallback.
 
-        Callers outside the flash agent (metadata, tuning lookups) have to agree
-        with it on which model that is, so the rule lives here rather than being
-        spelled out at each site.
+        Callers (metadata, tuning lookups) have to agree on which model that
+        is, so the rule lives here rather than being spelled out at each site.
         """
         return self.flash or self.name
 
@@ -296,9 +285,6 @@ class AgentConfig(BaseModel):
 
     # Skills configuration
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
-
-    # Flash agent configuration
-    flash: FlashConfig = Field(default_factory=FlashConfig)
 
     # Custom model input modalities override (set by resolve_llm_config for custom models)
     input_modalities: list[str] | None = None

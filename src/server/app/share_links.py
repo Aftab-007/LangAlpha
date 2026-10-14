@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from src.server.app.share_access import ShareScope, shared_path_visible
 from src.server.app.workspace_files._containment import contained_relative_path
 from src.server.app.workspace_files._shared import (
+    HOME_NOT_ON_COMPUTER,
     _is_flash_workspace,
     owner_work_dir,
     previous_dir_names_of,
@@ -105,9 +106,7 @@ async def _owned_workspace(workspace_id: str, user_id: str) -> tuple[dict[str, A
     workspace = await db_get_workspace(workspace_id)
     require_workspace_owner(workspace, user_id=user_id)
     if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have shareable files"
-        )
+        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
     return workspace, owner_work_dir(workspace)
 
 

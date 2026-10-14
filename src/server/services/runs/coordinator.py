@@ -12,7 +12,7 @@ else may write a run's terminal state.
 import asyncio
 import logging
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Coroutine, Dict, Optional
 from uuid import uuid4
@@ -110,7 +110,6 @@ class RunHandle:
     thread_id: str
     turn_index: int
     attempt_no: int
-    msg_type: str  # 'ptc' | 'flash'
     workspace_id: Optional[str] = None
     user_id: Optional[str] = None
     is_byok: bool = False
@@ -165,6 +164,16 @@ def _with_detached_failure_kind(outcome: RunOutcome) -> RunOutcome:
     return outcome
 
 
+def _ran_on_computer(run: Optional[Dict[str, Any]]) -> bool:
+    """Whether the run's START stamp names the full agent, the one with a computer.
+
+    Read from the row, which a detached finalize has without the run's
+    process. A run the retired Flash agent started ('flash') had no computer,
+    and a row without the stamp is not taken to have one.
+    """
+    return ((run or {}).get("metadata") or {}).get("msg_type") == "ptc"
+
+
 class RunCoordinator:
     """Stateless singleton — all run state lives in Postgres rows and RunHandles."""
 
@@ -183,7 +192,6 @@ class RunCoordinator:
         *,
         thread_id: str,
         run_id: str,
-        msg_type: str,
         request_key: Optional[str] = None,
         workspace_id: Optional[str] = None,
         user_id: Optional[str] = None,
@@ -218,11 +226,17 @@ class RunCoordinator:
         """
         from src.server.services import writer_guard as wg
 
+        # START stamps the producer on the run and on its query row, so no
+        # caller names it: the full agent is the only one left.
         metadata = {
-            "msg_type": msg_type,
+            "msg_type": "ptc",
             **(run_metadata or {}),
             **untaken_input_metadata(pending_input or {}),
         }
+        if query is not None:
+            query = replace(
+                query, metadata={"msg_type": "ptc", **(query.metadata or {})}
+            )
         # START-stamp identity onto the durable row: finalize/recovery paths
         # build the user-feed event from row metadata alone, with no in-process
         # context surviving a crash (user_id names the channel, workspace_id
@@ -262,7 +276,6 @@ class RunCoordinator:
                 thread_id=thread_id,
                 turn_index=row["turn_index"],
                 attempt_no=row["attempt_no"],
-                msg_type=msg_type,
                 workspace_id=workspace_id,
                 user_id=user_id,
                 is_byok=is_byok,
@@ -698,13 +711,10 @@ class RunCoordinator:
                 await usage.track_llm_usage(outcome.per_call_records)
             if outcome.tool_usage:
                 usage.record_tool_usage_batch(outcome.tool_usage)
-            # msg_type is the producer mode, never a status — interrupted
-            # turns bill as their real mode ('interrupted' rows were the old
-            # vocabulary pollution). final_status comes from the CAS row, not
-            # outcome.status: durable cancel intent may have overridden it.
+            # final_status comes from the CAS row, not outcome.status: durable
+            # cancel intent may have overridden it.
             ok = await usage.persist_usage(
                 response_id=handle.run_id,
-                msg_type=outcome.metadata.get("msg_type") or handle.msg_type,
                 deepthinking=outcome.metadata.get("deepthinking", False),
                 status=final_status,
                 conn=conn,
@@ -780,8 +790,7 @@ class RunCoordinator:
         # An archived thread keeps its scratchpad while a run writes to it,
         # and nothing else asks for the prune once that run ends.
         try:
-            meta = (run or {}).get("metadata") or {}
-            if meta.get("msg_type") != "ptc":
+            if not _ran_on_computer(run):
                 return
             from src.server.services.workspace_manager import prune_if_archived_soon
 
@@ -795,16 +804,13 @@ class RunCoordinator:
     def _schedule_transcript_export(
         self, thread_id: str, run: Optional[Dict[str, Any]]
     ) -> None:
-        # The mode comes from the row's START stamp, which a detached
-        # finalize has without the run's process. A Flash workspace has no
-        # computer to serve a transcript.
+        # The run's computer serves its transcript, through the file mount.
         try:
-            meta = (run or {}).get("metadata") or {}
-            if meta.get("msg_type") != "ptc":
+            if not _ran_on_computer(run):
                 return
             from src.server.services.transcripts import schedule_thread_export
 
-            schedule_thread_export(thread_id, meta.get("workspace_id"))
+            schedule_thread_export(thread_id, run["metadata"].get("workspace_id"))
         except Exception:
             logger.warning(
                 f"[RunCoordinator] transcript export scheduling failed for "

@@ -863,15 +863,9 @@ async def handle_command(
         # Start user onboarding flow
         console.print()
 
-        if getattr(session_state, "flash_mode", False):
-            # Onboarding saves to the profile files, which only a sandbox
-            # reaches: a Flash turn runs in Home when the flag is on, and on
-            # the sandbox-less Flash agent when it is off.
-            if not await client.feature_enabled("all_workspaces_agent"):
-                console.print("[yellow]This command is not available in Flash mode (no sandbox)[/yellow]")
-                console.print()
-                return "handled"
-        else:
+        # A Flash-mode turn runs in Home, which has the profile files
+        # onboarding saves to; only a workspace turn needs one picked first.
+        if not getattr(session_state, "flash_mode", False):
             if not client.workspace_id:
                 console.print("[yellow]No workspace selected.[/yellow]")
                 workspace_id = await _select_or_create_workspace_interactive(client)

@@ -8,8 +8,8 @@ whether a block is legal is a question only this side can answer, on the call
 where the target is actually known.
 
 Split from ``multimodal`` because the two halves share no state and not every
-agent wires both: the Flash assistant has no filesystem tool to intercept, but
-still inherits history full of blocks it may not be able to read.
+agent wires both: an agent with no filesystem tool has nothing to intercept,
+but still inherits history full of blocks it may not be able to read.
 """
 
 from typing import Any
@@ -128,29 +128,17 @@ def strip_unsupported_content_blocks(
     return result if modified else messages
 
 
-def _placeholder_guidance(can_extract: bool) -> str:
-    """What the model should do about a block it cannot see, one sentence or two.
-
-    Rides inside every placeholder rather than in the system prompt, so the
-    advice is decided on the call where the target is known (a fallback or a
-    subagent is judged on its own model) without the cached prefix moving.
-
-    ``can_extract`` says whether the agent has a workspace to work the file in.
-    The Flash assistant has no filesystem or code tool at all, so telling it to
-    extract the file itself would send it looking for a tool it never had.
-    """
-    extract = (
-        "The file is still in the workspace: extract it yourself with Python in the "
-        "sandbox (a PDF's text or page renders, OCR or image analysis) before giving up. "
-        if can_extract
-        else ""
-    )
-    return (
-        f"{extract}"
-        "If that cannot answer the question, tell the user: an unsupported input type "
-        "means switching to a model that accepts it, a page-limit rejection means "
-        "splitting the document or a longer-context model. Answer in best effort otherwise."
-    )
+# What the model should do about a block it cannot see. Rides inside the
+# placeholder rather than in the system prompt, so the advice is decided on the
+# call where the target is known (a fallback or a subagent is judged on its own
+# model) without the cached prefix moving.
+PLACEHOLDER_GUIDANCE = (
+    "The file is still in the workspace: extract it yourself with Python in the "
+    "sandbox (a PDF's text or page renders, OCR or image analysis) before giving up. "
+    "If that cannot answer the question, tell the user: an unsupported input type "
+    "means switching to a model that accepts it, a page-limit rejection means "
+    "splitting the document or a longer-context model. Answer in best effort otherwise."
+)
 
 
 class MultimodalStripMiddleware(AgentMiddleware):
@@ -166,20 +154,16 @@ class MultimodalStripMiddleware(AgentMiddleware):
         *,
         model_name: str | None = None,
         custom_modalities: list[str] | None = None,
-        can_extract: bool = False,
     ) -> None:
         """
         Args:
             model_name: Configured manifest model, used only to decide whether
                 ``custom_modalities`` applies to the target in hand.
             custom_modalities: Per-model modality override from user preferences.
-            can_extract: Whether this agent has a workspace it could extract an
-                unreadable file in, which changes the advice in the placeholder.
         """
         super().__init__()
         self.model_name = model_name
         self.custom_modalities = custom_modalities
-        self.placeholder_guidance = _placeholder_guidance(can_extract)
 
     def _resolve_target(self, request: Any) -> tuple[str | None, list[str]]:
         """Name and modalities of the model this request will actually reach.
@@ -225,7 +209,7 @@ class MultimodalStripMiddleware(AgentMiddleware):
         # a subagent on its own model then inherited wrongly. The system prompt
         # is left alone so the cached prefix does not move with the strip.
         messages = strip_unsupported_content_blocks(
-            messages, has_image, has_pdf, max_pdf_pages, self.placeholder_guidance
+            messages, has_image, has_pdf, max_pdf_pages, PLACEHOLDER_GUIDANCE
         )
         if messages is not request.messages:
             return await handler(request.override(messages=messages))

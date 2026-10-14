@@ -14,11 +14,6 @@ logger = logging.getLogger(__name__)
 _MAX_ATTEMPTS = 3
 
 
-class GrantSyncSuperseded(Exception):
-    """A revocation could not be written because newer configs kept winning."""
-
-
-
 async def sync_grants_until_current(
     base_config: Any,
     *,

@@ -326,6 +326,11 @@ def _decode_file_text(raw_bytes: bytes) -> str | None:
     return str(match)
 
 
+# Home joins the user's computer on its first start or turn (ensure_home);
+# until then a request for its files or sandbox has nothing to reach.
+HOME_NOT_ON_COMPUTER = "Home is not on a computer yet"
+
+
 def _is_flash_workspace(workspace: dict[str, Any]) -> bool:
     return workspace.get("status") == "flash"
 

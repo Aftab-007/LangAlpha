@@ -276,7 +276,7 @@ async def _skill_names(user_id: str) -> frozenset[str]:
     platform = {
         name
         for name, skill in get_skill_registry(feature_resolver=feature_enabled).items()
-        if skill.exposure != "hidden"
+        if not skill.hidden
     }
     own = {row["name"] for row in rows}
     return frozenset(platform | own) - SUBAGENT_WITHHELD_SKILLS

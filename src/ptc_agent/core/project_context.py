@@ -93,7 +93,7 @@ async def run_with_project(
     """Drive a turn's stream with its project bound.
 
     ``project=None`` passes the stream through untouched, which is every
-    caller with no workspace folder of its own (Flash, the OSS shape).
+    caller with no workspace folder of its own (the OSS shape).
     """
     if project is None:
         async with contextlib.aclosing(stream):

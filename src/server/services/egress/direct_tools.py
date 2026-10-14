@@ -66,10 +66,6 @@ _NAME_SAFE = re.compile(r"[^A-Za-z0-9_-]")
 # The strictest provider limit on a tool name.
 _MAX_TOOL_NAME = 64
 
-# The sandbox_id claim on a host-only turn. Audit-only at the relay, which
-# authorizes on the (user, workspace) pair, but the claim must be non-empty.
-FLASH_SANDBOX_ID = "flash"
-
 
 def direct_tool_name(server: str, tool: str) -> str:
     """``mcp__<server>__<tool>``: distinct per server so two vendors' ``account_*``
@@ -522,9 +518,8 @@ async def direct_tools_for_turn(
 ) -> tuple[DirectMCPBinding, "OrderAttemptLedger | None"]:
     """This turn's direct toolset, and the ledger its orders are written to.
 
-    A binder that fails costs the turn its direct tools and not the turn: on
-    PTC the rest of the toolset is still reachable through the sandbox, and on
-    Flash the agent still answers. The ledger carries ids only, because every
+    A binder that fails costs the turn its direct tools and not the turn: the
+    rest of the toolset is still reachable through the sandbox. The ledger carries ids only, because every
     transition it makes is a guarded statement against the row: the worker that
     ends up holding the tool call is never assumed to be the one that proposed
     it.
@@ -570,9 +565,8 @@ async def bind_direct_mcp_tools(
     return await prepare_direct_mcp_tools(
         user_id=user_id,
         workspace_id=workspace_id,
-        # Absent, not "": the host path runs for a Flash turn and for a session
-        # whose sandbox is not provisioned, and the validator refuses an empty
-        # identity claim.
+        # Absent, not "": the host path runs for a session whose sandbox is not
+        # provisioned, and the validator refuses an empty identity claim.
         sandbox_id=identity_claim(getattr(session.sandbox, "sandbox_id", None)),
         computer_id=identity_claim(getattr(session, "computer_id", None)),
         grants=egress.grants,

@@ -442,7 +442,6 @@ async def begin_run(
     scope: RunScope,
     thread_id: str,
     run_id: str,
-    msg_type: str,
     workspace_id: Optional[str],
     user_id: Optional[str],
     is_byok: bool,
@@ -484,7 +483,6 @@ async def begin_run(
     retry_of = await resolve_retry_of(request, thread_id)
     identity = dict(
         thread_id=thread_id,
-        msg_type=msg_type,
         workspace_id=workspace_id,
         user_id=user_id,
         is_byok=is_byok,
@@ -494,7 +492,6 @@ async def begin_run(
         RunCoordinator.get_instance().start_run(
             thread_id=thread_id,
             run_id=run_id,
-            msg_type=msg_type,
             request_key=request.request_key,
             workspace_id=workspace_id,
             user_id=user_id,
@@ -612,7 +609,6 @@ async def _committed_start(
     run_id: str,
     *,
     thread_id: str,
-    msg_type: str,
     workspace_id: Optional[str],
     user_id: Optional[str],
     is_byok: bool,
@@ -642,7 +638,6 @@ async def _committed_start(
         thread_id=thread_id,
         turn_index=row["turn_index"],
         attempt_no=row["attempt_no"],
-        msg_type=msg_type,
         workspace_id=workspace_id,
         user_id=user_id,
         is_byok=is_byok,

@@ -62,7 +62,7 @@ from src.server.models.computer import CLAIMABLE_FOR_START
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
 from src.server.utils.error_sanitization import sandbox_unreachable_detail
 from src.server.models.workspace_refresh import WorkspaceRefreshResponse
-from src.server.services.turn_runtime import ensure_home, home_enabled
+from src.server.services.turn_runtime import ensure_home
 from src.server.services.workspace_manager import WorkspaceManager
 from src.server.services.workspace_status_pubsub import subscribe_to_status
 
@@ -532,10 +532,9 @@ async def start_workspace(
 
         require_workspace_owner(workspace, user_id=x_user_id)
 
-        if workspace["status"] == "flash" and await home_enabled(x_user_id):
+        if workspace["status"] == "flash":
             # Home before its first turn: the warm puts it on the computer, as
-            # the turn would. Without the all-workspaces agent, Flash has
-            # nothing to start.
+            # the turn would.
             await ensure_home(x_user_id, workspace)
             workspace = await db_get_workspace(workspace_id)
             if not workspace:
@@ -745,13 +744,12 @@ async def duplicate_workspace(
     x_user_id: CurrentUserId,
 ):
     """
-    Duplicate a workspace, copying its files into a new project.
+    Duplicate a workspace, copying its files into a new workspace.
 
-    The copy lands on the same computer as every other project of this user,
+    The copy lands on the same computer as every other workspace of this user,
     so it takes that machine's tier and always-on rather than the source's,
     allocates nothing, and returns without waiting on a sandbox. Its files are
-    restored the first time the machine starts. Flash workspaces cannot be
-    duplicated.
+    restored the first time the machine starts. Home cannot be duplicated.
 
     Args:
         workspace_id: Source workspace UUID

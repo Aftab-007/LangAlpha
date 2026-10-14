@@ -144,7 +144,8 @@ class FlashWorkspaceTaken(RuntimeError):
 async def get_or_create_flash_workspace(user_id: str, conn=None) -> Dict[str, Any]:
     """Deterministic identity and ON CONFLICT make concurrent creation idempotent.
 
-    Every Flash turn lands here, so a row that exists is touched in one
+    Every turn bound for Home without a read of the row lands here, and so
+    does every app load, so a row that exists is touched in one
     statement with no lock. Only a miss opens a transaction and takes the
     lock, so the workspace commits with the MCP selection it starts with.
     Both statements match the owner as well as the id: the row is the one a

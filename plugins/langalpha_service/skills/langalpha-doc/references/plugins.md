@@ -27,7 +27,7 @@ Every server belongs to the account; a workspace only switches it on or off.
 
 **Where its tools appear**
 - A server's tools are Python functions you call from ExecuteCode (computer.md), not tool calls.
-- The user can set each tool of a remote server to Direct or Both, in its detail view under Connectors; Direct tools are tool calls, and the only tools Flash reaches. A server that signs in with a header needs a successful connection check first. Local and SSE servers are never Direct.
+- The user can set each tool of a remote server to Direct or Both, in its detail view under Connectors; Direct tools are tool calls. A server that signs in with a header needs a successful connection check first. Local and SSE servers are never Direct.
 
 **When a call fails**
 - `Missing vault secret(s) for server '<name>': <NAMES>`: the user adds those secrets on the Plugins page, Secrets. "Set up <NAME>" on the MCP tab opens it with the name filled in.

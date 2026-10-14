@@ -1,21 +1,4 @@
-"""Flash's secretary tools: workspace management, PTC dispatch, agent monitoring, thread management.
+"""The Chief of Staff's coordination tools: its workspaces, its hand-offs, and their threads.
 
-The Chief of Staff's versions are in ``chief_of_staff``.
+The tools are in ``chief_of_staff``; the actions behind them in ``tools``.
 """
-
-from src.tools.secretary.tools import (
-    agent_output,
-    manage_threads,
-    manage_workspaces,
-    ptc_agent,
-)
-
-SECRETARY_TOOLS = [manage_workspaces, ptc_agent, agent_output, manage_threads]
-
-__all__ = [
-    "manage_workspaces",
-    "ptc_agent",
-    "agent_output",
-    "manage_threads",
-    "SECRETARY_TOOLS",
-]

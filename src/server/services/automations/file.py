@@ -103,6 +103,11 @@ _FILE_FIELD = {
     "delivery_config": "delivery",
 }
 
+# The file names where a run goes, not the retired Flash agent; the row keeps
+# "flash", which the API, the platform and the channel gateways still send.
+_FILE_MODE = {"ptc": "ptc", "flash": "all_workspaces"}
+_ROW_MODE = {file_mode: mode for mode, file_mode in _FILE_MODE.items()}
+
 _ERROR_EXCERPT = 300
 _MAX_PROBLEMS = 10
 
@@ -171,7 +176,7 @@ def _definition(row: dict[str, Any]) -> dict[str, Any]:
     entry.update(
         timezone=tz,
         instruction=row["instruction"],
-        agent_mode=row["agent_mode"],
+        agent_mode=_FILE_MODE[row["agent_mode"]],
         workspace_id=str(workspace_id) if workspace_id else None,
         thread=_thread_value(row),
         llm_model=row.get("llm_model"),
@@ -268,7 +273,7 @@ class _Entry(BaseModel):
     trigger_config: dict[str, Any] | None = None
     timezone: str | None = None
     instruction: str | None = None
-    agent_mode: Literal["ptc", "flash"] | None = None
+    agent_mode: Literal["ptc", "all_workspaces"] | None = None
     workspace_id: UUID | None = None
     thread: dict[str, Any] | None = None
     llm_model: str | None = None
@@ -282,6 +287,12 @@ class _Entry(BaseModel):
     @classmethod
     def _required_value(cls, value: Any) -> Any:
         return _not_null(value)
+
+    @field_validator("agent_mode", mode="before")
+    @classmethod
+    def _former_mode(cls, value: Any) -> Any:
+        # The name files used before Flash retired, still in older notes.
+        return "all_workspaces" if value == "flash" else value
 
     @field_validator("timezone")
     @classmethod
@@ -510,7 +521,7 @@ def _plan_create(entry: _Entry, call: CallContext, zone: str, problems: _Problem
     data: dict[str, Any] = {
         "trigger_type": kind,
         "timezone": tz,
-        "agent_mode": entry.agent_mode or "ptc",
+        "agent_mode": _ROW_MODE[entry.agent_mode or "ptc"],
         "workspace_id": entry.workspace_id if "workspace_id" in written else call.workspace_id,
         **(entry.thread or {}),
     }
@@ -603,6 +614,11 @@ def _plan_update(entry: _Entry, raw: dict[str, Any], row: dict[str, Any], proble
         if key == "delivery":
             if value["methods"] != current["delivery"]:
                 fields["delivery_config"] = value
+                changed.append(key)
+            continue
+        if key == "agent_mode":
+            if value != current[key]:
+                fields[key] = _ROW_MODE[value]
                 changed.append(key)
             continue
         if _same(value, current.get(key)):

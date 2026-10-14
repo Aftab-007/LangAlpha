@@ -283,9 +283,10 @@ async def trigger_compaction(
 
                     is_byok = await is_byok_active(user_id)
                     meta = await get_thread_auth_meta(thread_id)
-                    # The thread's own mode: a flash thread keeps its model in
-                    # the flash slot, and the summary runs on the thread's
-                    # model, so PTC mode would summarize on the PTC default.
+                    # The thread's own mode: a thread Flash started that no
+                    # turn has taken over since keeps its model in the flash
+                    # slot, and the summary runs on the thread's model, so PTC
+                    # mode would summarize on the PTC default.
                     mode = "flash" if meta and meta.get("msg_type") == "flash" else "ptc"
 
                     async def resolve(model: str | None):

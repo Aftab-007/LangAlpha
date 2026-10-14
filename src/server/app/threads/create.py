@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.config.settings import HOST_MODE
 from src.server.database.conversation import create_thread
-from src.server.services.turn_runtime import requested_workspace, resolve_turn_route
+from src.server.services.turn_runtime import requested_workspace, turn_route
 from src.server.models.conversation import (
     ThreadCreateRequest,
     ThreadCreateResponse,
@@ -115,12 +115,11 @@ async def create_thread_endpoint(
         )
         await enforce_credit_limit(x_user_id, byok=is_byok or has_oauth)
 
-    # Decided where the message path decides it, so msg_type can't disagree
-    # with the runs the thread will actually carry.
-    route = await resolve_turn_route(
-        x_user_id, request.agent_mode, request.workspace_id, workspace
-    )
-    msg_type, workspace_id = route.agent, route.workspace_id
+    # Decided where the message path decides it, so the thread is born in the
+    # workspace its runs will actually use.
+    route = turn_route(x_user_id, workspace)
+    await route.bind(x_user_id, workspace)
+    workspace_id = route.workspace_id
 
     # Same stamp ensure_thread_exists would apply; also the CAS expectation
     # the title generator swaps against.
@@ -132,7 +131,6 @@ async def create_thread_endpoint(
             conversation_thread_id=thread_id,
             workspace_id=workspace_id,
             current_status="completed",
-            msg_type=msg_type,
             thread_index=None,
             title=stamped_title,
             platform=request.platform,
@@ -155,7 +153,7 @@ async def create_thread_endpoint(
         workspace_id=str(workspace_id),
         thread_index=row["thread_index"],
         title=stamped_title,
-        msg_type=msg_type,
+        msg_type=row["msg_type"],
         subagents_allowed=row["subagents_allowed"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],

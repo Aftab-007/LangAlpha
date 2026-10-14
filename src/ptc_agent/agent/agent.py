@@ -531,7 +531,6 @@ class PTCAgent:
         # Per-user registry: this build's feature gate (the registry default
         # only applies the system gate), builtin disables, and user skills.
         skill_registry = build_effective_skill_registry(
-            "ptc",
             feature_resolver=self.config.feature_enabled,
             disabled_skills=self.config.disabled_skills,
             user_skills=self.config.user_skills,
@@ -548,7 +547,8 @@ class PTCAgent:
         # gets neither the tools nor the prompt line naming them.
         chart_annotation = "chart-annotation" in skill_registry
         # Subagents never bind the annotation tools (see where they are
-        # appended), so their manifest must not offer the guide to them.
+        # appended), so neither their manifest nor a preload may offer the
+        # guide to them.
         subagent_skill_registry = {
             name: skill
             for name, skill in skill_registry.items()
@@ -560,7 +560,6 @@ class PTCAgent:
         # baseline rather than appending it per call.
         skills_middleware = partial(
             SkillsMiddleware,
-            mode="ptc",
             backend=backend,
             sources=skill_sources,
             known_skills=known_skills,
@@ -575,8 +574,6 @@ class PTCAgent:
         subagent_skill_middleware = skills_middleware(
             skill_registry=subagent_skill_registry, inject_manifest=False
         )
-        tools.extend(skill_loader_middleware.tools)
-        tools.extend(skill_loader_middleware.get_all_skill_tools())
 
         # --- Build main-only middleware (NOT passed to subagents) ---
         main_only_middleware: list[Any] = []
@@ -639,6 +636,7 @@ class PTCAgent:
                 sources=baseline_store_sources,
                 skills=lambda state: subagent_skill_middleware.build_manifest(state)
                 or "",
+                skill_registry=subagent_skill_registry,
                 scratchpad=scratchpad.folder if scratchpad is not None else None,
             )
             subagents.extend(additional_subagents or [])
@@ -751,7 +749,6 @@ class PTCAgent:
         multimodal_strip = MultimodalStripMiddleware(
             model_name=self.config.llm.name if self.config.llm else None,
             custom_modalities=self.config.input_modalities,
-            can_extract=True,
         )
         multimodal_read = MultimodalMiddleware(sandbox=sandbox)
 
@@ -834,7 +831,6 @@ class PTCAgent:
             model_name=turn.name or None,
             turn_context=turn_context,
             user_profile=user_profile,
-            sandbox_enabled=True,
             session=session,
             workspace_name=workspace_name,
             workspace_description=workspace_description,

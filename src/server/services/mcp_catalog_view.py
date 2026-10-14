@@ -116,57 +116,6 @@ def decorated(row: dict, conn: dict | None, **extra) -> CatalogServer:
     )
 
 
-def _has_direct_tools(row: dict, conn: dict | None, snapshot: dict | None) -> bool:
-    """Whether any tool on this row binds directly, and so reaches Flash.
-
-    Flash has no sandbox, so a row is reachable from it only through a tool on
-    the direct path. Answered from the snapshot the list already holds rather
-    than by asking per row, which is the observer behind every server the user
-    owns that the rows deliberately do not carry.
-
-    Read the same way ``resolve_mcp_config`` plans the row: a servable
-    connection says which vendor's rules apply and what was consented to,
-    while a row without one is judged by its own address, its own headers and
-    consent to nothing. A revoked connection is history rather than a claim on
-    the row, so it falls to that header path. A connection that needs repair
-    answers no on its own; the sync binds no grant for it, so nothing it lists
-    could be called.
-
-    Intersected with what the snapshot actually published, because a plan
-    carries every name the vendor's curation grants whether or not this server
-    published it, while ``build_direct_entries`` can only bind a schema it
-    holds. Reading ``plan.direct`` alone would offer Flash on a connection
-    whose scope toggle saves cleanly and then gives Flash nothing to call.
-    """
-    from src.server.models.mcp_server import probe_ok
-    from src.server.services.brokerage_capabilities import vendor_for_url
-    from src.server.services.egress import fold_tool_name, folded
-    from src.server.services.tool_binding import inputs_from_row, resolve_plan
-
-    status = ConnectionStatus(conn["status"]) if conn is not None else None
-    if status is ConnectionStatus.REVOKED:
-        conn = None
-    elif status is not None and status not in SERVABLE:
-        return False
-    # The flag has to agree with the grant the sync would write, and a header
-    # row's grant hangs on this verdict alone (``grant_scope._probe_ok``): the
-    # no-downgrade upsert keeps the tools and the ok status a refused probe
-    # never took away.
-    if conn is None and not probe_ok(snapshot):
-        return False
-    published = (snapshot or {}).get("tools") or []
-    names = [name for t in published if (name := t.get("name"))]
-    vendor_url = conn.get("server_url") if conn is not None else row.get("url")
-    plan = resolve_plan(
-        vendor_for_url(vendor_url),
-        (conn.get("granted_capabilities") or ()) if conn is not None else (),
-        inputs_from_row(row),
-        candidates=names,
-    )
-    direct = folded(plan.direct)
-    return any(fold_tool_name(n) in direct for n in names)
-
-
 async def _snapshots_by_server(
     user_id: str, rows: list[dict]
 ) -> dict[str, dict]:
@@ -346,7 +295,6 @@ async def decorate_rows(user_id: str, rows: list[dict]) -> list[CatalogServer]:
                 r,
                 oauth.get(r["name"]),
                 icon_url=await _plugin_mark(plugins, r, meta.get("server_info")),
-                has_direct_tools=_has_direct_tools(r, oauth.get(r["name"]), snapshot),
                 snapshot=snapshot,
             )
         )

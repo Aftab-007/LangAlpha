@@ -1,7 +1,7 @@
 """Automation create, update and control: the rules every surface shares.
 
-The REST API, the flash tools and the automation files all write through
-here, so a rule lives once. Checks the request models can make alone
+The REST API and the automation files both write through here, so a
+rule lives once. Checks the request models can make alone
 (schedule, a known zone) are theirs; the ones that need the stored row, the
 user's targets or their models are made here. The guards against an agent's
 slips (a past or date-only time, a fixed-offset zone) are the models

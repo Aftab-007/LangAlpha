@@ -2,10 +2,7 @@
 
 Every file the user attached takes one of three routes, decided by what this
 turn's model accepts: a native content block, a sandbox path the agent opens
-with Python, or a note saying the file exists and cannot be read. Which routes
-are available is the difference between the two flavors, so they get a call
-each rather than one function with a mode flag: PTC has a sandbox to upload to
-and can name a path per file, Flash has neither and can only say what arrived.
+with Python, or a note saying the file exists and cannot be read.
 """
 
 from __future__ import annotations
@@ -127,58 +124,3 @@ async def attach_request_files(
 
     return messages
 
-
-def attach_flash_request_files(
-    messages: list[dict],
-    request: ChatRequest,
-    effective_model: str | None,
-    config: Any,
-) -> list[dict]:
-    """Describe the turn's attachments to the Flash agent.
-
-    Supported items are injected as native content blocks; unsupported ones get
-    a text note naming only the type, because with no sandbox there is no path
-    to hand over and nothing for the agent to do with a file it cannot read.
-    """
-    multimodal_contexts = parse_multimodal_contexts(request.additional_context)
-    if not multimodal_contexts:
-        return messages
-
-    modalities = _modalities(effective_model, config)
-    supported, unsupported, file_only = filter_multimodal_by_capability(
-        multimodal_contexts, modalities
-    )
-    if file_only:
-        logger.warning(
-            f"[FLASH_CHAT] {len(file_only)} file-only attachment(s) "
-            f"ignored (Flash mode has no sandbox)"
-        )
-    if supported:
-        messages = inject_multimodal_context(messages, supported)
-        logger.info(
-            f"[FLASH_CHAT] Multimodal context injected: "
-            f"{len(supported)} supported attachment(s)"
-        )
-    if unsupported:
-        types = list(
-            set(
-                "PDF"
-                if (c.data if hasattr(c, "data") else "").startswith(
-                    "data:application/pdf"
-                )
-                else "image"
-                for c in unsupported
-            )
-        )
-        _append_to_last_user_message(
-            messages,
-            build_unsupported_reminder(
-                [f"The user attached {', '.join(types)} file(s)."]
-            ),
-        )
-        logger.info(
-            f"[FLASH_CHAT] {len(unsupported)} unsupported attachment(s) "
-            f"noted for {effective_model}"
-        )
-
-    return messages

@@ -78,6 +78,7 @@ from ._shared import (
     previous_dir_names_of,
     _is_always_hidden_path,
     _is_binary,
+    HOME_NOT_ON_COMPUTER,
     _is_flash_workspace,
     _is_hidden_path,
     _is_system_path,
@@ -421,9 +422,7 @@ async def read_workspace_file(
     require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
 
     # Virtual DB-backed JSON files (user profile, automations) are served from
     # the DB, independent of sandbox state. Works whether the workspace is
@@ -573,9 +572,7 @@ async def write_workspace_file(
     require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
 
     if served_from_mirror(workspace.get("status")):
         raise HTTPException(
@@ -736,9 +733,7 @@ async def download_workspace_file(
     require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
 
     work_dir = owner_work_dir(workspace)
     previous_dirs = previous_dir_names_of(workspace)
@@ -899,9 +894,7 @@ async def workspace_file_download_url(
     workspace = await db_get_workspace(workspace_id)
     require_workspace_owner(workspace, user_id=x_user_id)
     if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
 
     layout = owner_layout(workspace)
     work_dir = layout.workspace
@@ -959,9 +952,7 @@ async def upload_workspace_file(
     require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
 
     if served_from_mirror(workspace.get("status")):
         raise HTTPException(
@@ -1025,9 +1016,7 @@ async def backup_workspace_files(
     require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
 
     if served_from_mirror(workspace.get("status")):
         raise HTTPException(
@@ -1188,9 +1177,7 @@ async def delete_workspace_files(
     require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
 
     if served_from_mirror(workspace.get("status")):
         raise HTTPException(

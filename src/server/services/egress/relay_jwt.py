@@ -43,7 +43,7 @@ _REQUIRED_CLAIMS = ["iss", "aud", "sub", "workspace_id", "iat", "nbf", "exp", "j
 # The two machine-identity claims. Either, both, or neither may be present: a
 # token carries `computer_id` once its session knows the computer, `sandbox_id`
 # for the pre-computer shape, and neither for a host caller with no machine at
-# all (Flash order reads, a session whose sandbox is not yet provisioned).
+# all (a session whose sandbox is not yet provisioned).
 #
 # Neither is authorized against -- authorization is the per-request grant lookup
 # keyed by `workspace_id` -- so a token that names no machine is not a weaker

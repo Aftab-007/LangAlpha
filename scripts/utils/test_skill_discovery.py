@@ -291,7 +291,6 @@ async def test_middleware_integration(sandbox, skill_dirs):
     backend = DaytonaBackend(sandbox=sandbox)
 
     middleware = SkillsMiddleware(
-        mode="ptc",
         backend=backend,
         sources=["/home/workspace/skills/"],
         known_skills=known_skills,
