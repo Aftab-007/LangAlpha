@@ -265,6 +265,24 @@ async def _resolve_custom_model_byok(
     return None, None, custom_config
 
 
+async def _custom_provider_model(
+    user_id: str, model_name: str, _pref_cache: dict | None = None
+) -> dict | None:
+    """``model_name`` as a custom model on the user's custom provider of that
+    name, or None when it names none: a provider slug picked as the model runs
+    on that provider's key, so its key decides whether it runs at all."""
+    cp_config = await user_models.get_custom_provider_config(
+        user_id, model_name, _pref_cache=_pref_cache,
+    )
+    if not cp_config:
+        return None
+    return {
+        "name": model_name,
+        "model_id": model_name,
+        "provider": cp_config["parent_provider"],
+    }
+
+
 async def resolve_byok_llm_client(
     user_id: str,
     model_name: str,
@@ -341,16 +359,9 @@ async def resolve_byok_llm_client(
     # Unknown name — last-chance check for a custom-provider slug. Covers the
     # edge case where a user typed their custom provider slug as the model name.
     if source == ModelSource.UNKNOWN:
-        cp_config = await user_models.get_custom_provider_config(
-            user_id, model_name, _pref_cache=_pref_cache,
-        )
-        if not cp_config:
+        synthetic_cm = await _custom_provider_model(user_id, model_name, _pref_cache=_pref_cache)
+        if synthetic_cm is None:
             return None
-        synthetic_cm = {
-            "name": model_name,
-            "model_id": model_name,
-            "provider": cp_config["parent_provider"],
-        }
         byok_config, base_url, custom_config = await _resolve_custom_model_byok(
             user_id, model_name, synthetic_cm, mc,
             _pref_cache=_pref_cache, _byok_cache=_byok_cache,

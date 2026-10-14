@@ -96,6 +96,7 @@ from ptc_agent.agent.middleware.background_subagent.registry import (
 )
 from ptc_agent.agent.middleware.skills.discovery import SkillMetadata
 from ptc_agent.agent.middleware.skills.registry import (
+    SUBAGENT_WITHHELD_SKILLS,
     build_effective_skill_registry,
 )
 from ptc_agent.agent.prompts import (
@@ -540,7 +541,7 @@ class PTCAgent:
         subagent_skill_registry = {
             name: skill
             for name, skill in skill_registry.items()
-            if name != "chart-annotation"
+            if name not in SUBAGENT_WITHHELD_SKILLS
         }
 
         # One per stack rather than one shared instance, because the two stacks
@@ -635,7 +636,8 @@ class PTCAgent:
             user_skill_dir=self.config.user_skill_dir,
             workspace_skill_dir=self.config.workspace_skill_dir,
         )
-        compiler_skill_registry.pop("chart-annotation", None)
+        for name in SUBAGENT_WITHHELD_SKILLS:
+            compiler_skill_registry.pop(name, None)
         subagent_compiler = SubagentCompiler(
             sandbox=sandbox,
             mcp_registry=mcp_registry,
