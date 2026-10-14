@@ -905,12 +905,18 @@ async def get_recent_notification_run_ids(
 
 
 async def list_pending_jobs(hook_type: str) -> List[Dict[str, Any]]:
-    """Pending rows of one hook_type, for the one-shot legacy rekey sweep."""
+    """Pending rows of one hook_type, for the one-shot legacy rekey sweep.
+
+    Only the columns the sweep reads: a deferred row's ``next_retry_at`` is
+    ``'infinity'``, which no Python datetime holds, and the sweep gates every
+    claim, so loading it would stop the drainer for as long as one report-back
+    waits on its thread.
+    """
     async with pool.get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
-                SELECT * FROM hook_outbox
+                SELECT hook_outbox_id, ordering_key, payload FROM hook_outbox
                 WHERE status = 'pending' AND hook_type = %s
                 ORDER BY created_at, hook_outbox_id
                 """,
