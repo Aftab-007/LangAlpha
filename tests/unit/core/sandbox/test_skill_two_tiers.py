@@ -562,20 +562,22 @@ class TestTierIsolation:
 # --------------------------------------------------------------------------
 
 
+def _merge(tiers, entries, base=None):
+    """An install with nothing staged: the asset sync's lock merge alone."""
+    staging = f"{base or tiers.user_base}/.staging/sync-test"
+    return asyncio.run(
+        skill_sync.install_staged_skills(
+            tiers.sandbox, staging, [], entries, base=base
+        )
+    )
+
+
 class TestPerTierLocks:
     def test_each_tier_locks_and_ledgers_in_its_own_directory(self, tiers):
         _skill(tiers.user, "pdf")
         _link(tiers)
-        asyncio.run(
-            skill_sync.merge_authoritative_entries(
-                tiers.sandbox, {"shared-one": _ENTRY}
-            )
-        )
-        asyncio.run(
-            skill_sync.merge_authoritative_entries(
-                tiers.sandbox, {"ws-one": _ENTRY}, base=tiers.ws_base
-            )
-        )
+        _merge(tiers, {"shared-one": _ENTRY})
+        _merge(tiers, {"ws-one": _ENTRY}, base=tiers.ws_base)
 
         assert (tiers.ws / ".skills-sync.flock").is_file()
         assert (tiers.ws / "skills-lock.json").is_file()
@@ -583,29 +585,38 @@ class TestPerTierLocks:
         assert (tiers.user / "skills-lock.json").is_file()
 
     def test_the_two_ledgers_are_independent(self, tiers):
-        asyncio.run(
-            skill_sync.merge_authoritative_entries(
-                tiers.sandbox, {"shared-one": _ENTRY}
-            )
-        )
-        asyncio.run(
-            skill_sync.merge_authoritative_entries(
-                tiers.sandbox, {"ws-one": _ENTRY}, base=tiers.ws_base
-            )
-        )
+        _merge(tiers, {"shared-one": _ENTRY})
+        _merge(tiers, {"ws-one": _ENTRY}, base=tiers.ws_base)
 
         ws_lock = json.loads((tiers.ws / "skills-lock.json").read_text())
         user_lock = json.loads((tiers.user / "skills-lock.json").read_text())
         assert set(ws_lock["skills"]) == {"ws-one"}
         assert set(user_lock["skills"]) == {"shared-one"}
 
-    def test_the_link_pass_locks_only_the_workspace_tier(self, tiers):
+    def test_the_link_pass_waits_out_a_swap_in_the_shared_tier(self, tiers):
+        """Mid-swap, under the shared flock, the skill is briefly missing."""
+        import fcntl
+        import shutil
+        import threading
+        import time
+
         _skill(tiers.user, "pdf")
-
+        _skill(tiers.user, "xlsx")
         _link(tiers)
+        held = open(tiers.user / ".skills-sync.flock", "w")
+        fcntl.flock(held, fcntl.LOCK_EX)
+        shutil.move(tiers.user / "xlsx", tiers.user / ".trash-swap-xlsx")
+        result = {}
+        thread = threading.Thread(target=lambda: result.update(_link(tiers)))
+        thread.start()
+        time.sleep(0.5)
+        shutil.move(tiers.user / ".trash-swap-xlsx", tiers.user / "xlsx")
+        fcntl.flock(held, fcntl.LOCK_UN)
+        held.close()
+        thread.join(timeout=20)
 
-        assert (tiers.ws / ".skills-sync.flock").is_file()
-        assert not (tiers.user / ".skills-sync.flock").exists()
+        assert result["pruned"] == []
+        assert set(_entries(tiers.ws)) == {"pdf", "xlsx"}
 
     def test_the_tiers_bookkeeping_is_never_linked_as_a_skill(self, tiers):
         _skill(tiers.user, "pdf")
