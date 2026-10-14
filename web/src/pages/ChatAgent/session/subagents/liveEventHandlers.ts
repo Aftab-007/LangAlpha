@@ -866,6 +866,10 @@ function isTaskNotice(m: MessageRecord): boolean {
   return m.role === 'assistant' && String(m.id).startsWith('task-notice-');
 }
 
+function noticeDetail(m: MessageRecord): unknown {
+  return (m.contentSegments as Array<{ detail?: string }> | undefined)?.[0]?.detail;
+}
+
 function pendingInstructionIndex(messages: MessageRecord[], inputId: string | null | undefined): number {
   return inputId ? messages.findIndex((m) => isPendingInstruction(m) && m.inputId === inputId) : -1;
 }
@@ -920,9 +924,25 @@ export function addPendingTaskInstruction({ taskId, inputId, content, subagentSt
 }
 
 /** An instruction the subagent was sent, as the frame that settles it names it. */
-interface SentInstruction {
+export interface SentInstruction {
   inputId?: string | null;
   content: string;
+}
+
+/**
+ * The instruction a task lane's `steering_returned` frame hands back, or null
+ * when it names no text. Producers send the text as top-level content;
+ * messages[] is a defensive fallback only.
+ */
+export function returnedTaskInstruction(
+  event: { content?: unknown; input_id?: unknown; messages?: unknown },
+): SentInstruction | null {
+  const fallback = Array.isArray(event.messages)
+    ? (event.messages as Array<{ content?: string }>).map((m) => m?.content || '').filter(Boolean).join('\n')
+    : '';
+  const content = (typeof event.content === 'string' ? event.content : '') || fallback;
+  if (!content) return null;
+  return { inputId: typeof event.input_id === 'string' ? event.input_id : undefined, content };
 }
 
 /** Whether the instruction is still waiting on the subagent, neither delivered nor returned. */
@@ -969,9 +989,17 @@ export function pushTaskNotice(taskRefs: TaskRefs, text: string, detail?: string
  */
 export function returnTaskInstruction(taskRefs: TaskRefs, instruction: SentInstruction, notice: string): void {
   // Once per instruction: a refused send and the run's own return can both
-  // name it.
-  const { inputId } = instruction;
+  // name it, and a reconnect re-sends a return history already placed. With
+  // no id, a notice of the same text and no pending bubble for it means this
+  // return is already shown; a second send of that text would still be
+  // pending.
+  const { inputId, content } = instruction;
   if (inputId && taskRefs.messages.some((m) => isTaskNotice(m) && m.inputId === inputId)) return;
+  if (
+    !inputId
+    && !taskRefs.messages.some((m) => isPendingInstruction(m) && m.content === content)
+    && taskRefs.messages.some((m) => isTaskNotice(m) && !m.inputId && noticeDetail(m) === content)
+  ) return;
   withdrawPendingInstruction(taskRefs, instruction);
   pushTaskNotice(taskRefs, notice, instruction.content, inputId);
 }

@@ -38,7 +38,8 @@ import {
 import {
   isSubagentEvent, handleSubagentMessageChunk, handleSubagentToolCallChunks,
   handleSubagentToolCalls, handleSubagentToolCallResult, handleTaskSteeringAccepted,
-  handleWorkflowLifecycle, pushTaskNotice, returnTaskInstruction, type DeliveredInstruction,
+  handleWorkflowLifecycle, pushTaskNotice, returnTaskInstruction, returnedTaskInstruction,
+  type DeliveredInstruction,
 } from '../subagents/liveEventHandlers';
 import { getOrCreateTaskRefs, type UpdateSubagentCard } from '../streamRefs';
 import { handleMarketWatchUpdate, type MarketWatchState } from '../marketWatchEvents';
@@ -682,19 +683,12 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
           }
         } else if (eventType === 'steering_returned') {
           // Run ended before the task steering was delivered — surface the
-          // returned text in the task transcript. Producers emit the text as
-          // top-level content; messages[] is a defensive fallback only.
-          const returnedContent = ((event.content as string) || '')
-            || ((event.messages || []) as Array<{ content?: string }>)
-              .map((m) => m.content || '').filter(Boolean).join('\n');
-          if (returnedContent) {
+          // returned text in the task transcript.
+          const returned = returnedTaskInstruction(event);
+          if (returned) {
             // The notice goes up whether or not a bubble here was pending: the
             // frame is the server's word, and another tab may have sent it.
-            returnTaskInstruction(
-              taskRefs,
-              { inputId: event.input_id as string | undefined, content: returnedContent },
-              rt.t('chat.taskSteeringReturnedNotification'),
-            );
+            returnTaskInstruction(taskRefs, returned, rt.t('chat.taskSteeringReturnedNotification'));
             rt.updateSubagentCard(taskId, { messages: taskRefs.messages });
           }
         } else if (eventType === 'error' || event.error) {

@@ -14,6 +14,8 @@ import {
   handleSubagentToolCalls,
   handleSubagentToolCallResult,
   handleTaskSteeringAccepted,
+  returnTaskInstruction,
+  returnedTaskInstruction,
   type DeliveredInstruction,
 } from './liveEventHandlers';
 import { countToolCalls } from './subagentMetrics';
@@ -166,6 +168,16 @@ export function projectSubagentHistory(
             updateSubagentCard: historyUpdateSubagentCard,
           });
           currentRunIndex = tempSubagentStateRefs[taskId].runIndex;
+        }
+      } else if (eventType === 'steering_returned') {
+        // Steering the run handed back unread, placed where the run returned
+        // it: the same notice the live stream put up. The notice carries the
+        // input id, so the live frame re-sent on reconnect does not repeat it.
+        const returned = returnedTaskInstruction(event);
+        if (returned) {
+          returnTaskInstruction(
+            tempSubagentStateRefs[taskId], returned, rt.t('chat.taskSteeringReturnedNotification'),
+          );
         }
       } else if (eventType === 'context_window') {
         // Embed notification as content segment in the assistant message
