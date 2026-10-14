@@ -330,6 +330,7 @@ def test_role_registry_gives_each_role_its_own_models_effort():
     cfg = _make_config(compaction="cm", fetch="fm")
     sub = MagicMock()
     sub.model = "sub-model"
+    sub.reasoning_effort = None  # sets no level of its own
     model_pref = {
         "reasoning_effort": "low",
         "profiles": {"sub-model": {"reasoning_effort": "high"}, "cm": {"reasoning_effort": "max"}},

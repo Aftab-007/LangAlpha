@@ -60,6 +60,14 @@ _FLASH_SUBAGENT_DEFAULTS: dict[str, bool] = {
 }
 
 
+def _with_preloaded(prompt: str, preloaded: str) -> str:
+    """A standalone prompt closed by the block ``subagent_base.md.j2`` ends
+    with, so a skill the deployment or the user preloads reaches it too."""
+    if not preloaded:
+        return prompt
+    return f"{prompt.rstrip()}\n\n<preloaded_skills>\n{preloaded}\n</preloaded_skills>\n"
+
+
 class SubagentCompiler:
     """Compile :class:`SubagentDefinition` instances into ``SubAgent`` TypedDicts.
 
@@ -153,12 +161,15 @@ class SubagentCompiler:
         1. ``custom_prompt`` — raw string, used directly.
         2. ``custom_prompt_template`` — standalone template.
         3. Base template + role prompt (default).
+
+        Each one ends with the preloaded skills.
         """
         loader = get_loader()
+        preloaded = self._load_preloaded_skills(defn)
 
         # 1. Raw custom prompt — bypass all rendering
         if defn.custom_prompt is not None:
-            return defn.custom_prompt
+            return _with_preloaded(defn.custom_prompt, preloaded)
 
         # Shared template variables
         template_kwargs: dict[str, Any] = {
@@ -181,21 +192,22 @@ class SubagentCompiler:
 
         # 2. Standalone custom template — render it directly
         if defn.custom_prompt_template is not None:
-            return loader.render(defn.custom_prompt_template, **template_kwargs)
+            return _with_preloaded(
+                loader.render(defn.custom_prompt_template, **template_kwargs), preloaded
+            )
 
         # 3. Base template + role prompt (default path)
         sections = self._compute_sections(defn)
         if sections.get("tool_guide", False):
             template_kwargs["tool_summary"] = self._build_tool_summary()
 
-        preloaded_content = self._load_preloaded_skills(defn)
-
         return loader.get_subagent_base_prompt(
             identity_line=self._identity_line(defn),
             role_prompt_template=defn.role_prompt_template,
             role_prompt=defn.role_prompt,
-            preloaded_skills_content=preloaded_content,
+            preloaded_skills_content=preloaded,
             sections=sections,
+            tools_narrowed=defn.tools_narrowed,
             **template_kwargs,
         )
 
@@ -292,12 +304,13 @@ class SubagentCompiler:
                     available=list(self._tool_sets),
                 )
 
-        # 2. Resolve skills (both runtime and preload) → add skill tools.
-        # The per-build registry keeps a skill the main agent dropped (feature
+        # 2. Add the tools of each skill in ``skills``. A preloaded skill binds
+        # none: ``preload_skills`` is also the user's preferred list, which
+        # changes what a subagent reaches for, never what it can use. The
+        # per-build registry keeps a skill the main agent dropped (feature
         # gate, user disable) from handing its tools to a subagent anyway.
         registry = self._skill_registry if self._skill_registry is not None else SKILL_REGISTRY
-        all_skill_names = set(defn.skills) | set(defn.preload_skills)
-        for skill_name in all_skill_names:
+        for skill_name in dict.fromkeys(defn.skills):
             skill = registry.get(skill_name)
             if skill and skill.tools:
                 tools.extend(skill.tools)

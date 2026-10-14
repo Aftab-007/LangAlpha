@@ -1,7 +1,7 @@
 """Middleware for providing subagents to an agent via a `Task` tool."""
 
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Annotated, Any, NotRequired, TypedDict, cast
 
@@ -488,6 +488,28 @@ async def arun_subagent_streaming(
     return last_state if last_state is not None else {}
 
 
+def _unknown_type_refusal(
+    effective_type: str, roster: Iterable[str], *, resuming: bool
+) -> str:
+    """Why a Task names a subagent this build did not compile.
+
+    A resumed task outlives the roster it started on: its subagent may have
+    been deleted, renamed or turned off since, or serve only the other role,
+    and saying so tells the model not to retry under the same name.
+    """
+    allowed_types = ", ".join([f"`{k}`" for k in roster])
+    if resuming:
+        return (
+            f"Cannot resume: subagent `{effective_type}` was deleted, renamed, "
+            f"turned off, or isn't available to this agent. "
+            f"Available types: {allowed_types}"
+        )
+    return (
+        f"We cannot invoke subagent {effective_type} because it does not exist, "
+        f"the only allowed types are {allowed_types}"
+    )
+
+
 def _launch_refusal(reason: str, runtime: Any) -> "str | ToolMessage":
     """A Task refusal the frontend can settle on.
 
@@ -634,9 +656,10 @@ def _create_task_tool(
             _bg_checkpoint_ns, resume_type = _get_background_task_context()
             effective_type = effective_type or resume_type or "general-purpose"
             if effective_type not in subagent_graphs:
-                allowed_types = ", ".join([f"`{k}`" for k in subagent_graphs])
                 return _launch_refusal(
-                    f"We cannot invoke subagent {effective_type} because it does not exist, the only allowed types are {allowed_types}",
+                    _unknown_type_refusal(
+                        effective_type, subagent_graphs, resuming=action == "resume"
+                    ),
                     runtime,
                 )
         else:
@@ -646,9 +669,8 @@ def _create_task_tool(
                     "Error: subagent_type is required for new tasks.", runtime
                 )
             if effective_type not in subagent_graphs:
-                allowed_types = ", ".join([f"`{k}`" for k in subagent_graphs])
                 return _launch_refusal(
-                    f"We cannot invoke subagent {effective_type} because it does not exist, the only allowed types are {allowed_types}",
+                    _unknown_type_refusal(effective_type, subagent_graphs, resuming=False),
                     runtime,
                 )
 
@@ -733,9 +755,10 @@ def _create_task_tool(
             # For resume/follow-up, type is inferred; validate if explicitly provided
             effective_type = effective_type or resume_type or "general-purpose"
             if effective_type not in subagent_graphs:
-                allowed_types = ", ".join([f"`{k}`" for k in subagent_graphs])
                 return _launch_refusal(
-                    f"We cannot invoke subagent {effective_type} because it does not exist, the only allowed types are {allowed_types}",
+                    _unknown_type_refusal(
+                        effective_type, subagent_graphs, resuming=action == "resume"
+                    ),
                     runtime,
                 )
         else:
@@ -745,9 +768,8 @@ def _create_task_tool(
                     "Error: subagent_type is required for new tasks.", runtime
                 )
             if effective_type not in subagent_graphs:
-                allowed_types = ", ".join([f"`{k}`" for k in subagent_graphs])
                 return _launch_refusal(
-                    f"We cannot invoke subagent {effective_type} because it does not exist, the only allowed types are {allowed_types}",
+                    _unknown_type_refusal(effective_type, subagent_graphs, resuming=False),
                     runtime,
                 )
 

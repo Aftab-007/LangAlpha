@@ -1060,6 +1060,7 @@ class TestTuningReachesEveryClient:
         )
         sub = MagicMock()
         sub.model = "sub-model"
+        sub.reasoning_effort = None  # sets no level of its own
         base_config.subagents.enabled = ["research"]
 
         with (

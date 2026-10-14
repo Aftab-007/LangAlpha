@@ -82,6 +82,7 @@ STAYS: dict[str, str] = {
     "order_attempts": _RAN_THERE,
     "user_skills": _NO_SKILL_SCOPE,
     "workspace_skill_disables": _NO_SKILL_SCOPE,
+    "user_subagents": "its workspace_id is reserved and always NULL, so a flash row holds none",
 }
 
 _HAS_FORMER = """

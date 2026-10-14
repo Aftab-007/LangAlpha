@@ -134,6 +134,8 @@ async def build_ptc_graph(
 ) -> Any:
     """Build a BackgroundSubagentOrchestrator for ``conversation_id``, acquiring a session via ``session_provider``."""
     logger.debug(f"Building PTC graph for conversation: {conversation_id}")
+    if subagent_names is None:
+        subagent_names = config.subagents.roster()
 
     # Get session from provider
     session = await session_provider.get_or_create_session(
@@ -155,7 +157,7 @@ async def build_ptc_graph(
     inner_agent = ptc_agent.create_agent(
         sandbox=session.sandbox,
         mcp_registry=session.mcp_registry,
-        subagent_names=subagent_names or config.subagents.enabled,
+        subagent_names=subagent_names,
         operation_callback=operation_callback,
         checkpointer=checkpointer,
         background_registry=background_registry,
@@ -172,7 +174,7 @@ async def build_ptc_graph(
 
     logger.debug(
         f"Created PTC agent for {conversation_id} with "
-        f"subagents: {subagent_names or config.subagents.enabled} "
+        f"subagents: {subagent_names} "
         f"(checkpointer={'enabled' if checkpointer else 'disabled'})"
     )
 
@@ -221,6 +223,8 @@ async def build_ptc_graph_with_session(
     main agent trim its checkpoint to its window (see ``compaction.window``);
     a build without one never trims.
     """
+    if subagent_names is None:
+        subagent_names = config.subagents.roster()
     mcp_registry = (
         tool_view.mcp_registry if tool_view is not None else session.mcp_registry
     )
@@ -265,7 +269,7 @@ async def build_ptc_graph_with_session(
     inner_agent = ptc_agent.create_agent(
         sandbox=session.sandbox,
         mcp_registry=mcp_registry,
-        subagent_names=subagent_names or config.subagents.enabled,
+        subagent_names=subagent_names,
         disable_subagents=disable_subagents,
         operation_callback=operation_callback,
         checkpointer=checkpointer,
@@ -298,7 +302,7 @@ async def build_ptc_graph_with_session(
 
     logger.debug(
         f"Created PTC agent for workspace {workspace_id} with "
-        f"subagents: {subagent_names or config.subagents.enabled} "
+        f"subagents: {subagent_names} "
         f"(checkpointer={'enabled' if checkpointer else 'disabled'})"
     )
 

@@ -5,14 +5,22 @@ Nothing here resolves a model, which is why it is not in ``config``.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from . import logger
 
+#: Whether the user's plan reaches a manifest min tier. Fetches the tier at
+#: most once, on first use, for whichever check needs it first.
+TierPermits = Callable[[int], Awaitable[bool]]
 
-async def gate_capabilities(config, user_id: str, model_pref: dict) -> None:
+
+async def gate_capabilities(config, user_id: str, model_pref: dict) -> TierPermits:
     """Apply the user's search and crawl preferences, each behind its manifest tier.
 
     Resolve time is the enforcement point, so a stale preference left by a
     downgraded plan is ignored at consumption rather than trusted from storage.
+    Returns the tier check it used, so the rest of the turn's gates share its
+    one tier fetch.
     """
     from src.config.settings import HOST_MODE
 
@@ -96,5 +104,7 @@ async def gate_capabilities(config, user_id: str, model_pref: dict) -> None:
         if crawl_cap is not None and not await _tier_permits(resolve_min_tier(crawl_cap)):
             config.features["site_crawl"] = False
             logger.debug(f"[CHAT] crawl tools disabled (tier below {resolve_min_tier(crawl_cap)})")
+
+    return _tier_permits
 
 

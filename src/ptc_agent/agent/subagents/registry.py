@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import structlog
 
 from ptc_agent.agent.roles import ALL_ROLES, AgentRole
 from ptc_agent.agent.subagents.builtins import BUILTIN_SUBAGENTS
 from ptc_agent.agent.subagents.definition import SubagentDefinition
-from ptc_agent.config.agent import SubagentConfig
+from ptc_agent.config.agent import SubagentConfig, SubagentsConfig
 
 logger = structlog.get_logger(__name__)
 
@@ -45,9 +47,17 @@ class SubagentRegistry:
                 custom_prompt_template=cfg.custom_prompt_template,
                 custom_prompt=cfg.custom_prompt,
                 tools=cfg.tools,
-                skills=cfg.skills,
+                # A deployment's preloaded skill binds its tools, as it always
+                # has, and keeps them through a user's edit of the preferred list.
+                skills=list(dict.fromkeys([*cfg.skills, *cfg.preload_skills])),
                 preload_skills=cfg.preload_skills,
                 model=cfg.model,
+                reasoning_effort=cfg.reasoning_effort,
+                search_provider=cfg.search_provider,
+                search_depth=cfg.search_depth,
+                connectors=cfg.connectors,
+                brokerages=cfg.brokerages,
+                preferred_connectors=cfg.preferred_connectors,
                 max_iterations=cfg.max_iterations,
                 sections=cfg.sections,
                 stateful=(cfg.mode == "ptc"),
@@ -57,6 +67,19 @@ class SubagentRegistry:
                 roles=builtin.roles if builtin is not None else ALL_ROLES,
                 source="user",
             )
+
+    @classmethod
+    def from_definitions(
+        cls, definitions: Mapping[str, SubagentDefinition]
+    ) -> SubagentRegistry:
+        """A registry over definitions some other layer already finished.
+
+        The per-user merge has applied the built-ins, the deployment's YAML and
+        the user's own rows by then, so nothing here may layer them again.
+        """
+        registry = cls.__new__(cls)
+        registry._definitions = dict(definitions)
+        return registry
 
     def get(self, name: str) -> SubagentDefinition | None:
         """Get a definition by name."""
@@ -92,3 +115,11 @@ class SubagentRegistry:
     def list_all(self) -> dict[str, SubagentDefinition]:
         """Return a copy of all registered definitions."""
         return dict(self._definitions)
+
+
+def registry_for(subagents: SubagentsConfig) -> SubagentRegistry:
+    """The registry a build reads: the user's merged roster when the turn
+    resolved one, else the deployment's own layering."""
+    if subagents.resolved is not None:
+        return SubagentRegistry.from_definitions(subagents.resolved.definitions)
+    return SubagentRegistry(user_definitions=subagents.definitions or None)

@@ -86,6 +86,9 @@ class BackgroundSubagentMiddleware(AgentMiddleware):
         self.enabled = enabled
         self.checkpointer = checkpointer
         self.namespace_owner = namespace_owner
+        # The Task tool's roster, set once its graphs are compiled. None
+        # checks nothing, and every launch goes to the background.
+        self.subagent_types: frozenset[str] | None = None
         # Task ids with a resume mid-flight: the liveness check and the
         # writer spawn are separated by awaits, so two parallel resume calls
         # in one model step could otherwise both pass and double-spawn (the

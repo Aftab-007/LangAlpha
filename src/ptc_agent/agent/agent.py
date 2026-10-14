@@ -108,9 +108,9 @@ from ptc_agent.agent.prompts import (
 )
 from ptc_agent.agent.subagents import (
     SubagentCompiler,
-    SubagentRegistry,
     create_subagents,
 )
+from ptc_agent.agent.subagents.registry import registry_for
 from ptc_agent.agent.tools import (
     create_bash_output_tool,
     create_execute_bash_tool,
@@ -457,7 +457,7 @@ class PTCAgent:
         tools.extend(finance_tools)
 
         if subagent_names is None:
-            subagent_names = self.config.subagents.enabled
+            subagent_names = self.config.subagents.roster()
 
         # --- Build shared middleware (for both main agent and subagents) ---
         shared_middleware: list[Any] = []
@@ -613,13 +613,7 @@ class PTCAgent:
 
         from ptc_agent.agent.tools import think_tool
 
-        subagent_registry = SubagentRegistry(
-            user_definitions=(
-                self.config.subagents.definitions
-                if self.config.subagents.definitions
-                else None
-            ),
-        )
+        subagent_registry = registry_for(self.config.subagents)
         subagent_tool_sets: dict[str, list[Any]] = {
             "execute_code": [execute_code_tool],
             "bash": [bash_tool],
@@ -880,12 +874,19 @@ class PTCAgent:
                 default_tools=list(tools),
                 subagents=subagents if subagents else [],
                 default_middleware=subagent_middleware,
+                # The roster is the whole list: an implicit general-purpose
+                # agent would outlive the user turning theirs off.
+                general_purpose_agent=False,
                 registry=background_middleware.registry,
                 checkpointer=checkpointer,
             )
             if not disable_subagents
             else None
         )
+        if subagent_task_middleware is not None:
+            background_middleware.subagent_types = frozenset(
+                subagent_task_middleware.subagent_graphs
+            )
 
         # RunWorkflow: programmatic subagent orchestration (main agent only —
         # deliberately absent from subagent tool sets, so children can't nest

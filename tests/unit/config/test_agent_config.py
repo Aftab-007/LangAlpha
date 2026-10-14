@@ -335,6 +335,12 @@ class TestSubagentConfig:
         assert cfg.mode == "flash"
         assert cfg.model == "claude-haiku-4-5"
 
+    def test_effort_is_a_level_of_the_vocabulary(self):
+        # An unknown word would reach no model while the pane showed it.
+        assert SubagentConfig(description="Deep", reasoning_effort="max").reasoning_effort == "max"
+        with pytest.raises(ValueError, match="reasoning_effort"):
+            SubagentConfig(description="Deep", reasoning_effort="ultra")
+
 
 class TestSubagentsConfig:
     def test_defaults(self):

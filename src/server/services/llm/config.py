@@ -30,6 +30,7 @@ from . import logger
 
 from .capabilities import gate_capabilities
 from .clients import resolve_clients
+from .subagents import TurnSubagents, demote_clientless, resolve_user_subagents
 from . import user_models
 
 # ---------------------------------------------------------------------------
@@ -297,6 +298,7 @@ async def resolve_llm_config(
     enabled_subagents: list[str] | None = None,
     workspace_id: str | None = None,
     user_facing: bool = True,
+    turn_subagents: TurnSubagents | None = None,
 ):
     """Resolve the final LLM config for one turn: which model runs, how it is
     tuned, what it is allowed to reach, and every client it can call.
@@ -307,7 +309,8 @@ async def resolve_llm_config(
     their own credential resolution; ``None`` falls back to the config default.
     ``user_facing=False`` is a call no user is waiting on (a title, memo
     metadata): nobody would see the ``model_removed`` CTA, so its own saved
-    model is read like a role and nothing is scrubbed.
+    model is read like a role and nothing is scrubbed. ``turn_subagents``
+    carries one request's merged subagents across its resolves.
     """
     if is_byok is None:
         from src.server.database.api_keys import is_byok_active
@@ -341,7 +344,21 @@ async def resolve_llm_config(
     tuning = resolve_tuning(model_pref, selection.effective_model)
     config.prompt_guidance = user_models.guidance_for(model_pref, selection.effective_model)
     apply_compaction(config, tuning, user_models.model_entry(model_pref, selection.effective_model))
-    await gate_capabilities(config, user_id, model_pref)
+    permits = await gate_capabilities(config, user_id, model_pref)
+
+    # The user's own subagents, for a build that compiles any: after the gate,
+    # whose tier check the merge reuses, and before the clients, which read the
+    # merged definitions for their roles.
+    if mode == "ptc" and user_facing:
+        resolved = turn_subagents.result if turn_subagents is not None else None
+        if resolved is None:
+            resolved = await resolve_user_subagents(
+                user_id, config.subagents, model_pref=model_pref, permits=permits,
+                is_byok=is_byok, requested=enabled_subagents,
+            )
+            if turn_subagents is not None:
+                turn_subagents.result = resolved
+        config.subagents.resolved = resolved
 
     # The saved prefs, not the view: attribution asks whether the refused name
     # is one the user saved, and a dropped role may be that name.
@@ -355,12 +372,13 @@ async def resolve_llm_config(
     # one runs a different model and a level only means something against the
     # ladder of the model that will honor it. An unsupported level degrades in
     # ``LLM.__init__``, the one place that sees both the request and the ladder.
-    await resolve_clients(
+    on_main = await resolve_clients(
         config, user_id, selection.effective_model, model_pref, enabled_subagents,
         is_byok=is_byok, thread_id=thread_id,
         reasoning_effort=reasoning_effort,
         fast_mode=fast_mode,
         user_defined=user_defined,
     )
+    demote_clientless(config, on_main)
 
     return config

@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ptc_agent.config.plugins import bundled_skill_dirs
 from ptc_agent.config.core import (
@@ -168,6 +168,23 @@ class SubagentConfig(BaseModel):
     preload_skills: list[str] = Field(default_factory=list)
     max_iterations: int = 15
     sections: dict[str, bool] = Field(default_factory=dict)
+    reasoning_effort: str | None = None
+    search_provider: str | None = None
+    search_depth: str | None = None
+    connectors: bool = True
+    brokerages: Literal["off", "on"] = "on"
+    preferred_connectors: list[str] = Field(default_factory=list)
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _effort_is_a_level(cls, value: str | None) -> str | None:
+        # A word outside the vocabulary would reach no model: the client falls
+        # back to the model's default while the pane shows the word.
+        from src.llms.reasoning import REASONING_LEVELS
+
+        if value is not None and value not in REASONING_LEVELS:
+            raise ValueError(f"must be one of {', '.join(REASONING_LEVELS)}")
+        return value
 
 
 class SubagentsConfig(BaseModel):
@@ -179,6 +196,21 @@ class SubagentsConfig(BaseModel):
 
     enabled: list[str] = Field(default_factory=lambda: ["general-purpose"])
     definitions: dict[str, SubagentConfig] = Field(default_factory=dict)
+    #: This user's merged roster (a ``ResolvedSubagents``), written on the
+    #: per-turn copy by ``resolve_llm_config`` for a PTC build. None on the
+    #: shared config and on builds that never resolved a user, which read
+    #: ``enabled`` and ``definitions`` as the deployment wrote them.
+    resolved: Any | None = Field(default=None, exclude=True)
+
+    def roster(self, requested: list[str] | None = None) -> list[str]:
+        """The names this build compiles.
+
+        A resolved roster already folded the request in, so ``requested``
+        only applies to a build that never resolved a user.
+        """
+        if self.resolved is not None:
+            return list(self.resolved.enabled)
+        return list(requested if requested is not None else self.enabled)
 
 
 class LLMDefinition(BaseModel):

@@ -504,7 +504,7 @@ async def astream_ptc_workflow(
 
         _mark_phase("pre_session")
 
-        subagents = request.subagents_enabled or config.subagents.enabled
+        subagents = config.subagents.roster(request.subagents_enabled or None)
         sandbox_id = None
 
         # The turn's skill state, folded to one value so the acquire can tell

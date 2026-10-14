@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -134,6 +135,85 @@ async def test_a_completed_spawn_carries_no_refusal_message(
         )
         is None
     )
+
+
+class _TypedMiddleware(_RefusingMiddleware):
+    def __init__(self, subagent_types: frozenset[str] | None) -> None:
+        super().__init__()
+        self.subagent_types = subagent_types
+
+
+def _task_request(action: str = "init", subagent_type: str | None = "research") -> Any:
+    args = {"action": action, "description": "d", "prompt": "p", "subagent_type": subagent_type}
+    if action != "init":
+        args["task_id"] = "k7Xm2p"
+    return SimpleNamespace(tool_call={"id": "call-1", "args": args}, runtime=None)
+
+
+@pytest.fixture
+def routed(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
+    """Which handler each action reached, with the real ones stubbed out."""
+    reached: dict[str, list[str]] = {"init": [], "update": [], "resume": []}
+
+    def _stub(name: str):
+        async def _handle(*_args: Any, **kwargs: Any) -> str:
+            reached[name].append(kwargs.get("subagent_type"))
+            return name
+
+        return _handle
+
+    for name in reached:
+        monkeypatch.setattr(task_actions, f"_handle_{name}", _stub(name))
+    return reached
+
+
+@pytest.mark.asyncio
+# None: an omitted type means general-purpose, which this roster lacks.
+@pytest.mark.parametrize("subagent_type", ["ghost", None])
+async def test_an_init_of_a_type_with_no_graph_runs_in_place_and_registers_nothing(routed, subagent_type):
+    mw = _TypedMiddleware(frozenset({"research"}))
+    seen = []
+
+    async def handler(request: Any) -> str:
+        seen.append(request)
+        return "in place"
+
+    request = _task_request(subagent_type=subagent_type)
+
+    assert await task_actions.handle_task_action(mw, request, handler) == "in place"
+    assert seen == [request]
+    assert routed["init"] == []
+    assert not mw.registry._tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("subagent_types", "subagent_type"),
+    [(frozenset({"research"}), "research"), (None, "research"), (frozenset({"general-purpose"}), None)],
+    ids=["a-type-with-a-graph", "no-set-to-check", "an-omitted-type-with-general-purpose"],
+)
+async def test_an_init_otherwise_takes_the_background_path(routed, subagent_types, subagent_type):
+    async def handler(_request: Any) -> str:
+        raise AssertionError("ran in place")
+
+    result = await task_actions.handle_task_action(
+        _TypedMiddleware(subagent_types), _task_request(subagent_type=subagent_type), handler
+    )
+
+    assert (result, routed["init"]) == ("init", [subagent_type])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["update", "resume"])
+async def test_an_update_or_resume_is_not_judged_by_the_type_set(routed, action):
+    async def handler(_request: Any) -> str:
+        raise AssertionError("ran in place")
+
+    result = await task_actions.handle_task_action(
+        _TypedMiddleware(frozenset({"research"})), _task_request(action, "ghost"), handler
+    )
+
+    assert (result, routed[action]) == (action, ["ghost"])
 
 
 _SWEPT_FILES = ("task_actions.py", "middleware.py")
