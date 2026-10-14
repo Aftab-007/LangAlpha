@@ -638,6 +638,91 @@ def test_token_usage_projected_after_message_content():
     assert data["input_tokens"] == 900
     assert data["output_tokens"] == 100
     assert data["total_tokens"] == 1000
+    # Saved before the stamp: replay fills in the deployment default.
+    assert "threshold" not in data
+
+
+def test_token_usage_carries_the_threshold_its_call_ran_under():
+    # The turn's own preset, not the deployment default: the threshold is per
+    # turn and only the checkpoint outlives it.
+    from ptc_agent.agent.middleware.compaction.utils import stamp_context_threshold
+
+    message = AIMessage(
+        content="answer",
+        id="ai-1",
+        usage_metadata={"input_tokens": 900, "output_tokens": 100, "total_tokens": 1000},
+    )
+    stamp_context_threshold(message, 300000)
+    items = _sse([message])
+    assert items[1]["data"]["threshold"] == 300000
+
+
+def _compacted(message, summary_id, text="condensed", count=30):
+    """``message`` as the response to a call that compacted to ``summary_id``."""
+    from ptc_agent.agent.middleware.compaction.utils import stamp_compaction_summary
+
+    stamp_compaction_summary(
+        message,
+        summary_id,
+        {
+            "summary_length": len(text),
+            "original_message_count": count,
+            "summary_text": text,
+            "source": "model",
+        },
+    )
+    return message
+
+
+def test_a_compacted_calls_summary_replays_right_before_its_response():
+    # Live, the summarize signal fires before the compacted call streams, so
+    # it sits between that call and the one before it.
+    first = AIMessage(
+        content="before",
+        id="ai-1",
+        usage_metadata={"input_tokens": 900, "output_tokens": 100, "total_tokens": 1000},
+    )
+    second = _compacted(AIMessage(content="after", id="ai-2"), "sum-1")
+
+    items = _sse([first, second], agent="task:t1")
+
+    assert [(i["event"], i["data"].get("action")) for i in items] == [
+        ("message_chunk", None),
+        ("context_window", "token_usage"),
+        ("context_window", "summarize"),
+        ("message_chunk", None),
+    ]
+    assert items[2]["data"] == {
+        "thread_id": THREAD_ID,
+        "agent": "task:t1",
+        "action": "summarize",
+        "signal": "complete",
+        "summary_length": len("condensed"),
+        "summary_text": "condensed",
+        "original_message_count": 30,
+        "source": "model",
+    }
+
+
+def test_a_summary_replayed_inline_does_not_also_open_the_span():
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+    from src.server.services.history.projector import context_signal_items
+    from src.server.services.history.slices import SpanDelta
+
+    summary = build_summary_message("condensed", None, original_message_count=30)
+    stamped = SpanDelta(
+        messages=[_compacted(AIMessage(content="after", id="ai-2"), summary.id)],
+        new_summarization_event={"summary_message": summary, "cutoff_index": 3},
+    )
+    # Saved before the stamp: the state diff is all there is.
+    unstamped = SpanDelta(
+        messages=[AIMessage(content="after", id="ai-2")],
+        new_summarization_event={"summary_message": summary, "cutoff_index": 3},
+    )
+
+    assert context_signal_items(THREAD_ID, stamped) == []
+    (item,) = context_signal_items(THREAD_ID, unstamped)
+    assert item["data"]["summary_text"] == "condensed"
 
 
 def test_workflow_run_items_whitelists_fields_and_sanitizes_errors():

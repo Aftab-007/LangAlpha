@@ -54,8 +54,8 @@ _Turns = list[tuple[Any, TurnAnchor]]
 class Policy:
     """What an entry point lets its read do about turns it must project."""
 
-    # A turn that cannot be projected replays from its stored events rather
-    # than failing the read.
+    # A turn that cannot be projected replays from its stored events, or as
+    # unavailable without them, rather than failing the read.
     turn_fallback: bool = False
     # A batch may run the whole-thread claims pass it needs, rather than
     # raise ClaimsPassNeeded.
@@ -177,27 +177,12 @@ class _ColdRead:
             return await self._project(batch)
 
     async def recover(self, batch: _Turns, error: Exception) -> dict[Any, list[Line]]:
-        """The batch's lines after ``error``: from storage whole when its run
-        claims cannot be placed, otherwise a turn at a time, and from storage
-        for a turn that still fails."""
-        if isinstance(error, ClaimsUnavailable):
-            logger.warning(
-                "[REPLAY] run claims of %s unavailable; turns %s..%s replay "
-                "from their stored events",
-                self._inputs.thread_id,
-                batch[0][0],
-                batch[-1][0],
-                exc_info=error,
-            )
-            return await self._fall_back(batch)
+        """The batch's lines after ``error``, a turn at a time, so a turn
+        falls back only on its own failure. That holds for run claims the
+        whole-thread pass cannot place too: they fail only the turns that
+        launched those runs, and the pass is not run again."""
         if len(batch) == 1:
-            logger.warning(
-                "[REPLAY] turn %s of %s replays from its stored events",
-                batch[0][0],
-                self._inputs.thread_id,
-                exc_info=error,
-            )
-            return await self._fall_back(batch)
+            return await self._fall_back(batch, error)
         logger.warning(
             "[REPLAY] batch projection failed for %s; retrying per turn",
             self._inputs.thread_id,
@@ -210,13 +195,7 @@ class _ColdRead:
             except INFRASTRUCTURE:
                 raise
             except Exception as err:
-                logger.warning(
-                    "[REPLAY] turn %s of %s replays from its stored events",
-                    turn[0],
-                    self._inputs.thread_id,
-                    exc_info=err,
-                )
-                out.update(await self._fall_back([turn]))
+                out.update(await self._fall_back([turn], err))
         return out
 
     async def close(self) -> None:
@@ -288,11 +267,29 @@ class _ColdRead:
         )
         return {ti: self._in_hand[ti] for ti, _ in batch}
 
-    async def _fall_back(self, batch: _Turns) -> dict[Any, list[Line]]:
+    async def _fall_back(self, batch: _Turns, error: Exception) -> dict[Any, list[Line]]:
         """The batch from its stored events, never stored, so the next read
-        projects it again."""
-        lines = await fallback_lines(self._inputs, [ti for ti, _ in batch])
+        projects it again. A turn settled since nothing writes stored events
+        has none and replays as unavailable, which is logged as an error:
+        the user sees the turn's answer missing."""
+        turns = [ti for ti, _ in batch]
+        lines, lost = await fallback_lines(self._inputs, turns)
         self._finish(batch)
+        if lost:
+            logger.error(
+                "[REPLAY] turns %s of %s cannot be projected and have no stored "
+                "events; they replay without their content",
+                lost,
+                self._inputs.thread_id,
+                exc_info=error,
+            )
+        else:
+            logger.warning(
+                "[REPLAY] turns %s of %s replay from their stored events",
+                turns,
+                self._inputs.thread_id,
+                exc_info=error,
+            )
         return lines
 
     def _finish(self, batch: _Turns) -> None:
@@ -426,9 +423,8 @@ async def project_stale(
 
     With ``policy.turn_fallback``, a batch that fails is retried a turn at a
     time, and a turn that still fails replays from its stored events (or as
-    a stub), never stored, so it is projected again on the next read. Only a
-    turn's own failure is retried: a batch whose run claims cannot be placed
-    replays from storage whole, and a database fault ends the read.
+    unavailable without them), never stored, so it is projected again on the
+    next read. A database fault ends the read: it would fail every turn alike.
     """
     read = _ColdRead(reader, inputs, anchored, stale, policy)
     out: dict[Any, list[Line]] = {}

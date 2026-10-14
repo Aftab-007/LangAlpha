@@ -119,6 +119,11 @@ def _namespace_items(
 
 
 def _run_items(thread_id: str, run: SpanDelta, agent: str) -> list[dict[str, Any]]:
+    # Signals the run's messages do not carry (see ``context_signal_items``)
+    # open the run, ahead of its brief. The client hangs a notice on the
+    # lane's last assistant message: a previous run's, or in a task's first
+    # run none, which drops it. A stamped summary instead follows the run's
+    # earlier responses, where it fired.
     out = projector.context_signal_items(thread_id, run, agent=agent)
     out.extend(
         projector.with_model_fallbacks(

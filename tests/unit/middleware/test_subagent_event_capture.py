@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import redis.exceptions as redis_exceptions
+from deepagents.backends.protocol import WriteResult
 from langchain_core.messages import ToolMessage
 
 from langgraph.types import Command
@@ -28,6 +29,7 @@ from src.utils.cache import stream_append
 
 from ptc_agent.agent.middleware.background_subagent.event_capture import (
     SubagentEventCaptureMiddleware,
+    SubagentToolResultCaptureMiddleware,
     _tool_message_to_event_data,
 )
 from ptc_agent.agent.middleware.background_subagent.middleware import (
@@ -43,6 +45,9 @@ from ptc_agent.agent.middleware.file_operations.multimodal import (
 )
 from ptc_agent.agent.middleware.file_operations.multimodal_strip import (
     strip_unsupported_content_blocks,
+)
+from ptc_agent.agent.middleware.large_result_eviction import (
+    LargeResultEvictionMiddleware,
 )
 
 
@@ -1141,7 +1146,7 @@ async def test_command_wrapped_error_result_keeps_its_status() -> None:
     registry._tasks = {}
     registry.update_metrics = AsyncMock()
     registry.append_captured_event = AsyncMock()
-    middleware = SubagentEventCaptureMiddleware(registry=registry)
+    middleware = SubagentToolResultCaptureMiddleware(registry=registry)
 
     command = Command(
         update={
@@ -1168,3 +1173,76 @@ async def test_command_wrapped_error_result_keeps_its_status() -> None:
         if call.args[1]["event"] == "tool_call_result"
     ]
     assert captured and captured[0]["data"]["status"] == "error"
+
+
+def _capture_registry() -> MagicMock:
+    registry = MagicMock()
+    registry._tasks = {}
+    registry.update_metrics = AsyncMock()
+    registry.append_captured_event = AsyncMock()
+    return registry
+
+
+def _captured_results(registry: MagicMock) -> list[dict]:
+    return [
+        call.args[1]["data"]
+        for call in registry.append_captured_event.await_args_list
+        if call.args[1]["event"] == "tool_call_result"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_evicted_result_is_captured_as_the_pointer_the_checkpoint_keeps() -> None:
+    """Replay projects a subagent's results from its checkpoint, which keeps
+    the eviction pointer, so the live copy has to be that pointer too rather
+    than the full result eviction took out."""
+    registry = _capture_registry()
+    capture = SubagentToolResultCaptureMiddleware(registry=registry)
+    backend = MagicMock()
+    backend.awrite = AsyncMock(return_value=WriteResult(path="/evicted/c1.md"))
+    eviction = LargeResultEvictionMiddleware(
+        backend=backend, tool_token_limit_before_evict=100
+    )
+    full = "".join(f"row {i}\n" for i in range(1000))
+    request = MagicMock()
+    request.tool_call = {"name": "Bash", "id": "c1"}
+    request.runtime = MagicMock()
+
+    async def tool(_req):
+        return ToolMessage(content=full, tool_call_id="c1", name="Bash")
+
+    async def evicting(req):
+        return await eviction.awrap_tool_call(req, tool)
+
+    token = current_background_tool_call_id.set("task-tc")
+    try:
+        kept = await capture.awrap_tool_call(request, evicting)
+    finally:
+        current_background_tool_call_id.reset(token)
+
+    assert kept.content.startswith("Tool result too large")
+    (captured,) = _captured_results(registry)
+    assert captured["content"] == kept.content
+    assert full not in captured["content"]
+
+
+@pytest.mark.asyncio
+async def test_the_metrics_half_counts_without_capturing_the_result() -> None:
+    """The innermost half counts the call; the result is left to the capture
+    outside eviction, so one call never streams two results."""
+    registry = _capture_registry()
+    middleware = SubagentEventCaptureMiddleware(registry=registry)
+    request = MagicMock()
+    request.tool_call = {"name": "Bash", "id": "c1"}
+
+    async def tool(_req):
+        return ToolMessage(content="ok", tool_call_id="c1", name="Bash")
+
+    token = current_background_tool_call_id.set("task-tc")
+    try:
+        await middleware.awrap_tool_call(request, tool)
+    finally:
+        current_background_tool_call_id.reset(token)
+
+    registry.update_metrics.assert_awaited_once_with("task-tc", "Bash")
+    assert _captured_results(registry) == []

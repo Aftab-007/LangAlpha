@@ -19,7 +19,9 @@ from ..backends.sandbox import SandboxBackend
 
 logger = structlog.get_logger(__name__)
 
-# Max total size for inline-embedded data when cloud storage is unavailable.
+# Max total size of a widget's resolved data. It is also the most a
+# checkpointed artifact may carry inline, which it does whenever object
+# storage cannot take the payload (disabled, or the upload failed).
 _INLINE_DATA_CAP = 500 * 1024  # 500 KB
 
 # Resolved data up to this size is inlined into the checkpointed artifact;
@@ -279,8 +281,10 @@ async def _attach_widget_data(
 
     Small payloads (and everything when storage is disabled) inline as
     ``data``; larger ones upload content-addressed and attach
-    ``data_ref {key, sha256, size}``. On upload failure the artifact carries
-    neither — replay then falls back to the stored-event merge.
+    ``data_ref {key, sha256, size}``. The artifact is the only copy replay
+    reads, so a failed upload inlines the data too, as a deployment without
+    storage does: a checkpoint heavier by at most ``_INLINE_DATA_CAP`` beats a
+    widget that reloads empty.
     """
     payload = json.dumps(resolved_data, ensure_ascii=False, sort_keys=True).encode()
     if len(payload) <= _INLINE_ARTIFACT_CAP or not is_storage_enabled():
@@ -299,7 +303,10 @@ async def _attach_widget_data(
         artifact["data_ref"] = {"key": key, "sha256": sha, "size": len(payload)}
         logger.debug("ShowWidget data uploaded", key=key, size=len(payload))
     else:
-        logger.warning("ShowWidget data upload failed", key=key, size=len(payload))
+        logger.warning(
+            "ShowWidget data upload failed; inlining it", key=key, size=len(payload)
+        )
+        artifact["data"] = resolved_data
 
 
 def create_show_widget_tool(backend: SandboxBackend) -> BaseTool:
@@ -367,10 +374,9 @@ def create_show_widget_tool(backend: SandboxBackend) -> BaseTool:
             "title": display_title,
         }
 
-        # Resolve data files. Small payloads inline into the checkpointed
-        # artifact; large ones persist to object storage as a content-addressed
-        # data_ref — state carries pointers, not bulk payloads, and replay can
-        # recover the data without the stored SSE stream.
+        # Resolve data files into the checkpointed artifact, which is all
+        # replay reads: large payloads go to object storage as a
+        # content-addressed data_ref so state carries pointers, not bulk data.
         resolved_data: dict[str, str] | None = None
         if data_files and backend is not None:
             resolved_data = await _resolve_data_files(backend, data_files) or None

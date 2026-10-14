@@ -690,6 +690,54 @@ _SUMMARY_SOURCE = "summarization"
 #: summarizes it: the span of turns, and the skills its note listed.
 SUMMARIZED_KEY = "summarized"
 
+#: The ``response_metadata`` key holding the summary trigger a model call ran
+#: under. The trigger is per turn (the user's or the model's compaction
+#: preset), and the checkpoint is all replay has of the turn, so it rides on
+#: the response whose usage the ring shows.
+CONTEXT_THRESHOLD_KEY = "context_threshold"
+
+
+def stamp_context_threshold(message: AIMessage, threshold: int) -> None:
+    message.response_metadata = {
+        **(message.response_metadata or {}),
+        CONTEXT_THRESHOLD_KEY: threshold,
+    }
+
+
+def context_threshold(message: Any) -> int | None:
+    """The summary trigger stamped on ``message``, or None for a message
+    saved before the stamp."""
+    value = (getattr(message, "response_metadata", None) or {}).get(CONTEXT_THRESHOLD_KEY)
+    return value if isinstance(value, int) and value > 0 else None
+
+
+#: The ``response_metadata`` key holding the summary a model call compacted
+#: to before it ran. The summary message lives only in
+#: ``_summarization_event``, which the next compaction overwrites, so each
+#: summary, and where in the turn it fired, rides on the response that
+#: answered from it.
+COMPACTION_SUMMARY_KEY = "context_summary"
+
+
+def stamp_compaction_summary(
+    message: AIMessage, summary_message_id: str, fields: Mapping[str, Any]
+) -> None:
+    """Stamp ``fields``, the summarize complete signal's payload, on the
+    response to the call that compacted to ``summary_message_id``."""
+    message.response_metadata = {
+        **(message.response_metadata or {}),
+        COMPACTION_SUMMARY_KEY: {"summary_message_id": summary_message_id, **fields},
+    }
+
+
+def compaction_summary(message: Any) -> dict[str, Any] | None:
+    """The summary stamped on ``message``, or None for a response whose call
+    did not compact or that was saved before the stamp."""
+    value = (getattr(message, "response_metadata", None) or {}).get(COMPACTION_SUMMARY_KEY)
+    if isinstance(value, dict) and isinstance(value.get("summary_message_id"), str):
+        return value
+    return None
+
 
 def build_summary_message(
     summary: str,

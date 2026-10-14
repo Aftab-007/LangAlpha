@@ -51,6 +51,8 @@ from ptc_agent.agent.middleware.compaction.utils import (
     find_group_safe_cutoff,
     get_effective_messages,
     measured_tokens,
+    stamp_compaction_summary,
+    stamp_context_threshold,
 )
 from ptc_agent.agent.middleware.compaction.offloading import (
     is_idle,
@@ -78,6 +80,17 @@ logger = logging.getLogger(__name__)
 # boundaries, which takes tens of milliseconds; past this the trim waits for
 # the next pass rather than hold the turn.
 _COVERAGE_TIMEOUT_S = 5.0
+
+
+def _summary_fields(compaction: Compaction) -> dict[str, Any]:
+    """The summarize complete signal's payload, one shape for the live signal
+    and the stamp replay reads it back from."""
+    return {
+        "summary_length": len(compaction.summary.text),
+        "original_message_count": compaction.original_count,
+        "summary_text": compaction.summary.text,
+        "source": compaction.summary.source,
+    }
 
 
 class CompactionMiddleware(AgentMiddleware):
@@ -190,6 +203,7 @@ class CompactionMiddleware(AgentMiddleware):
 
         compaction = await self._compact(request, view, cutoff, transcript)
         response = await handler(request.override(messages=compaction.messages))
+        self._stamp_summary(response, compaction)
         return self._answered(response, compaction.update(request.state))
 
     def _context_tokens(self, request: ModelRequest, view: list[AnyMessage]) -> int:
@@ -235,15 +249,20 @@ class CompactionMiddleware(AgentMiddleware):
         except BaseException as e:
             self._emit_context_signal("summarize", "error", error=str(e))
             raise
-        self._emit_context_signal(
-            "summarize",
-            "complete",
-            summary_length=len(compaction.summary.text),
-            original_message_count=compaction.original_count,
-            summary_text=compaction.summary.text,
-            source=compaction.summary.source,
-        )
+        self._emit_context_signal("summarize", "complete", **_summary_fields(compaction))
         return compaction
+
+    @staticmethod
+    def _stamp_summary(response: ModelResponse, compaction: Compaction) -> None:
+        """Stamp the summary on the response that answered from it, for
+        replay to show where it fired: live, its signal comes right before
+        this response streams."""
+        for msg in reversed(response.result or ()):
+            if isinstance(msg, AIMessage):
+                stamp_compaction_summary(
+                    msg, compaction.event["summary_message"].id, _summary_fields(compaction)
+                )
+                return
 
     def _answered(
         self, response: ModelResponse, update: dict[str, Any] | None = None
@@ -266,7 +285,8 @@ class CompactionMiddleware(AgentMiddleware):
 
     def _extract_token_usage(self, response: ModelResponse) -> tuple[int, int]:
         """The (input, output) tokens the newest AI message reports, emitted
-        to the frontend, or (0, 0) when none does."""
+        to the frontend with the threshold they fill and stamped with it for
+        replay, or (0, 0) when none does."""
         for msg in reversed(response.result or ()):
             if not isinstance(msg, AIMessage):
                 continue
@@ -277,12 +297,14 @@ class CompactionMiddleware(AgentMiddleware):
                 logger.debug(
                     "[Compaction] Token usage: input=%d, output=%d", input_tokens, output_tokens
                 )
+                stamp_context_threshold(msg, self._token_threshold)
                 self._emit_context_signal(
                     "token_usage",
                     "complete",
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     total_tokens=input_tokens + output_tokens,
+                    threshold=self._token_threshold,
                 )
                 return (input_tokens, output_tokens)
         return (0, 0)

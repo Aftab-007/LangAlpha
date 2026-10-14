@@ -25,7 +25,11 @@ from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMes
 from ptc_agent.agent.middleware.background_subagent.workflow.emitter import (
     WORKFLOW_FRAME_FIELDS,
 )
-from ptc_agent.agent.middleware.compaction.utils import parse_summary_message
+from ptc_agent.agent.middleware.compaction.utils import (
+    compaction_summary,
+    context_threshold,
+    parse_summary_message,
+)
 from ptc_agent.agent.middleware.tool.argument_parsing import parse_tool_args
 from ptc_agent.agent.transcript.classify import STEERING_MARKERS, human_kind
 from src.llms.content_utils import extract_content_with_type
@@ -270,6 +274,18 @@ def _project_ai_message(
 ) -> list[HistoryEvent]:
     events: list[HistoryEvent] = []
     message_id = message.id or "unknown"
+    # A compaction before this call: live, its signal fires before the call
+    # streams, so the notice sits between the calls it fell between.
+    summary = compaction_summary(message)
+    if summary is not None:
+        events.append(
+            HistoryEvent(
+                "context-window",
+                agent,
+                summary["summary_message_id"],
+                _stamped_summarize_payload(summary),
+            )
+        )
     text, reasoning, phase = split_content_blocks(message.content)
     tool_calls = _filter_tool_calls(message.tool_calls or [])
 
@@ -307,20 +323,17 @@ def _project_ai_message(
     input_tokens = usage.get("input_tokens", 0)
     if input_tokens > 0:
         output_tokens = usage.get("output_tokens", 0)
-        events.append(
-            HistoryEvent(
-                "context-window",
-                agent,
-                message_id,
-                {
-                    "action": "token_usage",
-                    "signal": "complete",
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens,
-                },
-            )
-        )
+        usage_data: dict[str, Any] = {
+            "action": "token_usage",
+            "signal": "complete",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+        threshold = context_threshold(message)
+        if threshold is not None:
+            usage_data["threshold"] = threshold
+        events.append(HistoryEvent("context-window", agent, message_id, usage_data))
     return events
 
 
@@ -557,6 +570,29 @@ def summarize_payload(message: HumanMessage) -> dict[str, Any]:
     }
 
 
+def _stamped_summarize_payload(stamp: dict[str, Any]) -> dict[str, Any]:
+    """The summarize signal a summary stamped on its response replays as,
+    shaped as ``summarize_payload`` shapes one read off the summary."""
+    return {
+        "action": "summarize",
+        "signal": "complete",
+        "summary_length": stamp.get("summary_length", 0),
+        "summary_text": stamp.get("summary_text", ""),
+        "original_message_count": stamp.get("original_message_count", 0),
+        **({"source": stamp["source"]} if "source" in stamp else {}),
+    }
+
+
+def inline_summary_ids(messages: Iterable[AnyMessage]) -> set[str]:
+    """The summaries ``messages`` replay where they fired, off the
+    responses that answered from them."""
+    return {
+        stamp["summary_message_id"]
+        for message in messages
+        if isinstance(message, AIMessage) and (stamp := compaction_summary(message))
+    }
+
+
 def context_window_record(
     props: dict[str, Any],
     *,
@@ -661,10 +697,13 @@ def context_signal_items(
     new threads). What a manual compact or offload changed after the turn is
     left to its own marker (``manual_context_window_items``); a summary the
     agent wrote during the turn and a compact then replaced comes off the
-    compact's record.
+    compact's record. A summary stamped on the response that answered from it
+    already replays there (``inline_summary_ids``); only one saved before the
+    stamp opens the span, the one place the state diff can put it.
     """
     manual = _manual_context_records(turn)
     manual_summaries = manual_summary_ids(manual)
+    inline = inline_summary_ids(turn.messages)
     events: list[HistoryEvent] = []
     for count, kind, field_name in (
         (turn.newly_offloaded_args, "args", "offloaded_args"),
@@ -689,19 +728,22 @@ def context_signal_items(
     if summarization_event is not None:
         message = summarization_event.get("summary_message")
         if isinstance(message, HumanMessage) and message.id not in manual_summaries:
-            events.extend(messages_to_history_events([message], agent=agent))
+            if message.id not in inline:
+                events.extend(messages_to_history_events([message], agent=agent))
         else:
-            events.extend(_replaced_summaries(manual, manual_summaries, agent))
+            events.extend(_replaced_summaries(manual, manual_summaries | inline, agent))
     return history_events_to_sse(events, thread_id=thread_id)
 
 
 def _replaced_summaries(
-    manual: list[dict[str, Any]], manual_summaries: set[str], agent: str
+    manual: list[dict[str, Any]], shown: set[str], agent: str
 ) -> list[HistoryEvent]:
+    """The summaries the agent wrote during the turn that a compact after it
+    replaced, less those ``shown`` elsewhere."""
     events: list[HistoryEvent] = []
     for record in manual:
         replaced = (record.get("metadata") or {}).get("replaced_summary")
-        if not isinstance(replaced, dict) or replaced.get("id") in manual_summaries:
+        if not isinstance(replaced, dict) or replaced.get("id") in shown:
             continue
         payload = {k: v for k, v in replaced.items() if k != "id"}
         events.append(HistoryEvent("context-window", agent, replaced.get("id"), payload))

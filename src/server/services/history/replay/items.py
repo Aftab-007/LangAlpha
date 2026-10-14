@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from src.server.contracts.status import TERMINAL_STATUSES
@@ -147,20 +147,24 @@ def _insert_provenance_items(
     """Synthesize ``provenance`` events from table rows, anchored in position.
 
     Each row inserts after the ``tool_call_result`` matching its
-    ``tool_call_id`` (where the live event fired); rows with no matching
-    anchor in this projection append at the turn tail in row order.
+    ``tool_call_id`` (where the live event fired); rows whose call is not in
+    this projection append at the turn tail in row order. A row with no tool
+    call (a market-watch stamp) has only its time to go by, and so does a
+    subagent's: its lane replays after the whole main lane, while the client
+    hangs every record on the main bubble current when it arrives. See
+    ``_place_by_steer``.
     """
     if not rows:
         return turn_items
     by_anchor: dict[str, list[dict[str, Any]]] = {}
-    unanchored: list[dict[str, Any]] = []
+    unanchored: list[tuple[dict[str, Any], float | None]] = []
     for row in rows:
         item = {"event": "provenance", "data": provenance_row_to_event(row)}
         tool_call_id = item["data"].get("tool_call_id")
-        if tool_call_id:
+        if tool_call_id and agent_lane(item["data"].get("agent")) == MAIN_LANE:
             by_anchor.setdefault(tool_call_id, []).append(item)
         else:
-            unanchored.append(item)
+            unanchored.append((item, _arrival(row)))
 
     merged: list[dict[str, Any]] = []
     for item in turn_items:
@@ -169,8 +173,77 @@ def _insert_provenance_items(
             merged.extend(by_anchor.pop(item["data"].get("tool_call_id"), ()))
     for leftover in by_anchor.values():
         merged.extend(leftover)
-    merged.extend(unanchored)
+    return _place_by_steer(merged, unanchored)
+
+
+def _place_by_steer(
+    merged: list[dict[str, Any]],
+    unanchored: list[tuple[dict[str, Any], float | None]],
+) -> list[dict[str, Any]]:
+    """Put each row placed by its time in the bubble it reached live.
+
+    Live, a record lands in whatever bubble the turn is writing, and a
+    delivered steer opens a new one. A market-watch stamp is emitted at the
+    model call it feeds, which runs after the steer that call reads, so a
+    row that arrived before a steer belongs in the bubble that steer closed:
+    it goes just ahead of it. A row that arrived after every steer, or has
+    no time at all, stays at the tail. A throttled replay of a market-watch
+    block reuses its fetch time; but such a replay carries the same content
+    and is the same row, so the row sits where the block was first shown.
+    """
+    if not unanchored:
+        return merged
+    steers = [
+        (index, at)
+        for index, item in enumerate(merged)
+        if item["event"] == "steering_delivered"
+        and agent_lane(item["data"].get("agent")) == MAIN_LANE
+        and (at := _epoch(item["data"].get("timestamp"))) is not None
+    ]
+    before: dict[int, list[dict[str, Any]]] = {}
+    tail: list[dict[str, Any]] = []
+    for item, at in unanchored:
+        index = next(
+            (i for i, steer_at in steers if at is not None and at < steer_at), None
+        )
+        if index is None:
+            tail.append(item)
+        else:
+            before.setdefault(index, []).append(item)
+    if before:
+        placed: list[dict[str, Any]] = []
+        for index, item in enumerate(merged):
+            placed.extend(before.get(index, ()))
+            placed.append(item)
+        merged = placed
+    merged.extend(tail)
     return merged
+
+
+def _arrival(row: dict[str, Any]) -> float | None:
+    """When a row's record reached the client: its ``emitted_at``, or for a
+    row written before that was kept, its fetch time. The fetch can be well
+    before: code in the sandbox reports what it fetched only when it
+    returns."""
+    emitted = _epoch(row.get("emitted_at"))
+    return emitted if emitted is not None else _epoch(row.get("source_timestamp"))
+
+
+def _epoch(value: Any) -> float | None:
+    """Seconds since the epoch from a row's datetime, an ISO string, or the
+    float a steer payload stamps; None for anything else."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if isinstance(value, datetime):
+        return value.timestamp()
+    return None
 
 
 _CREDIT_USAGE_STATUSES = ("completed", "interrupted")

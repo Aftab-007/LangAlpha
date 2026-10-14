@@ -40,9 +40,9 @@ class _SubagentTokenForwarder:
     on transition to text content or message_id change. Without this, the
     frontend's reasoning UI never opens (it gates on the start signal).
 
-    Tool-call/tool-call-result events still come from
-    ``SubagentEventCaptureMiddleware.awrap_*_call`` — those are post-call
-    discrete signals, not stream-able token deltas.
+    Tool-call/tool-call-result events still come from the capture
+    middleware in ``event_capture.py``: those are post-call discrete
+    signals, not stream-able token deltas.
     """
 
     def __init__(
@@ -117,7 +117,7 @@ class _SubagentTokenForwarder:
     ) -> None:
         # Drop tool-node inner LLM chunks (e.g. WebFetch's extraction model):
         # the tool's user-facing output arrives via the tool_call_result event
-        # written separately by ``SubagentEventCaptureMiddleware`` (see
+        # written separately by ``SubagentToolResultCaptureMiddleware`` (see
         # ``event_capture.py``). Forwarding the inner model's AI chunks would
         # leak the extraction prompt's CoT to the per-task channel.
         #

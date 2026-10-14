@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest';
 import { prependSubagentRuns, projectSubagentHistory } from '../projectHistory';
-import { handleSubagentMessageChunk, handleTaskSteeringAccepted } from '../liveEventHandlers';
+import { handleSubagentMessageChunk, handleTaskSteeringAccepted, returnTaskInstruction } from '../liveEventHandlers';
 import { createSubagentHistoryStore, type SubagentHistorySnapshot } from '../historyStore';
 import type { SubagentRuntime } from '../../runtime';
 import type { SSEEvent } from '../../types';
@@ -214,6 +214,85 @@ describe('projectSubagentHistory steering', () => {
       ['Also cover 2024 guidance', 'main_agent'],
       ['Skip 2019', null],
     ]);
+  });
+});
+
+describe('projectSubagentHistory returned steering', () => {
+  const replay = (events: Record<string, unknown>[]) => {
+    const rt = makeRuntime();
+    projectSubagentHistory(
+      rt,
+      new Map([['task:k7Xm2p', { messages: [], events: events as unknown as SSEEvent[], status: 'completed' }]]),
+    );
+    return rt;
+  };
+  const transcript = (messages: Record<string, unknown>[]) => messages.map((m) => {
+    const notice = (m.contentSegments as Array<{ type: string; content: string; detail?: string }> | undefined)
+      ?.find((s) => s.type === 'notification');
+    return notice ? ['notice', notice.content, notice.detail, m.inputId] : [m.role, m.content];
+  });
+
+  it('puts up the notice the live stream did, where the run returned it', () => {
+    const rt = replay([
+      { event: 'user_message', role: 'user', content: 'Pull the 10-K' },
+      { event: 'message_chunk', role: 'assistant', content_type: 'text', content: 'Revenue' },
+      { event: 'steering_returned', content: 'Focus on margins', input_id: 'a1', reason: 'run_ended' },
+    ]);
+
+    const entry = rt.subagentHistory.get().entries['task:k7Xm2p']!;
+    expect(transcript(entry.messages as Record<string, unknown>[])).toEqual([
+      ['user', 'Pull the 10-K'],
+      ['assistant', 'Revenue'],
+      ['notice', 'chat.taskSteeringReturnedNotification', 'Focus on margins', 'a1'],
+    ]);
+
+    // The same frame re-sent by the live stream on reconnect adds nothing.
+    const held = rt.subagentStateRefsRef.current['task:k7Xm2p'];
+    const before = held.messages;
+    returnTaskInstruction(held, { inputId: 'a1', content: 'Focus on margins' }, 'chat.taskSteeringReturnedNotification');
+    expect(held.messages).toBe(before);
+  });
+
+  it('reads the text from messages[] when a frame carries no top-level content', () => {
+    const rt = replay([
+      { event: 'user_message', role: 'user', content: 'Pull the 10-K' },
+      { event: 'steering_returned', messages: [{ content: 'Skip 2019' }] },
+    ]);
+    expect(transcript(rt.subagentHistory.get().entries['task:k7Xm2p']!.messages as Record<string, unknown>[]))
+      .toEqual([
+        ['user', 'Pull the 10-K'],
+        ['notice', 'chat.taskSteeringReturnedNotification', 'Skip 2019', undefined],
+      ]);
+  });
+
+  it('adds nothing when a reconnect re-sends a return that carries no id', () => {
+    const rt = replay([
+      { event: 'user_message', role: 'user', content: 'Pull the 10-K' },
+      { event: 'steering_returned', content: 'Skip 2019', reason: 'run_ended' },
+    ]);
+    const held = rt.subagentStateRefsRef.current['task:k7Xm2p'];
+    const before = held.messages;
+    returnTaskInstruction(held, { content: 'Skip 2019' }, 'chat.taskSteeringReturnedNotification');
+    expect(held.messages).toBe(before);
+  });
+
+  it('drops the notice of steering a later run took after all', () => {
+    const rt = replay([
+      { event: 'user_message', role: 'user', content: 'Pull the 10-K' },
+      { event: 'steering_returned', content: 'Focus on margins', input_id: 'a1', reason: 'run_mismatch' },
+      { event: 'message_chunk', role: 'assistant', content_type: 'text', content: 'Revenue' },
+      {
+        event: 'steering_delivered',
+        content: 'Focus on margins',
+        entries: [{ input_id: 'a1', content: 'Focus on margins', sender: 'user' }],
+      },
+    ]);
+    expect(transcript(rt.subagentHistory.get().entries['task:k7Xm2p']!.messages as Record<string, unknown>[]))
+      .toEqual([
+        ['user', 'Pull the 10-K'],
+        ['assistant', 'Revenue'],
+        ['user', 'Focus on margins'],
+      ]);
   });
 });
 

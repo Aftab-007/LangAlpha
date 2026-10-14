@@ -217,6 +217,35 @@ describe('turnProjection — stamped turns on a paged transcript', () => {
   });
 });
 
+const retryBtn = (container: HTMLElement, id: string) =>
+  bubble(container, id)?.querySelector('[title="chat.actions.retry"]') ?? null;
+
+describe('MessageList — a reply replay could not load', () => {
+  const failure = { message: 'This response could not be loaded.', kind: 'internal' };
+
+  it('offers a Regenerate, since its run did not fail and the server refuses a Retry', () => {
+    const messages: Msg[] = [
+      userMsg('u0'),
+      emptyAssistant('a0', { error: true, unloaded: true, structuredError: failure }),
+    ];
+    const { container } = renderList(messages, { onRegenerate: vi.fn(), onRetry: vi.fn() });
+
+    expect(retryBtn(container, 'a0')).toBeNull();
+    expect(regenerateBtn(container, 'a0')).not.toBeNull();
+  });
+
+  it('keeps the Retry on a reply whose run failed', () => {
+    const messages: Msg[] = [
+      userMsg('u0'),
+      emptyAssistant('a0', { error: true, structuredError: failure }),
+    ];
+    const { container } = renderList(messages, { onRegenerate: vi.fn(), onRetry: vi.fn() });
+
+    expect(retryBtn(container, 'a0')).not.toBeNull();
+    expect(regenerateBtn(container, 'a0')).toBeNull();
+  });
+});
+
 describe('MessageList — regenerate lands on the last visible bubble', () => {
   it('keeps regenerate on the previous visible bubble when the steering continuation settled empty', () => {
     const onRegenerate = vi.fn();

@@ -574,10 +574,11 @@ class BackgroundTaskRegistry:
     ) -> None:
         """Append a captured SSE event to a background task.
 
-        Called by SubagentEventCaptureMiddleware (and steering) to capture
-        events for per-task SSE replay and post-interrupt persistence. The
-        record is best-effort spilled to the per-task Redis Stream; failure
-        leaves the seq counter advanced but flips ``redis_write_failed``.
+        Called by the capture middleware in event_capture.py (and steering)
+        to capture events for per-task SSE replay and post-interrupt
+        persistence. The record is best-effort spilled to the per-task Redis
+        Stream; failure leaves the seq counter advanced but flips
+        ``redis_write_failed``.
         An unresolvable tool_call_id drops the append — an evicted task's
         retired streams must not be recreated by a late writer.
         """

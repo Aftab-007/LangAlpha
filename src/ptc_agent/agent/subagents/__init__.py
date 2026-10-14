@@ -24,7 +24,6 @@ def create_subagents(
     registry: SubagentRegistry,
     enabled_names: list[str],
     compiler: SubagentCompiler,
-    event_capture_middleware: Any | None = None,
     role: AgentRole | None = None,
 ) -> list[dict[str, Any]]:
     """Compile enabled subagents into SubAgent TypedDicts.
@@ -33,8 +32,6 @@ def create_subagents(
         registry: The subagent registry (built-in + user definitions).
         enabled_names: Which subagents to include.
         compiler: The compiler with runtime context (sandbox, tools, etc.).
-        event_capture_middleware: Optional middleware injected into every subagent
-            for event capture (SSE streaming) and tool-call metrics.
         role: The role of the agent the subagents serve; leaves out the ones
             that role is not listed for. None keeps every enabled subagent.
 
@@ -42,14 +39,7 @@ def create_subagents(
         List of SubAgent TypedDicts ready for ``SubAgentMiddleware``.
     """
     definitions = registry.get_enabled(enabled_names, role=role)
-    subagents = compiler.compile_many(definitions)
-
-    if event_capture_middleware is not None:
-        for spec in subagents:
-            existing = spec.get("middleware", [])
-            spec["middleware"] = [event_capture_middleware, *list(existing)]
-
-    return subagents
+    return compiler.compile_many(definitions)
 
 
 __all__ = [

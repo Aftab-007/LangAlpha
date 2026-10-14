@@ -197,6 +197,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
   // labels each time while hidden. The two handlers read it when clicked.
   const messageId = message.id as string;
   const hasError = !!message.error;
+  const unloaded = !!message.unloaded;
   const failure = hasError ? message.structuredError as StructuredError | undefined : undefined;
   const hasBody = !(projection.textCount === 0 && projection.blocks.every((block) => block.type === 'text'));
   const isSteering = isSteeringUserMessage(message);
@@ -353,7 +354,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
         regenerating re-runs the whole turn from its input checkpoint
         (mid-run steering can't be replayed), so the affordance sits
         at the end of the full response. */}
-    {isAssistant && !hasError && onRegenerate && isTurnTail && (
+    {isAssistant && (!hasError || unloaded) && onRegenerate && isTurnTail && (
       <button
         onClick={() => onRegenerate(messageId)}
         className="p-1 min-h-7 min-w-7 inline-flex items-center justify-center rounded transition-colors hover:bg-(--color-bg-elevated)"
@@ -362,7 +363,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
         <RefreshCw className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
       </button>
     )}
-    {isAssistant && hasError && onRetry && isLatestReply && (
+    {isAssistant && hasError && !unloaded && onRetry && isLatestReply && (
       <button
         onClick={onRetry}
         className="p-1 min-h-7 min-w-7 inline-flex items-center justify-center rounded transition-colors hover:bg-(--color-bg-elevated)"

@@ -9,20 +9,21 @@ non-derivable remainder from persisted events:
   offload) are projected from checkpoint state — steering payloads and
   summarize fields are stamped into message ``additional_kwargs`` at emit
   time, token usage comes from ``usage_metadata``, offload counts and the
-  summarize event from private-state deltas. While the sse dual-write is on,
-  a turn with stored events replays those verbatim instead (richer historical
-  payloads, exact mid-turn positions).
+  summarize event from private-state deltas. A turn settled while stored
+  events were still written replays those verbatim instead (richer
+  historical payloads, exact mid-turn positions).
 - ``provenance`` / ``credit_usage`` are table-sourced (provenance_records /
   conversation_usages rows, written at persist time); answered ``interrupt``
   cards project from the resume boundary's ``__interrupt__`` pending writes;
   the terminal ``error`` event replays the frame the live stream sent, from
   the turn's stored events or its response row's replay facts, with the row's
   kind stamped on it, and reconstructs from the row when neither holds one
-  (both replay paths). While the sse dual-write is on, a turn with stored
-  events replays the stored copies instead.
-- ``html_widget`` artifacts prefer the stored event when present — the live
-  event inlines resolved data files that are deliberately kept out of the
-  checkpointer.
+  (both replay paths). A turn with stored events replays the stored copies
+  instead.
+- ``html_widget`` artifacts carry their resolved data in the checkpointed
+  artifact, inline or as a ``data_ref`` resolved on the way out
+  (``widgets``); an older turn's stored event still supplies it when the
+  artifact has neither.
 - Sandbox image paths in projected text resolve through the replay facts of
   the run that wrote them (the turn's response row, a subagent run's row),
   through ``image_capture`` ui records for a turn settled before its row held
@@ -41,8 +42,11 @@ read streams the lines while their key still matches the inputs. Only a turn
 whose key moved is projected again, from its stored slice when the branch
 still agrees with it, and from checkpoints otherwise.
 
-A turn that cannot be projected replays from its stored events (or as a
-stub) on the read paths that ask for it, so one bad turn costs only itself.
+A turn that cannot be projected replays from its stored events on the read
+paths that ask for it, so one bad turn costs only itself. Nothing writes
+stored events since #533, so a newer turn has none: it replays as its user
+message closed by an error frame (``stored_events.unavailable_item``), never
+as a turn the assistant silently left unanswered.
 
 Package layout:
 
@@ -94,6 +98,7 @@ from src.server.services.history.replay.keys import lines_epoch, lines_key
 from src.server.services.history.replay.lines import Line, line_of
 from src.server.services.history.replay.stored_events import (
     build_sse_replay_items,
+    lost_turns,
     with_stored_events,
 )
 from src.server.services.history.replay.turn import Derive, Inputs
@@ -235,10 +240,14 @@ async def read_replay_page(
     One assembly for every reader that shows a thread, so the owner and a
     share viewer see the same turns. ``auto`` projects from checkpoints and
     replays only a turn that cannot be projected from its stored events; the
-    whole page goes to storage only when the thread's turns cannot be paired
-    at all. ``checkpoint`` raises ``CheckpointReplayUnavailable`` rather than
-    fall back, and ``sse`` reads storage alone.
+    whole page goes to storage only when the page cannot be projected at all
+    (its turns cannot be paired, or a read every turn shares failed), since
+    a turn paired wrongly would show another turn's answer. ``checkpoint``
+    raises ``CheckpointReplayUnavailable`` rather than fall back, and ``sse``
+    reads storage alone. Either fallback shows a turn with no stored events
+    as unavailable.
     """
+    cause: BaseException | None = None
     if source in ("auto", "checkpoint"):
         try:
             if rows.thread.get("latest_checkpoint_id") is None:
@@ -264,30 +273,39 @@ async def read_replay_page(
         except CheckpointReplayUnavailable as e:
             if source == "checkpoint":
                 raise
+            cause = e
             logger.info(
                 "[REPLAY] Checkpoint replay unavailable for %s, falling back "
                 "to sse: %s",
                 rows.thread_id,
                 e,
             )
-        except Exception:
+        except Exception as e:
             if source == "checkpoint":
                 raise
+            cause = e
             logger.warning(
                 "[REPLAY] Checkpoint replay failed for %s, falling back to sse",
                 rows.thread_id,
                 exc_info=True,
             )
-    return await stored_events_page(rows, before_turn, limit), "sse"
+    return await stored_events_page(rows, before_turn, limit, cause=cause), "sse"
 
 
 async def stored_events_page(
     rows: ThreadRows,
     before_turn: Any | None = None,
     limit: int | None = None,
+    *,
+    cause: BaseException | None = None,
 ) -> ReplayPage:
     """A page replayed from stored events alone, over the same window the
-    checkpoint path pages by, counted in persisted turns."""
+    checkpoint path pages by, counted in persisted turns.
+
+    Turns with no stored events replay as unavailable and are logged as an
+    error with ``cause``, the failure that sent the read here: a thread
+    whose turns cannot pair is logged only at info, as older threads
+    legitimately are."""
     turns = sorted(
         {
             q["turn_index"]
@@ -306,6 +324,15 @@ async def stored_events_page(
     responses = await with_stored_events(
         rows.responses_by_turn, sorted(page_turns), verbatim=True
     )
+    lost = lost_turns(responses, sorted(page_turns), rows.open_runs)
+    if lost:
+        logger.error(
+            "[REPLAY] %s replays from stored events, which turns %s do not "
+            "have; they replay without their content",
+            rows.thread_id,
+            lost,
+            exc_info=cause,
+        )
     return ReplayPage(
         lines=[
             line_of(item)

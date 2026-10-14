@@ -98,6 +98,28 @@ describe('history replay: a failed turn', () => {
     expect(reply.structuredError).toMatchObject({ message: 'Error code: 401 - invalid key', kind: 'upstream', statusCode: 401 });
   });
 
+  it('marks a reply the server could not load, which no Retry reruns', async () => {
+    const reply = await replyAfter([
+      ...answered,
+      { event: 'user_message', data: { thread_id: 'thread-1', turn_index: 1, content: 'Reply BRAVO' } },
+      failure('This response could not be loaded.', { type: 'replay_unavailable', error_kind: 'internal' }),
+    ], 'history-assistant-1');
+
+    expect(reply.error).toBe(true);
+    expect(reply.unloaded).toBe(true);
+    expect(reply.structuredError).toMatchObject({ message: 'This response could not be loaded.', kind: 'internal' });
+  });
+
+  it('leaves a failed run open to its Retry', async () => {
+    const reply = await replyAfter([
+      ...answered,
+      { event: 'user_message', data: { thread_id: 'thread-1', turn_index: 1, content: 'Reply BRAVO' } },
+      failure('boom'),
+    ], 'history-assistant-1');
+
+    expect(reply.unloaded).toBeUndefined();
+  });
+
   it('leaves the turns that did not fail alone', async () => {
     const reply = await replyAfter([
       ...answered,

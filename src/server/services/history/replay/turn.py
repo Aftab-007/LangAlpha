@@ -58,6 +58,8 @@ class Inputs:
     usage_by_response: dict[str, Any]
     provenance_by_response: dict[str, Any]
     run_facts: replay_facts.RunFacts
+    # The run of each turn still going (``ThreadRows.open_runs``).
+    open_runs: dict[Any, str]
 
     @classmethod
     def of(cls, rows: ThreadRows) -> Inputs:
@@ -73,6 +75,7 @@ class Inputs:
             usage_by_response=items._usage_rows_by_response(rows.usages),
             provenance_by_response=items._rows_by_response(rows.provenance, many=True),
             run_facts=replay_facts.RunFacts.of(rows.run_facts),
+            open_runs=rows.open_runs,
         )
 
     def response_id(self, turn_index: Any) -> str | None:
@@ -108,10 +111,11 @@ def project_turn(
             messages_to_history_events(messages), thread_id=thread_id
         ),
     )
-    # Compaction signals (offload counts, the summarize event) live in
-    # private state keys, not the messages channel — re-emit them at the
-    # head of the turn they landed in (live they fire before the first
-    # post-compaction model call).
+    # Compaction signals the turn's messages do not carry live in private
+    # state keys: offload counts, which fire as the turn starts, and a
+    # summary saved before its response was stamped with it, whose place in
+    # the turn is lost. Both open the turn. A stamped summary already sits
+    # before the response that answered from it.
     turn_items[:0] = projector.context_signal_items(thread_id, turn)
     durations = replay_facts.reasoning_durations(response)
     if durations is not None:
@@ -202,10 +206,9 @@ def _collect_image_url_map(records: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def _fill_token_thresholds(turn_items: list[dict[str, Any]]) -> None:
-    """Stamp the UI-ring threshold on projected token_usage events.
-
-    The live handler adds it server-side (config, not graph state); replay
-    uses the same resolver so both wires carry the same value.
+    """Stamp the UI-ring threshold on projected token_usage events that lack
+    one: a message saved before the compaction middleware stamped the
+    threshold it ran under carries none, so it gets the deployment default.
     """
     for item in turn_items:
         data = item["data"]
