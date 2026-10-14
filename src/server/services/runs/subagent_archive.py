@@ -140,10 +140,14 @@ async def iter_subagent_events_full(
 
 
 def record_to_persist_event(record: dict, thread_id: str) -> dict:
-    """Convert a captured-event record to persistence shape ``{event, data}``."""
+    """Convert a captured-event record to persistence shape ``{event, data}``,
+    with the ``ts`` it went out at, which a provenance row keeps."""
     data = dict(record.get("data") or {})
     data["thread_id"] = thread_id
-    return {"event": record.get("event"), "data": data}
+    event = {"event": record.get("event"), "data": data}
+    if record.get("ts") is not None:
+        event["ts"] = record["ts"]
+    return event
 
 
 async def persist_collected_events(

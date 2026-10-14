@@ -603,7 +603,11 @@ class RunSSEProducer:
                                 event_data, agent_from_stream
                             )
                             self.provenance_events.append(
-                                {"event": "provenance", "data": dict(prov_data)}
+                                {
+                                    "event": "provenance",
+                                    "data": dict(prov_data),
+                                    "ts": time.time(),
+                                }
                             )
                             yield self._build_sse_event("provenance", prov_data)
                             continue

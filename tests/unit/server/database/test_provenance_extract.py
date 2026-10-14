@@ -1,9 +1,11 @@
 """Extraction + dedup logic for provenance records (pure, no DB).
 
 ``extract_provenance_from_sse_events`` filters accumulated SSE events down to
-``event == "provenance"`` entries and collapses duplicates within a turn on
-``(source_type, identifier, result_sha256)``.
+``event == "provenance"`` entries and collapses duplicates within one tool
+call on ``(source_type, identifier, result_sha256, agent, args_fingerprint)``.
 """
+
+from datetime import datetime, timezone
 
 from src.server.database.provenance import extract_provenance_from_sse_events
 
@@ -67,15 +69,92 @@ class TestExtractProvenance:
         assert record["agent"] == "task:abc"
         assert record["provider"] == "mcp:finance"
 
-    def test_dedup_same_source_same_content(self):
-        # Same (source_type, identifier, result_sha256) collapses to one row,
-        # even if other fields (e.g. tool_call_id) differ.
+    def test_keeps_when_the_record_went_out(self):
+        # Replay places a subagent's row by when it reached the client, which
+        # for code in the sandbox can be long after the fetch.
+        sent = {
+            "event": "provenance",
+            "data": {"source_type": "mcp_tool", "result_sha256": "sha-a"},
+            "ts": 1_760_000_000.5,
+        }
+        unstamped = {**sent, "ts": None, "data": {**sent["data"], "result_sha256": "b"}}
+        forged = {**sent, "ts": "soon", "data": {**sent["data"], "result_sha256": "c"}}
+
+        records = extract_provenance_from_sse_events([sent, unstamped, forged])
+
+        assert records[0]["emitted_at"] == datetime.fromtimestamp(
+            1_760_000_000.5, tz=timezone.utc
+        )
+        assert [r["emitted_at"] for r in records[1:]] == [None, None]
+
+    def test_dedup_same_source_same_content_within_one_call(self):
+        events = [
+            _provenance_event(tool_call_id="call-1"),
+            _provenance_event(tool_call_id="call-1"),
+        ]
+        records = extract_provenance_from_sse_events(events)
+        assert len(records) == 1
+
+    def test_same_result_under_another_call_keeps_its_row(self):
+        # Regression: the client lists sources per tool call, so a second
+        # search returning the result an earlier one did showed the source
+        # under both calls live, and lost it from the second on reload.
         events = [
             _provenance_event(tool_call_id="call-1"),
             _provenance_event(tool_call_id="call-2"),
         ]
         records = extract_provenance_from_sse_events(events)
-        assert len(records) == 1
+        assert [r["tool_call_id"] for r in records] == ["call-1", "call-2"]
+
+    def test_mcp_calls_with_distinct_args_keep_their_rows(self):
+        # One execute_code call can hit a tool twice; the client keys an MCP
+        # access by its args too, so equal results under other args stay apart.
+        events = [
+            _provenance_event(
+                source_type="mcp_tool",
+                identifier="server:get_prices",
+                tool_call_id="call-1",
+                args_fingerprint={"symbol": "AAA"},
+            ),
+            _provenance_event(
+                source_type="mcp_tool",
+                identifier="server:get_prices",
+                tool_call_id="call-1",
+                args_fingerprint={"symbol": "BBB"},
+            ),
+            _provenance_event(
+                source_type="mcp_tool",
+                identifier="server:get_prices",
+                tool_call_id="call-1",
+                args_fingerprint={"symbol": "AAA"},
+            ),
+        ]
+        records = extract_provenance_from_sse_events(events)
+        assert [r["args_fingerprint"] for r in records] == [
+            {"symbol": "AAA"},
+            {"symbol": "BBB"},
+        ]
+
+    def test_unhashable_fingerprint_does_not_drop_the_set(self):
+        # A sandbox-authored fingerprint json can't encode must still key.
+        events = [
+            _provenance_event(args_fingerprint={1: "a", "b": 2}),
+            _provenance_event(identifier="https://example.test/b"),
+        ]
+        records = extract_provenance_from_sse_events(events)
+        assert len(records) == 2
+
+    def test_market_watch_replays_collapse(self):
+        # No tool call: a throttled replay of the same block is one row.
+        events = [
+            _provenance_event(
+                source_type="market_data",
+                identifier="AAA",
+                detail="market_watch",
+                tool_call_id=None,
+            )
+        ] * 2
+        assert len(extract_provenance_from_sse_events(events)) == 1
 
     def test_distinct_content_kept(self):
         # Same URL, different content hash → two rows (content changed).

@@ -166,7 +166,7 @@ async def get_replay_thread_data(thread_id: str) -> ThreadRows | None:
                           turn_index, tool_call_id, source_type, identifier,
                           title, detail, args_fingerprint, args, result_sha256,
                           result_size, result_snippet, agent, provider,
-                          source_timestamp, created_at
+                          source_timestamp, emitted_at, created_at
                    FROM provenance_records
                    WHERE conversation_thread_id = %s
                    ORDER BY turn_index ASC,
