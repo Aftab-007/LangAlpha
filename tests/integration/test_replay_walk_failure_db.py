@@ -1,8 +1,9 @@
 """A branch walk that fails in Postgres, as replay and its endpoint see it.
 
 The walk raises rather than falling back to the in-process walk, so replay's
-own fallback is what keeps a thread readable: ``auto`` serves the stored
-events, and ``checkpoint`` (no fallback by request) fails the request.
+own fallback is what keeps a thread readable: ``auto`` replays the thread as
+stubs, each turn from the stream its row archived, and ``checkpoint`` (no
+fallback by request) fails the request.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from langgraph.graph import START, StateGraph
 
 from ptc_agent.agent.state import DeltaAgentState
 from src.server.database.conversation.replay_rows import ThreadRows
+from src.server.database.replay_facts import ARCHIVE_KEY
 from src.server.services.history.reader import CheckpointHistoryReader
 from src.server.services.history.replay import read_replay_page
 from src.server.utils import checkpoint_helpers
@@ -27,13 +29,24 @@ from tests.conftest import create_test_app
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="session")]
 
-STORED = [{"event": "message_chunk", "data": {"content": "stored answer"}}]
+ARCHIVED = [
+    {
+        "event": "message_chunk",
+        "data": {"content": "archived answer", "content_type": "text"},
+    }
+]
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def broken_walk(test_db_pool, monkeypatch):
+async def broken_walk(
+    test_db_pool, seed_workspace, seed_response, db_conn, monkeypatch
+):
     """A one-turn thread whose branch walk fails on a renamed column, read
-    through a real reader on the real saver. Returns the thread's rows."""
+    through a real reader on the real saver, and whose row archived the
+    turn's stream. Returns the thread's rows."""
+    from src.server.database.conversation import create_thread
+    from src.server.utils.pg_sanitize import SafeJson
+
     saver = AsyncPostgresSaver(test_db_pool)
     graph = (
         StateGraph(DeltaAgentState)
@@ -57,16 +70,28 @@ async def broken_walk(test_db_pool, monkeypatch):
             "parent_checkpoint_id", "parent_id"
         ),
     )
+    await create_thread(
+        conversation_thread_id=thread_id,
+        workspace_id=str(seed_workspace["workspace_id"]),
+        current_status="completed",
+        msg_type="ptc",
+    )
+    response_id = str(uuid.uuid4())
+    await seed_response(response_id, thread_id, 0)
+    await db_conn.execute(
+        "UPDATE conversation_responses SET replay_facts = %s "
+        "WHERE conversation_response_id = %s",
+        (SafeJson({ARCHIVE_KEY: ARCHIVED}), response_id),
+    )
     thread = {"conversation_thread_id": thread_id, "latest_checkpoint_id": tip}
     queries = [
         {"turn_index": 0, "content": "question", "type": "initial", "created_at": "t0"}
     ]
     responses = {
         0: {
-            "conversation_response_id": str(uuid.uuid4()),
+            "conversation_response_id": response_id,
             "turn_index": 0,
             "status": "completed",
-            "sse_events": STORED,
         }
     }
     return ThreadRows(
@@ -81,10 +106,12 @@ async def broken_walk(test_db_pool, monkeypatch):
     )
 
 
-async def test_auto_replays_the_stored_events(broken_walk):
+async def test_auto_replays_the_thread_as_stubs(broken_walk):
     page, source = await read_replay_page(broken_walk)
-    assert source == "sse"
-    assert any("stored answer" in line.data_json for line in page.lines)
+    assert source == "stub"
+    assert [line.event for line in page.lines] == ["user_message", "message_chunk"]
+    assert '"question"' in page.lines[0].data_json
+    assert '"archived answer"' in page.lines[1].data_json
 
 
 async def test_checkpoint_raises_the_walk_error(broken_walk):
@@ -94,7 +121,7 @@ async def test_checkpoint_raises_the_walk_error(broken_walk):
 
 @pytest.mark.parametrize(
     "source, status, replayed_from",
-    [("auto", 200, "sse"), ("checkpoint", 500, None)],
+    [("auto", 200, "stub"), ("checkpoint", 500, None)],
 )
 async def test_the_endpoint_answer(broken_walk, source, status, replayed_from):
     from src.server.app.threads import router
@@ -122,7 +149,8 @@ async def test_the_endpoint_answer(broken_walk, source, status, replayed_from):
     assert resp.status_code == status
     if replayed_from:
         assert resp.headers["X-Replay-Source"] == replayed_from
-        assert "stored answer" in resp.text
+        assert "event: user_message" in resp.text
+        assert "archived answer" in resp.text
     else:
         assert resp.json()["detail"].startswith(
             'Failed to replay thread: column "parent_id" does not exist'

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import psycopg
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
@@ -100,6 +101,24 @@ async def test_a_turn_whose_checkpoints_cannot_be_read_is_left_to_the_caller():
     pointer, reader, rows = _branch([{}, {}], read_error=RuntimeError("pool closed"))
     with pointer, reader, rows, patch(_REFRESH, AsyncMock()):
         assert await committed.committed_texts("t-1", {"r-1": 1}) == {}
+
+
+async def test_a_database_fault_raises_rather_than_read_as_no_text():
+    # A turn left out reads as one that said nothing, which a fault is not.
+    fault = psycopg.OperationalError("server closed")
+    pointer, reader, rows = _branch([{}, {}], read_error=fault)
+    with pointer, reader, rows, patch(_REFRESH, AsyncMock()):
+        with pytest.raises(psycopg.OperationalError):
+            await committed.committed_texts("t-1", {"r-1": 1})
+
+    pointer, reader, rows = _branch({})
+    with (
+        patch.object(committed, "get_branch_pointer", AsyncMock(side_effect=fault)),
+        reader,
+        rows,
+    ):
+        with pytest.raises(psycopg.OperationalError):
+            await committed.committed_texts("t-1", {"r-1": 1})
 
 
 async def test_a_branch_that_does_not_pair_reads_and_projects_nothing():

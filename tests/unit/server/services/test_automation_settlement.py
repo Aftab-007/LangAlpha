@@ -1052,18 +1052,14 @@ def test_what_a_failed_model_call_records_decides_the_outcome(
     assert ledger_outcome({"status": "error", "metadata": metadata}) is outcome
 
 
-def _paused(*events):
+def _paused(message=None):
     return {
         "status": "interrupted",
         "interrupt_reason": "credit_pause",
         "conversation_response_id": _RUN,
         "errors": None,
-        "sse_events": list(events),
+        "metadata": {"credit_pause_message": message} if message is not None else {},
     }
-
-
-def _pause_event(message, kind="credit_pause"):
-    return {"event": "interrupt", "data": {"action_requests": [{"type": kind, "message": message}]}}
 
 
 def test_a_run_says_why_in_its_own_last_error():
@@ -1088,20 +1084,14 @@ def test_a_run_with_no_error_is_named():
 
 
 def test_a_credit_pause_relays_the_services_words():
-    run = _paused(
-        {"event": "message_chunk", "data": {}},
-        _pause_event("Ask something else", kind="question"),
-        _pause_event("You have used this month's credits."),
-    )
+    run = _paused("You have used this month's credits.")
     assert run_failure_message(run) == "You have used this month's credits."
 
 
-@pytest.mark.parametrize(
-    "events",
-    [(), ({"event": "interrupt", "data": None},), ("not an event",), (_pause_event(None),)],
-)
-def test_a_credit_pause_without_its_words_says_nothing(events):
-    assert run_failure_message(_paused(*events)) is None
+@pytest.mark.parametrize("metadata", [{}, None, {"credit_pause_message": 7}])
+def test_a_credit_pause_without_its_words_says_nothing(metadata):
+    run = {**_paused(), "metadata": metadata}
+    assert run_failure_message(run) is None
 
 
 # ─── The run's finalize job ───────────────────────────────────────────
@@ -1145,7 +1135,7 @@ _REJECTED = ["AuthenticationError: invalid x-api-key"]
         (_ended("error", ["ValueError: the table has no rows"]), "failed", "count", None, "ValueError: the table has no rows"),
         (_ended("error", _REJECTED, error_status_code=401, error_credential_owned=True), "failed", "fuse", "provider_auth", _REJECTED[0]),
         (_ended("error", _REJECTED, error_status_code=401, error_credential_owned=False), "failed", None, "server_error", _REJECTED[0]),
-        (_paused(_pause_event("Daily limit reached.")), "failed", None, "usage_limit", "Daily limit reached."),
+        (_paused("Daily limit reached."), "failed", None, "usage_limit", "Daily limit reached."),
     ],
     ids=["completed", "user_stop", "shutdown", "failed", "users_key", "platform_key", "credit_pause"],
 )
@@ -1458,7 +1448,7 @@ async def test_sweep_settles_a_rejected_key():
 
 @pytest.mark.asyncio
 async def test_sweep_settles_a_paused_run_as_limited():
-    with _sweep(_paused(_pause_event("Daily limit reached."))) as fx:
+    with _sweep(_paused("Daily limit reached.")) as fx:
         assert await settle_abandoned(_automation(), _abandoned(), 300) is Outcome.LIMITED
     assert fx.settle.await_args.args[2] is Outcome.LIMITED
     assert fx.settle.await_args.kwargs["error"] == "Daily limit reached."

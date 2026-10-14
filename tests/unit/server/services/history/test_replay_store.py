@@ -10,13 +10,14 @@ from __future__ import annotations
 import dataclasses
 from unittest.mock import AsyncMock, patch
 
+import psycopg
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from psycopg_pool import PoolTimeout
 
 from src.server.services.history import replay, slices, task_streams
 from src.server.services.history.slices import SpanDelta
 from src.server.services.history.replay import (
-    build_checkpoint_replay_items,
     build_replay_page,
     run_lane,
 )
@@ -24,14 +25,16 @@ from src.server.services.history.replay import cold
 from src.server.services.history.replay import lines as replay_lines
 from src.server.services.history.replay.turn import Inputs
 from tests.unit.server.services.history.replay_builders import (
-    thread_rows,
     THREAD,
+    TIP,
     ThreadHistory,
     _mock_reader,
     _query,
     _response,
     _slice_store,
     _turn,
+    build_checkpoint_replay_items,
+    thread_rows,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -257,7 +260,7 @@ async def test_the_claims_pass_stores_the_settled_runs_outside_the_page(
     )
     queries, responses = _rows(2)
 
-    page = await build_replay_page(thread_rows(queries, responses), limit=1)
+    page = await build_replay_page(thread_rows(queries, responses), TIP, limit=1)
 
     assert page.first_turn_index == 1
     assert sorted(store.runs) == [("tsk1", "tsk1:in-0"), ("tsk2", "tsk2:in-0")]
@@ -436,7 +439,7 @@ async def test_a_paged_cold_open_stores_the_pass_once(monkeypatch):
     )
     queries, responses = _rows(4)
 
-    page = await build_replay_page(thread_rows(queries, responses), limit=2)
+    page = await build_replay_page(thread_rows(queries, responses), TIP, limit=2)
 
     assert page.first_turn_index == 2
     assert sorted(store.written) == ["resp-0", "resp-1", "resp-2", "resp-3"]
@@ -450,6 +453,7 @@ async def test_a_paged_cold_open_stores_the_pass_once(monkeypatch):
     cuts = reader.aget_turn_slices.await_count, reader.aget_run_slices.await_count
     older = await build_replay_page(
         thread_rows(queries, responses),
+        TIP,
         before_turn=2,
         limit=2,
     )
@@ -459,40 +463,6 @@ async def test_a_paged_cold_open_stores_the_pass_once(monkeypatch):
         reader.aget_run_slices.await_count,
     ) == cuts
     assert [kind for kind, _ in store.statements[before:]] == ["update_turns"]
-
-
-async def test_an_uncached_replay_reads_and_writes_no_stored_row(monkeypatch):
-    """``cache=False`` cuts every turn and run from checkpoints, though
-    current rows are stored, and stores nothing: what a parity run compares
-    is what the code projects today."""
-    store = _slice_store(monkeypatch)
-    _seal_evidence(monkeypatch)
-    reader = _mock_reader(
-        monkeypatch,
-        ThreadHistory(
-            thread_id=THREAD,
-            turns=_turns([_launch(0, "go"), _plain(1)]),
-        ),
-        task_messages=[
-            HumanMessage(content="go", id="sub-h-1"),
-            AIMessage(content="done", id="sub-ai-1"),
-        ],
-    )
-    rows = thread_rows(*_rows(2))
-    cached = await build_checkpoint_replay_items(rows)
-    assert store.lined and store.runs
-
-    for name in ("get_turn_lines", "get_turn_slices", "get_run_slices"):
-        monkeypatch.setattr(
-            cold.slices_db, name, AsyncMock(side_effect=AssertionError(name))
-        )
-    before = len(store.statements)
-    cuts = reader.aget_turn_slices.await_count, reader.aget_run_slices.await_count
-
-    assert await build_checkpoint_replay_items(rows, cache=False) == cached
-    assert len(store.statements) == before
-    assert reader.aget_turn_slices.await_count > cuts[0]
-    assert reader.aget_run_slices.await_count > cuts[1]
 
 
 async def test_a_change_to_the_cut_moves_the_slice_key(monkeypatch, tmp_path):
@@ -552,9 +522,8 @@ def _answers(page):
 
 async def test_a_failed_claims_pass_runs_once_per_read(monkeypatch):
     """Retrying turn by turn cannot place a run the whole-thread pass could
-    not: only the turns that launched one replay from storage, every other
-    turn of their batches projects, and the pass is never run again in the
-    read."""
+    not: only the turns that launched one replay as stubs, every other turn
+    of their batches projects, and the pass is never run again in the read."""
     store = _slice_store(monkeypatch)
     _seal_evidence(monkeypatch)
     size, n = _three_batches(monkeypatch)
@@ -562,7 +531,9 @@ async def test_a_failed_claims_pass_runs_once_per_read(monkeypatch):
     monkeypatch.setattr(cold, "_place_launches", place)
     queries, responses = _rows(n)
 
-    page = await build_replay_page(thread_rows(queries, responses), turn_fallback=True)
+    page = await build_replay_page(
+        thread_rows(queries, responses), TIP, turn_fallback=True
+    )
 
     projected = [i for i in range(n) if i not in (0, 2 * size)]
     assert place.await_count == 1
@@ -654,28 +625,34 @@ async def test_a_database_fault_ends_the_read_without_per_turn_retries(
     monkeypatch,
 ):
     from src.server.database.conversation import turn_slices as slices_db
-    from src.server.database.pool import AppDataPoolTimeout
 
     _slice_store(monkeypatch)
     _seal_evidence(monkeypatch)
     _size, n = _three_batches(monkeypatch)
-    reads = AsyncMock(side_effect=AppDataPoolTimeout("couldn't get a connection"))
+    reads = AsyncMock(side_effect=PoolTimeout("couldn't get a connection"))
     monkeypatch.setattr(slices_db, "get_turn_slices", reads)
     queries, responses = _rows(n)
 
-    # Nor does it fall back to storage, which waits on the same pool.
-    with pytest.raises(AppDataPoolTimeout):
+    # Nor does it fall back to stubs: a busy database is not a thread
+    # checkpoints cannot cover, so the reader is told to retry.
+    with pytest.raises(PoolTimeout):
         await replay.read_replay_page(thread_rows(queries, responses))
     assert reads.await_count == 1
 
 
-async def test_a_busy_checkpointer_pool_still_falls_back_to_storage(monkeypatch):
-    from psycopg_pool import PoolTimeout
-
+@pytest.mark.parametrize(
+    "fault",
+    [
+        pytest.param(lambda: PoolTimeout("couldn't get a connection"), id="pool"),
+        pytest.param(lambda: psycopg.OperationalError("server closed"), id="conn"),
+    ],
+)
+async def test_a_checkpointer_fault_ends_the_read_too(monkeypatch, fault):
     reader = _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[]))
-    reader.thread_history.side_effect = PoolTimeout("couldn't get a connection")
+    error = fault()
+    reader.thread_history.side_effect = error
     queries, responses = _rows(1)
 
-    # Storage is read through the app-data pool, which this wait never held.
-    page, source = await replay.read_replay_page(thread_rows(queries, responses))
-    assert (source, page.first_turn_index) == ("sse", 0)
+    # Stubs would show every answer of a healthy thread missing.
+    with pytest.raises(type(error)):
+        await replay.read_replay_page(thread_rows(queries, responses))

@@ -113,6 +113,7 @@ async def _page(monkeypatch, thread: Thread, store: SliceStore) -> str:
     _serve(monkeypatch, thread, store)
     page = await replay.build_replay_page(
         thread_rows([_query(i, content=f"Question {i + 1}") for i in range(TURNS)], {i: _response(i) for i in range(TURNS)}, thread_id=h.THREAD),
+        thread.tip,
     )
     return h.Normalizer()(json.dumps([line.item() for line in page.lines], default=str))
 

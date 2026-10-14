@@ -250,7 +250,7 @@ class TestResponseCRUD:
     ):
         from src.server.database.conversation import (
             create_thread,
-            get_responses_for_thread,
+            get_recent_responses_for_thread,
         )
 
         ws_id = str(seed_workspace["workspace_id"])
@@ -270,8 +270,8 @@ class TestResponseCRUD:
             execution_time=2.5,
         )
 
-        responses, total = await get_responses_for_thread(thread_id)
-        assert total == 1
+        responses = await get_recent_responses_for_thread(thread_id)
+        assert len(responses) == 1
         assert responses[0]["status"] == "completed"
         assert responses[0]["execution_time"] == pytest.approx(2.5)
 
@@ -329,7 +329,7 @@ class TestThreadLifecycle:
             create_thread,
             delete_thread,
             get_queries_for_thread,
-            get_responses_for_thread,
+            get_recent_responses_for_thread,
         )
 
         ws_id = str(seed_workspace["workspace_id"])
@@ -360,6 +360,6 @@ class TestThreadLifecycle:
 
         # Queries and responses should be cascade-deleted
         queries, q_total = await get_queries_for_thread(thread_id)
-        responses, r_total = await get_responses_for_thread(thread_id)
+        responses = await get_recent_responses_for_thread(thread_id)
         assert q_total == 0
-        assert r_total == 0
+        assert responses == []

@@ -8,8 +8,8 @@ and the URL each sandbox image its saved text still named at its end was
 captured to (``images``). A subagent run's
 ``subagent_runs`` row holds the URL each sandbox image it referenced was
 captured to (``images``) and the steering it handed back unread
-(``steering_returned``). A row settled before the column existed has none,
-and replay keeps reading what it needs from the turn's stored events; a turn
+(``steering_returned``). A row settled before the column existed has none:
+what its archived stream kept is in its legacy facts (``legacy``), and a turn
 settled before its row held its images keeps them in an ``image_capture`` ui
 record on its checkpoint.
 
@@ -94,7 +94,7 @@ def reasoning_durations(
     response: dict[str, Any] | None,
 ) -> dict[str, list[int]] | None:
     """The response's per-message reasoning durations, or None when the row
-    predates them (replay then carries them from the stored events)."""
+    predates them (its legacy facts then carry them)."""
     facts: ResponseFacts | None = (response or {}).get("replay_facts")
     if not isinstance(facts, dict):
         return None
@@ -303,7 +303,7 @@ def _place_returned_steering(
 
 def returned_keys(turn_items: list[dict[str, Any]]) -> set[tuple[Any, Any]]:
     """(agent, input_id) of every returned-steering item a projection placed,
-    whose stored copies a merge must then skip."""
+    whose archived copies ``legacy.apply`` then skips."""
     return {
         (data.get("agent"), data.get("input_id"))
         for item in turn_items

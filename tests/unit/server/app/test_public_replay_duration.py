@@ -96,7 +96,6 @@ def _row(**overrides) -> dict:
         "conversation_response_id": "55555555-5555-4555-8555-555555555555",
         "status": "completed",
         "usage_settled_at": _SETTLED,
-        "sse_events": [{"event": "message", "data": {"content": "done"}}],
     }
     row.update(overrides)
     return row
@@ -140,25 +139,3 @@ async def test_run_id_stays_off_the_public_stream(client):
     # no reason to leave the account.
     payload = _user_message(await _replay(client, _row()))
     assert "run_id" not in payload
-
-
-async def test_reasoning_duration_survives_the_public_copy(client):
-    # The client reads `elapsed_ms` off the stored close to label the row. The
-    # stored events are copied verbatim here, so this is the wire half of that
-    # contract rather than a transformation.
-    row = _row(
-        sse_events=[
-            {
-                "event": "message_chunk",
-                "data": {
-                    "content_type": "reasoning_signal",
-                    "content": "complete",
-                    "elapsed_ms": 23000,
-                },
-            }
-        ]
-    )
-    chunk = next(
-        e for e in await _replay(client, row) if e["event"] == "message_chunk"
-    )
-    assert chunk["data"]["elapsed_ms"] == 23000

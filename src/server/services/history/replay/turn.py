@@ -6,10 +6,9 @@ digested into the lines epoch (``keys.projection_sources``).
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 
 from src.server.database.conversation.replay_rows import ThreadRows
 from src.server.services.history import projector
@@ -22,29 +21,12 @@ from src.server.services.history.replay import facts as replay_facts
 from src.server.services.history.replay import items
 from src.server.services.history.replay import legacy
 from src.server.services.history.replay import run_lane
-from src.server.services.history.replay import stored_merge
 from src.server.services.history.slices import TurnSlice
 from src.server.services.runs.sse_producer import resolve_token_threshold
 
 # The ui record a turn settled before its row held its images keeps its
 # path -> URL map in.
 IMAGE_CAPTURE_UI_NAME = "image_capture"
-
-
-class Derive(Protocol):
-    """A caller's hook on each turn whose legacy facts were derived from its
-    stored events (the backfill). Called before the facts are placed, with
-    the turn's items still unplaced and whether every run it launched has
-    finished writing; what it returns is called with the placed items."""
-
-    def __call__(
-        self,
-        turn_index: Any,
-        response: dict[str, Any],
-        facts: legacy.LegacyFacts,
-        unplaced: tuple[list[dict[str, Any]], list[dict[str, Any]]],
-        sealed: bool,
-    ) -> Callable[[list[dict[str, Any]]], None]: ...
 
 
 @dataclass(frozen=True)
@@ -63,10 +45,7 @@ class Inputs:
 
     @classmethod
     def of(cls, rows: ThreadRows) -> Inputs:
-        queries_by_turn: dict[Any, list[dict[str, Any]]] = {}
-        for q in rows.queries:
-            if isinstance(q, dict):
-                queries_by_turn.setdefault(q.get("turn_index"), []).append(q)
+        queries_by_turn = group_queries(rows.queries)
         return cls(
             thread_id=rows.thread_id,
             turn_indexes=sorted(ti for ti in queries_by_turn if ti is not None),
@@ -83,13 +62,21 @@ class Inputs:
         return str(response["conversation_response_id"]) if response else None
 
 
+def group_queries(queries: list[Any]) -> dict[Any, list[dict[str, Any]]]:
+    """Query rows by ``turn_index``, in row order."""
+    out: dict[Any, list[dict[str, Any]]] = {}
+    for q in queries:
+        if isinstance(q, dict):
+            out.setdefault(q.get("turn_index"), []).append(q)
+    return out
+
+
 def project_turn(
     inputs: Inputs,
     turn_index: Any,
     turn: TurnSlice,
     response: dict[str, Any] | None,
     lane: run_lane.RunLane,
-    derive: Derive | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """One turn's replay items, and whether they are final (every run it
     launched has finished writing)."""
@@ -133,9 +120,9 @@ def project_turn(
             **replay_facts.images_of((response or {}).get("replay_facts")),
         },
     )
-    # Table-sourced synthesis rides ahead of the merge: a turn with stored
-    # events drops these copies and replays the stored ones instead (the
-    # STORED_PREFERRED_EVENTS transition rule).
+    # Table-sourced synthesis rides ahead of the legacy facts: a turn whose
+    # facts carry stored copies drops these and places those instead (the
+    # STORED_PREFERRED_EVENTS rule).
     turn_items = items._insert_provenance_items(
         turn_items, inputs.provenance_by_response.get(response_id) or []
     )
@@ -149,36 +136,22 @@ def project_turn(
         turn_items.append(credit_item)
 
     facts = legacy.facts_of(response)
-    placed: Callable[[list[dict[str, Any]]], None] | None = None
-    if facts is None:
-        facts = stored_merge.derive_turn(
-            turn_items,
-            task_items,
-            stored_merge._stored_events(response),
-            main_durations_known=durations is not None,
-        )
-        if derive is not None and response:
-            placed = derive(
-                turn_index, response, facts, (turn_items, task_items), sealed
-            )
-    turn_items = legacy.apply_turn(turn_items, task_items, facts)
-    if placed is not None:
-        placed(turn_items)
+    if facts is not None:
+        turn_items = legacy.apply_turn(turn_items, task_items, facts)
     # A compact or offload the user ran after the turn follows everything the
-    # turn streamed, where its stored copy placed it. Its record is in the
-    # checkpoint alone, so a turn whose stored events the merge prefers keeps
-    # it too.
+    # turn streamed. Its record is in the checkpoint alone, so it is added
+    # after the legacy facts, which would drop it with the projected signal
+    # rows they replace.
     turn_items.extend(projector.manual_context_window_items(thread_id, turn))
 
     _fill_token_thresholds(turn_items)
-    # The row's terminal error and a user stop's close, after the merge so
-    # each can defer to the copy an older turn's stored events kept: a stored
-    # error frame takes the row's kind instead of gaining a twin.
+    # The row's terminal error and a user stop's close, after the legacy
+    # facts so each can defer to the copy they placed: an archived error
+    # frame takes the row's kind instead of gaining a twin.
     turn_items += items.terminal_items(thread_id, response, turn_items)
 
-    # After the stored-events merge so both projected and stored-copy
-    # artifacts are covered: the watermark is a fact about which runs this
-    # turn's lines contain.
+    # After the legacy facts so the artifacts they place are covered too:
+    # the watermark is a fact about which runs this turn's lines contain.
     task_status.stamp_projected_watermarks(turn_items, watermarks)
     for item in turn_items:
         items._enrich(item, thread_id, turn_index, response_id)

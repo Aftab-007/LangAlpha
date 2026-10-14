@@ -90,7 +90,6 @@ def _response_row(response_id=None, thread_id="t-1", turn_index=0, **overrides):
         "errors": [],
         "execution_time": 1.5,
         "created_at": now,
-        "sse_events": None,
     }
     row.update(overrides)
     return row
@@ -704,21 +703,6 @@ async def test_get_latest_turn_index_read_failure_is_none(mock_db_connection, mo
 # ===========================================================================
 # Response Tests
 # ===========================================================================
-
-
-@pytest.mark.asyncio
-async def test_get_responses_for_thread(mock_db_connection, mock_cursor):
-    """get_responses_for_thread returns responses and total count."""
-    from src.server.database.conversation import get_responses_for_thread
-
-    r1 = _response_row(turn_index=0)
-    mock_cursor.fetchone.return_value = {"total": 1}
-    mock_cursor.fetchall.return_value = [r1]
-
-    responses, total = await get_responses_for_thread("t-1")
-
-    assert total == 1
-    assert len(responses) == 1
 
 
 @pytest.mark.asyncio

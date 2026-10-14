@@ -136,8 +136,9 @@ class NewestCheckpoint:
 
 
 # The row a finalize hands back: the terminal status plus what the post-CAS
-# effects read (outbox jobs, the transcript export). Never sse_events: an older
-# turn's archive runs to tens of MB, and decoding it holds the event loop.
+# effects read (outbox jobs, the transcript export). Never the archived event
+# stream an older row holds: it runs to tens of MB, and decoding it holds the
+# event loop.
 _FINALIZE_ROW_COLUMNS = """
     conversation_response_id, conversation_thread_id, turn_index, run_seq,
     status, interrupt_reason, metadata
@@ -735,7 +736,7 @@ async def finalize_run(
                     conversation_response_id=run_id,
                     conversation_thread_id=thread_id,
                     turn_index=run_row["turn_index"],
-                    sse_events=record.provenance,
+                    provenance=record.provenance,
                     strict=True,
                     lanes=(MAIN_PROVENANCE_LANE,),
                 )
@@ -876,8 +877,8 @@ async def get_run_brief(conn, run_id: str) -> Optional[Dict[str, Any]]:
     """A run's id, thread, request key and status, read on ``conn``.
 
     For a read inside START's transaction: on its own connection it waits on
-    no pool slot while START holds the thread's locks, and it leaves out an
-    older row's archived ``sse_events`` that ``get_run`` loads.
+    no pool slot while START holds the thread's locks, and it leaves out the
+    archived event stream of an older row that ``get_run`` loads.
     """
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
@@ -896,9 +897,8 @@ async def get_run_brief(conn, run_id: str) -> Optional[Dict[str, Any]]:
 async def get_run_ending(run_id: str) -> Optional[Dict[str, Any]]:
     """A run's status and metadata, with the workspace and user it ran for.
 
-    Narrow on purpose: ``get_run`` loads an older row's archived
-    ``sse_events`` too, which a billing read on the resume path has no use
-    for.
+    Narrow on purpose: ``get_run`` loads an older row's archived event
+    stream too, which a billing read on the resume path has no use for.
     """
     run_id = normalize_uuid(run_id)
     if run_id is None:

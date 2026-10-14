@@ -17,7 +17,7 @@ THREAD = "11111111-1111-1111-1111-111111111111"
 
 def _replay_data():
     """Owner matches create_test_app's override; no checkpoint pointer, so
-    replay takes the (empty) sse path without touching a DB."""
+    replay takes the (empty) stub path without touching a DB."""
     thread = {"conversation_thread_id": THREAD, "latest_checkpoint_id": None}
     return replay_rows(thread, [], [], owner_id="test-user-123")
 

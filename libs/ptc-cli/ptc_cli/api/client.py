@@ -387,7 +387,7 @@ class SSEStreamClient:
         return response.json()
 
     async def replay_thread(self, thread_id: str) -> AsyncGenerator[tuple[str, Dict[str, Any]], None]:
-        """Replay a completed thread from persisted streaming chunks."""
+        """Replay a completed thread, projected from its checkpoints."""
         url = urljoin(self.base_url, f"/api/v1/threads/{thread_id}/messages/replay")
 
         async with self.client.stream(

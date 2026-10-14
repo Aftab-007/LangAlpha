@@ -28,6 +28,7 @@ from langchain_core.messages import ToolMessage
 from ptc_agent.agent.transcript.classify import is_run_boundary_message
 from src.config.settings import get_redis_ttl_workflow_events
 from src.server.database.conversation import turn_slices as slices_db
+from src.server.database.pool import DATABASE_UNAVAILABLE
 from src.server.database.runs import subagent_runs as sr_db
 from src.server.services.history import projector
 from src.server.services.history import slices
@@ -252,14 +253,9 @@ class RunLane:
         reader: CheckpointHistoryReader,
         thread_id: str,
         run_facts: replay_facts.RunFacts,
-        *,
-        cache: bool = True,
     ):
         self._reader = reader
         self._thread_id = thread_id
-        # Without it no stored run slice is read: every run is cut from its
-        # checkpoints.
-        self._cache = cache
         # The read's snapshot: the same rows the turns' lines keys covered.
         self._facts = run_facts
         self._serde = reader.serde
@@ -439,7 +435,7 @@ class RunLane:
 
     async def _load_stored(self, task_ids: set[str]) -> None:
         task_ids = task_ids - self._loaded_tasks
-        if not task_ids or not self._cache:
+        if not task_ids:
             return
         self._loaded_tasks |= task_ids
         for row in await slices_db.get_run_slices(self._thread_id, sorted(task_ids)):
@@ -525,13 +521,15 @@ class RunLane:
                 self._runs[(task_id, run.input_checkpoint_id)] = _RunSlice(run_slice)
 
     def _unavailable(self, task_id: str, error: BaseException) -> None:
+        if isinstance(error, DATABASE_UNAVAILABLE):
+            raise error
         logger.warning(
             "[REPLAY] Failed to read subagent checkpoint state task:%s",
             task_id,
             exc_info=(type(error), error, error.__traceback__),
         )
         # Silent continuation would produce a plausible-looking but
-        # incomplete transcript and bypass the endpoint's SSE fallback.
+        # incomplete transcript instead of the turn's stub.
         raise CheckpointReplayUnavailable(
             f"subagent checkpoint state unavailable for task:{task_id}"
         ) from error

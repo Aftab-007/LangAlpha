@@ -8,7 +8,6 @@ from uuid import uuid4
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
-from src.server.contracts.status import INTERRUPT_REASON_CREDIT_PAUSE
 from src.server.database.automation import (
     EXECUTION_COLUMNS,
     UNSETTLED_STATUSES,
@@ -497,25 +496,15 @@ async def list_abandoned_executions(
 
 
 async def get_settling_run(run_id: str) -> Optional[Dict[str, Any]]:
-    """The columns of a run's ledger row that settling its firing reads.
-
-    ``sse_events`` is the turn's whole event archive, which can run to
-    megabytes, so it is read only for a credit pause settled before its
-    finalize stamped the denial into ``metadata``: the pause's stored
-    interrupt is then the one place that still has it.
-    """
+    """The columns of a run's ledger row that settling its firing reads."""
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute("""
                 SELECT conversation_response_id, status, interrupt_reason,
-                       metadata, errors,
-                       CASE WHEN interrupt_reason = %s
-                            AND NOT (COALESCE(metadata, '{}'::jsonb)
-                                     ? 'credit_pause_message')
-                       THEN sse_events END AS sse_events
+                       metadata, errors
                 FROM conversation_responses
                 WHERE conversation_response_id = %s
-            """, (INTERRUPT_REASON_CREDIT_PAUSE, run_id))
+            """, (run_id,))
             row = await cur.fetchone()
             return dict(row) if row else None
 

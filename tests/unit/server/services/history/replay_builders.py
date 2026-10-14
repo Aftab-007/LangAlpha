@@ -12,7 +12,9 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from ptc_agent.agent.transcript.classify import is_run_boundary_message
 from src.server.database.conversation.replay_rows import ThreadRows
 from src.server.database.conversation.turn_slices import RunRow, StoredSlice
+from src.server.services.history import replay
 from src.server.services.history.reader import TaskHistory, TaskRun, TurnAnchor
+from src.server.services.history.replay import widgets
 from src.server.services.history.slices import SpanDelta, TurnSlice
 
 THREAD = "thread-r"
@@ -47,10 +49,12 @@ def _query(turn_index, content="hello", qtype="user"):
     return {"turn_index": turn_index, "content": content, "type": qtype, "created_at": "t0"}
 
 
-def _response(turn_index, sse_events=None, status="completed"):
+def _response(turn_index, *, status="completed"):
+    # Carries ``replay_facts``, so a projection reads it as it is rather than
+    # re-reading the row (``replay_rows.with_replay_facts``).
     return {
         "conversation_response_id": f"resp-{turn_index}",
-        "sse_events": sse_events or [],
+        "replay_facts": None,
         "status": status,
     }
 
@@ -90,11 +94,30 @@ def replay_rows(
         owner_id=owner_id,
         thread=dict(thread),
         queries=list(queries),
-        responses_by_turn={r.get("turn_index"): r for r in responses},
+        # As if re-read with their replay facts, so a stub reads them as
+        # given (``replay_rows.with_replay_facts``).
+        responses_by_turn={
+            r.get("turn_index"): {"replay_facts": None, **r} for r in responses
+        },
         usages=list(usages),
         provenance=list(provenance),
         run_facts=[],
     )
+
+
+async def build_checkpoint_replay_items(
+    rows: ThreadRows,
+    branch_tip_checkpoint_id: str = TIP,
+    last_n_turns: int | None = None,
+) -> list[dict[str, Any]]:
+    """The newest ``last_n_turns`` (or every turn) as decoded replay items,
+    widget data inlined. Task cards are left unstamped."""
+    page = await replay.build_replay_page(
+        rows, branch_tip_checkpoint_id, limit=last_n_turns
+    )
+    out = [line.item() for line in page.lines]
+    await widgets._resolve_widget_data_refs(out)
+    return out
 
 
 class SliceStore:

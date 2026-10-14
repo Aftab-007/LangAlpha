@@ -27,7 +27,6 @@ from src.tools.secretary.utils import (
     _join_recent_turns,
     _run_block,
     _runs_to_read,
-    _text_from_response,
     _truncate_single,
     user_zone,
 )
@@ -36,40 +35,35 @@ _RECENT = "src.server.database.conversation.responses.get_recent_responses_for_t
 _UTC = user_zone("UTC")
 
 
-def _chunk(text: str) -> dict:
-    return {"event": "message_chunk", "data": {"content_type": "text", "content": text}}
+_COMMITTED = "src.server.services.history.committed.committed_texts"
 
-
-# Each run's stored events by response id, as ``_response`` built them.
-_STORED: dict[str, list[dict]] = {}
+# Each run's committed text by response id, as ``_response`` built it.
+_TEXT: dict[str, str] = {}
 
 
 def _response(turn_index: int, *texts: str, **fields) -> dict:
-    events = _STORED[f"r-{turn_index}"] = [_chunk(t) for t in texts]
+    if texts:
+        _TEXT[f"r-{turn_index}"] = "".join(texts)
     return {
         "conversation_response_id": f"r-{turn_index}",
         "conversation_thread_id": "t-1",
         "turn_index": turn_index,
         "status": "completed",
-        "sse_events": events,
         **fields,
     }
 
 
 @pytest.fixture(autouse=True)
-def _stored_events():
-    """The reader's rows come without their stored events, so a run's are
-    read by id; here, from what ``_response`` built."""
-    _STORED.clear()
+def _committed():
+    """A run's text is what its turn committed, read by id; here, from what
+    ``_response`` built."""
+    _TEXT.clear()
 
-    async def read(response_ids):
-        return {i: {"sse_events": _STORED[i]} for i in response_ids if i in _STORED}
+    async def read(thread_id, turns):
+        return {i: _TEXT[i] for i in turns if i in _TEXT}
 
-    events = AsyncMock(side_effect=read)
-    with patch(
-        "src.server.database.conversation.replay_rows.get_replay_responses", events
-    ):
-        yield events
+    with patch(_COMMITTED, AsyncMock(side_effect=read)):
+        yield
 
 
 def _ids(runs: list[dict]) -> list[str]:
@@ -181,24 +175,6 @@ async def test_db_failure_propagates():
     with patch(_RECENT, recent):
         with pytest.raises(RuntimeError):
             await _runs_to_read("t-1")
-
-
-# --- _text_from_response: one run's text --------------------------------------
-
-
-def test_concatenates_chunks_within_a_run():
-    assert _text_from_response(_response(5, "Hello ", "world", "!")) == "Hello world!"
-
-
-def test_filters_non_text_events():
-    resp = {
-        "sse_events": [
-            {"event": "tool_call", "data": {}},
-            _chunk("only this"),
-            {"event": "message_chunk", "data": {"content_type": "image", "content": "x"}},
-        ],
-    }
-    assert _text_from_response(resp) == "only this"
 
 
 # --- _run_block: the line that names a run -----------------------------------
@@ -327,40 +303,13 @@ def test_join_multi_turn_huge_newest_keeps_newest_head():
 
 # --- main_text: where a run's text comes from --------------------------------
 
-_COMMITTED = "src.server.services.history.committed.committed_texts"
-
 
 @pytest.mark.asyncio
 async def test_a_run_reads_the_text_its_turn_committed():
     committed = AsyncMock(return_value={"r-1": "committed text"})
-    with patch(_RECENT, AsyncMock(return_value=[_response(1, "stored text")])), patch(
+    with patch(_RECENT, AsyncMock(return_value=[_response(1)])), patch(
         _COMMITTED, committed
     ):
         runs = await _runs_to_read("t-1")
     assert runs[0]["main_text"] == "committed text"
     committed.assert_awaited_once_with("t-1", {"r-1": 1})
-
-
-@pytest.mark.asyncio
-async def test_a_run_without_committed_text_reads_its_stored_main_lane():
-    sub = {
-        "event": "message_chunk",
-        "data": {"content_type": "text", "content": "sub", "agent": "task:abc"},
-    }
-    run = _response(1, "main")
-    run["sse_events"].append(sub)
-    with patch(_RECENT, AsyncMock(return_value=[run])):
-        runs = await _runs_to_read("t-1")
-    assert runs[0]["main_text"] == "main"
-
-
-@pytest.mark.asyncio
-async def test_only_runs_without_committed_text_read_their_stored_events(
-    _stored_events,
-):
-    with patch(
-        _RECENT, AsyncMock(return_value=[_response(1), _response(2, "stored")])
-    ), patch(_COMMITTED, AsyncMock(return_value={"r-1": "committed"})):
-        runs = await _runs_to_read("t-1", turns=2)
-    assert [r["main_text"] for r in runs] == ["committed", "stored"]
-    _stored_events.assert_awaited_once_with(["r-2"])

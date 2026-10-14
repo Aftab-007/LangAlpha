@@ -8,8 +8,8 @@ exactly one of
 - **live-only** — transient signal never replayed (its durable content, if
   any, reaches the client another way).
 
-A new run writes no ``sse_events``, so a type with none of these sources is
-lost on replay; an older row's stored events only add to what these rebuild.
+A type with none of these sources is lost on replay; an older row's legacy
+facts only add to what these rebuild.
 
 This test scans the chat/replay emit surface for event-type literals and
 fails when an emitted type is missing from the ledger (add the type to the
@@ -59,8 +59,7 @@ TABLE_SOURCED = {
     "error",  # conversation_responses.errors + metadata (terminal event)
     "steering_returned",  # subagent_runs.replay_facts: undelivered steering
     # has no checkpoint twin by design (nothing was injected into the graph);
-    # a run settled before the facts keeps its stored copy, which the legacy
-    # facts backfill carries into the response row
+    # a run settled before those facts has it in its turn's legacy facts
 }
 
 LIVE_ONLY = {
@@ -172,15 +171,10 @@ def test_every_ledger_entry_still_exists_in_source():
     )
 
 
-def test_replay_transition_rules_cover_the_replayable_set():
-    """The replay module's passthrough/stored-preferred tuples must stay
-    inside the replayable ledger (a stored-preferred type outside the ledger
-    would silently vanish post-cutover)."""
-    from src.server.services.history.replay.legacy import (
-        PASSTHROUGH_EVENTS,
-        STORED_PREFERRED_EVENTS,
-    )
+def test_stored_preferred_types_stay_in_the_replayable_set():
+    """A turn with legacy facts places these types from its facts in place of
+    its projected copies. Every other turn has only the projected copies, so
+    each type needs a replay source in the ledger."""
+    from src.server.services.history.replay.legacy import STORED_PREFERRED_EVENTS
 
-    replayable = CHECKPOINT_PROJECTED | TABLE_SOURCED
-    assert set(STORED_PREFERRED_EVENTS) <= replayable
-    assert set(PASSTHROUGH_EVENTS) <= replayable
+    assert set(STORED_PREFERRED_EVENTS) <= CHECKPOINT_PROJECTED | TABLE_SOURCED

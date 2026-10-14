@@ -1,25 +1,25 @@
-"""A backfilled turn replays from its legacy facts exactly as from its stored
-events, and without reading them.
+"""A legacy row replays from its checkpoints plus its legacy facts.
 
-The backfill derives what a turn's stored events add to its projection once,
-into ``replay_facts.legacy``. The facts are stored as jsonb, so they must
-survive a JSON round trip, and must place every row where the stored-event
-merge placed it.
+A turn settled while its live stream was archived carries what only that
+archive kept in ``replay_facts.legacy``, resolved once against the projection
+of its day. The facts outlive that code, so they name projected rows by what
+the checkpoint gives them, and today's projection has to keep giving its rows
+those names for each fact to land where it was resolved to.
 """
 
 from __future__ import annotations
 
 import copy
-import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from scripts.utils.backfill_replay_facts import Derivation
+from src.server.database.conversation import replay_rows
 from src.server.database.replay_facts import LEGACY_KEY
 from src.server.services.history import replay
-from src.server.services.history.replay import legacy, stored_merge
+from src.server.services.history.replay import legacy
 from tests.unit.server.services.history.replay_builders import (
     thread_rows,
     THREAD,
@@ -34,59 +34,41 @@ from tests.unit.server.services.history.replay_builders import (
 from tests.unit.server.services.history.test_replay_facts import (
     _RUN_FACTS,
     _returned,
-    _signal,
     _task_reader,
     _text,
 )
 
-# A pointer as older turns checkpointed it, which is what derive has to
-# recognize whatever the agent-facing template reads today.
-_EVICTION_POINTER = (
-    "Tool result too large, the result of this tool call tc-r was saved in the "
-    "filesystem at this path: .agents/large_tool_results/tc-r.md"
-)
+
+def _legacy_row(turn_index, facts, **fields):
+    row = _response(turn_index) | fields
+    row["replay_facts"] = {LEGACY_KEY: {"v": legacy.FACTS_VERSION, **facts}}
+    return row
 
 
-def _stored_reads_refused(response):
-    raise AssertionError("a backfilled turn read its stored events")
-
-
-async def _both_ways(monkeypatch, responses, run_facts=None):
-    """Each turn's lines from its stored events, the facts they derived, and
-    the lines again from those facts (through JSON) with the events gone."""
-    queries = [_query(ti) for ti in sorted(responses)]
+async def _replayed(responses, **rows):
     turns = sorted(responses)
-    derivation = Derivation()
-    before = await replay.project_turns(
-        thread_rows(queries, responses, run_facts=run_facts),
+    lines = await replay.project_turns(
+        thread_rows([_query(ti) for ti in turns], responses, **rows),
         TIP,
         turn_indexes=turns,
-        derive=derivation,
     )
-    derived = derivation.turns
-    assert all(d.verified for d in derived.values())
-    backfilled = {}
-    for ti, response in responses.items():
-        row = {k: v for k, v in response.items() if k != "sse_events"}
-        row["replay_facts"] = {
-            **(response.get("replay_facts") or {}),
-            LEGACY_KEY: json.loads(json.dumps(derived[ti].facts)),
-        }
-        backfilled[ti] = row
-    monkeypatch.setattr(stored_merge, "_stored_events", _stored_reads_refused)
-    again = Derivation()
-    after = await replay.project_turns(
-        thread_rows(queries, backfilled, run_facts=run_facts),
-        TIP,
-        turn_indexes=turns,
-        derive=again,
-    )
-    assert again.turns == {}  # nothing derived a second time
-    return before, {ti: d.facts for ti, d in derived.items()}, after
-
-
-def _items(lines):
     return {ti: [line.item() for line in turn] for ti, turn in lines.items()}
+
+
+_ROW_NAME = {"message_chunk": "id", "artifact": "artifact_id", "tool_call_result": "tool_call_id"}
+
+
+def _named(items):
+    return [(i["event"], i["data"].get(_ROW_NAME.get(i["event"], ""))) for i in items]
+
+
+def _tagged(items):
+    """``_named``, with a signal row named by its tag: only an archived copy
+    carries one."""
+    return [
+        (event, name or item["data"].get("tag"))
+        for item, (event, name) in zip(items, _named(items))
+    ]
 
 
 # ------------------------------------------------------------ through replay
@@ -111,48 +93,65 @@ async def test_widgets_results_and_signals_replay_from_facts(monkeypatch):
             artifact={"html": "<div/>", "title": "W"},
         ),
         ToolMessage(
-            content=_EVICTION_POINTER, tool_call_id="tc-r", name="get_sec_filing", id="tm-2"
+            content=(
+                "Tool result too large, the result of this tool call tc-r was saved "
+                "in the filesystem at this path: .agents/large_tool_results/tc-r.md"
+            ),
+            tool_call_id="tc-r",
+            name="get_sec_filing",
+            id="tm-2",
         ),
         AIMessage(content="done", id="ai-2"),
     ]
 
     def widget(artifact_id, data):
         payload = {"html": "<div/>", "title": "W", "data": data}
-        return {
-            "event": "artifact",
-            "data": {
-                "artifact_type": "html_widget",
-                "artifact_id": artifact_id,
-                "payload": payload,
-            },
-        }
+        return {"artifact_type": "html_widget", "artifact_id": artifact_id, "payload": payload}
 
-    stored = [
-        {"event": "message_chunk", "data": {"id": "lc-1", "content_type": "text", "content": "looking"}},
-        widget("widget_1", {"a.csv": "1"}),
-        # Beyond what the checkpoint projected: placed like a signal row.
-        widget("widget_2", {"b.csv": "2"}),
-        {"event": "tool_call_result", "data": {"tool_call_id": "tc-r", "content": "full", "content_type": "text"}},
-        {"event": "context_window", "data": {"action": "offload", "kind": "tool_args"}},
-        {"event": "provenance", "data": {"source_type": "web", "identifier": "https://a.example"}},
-        {"event": "message_chunk", "data": {"id": "lc-2", "content_type": "text", "content": "done"}},
-        {"event": "credit_usage", "data": {"total_credits": 1.0}},
-    ]
+    facts = {
+        "merge": {
+            # Named by the projected widget it upgrades; the second streamed
+            # beyond what the checkpoint projects, so it is placed.
+            "widgets": [
+                ["tc-s", widget("widget_1", {"a.csv": "1"})],
+                [None, widget("widget_2", {"b.csv": "2"})],
+            ],
+            "results": {"tc-r": {"content": "full", "content_type": "text"}},
+            "anchors": [
+                ["message_chunk", "main", "ai-1", "text"],
+                ["artifact", "tc-s"],
+                ["widget", 1],
+                ["tool_call_result", "tc-r"],
+                ["message_chunk", "main", "ai-2", "text"],
+            ],
+            "signals": [
+                {"widget": 0, "at": 0},
+                {"widget": 1, "at": 1},
+                {"event": "context_window", "data": {"action": "offload", "kind": "tool_args"}, "at": 3},
+                {"event": "provenance", "data": {"source_type": "web", "identifier": "https://a.example"}},
+                {"event": "credit_usage", "data": {"total_credits": 1.0}, "at": 4},
+            ],
+        }
+    }
     _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[_turn(0, messages)]))
 
-    before, facts, after = await _both_ways(monkeypatch, {0: _response(0, stored)})
+    items = (await _replayed({0: _legacy_row(0, facts)}))[0]
 
-    merge = facts[0]["merge"]
-    # Named by the projected widget it upgraded; the extra one by nothing.
-    assert [artifact_id for artifact_id, _data in merge["widgets"]] == ["tc-s", None]
-    assert merge["results"] == {"tc-r": {"content": "full", "content_type": "text"}}
-    assert [s.get("event", "widget") for s in merge["signals"]] == [
-        "widget", "widget", "context_window", "provenance", "credit_usage"
+    assert _named(items) == [
+        ("user_message", None),
+        ("message_chunk", "ai-1"),
+        ("tool_calls", None),
+        ("artifact", "widget_1"),
+        ("artifact", "widget_2"),
+        ("tool_call_result", "tc-s"),
+        ("tool_call_result", "tc-r"),
+        ("context_window", None),
+        ("provenance", None),
+        ("message_chunk", "ai-2"),
+        ("credit_usage", None),
     ]
-    assert after == before
-    result = next(i for i in _items(after)[0] if i["event"] == "tool_call_result"
-                  and i["data"]["tool_call_id"] == "tc-r")
-    assert result["data"]["content"] == "full"
+    assert items[3]["data"]["payload"]["data"] == {"a.csv": "1"}
+    assert items[6]["data"]["content"] == "full"
 
 
 @pytest.mark.asyncio
@@ -164,54 +163,23 @@ async def test_reasoning_durations_replay_from_facts(monkeypatch):
         ],
         id="msg_1",
     )
-    stored = [
-        _signal("lc-1", "start"),
-        _signal("lc-1", "complete", elapsed_ms=1500),
-        _signal("lc-1", "start"),
-        _signal("lc-1", "complete", elapsed_ms=500),
-        _text("lc-1", "the answer"),
-    ]
+    facts = {"merge": {"durations": [[["message_chunk", "main", "msg_1", "reasoning_signal"], 2000]]}}
     _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[_turn(0, [reasoning])]))
 
-    before, facts, after = await _both_ways(monkeypatch, {0: _response(0, stored)})
+    items = (await _replayed({0: _legacy_row(0, facts)}))[0]
 
-    assert [ms for _key, ms in facts[0]["merge"]["durations"]] == [2000]
-    assert after == before
-
-
-@pytest.mark.asyncio
-async def test_interrupt_and_error_keep_their_places(monkeypatch):
-    messages = [
-        AIMessage(
-            content="",
-            id="ai-1",
-            tool_calls=[{"name": "AskUserQuestion", "args": {}, "id": "tc-q"}],
-        ),
-        ToolMessage(
-            content="answer: blue", tool_call_id="tc-q", name="AskUserQuestion", id="tm-1"
-        ),
-    ]
-    stored = [
-        {"event": "tool_calls", "data": {"id": "run-1", "tool_calls": [{"id": "tc-q", "name": "AskUserQuestion"}]}},
-        {"event": "interrupt", "data": {"interrupt_id": "int-q", "action_requests": [{"type": "ask_user_question"}]}},
-        {"event": "tool_call_result", "data": {"tool_call_id": "tc-q", "content": "answer: blue"}},
-        {"event": "error", "data": {"error": "provider exploded"}},
-    ]
-    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[_turn(0, messages)]))
-
-    before, _facts, after = await _both_ways(monkeypatch, {0: _response(0, stored)})
-
-    assert after == before
-    events = [i["event"] for i in _items(after)[0]]
-    assert events.index("tool_calls") < events.index("interrupt") < events.index("tool_call_result")
+    assert [
+        i["data"].get("elapsed_ms")
+        for i in items
+        if i["event"] == "message_chunk"
+        and i["data"]["content_type"] == "reasoning_signal"
+        and i["data"]["content"] == "complete"
+    ] == [2000]
 
 
 @pytest.mark.asyncio
-async def test_unresolved_images_resolve_to_the_stored_url_with_their_basename(monkeypatch):
-    """Capture rewrote the stored copy's paths to keys ending in the file's
-    basename. The turn keeps its projection, so a stored message the
-    checkpoint never committed stays out, and a path capture never reached
-    stays a path."""
+async def test_images_resolve_to_the_urls_the_facts_hold(monkeypatch):
+    """A path capture never reached stays a path."""
     _mock_reader(
         monkeypatch,
         ThreadHistory(
@@ -224,62 +192,36 @@ async def test_unresolved_images_resolve_to_the_stored_url_with_their_basename(m
             ],
         ),
     )
-    stored = [
-        _text("lc-1", "![chart](https://cdn/abc/chart.png) ![raw](work/raw.png)"),
-        _text("lc-2", "a reply the checkpoint never committed"),
-    ]
+    facts = {"images": {"work/chart.png": "https://cdn/abc/chart.png"}, "merge": {}}
 
-    before, facts, after = await _both_ways(monkeypatch, {0: _response(0, stored)})
+    items = (await _replayed({0: _legacy_row(0, facts)}))[0]
 
-    assert facts[0]["images"] == {"work/chart.png": "https://cdn/abc/chart.png"}
-    assert "verbatim" not in facts[0]
-    assert after == before
-    assert [i["data"]["content"] for i in _items(after)[0] if i["event"] == "message_chunk"] == [
+    assert [i["data"]["content"] for i in items if i["event"] == "message_chunk"] == [
         "![chart](https://cdn/abc/chart.png) ![raw](work/raw.png)"
     ]
 
 
 @pytest.mark.asyncio
-async def test_a_run_lanes_unresolved_image_resolves_from_the_stored_copy(monkeypatch):
-    """A run settled before its row kept facts has its image URL only in
-    the stored copy, which a run lane resolves from like the main lane."""
+async def test_a_run_lanes_image_resolves_from_its_turns_facts(monkeypatch):
+    """A run settled before its row kept facts has its image URL only in its
+    turn's legacy facts, which reach its lane like the main lane."""
     _cache_probe(monkeypatch)
     _task_reader(monkeypatch)
-    stored = [_text("lc-s", "see ![c](https://cdn/abc/sub.png)", agent="task:tsk1")]
+    facts = {"images": {"work/sub.png": "https://cdn/abc/sub.png"}, "merge": {}}
 
-    before, facts, after = await _both_ways(monkeypatch, {0: _response(0, stored)})
+    items = (await _replayed({0: _legacy_row(0, facts)}))[0]
 
-    assert facts[0]["images"] == {"work/sub.png": "https://cdn/abc/sub.png"}
-    assert after == before
     assert [
         i["data"]["content"]
-        for i in _items(after)[0]
+        for i in items
         if i["event"] == "message_chunk" and i["data"].get("agent") == "task:tsk1"
     ] == ["see ![c](https://cdn/abc/sub.png)"]
 
 
 @pytest.mark.asyncio
-async def test_a_run_lanes_ambiguous_image_keeps_the_main_lane_projected(monkeypatch):
-    """Only the main lane can replay verbatim, so a run lane's path that
-    several stored URLs could match stays a path and sends nothing there."""
-    _cache_probe(monkeypatch)
-    _task_reader(monkeypatch)
-    stored = [
-        _text("lc-s1", "see ![c](https://cdn/1/sub.png)", agent="task:tsk1"),
-        _text("lc-s2", "or ![c](https://cdn/2/sub.png)", agent="task:tsk1"),
-    ]
-
-    before, facts, after = await _both_ways(monkeypatch, {0: _response(0, stored)})
-
-    assert "verbatim" not in facts[0]
-    assert "images" not in facts[0]
-    assert after == before
-
-
-@pytest.mark.asyncio
-async def test_images_no_basename_settles_replay_their_main_lane_verbatim(monkeypatch):
-    """Two stored URLs share the basename of both projected paths, so only
-    the stored copy knows which image is which."""
+async def test_a_main_lane_held_verbatim_replays_as_held(monkeypatch):
+    """Two captured URLs shared the basename of both projected paths, so the
+    facts hold the main lane as it streamed."""
     _mock_reader(
         monkeypatch,
         ThreadHistory(
@@ -292,70 +234,259 @@ async def test_images_no_basename_settles_replay_their_main_lane_verbatim(monkey
             ],
         ),
     )
-    stored = [_text("lc-1", "![a](https://cdn/1/chart.png) ![b](https://cdn/2/chart.png)")]
+    facts = {"verbatim": [_text("lc-1", "![a](https://cdn/1/chart.png) ![b](https://cdn/2/chart.png)")]}
 
-    before, facts, after = await _both_ways(monkeypatch, {0: _response(0, stored)})
+    items = (await _replayed({0: _legacy_row(0, facts)}))[0]
 
-    assert facts[0]["verbatim"] == stored
-    assert "images" not in facts[0]
-    assert after == before
-    chunk = next(i for i in _items(after)[0] if i["event"] == "message_chunk")
-    assert chunk["data"]["content"] == "![a](https://cdn/1/chart.png) ![b](https://cdn/2/chart.png)"
+    assert [(i["data"]["id"], i["data"]["content"]) for i in items if i["event"] == "message_chunk"] == [
+        ("lc-1", "![a](https://cdn/1/chart.png) ![b](https://cdn/2/chart.png)")
+    ]
 
 
 @pytest.mark.asyncio
 async def test_a_run_lane_keeps_its_own_returns_once(monkeypatch):
-    """A run with facts places its returns; the stored copy adds only the
-    ones its facts do not hold."""
+    """A run with facts places its returns; the legacy facts add only the
+    ones the run's facts do not hold."""
     _cache_probe(monkeypatch)
     _task_reader(monkeypatch)
-    stored = [_returned("in-1"), _returned("in-2", content="and NVDA")]
+    facts = {"merge": {"signals": [_returned("in-1"), _returned("in-2", content="and NVDA")]}}
 
-    before, _facts, after = await _both_ways(
-        monkeypatch, {0: _response(0, stored)}, run_facts=[_RUN_FACTS]
-    )
+    items = (await _replayed({0: _legacy_row(0, facts)}, run_facts=[_RUN_FACTS]))[0]
 
-    assert after == before
-    returns = [i["data"]["input_id"] for i in _items(after)[0] if i["event"] == "steering_returned"]
+    returns = [i["data"]["input_id"] for i in items if i["event"] == "steering_returned"]
     assert sorted(returns) == ["in-1", "in-2"]
 
 
-@pytest.mark.asyncio
-async def test_a_turn_without_stored_events_is_known_empty(monkeypatch):
-    _mock_reader(
-        monkeypatch,
-        ThreadHistory(thread_id=THREAD, turns=[_turn(0, [AIMessage(content="hi", id="ai-1")])]),
-    )
-
-    before, facts, after = await _both_ways(monkeypatch, {0: _response(0)})
-
-    assert facts[0] == {"v": legacy.FACTS_VERSION}
-    assert after == before
+def _archived(event, at=None, **data):
+    """A signal row as the archive kept it, tagged apart from the projected
+    copy of its kind."""
+    signal = {"event": event, "data": {"agent": "main", "tag": "archived", **data}}
+    return signal if at is None else signal | {"at": at}
 
 
 @pytest.mark.asyncio
-async def test_facts_the_row_would_hold_differently_are_not_verified(monkeypatch):
-    """A jsonb bind drops a NUL, so facts carrying one would replay without
-    it: the backfill must not write them."""
-    _mock_reader(
-        monkeypatch,
-        ThreadHistory(thread_id=THREAD, turns=[_turn(0, [AIMessage(content="hi", id="ai-1")])]),
+async def test_archived_signal_rows_replace_the_projected_ones(monkeypatch):
+    """Each kind the archive kept in full is projected too, from the
+    checkpoint or the tables. The facts place the archived copies where they
+    streamed, so the projected ones go, or every signal row would render
+    twice."""
+    usage = {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}
+    delivered = {"count": 1, "messages": [{"content": "go deeper"}], "timestamp": 2.0}
+    fallback = {
+        "type": "ui",
+        "id": "fb-1",
+        "name": "model_fallback",
+        "props": {"from_model": "p", "to_model": "f"},
+        "metadata": {},
+    }
+    turn = _turn(
+        0,
+        [
+            AIMessage(
+                content="looking",
+                id="ai-1",
+                tool_calls=[{"name": "web_search", "args": {}, "id": "tc-1"}],
+                usage_metadata=usage,
+            ),
+            ToolMessage(content="result", tool_call_id="tc-1", id="tm-1"),
+            HumanMessage(
+                content="[Steering from User]\ngo deeper",
+                id="h-steer",
+                additional_kwargs={
+                    "lc_source": "steering",
+                    "steering_delivered": delivered,
+                },
+            ),
+            AIMessage(content="done", id="ai-2", usage_metadata=usage),
+        ],
+        new_ui_records=[fallback],
     )
-    stored = [
-        {"event": "message_chunk", "data": {"id": "lc-1", "content_type": "text", "content": "hi"}},
-        {"event": "provenance", "data": {"source_type": "web", "identifier": "a\x00b"}},
+    turn.anchor.ending_interrupts = [
+        {"id": "int-1", "value": {"action_requests": [{"description": "pick one"}]}}
     ]
-    derivation = Derivation()
-    await replay.project_turns(
-        thread_rows([_query(0)], {0: _response(0, stored)}),
-        TIP,
-        turn_indexes=[0],
-        derive=derivation,
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    provenance = {
+        "conversation_response_id": "resp-0",
+        "provenance_record_id": "row-1",
+        "tool_call_id": "tc-1",
+        "source_type": "web_page",
+        "identifier": "https://a.example",
+        "agent": "main",
+    }
+    credits = {
+        "conversation_response_id": "resp-0",
+        "token_usage": {"by_model": {"m": usage}},
+        "total_credits": 1.0,
+        "created_at": "t0",
+    }
+    facts = {
+        "merge": {
+            "anchors": [
+                ["tool_calls", "tc-1"],
+                ["tool_call_result", "tc-1"],
+                ["message_chunk", "main", "ai-2", "text"],
+            ],
+            "signals": [
+                _archived("context_window", at=0, action="token_usage"),
+                _archived("model_fallback", at=1, to_model="f"),
+                _archived("provenance", identifier="https://a.example"),
+                _archived("steering_delivered", count=1),
+                _archived("context_window", at=2, action="token_usage"),
+                _archived("interrupt", interrupt_id="int-1"),
+                _archived("credit_usage", total_credits=1.0),
+            ],
+        }
+    }
+
+    items = (
+        await _replayed(
+            {0: _legacy_row(0, facts)}, provenance=[provenance], usages=[credits]
+        )
+    )[0]
+
+    assert _tagged(items) == [
+        ("user_message", None),
+        ("message_chunk", "ai-1"),
+        ("tool_calls", None),
+        ("context_window", "archived"),
+        ("tool_call_result", "tc-1"),
+        ("model_fallback", "archived"),
+        ("provenance", "archived"),
+        ("steering_delivered", "archived"),
+        ("message_chunk", "ai-2"),
+        ("context_window", "archived"),
+        ("interrupt", "archived"),
+        ("credit_usage", "archived"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_verbatim_main_lane_keeps_its_run_lanes_and_leaves_its_facts_alone(
+    monkeypatch,
+):
+    """The archive held the root stream alone, so a turn whose main lane is
+    held verbatim still takes its run lanes from the projection, and the task
+    card the lane holds is stamped with the runs they contain. Replay stamps
+    the rows it places, so those are copies: the row's facts stay as read for
+    every later projection of the turn."""
+    _cache_probe(monkeypatch)
+    _task_reader(monkeypatch)
+    card = {
+        "agent": "main",
+        "artifact_type": "task",
+        "artifact_id": "task:tsk1",
+        "payload": {"task_id": "tsk1", "action": "init", "task_run_id": "run-1"},
+    }
+    facts = {
+        "verbatim": [
+            _text("lc-1", "![a](https://cdn/1/chart.png)"),
+            {"event": "artifact", "data": card},
+            {
+                "event": "context_window",
+                "data": {"agent": "main", "action": "token_usage", "input_tokens": 9},
+            },
+        ]
+    }
+    row = _legacy_row(0, facts)
+    held = copy.deepcopy(row["replay_facts"])
+
+    items = (await _replayed({0: row}))[0]
+
+    assert [
+        (i["event"], i["data"].get("content"))
+        for i in items
+        if str(i["data"].get("agent", "")).startswith("task:")
+    ] == [("user_message", "p"), ("message_chunk", "see ![c](work/sub.png)")]
+    (stamped,) = [i["data"] for i in items if i["event"] == "artifact"]
+    assert stamped["payload"]["projected_run_started_ms"] == (
+        datetime(2026, 1, 3, tzinfo=timezone.utc).timestamp() * 1000
+    )
+    assert row["replay_facts"] == held
+
+
+@pytest.mark.asyncio
+async def test_a_compact_after_a_legacy_turn_follows_its_facts(monkeypatch):
+    """The compact is a context_window row, a kind the facts replace, and
+    only the checkpoint keeps it, so it is added after they are applied. It
+    still precedes the error the row records, which ends the turn."""
+    from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+    from src.server.services.history.projector import context_window_record
+
+    summary = build_summary_message("condensed", None, original_message_count=9)
+    compact = context_window_record(
+        {"action": "summarize", "signal": "complete"},
+        summary_message_id=summary.id,
+    )
+    turn = _turn(0, [AIMessage(content="answer", id="ai-0")], new_ui_records=[compact])
+    turn.new_summarization_event = {"summary_message": summary, "cutoff_index": 4}
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[turn]))
+    facts = {
+        "merge": {
+            "anchors": [["message_chunk", "main", "ai-0", "text"]],
+            "signals": [_archived("context_window", at=0, action="token_usage")],
+        }
+    }
+    row = _legacy_row(0, facts, status="error", errors=["provider exploded"])
+
+    items = (await _replayed({0: row}))[0]
+
+    assert _tagged(items) == [
+        ("user_message", None),
+        ("message_chunk", "ai-0"),
+        ("context_window", "archived"),
+        ("context_window", None),
+        ("error", None),
+    ]
+    assert items[3]["data"]["summary_text"] == "condensed"
+
+
+def _stop_close(message_id):
+    """The close a live stream wrote for the message open at a stop."""
+    return {
+        "event": "message_chunk",
+        "data": {
+            "agent": "main",
+            "id": message_id,
+            "role": "assistant",
+            "finish_reason": "stopped",
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verbatim",
+    [
+        [_text("lc-1", "The answer is"), _stop_close("lc-1")],
+        [_text("lc-1", "The answer is")],
+    ],
+    ids=["close_held", "close_owed"],
+)
+async def test_a_stopped_turn_held_verbatim_closes_its_last_message_once(
+    monkeypatch, verbatim
+):
+    """A stop mid-answer streamed a close, which the verbatim lane holds; a
+    stop between messages streamed none, and the row owes one. Either way
+    the lane's last message gets one close, under the id the lane gave it."""
+    _mock_reader(
+        monkeypatch,
+        ThreadHistory(
+            thread_id=THREAD,
+            turns=[_turn(0, [AIMessage(content="The answer is", id="ai-1")])],
+        ),
+    )
+    row = _legacy_row(
+        0,
+        {"verbatim": verbatim},
+        status="cancelled",
+        metadata={"cancelled_by_user": True},
     )
 
-    assert derivation.turns[0].verified is False
-    signal = derivation.turns[0].facts["merge"]["signals"][0]
-    assert signal["data"]["identifier"] == "ab"  # as the row would hold it
+    items = (await _replayed({0: row}))[0]
+
+    closes = [i for i in items if i["data"].get("finish_reason") == "stopped"]
+    assert [i["data"]["id"] for i in closes] == ["lc-1"]
+    assert items[-1] is closes[0]
 
 
 # ------------------------------------------------------------ facts_of
@@ -372,7 +503,7 @@ async def test_facts_the_row_would_hold_differently_are_not_verified(monkeypatch
     ],
     ids=["none", "run_facts_only", "malformed", "other_version", "known_empty"],
 )
-def test_only_this_versions_facts_stand_in_for_the_events(replay_facts, expected):
+def test_only_this_versions_facts_are_read(replay_facts, expected):
     assert legacy.facts_of({"replay_facts": replay_facts}) == expected
 
 
@@ -537,17 +668,24 @@ def test_a_message_without_an_id_is_named_by_its_occurrence():
 # ------------------------------------------------------------ projection drift
 #
 # Facts resolved against one projection and applied to a later one, the way a
-# backfilled row meets a projector change: what the facts carry stays with
+# legacy row meets a projector change: what the facts carry stays with
 # the rows it was resolved onto.
 
 
-def _message(message_id, elapsed_ms=None):
-    close = {"elapsed_ms": elapsed_ms} if elapsed_ms is not None else {}
+def _message(message_id):
     return [
         _row("message_chunk", agent="main", id=message_id, content_type="reasoning_signal", content="start"),
         _row("message_chunk", agent="main", id=message_id, content_type="reasoning", content="r"),
-        _row("message_chunk", agent="main", id=message_id, content_type="reasoning_signal", content="complete", **close),
+        _row("message_chunk", agent="main", id=message_id, content_type="reasoning_signal", content="complete"),
         _row("message_chunk", agent="main", id=message_id, content_type="text", content="t"),
+    ]
+
+
+def _message_keys(message_id):
+    """The anchors ``_message``'s rows streamed as."""
+    return [
+        ["message_chunk", "main", message_id, content_type]
+        for content_type in ("reasoning_signal", "reasoning", "reasoning_signal", "text")
     ]
 
 
@@ -558,9 +696,8 @@ def _call(call_id):
     ]
 
 
-def _resolved_then_applied(then, now, stored):
-    facts = json.loads(json.dumps(stored_merge.derive_turn(then, [], stored)))
-    return legacy.apply_turn(copy.deepcopy(now), [], facts)
+def _applied(now, merge):
+    return legacy.apply_turn(copy.deepcopy(now), [], {"v": legacy.FACTS_VERSION, "merge": merge})
 
 
 def _shape(items):
@@ -580,16 +717,25 @@ def _shape(items):
 
 
 def test_a_message_the_projection_gained_takes_nothing_of_its_neighbours():
-    stored = [
-        *_message("lc0", 1000),
-        *_call("A"),
-        *_message("lc1", 2000),
-        _row("context_window", agent="main", action="token_usage"),
-    ]
-    then = [*_message("p0"), *_call("A"), *_message("p1")]
+    # Resolved against p0, A, p1.
+    merge = {
+        "durations": [
+            [["message_chunk", "main", "p0", "reasoning_signal"], 1000],
+            [["message_chunk", "main", "p1", "reasoning_signal"], 2000],
+        ],
+        "anchors": [
+            *_message_keys("p0"),
+            ["tool_calls", "A"],
+            ["tool_call_result", "A"],
+            *_message_keys("p1"),
+        ],
+        "signals": [
+            {"event": "context_window", "data": {"agent": "main", "action": "token_usage"}, "at": 9}
+        ],
+    }
     now = [*_message("p0"), *_call("A"), *_message("px"), *_message("p1")]
 
-    assert _shape(_resolved_then_applied(then, now, stored)) == [
+    assert _shape(_applied(now, merge)) == [
         "close:p0:1000", "text:p0",
         "close:px:None", "text:px",
         "close:p1:2000", "text:p1",
@@ -606,10 +752,13 @@ def test_a_message_the_projection_gained_takes_nothing_of_its_neighbours():
     ids=["first_dropped", "last_dropped"],
 )
 def test_a_signal_whose_anchor_the_projection_dropped_stays_in_place(now, expected):
-    stored = [*_message("lc0"), *_message("lc1"), _row("credit_usage", agent="main")]
-    then = [*_message("p0"), *_message("p1")]
+    # Resolved against p0, p1.
+    merge = {
+        "anchors": [*_message_keys("p0"), *_message_keys("p1")],
+        "signals": [{"event": "credit_usage", "data": {"agent": "main"}, "at": 7}],
+    }
 
-    assert _shape(_resolved_then_applied(then, now, stored)) == expected
+    assert _shape(_applied(now, merge)) == expected
 
 
 @pytest.mark.parametrize(
@@ -631,31 +780,42 @@ def test_a_signal_whose_anchor_the_projection_dropped_stays_in_place(now, expect
     ids=["widget_gained", "widget_dropped", "missed_widget_emitted"],
 )
 def test_a_widget_payload_stays_with_its_widget(now, expected):
-    """The third payload streamed beyond what the projection then emitted:
-    placed where it streamed, or taken by a widget that appears after its
-    neighbours' widgets, never by one ahead of them."""
-    stored = [
-        _row("artifact", artifact_type="html_widget", artifact_id=f"s{k}", payload={"k": k})
-        for k in range(3)
-    ] + [_row("provenance", agent="main")]
-    then = [_widget("tc-a"), _widget("tc-b")]
+    """Resolved against widgets tc-a and tc-b. The third payload streamed
+    beyond what the projection then emitted: placed where it streamed, or
+    taken by a widget that appears after its neighbours' widgets, never by
+    one ahead of them."""
+    merge = {
+        "widgets": [["tc-a", _stored_widget(0)], ["tc-b", _stored_widget(1)], [None, _stored_widget(2)]],
+        "anchors": [["artifact", "tc-a"], ["artifact", "tc-b"], ["widget", 2]],
+        "signals": [
+            {"widget": 0},
+            {"widget": 1, "at": 0},
+            {"widget": 2, "at": 1},
+            {"event": "provenance", "data": {"agent": "main"}, "at": 2},
+        ],
+    }
 
-    assert _shape(_resolved_then_applied(then, now, stored)) == expected
+    assert _shape(_applied(now, merge)) == expected
 
 
 # ------------------------------------------------------------ re-read
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("verbatim", "asked"), [(False, legacy.FACTS_VERSION), (True, None)])
-async def test_the_re_read_leaves_out_events_the_facts_stand_in_for(
-    monkeypatch, verbatim, asked
-):
-    read = AsyncMock(return_value={"resp-0": {"conversation_response_id": "resp-0"}})
-    monkeypatch.setattr("src.server.database.conversation.get_replay_responses", read)
+async def test_only_a_row_read_without_its_facts_is_read_again(monkeypatch):
+    """Replay rows arrive without ``replay_facts``, so a turn projected
+    afresh re-reads its row for them; a row that already holds the key is
+    projected as it is."""
+    whole = {
+        "conversation_response_id": "resp-0",
+        "replay_facts": {LEGACY_KEY: {"v": legacy.FACTS_VERSION}},
+    }
+    read = AsyncMock(return_value={"resp-0": whole})
+    monkeypatch.setattr(replay_rows, "get_replay_responses", read)
+    rows = {0: {"conversation_response_id": "resp-0"}, 1: _response(1)}
 
-    await replay.with_stored_events(
-        {0: {"conversation_response_id": "resp-0"}}, [0], verbatim=verbatim
-    )
+    out = await replay_rows.with_replay_facts(rows, [0, 1])
 
-    read.assert_awaited_once_with(["resp-0"], legacy_facts=asked)
+    read.assert_awaited_once_with(["resp-0"])
+    assert out[0] is whole
+    assert out[1] is rows[1]

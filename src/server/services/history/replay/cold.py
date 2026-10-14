@@ -16,24 +16,21 @@ from datetime import datetime
 from typing import Any
 
 from src.server.database.conversation import turn_slices as slices_db
+from src.server.database.conversation.replay_rows import with_replay_facts
+from src.server.database.pool import DATABASE_UNAVAILABLE
 from src.server.services.history import slices
 from src.server.services.history.reader import CheckpointHistoryReader, TurnAnchor
 from src.server.services.history.replay import lines as replay_lines
 from src.server.services.history.replay import run_lane
 from src.server.services.history.replay.errors import (
-    INFRASTRUCTURE,
     ClaimsNeeded,
     ClaimsPassNeeded,
     ClaimsUnavailable,
 )
 from src.server.services.history.replay.keys import lines_key
 from src.server.services.history.replay.lines import Line, line_of
-from src.server.services.history.replay.stored_events import (
-    fallback_lines,
-    with_stored_events,
-)
+from src.server.services.history.replay.stubs import stub_lines
 from src.server.services.history.replay.turn import (
-    Derive,
     Inputs,
     project_turn,
     settled_at,
@@ -42,8 +39,8 @@ from src.server.services.history.slices import TurnSlice
 
 logger = logging.getLogger(__name__)
 
-# Turns projected per batch, which bounds the checkpoint states and stored
-# events in hand at once.
+# Turns projected per batch, which bounds the checkpoint states and replay
+# facts in hand at once.
 PROJECT_BATCH = 16
 
 # Turns by index with their anchors on the branch, in turn order.
@@ -54,19 +51,12 @@ _Turns = list[tuple[Any, TurnAnchor]]
 class Policy:
     """What an entry point lets its read do about turns it must project."""
 
-    # A turn that cannot be projected replays from its stored events, or as
-    # unavailable without them, rather than failing the read.
+    # A turn that cannot be projected replays as its stub rather than
+    # failing the read.
     turn_fallback: bool = False
     # A batch may run the whole-thread claims pass it needs, rather than
     # raise ClaimsPassNeeded.
     claims_pass: bool = True
-    # The backfill's hook on each turn that derived its legacy facts from
-    # its stored events.
-    derive: Derive | None = None
-    # Read stored slices and lines, and store what the read projects. Off,
-    # every turn and run is cut from its checkpoints and nothing is written,
-    # so a stored row cannot hide what the code projects today.
-    cache: bool = True
 
 
 @dataclass
@@ -102,17 +92,14 @@ class _Writes:
 class _Pending:
     """Stores in flight while the next batch loads. Every one is awaited
     before the request returns, so a later read in it never misses its own
-    writes, and the post-turn refresh and backfill still finish theirs.
-    Without ``store`` every write is dropped here, the one place they all
-    pass."""
+    writes, and the post-turn refresh and backfill still finish theirs."""
 
-    def __init__(self, thread_id: str, *, store: bool) -> None:
+    def __init__(self, thread_id: str) -> None:
         self._thread_id = thread_id
-        self._store = store
         self._tasks: list[asyncio.Task[None]] = []
 
     def start(self, writes: _Writes) -> None:
-        if self._store and (writes.turns or writes.updates or writes.runs):
+        if writes.turns or writes.updates or writes.runs:
             self._tasks.append(asyncio.create_task(writes.store(self._thread_id)))
 
     async def drain(self) -> None:
@@ -150,11 +137,9 @@ class _ColdRead:
         self._anchored = anchored
         self._stale = [ti for ti, _ in stale]
         self._policy = policy
-        self.lane = run_lane.RunLane(
-            reader, inputs.thread_id, inputs.run_facts, cache=policy.cache
-        )
-        self.pending = _Pending(inputs.thread_id, store=policy.cache)
-        # Stale turns projected or replayed from storage.
+        self.lane = run_lane.RunLane(reader, inputs.thread_id, inputs.run_facts)
+        self.pending = _Pending(inputs.thread_id)
+        # Stale turns projected or replayed as stubs.
         self._done: set[Any] = set()
         # Slices read for turns not yet done: a batch the claims pass
         # interrupted, and the turns the pass cut from checkpoints, so each
@@ -192,7 +177,7 @@ class _ColdRead:
         for turn in batch:
             try:
                 out.update(await self.project([turn]))
-            except INFRASTRUCTURE:
+            except DATABASE_UNAVAILABLE:
                 raise
             except Exception as err:
                 out.update(await self._fall_back([turn], err))
@@ -226,9 +211,9 @@ class _ColdRead:
             ]
         )
 
-        # Only turns projected afresh need their row's stored events (and the
-        # version of the row those events came from).
-        responses = await with_stored_events(
+        # Only turns projected afresh need their row's replay facts (and the
+        # version of the row those facts came from).
+        responses = await with_replay_facts(
             inputs.responses_by_turn, [ti for ti, _ in batch]
         )
         writes = _Writes()
@@ -236,9 +221,7 @@ class _ColdRead:
         for ti, anchor in batch:
             response = responses.get(ti)
             turn = loaded[ti].turn
-            segment, sealed = project_turn(
-                inputs, ti, turn, response, self.lane, self._policy.derive
-            )
+            segment, sealed = project_turn(inputs, ti, turn, response, self.lane)
             out[ti] = [line_of(item) for item in segment]
             self._add_turn_write(
                 writes,
@@ -259,35 +242,39 @@ class _ColdRead:
 
     async def _load(self, batch: _Turns) -> dict[Any, _Loaded]:
         missing = [(ti, a) for ti, a in batch if ti not in self._in_hand]
-        turns, claims, fresh = await load_turns(
-            self._reader, self._inputs, missing, cache=self._policy.cache
-        )
+        turns, claims, fresh = await load_turns(self._reader, self._inputs, missing)
         self._in_hand.update(
             (ti, _Loaded(turns[ti], ti in fresh, claims[ti])) for ti, _ in missing
         )
         return {ti: self._in_hand[ti] for ti, _ in batch}
 
     async def _fall_back(self, batch: _Turns, error: Exception) -> dict[Any, list[Line]]:
-        """The batch from its stored events, never stored, so the next read
-        projects it again. A turn settled since nothing writes stored events
-        has none and replays as unavailable, which is logged as an error:
-        the user sees the turn's answer missing."""
+        """The batch as stubs, never stored, so the next read projects it
+        again. A turn that answered and archived no stream replays without
+        its answer, which is logged as an error: the user sees it missing."""
+        inputs = self._inputs
         turns = [ti for ti, _ in batch]
-        lines, lost = await fallback_lines(self._inputs, turns)
+        lines, lost = await stub_lines(
+            inputs.thread_id,
+            turns,
+            inputs.queries_by_turn,
+            inputs.responses_by_turn,
+            inputs.open_runs,
+        )
         self._finish(batch)
         if lost:
             logger.error(
-                "[REPLAY] turns %s of %s cannot be projected and have no stored "
-                "events; they replay without their content",
+                "[REPLAY] turns %s of %s cannot be projected and archived no "
+                "stream; they replay without their answer",
                 lost,
-                self._inputs.thread_id,
+                inputs.thread_id,
                 exc_info=error,
             )
         else:
             logger.warning(
-                "[REPLAY] turns %s of %s replay from their stored events",
+                "[REPLAY] turns %s of %s cannot be projected; they replay as stubs",
                 turns,
-                self._inputs.thread_id,
+                inputs.thread_id,
                 exc_info=error,
             )
         return lines
@@ -313,9 +300,8 @@ class _ColdRead:
                 self.lane,
                 self._anchored,
                 self._launched,
-                cache=self._policy.cache,
             )
-        except INFRASTRUCTURE:
+        except DATABASE_UNAVAILABLE:
             raise
         except Exception as err:
             self._placement_failed = True
@@ -418,13 +404,13 @@ async def project_stale(
 ) -> dict[Any, list[Line]]:
     """Project and store stale turns a batch at a time: each checkpoint
     state holds the thread's whole transcript up to its turn, and each
-    response row its stored events, so a thread read at once would hold
-    both for every turn. A batch's stores run while the next batch loads.
+    response row its replay facts, so a thread read at once would hold both
+    for every turn. A batch's stores run while the next batch loads.
 
     With ``policy.turn_fallback``, a batch that fails is retried a turn at a
-    time, and a turn that still fails replays from its stored events (or as
-    unavailable without them), never stored, so it is projected again on the
-    next read. A database fault ends the read: it would fail every turn alike.
+    time, and a turn that still fails replays as its stub (``stubs``), never
+    stored, so it is projected again on the next read. A database fault ends
+    the read: it would fail every turn alike.
     """
     read = _ColdRead(reader, inputs, anchored, stale, policy)
     out: dict[Any, list[Line]] = {}
@@ -433,7 +419,7 @@ async def project_stale(
             batch = stale[start : start + PROJECT_BATCH]
             try:
                 out.update(await read.project(batch))
-            except INFRASTRUCTURE:
+            except DATABASE_UNAVAILABLE:
                 raise
             except Exception as e:
                 if not policy.turn_fallback:
@@ -448,18 +434,11 @@ async def load_turns(
     reader: CheckpointHistoryReader,
     inputs: Inputs,
     batch: list[tuple[Any, TurnAnchor]],
-    *,
-    cache: bool = True,
 ) -> tuple[dict[Any, TurnSlice], dict[Any, list[str | None] | None], set[Any]]:
-    """``(turns, claims, fresh)``: the batch's turns by ``slices.load_turns``,
-    every one cut from checkpoints without ``cache``. Claims count only
-    beside the slice they were placed against."""
-    stored = (
-        await slices_db.get_turn_slices(
-            [rid for ti, _ in batch if (rid := inputs.response_id(ti))]
-        )
-        if cache
-        else {}
+    """``(turns, claims, fresh)``: the batch's turns by ``slices.load_turns``.
+    Claims count only beside the slice they were placed against."""
+    stored = await slices_db.get_turn_slices(
+        [rid for ti, _ in batch if (rid := inputs.response_id(ti))]
     )
     rows = {
         ti: row for ti, _ in batch if (row := stored.get(inputs.response_id(ti) or ""))
@@ -475,8 +454,6 @@ async def _place_launches(
     lane: run_lane.RunLane,
     anchored: list[tuple[Any, TurnAnchor]],
     known: dict[Any, list[run_lane.Launch]],
-    *,
-    cache: bool,
 ) -> tuple[dict[Any, list[str | None]], dict[Any, TurnSlice]]:
     """``(claims, extracted)``: every run launch of the thread claimed in
     order (``assign_claims``), and the turns this pass had to cut from
@@ -492,10 +469,7 @@ async def _place_launches(
     for start in range(0, len(anchored), PROJECT_BATCH):
         batch = anchored[start : start + PROJECT_BATCH]
         turns, _claims, fresh = await load_turns(
-            reader,
-            inputs,
-            [(ti, a) for ti, a in batch if ti not in known],
-            cache=cache,
+            reader, inputs, [(ti, a) for ti, a in batch if ti not in known]
         )
         extracted.update((ti, turns[ti]) for ti in fresh)
         for ti, _anchor in batch:

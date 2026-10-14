@@ -50,8 +50,8 @@ EXCLUDED: dict[str, tuple[frozenset[str], str]] = {
     ),
     "src/server/database/replay_facts.py": (
         frozenset({"LEGACY_KEY"}),
-        "Names the key legacy facts sit under: those resolve the row's stored "
-        "events, so where they sit cannot change what lines hold.",
+        "Names the key a row's legacy facts sit under. Moving them rewrites "
+        "the row, whose version is in the lines key.",
     ),
     "src/server/utils/pg_sanitize.py": (
         frozenset({"SafeJson", "strip_pg_nul_str"}),
