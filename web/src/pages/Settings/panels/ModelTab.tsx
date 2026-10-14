@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutationState } from '@tanstack/react-query';
 import { Search, Pin, Settings2 } from 'lucide-react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Select } from '@/components/ui/select';
 import { useUser } from '@/hooks/useUser';
 import { usePreferences } from '@/hooks/usePreferences';
@@ -17,7 +17,7 @@ import { useAllModels } from '@/hooks/useAllModels';
 import { useQuickAccessModels } from '@/hooks/useQuickAccessModels';
 import { modelLabel, modelMatches } from '@/lib/modelLabel';
 import { isPlatformMode } from '@/config/hostMode';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { ConnectedAccounts } from './ConnectedAccounts';
 import { FLASH_AUTO, flashDefaultChoice, modelPrefs, readDefaultModelScope, splitPreferenceWrite } from '@/lib/modelPreferences';
 import { useModelSlotCopy } from '@/components/model/useModelSlotCopy';
@@ -415,6 +415,21 @@ export function ModelTab() {
                   modelAccess={modelAccessMap}
                   metadata={modelMetadata}
                 />
+                {/* A subagent's model is the subagent's own setting, kept with
+                    the rest of it rather than as a routing slot here. */}
+                <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                  <Trans
+                    i18nKey="settings.modelTuning.subagentsLink"
+                    components={{
+                      pane: (
+                        <Link
+                          to="/plugins?tab=subagents"
+                          className="underline underline-offset-2 hover:text-[var(--color-text-primary)]"
+                        />
+                      ),
+                    }}
+                  />
+                </p>
                 <FallbackModelsPicker
                   selected={fallbackModels}
                   onChange={(list) => write({ fallback_models: list })}

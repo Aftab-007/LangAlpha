@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 import { Blocks, KeyRound, ScrollText, Server } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LangAlphaMark } from '@/components/brand/LangAlphaMark';
+import { SubagentsRings } from '@/components/ui/subagents-rings';
 import { TILE_SIZES, type TileSize } from './IdentityTile';
 
 /**
@@ -28,10 +29,11 @@ const KIND_GLYPH: Record<MarkKind, ComponentType<{ className?: string }>> = {
   skill: ScrollText,
   server: Server,
   secret: KeyRound,
+  subagent: SubagentsRings,
   langalpha: LangAlphaMark,
 };
 
-export type MarkKind = 'plugin' | 'skill' | 'server' | 'secret' | 'langalpha';
+export type MarkKind = 'plugin' | 'skill' | 'server' | 'secret' | 'subagent' | 'langalpha';
 
 const GLYPH_SIZES: Record<TileSize, string> = {
   xs: 'h-3 w-3',

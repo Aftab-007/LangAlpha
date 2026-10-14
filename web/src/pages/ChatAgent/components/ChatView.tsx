@@ -1272,6 +1272,32 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     navigate(location.pathname, { replace: true, state: { ...navState, widgetSnapshots: undefined } });
   }, [location.state, location.pathname, navigate]);
 
+  // A composer handed a sentence to finish rather than a message to send
+  // (Plugins → Subagents' "Create with the agent"). The input can mount a
+  // few frames after the route does, so the seed waits for it, and the state
+  // is spent only once it lands.
+  const draftSeedRef = useRef(false);
+  useEffect(() => {
+    if (draftSeedRef.current) return;
+    const navState = location.state as LocationState | null;
+    const draft = navState?.draftMessage;
+    if (!draft || navState?.initialMessage) return;
+    let frame = 0;
+    let tries = 0;
+    const seed = () => {
+      const input = chatInputRef.current;
+      if (!input) {
+        if (++tries < 120) frame = requestAnimationFrame(seed);
+        return;
+      }
+      draftSeedRef.current = true;
+      input.setValue(draft);
+      navigate(location.pathname, { replace: true, state: { ...navState, draftMessage: undefined } });
+    };
+    seed();
+    return () => cancelAnimationFrame(frame);
+  }, [location.state, location.pathname, navigate]);
+
 
 
 

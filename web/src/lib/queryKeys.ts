@@ -200,6 +200,12 @@ export const queryKeys = {
     // the life of the page.
     limits: () => [...queryKeys.skills.all, 'limits'],
   },
+  // One read carries every subagent plus what the pane needs to edit them
+  // (connector names, brokerage flags, limits), so a write lands in one entry.
+  subagents: {
+    all:  ['subagents'],
+    list: () => [...queryKeys.subagents.all, 'list'],
+  },
   userVault: {
     all:        ['userVault'],
     secrets:    () => [...queryKeys.userVault.all, 'secrets'],

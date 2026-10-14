@@ -1,9 +1,10 @@
 import { useBrokerages, useBuiltinMcpServers, useMcpCatalog } from '@/hooks/useMcpServers';
 import { usePlugins } from '@/hooks/usePlugins';
 import { useSkills } from '@/hooks/useSkills';
+import { useSubagents } from '@/hooks/useSubagents';
 import { useUserVaultSecrets } from '@/hooks/useUserVault';
 import { needsOauthConnect } from '@/pages/ChatAgent/components/mcp/mcpState';
-import type { CatalogServer, PluginInfo } from '@/pages/ChatAgent/utils/api';
+import type { CatalogServer, PluginInfo, SubagentsResponse } from '@/pages/ChatAgent/utils/api';
 import { connectorState, failureBucket, type PluginProblem } from '../../utils/connectorState';
 import { hasLifecycle } from '../../utils/pluginSurface';
 import { isEffectivelyEnabled } from '../../utils/provenance';
@@ -43,6 +44,14 @@ export interface ShellData {
   } | null;
   connectors: ConnectorTally | null;
   skills: { total: number; off: number } | null;
+  subagents: {
+    total: number;
+    off: number;
+    /** Rows with a problem, which the Needs attention pill counts too. */
+    attention: number;
+    /** What the agent itself runs on, which the summary names. */
+    main: SubagentsResponse['main'];
+  } | null;
   brokerages: { connected: number; signIn: number } | null;
   secrets: number | null;
 }
@@ -64,6 +73,7 @@ export function useShellData(): ShellData {
   const { data: skills } = useSkills(null, { includeDisabled: true, allScopes: true });
   const { data: shipped } = useBrokerages();
   const { data: vault } = useUserVaultSecrets();
+  const { data: subagentData } = useSubagents();
 
   const servers = catalog?.servers;
 
@@ -140,6 +150,14 @@ export function useShellData(): ShellData {
     connectors,
     skills: skills
       ? { total: skills.length, off: skills.filter((s) => !isEffectivelyEnabled(s)).length }
+      : null,
+    subagents: subagentData
+      ? {
+          total: subagentData.subagents.length,
+          off: subagentData.subagents.filter((s) => !s.enabled).length,
+          attention: subagentData.subagents.filter((s) => s.problems.length > 0).length,
+          main: subagentData.main,
+        }
       : null,
     brokerages,
     secrets: vault ? vault.secrets.length : null,

@@ -14,8 +14,10 @@ const ACCESS_LABEL_KEYS: Record<ModelAccess, string> = {
 }
 
 export interface ModelSelectorProps {
-  /** Label shown above the select */
-  label: string
+  /** Label shown above the select. Absent, `ariaLabel` names it and the
+   *  surrounding block's heading is the visible label. */
+  label?: string
+  ariaLabel?: string
   /** Description shown below the label */
   description?: string
   /** Currently selected model name */
@@ -36,6 +38,11 @@ export interface ModelSelectorProps {
   modelAccess?: Record<string, ModelAccess>
   /** Optional model metadata: options print its display_name in place of the key. */
   metadata?: Record<string, ModelMetadataEntry>
+  /** Models listed but not pickable (above the plan), each in its provider's group. */
+  disabledModels?: Record<string, ProviderModelsData>
+  /** Names a saved value no group lists, which would otherwise show as the
+   *  placeholder and hide that the setting points somewhere unusable. */
+  missingLabel?: (value: string) => string
 }
 
 export function ModelSelector({
@@ -50,6 +57,9 @@ export function ModelSelector({
   required = false,
   modelAccess,
   metadata,
+  ariaLabel,
+  disabledModels,
+  missingLabel,
 }: ModelSelectorProps) {
   const { t } = useTranslation()
   const id = useId()
@@ -73,9 +83,29 @@ export function ModelSelector({
     [filteredModels],
   )
 
+  const groups = useMemo(() => {
+    const keys = [...new Set([...Object.keys(filteredModels), ...Object.keys(disabledModels ?? {})])]
+    return keys.map((provider) => ({
+      provider,
+      display:
+        filteredModels[provider]?.display_name ??
+        disabledModels?.[provider]?.display_name ??
+        provider.charAt(0).toUpperCase() + provider.slice(1),
+      models: filteredModels[provider]?.models ?? [],
+      locked: (disabledModels?.[provider]?.models ?? []).filter(
+        (m) => !(filteredModels[provider]?.models ?? []).includes(m),
+      ),
+    }))
+  }, [filteredModels, disabledModels])
+
+  const listed =
+    !value ||
+    value === autoOption?.value ||
+    groups.some((g) => g.models.includes(value) || g.locked.includes(value))
+
   return (
     <div className="flex flex-col gap-1.5">
-      <label
+      {label && <label
         htmlFor={id}
         className="block font-medium"
         style={{
@@ -94,7 +124,7 @@ export function ModelSelector({
             *
           </span>
         )}
-      </label>
+      </label>}
 
       {description && (
         <p
@@ -116,17 +146,15 @@ export function ModelSelector({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           required={required}
+          aria-label={label ? undefined : ariaLabel}
         >
           <option value="">{placeholder ?? t("settings.selectModel")}</option>
           {autoOption && <option value={autoOption.value}>{autoOption.label}</option>}
-          {Object.entries(filteredModels).map(([provider, providerData]) => {
-            const modelList = providerData.models ?? []
-            if (modelList.length === 0) return null
-            const displayName =
-              providerData.display_name ??
-              provider.charAt(0).toUpperCase() + provider.slice(1)
+          {!listed && missingLabel && <option value={value}>{missingLabel(value)}</option>}
+          {groups.map(({ provider, display, models: modelList, locked }) => {
+            if (modelList.length === 0 && locked.length === 0) return null
             return (
-              <optgroup key={provider} label={displayName}>
+              <optgroup key={provider} label={display}>
                 {modelList.map((m) => {
                   const access = modelAccess?.[m]
                   const suffix = access ? ` (${t(ACCESS_LABEL_KEYS[access])})` : ""
@@ -136,6 +164,11 @@ export function ModelSelector({
                     </option>
                   )
                 })}
+                {locked.map((m) => (
+                  <option key={m} value={m} disabled>
+                    {modelLabel(m, metadata)} ({t(ACCESS_LABEL_KEYS.locked)})
+                  </option>
+                ))}
               </optgroup>
             )
           })}

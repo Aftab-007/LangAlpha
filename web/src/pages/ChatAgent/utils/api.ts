@@ -33,6 +33,7 @@ export * from './api/mcpBuiltins';
 export * from './api/mcpOauth';
 export * from './api/brokerages';
 export * from './api/skills';
+export * from './api/subagents';
 export * from './api/plugins';
 export * from './api/marketplace';
 export * from './api/orders';

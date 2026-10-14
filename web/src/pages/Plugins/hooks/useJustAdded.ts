@@ -10,7 +10,7 @@ import { useSyncExternalStore } from 'react';
  * says "it went here", not a state the item keeps.
  */
 
-export type JustAddedKind = 'plugin' | 'server' | 'skill' | 'secret';
+export type JustAddedKind = 'plugin' | 'server' | 'skill' | 'secret' | 'subagent';
 
 const HOLD_MS = 6000;
 

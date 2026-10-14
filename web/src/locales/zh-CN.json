@@ -439,7 +439,8 @@
       "compactionModel": "上下文压缩模型",
       "compactionModelDesc": "用于压缩过长的对话上下文。",
       "defaultsToFlash": "默认使用快速模型",
-      "defaultsToConversationModel": "与对话所用模型相同"
+      "defaultsToConversationModel": "与对话所用模型相同",
+      "subagentsLink": "每个子 Agent 的模型和推理强度在<pane>插件 → 子 Agent</pane>中设置。"
     },
     "manageProvidersDesc": "添加或移除 API 密钥、自定义提供商和模型",
     "selectModel": "选择模型…",
@@ -1524,7 +1525,8 @@
       "watch": "盯盘",
       "watchOn": "盯盘已开启",
       "watchOff": "盯盘已关闭",
-      "watchTitle": "实时跟踪 Agent 关注的股票价格"
+      "watchTitle": "实时跟踪 Agent 关注的股票价格",
+      "manageSubagents": "管理子 Agent"
     },
     "moreTools": "更多工具",
     "widgetContext": {
@@ -4445,7 +4447,8 @@
       "noun": {
         "plugin_other": "{{count}} 个插件",
         "connector_other": "{{count}} 个连接器",
-        "skill_other": "{{count}} 个技能"
+        "skill_other": "{{count}} 个技能",
+        "subagent_other": "{{count}} 个子 Agent"
       },
       "done": {
         "enable": "已开启 {{what}}",
@@ -4462,7 +4465,9 @@
         "scope": "无法更改 {{what}}的工作区"
       },
       "needSignIn_other": "{{names}} 需要先登录。",
-      "failedReason": "{{names}}：{{reason}}"
+      "failedReason": "{{names}}：{{reason}}",
+      "confirmRemoveSubagents_other": "移除 {{count}} 个子 Agent？Agent 从下一轮起不再使用它们。",
+      "keptBuiltInSubagents_other": "所选中有 {{count}} 项是内置的，只能关闭或恢复，不能移除。"
     },
     "filter": {
       "clear": "清除筛选",
@@ -4481,7 +4486,8 @@
       },
       "nounConnectors": "连接器",
       "resetState": "显示全部",
-      "catalogMatches_other": "目录中有 {{count}} 个与 “{{query}}” 匹配"
+      "catalogMatches_other": "目录中有 {{count}} 个与 “{{query}}” 匹配",
+      "nounSubagents": "子 Agent"
     },
     "addMenu": {
       "add": "添加",
@@ -4489,7 +4495,11 @@
       "addServer": "通过 URL 或命令添加",
       "importServers": "导入 JSON 配置",
       "uploadSkill": "上传技能",
-      "browseCatalog": "浏览目录"
+      "browseCatalog": "浏览目录",
+      "newSubagent": "新建子 Agent",
+      "newSubagentHint": "从空白表单开始",
+      "createWithAgent": "让 Agent 创建",
+      "createWithAgentHint": "在对话中描述，由 Agent 来编写"
     },
     "stateFilter": {
       "all": "全部",
@@ -4836,7 +4846,8 @@
         "mcp": "连接器",
         "skills": "技能",
         "brokerages": "券商",
-        "secrets": "密钥"
+        "secrets": "密钥",
+        "subagents": "子 Agent"
       },
       "group": {
         "customize": "自定义",
@@ -4857,7 +4868,8 @@
         "mcp": "搜索连接器",
         "skills": "搜索技能",
         "catalog": "搜索目录",
-        "clear": "清除搜索"
+        "clear": "清除搜索",
+        "subagents": "搜索子 Agent"
       },
       "summary": {
         "sep": "，",
@@ -4878,7 +4890,11 @@
         "secrets_other": "已存储 {{count}} 个密钥",
         "noSecrets": "还没有存储密钥",
         "plugins_other": "{{count}} 个插件",
-        "connectorsWithBuiltIn_other": "{{count}} 个连接器（内置 {{builtIn}} 个）"
+        "connectorsWithBuiltIn_other": "{{count}} 个连接器（内置 {{builtIn}} 个）",
+        "subagents_other": "{{count}} 个子 Agent",
+        "mainRunsOn": "Agent 本身使用 <b>{{model}}</b>，推理强度 <b>{{effort}}</b>，可在<settings>设置</settings>中更改",
+        "mainRunsOnModel": "Agent 本身使用 <b>{{model}}</b>，可在<settings>设置</settings>中更改",
+        "mainDefault": "Agent 本身使用对话的模型，可在<settings>设置</settings>中更改"
       },
       "brokerage": {
         "readOnly": "只读",
@@ -4894,7 +4910,8 @@
         "mcp": "Agent 调用的工具",
         "skills": "Agent 遵循的指令",
         "brokerages": "Agent 可以交易的账户",
-        "secrets": "连接器使用的密钥"
+        "secrets": "连接器使用的密钥",
+        "subagents": "Agent 分派工作的专家"
       }
     },
     "loadFailed": {
@@ -4902,7 +4919,8 @@
       "mcp": "无法加载你的连接器。",
       "skills": "无法加载你的技能。",
       "brokerages": "无法加载券商。",
-      "secrets": "无法加载你的密钥，未做任何更改。"
+      "secrets": "无法加载你的密钥，未做任何更改。",
+      "subagents": "无法加载你的子 Agent。"
     },
     "signin": {
       "tryAgain": "重试",
@@ -5026,6 +5044,210 @@
         "connectors": "还没有你自己的连接器。可以通过 URL 或命令添加，也可以导入 JSON 配置。",
         "skills": "还没有你自己的技能。上传一个，教 Agent 一个新的工作流程。"
       }
+    },
+    "subagents": {
+      "addedByYou": "你添加的",
+      "builtIn": "内置",
+      "emptyOwn": "你编写的子 Agent 会显示在这里。可以从空白表单开始，也可以复制一个内置子 Agent。",
+      "edited": "已修改",
+      "threadsModel": "对话的模型",
+      "threadsSetting": "对话的设置",
+      "modelsSetting": "模型的设置",
+      "modelsSettingNamed": "模型的设置（{{effort}}）",
+      "duplicate": "复制",
+      "remove": "移除",
+      "removeYes": "移除",
+      "removeConfirm": "移除 {{name}}？Agent 从下一轮起不再使用它。",
+      "removeNamed": "移除 {{name}}",
+      "removeNote": "Agent 从下一轮起不再使用它。",
+      "removeOrphanNote": "它的原始子 Agent 已不存在，这些修改不再起作用。",
+      "resetToBuiltIn": "恢复内置设置",
+      "resetToDefault": "恢复默认设置",
+      "resetYes": "恢复",
+      "resetConfirm": "恢复 {{name}}？将丢弃你修改的{{fields}}。",
+      "resetConfirmPlain": "恢复 {{name}}？将丢弃你的修改。",
+      "resetNote": "丢弃你修改的{{fields}}，指令保持不变。",
+      "resetNotePlain": "丢弃你的修改，指令保持不变。",
+      "builtinNote": "随应用提供。关闭即可停止使用。",
+      "pluginNote": "随 {{plugin}} 提供。关闭即可停止使用。",
+      "conflictTitle": "未保存",
+      "conflictBody": "这个子 Agent 已在别处被修改。页面现在显示的是最新版本。",
+      "saveFailed": "无法保存修改",
+      "chatPrefill": "设置一个子 Agent，用于",
+      "chatFailed": "无法打开 Home 对话",
+      "problem": {
+        "modelUnavailable": "模型不可用",
+        "skillMissing": "技能缺失",
+        "connectorMissing": "连接器缺失",
+        "searchNotOnPlan": "搜索不在你的套餐内",
+        "searchUnavailable": "搜索引擎不可用",
+        "depthNotOffered": "{{provider}} 不提供该深度",
+        "effortNotOffered": "模型不提供该推理强度",
+        "descriptionMatches": "描述与 {{name}} 相同",
+        "baseRemoved": "原始子 Agent 已移除",
+        "nameCollision": "名称已被内置子 Agent 占用",
+        "unknown": "需要处理",
+        "thisProvider": "该搜索引擎"
+      },
+      "tool": {
+        "web": "网络搜索与抓取",
+        "webDesc": "搜索网络并读取网页",
+        "webShort": "网络",
+        "marketData": "市场数据",
+        "marketDataDesc": "价格、基本面、公告、宏观",
+        "marketDataShort": "市场数据",
+        "code": "代码执行",
+        "codeDesc": "在工作区的计算机中运行 Python",
+        "codeShort": "代码",
+        "shell": "Shell",
+        "shellDesc": "在工作区的计算机中运行命令",
+        "shellShort": "Shell",
+        "none": "仅文件"
+      },
+      "preset": {
+        "label": "预设",
+        "research": "研究",
+        "analyst": "分析",
+        "data": "数据",
+        "writer": "写作"
+      },
+      "field": {
+        "enabled": "开关",
+        "model": "模型",
+        "effort": "推理强度",
+        "tools": "工具",
+        "searchProvider": "搜索引擎",
+        "searchDepth": "搜索深度",
+        "connectors": "连接器权限",
+        "brokerages": "券商权限",
+        "preferredConnectors": "优先连接器",
+        "preferredSkills": "优先技能"
+      },
+      "brokerageState": {
+        "off": "无权限",
+        "on": "可访问"
+      },
+      "audience": {
+        "analyst": "工作区分析师",
+        "chiefOfStaff": "Chief of Staff Agent（Home）",
+        "analystFact": "工作区分析师",
+        "chiefOfStaffFact": "CoS Agent"
+      },
+      "source": {
+        "custom": "你添加的",
+        "plugin": "来自 {{plugin}}",
+        "pluginLink": "来自 <open>{{plugin}}</open>",
+        "builtin": "内置"
+      },
+      "sideBuiltIn": "内置：{{value}}",
+      "sideFrom": "来自 {{plugin}}：{{value}}",
+      "provenance": {
+        "agentIn": "Agent 在 <thread>{{thread}}</thread> 中修改，{{when}}",
+        "agent": "由 Agent 修改，{{when}}",
+        "user": "由你修改，{{when}}",
+        "fieldsAgentIn": "Agent 在 <thread>{{thread}}</thread> 中修改了{{fields}}，{{when}}",
+        "fieldsAgent": "Agent 修改了{{fields}}，{{when}}",
+        "fieldsUser": "你修改了{{fields}}，{{when}}",
+        "aThread": "某个对话"
+      },
+      "orphanTitle": "原始子 Agent 已移除",
+      "orphanBody": "这些修改针对的子 Agent 已不存在，因此不再起作用。移除它们即可清除这条提示。",
+      "collisionTitle": "现在有一个内置子 Agent 使用了这个名称",
+      "collisionBody": "Agent 会使用内置的那个。如需继续使用这个，请复制并换一个新名称。",
+      "baseBanner": "内置指令会随 langalpha 的改进保持更新。如需编写自己的指令，请以它为起点新建一个子 Agent。",
+      "duplicateToEdit": "复制后编辑",
+      "instructions": "指令",
+      "readOnly": "只读",
+      "info": "信息",
+      "availableTo": "可供使用",
+      "availableHint": "哪个 Agent 可以把工作交给它。",
+      "file": "文件",
+      "changed": "已修改",
+      "updatedByAgent": "{{when}}，由 Agent 修改",
+      "updatedByYou": "{{when}}，由你修改",
+      "whenToUse": "何时使用",
+      "whenToUseHint": "Agent 根据这段说明决定何时把工作交给它",
+      "whenToUsePlaceholder": "Agent 什么时候应该把工作交给它，什么时候不应该",
+      "sayWhen": "说明什么情况下应选它而不是 {{name}}",
+      "sep": " · ",
+      "charCount": "{{used}} / {{max}}",
+      "markdown": "Markdown",
+      "markdownSize": "Markdown · {{used}} / {{max}}",
+      "copiedMarkdown": "复制自 {{name}} · Markdown",
+      "sizeOf": "{{used}} / {{max}}",
+      "instructionsPlaceholder": "它做什么、怎么做，以及交回什么结果",
+      "draftConflict": "你编辑期间 Agent 修改了这里。你的草稿已保留。",
+      "saveMine": "仍保存我的版本",
+      "loadSaved": "载入已保存的版本",
+      "appliesNextTurn": "修改从下一轮起生效。",
+      "model": "模型",
+      "modelAria": "{{name}} 的模型",
+      "modelHint": "保持“对话的模型”即可跟随对话所用的模型。",
+      "modelUnavailableHint": "保存的模型目前对你不可用，因此它会使用对话的模型。选择其他模型即可清除这条提示。",
+      "modelUnavailableOption": "{{model}}（不可用）",
+      "unavailableOption": "{{name}}（不可用）",
+      "effort": "推理强度",
+      "effortAria": "{{name}} 的推理强度",
+      "effortHintUnlisted": "未列出 {{model}} 不支持的级别。",
+      "effortHintSetting": "模型的设置：{{effort}}。",
+      "effortHintInherit": "会降到模型支持的级别。",
+      "effortNone": "{{model}} 没有推理强度设置。",
+      "tools": "工具",
+      "filesAlwaysOn": "文件始终开启。",
+      "toolsSameAsBase": "与内置相同。文件始终开启。",
+      "toolsBaseDiffers": "{{base}}。文件始终开启。",
+      "searchProvider": "搜索引擎",
+      "depth": "深度",
+      "sameAsYours": "与你的相同",
+      "sameAsYoursNamed": "与你的相同（{{name}}）",
+      "depthDefaultNamed": "默认（{{name}}）",
+      "searchYours": "你的设置：{{provider}}，{{depth}}。深度越高，每次搜索消耗的积分越多。",
+      "searchYoursProvider": "你的设置：{{provider}}。深度越高，每次搜索消耗的积分越多。",
+      "searchCredits": "深度越高，每次搜索消耗的积分越多。",
+      "searchNotOnPlanHint": "该搜索引擎不在你的套餐内，因此会使用你的搜索引擎。",
+      "searchUnavailableHint": "该搜索引擎不可用，因此会使用你的搜索引擎。",
+      "depthNotOfferedHint": "{{provider}} 不提供该深度，因此会使用它的默认深度。",
+      "connectors": "连接器",
+      "connectorsDesc": "内置数据服务和你自己的连接器",
+      "connectorsAll": "全部",
+      "connectorsNone": "无",
+      "brokerages": "券商",
+      "access": "访问",
+      "accessDesc": "使用你已连接的券商，范围以各连接在<brokerages>券商</brokerages>中允许的为准",
+      "needsCode": "需要开启代码执行",
+      "preferred": "优先使用",
+      "preferredConnectors": "连接器",
+      "preferredSkills": "技能",
+      "addConnector": "添加连接器",
+      "addSkill": "添加技能",
+      "preferredHint": "它会优先使用这些，但不限制它能使用的范围。",
+      "none": "无",
+      "nothingToAdd": "没有可添加的了",
+      "missing": "未找到，可能已被移除。",
+      "connectorOff": "已在连接器中关闭",
+      "skillOff": "已在技能中关闭",
+      "removeChip": "移除 {{name}}",
+      "newTitle": "新建子 Agent",
+      "newLead": "选择一个起点。复制过来的内容都可以继续编辑。",
+      "startFrom": "起点",
+      "blank": "空白",
+      "blankLine": "自己编写指令",
+      "fromPluginLine": "来自 {{plugin}} · {{description}}",
+      "copiedFrom": "复制自 {{name}}",
+      "startsWith": "初始设置",
+      "copyIncludesEdits": "包含你对 {{name}} 的修改。创建后可以随时更改。",
+      "copyChangeLater": "创建后可以随时更改。",
+      "name": "名称",
+      "nameHint": "小写字母、数字和连字符",
+      "namePlaceholder": "例如 credit-data",
+      "nameInvalid": "请使用小写字母、数字和连字符，以字母或数字开头，最多 48 个字符。",
+      "nameReserved": "{{name}} 是保留名称。",
+      "nameTaken": "{{name}} 已被占用。",
+      "create": "创建",
+      "availableNextTurn": "从下一轮起可用。",
+      "copyStartsOff": "与 {{name}} 一样默认关闭。创建后开启即可使用。",
+      "copyReachesNoAgent": "与 {{name}} 一样只供 CoS Agent 使用，而它已关闭。创建后在“可供使用”中选择“工作区分析师”。",
+      "atLimit": "你已有 {{count}} 个自己的子 Agent，已达上限。移除一个后才能再添加。"
     }
   },
   "timezone": {

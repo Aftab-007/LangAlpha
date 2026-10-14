@@ -147,12 +147,15 @@ export function ToolAccessSwitches({
   );
 }
 
-function SwitchRow({
+/** One labelled switch of a side column's list, its description under it. */
+export function SwitchRow({
   label,
   desc,
   enabled,
   disabled,
   locked = false,
+  tone,
+  className,
   onToggle,
 }: {
   label: string;
@@ -162,10 +165,12 @@ function SwitchRow({
   /** Held in place by a setting elsewhere, so it is drawn as unavailable,
    *  which a switch merely waiting on a write is not. */
   locked?: boolean;
+  tone?: 'default' | 'danger';
+  className?: string;
   onToggle: () => void;
 }) {
   return (
-    <li className="flex items-start justify-between gap-3">
+    <li className={cn('flex items-start justify-between gap-3', className)}>
       <div className="min-w-0">
         <p className="text-xs font-medium" style={{ color: 'var(--color-text-primary)' }}>
           {label}
@@ -175,7 +180,7 @@ function SwitchRow({
         </p>
       </div>
       <div className={cn('shrink-0 pt-0.5', locked && 'opacity-50')}>
-        <EnabledToggle enabled={enabled} name={label} disabled={disabled} onToggle={onToggle} />
+        <EnabledToggle enabled={enabled} name={label} disabled={disabled} tone={tone} onToggle={onToggle} />
       </div>
     </li>
   );

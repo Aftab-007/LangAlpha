@@ -40,7 +40,8 @@ export function PluginListFrame<T>({
   loadFailed: string;
   /** What the tab lists, for the empty narrowing ("plugins"). */
   noun: string;
-  catalogScope: DiscoverScope;
+  /** The catalog side a search also counts matches on, where there is one. */
+  catalogScope?: DiscoverScope;
   bulk: BulkActions & { scope?: BulkScopeSpec };
   hidden: boolean;
   className?: string;

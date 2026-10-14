@@ -89,7 +89,7 @@ export interface BulkTarget {
 /** What a bulk action did, which its result is titled by. */
 export type BulkVerb = 'enable' | 'disable' | 'remove' | 'uninstall' | 'scope';
 /** What a tab's rows are, which the result counts. */
-export type BulkNoun = 'plugin' | 'connector' | 'skill';
+export type BulkNoun = 'plugin' | 'connector' | 'skill' | 'subagent';
 
 export interface BulkRunOptions {
   verb: BulkVerb;

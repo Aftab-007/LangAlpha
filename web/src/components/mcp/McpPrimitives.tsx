@@ -232,11 +232,15 @@ export function EnabledToggle({
   enabled,
   name,
   disabled = false,
+  tone = 'default',
   onToggle,
 }: {
   enabled: boolean;
   name: string;
   disabled?: boolean;
+  /** `danger` fills an on switch in the loss colour, for one that spends
+   *  real money (a subagent's order access). */
+  tone?: 'default' | 'danger';
   onToggle: () => void;
 }) {
   const { t } = useTranslation();
@@ -250,7 +254,11 @@ export function EnabledToggle({
       onClick={onToggle}
       className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
       style={{
-        backgroundColor: enabled ? 'var(--color-accent-primary)' : 'var(--color-border-muted)',
+        backgroundColor: enabled
+          ? tone === 'danger'
+            ? 'var(--color-loss)'
+            : 'var(--color-accent-primary)'
+          : 'var(--color-border-muted)',
       }}
     >
       <motion.span
