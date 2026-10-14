@@ -116,16 +116,6 @@ async def test_a_user_steer_becomes_its_own_turn_under_its_surface(platform):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("sent", "posted"), [("flash", "flash"), (None, "ptc")])
-async def test_a_user_steers_turn_runs_as_its_send_was_routed(sent, posted):
-    """A Flash turn in a workspace stays Flash with the Chief of Staff off;
-    a row from before the payload carried the mode runs as the analyst."""
-    mocks = await _execute(_payload(agent_mode=sent))
-
-    assert mocks["post"].await_args.kwargs["body"]["agent_mode"] == posted
-
-
-@pytest.mark.asyncio
 async def test_a_user_steer_without_a_key_gets_one_stable_per_job():
     """A re-post after a lost answer must dedup on the same key."""
     mocks = await _execute(_payload(request_key=None))

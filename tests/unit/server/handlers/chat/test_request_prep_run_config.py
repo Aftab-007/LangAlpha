@@ -103,7 +103,6 @@ class TestBuildGraphConfig:
             thread_id="t-1",
             user_id="u-1",
             workspace_id="ws-1",
-            mode="flash",
             timezone_str="America/New_York",
             token_callback=MagicMock(),
             request=MagicMock(
@@ -122,16 +121,25 @@ class TestBuildGraphConfig:
         ):
             return build_graph_config(**defaults)
 
-    def test_basic_flash_config(self):
-        config = self._build(mode="flash")
-        assert config["configurable"]["agent_mode"] == "flash"
+    def test_ptc_config(self):
+        config = self._build()
+        assert "agent_mode" not in config["configurable"]
         assert config["configurable"]["thread_id"] == "t-1"
         assert config["recursion_limit"] == UNBOUNDED_RECURSION_LIMIT
 
-    def test_ptc_config(self):
-        config = self._build(mode="ptc")
-        assert config["configurable"]["agent_mode"] == "ptc"
-        assert config["recursion_limit"] == UNBOUNDED_RECURSION_LIMIT
+    def test_a_turn_is_tagged_as_chat_and_by_its_locale(self):
+        from src.server.handlers.chat.request_prep import build_graph_config
+
+        config = build_graph_config(
+            thread_id="t-1",
+            user_id="u-1",
+            workspace_id="ws-1",
+            timezone_str="UTC",
+            token_callback=None,
+            request=MagicMock(locale="zh-CN", checkpoint_id=None, platform=None),
+            effective_model="gpt-4o",
+        )
+        assert config["tags"] == ["workflow:chat", "locale:zh-CN"]
 
     def test_checkpoint_id_added(self):
         request = MagicMock(
@@ -214,7 +222,6 @@ class TestBuildGraphConfig:
                 thread_id="t-1",
                 user_id="u-1",
                 workspace_id="ws-1",
-                mode="ptc",
                 timezone_str="UTC",
                 token_callback=None,
                 request=MagicMock(

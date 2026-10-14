@@ -16,11 +16,9 @@ from ptc_agent.agent.middleware.runtime_context.profile import (
 )
 from ptc_agent.agent.prompts import get_loader
 from ptc_agent.config.core import MCPConfig, MCPServerConfig
-from src.server.database.egress_grants import GRANT_KIND_OAUTH_MCP, GrantRef
 from src.server.services import trading_rule as trading_rule_module
 from src.server.services.brokerage_capabilities import vendor_for_url
-from src.server.services.egress import direct_tools, flash_binding
-from src.server.services.egress.direct_tools import METADATA_KEY, direct_tools_for_turn
+from src.server.services.egress import direct_tools
 from src.server.services.mcp_config import (
     Origin,
     ResolvedMCP,
@@ -59,7 +57,7 @@ TRADES = {
 @pytest.fixture(autouse=True)
 def _relay(monkeypatch):
     # This deployment binds direct tools; nothing here opens a relay session.
-    for module in (trading_rule_module, direct_tools, flash_binding):
+    for module in (trading_rule_module, direct_tools):
         monkeypatch.setattr(module, "EGRESS_RELAY_SECRET", "s" * 32)
 
 
@@ -110,7 +108,7 @@ def _section(profile: dict) -> str:
         "components/user_profile.md.j2",
         user_profile=profile,
         user_data_counts=None,
-        sandbox_enabled=False,
+        main_agent_steering=False,
     )
     return out.split("## Trading Permission", 1)[1]
 
@@ -239,118 +237,6 @@ def test_revoking_the_trading_capability_files_a_removed_rule():
 # ---------------------------------------------------------------------------
 # What the turn managed to bind does not
 # ---------------------------------------------------------------------------
-
-
-class _Snapshots:
-    """Discovery found every tool each configured server's plan names."""
-
-    def __init__(self, resolved: ResolvedMCP):
-        self._plans = resolved.binding_plans_by_name
-
-    def ok(self, server):
-        plan = self._plans.get(server.name)
-        return {"tools": [{"name": n} for n in sorted(plan.by_tool)]} if plan else None
-
-
-async def _flash_turn(monkeypatch, resolved: ResolvedMCP, lost: str | None = None):
-    """One Flash turn through the resolve, the grant sync and the binder, losing
-    its tools the way ``lost`` says, with the profile composed as the runner
-    composes it. The stored level is unreadable to anything that asks again."""
-    refs = [
-        GrantRef(GRANT_KIND_OAUTH_MCP, name, connection_id=f"conn-{name}")
-        for name in resolved.binding_plans_by_name
-    ]
-    grants = {ref.key: f"grant-{ref.server_name}" for ref in refs}
-    reads: list = []
-
-    async def _resolve(*a, **kw):
-        return resolved
-
-    async def _snapshots(user_id):
-        if lost == "binder raises":
-            raise ConnectionError("discovery snapshots unreadable")
-        return _Snapshots(resolved)
-
-    async def _refs(*a, **kw):
-        return refs
-
-    async def _sync(**kw):
-        if lost == "superseded":
-            return None
-        # A disconnect racing the sync leaves the server with no grant.
-        return SimpleNamespace(grants={} if lost == "no grant" else grants)
-
-    async def _unreadable(user_id, *a, **kw):
-        reads.append(user_id)
-        raise ConnectionError("database unavailable")
-
-    monkeypatch.setattr(flash_binding, "resolve_mcp_config", _resolve)
-    monkeypatch.setattr(flash_binding, "user_snapshots", _snapshots)
-    monkeypatch.setattr(flash_binding, "grant_refs", _refs)
-    monkeypatch.setattr(flash_binding, "sync_egress_grants", _sync)
-    monkeypatch.setattr(
-        "src.server.database.trading_permission.get_trading_permission_row",
-        _unreadable,
-    )
-    if lost == "starved":
-        # Every brokerage publishes more order tools than this.
-        monkeypatch.setattr(direct_tools, "MAX_DIRECT_TOOLS", 1)
-
-    mcp = await flash_binding.resolve_flash_mcp(object(), user_id="u", workspace_id="w")
-    bound, _ = await direct_tools_for_turn(
-        flash_binding.bind_flash_direct_tools(mcp, user_id="u", workspace_id="w"),
-        user_id="u",
-        workspace_id="w",
-        thread_id="t",
-        run_id="r",
-        turn_index=0,
-    )
-    assert not reads
-    return bound, with_trading_rule({"name": "Demo"}, trading_rule(mcp))
-
-
-def _live_stamps(bound) -> dict[str, list[bool]]:
-    """Per server, the approval each bound live order tool was stamped with."""
-    stamps: dict[str, list[bool]] = {}
-    for tool in bound.tools:
-        stamp = tool.metadata[METADATA_KEY]
-        if (stamp["order"] or {}).get("mode") == "live":
-            stamps.setdefault(stamp["server"], []).append(stamp["approval"])
-    return stamps
-
-
-def _two_brokerages() -> ResolvedMCP:
-    return _resolved(
-        moomoo=_plan("moomoo", AUTONOMOUS, live=True),
-        robinhood=_plan("robinhood", AUTONOMOUS),
-    )
-
-
-@pytest.mark.asyncio
-async def test_the_rule_and_the_stamps_read_one_resolution(monkeypatch):
-    bound, profile = await _flash_turn(monkeypatch, _two_brokerages())
-    stamps = _live_stamps(bound)
-    assert stamps["moomoo"] and all(stamps["moomoo"])
-    assert stamps["robinhood"] and not any(stamps["robinhood"])
-    assert profile["trading_permission"] == "autonomous"
-    assert profile["trading_asks_on"] == ["moomoo"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("lost", ["no grant", "superseded", "starved", "binder raises"])
-async def test_a_turn_that_bound_no_order_tool_files_no_change(monkeypatch, lost):
-    resolved = _two_brokerages()
-    bound, frozen = await _flash_turn(monkeypatch, resolved)
-    assert _live_stamps(bound)
-
-    unbound, current = await _flash_turn(monkeypatch, resolved, lost=lost)
-    assert not _live_stamps(unbound)
-    assert current == frozen
-    assert (
-        ProfileSnapshot(user_profile=current).fields()["Trading permission"]
-        == ProfileSnapshot(user_profile=frozen).fields()["Trading permission"]
-    )
-    assert _diff(frozen, current) == []
 
 
 async def _resolve_with_connection(status: str) -> ResolvedMCP:

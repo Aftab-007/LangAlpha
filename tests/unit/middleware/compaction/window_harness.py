@@ -304,9 +304,7 @@ def build_graph(
         compaction = compaction.with_window(
             coverage, [notes_window_carry(THREAD), subagents_window_carry]
         )
-    context = build_context_middleware(
-        now=now, guidance=None, model_name=None, sandbox_enabled=False
-    )
+    context = build_context_middleware(now=now, guidance=None, model_name=None)
     return create_agent(
         run.model,
         system_prompt="You are the test analyst.",

@@ -321,9 +321,9 @@ class TestMachineIdentity:
         assert "computer_id" not in payload
         assert validate_relay_jwt(SECRET, token).identity is None
 
-    @pytest.mark.parametrize("synthetic", ["flash", "reconcile"])
+    @pytest.mark.parametrize("synthetic", ["reconcile"])
     def test_the_synthetic_sandbox_ids_still_work(self, synthetic):
-        """flash_binding and orders/reconcile name a caller, not a machine."""
+        """orders/reconcile names a caller, not a machine."""
         token = mint_relay_jwt(
             SECRET,
             user_id=USER_ID,

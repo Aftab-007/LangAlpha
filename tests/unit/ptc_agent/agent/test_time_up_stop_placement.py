@@ -1,4 +1,4 @@
-"""The time-up tool stop is the outermost tool wrapper in every agent stack.
+"""The time-up tool stop is the outermost tool wrapper in every stack a turn runs.
 
 Whatever wraps the stop has already acted on a call by the time the refusal
 comes back (the Task interceptor spawned the subagent, the file-op stream
@@ -95,28 +95,6 @@ def ptc_stacks() -> tuple[list, list]:
     return main[0], handed[0]
 
 
-@pytest.fixture(scope="module")
-def flash_stack() -> list:
-    from ptc_agent.agent.flash.agent import FlashAgent
-
-    llm = GenericFakeChatModel(messages=iter([]))
-    built: list[list] = []
-    with (
-        patch("src.llms.llm.ensure_model_in_manifest", return_value=None),
-        patch("src.llms.create_llm", return_value=llm),
-        patch(
-            "ptc_agent.agent.middleware.compaction.compact.create_llm",
-            return_value=llm,
-        ),
-        patch(
-            "ptc_agent.agent.flash.agent.create_agent",
-            side_effect=_fake_graph(built),
-        ),
-    ):
-        FlashAgent(_config(flash="test-model")).create_agent(llm=llm)
-    return built[0]
-
-
 def test_the_main_stack_refuses_before_any_tool_wrapper(ptc_stacks):
     main, _ = ptc_stacks
     assert isinstance(_first_tool_wrapper(main), TimeUpToolStopMiddleware)
@@ -129,16 +107,11 @@ def test_the_subagent_stack_refuses_before_any_tool_wrapper(ptc_stacks):
     assert sum(isinstance(m, TimeUpToolStopMiddleware) for m in subagent) == 1
 
 
-def test_the_flash_stack_refuses_before_any_tool_wrapper(flash_stack):
-    assert isinstance(_first_tool_wrapper(flash_stack), TimeUpToolStopMiddleware)
-    assert sum(isinstance(m, TimeUpToolStopMiddleware) for m in flash_stack) == 1
-
-
-def test_the_stops_it_has_to_beat_are_tool_wrappers(ptc_stacks, flash_stack):
+def test_the_stops_it_has_to_beat_are_tool_wrappers(ptc_stacks):
     """Guards the check above against a wrapper it cannot see: the three
     middlewares the refusal used to reach first all wrap tool calls."""
     main, subagent = ptc_stacks
-    names = {type(m).__name__ for m in [*main, *subagent, *flash_stack] if _wraps_tools(m)}
+    names = {type(m).__name__ for m in [*main, *subagent] if _wraps_tools(m)}
     assert {
         "BackgroundSubagentMiddleware",
         "FileOperationMiddleware",

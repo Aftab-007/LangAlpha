@@ -1,28 +1,23 @@
-"""Failed-dispatch lifecycle: auto-created workspaces AND the cap reservation.
+"""Failed-dispatch lifecycle: the report-back reservation.
 
-Dispatch without a ``workspace_id`` provisions a workspace (real sandbox,
-~8-10s) before ``reserve()`` admits the dispatch. A failed dispatch must not
-leak that sandbox when the failure proves the run never started: a
-deterministic cap hit is pre-checked BEFORE provisioning
-(``check_dispatch_capacity``), the residual pre-check/reserve race deletes the
-just-created workspace on ``slot.error`` (no HTTP was sent), and a >=400
-dispatch response does too (the endpoint's error paths all precede its
-create_task). Ambiguous outcomes (timeout, mid-flight transport loss, odd
-statuses/bodies) reconcile against the endpoint's admission marker, scoped
-to THIS dispatch's generation (the endpoint stamps the POST's
-``origin_dispatch_gen`` into the marker and refuses to schedule if the
-write fails): a marker carrying OUR generation → delivered, plain success.
-The marker is POSITIVE-ONLY and reconciliation NEVER rolls back — no
-finite absence proves a delivered request won't admit later, and a foreign
-marker may be a stale terminal our own admission is about to replace — so
-every unproven verdict retains the reservation (TTL-bounded, orphan-reaped
-once the origin lapses). Rollback happens only on definitive receipts: a
->=400 status, or a provably-undelivered request (connection never
-established).
+A dispatch reserves its report-back slot before the request goes out, and
+rolls it back only on a definitive receipt that the run never started: a cap
+hit in ``reserve()`` (nothing is sent), a >=400 response (the endpoint's error
+paths all precede its create_task), or a connection never established.
+Ambiguous outcomes (timeout, mid-flight transport loss, odd statuses/bodies)
+reconcile against the endpoint's admission marker, scoped to THIS dispatch's
+generation (the endpoint stamps the POST's ``origin_dispatch_gen`` into the
+marker and refuses to schedule if the write fails): a marker carrying OUR
+generation means delivered, plain success. The marker is POSITIVE-ONLY and
+reconciliation NEVER rolls back: no finite absence proves a delivered request
+won't admit later, and a foreign marker may be a stale terminal our own
+admission is about to replace, so every unproven verdict retains the
+reservation (TTL-bounded, orphan-reaped once the origin lapses).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,29 +25,48 @@ import aiohttp
 import pytest
 
 from src.server.services.report_back.flash import keys, reserve
-from src.tools.secretary.tools import ptc_agent
+from src.tools.secretary.chief_of_staff import delegate_to_analyst
 from tests.unit.server.handlers.chat.redis_fakes import FakeCache as _FakeCache
 
-from .conftest import NEW_WORKSPACE_ID, FakeResp, FakeSession, workspace_manager
-
-RESERVE_MOD = "src.server.services.report_back.flash.reserve"
+from .conftest import FakeResp, FakeSession
 
 USER_ID = "user-1"
 FLASH_THREAD_ID = "flash-thread-1"
+WORKSPACE_ID = "22222222-2222-2222-2222-222222222222"
 
 
 def _tool_call(args: dict, call_id: str = "call_test") -> dict:
     # ``state`` is what the graph injects; nothing here was approved in advance.
-    return {"name": "ptc_agent", "args": {**args, "state": {}}, "id": call_id, "type": "tool_call"}
+    return {"name": "delegate_to_analyst", "args": {**args, "state": {}}, "id": call_id, "type": "tool_call"}
+
+
+def _new_thread() -> dict:
+    """A hand-off starting a new thread in the user's workspace."""
+    return _tool_call({"question": "analyze this", "workspace_id": WORKSPACE_ID})
 
 
 def _config() -> dict:
-    # thread_id = the dispatching flash thread -> report_back wiring is live.
+    # thread_id = the dispatching thread -> report_back wiring is live.
     return {"configurable": {"user_id": USER_ID, "thread_id": FLASH_THREAD_ID}}
 
 
 def _payload(result) -> dict:
     return json.loads(result.update["messages"][0].content)
+
+
+@pytest.fixture(autouse=True)
+def _owned_workspace():
+    with patch(
+        "src.server.database.workspace.get_workspace",
+        AsyncMock(
+            return_value={
+                "user_id": USER_ID,
+                "workspace_id": WORKSPACE_ID,
+                "name": "Semis",
+            }
+        ),
+    ):
+        yield
 
 
 @pytest.fixture
@@ -76,139 +90,58 @@ def _fill_flash_cap(cache) -> None:
 
 
 @pytest.mark.asyncio
-async def test_precheck_rejection_skips_workspace_creation(cache):
-    """A deterministic cap hit fails BEFORE any sandbox is provisioned."""
+async def test_a_full_cap_refuses_before_any_request(cache):
+    """A cap hit in reserve() aborts the dispatch with nothing sent."""
     _fill_flash_cap(cache)
-    mgr = workspace_manager()
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession",
         MagicMock(side_effect=AssertionError("dispatch must not run")),
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert "too many concurrent analyses" in payload["error"]
-    mgr.create_workspace.assert_not_awaited()
-    mgr.delete_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_reserve_rejection_deletes_auto_created_workspace(cache):
-    """The pre-check/reserve race path: the cap fills between the pre-check and
-    reserve(), so the just-created workspace must be deleted, not leaked."""
-    _fill_flash_cap(cache)
-    mgr = workspace_manager()
-    with patch(
-        "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
-    ), patch(
-        # Simulate the race: the pre-check saw capacity, reserve() did not.
-        f"{RESERVE_MOD}.check_dispatch_capacity",
-        new=AsyncMock(return_value=None),
-    ), patch(
-        "aiohttp.ClientSession",
-        MagicMock(side_effect=AssertionError("dispatch must not run")),
-    ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
-
-    payload = _payload(result)
-    assert payload["success"] is False
-    assert "too many concurrent analyses" in payload["error"]
-    mgr.create_workspace.assert_awaited_once()
-    mgr.delete_workspace.assert_awaited_once_with(NEW_WORKSPACE_ID)
-
-
-@pytest.mark.asyncio
-async def test_cleanup_failure_still_returns_the_cap_error(cache):
-    """A failed best-effort delete must not mask the cap rejection."""
-    _fill_flash_cap(cache)
-    mgr = workspace_manager(delete=AsyncMock(side_effect=RuntimeError("sandbox teardown failed")))
-    with patch(
-        "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
-    ), patch(
-        f"{RESERVE_MOD}.check_dispatch_capacity",
-        new=AsyncMock(return_value=None),
-    ), patch(
-        "aiohttp.ClientSession",
-        MagicMock(side_effect=AssertionError("dispatch must not run")),
-    ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
-
-    payload = _payload(result)
-    assert payload["success"] is False
-    assert "too many concurrent analyses" in payload["error"]
-    mgr.delete_workspace.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_dispatch_error_status_deletes_auto_created_workspace(cache):
+async def test_dispatch_error_status_rolls_back_the_reservation(cache):
     """A >=400 dispatch response (e.g. the credit gate) proves the run never
-    started — the endpoint's error paths all precede its create_task — so the
-    just-created workspace is deleted, not leaked."""
-    mgr = workspace_manager()
+    started: the endpoint's error paths all precede its create_task."""
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession", return_value=FakeSession(FakeResp(status=402))
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert payload["error"] == "dispatch_failed"
-    mgr.create_workspace.assert_awaited_once()
-    mgr.delete_workspace.assert_awaited_once_with(NEW_WORKSPACE_ID)
+    assert _reservation(cache) is None
 
 
 @pytest.mark.asyncio
-async def test_dispatch_timeout_with_probe_down_keeps_workspace_and_reservation(cache, ledger):
+async def test_dispatch_timeout_with_probe_down_keeps_the_reservation(cache, ledger):
     """A timed-out dispatch may have started the run server-side; when the
-    admission-marker probe can't answer either (Redis blip), both the
-    workspace and the report-back reservation must survive."""
-    mgr = workspace_manager()
+    admission-marker probe can't answer either (DB blip), the report-back
+    reservation must survive."""
     _ledger_probe_raises(ledger)
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession", return_value=FakeSession(post_exc=TimeoutError())
     ), patch(
         "src.tools.secretary.dispatch._DISPATCH_CONFIRM_GRACE_S", 0.0
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert payload["error"] == "dispatch_timeout"
     assert payload["outcome"] == "unknown_retained"
-    mgr.create_workspace.assert_awaited_once()
-    mgr.delete_workspace.assert_not_awaited()
     assert _reservation(cache) == payload["thread_id"]
 
 
@@ -280,18 +213,12 @@ async def test_success_status_with_lost_body_commits_and_reports_dispatched(cach
     """A 2xx whose body can't be read is a DISPATCHED run: the status alone
     proves scheduling, so the reservation commits before the body parse and
     the tool reports success."""
-    mgr = workspace_manager()
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
     ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
-    ), patch(
         "aiohttp.ClientSession", return_value=FakeSession(_LostBodyResp(status=200))
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is True
@@ -299,7 +226,6 @@ async def test_success_status_with_lost_body_commits_and_reports_dispatched(cach
     # Only the body names the run, so a later stop takes whatever is running.
     assert "run_id" not in payload
     assert _reservation(cache) == payload["thread_id"]
-    mgr.delete_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -309,15 +235,9 @@ async def test_the_dispatched_run_id_reaches_the_result(cache):
     body = {"status": "dispatched", "run_id": run_id}
     with (
         patch("src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})),
-        patch(
-            "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-            return_value=workspace_manager(),
-        ),
         patch("aiohttp.ClientSession", return_value=FakeSession(FakeResp(body=body))),
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is True
@@ -329,26 +249,19 @@ async def test_ambiguous_loss_with_admission_marker_reports_success(cache, ledge
     """Codex round-8 F1: a lost exchange whose admission marker appears is a
     DELIVERED dispatch — the tool reports plain success (no unknown_retained
     ambiguity for the model to mis-handle)."""
-    mgr = workspace_manager()
     _attempt_with_our_gen(cache, ledger)
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
     ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
-    ), patch(
         "aiohttp.ClientSession",
         return_value=FakeSession(post_exc=aiohttp.ServerDisconnectedError()),
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is True
     assert payload["status"] == "dispatched"
     assert _reservation(cache) == payload["thread_id"]
-    mgr.delete_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -357,28 +270,21 @@ async def test_ambiguous_loss_with_no_marker_on_fresh_pair_retains(cache):
     may still be mid-admission (platform auth/credit checks can outlast the
     grace) — and nothing pre-existing can be lost by keeping a fresh pair, so
     the reservation and workspace are retained as unknown (TTL-bounded)."""
-    mgr = workspace_manager()
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession",
         return_value=FakeSession(post_exc=aiohttp.ServerDisconnectedError()),
     ), patch(
         "src.tools.secretary.dispatch._DISPATCH_CONFIRM_GRACE_S", 0.0
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert payload["error"] == "dispatch_failed"
     assert payload["outcome"] == "unknown_retained"
     assert _reservation(cache) == payload["thread_id"]
-    mgr.delete_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -386,28 +292,21 @@ async def test_foreign_marker_on_fresh_pair_is_not_success(cache, ledger):
     """Codex round-9 F3: gen-scoping — a marker that doesn't carry OUR
     generation no longer confirms the dispatch. On a fresh pair it retains
     as unknown instead of claiming success."""
-    mgr = workspace_manager()
     _attempt_with_gen(ledger, "someone-elses-gen")
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession",
         return_value=FakeSession(post_exc=aiohttp.ServerDisconnectedError()),
     ), patch(
         "src.tools.secretary.dispatch._DISPATCH_CONFIRM_GRACE_S", 0.0
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert payload["outcome"] == "unknown_retained"
     assert _reservation(cache) == payload["thread_id"]
-    mgr.delete_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -415,56 +314,40 @@ async def test_ambiguous_loss_with_probe_down_retains_unknown(cache, ledger):
     """When the marker probe itself fails, the outcome stays unknown — keep
     the reservation (TTL-bounded) and surface the retained thread id so the
     model can check agent_output instead of blind-re-dispatching."""
-    mgr = workspace_manager()
     _ledger_probe_raises(ledger)
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession",
         return_value=FakeSession(post_exc=aiohttp.ServerDisconnectedError()),
     ), patch(
         "src.tools.secretary.dispatch._DISPATCH_CONFIRM_GRACE_S", 0.0
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert payload["error"] == "dispatch_failed"
     assert payload["outcome"] == "unknown_retained"
     assert _reservation(cache) == payload["thread_id"]
-    mgr.delete_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_cancellation_mid_exchange_retains_reservation(cache):
-    """Codex round-7 F1: CancelledError (flash turn cancelled, worker
-    shutdown) bypasses the except clauses — it must commit before
+    """Codex round-7 F1: CancelledError (the dispatching turn cancelled,
+    worker shutdown) bypasses the except clauses — it must commit before
     propagating, or the CM rollback erases a possibly-scheduled run's
     report-back wiring."""
-    import asyncio
-
-    mgr = workspace_manager()
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession",
         return_value=FakeSession(post_exc=asyncio.CancelledError()),
     ):
         with pytest.raises(asyncio.CancelledError):
-            await ptc_agent.ainvoke(
-                _tool_call({"question": "analyze this"}), config=_config()
-            )
+            await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     assert _reservation(cache) is not None
-    mgr.delete_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -472,27 +355,20 @@ async def test_non_200_success_status_is_not_scheduling_proof(cache):
     """Codex round-7 F2: a 3xx/2xx-non-200 is not the endpoint's reply (it
     answers exactly 200; redirects are disabled) — never success. Delivery
     stays unproven either way, so the fresh pair retains as unknown."""
-    mgr = workspace_manager()
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession", return_value=FakeSession(FakeResp(status=302))
     ), patch(
         "src.tools.secretary.dispatch._DISPATCH_CONFIRM_GRACE_S", 0.0
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert payload["error"] == "dispatch_failed"
     assert payload["outcome"] == "unknown_retained"
     assert _reservation(cache) == payload["thread_id"]
-    mgr.delete_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -501,28 +377,21 @@ async def test_non_dict_200_body_reconciles_without_raising(cache, ledger):
     must not AttributeError out of the tool — the 200 keeps the reservation
     committed (status proof stands) and the outcome reconciles as unknown
     when the marker can't confirm."""
-    mgr = workspace_manager()
     _ledger_probe_raises(ledger)
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession",
         return_value=FakeSession(FakeResp(status=200, body=[])),
     ), patch(
         "src.tools.secretary.dispatch._DISPATCH_CONFIRM_GRACE_S", 0.0
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert payload["outcome"] == "unknown_retained"
     assert _reservation(cache) == payload["thread_id"]
-    mgr.delete_workspace.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -530,78 +399,62 @@ async def test_200_with_contradictory_body_never_rolls_back(cache):
     """A clean marker-absent verdict after a REAL 200 must still retain: the
     exact-status proof outranks the probe (the two contradicting is a state
     we can't explain, so the safe side is keep)."""
-    mgr = workspace_manager()
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession",
         return_value=FakeSession(FakeResp(status=200, body={"status": "nope"})),
     ), patch(
         "src.tools.secretary.dispatch._DISPATCH_CONFIRM_GRACE_S", 0.0
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert payload["outcome"] == "unknown_retained"
     assert _reservation(cache) == payload["thread_id"]
-    mgr.delete_workspace.assert_not_awaited()
+
+
+class _CancelledOnClose(FakeResp):
+    async def __aexit__(self, *_exc) -> bool:
+        raise asyncio.CancelledError()
 
 
 @pytest.mark.asyncio
-async def test_cancel_during_post_rejection_cleanup_does_not_commit(cache):
-    """Codex round-8 F2: a >=400 response settles non-scheduling BEFORE the
-    best-effort workspace cleanup — a cancellation landing during that
-    cleanup must not commit the already-dead reservation."""
-    import asyncio
-
-    mgr = workspace_manager(delete=AsyncMock(side_effect=asyncio.CancelledError()))
+async def test_cancel_as_a_rejected_response_closes_does_not_commit(cache):
+    """Codex round-8 F2: a >=400 response settles non-scheduling before the
+    response closes, so a cancellation landing as it closes must not commit
+    the already-dead reservation."""
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
     ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
-    ), patch(
-        "aiohttp.ClientSession", return_value=FakeSession(FakeResp(status=402))
+        "aiohttp.ClientSession",
+        return_value=FakeSession(_CancelledOnClose(status=402)),
     ):
         with pytest.raises(asyncio.CancelledError):
-            await ptc_agent.ainvoke(
-                _tool_call({"question": "analyze this"}), config=_config()
-            )
+            await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     assert _reservation(cache) is None
 
 
 @pytest.mark.asyncio
 async def test_connection_never_established_rolls_back_reservation(cache):
-    """A refused connection proves the request never reached the endpoint:
-    the reservation rolls back and the auto-created workspace is deleted."""
-    mgr = workspace_manager()
+    """A refused connection proves the request never reached the endpoint,
+    so the reservation rolls back."""
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
     ), patch(
         "aiohttp.ClientSession",
         return_value=FakeSession(
             post_exc=aiohttp.ClientConnectorError(MagicMock(), OSError("refused"))
         ),
     ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
+        result = await delegate_to_analyst.ainvoke(_new_thread(), config=_config())
 
     payload = _payload(result)
     assert payload["success"] is False
     assert payload["error"] == "dispatch_failed"
     assert _reservation(cache) is None
-    mgr.delete_workspace.assert_awaited_once_with(NEW_WORKSPACE_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -664,7 +517,7 @@ async def _continuation_dispatch(
     with contextlib.ExitStack() as stack:
         for p in _continuation_patches(post_exc, resp):
             stack.enter_context(p)
-        result = await ptc_agent.ainvoke(
+        result = await delegate_to_analyst.ainvoke(
             _tool_call({"question": "follow up", "thread_id": PTC_THREAD_ID}),
             config=_config(),
         )
@@ -714,7 +567,7 @@ async def test_unwired_continuation_never_reads_a_marker_as_ours(cache, ledger):
     with contextlib.ExitStack() as stack:
         for p in _continuation_patches(aiohttp.ServerDisconnectedError()):
             stack.enter_context(p)
-        result = await ptc_agent.ainvoke(
+        result = await delegate_to_analyst.ainvoke(
             _tool_call(
                 {
                     "question": "follow up",
@@ -783,55 +636,3 @@ async def test_continuation_probe_down_retains_unknown(cache, ledger):
 @pytest.fixture(autouse=True)
 def _internal_service_token(monkeypatch):
     monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "test-internal-service-token")
-
-
-@pytest.mark.asyncio
-async def test_an_auto_created_name_lost_to_two_races_takes_the_next_free_one(cache):
-    """Three dispatches planning one name: the loser of the second race
-    retries too, instead of failing the dispatch."""
-    from src.server.database.workspace_names import WorkspaceNameTaken
-
-    _fill_flash_cap(cache)
-    mgr = workspace_manager()
-    mgr.create_workspace = AsyncMock(side_effect=[
-        WorkspaceNameTaken("analyze this"),
-        WorkspaceNameTaken("analyze this (2)"),
-        {"workspace_id": NEW_WORKSPACE_ID},
-    ])
-    with patch(
-        "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
-    ), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
-    ), patch(
-        f"{RESERVE_MOD}.check_dispatch_capacity",
-        new=AsyncMock(return_value=None),
-    ), patch(
-        "aiohttp.ClientSession",
-        MagicMock(side_effect=AssertionError("dispatch must not run")),
-    ):
-        result = await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
-
-    # Past creation: the cap the test filled is what stops it.
-    assert "too many concurrent analyses" in _payload(result)["error"]
-    assert mgr.create_workspace.await_count == 3
-    mgr.delete_workspace.assert_awaited_once_with(NEW_WORKSPACE_ID)
-
-
-@pytest.mark.asyncio
-async def test_an_unreadable_name_list_still_reaches_the_approval_card(cache):
-    """The free-name read runs before the user is asked; failing it must not
-    fail the dispatch, only cost the number."""
-    confirm = MagicMock(return_value=(False, {}))
-    with patch(
-        "src.server.database.workspace.get_workspace_name_keys",
-        AsyncMock(side_effect=RuntimeError("pool closed")),
-    ), patch("src.tools.secretary.dispatch.hitl_confirm", confirm):
-        await ptc_agent.ainvoke(
-            _tool_call({"question": "analyze this"}), config=_config()
-        )
-
-    confirm.assert_called_once()
-    assert confirm.call_args.args[1]["workspace_name"] == "analyze this"

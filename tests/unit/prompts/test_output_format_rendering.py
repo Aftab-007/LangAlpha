@@ -1,8 +1,8 @@
 """Tests for output_format steering in the user_profile prompt component.
 
-Renders ``components/user_profile.md.j2`` exactly as ``subagent_base.md.j2``
-does and asserts the HTML-steering block appears iff ``sandbox_enabled`` (PTC,
-not Flash) and ``agent_preference.output_format == "html"``, and never
+Renders ``components/user_profile.md.j2`` and asserts the HTML-steering block
+appears iff ``main_agent_steering`` (the main agent's copy; a subagent's
+leaves it out) and ``agent_preference.output_format == "html"``, and never
 double-renders the ``output_format`` key in the generic preference loop.
 """
 
@@ -14,12 +14,11 @@ HTML_BLOCK_MARKER = "Output Format: Styled HTML"
 SKILL_REFS = (".agents/skills/html-report/SKILL.md", ".agents/skills/ui-design/SKILL.md")
 
 
-def _render(agent_preference, sandbox_enabled=True):
+def _render(agent_preference, main_agent_steering=True):
     """Render the user_profile component with the given agent_preference dict.
 
-    ``sandbox_enabled`` mirrors the subagent prompt: True for PTC (has a
-    sandbox/filesystem), False for Flash. Defaults to True so the PTC path is
-    the baseline.
+    ``main_agent_steering`` is True for the main agent's baseline and False
+    for a subagent's prompt. Defaults to True so the main agent is the baseline.
     """
     reset_loader()
     loader = get_loader()
@@ -30,7 +29,7 @@ def _render(agent_preference, sandbox_enabled=True):
         "components/user_profile.md.j2",
         user_profile=profile,
         user_data_counts=None,
-        sandbox_enabled=sandbox_enabled,
+        main_agent_steering=main_agent_steering,
     )
 
 
@@ -67,19 +66,20 @@ class TestHtmlSteeringBlock:
         assert HTML_BLOCK_MARKER not in out
         assert "## Agent Preferences" not in out
 
-    def test_html_no_block_without_sandbox(self):
-        # Flash has no sandbox: HTML steering must not fire even when the user
-        # set output_format=html — there is no filesystem to write the report to.
-        out = _render({"output_format": "html"}, sandbox_enabled=False)
+    def test_html_no_block_for_a_subagent(self):
+        # A subagent hands its result back rather than authoring the
+        # deliverable, so HTML steering must not fire even when the user set
+        # output_format=html.
+        out = _render({"output_format": "html"}, main_agent_steering=False)
         assert HTML_BLOCK_MARKER not in out
         for ref in SKILL_REFS:
             assert ref not in out
 
-    def test_other_prefs_still_render_without_sandbox(self):
-        # Only the filesystem-dependent HTML block is gated; other preferences
-        # still apply in Flash, and output_format never double-renders.
+    def test_other_prefs_still_render_for_a_subagent(self):
+        # Only the main agent's HTML block is gated; other preferences still
+        # apply to a subagent, and output_format never double-renders.
         out = _render(
-            {"output_format": "html", "tone": "concise"}, sandbox_enabled=False
+            {"output_format": "html", "tone": "concise"}, main_agent_steering=False
         )
         assert HTML_BLOCK_MARKER not in out
         assert "- **tone**: concise" in out

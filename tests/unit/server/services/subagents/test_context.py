@@ -177,7 +177,7 @@ async def test_a_skill_behind_a_feature_counts_once_the_user_turns_it_on(monkeyp
     from src.config.features import FEATURES
     from ptc_agent.agent.middleware.skills.registry import SKILL_REGISTRY
 
-    gated = next(s for s in SKILL_REGISTRY.values() if s.feature in FEATURES and s.exposure != "hidden")
+    gated = next(s for s in SKILL_REGISTRY.values() if s.feature in FEATURES and not s.hidden)
 
     async def flags(_user_id):
         return {gated.feature: opted_in}

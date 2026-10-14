@@ -34,10 +34,10 @@ def _ctx(name: str, instruction: str | None = None) -> SkillRequest:
 
 
 @pytest.fixture(autouse=True)
-def _skill_exposed_in_mode():
-    """The already-loaded branch calls ``get_skill(name, mode)`` to confirm the
-    skill is still exposed in the current mode. Default it truthy so the dedup
-    tests exercise the skip path; the mode-mismatch test overrides it to None.
+def _skill_still_registered():
+    """The already-loaded branch calls ``get_skill(name)`` to confirm the skill
+    is still available. Default it truthy so the dedup tests exercise the skip
+    path; the no-longer-registered test overrides it to None.
     """
     with patch(f"{MOD}.get_skill", return_value=MagicMock()):
         yield
@@ -51,7 +51,6 @@ def _skill_exposed_in_mode():
 def test_fresh_skill_injects_full_body_and_instruction():
     with (
         patch(f"{MOD}.load_skill_content", return_value="SKILL BODY"),
-        patch(f"{MOD}.build_tool_descriptions", return_value=None),
     ):
         result = build_skill_content([_ctx("chart-annotation", "draw on AAPL:1day")])
 
@@ -62,31 +61,11 @@ def test_fresh_skill_injects_full_body_and_instruction():
     assert "[Instruction: draw on AAPL:1day]" in result.content
 
 
-def test_fresh_skill_appends_tool_descriptions_block():
-    """When a skill has tools, the body block carries an **Available tools:**
-    section plus the 'call directly' note — the text the model uses to invoke
-    the skill's tools without a separate LoadSkill round-trip."""
-    with (
-        patch(f"{MOD}.load_skill_content", return_value="SKILL BODY"),
-        patch(
-            f"{MOD}.build_tool_descriptions",
-            return_value="- create_automation: schedule a recurring task",
-        ),
-    ):
-        result = build_skill_content([_ctx("automation")])
-
-    assert result is not None
-    assert "**Available tools:**" in result.content
-    assert "- create_automation: schedule a recurring task" in result.content
-    assert "without needing to call LoadSkill" in result.content
-
-
 def test_fresh_skill_marker_carries_message_id():
     """The emitted marker binds to the target message's id so the dedup scanner
     can verify it later (defeats content-forged 'already loaded' matches)."""
     with (
         patch(f"{MOD}.load_skill_content", return_value="SKILL BODY"),
-        patch(f"{MOD}.build_tool_descriptions", return_value=None),
     ):
         result = build_skill_content([_ctx("chart-annotation")], message_id="msg-7")
 
@@ -99,7 +78,6 @@ def test_same_skill_twice_in_one_request_emits_body_once():
     entries) must not paste the body or count the skill as loaded twice."""
     with (
         patch(f"{MOD}.load_skill_content", return_value="SKILL BODY") as load,
-        patch(f"{MOD}.build_tool_descriptions", return_value=None),
     ):
         result = build_skill_content(
             [_ctx("chart-annotation", "AAPL:1d"), _ctx("chart-annotation", "TSLA:4h")],
@@ -116,7 +94,6 @@ def test_same_already_loaded_skill_twice_refreshes_instruction_once():
     """A duplicate name on the already-loaded path must not double the instruction."""
     with (
         patch(f"{MOD}.load_skill_content", return_value="SKILL BODY"),
-        patch(f"{MOD}.build_tool_descriptions", return_value=None),
     ):
         result = build_skill_content(
             [_ctx("chart-annotation", "AAPL:1d"), _ctx("chart-annotation", "TSLA:4h")],
@@ -132,7 +109,6 @@ def test_same_already_loaded_skill_twice_refreshes_instruction_once():
 def test_already_loaded_skill_skips_body_keeps_instruction():
     with (
         patch(f"{MOD}.load_skill_content", return_value="SKILL BODY") as load,
-        patch(f"{MOD}.build_tool_descriptions", return_value=None),
     ):
         result = build_skill_content(
             [_ctx("chart-annotation", "draw on NVDA:1hour")],
@@ -152,7 +128,6 @@ def test_already_loaded_skill_skips_body_keeps_instruction():
 def test_already_loaded_skill_without_instruction_returns_none():
     with (
         patch(f"{MOD}.load_skill_content", return_value="SKILL BODY"),
-        patch(f"{MOD}.build_tool_descriptions", return_value=None),
     ):
         result = build_skill_content(
             [_ctx("chart-annotation")],
@@ -164,12 +139,11 @@ def test_already_loaded_skill_without_instruction_returns_none():
 
 
 def test_mixed_fresh_and_already_loaded():
-    def fake_load(name, skill_dirs=None, mode=None, registry=None):
+    def fake_load(name, skill_dirs=None, registry=None):
         return f"BODY:{name}"
 
     with (
         patch(f"{MOD}.load_skill_content", side_effect=fake_load),
-        patch(f"{MOD}.build_tool_descriptions", return_value=None),
     ):
         result = build_skill_content(
             [
@@ -199,7 +173,6 @@ def test_single_instruction_across_multiple_skills_uses_named_format():
     """
     with (
         patch(f"{MOD}.load_skill_content", return_value="SKILL BODY"),
-        patch(f"{MOD}.build_tool_descriptions", return_value=None),
     ):
         result = build_skill_content(
             [
@@ -218,22 +191,21 @@ def test_single_instruction_across_multiple_skills_uses_named_format():
     assert "[Instruction: draw on NVDA:1day]" not in result.content
 
 
-def test_already_loaded_but_mode_mismatch_drops_instruction():
-    """A stale loaded_skills entry for a skill no longer exposed in the current
-    mode must NOT short-circuit to an instruction-only inject — the mode re-check
-    fails, the skill falls through to the fresh path, and load_skill_content
-    (which also mode-gates) rejects it. Net: nothing is injected, so a caller
-    can't smuggle an instruction past the mode gate via a stale loaded set.
+def test_already_loaded_but_no_longer_registered_drops_instruction():
+    """A stale loaded_skills entry for a skill the registry no longer carries
+    must NOT short-circuit to an instruction-only inject — the registry
+    re-check fails, the skill falls through to the fresh path, and
+    load_skill_content (which resolves the same way) rejects it. Net: nothing
+    is injected, so a caller can't smuggle an instruction past the gate via a
+    stale loaded set.
     """
     with (
-        patch(f"{MOD}.get_skill", return_value=None),  # not exposed in this mode
+        patch(f"{MOD}.get_skill", return_value=None),  # gated off or disabled
         patch(f"{MOD}.load_skill_content", return_value=None),  # fresh path also rejects
-        patch(f"{MOD}.build_tool_descriptions", return_value=None),
     ):
         result = build_skill_content(
             [_ctx("chart-annotation", "draw on NVDA:1day")],
             already_loaded={"chart-annotation"},
-            mode="flash",
         )
 
     assert result is None
@@ -448,21 +420,45 @@ def test_compacted_skills_reads_every_carrier_and_skips_what_is_kept():
     injected = HumanMessage(
         'run it\n<loaded-skill name="dcf-model" mid="u1">body</loaded-skill>', id="u1"
     )
-    load = [
-        AIMessage("", id="ai-l1", tool_calls=[
-            {"name": "LoadSkill", "id": "l1", "args": {"skill_name": "secretary"}}
-        ]),
-        ToolMessage("# Skill Loaded: secretary", tool_call_id="l1", id="tm-l1"),
-    ]
     summarized = [
         injected,
         *_read_skill("r1", "comps-analysis"),
         *_read_skill("r2", "pdf", result="ERROR: File not found: x"),
-        *load,
+        *_load_skill("l1", "xlsx"),
     ]
     kept = [*_read_skill("r3", "comps-analysis")]
 
-    assert compacted_skills(summarized, kept) == ["dcf-model", "secretary"]
+    assert compacted_skills(summarized, kept) == ["dcf-model", "xlsx"]
+
+
+def _load_skill(call_id: str, name: str):
+    """A load by the retired Flash agent, as its threads' history still has it."""
+    return [
+        AIMessage("", id=f"ai-{call_id}", tool_calls=[
+            {"name": "LoadSkill", "id": call_id, "args": {"skill_name": name}}
+        ]),
+        ToolMessage(f"# Skill Loaded: {name}", tool_call_id=call_id, id=f"tm-{call_id}"),
+    ]
+
+
+def test_a_built_in_with_no_file_in_the_sandbox_is_not_handed_back():
+    """The note sends the agent to read SKILL.md back, which a hidden skill
+    (injected by the host only) and a retired one do not have."""
+    injected = HumanMessage(
+        'hi\n<loaded-skill name="onboarding" mid="u1">body</loaded-skill>', id="u1"
+    )
+    summarized = [injected, *_load_skill("l1", "secretary"), *_read_skill("r1", "my-own")]
+
+    assert compacted_skills(summarized, []) == ["my-own"]
+
+
+def test_a_user_skill_under_a_retired_name_is_handed_back():
+    """A retired built-in's name is free to take, and the user's skill by it
+    has a SKILL.md to read back; the retired one beside it still has none."""
+    summarized = [*_read_skill("r1", "automation"), *_load_skill("l1", "secretary")]
+
+    assert compacted_skills(summarized, []) == []
+    assert compacted_skills(summarized, [], user_skills={"automation"}) == ["automation"]
 
 
 def test_a_skill_read_in_part_is_handed_back_but_never_stands_in_for_it():

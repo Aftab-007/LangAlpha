@@ -175,7 +175,7 @@ class TestTheThreadBindingIsReadWithThePriorTurn:
                 return_value=None,
             ),
         ):
-            prior = await ensure_thread(request, "t-1", "ws-1", "u-1", msg_type="ptc")
+            prior = await ensure_thread(request, "t-1", "ws-1", "u-1")
 
         assert prior.platform == "imessage"
 
@@ -200,7 +200,7 @@ class TestTheThreadBindingIsReadWithThePriorTurn:
                 return_value=attempt,
             ),
         ):
-            prior = await ensure_thread(request, "t-1", "ws-1", "u-1", msg_type="ptc")
+            prior = await ensure_thread(request, "t-1", "ws-1", "u-1")
 
         assert (prior.platform, prior.attempt_platform) == ("slack", "web")
 
@@ -224,7 +224,7 @@ class TestTheThreadBindingIsReadWithThePriorTurn:
                 return_value=None,
             ),
         ):
-            prior = await ensure_thread(request, "t-1", "ws-1", "u-1", msg_type="ptc")
+            prior = await ensure_thread(request, "t-1", "ws-1", "u-1")
 
         assert prior.platform is None
         assert prior.attempt_platform is None
@@ -264,7 +264,6 @@ class TestTheGraphConfigCarriesRunAndSurface:
                 thread_id="t-1",
                 user_id="u-1",
                 workspace_id="ws-1",
-                mode="ptc",
                 timezone_str="UTC",
                 token_callback=None,
                 request=ChatRequest(),

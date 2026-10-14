@@ -76,11 +76,11 @@ _PATCHES = {
 
 @contextmanager
 def _route_reads():
-    """The rows the turn route reads, with the all-workspaces agent off."""
+    """The rows the turn route reads, and the Home bind."""
     with (
         patch(
-            "src.server.services.turn_runtime.home_enabled",
-            new=AsyncMock(return_value=False),
+            "src.server.services.workspace_manager.WorkspaceManager.get_instance",
+            return_value=MagicMock(ensure_home_bound=AsyncMock()),
         ),
         patch(
             "src.server.database.workspace.get_or_create_flash_workspace",
@@ -160,7 +160,7 @@ class TestCredentialGate:
     """AutomationExecutor passes correct is_byok and credit gate to workflows."""
 
     @pytest.mark.asyncio
-    async def test_byok_only_user_flash(self):
+    async def test_byok_only_user_home(self):
         """BYOK-only user: enforce_credit called with byok=True, workflow gets is_byok=True."""
         patches = _patch_all(is_byok=True, has_oauth=False)
 
@@ -175,7 +175,7 @@ class TestCredentialGate:
             patches["settlement_webhook"],
             patches["get_run"],
             patch(
-                "src.server.handlers.chat.astream_flash_workflow",
+                "src.server.handlers.chat.astream_ptc_workflow",
                 side_effect=_empty_async_gen,
             ) as mock_astream,
         ):
@@ -191,7 +191,7 @@ class TestCredentialGate:
         _assert_astream_called_with_byok(mock_astream, expected_byok=True)
 
     @pytest.mark.asyncio
-    async def test_oauth_only_user_flash(self):
+    async def test_oauth_only_user_home(self):
         """OAuth-only user: credit gate sees has_cred=True (not mis-gated as a
         platform user), but the workflow gets is_byok=False — the BYOK ladder is
         not attempted for a user with no BYOK keys."""
@@ -208,7 +208,7 @@ class TestCredentialGate:
             patches["settlement_webhook"],
             patches["get_run"],
             patch(
-                "src.server.handlers.chat.astream_flash_workflow",
+                "src.server.handlers.chat.astream_ptc_workflow",
                 side_effect=_empty_async_gen,
             ) as mock_astream,
         ):
@@ -226,7 +226,7 @@ class TestCredentialGate:
         _assert_astream_called_with_byok(mock_astream, expected_byok=False)
 
     @pytest.mark.asyncio
-    async def test_no_cred_user_flash(self):
+    async def test_no_cred_user_home(self):
         """Neither BYOK nor OAuth: enforce_credit called with byok=False (platform path)."""
         patches = _patch_all(is_byok=False, has_oauth=False)
 
@@ -241,7 +241,7 @@ class TestCredentialGate:
             patches["settlement_webhook"],
             patches["get_run"],
             patch(
-                "src.server.handlers.chat.astream_flash_workflow",
+                "src.server.handlers.chat.astream_ptc_workflow",
                 side_effect=_empty_async_gen,
             ) as mock_astream,
         ):
@@ -357,7 +357,7 @@ async def _gated(exc):
         patches["settlement_webhook"] as mock_settled,
         patches["get_run"],
         patch(
-            "src.server.handlers.chat.astream_flash_workflow",
+            "src.server.handlers.chat.astream_ptc_workflow",
             side_effect=_empty_async_gen,
         ) as mock_astream,
     ):
@@ -384,7 +384,7 @@ class TestAdmitted:
             patches["settlement_webhook"] as mock_settled,
             patches["get_run"] as mock_get_run,
             patch(
-                "src.server.handlers.chat.astream_flash_workflow",
+                "src.server.handlers.chat.astream_ptc_workflow",
                 side_effect=_one_event_gen,
             ) as mock_astream,
         ):

@@ -219,20 +219,6 @@ class TestOAuthKind:
 
         assert [r.kind for r in refs] == [GRANT_KIND_OAUTH_MCP]
 
-    @pytest.mark.asyncio
-    async def test_the_flash_shape_drops_it(self):
-        # Flash has no sandbox, so a grant for a server it binds no tool of is
-        # authority nothing spends.
-        server = _server(connection_id="conn-1")
-        refs = await grant_refs(
-            _resolved(_entry(server, bound=False)),
-            user_id=USER,
-            direct_only=True,
-            snapshots=_snapshots(),
-        )
-
-        assert refs == []
-
 
 @pytest.mark.asyncio
 async def test_the_two_kinds_are_decided_per_row_in_one_pass():

@@ -77,8 +77,9 @@ CONSTRUCTOR_NAMES = BARE_CONSTRUCTORS | ATTR_CONSTRUCTORS | CHAT_MODEL_CLASSES
 ALLOWLIST: dict[tuple[str, str], int] = {
     # get_llm_client lazy factory — OSS standalone path, no server resolution ran.
     ("src/ptc_agent/config/agent.py", "create_llm"): 1,
-    # flash standalone build.
-    ("src/ptc_agent/agent/flash/agent.py", "create_llm"): 1,
+    # market-insight research graph, Background model by name (no client
+    # resolved: the platform path, or a user with no BYOK/OAuth for it).
+    ("src/ptc_agent/agent/insight_graph.py", "create_llm"): 1,
     # fallback-model name path (build_fallback_pairs, OSS standalone — server
     # runs pre-resolve fallback_llm_clients via resolve_llm_config first).
     ("src/ptc_agent/agent/middleware/model_resilience.py", "get_llm_by_type"): 1,

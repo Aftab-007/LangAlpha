@@ -6,7 +6,7 @@ Covers:
 - load_from_dict() with string LLM format
 - load_from_dict() with dict LLM format
 - Missing required sections
-- Optional sections (agent, subagents, skills, flash)
+- Optional sections (agent, subagents, skills)
 - Subagent validation against builtins
 - load_from_files() config search behavior
 - generate_config_template()
@@ -177,14 +177,13 @@ class TestLoadFromDictOptionalSections:
         assert config.skills.enabled is False
         assert config.skills.user_skills_dir == "/custom/skills"
 
-    def test_no_flash_section(self):
-        config = load_from_dict(_full_config_dict())
-        assert config.flash.enabled is True
-
-    def test_flash_disabled(self):
+    def test_a_retired_flash_section_still_loads(self):
+        # An agent_config.yaml written for the removed Flash agent keeps
+        # starting the server; the section is ignored, not an error.
         data = _full_config_dict(flash={"enabled": False})
         config = load_from_dict(data)
-        assert config.flash.enabled is False
+        assert "flash" not in type(config).model_fields
+        assert config.llm.flash == "test-flash"
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Regression coverage for ``ptc_agent`` continuation ownership check.
+"""Regression coverage for the hand-off continuation ownership check.
 
 The continuation branch (``thread_id`` provided) used to verify ownership by
 reading ``thread.get("user_id")`` off ``get_thread_by_id``. But that helper
@@ -20,7 +20,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.tools.secretary.chief_of_staff import delegate_to_analyst
-from src.tools.secretary.tools import ptc_agent
 from tests.unit.server.handlers.chat.redis_fakes import FakeCache as _FakeCache
 
 USER_ID = "user-1"
@@ -31,7 +30,7 @@ WORKSPACE_ID = "22222222-2222-2222-2222-222222222222"
 def _tool_call(args: dict, call_id: str = "call_test") -> dict:
     """Build a ToolCall-shaped dict so ``ainvoke`` injects ``tool_call_id``."""
     # ``state`` is what the graph injects; nothing here was approved in advance.
-    return {"name": "ptc_agent", "args": {**args, "state": {}}, "id": call_id, "type": "tool_call"}
+    return {"name": "delegate_to_analyst", "args": {**args, "state": {}}, "id": call_id, "type": "tool_call"}
 
 
 def _config(user_id: str | None = USER_ID) -> dict:
@@ -93,7 +92,7 @@ async def test_continuation_owner_match_reaches_dispatch():
     ), patch(
         "aiohttp.ClientSession", return_value=_FakeSession(_FakeResp())
     ):
-        result = await ptc_agent.ainvoke(
+        result = await delegate_to_analyst.ainvoke(
             _tool_call({"question": "follow up please", "thread_id": PTC_THREAD_ID}),
             config=_config(),
         )
@@ -118,12 +117,7 @@ class _RecordingSession(_FakeSession):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("tool", "dispatcher"),
-    [(ptc_agent, "flash"), (delegate_to_analyst, "chief_of_staff")],
-    ids=["flash", "chief of staff"],
-)
-async def test_the_dispatched_thread_names_the_agent_that_sent_it(tool, dispatcher):
+async def test_the_dispatched_thread_names_the_agent_that_sent_it():
     """History labels a handed-off thread by the agent that dispatched it."""
     session = _RecordingSession(_FakeResp())
     with patch(
@@ -135,9 +129,8 @@ async def test_the_dispatched_thread_names_the_agent_that_sent_it(tool, dispatch
     ), patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
     ), patch("aiohttp.ClientSession", return_value=session):
-        result = await tool.ainvoke(
-            {**_tool_call({"question": "follow up", "thread_id": PTC_THREAD_ID}),
-             "name": tool.name},
+        result = await delegate_to_analyst.ainvoke(
+            _tool_call({"question": "follow up", "thread_id": PTC_THREAD_ID}),
             config={"configurable": {"user_id": USER_ID, "thread_id": "dispatcher-1"}},
         )
 
@@ -145,7 +138,7 @@ async def test_the_dispatched_thread_names_the_agent_that_sent_it(tool, dispatch
     assert session.bodies[0]["origin"] == {
         "type": "agent",
         "id": "dispatcher-1",
-        "agent": dispatcher,
+        "agent": "chief_of_staff",
     }
 
 
@@ -170,7 +163,7 @@ async def test_continuation_owner_mismatch_returns_thread_not_found():
     ), patch(
         "aiohttp.ClientSession", dispatch
     ):
-        result = await ptc_agent.ainvoke(
+        result = await delegate_to_analyst.ainvoke(
             _tool_call({"question": "follow up please", "thread_id": PTC_THREAD_ID}),
             config=_config(),
         )
@@ -202,7 +195,7 @@ async def test_continuation_normalizes_noncanonical_thread_id():
     ), patch(
         "aiohttp.ClientSession", return_value=_FakeSession(_FakeResp())
     ):
-        result = await ptc_agent.ainvoke(
+        result = await delegate_to_analyst.ainvoke(
             _tool_call({"question": "follow up please", "thread_id": raw}),
             config=_config(),
         )
@@ -252,7 +245,7 @@ def _dispatch_env(store: dict, *, resp: _FakeResp | None = None):
 
 
 async def _dispatch_from(flash: str) -> dict:
-    result = await ptc_agent.ainvoke(
+    result = await delegate_to_analyst.ainvoke(
         _tool_call({"question": "follow up", "thread_id": PTC_THREAD_ID}),
         config={"configurable": {
             "user_id": USER_ID,
@@ -343,7 +336,7 @@ async def test_continuation_non_uuid_thread_id_short_circuits():
     ), patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
     ):
-        result = await ptc_agent.ainvoke(
+        result = await delegate_to_analyst.ainvoke(
             _tool_call({"question": "follow up please", "thread_id": "results"}),
             config=_config(),
         )

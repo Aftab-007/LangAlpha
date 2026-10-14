@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from ptc_agent.agent.middleware._message_utils import order_tool_results_first
 from ptc_agent.agent.middleware.file_operations.multimodal_strip import (
+    PLACEHOLDER_GUIDANCE,
     MultimodalStripMiddleware,
     strip_unsupported_content_blocks,
 )
@@ -412,27 +413,13 @@ class TestTheGuidanceRidesInThePlaceholder:
             seen["request"] = request
             return "ok"
 
-        mw = MultimodalStripMiddleware(can_extract=True)
-        await mw.awrap_model_call(self._request(), handler)
+        await MultimodalStripMiddleware().awrap_model_call(self._request(), handler)
 
         placeholder = seen["request"].messages[0].content[1]["text"]
         assert placeholder.startswith("[Image attached in a prior turn, not visible to the current model.")
-        assert mw.placeholder_guidance in placeholder
+        assert PLACEHOLDER_GUIDANCE in placeholder
         assert "extract it yourself" in placeholder
         assert _system_text(seen["request"]) == "prefix"
-
-    @pytest.mark.asyncio
-    async def test_a_flash_agent_is_not_told_to_extract(self):
-        seen = {}
-
-        async def handler(request):
-            seen["request"] = request
-            return "ok"
-
-        await MultimodalStripMiddleware(can_extract=False).awrap_model_call(self._request(), handler)
-        placeholder = seen["request"].messages[0].content[1]["text"]
-        assert "extract it yourself" not in placeholder
-        assert "switching to a model that accepts it" in placeholder
 
 
 def _batch(*after_ai):
@@ -632,7 +619,7 @@ class TestPDFPageCeilingIsPerTarget:
         blocks, request = await _blocks_reaching(route_200k, _pdf_block(300))
         assert [b["type"] for b in blocks] == ["text", "text"]
         assert "300 pages" in blocks[1]["text"]
-        assert _STRIP.placeholder_guidance in blocks[1]["text"]
+        assert PLACEHOLDER_GUIDANCE in blocks[1]["text"]
 
     @pytest.mark.asyncio
     async def test_a_pdf_inside_the_200k_ceiling_still_reaches_it(self, route_200k):

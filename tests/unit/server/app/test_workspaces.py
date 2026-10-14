@@ -768,7 +768,6 @@ async def test_starting_a_former_flash_row_that_home_folded_in_is_not_found(clie
             "src.server.app.workspaces.db_get_workspace",
             AsyncMock(side_effect=[former, None]),
         ),
-        patch("src.server.app.workspaces.home_enabled", AsyncMock(return_value=True)),
         patch("src.server.app.workspaces.ensure_home", ensure_home),
         patch("src.server.app.workspaces.WorkspaceManager") as MockWM,
     ):

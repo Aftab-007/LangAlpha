@@ -28,9 +28,7 @@ from ptc_agent.agent.subagents.merge import (
     tool_words,
     turn_roster,
 )
-from ptc_agent.agent.subagents.registry import SubagentRegistry
 from ptc_agent.config.agent import SubagentConfig, SubagentsConfig
-from src.tools.automation import AUTOMATION_TOOLS
 
 OFFERED = tuple(BUILTIN_SUBAGENTS)
 
@@ -333,7 +331,7 @@ NARROWED = "Your tools here are narrower than this role was written for"
 
 
 def _prompt(defn: SubagentDefinition) -> str:
-    compiler = SubagentCompiler(skill_registry=build_effective_skill_registry(None))
+    compiler = SubagentCompiler(skill_registry=build_effective_skill_registry())
     return compiler._resolve_prompt(defn, compiler._compute_sections(defn))
 
 
@@ -578,34 +576,3 @@ def test_a_resolved_roster_supersedes_the_deployments():
     assert turn_roster(deployment).definitions["research"].tools == ["web_search"]
     # A user who turned everything off compiles nothing, not the deployment's list.
     assert turn_roster(per_turn) is resolved
-
-
-def _bound(defn: SubagentDefinition) -> set[str]:
-    """The tools a definition compiles with, by name."""
-    sets = {k: [SimpleNamespace(name=k)] for k in ("execute_code", "bash", "filesystem", "web_search", "finance")}
-    compiler = SubagentCompiler(tool_sets=sets, skill_registry=build_effective_skill_registry(None))
-    return {tool.name for tool in compiler._resolve_tools(defn)}
-
-
-@pytest.mark.parametrize(
-    "defn",
-    [
-        apply_override(BUILTIN_SUBAGENTS["research"], {"tools": [], "preferred_skills": ["automation"]}),
-        custom_definition({"name": "mine", "fields": {"tools": [], "preferred_skills": ["automation"]}}),
-        plugin_definition({"name": "pkg", "fields": {"tools": [], "preferred_skills": ["automation"]}}),
-    ],
-    ids=["override", "custom", "plugin"],
-)
-def test_a_preferred_skill_binds_none_of_its_tools(defn):
-    assert defn.preload_skills == ["automation"]
-    assert _bound(defn) == {"filesystem"}
-
-
-def test_a_deployment_preload_keeps_its_tools_through_a_preferred_edit():
-    ops = SubagentRegistry(
-        user_definitions={"ops": SubagentConfig(description="d", tools=["filesystem"], preload_skills=["automation"])}
-    ).list_all()["ops"]
-    automation = {tool.name for tool in AUTOMATION_TOOLS}
-
-    assert automation <= _bound(ops)
-    assert automation <= _bound(apply_override(ops, {"preferred_skills": []}))

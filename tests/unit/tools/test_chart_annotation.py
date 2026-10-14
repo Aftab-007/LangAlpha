@@ -989,17 +989,17 @@ class TestManageChartAnnotations:
 
 
 class TestSkillRegistryVisibility:
-    def test_chart_annotation_registered_for_both_modes(self):
+    def test_chart_annotation_registered_as_a_listed_guide(self):
         from ptc_agent.agent.middleware.skills.registry import SKILL_REGISTRY
 
         skill = SKILL_REGISTRY["chart-annotation"]
-        # The drawing guide, discoverable in both modes. The tools themselves
+        # The drawing guide, discoverable by the agent. The tools themselves
         # are bound on every main-agent build, so the skill gates none.
-        assert skill.exposure == "both"
-        assert skill.get_tool_names() == []
+        assert not skill.hidden
+        assert skill.tool_names == ()
 
     def test_appears_in_default_listing(self):
-        """chart-annotation must be in the manifest the LLM sees in every mode.
+        """chart-annotation must be in the manifest the LLM sees.
 
         ``list_skills`` drives what gets injected into the system prompt via
         SkillsMiddleware. The agent can only choose to load a skill it can see,
@@ -1007,27 +1007,24 @@ class TestSkillRegistryVisibility:
         """
         from ptc_agent.agent.middleware.skills.registry import list_skills
 
-        for mode in ("ptc", "flash", None):
-            listed = {s["name"] for s in list_skills(mode=mode)}
-            assert "chart-annotation" in listed, (
-                f"chart-annotation missing from listing for mode={mode}"
-            )
+        assert "chart-annotation" in {s["name"] for s in list_skills()}
 
     def test_synced_to_sandbox(self):
-        """exposure=both ⇒ SKILL.md is uploaded so PTC can self-load by reading it."""
+        """SKILL.md is uploaded so the agent can self-load by reading it."""
         from ptc_agent.agent.middleware.skills.registry import (
-            get_sandbox_skill_names,
+            SKILL_REGISTRY,
+            skills_outside_sandbox,
         )
 
-        assert "chart-annotation" in get_sandbox_skill_names()
+        assert "chart-annotation" in SKILL_REGISTRY
+        assert "chart-annotation" not in skills_outside_sandbox()
 
-    def test_reachable_by_name_in_every_mode(self):
+    def test_reachable_by_name(self):
         from ptc_agent.agent.middleware.skills.registry import get_skill
 
-        for mode in ("ptc", "flash", None):
-            skill = get_skill("chart-annotation", mode=mode)
-            assert skill is not None, f"get_skill returned None for mode={mode}"
-            assert skill.name == "chart-annotation"
+        skill = get_skill("chart-annotation")
+        assert skill is not None
+        assert skill.name == "chart-annotation"
 
 
 # --------------------------------------------------------------------------- #

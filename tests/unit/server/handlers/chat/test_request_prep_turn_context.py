@@ -51,7 +51,7 @@ class TestEnsureThread:
 
         with patch(f"{PREP}.qr_db.ensure_thread_exists", new_callable=AsyncMock) as mock_db:
             await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="flash", initial_query="hello"
+                request, "t-1", "ws-1", "u-1", initial_query="hello"
             )
 
         mock_db.assert_called_once_with(
@@ -60,7 +60,6 @@ class TestEnsureThread:
             user_id="u-1",
             initial_query="hello",
             initial_status="in_progress",
-            msg_type="flash",
         )
 
     @pytest.mark.asyncio
@@ -75,7 +74,7 @@ class TestEnsureThread:
 
         with patch(f"{PREP}.qr_db.ensure_thread_exists", new_callable=AsyncMock) as mock_db:
             await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query=""
+                request, "t-1", "ws-1", "u-1", initial_query=""
             )
 
         call_kwargs = mock_db.call_args.kwargs
@@ -93,7 +92,7 @@ class TestEnsureThread:
         request.subagents_allowed = None
 
         with patch(f"{PREP}.qr_db.ensure_thread_exists", new_callable=AsyncMock) as mock_db:
-            await ensure_thread(request, "t-1", "ws-1", "u-1", msg_type="flash")
+            await ensure_thread(request, "t-1", "ws-1", "u-1")
 
         call_kwargs = mock_db.call_args.kwargs
         assert call_kwargs["initial_query"] == ""
@@ -116,7 +115,7 @@ class TestEnsureThread:
             return_value=False,
         ) as mock_db:
             await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query="hi"
+                request, "t-1", "ws-1", "u-1", initial_query="hi"
             )
 
         assert mock_db.call_args.kwargs["metadata"] == {
@@ -141,7 +140,7 @@ class TestEnsureThread:
             new_callable=AsyncMock,
             return_value=False,
         ) as mock_db:
-            await ensure_thread(request, "t-1", "ws-1", "u-1", msg_type="ptc")
+            await ensure_thread(request, "t-1", "ws-1", "u-1")
 
         assert mock_db.call_args.kwargs.get("subagents_allowed") is named
 
@@ -167,7 +166,7 @@ class TestEnsureThread:
             ) as mock_schedule,
         ):
             await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query="hello"
+                request, "t-1", "ws-1", "u-1", initial_query="hello"
             )
 
         mock_schedule.assert_called_once()
@@ -196,7 +195,7 @@ class TestEnsureThread:
             ) as mock_schedule,
         ):
             await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query="hello"
+                request, "t-1", "ws-1", "u-1", initial_query="hello"
             )
 
         mock_schedule.assert_not_called()
@@ -233,7 +232,7 @@ class TestEnsureThread:
             ),
         ):
             prior = await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query="hi"
+                request, "t-1", "ws-1", "u-1", initial_query="hi"
             )
 
         assert calls == ["read", "ensure"]
@@ -268,7 +267,7 @@ class TestEnsureThread:
             ),
         ):
             prior = await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query=""
+                request, "t-1", "ws-1", "u-1", initial_query=""
             )
 
         assert prior.last_turn_at == last_turn
@@ -298,7 +297,7 @@ class TestEnsureThread:
             ),
         ):
             prior = await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query=""
+                request, "t-1", "ws-1", "u-1", initial_query=""
             )
 
         assert prior.last_turn_at == datetime(2026, 3, 1, 14, 30, tzinfo=UTC)
@@ -332,7 +331,7 @@ class TestEnsureThread:
             ) as latest,
         ):
             prior = await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query=""
+                request, "t-1", "ws-1", "u-1", initial_query=""
             )
 
         latest.assert_awaited_once_with("t-1", before_turn=3)
@@ -363,7 +362,7 @@ class TestEnsureThread:
             ) as latest,
         ):
             await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query=""
+                request, "t-1", "ws-1", "u-1", initial_query=""
             )
 
         latest.assert_awaited_once_with("t-1", before_turn=None)
@@ -390,7 +389,7 @@ class TestEnsureThread:
             patch(f"{PREP}.tl_db.get_latest_attempt", new_callable=AsyncMock, return_value=None),
         ):
             prior = await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query=""
+                request, "t-1", "ws-1", "u-1", initial_query=""
             )
 
         assert prior.last_turn_at is None
@@ -407,7 +406,7 @@ class TestEnsureThread:
 
         with patch(f"{PREP}.qr_db.ensure_thread_exists", new_callable=AsyncMock):
             prior = await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query="hi"
+                request, "t-1", "ws-1", "u-1", initial_query="hi"
             )
 
         assert prior.last_turn_at is None
@@ -434,7 +433,7 @@ class TestEnsureThread:
             ) as mock_db,
         ):
             prior = await ensure_thread(
-                request, "t-1", "ws-1", "u-1", msg_type="ptc", initial_query="hi"
+                request, "t-1", "ws-1", "u-1", initial_query="hi"
             )
 
         assert prior == PriorThread()

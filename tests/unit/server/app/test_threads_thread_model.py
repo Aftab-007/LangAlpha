@@ -82,7 +82,13 @@ def _send_stubs(*, owner_id, stored_model=None, turn_model=None, msg_type="ptc")
         patch(f"{THREAD_MODEL_MOD}.turn_model", new=mocks["turn_model"]),
         patch(
             "src.server.database.workspace.get_workspace",
-            new=AsyncMock(return_value={"user_id": USER, "status": "running"}),
+            new=AsyncMock(
+                return_value={
+                    "workspace_id": "ws-placeholder",
+                    "user_id": USER,
+                    "status": "running",
+                }
+            ),
         ),
         patch.object(setup_module, "agent_config", MagicMock()),
         patch("src.server.services.llm.config.resolve_llm_config", new=mocks["resolve"]),
@@ -159,18 +165,17 @@ async def test_home_is_bound_only_once_the_admission_gates_pass(admitted):
     credit = AsyncMock(
         side_effect=None if admitted else HTTPException(status_code=402, detail="quota")
     )
-    route = AsyncMock(return_value=TurnRoute("ptc", "home-ws", role="chief_of_staff"))
+    route = MagicMock(return_value=TurnRoute("home-ws", "chief_of_staff"))
     bind = AsyncMock(return_value="home-ws")
     with (
         _send_stubs(owner_id=USER),
         patch("src.server.dependencies.usage_limits.enforce_credit_limit", new=credit),
-        patch("src.server.services.turn_runtime.resolve_turn_route", new=route),
+        patch("src.server.services.turn_runtime.turn_route", new=route),
         patch("src.server.services.turn_runtime.ensure_home", new=bind),
     ):
         resp = await _send()
 
     assert resp.status_code == (200 if admitted else 402)
-    assert route.await_args.kwargs == {"bind_home": False}
     assert bind.await_count == (1 if admitted else 0)
 
 

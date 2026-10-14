@@ -468,7 +468,6 @@ async def _settle(
         thread_id=thread.id,
         turn_index=turn_index,
         attempt_no=1,
-        msg_type="ptc",
         pending_input=pending_input or {},
     )
     with patch.object(setup, "checkpointer", thread.saver):
@@ -1330,7 +1329,6 @@ async def _start_owned(thread, text, request, fork=None):
         handle = await RunCoordinator().start_run(
             thread_id=thread.id,
             run_id=run_id,
-            msg_type="ptc",
             request_key=str(uuid.uuid4()),
             query=QuerySpec(
                 query_id=str(uuid.uuid4()), content=text, query_type="initial"
@@ -2174,7 +2172,6 @@ async def test_a_first_send_a_disconnect_stopped_at_start_is_regenerated_in_plac
     handle = await _committed_start(
         run_id,
         thread_id=new_thread.id,
-        msg_type="ptc",
         workspace_id=None,
         user_id=None,
         is_byok=False,

@@ -103,8 +103,6 @@ async def test_max_retries_branch_finalizes_error(coordinator):
             start_time=0.0,
             request=_make_request(),
             is_byok=False,
-            msg_type="user",
-            log_prefix="CHAT",
         ))
 
     coordinator.finalize_run.assert_awaited_once()
@@ -134,14 +132,14 @@ async def test_non_recoverable_branch_finalizes_error(coordinator):
             start_time=0.0,
             request=_make_request(),
             is_byok=False,
-            msg_type="user",
-            log_prefix="CHAT",
         ))
 
     coordinator.finalize_run.assert_awaited_once()
     _, outcome = coordinator.finalize_run.await_args.args
     assert outcome.status == "error"
     assert outcome.errors == ["'NoneType' has no attribute 'foo'"]
+    # The run row keeps START's producer stamp; the merge must not touch it.
+    assert "msg_type" not in outcome.metadata
 
 
 @pytest.mark.asyncio
@@ -166,8 +164,6 @@ async def test_finalize_failure_does_not_break_error_flow(coordinator):
             start_time=0.0,
             request=_make_request(),
             is_byok=False,
-            msg_type="user",
-            log_prefix="CHAT",
         ))
 
     assert any(ev.startswith("event: error\n") for ev in events)
@@ -200,8 +196,6 @@ async def test_external_id_conflict_branch_emits_conflict_and_skips_finalize(
             start_time=0.0,
             request=_make_request(),
             is_byok=False,
-            msg_type="user",
-            log_prefix="CHAT",
         ))
 
     assert len(events) == 1
@@ -243,8 +237,6 @@ async def test_query_conflict_branch_emits_turn_conflict_and_skips_finalize(
             start_time=0.0,
             request=_make_request(),
             is_byok=False,
-            msg_type="user",
-            log_prefix="CHAT",
         ))
 
     assert len(events) == 1
@@ -282,8 +274,6 @@ async def test_a_fork_whose_branch_moved_is_refused_as_the_route_refuses_it(
                 start_time=0.0,
                 request=_make_request(),
                 is_byok=False,
-                msg_type="ptc",
-                log_prefix="CHAT",
             )
         )
 
@@ -323,8 +313,6 @@ async def _fail(err, *, scope, request):
             start_time=0.0,
             request=request,
             is_byok=False,
-            msg_type="ptc",
-            log_prefix="CHAT",
         )))
 
 

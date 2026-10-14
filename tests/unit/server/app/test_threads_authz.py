@@ -86,7 +86,13 @@ def _stub_downstream(owner_id, ws_owner=CALLER):
         # Workspace IDOR guard reads the workspace owner via get_workspace.
         patch(
             "src.server.database.workspace.get_workspace",
-            new=AsyncMock(return_value={"user_id": ws_owner, "status": "running"}),
+            new=AsyncMock(
+                return_value={
+                    "workspace_id": "ws-placeholder",
+                    "user_id": ws_owner,
+                    "status": "running",
+                }
+            ),
         ),
         patch.object(setup_module, "agent_config", MagicMock()),
         patch(

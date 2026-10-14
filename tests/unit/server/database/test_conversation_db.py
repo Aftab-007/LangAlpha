@@ -8,6 +8,7 @@ thread sharing, and pagination logic.
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import psycopg
 import pytest
@@ -189,6 +190,59 @@ async def test_create_thread_binds_the_switch_with_its_workspace(
     values = _insert_values(*mock_cursor.execute.call_args_list[-1].args)
     assert values["subagents_allowed"] == (allowed, "ws-1")
     assert values["platform"] == "telegram"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("named", "stored"),
+    [({}, "ptc"), ({"msg_type": "flash"}, "flash")],
+    ids=["omitted", "named"],
+)
+async def test_create_thread_stamps_the_full_agent_unless_told_otherwise(
+    mock_db_connection, mock_cursor, named, stored
+):
+    """No caller names the producer any more; the insert still writes 'ptc'."""
+    from src.server.database.conversation import create_thread
+
+    mock_cursor.fetchone.side_effect = [{"next_index": 0}, _thread_row()]
+
+    await create_thread(
+        conversation_thread_id="t-1",
+        workspace_id="ws-1",
+        current_status="in_progress",
+        **named,
+    )
+
+    values = _insert_values(*mock_cursor.execute.call_args_list[-1].args)
+    assert values["msg_type"] == stored
+
+
+@pytest.mark.asyncio
+async def test_a_thread_a_turn_creates_is_the_full_agents(
+    mock_db_connection, mock_cursor
+):
+    """ensure_thread_exists, which every send passes through, creates the row
+    as the full agent's without being told."""
+    from src.server.database.conversation import ensure_thread_exists
+
+    mock_cursor.fetchone.side_effect = [
+        {"workspace_id": "ws-1"},
+        None,
+        {"next_index": 0},
+        _thread_row(),
+    ]
+    cache = SimpleNamespace(enabled=False, client=None)
+    with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
+        created = await ensure_thread_exists(
+            workspace_id="ws-1",
+            conversation_thread_id="t-1",
+            user_id="u-1",
+            initial_query="hello",
+        )
+
+    assert created is True
+    values = _insert_values(*mock_cursor.execute.call_args_list[-1].args)
+    assert values["msg_type"] == "ptc"
 
 
 @pytest.mark.asyncio

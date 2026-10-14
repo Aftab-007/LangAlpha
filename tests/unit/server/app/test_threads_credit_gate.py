@@ -134,7 +134,11 @@ async def test_credit_gate_byok_arg(
         patch(
             "src.server.database.workspace.get_workspace",
             new=AsyncMock(
-                return_value={"user_id": "usr-placeholder-001", "status": "running"}
+                return_value={
+                    "workspace_id": "ws-placeholder",
+                    "user_id": "usr-placeholder-001",
+                    "status": "running",
+                }
             ),
         ),
         patch(

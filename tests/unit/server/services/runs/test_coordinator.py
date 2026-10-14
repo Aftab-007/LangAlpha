@@ -46,7 +46,6 @@ def _coordinator() -> RunCoordinator:
 def _handle() -> RunHandle:
     return RunHandle(
         run_id="run-1", thread_id="thread-1", turn_index=0, attempt_no=1,
-        msg_type="ptc",
     )
 
 
@@ -123,6 +122,50 @@ def test_a_ptc_run_end_asks_for_its_threads_archive_prune(msg_type, asked):
         _coordinator().post_finalize_tail("thread-1", _row("completed", msg_type))
 
     assert prune.call_args_list == ([call("thread-1")] if asked else [])
+
+
+@pytest.mark.parametrize(
+    ("run", "reached"),
+    [
+        (_row("completed"), True),
+        (_row("completed", "flash"), False),
+        (_row("completed", "task"), False),
+        ({**_row("completed"), "metadata": {"workspace_id": "ws-1"}}, False),
+        ({**_row("completed"), "metadata": None}, False),
+        (None, False),
+    ],
+    ids=["ptc", "flash", "task", "unstamped", "no-metadata", "no-row"],
+)
+def test_only_a_run_stamped_ptc_reaches_its_computer(run, reached):
+    """The prune and the export both need the run's computer, which only a
+    run the full agent started has. Every other row is left alone."""
+    with patch(EXPORT) as export, patch(
+        "src.server.services.workspace_manager.prune_if_archived_soon"
+    ) as prune:
+        _coordinator().post_finalize_tail("thread-1", run)
+
+    assert prune.call_args_list == ([call("thread-1")] if reached else [])
+    assert export.call_args_list == (
+        [call("thread-1", "ws-1")] if reached else []
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_turns_usage_row_names_the_full_agent():
+    """The turn's usage row lands as 'ptc' with no producer on the outcome."""
+    handle = RunHandle(
+        run_id="run-1", thread_id="thread-1", turn_index=0, attempt_no=1,
+        workspace_id="ws-1", user_id="user-1",
+    )
+    outcome = RunOutcome(status="completed", metadata={"is_byok": False})
+    write = _coordinator()._build_usage_writer(handle, outcome)
+
+    with patch(
+        "src.server.database.conversation.create_usage_record", new=AsyncMock()
+    ) as insert:
+        await write(MagicMock(), "completed")
+
+    assert insert.await_args.args[0]["msg_type"] == "ptc"
 
 
 @pytest.mark.asyncio

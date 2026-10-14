@@ -19,6 +19,7 @@ from src.server.models.chat import ChatRequest
 from src.server.services import automation_delivery
 from src.server.services.automation_delivery import DELIVERY_KEY, Delivery, Target
 from src.server.services.report_back.flash.carry import carried_delivery
+from src.server.services.turn_runtime import TurnRoute
 
 PTC = "src.server.handlers.chat.ptc_run"
 _LATEST = "src.server.database.runs.lifecycle.get_latest_attempt"
@@ -174,7 +175,7 @@ async def _stamped(
             run_id="r-1",
             user_input="",
             user_id="u-1",
-            workspace_id="ws-1",
+            route=TurnRoute("ws-1", "analyst"),
             is_byok=False,
             config=config,
             run_metadata=run_metadata,

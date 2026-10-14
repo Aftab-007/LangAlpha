@@ -31,7 +31,7 @@ from src.tools.secretary.approvals import (
     preapproved,
 )
 from src.tools.secretary.chief_of_staff import delegate_to_analyst
-from src.tools.secretary.tools import ptc_agent, workspaces_create
+from src.tools.secretary.tools import workspaces_create
 from tests.unit.server.handlers.chat.redis_fakes import FakeCache
 
 from .conftest import FakeResp, FakeSession, workspace_manager
@@ -192,36 +192,18 @@ async def test_a_handoff_to_a_named_workspace_or_thread_needs_only_its_own_setti
     other_preference, ids
 ):
     other_preference[AUTO_APPROVE_HANDOFFS] = True
-    update = await _recorded([_call("ptc_agent", "handoff", question="q", **ids)])
+    update = await _recorded(
+        [_call("delegate_to_analyst", "handoff", question="q", **ids)]
+    )
 
     assert update == {"preapproved_calls": ["handoff"]}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("granted", "recorded"),
-    [
-        ({AUTO_APPROVE_HANDOFFS}, []),
-        ({AUTO_APPROVE_WORKSPACE_CREATION}, []),
-        ({AUTO_APPROVE_HANDOFFS, AUTO_APPROVE_WORKSPACE_CREATION}, ["handoff"]),
-    ],
-)
-async def test_a_handoff_that_creates_its_workspace_needs_both_settings(
-    other_preference, granted, recorded
-):
-    """Flash's ptc_agent with no workspace or thread creates one first, so a
-    yes to hand-offs alone must not make a workspace without its card."""
-    other_preference.update(dict.fromkeys(granted, True))
-    update = await _recorded([_call("ptc_agent", "handoff", question="q")])
-
-    assert update == {"preapproved_calls": recorded}
 
 
 @pytest.mark.asyncio
 async def test_only_a_true_setting_approves(other_preference):
     other_preference[AUTO_APPROVE_HANDOFFS] = "yes"
     update = await _recorded(
-        [_call("ptc_agent", "handoff", question="q", workspace_id="ws-1")]
+        [_call("delegate_to_analyst", "handoff", question="q", workspace_id="ws-1")]
     )
 
     assert update == {"preapproved_calls": []}
@@ -234,7 +216,7 @@ async def test_an_unreadable_setting_asks_instead_of_failing_the_turn(monkeypatc
         AsyncMock(side_effect=RuntimeError("pool closed")),
     )
     update = await _recorded(
-        [_call("ptc_agent", "handoff", question="q", workspace_id="ws-1")]
+        [_call("delegate_to_analyst", "handoff", question="q", workspace_id="ws-1")]
     )
 
     assert update == {"preapproved_calls": []}
@@ -246,7 +228,9 @@ async def test_a_turn_without_a_user_or_an_approvable_call_records_nothing(
 ):
     other_preference[AUTO_APPROVE_HANDOFFS] = True
 
-    assert await _recorded([_call("ptc_agent", "h", question="q")], None) is None
+    assert await _recorded(
+        [_call("delegate_to_analyst", "h", question="q", workspace_id="ws-1")], None
+    ) is None
     assert await _recorded([_call("manage_threads", "t", action="list")]) is None
 
 
@@ -258,15 +242,10 @@ def _payload(result: Command) -> dict:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("handoff", "ids"),
-    [(delegate_to_analyst, {"workspace_id": "ws-1"}), (ptc_agent, {})],
-    ids=["delegate_to_analyst", "ptc_agent"],
-)
-async def test_the_real_handoff_tools_ask_unless_their_call_was_recorded(
-    other_preference, monkeypatch, handoff, ids
+async def test_the_real_handoff_tool_asks_unless_its_call_was_recorded(
+    other_preference, monkeypatch
 ):
-    """The tools never read the setting: on resume they re-run from the top,
+    """The tool never reads the setting: on resume it re-runs from the top,
     so only the record made when the model proposed this call may skip it."""
     monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "test-internal-service-token")
     other_preference.update(
@@ -277,12 +256,12 @@ async def test_the_real_handoff_tools_ask_unless_their_call_was_recorded(
         "src.server.database.workspace.get_workspace",
         AsyncMock(return_value={"user_id": USER_ID, "name": "Research"}),
     ):
-        result = await handoff.ainvoke(
+        result = await delegate_to_analyst.ainvoke(
             {
-                "name": handoff.name,
+                "name": "delegate_to_analyst",
                 "args": {
                     "question": "q",
-                    **ids,
+                    "workspace_id": "ws-1",
                     "state": {"preapproved_calls": ["an-earlier-call"]},
                 },
                 "id": "call-1",
@@ -333,33 +312,33 @@ async def test_a_workspace_the_user_approved_on_its_card_is_not_marked():
 
 
 @pytest.mark.asyncio
-async def test_a_handoff_approved_in_advance_names_the_workspace_it_made(monkeypatch):
+async def test_a_handoff_approved_in_advance_names_its_workspace(monkeypatch):
+    """No card asked for it, so the result carries what the card would show."""
     monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "test-internal-service-token")
     cache = FakeCache()
     monkeypatch.setattr("src.utils.cache.redis_cache.get_cache_client", lambda: cache)
-    # The row holds no name: the card's is the one dispatch asked for.
-    mgr = workspace_manager()
     with patch("src.tools.secretary.dispatch.hitl_confirm", _NEVER_ASK), patch(
-        "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-        return_value=mgr,
+        "src.server.database.workspace.get_workspace",
+        AsyncMock(return_value={"user_id": USER_ID, "name": "Research"}),
     ), patch("aiohttp.ClientSession", return_value=FakeSession(FakeResp())):
-        result = await ptc_agent.ainvoke(
+        result = await delegate_to_analyst.ainvoke(
             {
-                "name": "ptc_agent",
+                "name": "delegate_to_analyst",
                 "args": {
                     "question": "analyze this",
+                    "workspace_id": "ws-1",
                     "state": {"preapproved_calls": ["call-1"]},
                 },
                 "id": "call-1",
                 "type": "tool_call",
             },
-            config={"configurable": {"user_id": USER_ID, "thread_id": "flash-1"}},
+            config={"configurable": {"user_id": USER_ID, "thread_id": "home-1"}},
         )
 
     payload = _payload(result)
     assert payload["status"] == "dispatched"
     assert payload["preapproved"] is True
-    assert payload["workspace_name"] == "analyze this"
+    assert payload["workspace_name"] == "Research"
     assert payload["report_back"] is True
 
 

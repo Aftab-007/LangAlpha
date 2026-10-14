@@ -15,8 +15,9 @@ pytestmark = pytest.mark.asyncio
 
 _OWNER_WS = "0f1e2d3c-4b5a-4968-8776-655443322110"
 
-# The flash agent's account tools answer with the owner's own rows, serialized
-# into the tool message's text, where no key-based strip reaches them.
+# The account tools answer with the owner's own rows, serialized into the tool
+# message's text, where no key-based strip reaches them. This turn is the
+# retired Flash agent's, whose threads are still shared.
 _DISPATCHED_WS = "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
 _DISPATCHED_THREAD = "8b7c6d5e-4f3a-4b2c-8d1e-0f9a8b7c6d5e"
 _OWNER_USER = "user-2f9e8d7c"

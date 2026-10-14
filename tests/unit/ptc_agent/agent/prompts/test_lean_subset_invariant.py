@@ -67,11 +67,6 @@ def _render_pair(surface: str) -> tuple[str, str]:
             loader.get_system_prompt(**guidance_template_vars("detailed"), **kwargs),
             loader.get_system_prompt(**guidance_template_vars("lean"), **kwargs),
         )
-    if surface == "flash":
-        return (
-            loader.render("flash_system.md.j2", tools=[], **guidance_template_vars("detailed")),
-            loader.render("flash_system.md.j2", tools=[], **guidance_template_vars("lean")),
-        )
     defn = SubagentRegistry().get(surface)
     assert defn is not None, f"unknown subagent {surface}"
 
@@ -98,7 +93,6 @@ SURFACES = [
     "ptc+scratchpad",
     "chief-of-staff",
     "chief-of-staff+scratchpad",
-    "flash",
     *SUBAGENTS,
 ]
 

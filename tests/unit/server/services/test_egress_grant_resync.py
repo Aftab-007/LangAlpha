@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.server.database.egress_grants import GRANT_KIND_OAUTH_MCP, GrantRef
-from src.server.services.egress import flash_binding, grant_resync
+from src.server.services.egress import grant_resync
 
 
 def _resolved(version: int, connection_ids: list[str]):
@@ -86,23 +86,3 @@ async def test_it_gives_up_rather_than_spinning_on_a_busy_workspace():
     assert wrote is False
     assert sync.await_count == grant_resync._MAX_ATTEMPTS
 
-
-@pytest.mark.asyncio
-async def test_the_flash_path_refuses_to_report_a_revocation_it_did_not_make():
-    # Nothing converges a flash workspace behind this call, so a quiet failure
-    # would leave the toggle's 200 claiming a retirement that never happened.
-    with patch.object(
-        grant_resync, "sync_grants_until_current", AsyncMock(return_value=False)
-    ):
-        with pytest.raises(grant_resync.GrantSyncSuperseded):
-            await flash_binding.sync_flash_grants(
-                object(), user_id="u", workspace_id="w"
-            )
-
-
-@pytest.mark.asyncio
-async def test_the_flash_path_is_quiet_when_the_grants_were_written():
-    with patch.object(
-        grant_resync, "sync_grants_until_current", AsyncMock(return_value=True)
-    ):
-        await flash_binding.sync_flash_grants(object(), user_id="u", workspace_id="w")

@@ -231,7 +231,7 @@ class TestBucketIsInvisibleToThePrompt:
                 "model_preference": {"prompt_guidance": "lean"},
                 "agent_preference": {"proactive_questions": "auto"},
             },
-            sandbox_enabled=True,
+            main_agent_steering=True,
         )
         assert "prompt_guidance" not in rendered
         # Ordinary preferences still reach the model.
