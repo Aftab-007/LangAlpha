@@ -829,7 +829,7 @@ class ProvisioningMixin:
     async def _sandbox_held_down(
         self, sandbox_id: str, binding: ComputerBinding
     ) -> bool:
-        """Whether the provider holds the sandbox stopped or archived.
+        """Whether the provider holds the sandbox stopped, archived or archiving.
 
         An errored sandbox is not: a stop of it still fails, and the failed
         stop's reconcile settles the row for the next start to recover it."""
@@ -838,6 +838,7 @@ class ProvisioningMixin:
                 return await runtime.get_state() in (
                     RuntimeState.STOPPED,
                     RuntimeState.ARCHIVED,
+                    RuntimeState.ARCHIVING,
                 )
         except Exception:  # noqa: BLE001 - an unreadable state is not down
             return False

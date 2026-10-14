@@ -76,13 +76,14 @@ class TestRuntimeState:
         assert RuntimeState.STARTING == "starting"
         assert RuntimeState.STOPPING == "stopping"
         assert RuntimeState.ARCHIVED == "archived"
+        assert RuntimeState.ARCHIVING == "archiving"
         assert RuntimeState.ERROR == "error"
 
     def test_is_string(self):
         assert isinstance(RuntimeState.RUNNING, str)
 
     def test_all_members(self):
-        assert len(RuntimeState) == 6
+        assert len(RuntimeState) == 7
 
 
 # ---------------------------------------------------------------------------

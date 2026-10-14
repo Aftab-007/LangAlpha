@@ -38,6 +38,9 @@ _STATE_MAP: dict[str, RuntimeState] = {
     "restoring": RuntimeState.STARTING,
     "stopping": RuntimeState.STOPPING,
     "archived": RuntimeState.ARCHIVED,
+    # Its own state, not an error: a stop of it answers 409, and a start that
+    # lands after the container is gone errors the sandbox beyond recovery.
+    "archiving": RuntimeState.ARCHIVING,
     "error": RuntimeState.ERROR,
 }
 

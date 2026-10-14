@@ -76,6 +76,7 @@ async def test_error_state_is_transient_not_gone():
         RuntimeState.STOPPED,
         RuntimeState.STOPPING,
         RuntimeState.ARCHIVED,
+        RuntimeState.ARCHIVING,
         RuntimeState.ERROR,
     ],
 )

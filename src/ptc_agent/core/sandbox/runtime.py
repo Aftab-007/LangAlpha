@@ -117,6 +117,7 @@ class RuntimeState(str, Enum):
     STARTING = "starting"
     STOPPING = "stopping"
     ARCHIVED = "archived"
+    ARCHIVING = "archiving"
     ERROR = "error"
 
 

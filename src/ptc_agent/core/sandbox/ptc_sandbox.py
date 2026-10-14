@@ -769,7 +769,11 @@ class PTCSandbox:
 
         if on_state_observed is not None:
             try:
-                on_state_observed(state_value)
+                # An archive in progress ends in a restore from archived, so it
+                # gets the same slow-restore notice.
+                on_state_observed(
+                    "archived" if state_value == "archiving" else state_value
+                )
             except Exception:
                 logger.debug(
                     "on_state_observed callback raised; ignoring",
@@ -865,6 +869,49 @@ class PTCSandbox:
             )
             await self._start_runtime(sandbox_id, self.runtime.start, timeout=300)
             _mark_rc("start_archived")
+        elif state_value == "archiving":
+            # Never started mid-archive: a start that lands once Daytona has
+            # removed the container errors the sandbox beyond recovery, which
+            # reads as gone and rebuilds it from the backup. Wait for the
+            # archive to land, then restore it like any archived sandbox.
+            logger.info(
+                "Sandbox is being archived, waiting before restore",
+                sandbox_id=sandbox_id,
+            )
+            # A deadline, not a poll count: each poll is also a provider read,
+            # and the restore after it has its own 300s budget.
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.5)
+                self.runtime = await self._runtime_call(
+                    self.provider.get,
+                    sandbox_id,
+                    retry_policy=RetryPolicy.SAFE,
+                    allow_reconnect=False,
+                )
+                state = await self.runtime.get_state()
+                state_value = state.value
+                if state_value != "archiving":
+                    break
+            # A cancelled archive ends stopped, which starts like any other,
+            # or running, when something else already started it.
+            if state_value not in ("archived", "stopped", "running"):
+                # Still archiving is a sandbox that exists, so a retry, not a
+                # replacement; any other state is the next open's to handle.
+                logger.warning(
+                    "Sandbox did not finish archiving",
+                    sandbox_id=sandbox_id,
+                    state=state_value,
+                )
+                raise SandboxTransientError(
+                    f"Sandbox {sandbox_id} is being archived "
+                    f"(state '{state_value}' after ~45s); try again in a few minutes"
+                )
+            if state_value != "running":
+                await self._start_runtime(
+                    sandbox_id, self.runtime.start, timeout=300
+                )
+            _mark_rc("start_archiving")
         elif state_value == "error":
             # Restarting an errored sandbox the provider will not recover fails
             # the same way on every open, so the runtime answers Gone and the

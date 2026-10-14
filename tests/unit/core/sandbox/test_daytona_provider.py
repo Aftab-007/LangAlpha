@@ -152,6 +152,13 @@ class TestDaytonaRuntime:
         assert state == RuntimeState.STARTING
 
     @pytest.mark.asyncio
+    async def test_get_state_maps_archiving(self, runtime, mock_sdk_sandbox):
+        """Never error: a start mid-archive can break the sandbox for good."""
+        mock_sdk_sandbox.state = "archiving"
+        state = await runtime.get_state()
+        assert state == RuntimeState.ARCHIVING
+
+    @pytest.mark.asyncio
     async def test_recoverable_error_recovers(self, runtime, mock_sdk_sandbox):
         mock_sdk_sandbox.state = "error"
         mock_sdk_sandbox.recoverable = True
@@ -173,7 +180,7 @@ class TestDaytonaRuntime:
 
     @pytest.mark.parametrize(
         ("state", "recoverable"),
-        [("archiving", False), ("resizing", False), ("error", None)],
+        [("resizing", False), ("error", None)],
     )
     @pytest.mark.asyncio
     async def test_no_verdict_restarts(self, runtime, mock_sdk_sandbox, state, recoverable):
