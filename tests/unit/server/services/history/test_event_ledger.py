@@ -95,6 +95,8 @@ LIVE_ONLY = {
     # marks where a batch of replayed events ends, so replaying it would be
     # meaningless.
     "chan_caught_up",  # the same boundary per mux channel (thread_stream_mux_v2)
+    "attached",  # mux: the attach served the open-turn drain a fresh page
+    # asked for; a socket-level acknowledgement, nothing to replay
     "resync_required",  # mux: a channel's cursor fell off its stream, reload
     # from history; a socket-level instruction, nothing to replay
 }

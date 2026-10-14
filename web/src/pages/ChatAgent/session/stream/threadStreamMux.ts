@@ -71,6 +71,7 @@ const CONTROL_EVENTS = new Set([
   'chan_open',
   'chan_caught_up',
   'chan_close',
+  'attached',
   'resync_required',
   'transport_error',
   'timeout',
@@ -131,6 +132,13 @@ export class ThreadStreamMux {
   // A discarding tear had no rollback floor: declare an over-cap age so the
   // server answers with a thread-scoped resync (projection reload).
   private horizonUntrusted = false;
+  // Whether a connection has served the open-turn drain (its `attached`
+  // frame). The projection this mux attaches beside comes from history, which
+  // stops before the executing turn, so the turn's already-settled runs reach
+  // the page only if the server is asked for them. Asked once, not on every
+  // reconnect: the client sends no cursor for a closed channel, so each ask
+  // resends every one of those streams whole.
+  private openTurnServed = false;
 
   constructor(
     private threadId: string,
@@ -192,6 +200,11 @@ export class ThreadStreamMux {
         : this.knownAt == null
           ? 0
           : Math.max(0, (Date.now() - this.knownAt) / 1000);
+      // Asked again while a drain is cut off before its close: one opened
+      // without a frame has no cursor to resume from.
+      const openTurn =
+        !this.openTurnServed ||
+        [...this.runs.values()].some((chan) => chan.drain && !chan.closed && !chan.cursor);
       try {
         await openThreadMuxStream(
           this.threadId,
@@ -199,6 +212,7 @@ export class ThreadStreamMux {
           (line) => this.onLine(line),
           aborted,
           sinceAgeS,
+          openTurn,
         );
         // A transport_error close resolves the HTTP request normally but is
         // a failure — let the backoff keep growing across an outage.
@@ -404,6 +418,10 @@ export class ThreadStreamMux {
           console.warn(`[mux:${this.threadId}] onTaskRunOpened threw for ${taskId}`, e);
         }
       }
+      return;
+    }
+    if (event === 'attached') {
+      this.openTurnServed = true;
       return;
     }
     if (event === 'chan_caught_up') {

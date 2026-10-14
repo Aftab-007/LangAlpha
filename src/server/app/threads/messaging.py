@@ -1361,6 +1361,14 @@ async def thread_stream_mux_endpoint(
             "settled-run catch-up window"
         ),
     ),
+    open_turn: bool = Query(
+        False,
+        description=(
+            "v2 only: the client's projection holds none of the executing "
+            "turn's settled runs (a fresh page), so drain them; acknowledged "
+            "by an `attached` control frame"
+        ),
+    ),
 ):
     """Multiplexed thread stream: every lane of the thread on one socket.
 
@@ -1379,7 +1387,12 @@ async def thread_stream_mux_endpoint(
     )
 
     return StreamingResponse(
-        stream_thread_mux_v2(thread_id, parse_mux_cursors_v2(cursors), since_age_s),
+        stream_thread_mux_v2(
+            thread_id,
+            parse_mux_cursors_v2(cursors),
+            since_age_s,
+            open_turn=open_turn,
+        ),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )

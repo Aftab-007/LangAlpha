@@ -77,7 +77,7 @@ _PROBE_MIN_INTERVAL_S = 5.0
 # positive closure. Runs settled before the client's knowledge horizon are
 # already terminal in its history projection and are never re-announced —
 # except those the still-executing turn launched: replay excludes the open
-# turn, so attach drains them whatever their age (_settled_runs_of_open_turn).
+# turn, so a fresh page's attach drains them whatever their age (open_turn).
 # Must exceed the rescan interval so a run that both spawned and settled
 # between rescans is seen at least once.
 _RECENT_TERMINAL_SEED_S = 60
@@ -442,7 +442,11 @@ def _entry_after(entry_id: bytes | str, cursor: str) -> bool:
 
 
 async def stream_thread_mux_v2(
-    thread_id: str, cursor_map: dict[str, str], since_age_s: float = 0.0
+    thread_id: str,
+    cursor_map: dict[str, str],
+    since_age_s: float = 0.0,
+    *,
+    open_turn: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Attach (seed + control snapshot), then one XREAD pump over control +
     every open run stream, plus the watch relay.
@@ -451,7 +455,14 @@ async def stream_thread_mux_v2(
     between its status/history snapshot (or last received frame) and this
     connect. The settled-run catch-up windows anchor at that horizon — not
     the socket's attach moment — so a task that settled during a slow
-    history load still gets positive closure."""
+    history load still gets positive closure.
+
+    ``open_turn``: the client's projection is fresh from history, which stops
+    before the executing turn, so attach also drains the runs that turn has
+    settled. Only a fresh page asks: a reconnecting socket already holds them,
+    and since the client sends no cursor for a closed channel, re-draining on
+    every reconnect would resend each of those streams whole. The trailing
+    ``attached`` frame tells the client its ask was served."""
     cache = get_cache_client()
     if not cache.enabled or not cache.client:
         yield _control("transport_error", {"retryable": True})
@@ -595,15 +606,17 @@ async def stream_thread_mux_v2(
         )
         attach_frames.append(_chan_open_frame(chan, "drain"))
 
-    for run in await _settled_runs_of_open_turn(thread_id):
+    open_turn_runs = await _settled_runs_of_open_turn(thread_id) if open_turn else []
+    for run in open_turn_runs:
         run_id = str(run["task_run_id"])
         if run_id in channels:
             continue
         lane = f"task:{run['task_id']}"
         if _open_count() >= _MAX_CHANNELS:
-            # Socket-local deferral is enough: the next socket re-derives this
-            # set from the ledger for as long as the turn runs.
+            # Durable, like any deferral: the client's next socket will not
+            # ask for the open turn again once this one acknowledged it.
             pending_admissions[run_id] = lane
+            await _store_pending(cache, thread_id, run_id, lane)
             continue
         chan = _open(run_id, lane, b"0", _row_started_ms(run))
         attach_frames.append(_chan_open_frame(chan, "drain"))
@@ -661,6 +674,8 @@ async def stream_thread_mux_v2(
             )
             attach_frames.append(_chan_close_frame(chan, "resync_required"))
 
+    if open_turn:
+        attach_frames.append(_control("attached", {}))
     for frame in attach_frames:
         yield frame
 
