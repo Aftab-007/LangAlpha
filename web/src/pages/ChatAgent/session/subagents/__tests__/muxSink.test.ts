@@ -32,7 +32,7 @@ function setup(historyStatus?: string) {
     isStreamingRef: { current: true },
     threadIdRef: { current: 'thread-1' },
   } as unknown as SubagentRuntime;
-  createSubagentMuxController(rt, { muxOpenTaskIds: () => new Set(), armReportBackWatch: vi.fn() })
+  createSubagentMuxController(rt, { muxOpenTaskIds: () => new Set(), armReportBackWatch: vi.fn(), hydrateTaskTranscript: vi.fn(async () => null) })
     .attachSubagentMux('thread-1', vi.fn());
   const close = () => attached.sink!.onTaskRunClosed('Qm3xLp', 'completed');
   const written = () => updateSubagentCard.mock.calls.map(([, data]) => data as Record<string, unknown>);

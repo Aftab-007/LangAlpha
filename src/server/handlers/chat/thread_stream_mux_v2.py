@@ -75,7 +75,9 @@ _PROBE_MIN_INTERVAL_S = 5.0
 # to the socket's own attach age plus the client's declared snapshot lag) —
 # closing the settled-before-seed race and the lost-announce case with
 # positive closure. Runs settled before the client's knowledge horizon are
-# already terminal in its history projection and are never re-announced.
+# already terminal in its history projection and are never re-announced —
+# except those the still-executing turn launched: replay excludes the open
+# turn, so attach drains them whatever their age (_settled_runs_of_open_turn).
 # Must exceed the rescan interval so a run that both spawned and settled
 # between rescans is seen at least once.
 _RECENT_TERMINAL_SEED_S = 60
@@ -348,8 +350,9 @@ async def _seed_channels(
 
     Deliberately open runs only: a run already terminal at attach belongs to
     the history projection, and re-announcing it would replay content the
-    client just projected. Runs that settle AFTER attach are healed by the
-    rescan's recent-terminal admission below."""
+    client just projected (the open turn's settled runs are the exception,
+    drained by _settled_runs_of_open_turn). Runs that settle AFTER attach are
+    healed by the rescan's recent-terminal admission below."""
     out: list[tuple[str, str, Optional[float]]] = []
     try:
         from src.server.database.runs import lifecycle as tl_db
@@ -377,6 +380,31 @@ async def _seed_channels(
             "[mux2] ledger seed failed for %s", thread_id, exc_info=True
         )
     return out
+
+
+async def _settled_runs_of_open_turn(thread_id: str) -> list[dict]:
+    """Terminal task runs the thread's executing turn launched.
+
+    The history projection a client attaches with stops before the open turn,
+    and the turn can outlive its runs by any margin, so these are settled yet
+    unseen however old: the horizon-bounded catch-up would miss them and leave
+    their cards running until the turn ends. Drained from 0; a client that
+    already holds one drops the backlog by its own settled check."""
+    try:
+        from src.server.database.runs import lifecycle as tl_db
+        from src.server.database.runs import subagent_runs as sr_db
+
+        root = await tl_db.get_active_run(thread_id)
+        if root is None:
+            return []
+        return await sr_db.list_settled_runs_for_parent(
+            thread_id, str(root["conversation_response_id"])
+        )
+    except Exception:
+        logger.warning(
+            "[mux2] open-turn settled seed failed for %s", thread_id, exc_info=True
+        )
+        return []
 
 
 async def _resolve_lane(
@@ -565,6 +593,19 @@ async def stream_thread_mux_v2(
         chan = _open(
             run_id, f"task:{run['task_id']}", b"0", _row_started_ms(run)
         )
+        attach_frames.append(_chan_open_frame(chan, "drain"))
+
+    for run in await _settled_runs_of_open_turn(thread_id):
+        run_id = str(run["task_run_id"])
+        if run_id in channels:
+            continue
+        lane = f"task:{run['task_id']}"
+        if _open_count() >= _MAX_CHANNELS:
+            # Socket-local deferral is enough: the next socket re-derives this
+            # set from the ledger for as long as the turn runs.
+            pending_admissions[run_id] = lane
+            continue
+        chan = _open(run_id, lane, b"0", _row_started_ms(run))
         attach_frames.append(_chan_open_frame(chan, "drain"))
 
     # Pending admissions inherited from prior sockets: a defer whose socket

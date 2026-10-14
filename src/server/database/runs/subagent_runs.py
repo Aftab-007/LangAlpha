@@ -600,6 +600,30 @@ async def list_recently_finalized_runs_for_thread(
             return [dict(r) for r in rows]
 
 
+async def list_settled_runs_for_parent(
+    thread_id: str, parent_run_id: str
+) -> List[Dict[str, Any]]:
+    """Terminal runs launched by one root run, oldest first.
+
+    Launched by a turn that is still executing, a settled run is in no
+    history projection (replay excludes the open turn), so the mux has to
+    deliver it however long ago it finalized."""
+    async with pool.get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT * FROM subagent_runs
+                WHERE thread_id = %s
+                  AND parent_run_id = %s
+                  AND status != 'in_progress'
+                ORDER BY started_at
+                """,
+                (thread_id, parent_run_id),
+            )
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
 async def count_open_runs_for_workspace(workspace_id: str) -> int:
     """Live task runs across every thread of the workspace — the durable
     signal that a background subagent still needs the sandbox, regardless of

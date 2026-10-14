@@ -25,6 +25,7 @@ from typing import Any
 
 from langchain_core.messages import ToolMessage
 
+from ptc_agent.agent.middleware.background_subagent.task import WORKFLOW_SUBAGENT_TYPE
 from ptc_agent.agent.transcript.classify import is_run_boundary_message
 from src.config.settings import get_redis_ttl_workflow_events
 from src.server.database.conversation import turn_slices as slices_db
@@ -165,6 +166,11 @@ async def project_task_transcript(
     stream, and a checkpoint read here would hand the caller a partial
     transcript that never self-heals. An unresolvable status counts as
     running.
+
+    A workflow run has no transcript, only the driver's ui snapshot, so it
+    gets the lifecycle frames replay would project for its launch. A client
+    needs them while the launching turn is still running, which no history
+    load covers, once the run's stream has expired.
     """
     try:
         details = await resolve_task_details(thread_id, [task_id])
@@ -176,11 +182,20 @@ async def project_task_transcript(
             exc_info=True,
         )
         return []
-    if (details.get(task_id) or {}).get("status") not in TERMINAL_TASK_STATUSES:
+    detail = details.get(task_id) or {}
+    if detail.get("status") not in TERMINAL_TASK_STATUSES:
         return []
 
     reader = CheckpointHistoryReader.get_instance()
     history = await reader.aget_task_history(thread_id, task_id)
+    task = await sr_db.get_task(thread_id, task_id)
+    if task is not None and task.get("subagent_type") == WORKFLOW_SUBAGENT_TYPE:
+        return projector.workflow_run_items(
+            history,
+            task_id=task_id,
+            ledger_status=detail["status"],
+            ledger_failure=detail.get("error"),
+        )
     return _run_items(thread_id, history, f"task:{task_id}")
 
 

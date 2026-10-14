@@ -13,6 +13,7 @@ import {
   type SubagentTerminalStatus,
 } from './subagentStatus';
 import { settleWorkflowRunFromClosure } from './liveEventHandlers';
+import type { TaskTranscriptMeta } from './hydrateTaskTranscript';
 import { isTaskAgentId, taskIdFromAgentId } from '../../utils/agentId';
 import type { SSEEvent } from '../types';
 import type { SubagentRuntime } from '../runtime';
@@ -45,6 +46,8 @@ export interface SubagentMuxDeps {
     reportBackRunId: string | null | undefined,
     pokeSource: string | null,
   ) => void;
+  /** useSubagentHistory's checkpoint read for one settled task. */
+  hydrateTaskTranscript: (agentId: string, meta?: TaskTranscriptMeta) => Promise<unknown>;
 }
 
 /**
@@ -177,6 +180,14 @@ export function createSubagentMuxController(rt: SubagentRuntime, deps: SubagentM
       // with no open channel is not terminal (its chan_open may simply not
       // have landed yet), and its own closure/ledger stamp will flip it.
       setInlineSubagentTaskStatus(`task:${shortTaskId}`, status);
+      // A lane that closed news here with nothing delivered drained a stream
+      // that expired before this page could read it: a run the still-running
+      // turn launched, which no history load covers yet. Its durable copy is
+      // the checkpoint; for a workflow run, the only progress the panels have.
+      const taskRefs = rt.subagentStateRefsRef.current[`task:${shortTaskId}`];
+      if (news && !taskRefs?.workflowRun && !taskRefs?.messages?.length) {
+        void deps.hydrateTaskTranscript(`task:${shortTaskId}`, { status });
+      }
       // Workflow-level flag only when ALL run channels have closed. No status
       // sweep: each task's card/chip was already stamped terminal by its own
       // chan_close above (positive closure per task). A blanket completion
