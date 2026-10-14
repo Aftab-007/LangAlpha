@@ -1,4 +1,4 @@
-"""InsightService — Schedule-based market insights via flash agent.
+"""InsightService — Schedule-based market insights from a research agent.
 
 Schedule (all times Eastern / America/New_York):
   - 9:00 AM  pre_market    — Overnight + pre-market news
@@ -9,6 +9,7 @@ Weekends: pre_market and post_market only — no hourly updates.
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
@@ -199,21 +200,18 @@ async def _llm_extract_fallback(raw_text: str, user_id: str | None) -> dict:
     return result.model_dump() if hasattr(result, "model_dump") else dict(result)
 
 
-async def _run_flash_agent(prompt: str, user_id: str | None = None) -> str:
-    """Run the flash agent graph and return raw text output.
+async def _research(prompt: str, user_id: str | None = None) -> str:
+    """Run one research brief and return the last AI message's text.
 
-    When *user_id* is provided the LLM is resolved through the normal
-    OAuth / BYOK chain so self-hosted deployments without a system API
-    key can still generate insights using the user's own credentials.
-
-    Returns:
-        Raw text content from the agent's last AI message.
+    *user_id* resolves the model through the user's OAuth / BYOK chain, so a
+    self-hosted deployment without a system key can still generate insights.
     """
     from langchain_core.messages import HumanMessage
 
-    from ptc_agent.agent.flash.graph import build_flash_graph
+    from ptc_agent.agent.insight_graph import build_insight_graph
     from src.observability.langsmith_tracer import with_run_tracer
     from src.server.app import setup
+    from src.server.services.llm.config import apply_fetch_override
 
     agent_config = setup.agent_config
     if not agent_config:
@@ -234,12 +232,19 @@ async def _run_flash_agent(prompt: str, user_id: str | None = None) -> str:
     if config.llm is None:
         raise ValueError("No LLM configured — set a model in agent_config.yaml or select one in Settings")
 
-    # A scheduled job has no workspace for a chart drawing to land in.
-    graph = build_flash_graph(config=config, chart_annotation=False)
+    graph = build_insight_graph(config)
     input_state = {"messages": [HumanMessage(content=prompt)]}
-    # A flash run has no step cap, so it names a tracer that does not hold
+    # WebFetch reads the user's fetch model from the context, as in a chat
+    # turn. The run gets a context of its own because the scheduler runs one
+    # brief after another in a single task, and a fetch client set for one
+    # must not outlive it.
+    run_context = contextvars.copy_context()
+    run_context.run(apply_fetch_override, config)
+    # A research run has no step cap, so it names a tracer that does not hold
     # its run tree, as a chat turn does.
-    result = await graph.ainvoke(input_state, with_run_tracer({}))
+    result = await asyncio.create_task(
+        graph.ainvoke(input_state, with_run_tracer({})), context=run_context,
+    )
 
     # Extract text from the last AI message
     messages = result.get("messages", [])
@@ -256,7 +261,7 @@ async def _run_flash_agent(prompt: str, user_id: str | None = None) -> str:
                 return "\n".join(text_parts)
             return str(content)
 
-    raise ValueError("Flash agent returned no AI message")
+    raise ValueError("Insight research returned no AI message")
 
 
 class InsightService:
@@ -343,12 +348,12 @@ class InsightService:
         if next_job:
             run_at, job_type = next_job
             logger.info(
-                f"[MARKET_INSIGHT] Service started (flash agent), "
+                f"[MARKET_INSIGHT] Service started, "
                 f"next job: {job_type} at {run_at.strftime('%H:%M')} ET"
             )
         else:
             logger.info(
-                "[MARKET_INSIGHT] Service started (flash agent), "
+                "[MARKET_INSIGHT] Service started, "
                 "no more jobs today"
             )
 
@@ -434,11 +439,11 @@ class InsightService:
     async def _run_personalized_generation(
         self, user_id: str, insight_id: str, prompt: str
     ) -> None:
-        """Background task: run flash agent and persist result."""
+        """Background task: run the research graph and persist the result."""
         start_time = time.monotonic()
         try:
             raw_text = await asyncio.wait_for(
-                _run_flash_agent(prompt + "\n\n" + _JSON_GUIDELINES, user_id=user_id),
+                _research(prompt + "\n\n" + _JSON_GUIDELINES, user_id=user_id),
                 timeout=self._generation_timeout,
             )
             parsed = await self._extract_with_fallback(raw_text, user_id=user_id)
@@ -710,10 +715,10 @@ class InsightService:
     async def _generate_insight(
         self, job_type: str, now_et: datetime
     ) -> None:
-        """Generate a single market insight via flash agent."""
+        """Generate a single market insight."""
         instruction = _build_instruction(job_type, now_et)
 
-        logger.info(f"[MARKET_INSIGHT] Starting {job_type} (flash agent)")
+        logger.info(f"[MARKET_INSIGHT] Starting {job_type}")
         start_time = time.monotonic()
 
         # When auth is off (local dev / self-hosted), use the local dev user's
@@ -730,7 +735,7 @@ class InsightService:
 
         try:
             raw_text = await asyncio.wait_for(
-                _run_flash_agent(instruction + "\n\n" + _JSON_GUIDELINES, user_id=system_user_id),
+                _research(instruction + "\n\n" + _JSON_GUIDELINES, user_id=system_user_id),
                 timeout=self._generation_timeout,
             )
             parsed = await self._extract_with_fallback(raw_text, user_id=system_user_id)

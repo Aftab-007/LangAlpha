@@ -36,7 +36,6 @@ from src.server.utils.skill_context import (
     detect_slash_commands,
     parse_skill_contexts,
 )
-from src.tools.web.fetch import fetch_llm_client_override, fetch_model_override
 from src.utils.timezone_utils import zone_or_none
 from src.utils.tracking import TokenTrackingManager
 from src.tools.decorators import ToolUsageTracker
@@ -370,21 +369,6 @@ def init_tracking(thread_id: str) -> tuple[TokenTrackingManager, ToolUsageTracke
     )
     tool_tracker = ToolUsageTracker(thread_id=thread_id)
     return token_callback, tool_tracker
-
-
-def apply_fetch_override(config) -> None:
-    """Propagate fetch model / client overrides from *config* into context vars.
-
-    A blank fetch means the turn's flash model, the same default ``role_registry``
-    resolves a client for. Without the name override, web_fetch would fall back
-    to re-reading agent_config.yaml and miss the user's own flash choice.
-    """
-    fetch_client = config.subsidiary_llm_clients.get("fetch")
-    if fetch_client:
-        fetch_llm_client_override.set(fetch_client)
-    fetch_model = config.llm and config.llm.fetch_name
-    if fetch_model:
-        fetch_model_override.set(fetch_model)
 
 
 class PriorThread(NamedTuple):

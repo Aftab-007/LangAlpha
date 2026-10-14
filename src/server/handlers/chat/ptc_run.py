@@ -69,7 +69,6 @@ from ptc_agent.agent.middleware.credit_gate import run_with_credit_gate
 from .request_prep import (
     DISPATCH_STARTED_MARKER,
     _resolve_fork,
-    apply_fetch_override,
     build_graph_config,
     build_turn_context,
     turn_start_checkpoint_id,
@@ -104,7 +103,7 @@ from .attachments import attach_request_files
 from .error_handling import handle_workflow_error
 from .flash_handover import cancel_tool_calls_it_lacks, hand_over_flash_thread
 from src.server.services.llm.clients import is_own_key_turn
-from src.server.services.llm.config import resolve_llm_config
+from src.server.services.llm.config import apply_fetch_override, resolve_llm_config
 from src.server.services.llm.thread_model import NamedModel
 from .steering import open_with_steers_ahead
 from .run_stream_reader import stream_from_log

@@ -58,7 +58,6 @@ class TestSubmoduleImports:
         assert hasattr(mod, "process_hitl_response")
         assert hasattr(mod, "normalize_request_messages")
         assert hasattr(mod, "init_tracking")
-        assert hasattr(mod, "apply_fetch_override")
         assert hasattr(mod, "ensure_thread")
         assert hasattr(mod, "prepare_skill_contexts")
         assert hasattr(mod, "build_graph_config")
