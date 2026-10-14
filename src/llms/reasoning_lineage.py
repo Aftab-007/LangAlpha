@@ -99,3 +99,21 @@ def lineage_for_model_id(model_id: str | None) -> str:
     if not model_id:
         return UNKNOWN_LINEAGE
     return _model_id_index(_config()).get(model_id) or UNKNOWN_LINEAGE
+
+
+def tool_turns_need_reasoning(
+    route: str | None, config: ModelConfig | None = None
+) -> bool:
+    """Whether the route's API rejects a tool-calling turn with no reasoning block.
+
+    Declared per provider in ``providers.json`` as
+    ``"tool_turns_need_reasoning": true``. DeepSeek is the case: with thinking
+    on, every tool-calling turn of the turn in progress must carry a thinking
+    block, so a turn another model wrote, whose reasoning gate A has stripped,
+    is a 400. An empty block satisfies it, with thinking on or off. Off for a
+    route redirected off its manifest endpoint, which may not be that API.
+    """
+    if not route or ROUTE_ENDPOINT_SEP in route:
+        return False
+    info = (config or _config()).get_provider_info(route)
+    return info.get("tool_turns_need_reasoning") is True
