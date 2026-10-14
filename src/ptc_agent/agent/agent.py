@@ -28,7 +28,6 @@ from ptc_agent.agent.middleware import (
     AskUserMiddleware,
     BackgroundSubagentMiddleware,
     BackgroundSubagentOrchestrator,
-    SubagentEventCaptureMiddleware,
     MultimodalMiddleware,
     MultimodalStripMiddleware,
     CodeValidationMiddleware,
@@ -51,6 +50,10 @@ from ptc_agent.agent.middleware import (
     ReasoningCompatibilityMiddleware,
     StreamHeartbeatMiddleware,
     RepeatCallGuardMiddleware,
+)
+from ptc_agent.agent.middleware.background_subagent import (
+    SubagentEventCaptureMiddleware,
+    SubagentToolResultCaptureMiddleware,
 )
 from ptc_agent.agent.middleware.compaction.notes import (
     NotesDueMiddleware,
@@ -588,8 +591,6 @@ class PTCAgent:
         direct_tools = list(direct_mcp.tools) if direct_mcp is not None else []
         main_only_middleware.extend(direct_tool_middleware(direct_mcp, order_ledger))
 
-        event_capture_middleware = SubagentEventCaptureMiddleware(registry=_bg_registry)
-
         background_middleware = BackgroundSubagentMiddleware(
             timeout=background_timeout,
             enabled=not disable_subagents,
@@ -665,7 +666,6 @@ class PTCAgent:
                 registry=subagent_registry,
                 enabled_names=subagent_names,
                 compiler=subagent_compiler,
-                event_capture_middleware=event_capture_middleware,
                 role=role,
             )
             if additional_subagents:
@@ -773,6 +773,13 @@ class PTCAgent:
             m
             for m in [
                 SubagentSteeringMiddleware(registry=background_middleware.registry),
+                # Outermost of the tool wrappers, so each result streams as
+                # the checkpoint keeps it, the time-up refusal included, and
+                # live agrees with replay. It acts only on what comes back,
+                # and nothing between it and eviction changes a result.
+                SubagentToolResultCaptureMiddleware(
+                    registry=background_middleware.registry
+                ),
                 # Outside every tool wrapper below, so a call refused in the
                 # last minutes of the run's clock reaches none of them.
                 TimeUpToolStopMiddleware(),
@@ -811,6 +818,12 @@ class PTCAgent:
                     model_name=turn.name or None,
                 ),
                 ReasoningCompatibilityMiddleware(),
+                # Last, so it sits innermost in every subagent built on this
+                # stack: it captures the tool calls of the response the model
+                # returned and counts only the calls that reach their tool.
+                SubagentEventCaptureMiddleware(
+                    registry=background_middleware.registry
+                ),
             ]
             if m is not None
         ]

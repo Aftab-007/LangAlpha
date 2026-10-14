@@ -5,8 +5,8 @@ import contextvars
 from src.utils.tracking.per_call_token_tracker import PerCallTokenTracker
 
 # This ContextVar propagates tool_call_id to subagent tool calls, used by
-# SubagentEventCaptureMiddleware to track which background task a tool call
-# belongs to.
+# the capture middleware in event_capture.py to track which background task a
+# tool call belongs to.
 current_background_tool_call_id: contextvars.ContextVar[str | None] = (
     contextvars.ContextVar("current_background_tool_call_id", default=None)
 )

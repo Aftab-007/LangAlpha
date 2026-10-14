@@ -3,7 +3,8 @@
 Whatever wraps the stop has already acted on a call by the time the refusal
 comes back (the Task interceptor spawned the subagent, the file-op stream
 reported the write), so in each stack the first middleware that wraps tool
-calls has to be the stop.
+calls has to be the stop. A subagent's result capture is the one exception: it
+acts only on what the call returns, and has to stream the refusal as well.
 """
 
 from unittest.mock import MagicMock, patch
@@ -13,6 +14,9 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 
 from ptc_agent.agent.middleware import SubAgentMiddleware
+from ptc_agent.agent.middleware.background_subagent import (
+    SubagentToolResultCaptureMiddleware,
+)
 from ptc_agent.agent.middleware.runtime_context import TimeUpToolStopMiddleware
 from ptc_agent.config.agent import AgentConfig, LLMConfig
 from ptc_agent.config.core import (
@@ -55,7 +59,11 @@ def _wraps_tools(middleware: object) -> bool:
 
 
 def _first_tool_wrapper(stack: list) -> object:
-    return next(m for m in stack if _wraps_tools(m))
+    return next(
+        m
+        for m in stack
+        if _wraps_tools(m) and not isinstance(m, SubagentToolResultCaptureMiddleware)
+    )
 
 
 @pytest.fixture(scope="module")

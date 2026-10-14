@@ -373,7 +373,9 @@ def _evicted_results(
     ToolMessage is checkpointed, so a projected ``tool_call_result`` may
     carry only the "too large, saved to …" pointer. Only results replay
     restores are kept: none once the stored result is itself the pointer
-    (eviction ran before SSE), so newer turns keep nothing here.
+    (eviction ran before SSE). That leaves older subagent results, which
+    were captured ahead of eviction and stored whole. Newer turns store no
+    copy, and both lanes stream the pointer the checkpoint keeps.
     """
     stored_results = {
         e["data"].get("tool_call_id"): e["data"]

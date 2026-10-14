@@ -179,7 +179,8 @@ class TimeUpToolStopMiddleware(AgentMiddleware):
     ``Task`` asked for, the file-op middleware has streamed a refused ``Write``
     as done, and the repeat guard has counted the call. Out here a refused call
     reaches none of them. The ``refusal`` tag tells the harness's own refusal
-    from a tool that failed.
+    from a tool that failed. A subagent's result capture alone goes further
+    out: it acts only on the result, and has to stream the refusal too.
     """
 
     # Async only, as ``SubagentSwitchMiddleware``'s is: the async agent never
