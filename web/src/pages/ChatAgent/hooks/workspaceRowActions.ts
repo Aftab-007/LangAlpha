@@ -87,6 +87,11 @@ export async function patchWorkspaceRow(
     // The detail cache (useWorkspace → FilePanel header) carries the name, so
     // a rename must refresh it too; harmless for other patches.
     queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.detail(wsId) });
+    // Hand-off cards head themselves with the workspace's name from their
+    // liveness read, which stops polling once the run settles.
+    if ('name' in patch) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.threads.dispatchLivenessAll() });
+    }
     return true;
   } catch (e) {
     rollbackCachedWorkspaces(queryClient, previous);

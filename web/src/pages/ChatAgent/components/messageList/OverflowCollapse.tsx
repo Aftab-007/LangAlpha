@@ -33,6 +33,17 @@ export function OverflowCollapse({ enabled, maxHeight, children }: OverflowColla
     setOverflows(el.scrollHeight > maxHeight);
   }, [enabled, maxHeight, children]);
 
+  // The content also grows with no new children: an image loading, or the
+  // column narrowing as a side panel opens and the text rewraps.
+  useEffect(() => {
+    if (!enabled || typeof ResizeObserver === 'undefined') return;
+    const el = contentRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => setOverflows(el.scrollHeight > maxHeight));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [enabled, maxHeight]);
+
   if (!enabled) return <>{children}</>;
 
   const bounded = overflows && !expanded;

@@ -145,6 +145,43 @@ describe('PTCAgentCard — live dispatch status', () => {
   });
 });
 
+describe('PTCAgentCard — the run\'s title', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('heads the card with the thread\'s title and its workspace\'s current name', async () => {
+    mockLiveness.mockResolvedValue([
+      { thread_id: 'thread-123', status: 'running', run_id: 'run-1', can_reconnect: true, title: 'NVDA vs AMD datacenter share', workspace_name: 'Chips' },
+    ]);
+    renderApproved();
+
+    await waitFor(() => expect(screen.getByText('NVDA vs AMD datacenter share')).toBeInTheDocument());
+    expect(screen.getByText('Chips')).toBeInTheDocument();
+    // The brief stays, as the line under the title.
+    expect(screen.getByText(APPROVED.question)).toBeInTheDocument();
+  });
+
+  it('reads a title that is still the placeholder as no title', async () => {
+    mockLiveness.mockResolvedValue([
+      { thread_id: 'thread-123', status: 'running', run_id: 'run-1', can_reconnect: true, title: APPROVED.question },
+    ]);
+    renderApproved();
+
+    await waitFor(() => expect(screen.getByText('chat.ptcCard.statusWorking')).toBeInTheDocument());
+    // Only the brief, as the heading: no title above it.
+    expect(screen.getAllByText(APPROVED.question)).toHaveLength(1);
+  });
+
+  it('shows a generated title that happens to open the brief', async () => {
+    mockLiveness.mockResolvedValue([
+      { thread_id: 'thread-123', status: 'running', run_id: 'run-1', can_reconnect: true, title: 'Is NVDA overvalued' },
+    ]);
+    renderApproved();
+
+    await waitFor(() => expect(screen.getByText('Is NVDA overvalued')).toBeInTheDocument());
+    expect(screen.getByText(APPROVED.question)).toBeInTheDocument();
+  });
+});
+
 describe('PTCAgentCard: a dispatch that failed after approval', () => {
   beforeEach(() => vi.clearAllMocks());
 

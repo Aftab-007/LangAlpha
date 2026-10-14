@@ -7,6 +7,8 @@ import { DispatchStatusIndicator } from './dispatchStatusUi';
 import { useOpenDispatchedThread, type DispatcherContext } from '../hooks/useOpenDispatchedThread';
 import { AUTO_APPROVE, useApproveAlways } from '@/hooks/useAutoApprove';
 import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
+import Markdown from './Markdown';
+import { OverflowCollapse } from './messageList/OverflowCollapse';
 
 interface ProposalData {
   workspace_name?: string;
@@ -31,6 +33,34 @@ interface PTCAgentCardProps {
 // not --color-bg-card (white; the dashboard-on-canvas pairing).
 const PANEL_BG = 'var(--color-bg-tool-card)';
 const MONO = 'var(--font-mono)';
+
+// How much of the brief the approval card shows before Show all, in px. A
+// hand-off brief is written for an analyst who sees nothing else, so it runs
+// long; once approved, the card names the run instead and the thread holds
+// the brief.
+const BRIEF_MAX_PX = 132;
+
+/**
+ * The thread's title, unless it is still the placeholder a new thread is given
+ * until its title is generated: the question's first 255 code points, as the
+ * server slices them. An exact match, so a generated title that happens to open
+ * the brief still shows. Both sides trimmed, as the liveness slice trims.
+ */
+function namedTitle(title: string | undefined, question: string): string | null {
+  if (!title || title === Array.from(question).slice(0, 255).join('').trim()) return null;
+  return title;
+}
+
+/** The brief as one line of plain text, for a clamped preview. */
+function plainBrief(question: string): string {
+  return question
+    .replace(/^\s*(?:#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*(\S(?:[^*]*\S)?)\*\*/g, '$1')
+    .replace(/`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 /**
  * The card's own reading of each status: whether the run is still in flight
@@ -59,8 +89,10 @@ const CARD_UI: Record<
 interface MissionPanelProps {
   /** Small mono kicker naming the workspace the run belongs to. */
   eyebrow: string;
-  /** Research question. */
-  question: string;
+  /** What the card is about: the run's title, or the brief while the run has none. */
+  heading?: string | null;
+  /** Under the heading: the brief, whole or as a clamped preview. */
+  body: React.ReactNode;
   /** Border color of the shell. */
   border: string;
   /** Right-aligned header content (status indicator or "awaiting approval" label). */
@@ -74,14 +106,16 @@ interface MissionPanelProps {
 
 /**
  * Shared work-order chrome for the pending + approved cards: the motion shell,
- * kicker, and question. Both cards layout-match exactly; only the header status
- * slot, border, and footer differ, so those are slots. Deliberately quiet — the
- * card sits inside a chat transcript, so the question renders at body size and
- * the workspace name is small mono metadata, not a display headline.
+ * kicker, heading and body. Both cards layout-match; only what they say, the
+ * header status slot, border, and footer differ, so those are slots.
+ * Deliberately quiet — the card sits inside a chat transcript, so the brief
+ * renders below body size and is bounded, and the workspace name is small mono
+ * metadata.
  */
 function MissionPanel({
   eyebrow,
-  question,
+  heading,
+  body,
   border,
   statusSlot,
   animate,
@@ -110,9 +144,13 @@ function MissionPanel({
           {statusSlot}
         </div>
 
-        <div className="text-[0.875rem] font-medium leading-snug" style={{ color: 'var(--color-text-primary)' }}>
-          {question}
-        </div>
+        {heading && (
+          <div className="line-clamp-2 text-[0.875rem] font-medium leading-snug" style={{ color: 'var(--color-text-primary)' }}>
+            {heading}
+          </div>
+        )}
+
+        {body}
 
         {children}
       </div>
@@ -142,7 +180,8 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
   const isApproved = status === 'approved';
   const threadId = proposalData?.thread_id;
 
-  const { status: runStatus, startedAt } = useDispatchStatus(threadId, isApproved && !!threadId);
+  const { status: runStatus, startedAt, title: threadTitle, workspaceName: liveWorkspaceName } =
+    useDispatchStatus(threadId, isApproved && !!threadId);
   // A failed dispatch has no run to wait for, unless one turns up on the
   // thread an unknown outcome named.
   const notStarted = proposalData?.dispatch_failed === true && runStatus === 'starting';
@@ -153,8 +192,10 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
   const { workspace_name, question, workspace_id } = proposalData;
   // The kicker names which workspace the run belongs to — PTC runs aren't only
   // "deep research", so we surface the workspace's real name (resolved by the
-  // backend). Empty when unknown rather than a fixed placeholder string.
-  const eyebrow = workspace_name?.trim() || '';
+  // backend), current once the run's thread is read. Empty when unknown rather
+  // than a fixed placeholder string.
+  const eyebrow = liveWorkspaceName || workspace_name?.trim() || '';
+  const title = namedTitle(threadTitle, question);
 
   const openThread = () => {
     if (threadId) openDispatchedThread(threadId, workspace_id);
@@ -184,7 +225,9 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
               <div className="pb-1 pl-6 pt-2">
                 <div className="rounded-lg px-4 py-3" style={{ border: '1px solid var(--color-border-muted)', opacity: 0.6 }}>
                   {workspace_name && <div className="mb-1 text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>{workspace_name}</div>}
-                  <div className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>{question}</div>
+                  <OverflowCollapse enabled maxHeight={BRIEF_MAX_PX}>
+                    <Markdown variant="compact" content={question} className="text-[0.8125rem] leading-relaxed" />
+                  </OverflowCollapse>
                 </div>
               </div>
             </motion.div>
@@ -202,7 +245,12 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
     return (
       <MissionPanel
         eyebrow={eyebrow}
-        question={question}
+        heading={title ?? plainBrief(question)}
+        body={title && (
+          <div className="mt-1 line-clamp-1 text-[0.8125rem]" style={{ color: 'var(--color-text-tertiary)' }}>
+            {plainBrief(question)}
+          </div>
+        )}
         border={ui.live ? 'var(--color-border-default)' : 'var(--color-border-muted)'}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
@@ -231,7 +279,11 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
   return (
     <MissionPanel
       eyebrow={eyebrow}
-      question={question}
+      body={
+        <OverflowCollapse enabled maxHeight={BRIEF_MAX_PX}>
+          <Markdown variant="compact" content={question} className="text-[0.8125rem] leading-relaxed" />
+        </OverflowCollapse>
+      }
       border="var(--color-border-muted)"
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
@@ -284,7 +336,7 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
           disabled={saving}
           onClick={(e: React.MouseEvent) => { e.stopPropagation(); onReject?.(); }}
           className="rounded-md px-3.5 py-1.5 text-[0.8125rem] font-medium transition-colors hover:bg-(--color-bg-hover)"
-          style={{ border: '1px solid var(--color-border-default)', color: 'var(--color-text-tertiary)' }}
+          style={{ border: '1px solid var(--color-border-default)', color: 'var(--color-text-secondary)' }}
         >
           {t('chat.ptcCard.decline')}
         </button>
