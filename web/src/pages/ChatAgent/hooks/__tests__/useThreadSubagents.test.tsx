@@ -74,7 +74,7 @@ function setup(
   if (cached) queryClient.setQueryData(queryKeys.threads.detail(THREAD), cached);
   mocks.getThread.mockResolvedValue(cached ?? row(true));
   if (prefs !== UNREAD) queryClient.setQueryData(queryKeys.user.preferences(), prefs);
-  const initial: Props = { threadId: THREAD, mode: 'ptc', ...props };
+  const initial: Props = { threadId: THREAD, ...props };
   const view = renderHookWithProviders(
     (p: Props = initial) => useThreadSubagents(p),
     { queryClient },
@@ -92,7 +92,7 @@ function setupWithDefault(cached: Thread, prefs: UserPreferences) {
   queryClient.setQueryData(queryKeys.user.preferences(), prefs);
   const view = renderHookWithProviders(
     () => ({
-      thread: useThreadSubagents({ threadId: THREAD, mode: 'ptc' }),
+      thread: useThreadSubagents({ threadId: THREAD }),
       subagentsDefault: readSubagentsDefault(usePreferences().preferences),
       accept: useUpdatePreferences(),
     }),
@@ -203,12 +203,6 @@ describe('useThreadSubagents', () => {
 
       await act(async () => { await result.current.setAllowed(true); });
       expect(result.current.toSend).toBe(true);
-    });
-
-    it('carries nothing in fast mode, held pick or not', async () => {
-      const { result } = setup({ threadId: '__default__', mode: 'fast' }, null);
-      await act(async () => { await result.current.setAllowed(false); });
-      expect(result.current.toSend).toBeUndefined();
     });
   });
 
@@ -376,7 +370,7 @@ describe('useThreadSubagents', () => {
       // The row read beside the switch, to know the switch has seen it too.
       const { result } = renderHookWithProviders(
         () => ({
-          switch: useThreadSubagents({ threadId: THREAD, mode: 'ptc' }),
+          switch: useThreadSubagents({ threadId: THREAD }),
           row: useQuery(threadDetailQuery(THREAD)).data,
         }),
         { queryClient },
@@ -447,14 +441,10 @@ describe('useThreadSubagents', () => {
       expect(result.current.offer).toBe(false);
     });
 
-    it('waits for the default to be read, and never comes up in fast mode', async () => {
+    it('waits for the default to be read', async () => {
       const unread = setup({}, row(true), undefined, UNREAD);
       await act(async () => { await unread.result.current.setAllowed(false); });
       expect(unread.result.current.offer).toBeNull();
-
-      const fast = setup({ mode: 'fast' });
-      await act(async () => { await fast.result.current.setAllowed(false); });
-      expect(fast.result.current.offer).toBeNull();
     });
 
     it('comes back with a later flip once run out, but closed stays closed for the thread', async () => {
@@ -481,7 +471,7 @@ describe('useThreadSubagents', () => {
       await act(async () => { await result.current.setAllowed(false); });
       expect(result.current.offer).toBe(false);
       queryClient.setQueryData(queryKeys.threads.detail('thread-2'), row(false, 'thread-2'));
-      rerender({ threadId: 'thread-2', mode: 'ptc' });
+      rerender({ threadId: 'thread-2' });
       expect(result.current.offer).toBeNull();
     });
 
@@ -492,7 +482,7 @@ describe('useThreadSubagents', () => {
       let saving!: Promise<boolean>;
       act(() => { saving = result.current.setAllowed(false); });
       queryClient.setQueryData(queryKeys.threads.detail('thread-2'), row(false, 'thread-2'));
-      rerender({ threadId: 'thread-2', mode: 'ptc' });
+      rerender({ threadId: 'thread-2' });
 
       await act(async () => { patch.resolve(row(false)); await saving; });
       expect(result.current.offer).toBeNull();
@@ -573,12 +563,12 @@ describe('useThreadSubagents', () => {
 
       mocks.getThread.mockResolvedValueOnce(row(null)).mockResolvedValue(row(false));
       mocks.updateThread.mockResolvedValue(row(false));
-      rerender({ threadId: THREAD, mode: 'ptc' });
+      rerender({ threadId: THREAD });
       await waitFor(() => expect(mocks.updateThread).toHaveBeenCalledWith(THREAD, { subagents_allowed: false }));
       await waitFor(() => expect(result.current.allowed).toBe(false));
       expect(result.current.toSend).toBeUndefined();
 
-      rerender({ threadId: THREAD, mode: 'ptc' });
+      rerender({ threadId: THREAD });
       await act(async () => {});
       expect(mocks.updateThread).toHaveBeenCalledTimes(1);
     });
@@ -591,20 +581,16 @@ describe('useThreadSubagents', () => {
 
       mocks.getThread.mockResolvedValueOnce(row(false)).mockResolvedValue(row(null));
       mocks.updateThread.mockResolvedValue(row(null));
-      rerender({ threadId: THREAD, mode: 'ptc' });
+      rerender({ threadId: THREAD });
       await waitFor(() => expect(mocks.updateThread).toHaveBeenCalledWith(THREAD, { subagents_allowed: true }));
       await waitFor(() => expect(result.current.allowed).toBe(true));
       expect(mocks.updateThread).toHaveBeenCalledTimes(1);
     });
 
-    it('saves nothing when nothing was held, or in fast mode', async () => {
+    it('saves nothing when nothing was held', async () => {
       const untouched = setup({ threadId: '__default__' }, null);
-      untouched.rerender({ threadId: THREAD, mode: 'ptc' });
+      untouched.rerender({ threadId: THREAD });
       await waitFor(() => expect(mocks.getThread).toHaveBeenCalled());
-
-      const fast = setup({ threadId: '__default__', mode: 'fast' }, null);
-      await act(async () => { await fast.result.current.setAllowed(false); });
-      fast.rerender({ threadId: THREAD, mode: 'fast' });
       await act(async () => {});
       expect(mocks.updateThread).not.toHaveBeenCalled();
     });
@@ -614,12 +600,12 @@ describe('useThreadSubagents', () => {
       const { result, rerender, queryClient } = setup({ threadId: '__default__' }, null);
       await act(async () => { await result.current.setAllowed(false); });
       queryClient.setQueryData(queryKeys.threads.detail(THREAD), row(true));
-      rerender({ threadId: THREAD, mode: 'ptc' });
+      rerender({ threadId: THREAD });
       expect(result.current.allowed).toBe(false);
       await waitFor(() => expect(mocks.updateThread).toHaveBeenCalledWith(THREAD, { subagents_allowed: false }));
 
       queryClient.setQueryData(queryKeys.threads.detail('thread-2'), row(true, 'thread-2'));
-      rerender({ threadId: 'thread-2', mode: 'ptc' });
+      rerender({ threadId: 'thread-2' });
       expect(result.current.allowed).toBe(true);
       await act(async () => {});
       expect(mocks.updateThread).toHaveBeenCalledTimes(1);

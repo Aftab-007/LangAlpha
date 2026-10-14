@@ -66,10 +66,10 @@ import { useFlashWorkspace } from '@/hooks/useFlashWorkspace';
 import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
 
 const workspaces = [{ id: 'ws-1', name: 'Research' }];
-const flashWorkspace = { id: 'flash-1', name: 'Flash' };
+const flashWorkspace = { id: 'flash-1', name: 'Home' };
 
-describe('ScopeControl with the Flash workspace', () => {
-  it('lists Flash last with its note only when the row can reach it', () => {
+describe('ScopeControl with Home', () => {
+  it('lists Home last when the row offers it', () => {
     const onSet = vi.fn();
     renderWithProviders(
       <ScopeControl
@@ -82,21 +82,20 @@ describe('ScopeControl with the Flash workspace', () => {
       />,
     );
     const checks = screen.getAllByRole('menuitemcheckbox');
-    expect(checks.map((el) => el.textContent)).toEqual(['Research', 'Flash']);
+    expect(checks.map((el) => el.textContent)).toEqual(['Research', 'Home']);
     expect(checks.map((el) => el.getAttribute('aria-checked'))).toEqual(['true', 'false']);
-    expect(screen.getByText(/Flash reaches only the tools bound as Direct/)).toBeInTheDocument();
-    // Flash is never a move destination.
+    // Home is never a move destination.
     const moves = screen.getAllByRole('menuitem').map((el) => el.textContent);
     expect(moves).toContain('Research');
-    expect(moves).not.toContain('Flash');
-    // The disabled Flash entry still counts toward the label.
+    expect(moves).not.toContain('Home');
+    // The disabled Home entry still counts toward the label.
     expect(screen.getByText('All workspaces except 1')).toBeInTheDocument();
 
     fireEvent.click(checks[1]);
     expect(onSet).toHaveBeenCalledWith('flash-1', false);
   });
 
-  it('keeps Flash out of rows that cannot reach it', () => {
+  it('keeps Home out of rows that do not offer it', () => {
     renderWithProviders(
       <ScopeControl
         workspaces={workspaces}
@@ -105,11 +104,11 @@ describe('ScopeControl with the Flash workspace', () => {
         onSetWorkspaceDisabled={vi.fn()}
       />,
     );
-    expect(screen.queryByText('Flash')).not.toBeInTheDocument();
+    expect(screen.queryByText('Home')).not.toBeInTheDocument();
     expect(screen.getByText('All workspaces')).toBeInTheDocument();
   });
 
-  it('keeps Flash out of the bulk move-to-workspace destinations', async () => {
+  it('keeps Home out of the bulk move-to-workspace destinations', async () => {
     function Harness() {
       const { workspaces: wsOptions } = useWorkspaceOptions();
       const flash = useFlashWorkspace();
@@ -128,7 +127,7 @@ describe('ScopeControl with the Flash workspace', () => {
       );
     }
     renderWithProviders(<Harness />);
-    // The move list is only meaningful once Flash has actually resolved:
+    // The move list is only meaningful once Home has actually resolved:
     // an unresolved query would pass this test for the wrong reason.
     await screen.findByText('flash-1');
 
@@ -137,9 +136,9 @@ describe('ScopeControl with the Flash workspace', () => {
       .find((el) => el.textContent?.includes('Move into one workspace'));
     expect(moveSub).toBeDefined();
     expect(within(moveSub as HTMLElement).getByText('Research')).toBeInTheDocument();
-    expect(within(moveSub as HTMLElement).queryByText('Flash')).not.toBeInTheDocument();
+    expect(within(moveSub as HTMLElement).queryByText('Home')).not.toBeInTheDocument();
     // Nor anywhere else in the bulk menu: the "Only in" checklist writes a
     // deny the Skills tab's ScopeControl could not display or undo.
-    expect(screen.queryByText('Flash')).not.toBeInTheDocument();
+    expect(screen.queryByText('Home')).not.toBeInTheDocument();
   });
 });

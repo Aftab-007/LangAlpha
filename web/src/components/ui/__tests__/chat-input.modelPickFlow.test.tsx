@@ -2,8 +2,8 @@
  * A composer's model belongs to its thread. A thread host owns it (the hook
  * behind `model` is pinned in useThreadModel's tests); a composer with no
  * thread holds it itself. These pin what each shows and sends: the host's
- * model as given, or the account default for the mode (the deployment's with
- * nothing saved) followed until a pick; a pick handed to the host or held for
+ * model as given, or the account default (the deployment's with nothing
+ * saved) followed until a pick; a pick handed to the host or held for
  * the next send, never written to the account; and every send naming exactly
  * the model the pill shows.
  */
@@ -83,11 +83,10 @@ interface TreeProps {
   onPickModel?: (model: string) => void;
   /** Set for a thread host; left out, the composer holds its own model. */
   model?: string | null;
-  mode?: 'fast' | 'ptc';
   ref?: Ref<ChatInputHandle>;
 }
 
-function tree({ onSend = vi.fn(), onPickModel, model, mode, ref }: TreeProps = {}) {
+function tree({ onSend = vi.fn(), onPickModel, model, ref }: TreeProps = {}) {
   if (!queryClient.getQueryData(queryKeys.user.preferences())) {
     queryClient.setQueryData(queryKeys.user.preferences(), mocks.preferences);
   }
@@ -99,7 +98,6 @@ function tree({ onSend = vi.fn(), onPickModel, model, mode, ref }: TreeProps = {
           onSend={onSend}
           onPickModel={onPickModel}
           model={model}
-          mode={mode}
         />
       </MemoryRouter>
     </QueryClientProvider>
@@ -190,25 +188,14 @@ describe('ChatInput: the thread owns the model', () => {
     expect(screen.getByText('pill:model-gamma')).toBeInTheDocument();
   });
 
-  it('names and sends the deployment default for the mode when nothing is saved', () => {
+  it('names and sends the deployment default when nothing is saved', () => {
     mocks.preferences = { model_preference: {} };
     const ref = createRef<ChatInputHandle>();
-    const { rerender } = render(tree({ mode: 'ptc', ref }));
+    render(tree({ ref }));
     expect(screen.getByText('pill:model-default')).toBeInTheDocument();
     // The controls are the named model's, so its ladder is offered.
     expect(screen.getByText('efforts:low,high')).toBeInTheDocument();
     expect(ref.current?.getModelOptions()).toMatchObject({ model: 'model-default' });
-
-    rerender(tree({ mode: 'fast', ref }));
-    expect(screen.getByText('pill:model-flash-default')).toBeInTheDocument();
-    expect(ref.current?.getModelOptions()).toMatchObject({ model: 'model-flash-default' });
-  });
-
-  it('names the primary default on a flash composer when the deployment names no flash model', () => {
-    mocks.preferences = { model_preference: {} };
-    mocks.systemDefaults = { default_model: 'model-default', flash_model: '' };
-    render(tree({ mode: 'fast' }));
-    expect(screen.getByText('pill:model-default')).toBeInTheDocument();
   });
 
   it("holds a pick with no host until the first send carries it, as a composer before its thread exists does", () => {
@@ -225,7 +212,7 @@ describe('ChatInput: the thread owns the model', () => {
   it('does nothing for a pick of the model the pill already shows', () => {
     mocks.preferences = { model_preference: {} };
     const onPickModel = vi.fn();
-    render(tree({ onPickModel, model: 'model-default', mode: 'ptc' }));
+    render(tree({ onPickModel, model: 'model-default' }));
 
     fireEvent.click(screen.getByText('pick-default'));
     expect(onPickModel).not.toHaveBeenCalled();
@@ -235,13 +222,13 @@ describe('ChatInput: the thread owns the model', () => {
     mocks.preferences = null;
     mocks.prefsLoaded = false;
     const ref = createRef<ChatInputHandle>();
-    const { rerender } = render(tree({ mode: 'ptc', ref }));
+    const { rerender } = render(tree({ ref }));
     expect(ref.current?.getModelOptions()).toMatchObject({ model: null, reasoningEffort: null });
 
     mocks.preferences = { model_preference: {} };
     mocks.prefsLoaded = true;
     queryClient.setQueryData(queryKeys.user.preferences(), mocks.preferences);
-    rerender(tree({ mode: 'ptc', ref }));
+    rerender(tree({ ref }));
     expect(ref.current?.getModelOptions()).toMatchObject({ model: 'model-default', reasoningEffort: 'high' });
   });
 
@@ -250,18 +237,15 @@ describe('ChatInput: the thread owns the model', () => {
     // nothing is saved, so the server runs the deployment's defaults.
     mocks.preferences = null;
     const ref = createRef<ChatInputHandle>();
-    const { rerender } = render(tree({ mode: 'ptc', ref }));
+    render(tree({ ref }));
     expect(screen.getByText('pill:model-default')).toBeInTheDocument();
     expect(ref.current?.getModelOptions()).toMatchObject({ model: 'model-default' });
-
-    rerender(tree({ mode: 'fast', ref }));
-    expect(screen.getByText('pill:model-flash-default')).toBeInTheDocument();
   });
 
   it('lifts device-local tuning for the default when nothing is saved', () => {
     mocks.preferences = { model_preference: {} };
     localStorage.setItem('reasoning_effort:model-default', 'low');
-    render(tree({ mode: 'ptc' }));
+    render(tree());
     expect(mocks.mutate).toHaveBeenCalledWith(
       { model_preference: { profiles: { 'model-default': { reasoning_effort: 'low' } } } },
       expect.anything(),

@@ -8,8 +8,7 @@ import type { RouteLeaveGuard } from '../../../contexts/RouteLeaveGuardContext';
 
 // Home's panel shows its own files. A `__wsref__` link names a sibling, which
 // the panel shows in their place; anything that names no other workspace
-// brings it back to Home's. Flash has no files of its own, so it stays on the
-// sibling it last showed.
+// brings it back to Home's.
 
 const HOME = '11111111-1111-4111-8111-111111111111';
 const SIBLING = '22222222-2222-4222-8222-222222222222';
@@ -19,25 +18,19 @@ describe('nextPanelOverride', () => {
   const sibling = { clearWorkspaceId: false, setWorkspaceId: SIBLING };
 
   it("returns Home's panel to its own files on a plain path", () => {
-    expect(nextPanelOverride(plain, SIBLING, HOME)).toBeNull();
+    expect(nextPanelOverride(plain, HOME)).toBeNull();
   });
 
   it("shows a sibling's files from Home", () => {
-    expect(nextPanelOverride(sibling, null, HOME)).toBe(SIBLING);
+    expect(nextPanelOverride(sibling, HOME)).toBe(SIBLING);
   });
 
   it('reads a link naming Home itself as its own files', () => {
-    expect(nextPanelOverride({ clearWorkspaceId: false, setWorkspaceId: HOME }, SIBLING, HOME)).toBeNull();
+    expect(nextPanelOverride({ clearWorkspaceId: false, setWorkspaceId: HOME }, HOME)).toBeNull();
   });
 
-  it('keeps the sibling Flash last showed on a plain path', () => {
-    expect(nextPanelOverride(plain, SIBLING, null)).toBe(SIBLING);
-  });
-
-  it('clears for a user-scoped target either way', () => {
-    const clear = { clearWorkspaceId: true, setWorkspaceId: null };
-    expect(nextPanelOverride(clear, SIBLING, HOME)).toBeNull();
-    expect(nextPanelOverride(clear, SIBLING, null)).toBeNull();
+  it('clears for a user-scoped target', () => {
+    expect(nextPanelOverride({ clearWorkspaceId: true, setWorkspaceId: null }, HOME)).toBeNull();
   });
 });
 
@@ -52,8 +45,6 @@ function home(filePanelWorkspaceId: string | null) {
     containerRef: { current: null },
     setFilePanelWorkspaceId,
     filePanelWorkspaceId,
-    dispatches: true,
-    isHome: true,
     messages: [],
   }), { wrapper: ({ children }) => <MemoryRouter>{children}</MemoryRouter> });
   // The mount clears the override as any change of workspace does.

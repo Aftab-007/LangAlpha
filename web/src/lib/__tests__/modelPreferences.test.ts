@@ -14,7 +14,7 @@ import {
   MODEL_PREF_KEYS,
   FLASH_AUTO,
   flashDefaultChoice,
-  modeDefaultModel,
+  slotDefaultModel,
   modelPrefs,
   modelProfile,
   readDefaultModelScope,
@@ -135,31 +135,31 @@ describe('splitPreferenceWrite', () => {
   });
 });
 
-describe('modeDefaultModel', () => {
+describe('slotDefaultModel', () => {
   const deployment = { default_model: 'deploy-default', flash_model: 'deploy-flash' };
 
   it("resolves PTC to the user's primary, then the deployment's", () => {
-    expect(modeDefaultModel({ preferred_model: 'mine' }, deployment, 'ptc')).toBe('mine');
-    expect(modeDefaultModel({}, deployment, 'ptc')).toBe('deploy-default');
+    expect(slotDefaultModel({ preferred_model: 'mine' }, deployment, 'default')).toBe('mine');
+    expect(slotDefaultModel({}, deployment, 'default')).toBe('deploy-default');
   });
 
   it("resolves fast through the user's flash and primary before the deployment's", () => {
-    expect(modeDefaultModel({ preferred_flash_model: 'flash', preferred_model: 'mine' }, deployment, 'fast')).toBe('flash');
-    expect(modeDefaultModel({ preferred_model: 'mine' }, deployment, 'fast')).toBe('mine');
-    expect(modeDefaultModel({}, deployment, 'fast')).toBe('deploy-flash');
+    expect(slotDefaultModel({ preferred_flash_model: 'flash', preferred_model: 'mine' }, deployment, 'background')).toBe('flash');
+    expect(slotDefaultModel({ preferred_model: 'mine' }, deployment, 'background')).toBe('mine');
+    expect(slotDefaultModel({}, deployment, 'background')).toBe('deploy-flash');
     // A deployment naming no flash model reports it as "".
-    expect(modeDefaultModel({}, { default_model: 'deploy-default', flash_model: '' }, 'fast')).toBe('deploy-default');
+    expect(slotDefaultModel({}, { default_model: 'deploy-default', flash_model: '' }, 'background')).toBe('deploy-default');
   });
 
   it('resolves fast past the primary when flash is on Auto', () => {
-    expect(modeDefaultModel({ preferred_model: 'mine', flash_follows: 'deployment' }, deployment, 'fast')).toBe('deploy-flash');
-    expect(modeDefaultModel(
-      { preferred_flash_model: 'flash', preferred_model: 'mine', flash_follows: 'deployment' }, deployment, 'fast',
+    expect(slotDefaultModel({ preferred_model: 'mine', flash_follows: 'deployment' }, deployment, 'background')).toBe('deploy-flash');
+    expect(slotDefaultModel(
+      { preferred_flash_model: 'flash', preferred_model: 'mine', flash_follows: 'deployment' }, deployment, 'background',
     )).toBe('flash');
   });
 
   it('is null with nothing saved and no deployment defaults loaded', () => {
-    expect(modeDefaultModel({}, null, 'ptc')).toBeNull();
+    expect(slotDefaultModel({}, null, 'default')).toBeNull();
   });
 });
 

@@ -1,13 +1,13 @@
 /**
  * A send carries the subagents setting only when it creates the thread: on a
  * live thread the PATCH a flip makes is the only writer, so a send never
- * re-sends a cached value over a newer flip from another tab. A flash thread
- * has no such setting. A landing composer's toggle arrives in the navigation
- * state, rides the first send and is what the new thread's toggle shows. What
- * the toggle holds when the new thread's id arrives is saved on its row, so a
- * flip made while the send was creating it is not lost. A new chat's view is
- * cached while unsent and taken up by the next navigation to one, whose pick
- * replaces whatever the view held.
+ * re-sends a cached value over a newer flip from another tab. Home's threads
+ * hold it like any workspace's. A landing composer's toggle arrives in the
+ * navigation state, rides the first send and is what the new thread's toggle
+ * shows. What the toggle holds when the new thread's id arrives is saved on
+ * its row, so a flip made while the send was creating it is not lost. A new
+ * chat's view is cached while unsent and taken up by the next navigation to
+ * one, whose pick replaces whatever the view held.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import '@testing-library/jest-dom';
@@ -89,7 +89,7 @@ beforeEach(() => {
 });
 
 describe('ChatView: the subagents setting on a send', () => {
-  it("is left off a PTC send on a live thread, whose row holds it", async () => {
+  it("is left off a send on a live thread, whose row holds it", async () => {
     mocks.getWorkspace.mockResolvedValue({ workspace_id: WORKSPACE_ID, name: 'Harness WS', status: 'active' });
     mocks.getThread.mockResolvedValue({ thread_id: THREAD_ID, subagents_allowed: false });
     mountChatView(ChatView);
@@ -113,13 +113,12 @@ describe('ChatView: the subagents setting on a send', () => {
     expect(mocks.updateThread).toHaveBeenCalledWith(THREAD_ID, { subagents_allowed: false });
   });
 
-  it('is left off a flash send, which has no such setting', async () => {
+  it("shows Home's toggle from its thread row and leaves it off a send", async () => {
     mocks.getWorkspace.mockResolvedValue({ workspace_id: WORKSPACE_ID, name: 'Harness WS', status: 'flash' });
     mocks.getThread.mockResolvedValue({ thread_id: THREAD_ID, subagents_allowed: false });
     mountChatView(ChatView);
 
-    await waitFor(() => expect(chatInput.props?.mode).toBe('fast'));
-    await waitFor(() => expect(mocks.getThread).toHaveBeenCalled());
+    await waitFor(() => expect(chatInput.props?.subagentsAllowed).toBe(false));
     const options = send({ model: 'm1' });
     expect(options).toMatchObject({ model: 'm1' });
     expect(options.subagentsAllowed).toBeUndefined();

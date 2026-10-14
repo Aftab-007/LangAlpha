@@ -198,7 +198,7 @@ describe('ChatAgent API utilities', () => {
       global.fetch = originalFetch;
     });
 
-    it('includes agent_mode in request body defaulting to ptc', async () => {
+    it('sends agent_mode ptc in the request body', async () => {
       await sendHitlResponse({ int1: { decisions: [{ type: 'approve' }] } }, 'ws-1', 't-1', { onEvent: () => {} });
 
       const fetchMock = global.fetch as Mock;
@@ -206,19 +206,6 @@ describe('ChatAgent API utilities', () => {
       const [, opts] = fetchMock.mock.calls[0];
       const body = JSON.parse(opts.body);
       expect(body.agent_mode).toBe('ptc');
-    });
-
-    it('passes custom agentMode', async () => {
-      await sendHitlResponse(
-        { int1: { decisions: [{ type: 'approve' }] } },
-        'ws-1', 't-1',
-        { onEvent: () => {}, agentMode: 'flash' },
-      );
-
-      const fetchMock = global.fetch as Mock;
-      const [, opts] = fetchMock.mock.calls[0];
-      const body = JSON.parse(opts.body);
-      expect(body.agent_mode).toBe('flash');
     });
 
     it('includes model options when provided', async () => {
@@ -261,7 +248,7 @@ describe('ChatAgent API utilities', () => {
       await sendHitlResponse(
         { int1: { decisions: [{ type: 'approve' }] } },
         'ws-1', 't-1',
-        { onEvent: () => {}, agentMode: 'ptc', onRunIdResolved },
+        { onEvent: () => {}, onRunIdResolved },
       );
 
       expect(onRunIdResolved).toHaveBeenCalledTimes(1);
@@ -286,7 +273,7 @@ describe('ChatAgent API utilities', () => {
       await sendHitlResponse(
         { int1: { decisions: [{ type: 'approve' }] } },
         'ws-1', 't-1',
-        { onEvent: () => {}, agentMode: 'ptc', onRunIdResolved },
+        { onEvent: () => {}, onRunIdResolved },
       );
       expect(onRunIdResolved).not.toHaveBeenCalled();
     });
@@ -790,7 +777,7 @@ describe('ChatAgent API utilities', () => {
           'Market watch mode is on for this message. If the central tickers are not yet registered, register them with watch_market.',
       };
       await sendChatMessageStream(
-        'hi', 'ws-1', 't-1', { onEvent: () => {}, additionalContext: [skillItem], agentMode: 'ptc' },
+        'hi', 'ws-1', 't-1', { onEvent: () => {}, additionalContext: [skillItem] },
       );
 
       const body = bodyOfLastSend();
@@ -1010,7 +997,7 @@ describe('sendChatMessageStream — per-turn tuning is explicit', () => {
   const send = async (effort: string | null, fast: boolean | null) => {
     await sendChatMessageStream(
       'hi', 'ws-1', 't-1',
-      { onEvent: () => {}, agentMode: 'ptc', llmModel: 'gpt-5.5', reasoningEffort: effort, fastMode: fast },
+      { onEvent: () => {}, llmModel: 'gpt-5.5', reasoningEffort: effort, fastMode: fast },
     );
     const [, opts] = (global.fetch as Mock).mock.calls[0];
     return JSON.parse(opts.body) as Record<string, unknown>;
@@ -1057,7 +1044,7 @@ describe('sendChatMessageStream: the subagents setting', () => {
 
   const send = async (threadId: string | null, settings?: { subagentsAllowed?: boolean }) => {
     await sendChatMessageStream(
-      'hi', 'ws-1', threadId, { onEvent: () => {}, agentMode: 'ptc', threadSettings: settings },
+      'hi', 'ws-1', threadId, { onEvent: () => {}, threadSettings: settings },
     );
     const [url, opts] = (global.fetch as Mock).mock.calls[0];
     return { url: url as string, body: JSON.parse(opts.body) as Record<string, unknown> };

@@ -31,8 +31,8 @@ test.describe('MarketView workspace restore', () => {
       });
 
       await page.goto('/market?symbol=AAPL');
-      // The reconcile lands on Flash mode and the first listed workspace, after a
-      // first paint that can outlast the 5s default on a loaded machine.
+      // The reconcile lands on All workspaces and the first listed workspace,
+      // after a first paint that can outlast the 5s default on a loaded machine.
       await expect.poll(() => storedPref(page, 'selectedWorkspaceId'), { timeout: 15000 }).toBe('"ws-mine"');
       await expect.poll(() => storedPref(page, 'mode')).toBe('"fast"');
       expect(named).toEqual([]);

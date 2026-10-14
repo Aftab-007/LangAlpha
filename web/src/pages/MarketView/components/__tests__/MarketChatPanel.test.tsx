@@ -36,7 +36,6 @@ const h = vi.hoisted(() => ({
   threadId: 'thread-xyz', // mutated per-test to exercise the new-chat case
   pendingInterrupt: null as unknown, // mutated per-test to exercise input gating
   preferences: null as unknown, // the user's preferences, set per-test
-  allWorkspaces: false, // the all_workspaces_agent flag, set per-test
 }));
 
 // API spies — compaction calls straight into the ChatAgent api module. (Stop is
@@ -58,10 +57,6 @@ const ci = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }))
 
 vi.mock('@/hooks/usePreferences', () => ({
   usePreferences: () => ({ preferences: h.preferences, isLoading: false, isLoaded: true }),
-}));
-
-vi.mock('@/hooks/useAllWorkspacesAgent', () => ({
-  useAllWorkspacesAgent: () => h.allWorkspaces,
 }));
 
 vi.mock('@/pages/ChatAgent/hooks/useChatMessages', () => ({
@@ -144,7 +139,6 @@ vi.mock('@/pages/MarketView/components/MarketChatHistoryButton', () => ({
 
 vi.mock('@/pages/ChatAgent/utils/api', async (importActual) => ({
   ...(await importActual<Record<string, unknown>>()),
-  getFlashWorkspace: vi.fn().mockResolvedValue({ workspace_id: 'flash-ws' }),
   getWorkspace: api.getWorkspace,
   getPreviewUrl: vi.fn().mockResolvedValue({ url: 'https://signed.example/' }),
   summarizeThread: api.summarizeThread,
@@ -158,11 +152,15 @@ import { userLocalStorage } from '@/lib/userStorage';
 
 type PanelProps = React.ComponentProps<typeof MarketChatPanel>;
 
+/** All workspaces, which runs in Home's row. */
+const ALL: Partial<PanelProps> = { scope: 'all', activeWorkspaceId: 'flash-ws' };
+
 const baseProps: PanelProps = {
   symbol: 'AAPL',
   interval: '1day',
-  mode: 'ptc',
-  onModeChange: vi.fn(),
+  scope: 'workspace',
+  onScopeChange: vi.fn(),
+  activeWorkspaceId: 'ws-1',
   workspaces: [{ workspace_id: 'ws-1', name: 'Workspace 1' }],
   selectedWorkspaceId: 'ws-1',
   onWorkspaceChange: vi.fn(),
@@ -274,7 +272,6 @@ describe('MarketChatPanel', () => {
     h.isLoading = false;
     h.messages = [{ id: 'm1', role: 'assistant' }];
     h.preferences = null;
-    h.allWorkspaces = false;
     ml.props = null;
     ml.actions = null;
     ml.folders = null;
@@ -583,7 +580,7 @@ describe('MarketChatPanel', () => {
     expect(h.handleRegenerate).toHaveBeenCalledWith('m1', undefined);
     (a.onRetry as () => void)();
     expect(h.handleRetry).toHaveBeenCalled();
-    // PTC mode → no flash deep-link context.
+    // In a workspace → no hand-off context.
     expect(ml.props!.flashContext).toBeNull();
   });
 
@@ -743,12 +740,13 @@ describe('MarketChatPanel', () => {
       expect((h.handleSendMessage.mock.calls[0][3] as Record<string, unknown>).subagentsAllowed).toBeUndefined();
     });
 
-    it('sends none on a Fast thread', async () => {
+    it('rides an All workspaces send too', async () => {
       h.threadId = '__default__';
-      renderPanel({ mode: 'fast' });
+      renderPanel(ALL);
       await vi.waitFor(() => expect(ci.props).not.toBeNull());
+      act(() => { void (ci.props!.onToggleSubagents as (next: boolean) => Promise<boolean>)(false); });
       act(() => (ci.props!.onSend as OnSend)('What is AAPL doing?', [], [], {}));
-      expect((h.handleSendMessage.mock.calls[0][3] as Record<string, unknown>).subagentsAllowed).toBeUndefined();
+      expect(h.handleSendMessage.mock.calls[0][3]).toMatchObject({ subagentsAllowed: false });
     });
   });
 
@@ -761,52 +759,40 @@ describe('MarketChatPanel', () => {
     expect(screen.getByText(/no longer in the chat/i)).toBeInTheDocument();
   });
 
-  describe('the all-workspaces agent flag', () => {
-    beforeEach(() => {
-      h.allWorkspaces = true;
-    });
-
-    it('runs All workspaces as the full agent on the flash row', async () => {
-      renderPanel({ mode: 'fast' });
+  describe('All workspaces', () => {
+    it('runs on the flash row', async () => {
+      renderPanel(ALL);
       await screen.findByTestId('chat-input');
-      const args = vi.mocked(useChatMessages).mock.lastCall!;
-      expect(args[0]).toBe('flash-ws');
-      // The agent mode the chat engine sends with.
-      expect(args[7]).toBe('ptc');
+      expect(vi.mocked(useChatMessages).mock.lastCall![0]).toBe('flash-ws');
     });
 
     it("reads Home's folder from the workspace detail, which a turn re-reads once Home is bound", async () => {
       // The flash row (mocked above) was read before Home had a folder.
       api.getWorkspace.mockResolvedValueOnce({ workspace_id: 'flash-ws', dir_name: 'Home', previous_dir_names: [] });
-      renderPanel({ mode: 'fast' });
+      renderPanel(ALL);
       await vi.waitFor(() => expect(ml.folders?.dirName).toBe('Home'));
       expect(api.getWorkspace).toHaveBeenCalledWith('flash-ws');
     });
 
-    it('keeps Flash on the flash row with the flag off', async () => {
-      h.allWorkspaces = false;
-      renderPanel({ mode: 'fast' });
+    it('carries the thread into the work it hands off', async () => {
+      renderPanel(ALL);
       await screen.findByTestId('chat-input');
-      const args = vi.mocked(useChatMessages).mock.lastCall!;
-      expect(args[0]).toBe('flash-ws');
-      expect(args[7]).toBe('flash');
+      expect(ml.props!.flashContext).toEqual({ threadId: 'thread-xyz', workspaceId: 'flash-ws' });
     });
 
     it('explains an empty workspace list without naming PTC', async () => {
-      renderPanel({ mode: 'fast', workspaces: [], selectedWorkspaceId: null });
+      renderPanel({ ...ALL, workspaces: [], selectedWorkspaceId: null });
       await screen.findByTestId('chat-input');
       expect(ci.props?.emptyWorkspacesHint).toBe('Create a workspace in /chat to work in one');
-      expect(ci.props?.ptcDisabledReason).toBeNull();
     });
 
-    it('hands the composer a scope in place of the mode', async () => {
-      const onModeChange = vi.fn();
-      renderPanel({ mode: 'fast', onModeChange });
+    it('hands the composer its scope and passes a pick up', async () => {
+      const onScopeChange = vi.fn();
+      renderPanel({ ...ALL, onScopeChange });
       await screen.findByTestId('chat-input');
-      expect(ci.props?.mode).toBeUndefined();
       expect(ci.props?.scope).toBe('all');
       act(() => (ci.props?.onScopeChange as (scope: string) => void)('workspace'));
-      expect(onModeChange).toHaveBeenCalledWith('ptc');
+      expect(onScopeChange).toHaveBeenCalledWith('workspace');
     });
   });
 });

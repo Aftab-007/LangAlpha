@@ -63,7 +63,7 @@ function ChatPage() {
 function renderComposer(Composer: React.ComponentType, subagentsDefault: boolean) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(queryKeys.user.preferences(), { other_preference: { subagents_default: subagentsDefault } });
-  // A send waits for the flags; none are on here.
+  // No flags are on here.
   queryClient.setQueryData(queryKeys.features.list(), []);
   render(
     <QueryClientProvider client={queryClient}>
@@ -102,7 +102,7 @@ describe.each([
     ChatInputRegistry.__resetForTests();
   });
 
-  it('shows the default in PTC, and a flip rides the navigation into the new thread', async () => {
+  it('shows the default, and a flip rides the navigation into the new thread', async () => {
     renderComposer(Composer, true);
     expect(pill()).toHaveAttribute('aria-pressed', 'true');
 
@@ -117,16 +117,6 @@ describe.each([
     renderComposer(Composer, false);
     expect(pill()).toHaveAttribute('aria-pressed', 'false');
     await send('Build me a DCF');
-
-    expect(await screen.findByTestId('chat-page')).toHaveTextContent('undefined');
-  });
-
-  it('is hidden in Flash, whose send names none', async () => {
-    renderComposer(Composer, true);
-    fireEvent.click(pill()!);
-    fireEvent.click(screen.getByRole('button', { name: 'PTC' }));
-    expect(pill()).toBeNull();
-    await send('What is AAPL doing?');
 
     expect(await screen.findByTestId('chat-page')).toHaveTextContent('undefined');
   });

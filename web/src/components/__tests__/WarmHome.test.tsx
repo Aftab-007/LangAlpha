@@ -19,12 +19,6 @@ vi.mock('@/pages/ChatAgent/utils/warmWorkspace', async (importOriginal) => ({
   warmWorkspace: warm.warmWorkspace,
 }));
 
-const flag = vi.hoisted(() => ({ on: true }));
-vi.mock('@/hooks/useAllWorkspacesAgent', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  useAllWorkspacesAgent: () => flag.on,
-}));
-
 import { REWARM_AFTER_MS, WarmHome } from '../WarmHome';
 
 let now = 0;
@@ -38,7 +32,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   api.getFlashWorkspace.mockClear();
   warm.warmWorkspace.mockClear();
-  flag.on = true;
   document.body.replaceChildren();
 });
 
@@ -103,28 +96,16 @@ describe('WarmHome', () => {
     expect(warm.warmWorkspace).toHaveBeenCalledWith('home-1', expect.anything(), { home: true });
   });
 
-  it('does not warm Home found after the flag turned off', async () => {
+  it('does not warm Home found after unmount', async () => {
     let resolveHome: (home: { workspace_id: string }) => void = () => {};
     api.getFlashWorkspace.mockImplementationOnce(
       () => new Promise((resolve) => { resolveHome = resolve; }),
     );
-    const { rerender } = renderWithProviders(<WarmHome />);
+    const { unmount } = renderWithProviders(<WarmHome />);
     await tap();
 
-    flag.on = false;
-    rerender(<WarmHome />);
+    unmount();
     await act(async () => resolveHome({ workspace_id: 'home-1' }));
-    expect(warm.warmWorkspace).not.toHaveBeenCalled();
-  });
-
-  it('neither looks up nor warms Home with the flag off', async () => {
-    flag.on = false;
-    renderWithProviders(<WarmHome />);
-    await act(async () => {});
-
-    await tap();
-    await press('a');
-    expect(api.getFlashWorkspace).not.toHaveBeenCalled();
     expect(warm.warmWorkspace).not.toHaveBeenCalled();
   });
 

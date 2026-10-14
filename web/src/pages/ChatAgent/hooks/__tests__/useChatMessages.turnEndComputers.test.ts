@@ -1,11 +1,10 @@
 /**
  * A turn's end is when the server measures the machine's disk, onto the
  * computer row; the open page has no other reason to re-read that row, so the
- * stream's end has to ask for it. Once per turn, and only where there is a
- * machine: a flash thread has none.
+ * stream's end has to ask for it, once per turn.
  *
  * The same machine is where a renamed workspace's folder moves, during the
- * sandbox acquisition that precedes a PTC run's first event. The page folds
+ * sandbox acquisition that precedes a run's first event. The page folds
  * agent paths against the workspace rows' folders, and a settle rewrites a
  * sibling's too, so it re-reads every workspace row when the run's `metadata`
  * event arrives, and again at the turn's end for a stream that joined past it.
@@ -49,11 +48,11 @@ const CHUNK = { event: 'message_chunk', role: 'assistant', agent: 'main', conten
 const METADATA = { event: 'metadata', thread_id: 'th-x', run_id: 'run-1' };
 
 /** Mount a thread with a spied query client. */
-async function mountThread(agentMode: string) {
+async function mountThread() {
   const queryClient = createTestQueryClient();
   const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
   const rendered = renderHookWithProviders(
-    () => useChatMessages('ws-x', 'th-x', null, null, null, null, null, agentMode),
+    () => useChatMessages('ws-x', 'th-x'),
     { queryClient },
   );
   await waitFor(() => expect(mockReplay).toHaveBeenCalled());
@@ -62,13 +61,13 @@ async function mountThread(agentMode: string) {
 }
 
 /** Mount a thread and run one turn that streams `events` and completes. */
-async function completeOneTurn(agentMode: string, events: Record<string, unknown>[] = [CHUNK]) {
+async function completeOneTurn(events: Record<string, unknown>[] = [CHUNK]) {
   mockSend.mockImplementation(async (...args: unknown[]) => {
     const onEvent = (args[3] as { onEvent: (e: Record<string, unknown>) => void }).onEvent;
     for (const e of events) onEvent(e);
     return { disconnected: false };
   });
-  const mounted = await mountThread(agentMode);
+  const mounted = await mountThread();
   await act(async () => {
     await mounted.result.current.handleSendMessage('measure');
   });
@@ -98,21 +97,16 @@ beforeEach(() => {
 });
 
 describe('useChatMessages, turn end re-reads the machine rows', () => {
-  it('asks for the rows once when a PTC turn completes', async () => {
-    const { queryClient } = await completeOneTurn('ptc');
+  it('asks for the rows once when a turn completes', async () => {
+    const { queryClient } = await completeOneTurn();
     expect(mockRefresh).toHaveBeenCalledTimes(1);
     expect(mockRefresh).toHaveBeenCalledWith(queryClient);
   });
-
-  it('asks for nothing on a flash thread, which has no machine', async () => {
-    await completeOneTurn('flash');
-    expect(mockRefresh).not.toHaveBeenCalled();
-  });
 });
 
-describe('useChatMessages, a PTC run re-reads the workspace rows for their folders', () => {
+describe('useChatMessages, a run re-reads the workspace rows for their folders', () => {
   it('re-reads it when the turn ends, for a stream that never saw the run start', async () => {
-    const { invalidate } = await completeOneTurn('ptc', [CHUNK]);
+    const { invalidate } = await completeOneTurn([CHUNK]);
     expect(workspaceRowReads(invalidate)).toBe(1);
   });
 
@@ -125,7 +119,7 @@ describe('useChatMessages, a PTC run re-reads the workspace rows for their folde
       onEvent(CHUNK);
       return new Promise((r) => { end = () => r({ disconnected: false }); });
     });
-    const { result, invalidate } = await mountThread('ptc');
+    const { result, invalidate } = await mountThread();
     act(() => {
       void result.current.handleSendMessage('measure');
     });
@@ -135,10 +129,5 @@ describe('useChatMessages, a PTC run re-reads the workspace rows for their folde
     await act(async () => { end(); });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(workspaceRowReads(invalidate)).toBe(2);
-  });
-
-  it('re-reads nothing on a flash thread, whose runs move no folder', async () => {
-    const { invalidate } = await completeOneTurn('flash', [METADATA, CHUNK]);
-    expect(workspaceRowReads(invalidate)).toBe(0);
   });
 });

@@ -178,8 +178,8 @@ function renderModelTab() {
   );
 }
 
-const primary = () => screen.getByRole('combobox', { name: 'Primary Model' }) as HTMLSelectElement;
-const flash = () => screen.getByRole('combobox', { name: 'Flash Model' }) as HTMLSelectElement;
+const primary = () => screen.getByRole('combobox', { name: 'Default model' }) as HTMLSelectElement;
+const flash = () => screen.getByRole('combobox', { name: 'Background model' }) as HTMLSelectElement;
 
 /** Whether any preferences write so far named a default model. */
 function wroteADefault(): boolean {
@@ -206,9 +206,9 @@ beforeEach(() => {
 describe('Settings: default model question', () => {
   it('leaves an empty flash slot following the primary, whichever provider it is from', async () => {
     renderModelTab();
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Primary Model' }), { target: { value: 'gpt-sol' } });
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Default model' }), { target: { value: 'gpt-sol' } });
     expect(flash().value).toBe('');
-    expect(flash().selectedOptions[0].textContent).toBe('Same as Primary model');
+    expect(flash().selectedOptions[0].textContent).toBe('Same as Default model');
     expect(screen.getByText(/your default model\?/)).toBeInTheDocument();
 
     fireEvent.change(primary(), { target: { value: 'claude-big' } });
@@ -222,7 +222,7 @@ describe('Settings: default model question', () => {
 
   it('keeps both picks under one question and writes them together', async () => {
     renderModelTab();
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Primary Model' }), { target: { value: 'gpt-sol' } });
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Default model' }), { target: { value: 'gpt-sol' } });
     fireEvent.change(flash(), { target: { value: 'gpt-luna' } });
     fireEvent.change(primary(), { target: { value: 'claude-big' } });
 
@@ -242,7 +242,7 @@ describe('Settings: default model question', () => {
 
   it('takes a cleared default out of the open question, and closes it once nothing is left', async () => {
     renderModelTab();
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Primary Model' }), { target: { value: 'gpt-sol' } });
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Default model' }), { target: { value: 'gpt-sol' } });
     fireEvent.change(flash(), { target: { value: 'gpt-luna' } });
     expect(screen.getByText(/your default models\?/)).toBeInTheDocument();
 
@@ -261,9 +261,9 @@ describe('Settings: default model question', () => {
 });
 
 /**
- * An unset default is a choice: Auto runs the deployment's model. Flash offers
- * Auto beside "Same as Primary" only once a primary is saved, since before
- * that the two run the same model.
+ * An unset default is a choice: Auto runs the deployment's model. The background
+ * slot offers Auto beside "Same as Default" only once a default is saved, since
+ * before that the two run the same model.
  */
 describe('Settings: Auto defaults', () => {
   const options = (select: HTMLSelectElement) => [...select.options].map((o) => o.textContent);
@@ -272,10 +272,10 @@ describe('Settings: Auto defaults', () => {
     h.systemDefaults = { default_model: 'claude-big', flash_model: 'deepseek-flash', fallback_models: [] };
     try {
       renderModelTab();
-      await screen.findByRole('combobox', { name: 'Primary Model' });
+      await screen.findByRole('combobox', { name: 'Default model' });
       expect(primary().selectedOptions[0].textContent).toBe('Auto (claude-big)');
       expect(flash().selectedOptions[0].textContent).toBe('Auto (deepseek-flash)');
-      expect(options(flash())).not.toContain('Same as Primary model');
+      expect(options(flash())).not.toContain('Same as Default model');
     } finally {
       h.systemDefaults = { default_model: 'deepseek-flash', flash_model: 'deepseek-flash', fallback_models: [] };
     }
@@ -284,8 +284,8 @@ describe('Settings: Auto defaults', () => {
   it('offers Auto beside a saved primary, and writes it without asking', async () => {
     h.preferences = { model_preference: { preferred_model: 'gpt-sol' }, other_preference: {} };
     renderModelTab();
-    await screen.findByRole('combobox', { name: 'Flash Model' });
-    expect(flash().selectedOptions[0].textContent).toBe('Same as Primary model');
+    await screen.findByRole('combobox', { name: 'Background model' });
+    expect(flash().selectedOptions[0].textContent).toBe('Same as Default model');
 
     fireEvent.change(flash(), { target: { value: '__auto__' } });
     expect(h.mutate).toHaveBeenLastCalledWith({
@@ -300,7 +300,7 @@ describe('Settings: Auto defaults', () => {
       other_preference: {},
     };
     renderModelTab();
-    await screen.findByRole('combobox', { name: 'Flash Model' });
+    await screen.findByRole('combobox', { name: 'Background model' });
     expect(flash().selectedOptions[0].textContent).toBe('Auto (deepseek-flash)');
   });
 });

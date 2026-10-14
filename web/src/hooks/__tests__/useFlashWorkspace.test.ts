@@ -11,22 +11,15 @@ vi.mock('@/pages/ChatAgent/utils/api/workspaces', async (importOriginal) => ({
   getFlashWorkspace: api.getFlashWorkspace,
 }));
 
-const flag = vi.hoisted(() => ({ on: false }));
-vi.mock('@/hooks/useAllWorkspacesAgent', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  useAllWorkspacesAgent: () => flag.on,
-}));
-
 import { queryKeys } from '@/lib/queryKeys';
-import { useFlashScope, useFlashWorkspace } from '../useFlashWorkspace';
+import { useFlashWorkspace } from '../useFlashWorkspace';
 
 afterEach(() => {
   api.getFlashWorkspace.mockClear();
-  flag.on = false;
 });
 
 /**
- * A catalog read before Flash exists: the insert that ensures Flash switches it
+ * A catalog read before Home exists: the insert that ensures Home switches it
  * off for every server new workspaces start without, which this read lacks.
  * The test client's `gcTime: 0` would drop it before the hook runs.
  */
@@ -37,7 +30,7 @@ function clientWithCatalog(): QueryClient {
 }
 
 describe('useFlashWorkspace', () => {
-  it('refetches the MCP catalog once the first fetch ensures Flash', async () => {
+  it('refetches the MCP catalog once the first fetch ensures Home', async () => {
     const queryClient = clientWithCatalog();
     const { result } = renderHookWithProviders(() => useFlashWorkspace(), { queryClient });
 
@@ -49,7 +42,7 @@ describe('useFlashWorkspace', () => {
   it('leaves the catalog alone on a refresh, which cannot be the insert', async () => {
     const queryClient = clientWithCatalog();
     queryClient.setQueryData(queryKeys.workspaces.flash(), { workspace_id: 'flash-1' });
-    // What creating a regular workspace does to the Flash key.
+    // What creating a regular workspace does to the flash key.
     await queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.all });
     renderHookWithProviders(() => useFlashWorkspace(), { queryClient });
 
@@ -60,27 +53,12 @@ describe('useFlashWorkspace', () => {
     expect(queryClient.getQueryState(queryKeys.mcp.catalog())?.isInvalidated).toBe(false);
     queryClient.clear();
   });
-});
 
-describe('under the all-workspaces agent', () => {
   it('names the row Home, since All workspaces already means every workspace in a scope', async () => {
-    flag.on = true;
     const queryClient = clientWithCatalog();
     const { result } = renderHookWithProviders(() => useFlashWorkspace(), { queryClient });
 
     await waitFor(() => expect(result.current).toEqual({ id: 'flash-1', name: 'Home' }));
-    queryClient.clear();
-  });
-
-  it('offers Home on every plugin row, where Flash takes only directly bound tools', async () => {
-    const queryClient = clientWithCatalog();
-    const { result, rerender } = renderHookWithProviders(() => useFlashScope(), { queryClient });
-    await waitFor(() => expect(result.current(true)?.id).toBe('flash-1'));
-    expect(result.current(false)).toBeUndefined();
-
-    flag.on = true;
-    rerender();
-    expect(result.current(false)).toEqual({ id: 'flash-1', name: 'Home' });
     queryClient.clear();
   });
 });

@@ -18,7 +18,6 @@ vi.mock('@/components/ui/use-toast', () => ({
 }));
 
 const h = vi.hoisted(() => ({
-  allWorkspaces: true,
   handoffsEnabled: false,
   workspaceCreationEnabled: false,
   setHandoffs: vi.fn(),
@@ -36,30 +35,15 @@ vi.mock('@/hooks/useAutoApprove', async (importOriginal) => {
   };
 });
 
-vi.mock('@/hooks/useAllWorkspacesAgent', () => ({
-  useAllWorkspacesAgent: () => h.allWorkspaces,
-}));
-
 import { AutoApproveSettings } from '../AutoApproveSettings';
 
 describe('AutoApproveSettings', () => {
   beforeEach(() => {
-    h.allWorkspaces = true;
     h.handoffsEnabled = false;
     h.workspaceCreationEnabled = false;
     h.setHandoffs.mockReset().mockResolvedValue(undefined);
     h.setWorkspaceCreation.mockReset().mockResolvedValue(undefined);
     mockToast.mockReset();
-  });
-
-  it('names an Analyst only to a user who has one', () => {
-    const { unmount } = render(<AutoApproveSettings />);
-    expect(screen.getByText('settings.autoApproveHandoffsDesc')).toBeInTheDocument();
-    unmount();
-
-    h.allWorkspaces = false;
-    render(<AutoApproveSettings />);
-    expect(screen.getByText('settings.autoApproveHandoffsDescPtc')).toBeInTheDocument();
   });
 
   it('turns an off toggle on', () => {

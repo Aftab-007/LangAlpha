@@ -36,8 +36,8 @@ vi.mock('../../utils/api', () => ({
   }),
 }));
 
-vi.mock('@/hooks/useModeDefaultModel', () => ({
-  useModeDefaultModel: () => mocks.defaultModel,
+vi.mock('@/hooks/useSlotDefaultModels', () => ({
+  useDefaultModel: () => mocks.defaultModel,
 }));
 
 vi.mock('@/hooks/useAllModels', () => ({
@@ -72,7 +72,7 @@ function setup(
   if (cached) queryClient.setQueryData(queryKeys.threads.detail(THREAD), cached);
   mocks.server = cached ?? row(null);
   mocks.getThread.mockImplementation(async () => mocks.server);
-  const initial: Props = { threadId: THREAD, mode: 'ptc', isLoading: false, ...props };
+  const initial: Props = { threadId: THREAD, isLoading: false, ...props };
   const view = renderHookWithProviders(
     (p: Props = initial) => useThreadModel(p),
     { queryClient },
@@ -118,8 +118,7 @@ describe('useThreadModel', () => {
 
     it("starts a Flash thread Home is taking over on the default, not Flash's model", () => {
       const flashRow = { ...row('model-fast'), msg_type: 'flash' } as Thread;
-      expect(setup({ mode: 'ptc' }, flashRow).result.current.model).toBe('model-default');
-      expect(setup({ mode: 'fast' }, flashRow).result.current.model).toBe('model-fast');
+      expect(setup({}, flashRow).result.current.model).toBe('model-default');
     });
 
     it('follows the row when its model changes', async () => {
@@ -133,14 +132,14 @@ describe('useThreadModel', () => {
     it('follows a default change only on a thread with no model of its own', () => {
       const own = setup();
       mocks.defaultModel = 'model-gamma';
-      own.rerender({ threadId: THREAD, mode: 'ptc', isLoading: false });
+      own.rerender({ threadId: THREAD, isLoading: false });
       expect(own.result.current.model).toBe('model-thread');
 
       mocks.defaultModel = 'model-default';
       const following = setup({}, row(null));
       expect(following.result.current.model).toBe('model-default');
       mocks.defaultModel = 'model-gamma';
-      following.rerender({ threadId: THREAD, mode: 'ptc', isLoading: false });
+      following.rerender({ threadId: THREAD, isLoading: false });
       expect(following.result.current.model).toBe('model-gamma');
     });
 
@@ -224,7 +223,7 @@ describe('useThreadModel', () => {
       act(() => { pick = result.current.pickModel('model-beta'); });
 
       queryClient.setQueryData(queryKeys.threads.detail('thread-2'), other);
-      rerender({ threadId: 'thread-2', mode: 'ptc', isLoading: false });
+      rerender({ threadId: 'thread-2', isLoading: false });
       await act(async () => { save.reject(failure()); await pick; });
       // Let that read land, so the result never depends on when it does.
       await waitFor(() => expect(mocks.getThread).toHaveBeenCalledWith('thread-2'));
@@ -242,7 +241,7 @@ describe('useThreadModel', () => {
       await act(async () => { await result.current.pickModel('model-beta'); });
       expect(result.current.model).toBe('model-beta');
 
-      rerender({ threadId: 'thread-2', mode: 'ptc', isLoading: false });
+      rerender({ threadId: 'thread-2', isLoading: false });
       expect(result.current.model).toBeNull();
     });
 
@@ -426,7 +425,7 @@ describe('useThreadModel', () => {
       expect(result.current.offer).not.toBeNull();
 
       queryClient.setQueryData(queryKeys.threads.detail('thread-2'), { thread_id: 'thread-2', llm_model: 'model-beta' });
-      rerender({ threadId: 'thread-2', mode: 'ptc', isLoading: false });
+      rerender({ threadId: 'thread-2', isLoading: false });
       expect(result.current.model).toBe('model-beta');
       expect(result.current.offer).toBeNull();
     });
@@ -443,7 +442,7 @@ describe('useThreadModel', () => {
     it('rereads the row, since the send stored its model there', () => {
       const { rerender, queryClient } = setup({ isLoading: true });
       const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-      rerender({ threadId: THREAD, mode: 'ptc', isLoading: false });
+      rerender({ threadId: THREAD, isLoading: false });
       expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.threads.detail(THREAD) });
     });
 
@@ -456,7 +455,7 @@ describe('useThreadModel', () => {
       act(() => { void result.current.pickModel('model-beta'); });
       await waitFor(() => expect(mocks.updateThread).toHaveBeenCalled());
 
-      rerender({ threadId: THREAD, mode: 'ptc', isLoading: false });
+      rerender({ threadId: THREAD, isLoading: false });
       // A read now would land over the pick.
       expect(mocks.getThread).toHaveBeenCalledTimes(reads);
 
@@ -475,7 +474,7 @@ describe('useThreadModel', () => {
       mocks.server = row('model-thread');
       mocks.getThread.mockImplementation(async () => mocks.server);
       const { result, rerender } = renderHookWithProviders(
-        (p: Props = { threadId: THREAD, mode: 'ptc', isLoading: true }) => ({
+        (p: Props = { threadId: THREAD, isLoading: true }) => ({
           thread: useThreadModel(p),
           flip: useThreadFieldSave({
             threadId: THREAD,
@@ -490,7 +489,7 @@ describe('useThreadModel', () => {
 
       act(() => { void result.current.flip({ threadId: THREAD, value: false, before: null }); });
       await waitFor(() => expect(mocks.updateThread).toHaveBeenCalled());
-      rerender({ threadId: THREAD, mode: 'ptc', isLoading: false });
+      rerender({ threadId: THREAD, isLoading: false });
 
       await act(async () => { flip.resolve({ ...row(null), subagents_allowed: false } as Thread); });
       await waitFor(() => expect(cachedModel(queryClient)).toBeNull());
@@ -506,7 +505,7 @@ describe('useThreadModel', () => {
       mocks.server = row('model-thread');
       mocks.getThread.mockImplementation(async () => mocks.server);
       const { result, rerender } = renderHookWithProviders(
-        (p: Props = { threadId: THREAD, mode: 'ptc', isLoading: true }) => ({
+        (p: Props = { threadId: THREAD, isLoading: true }) => ({
           thread: useThreadModel(p),
           flip: useThreadFieldSave({
             threadId: THREAD,
@@ -524,7 +523,7 @@ describe('useThreadModel', () => {
       act(() => { void result.current.thread.pickModel('model-beta'); });
       act(() => { void result.current.flip({ threadId: THREAD, value: false, before: null }); });
       await waitFor(() => expect(mocks.updateThread).toHaveBeenCalledTimes(2));
-      rerender({ threadId: THREAD, mode: 'ptc', isLoading: false });
+      rerender({ threadId: THREAD, isLoading: false });
 
       // The server has not taken the flip yet, so a read now would undo it.
       await act(async () => { pick.resolve(row('model-beta')); });
@@ -546,7 +545,7 @@ describe('useThreadModel', () => {
 
       act(() => { void result.current.pickModel('model-x'); });
       await waitFor(() => expect(cachedModel(queryClient)).toBe('model-x'));
-      rerender({ threadId: THREAD, mode: 'ptc', isLoading: false });
+      rerender({ threadId: THREAD, isLoading: false });
       // The second pick's optimistic write would clear the stale mark.
       act(() => { void result.current.pickModel('model-y'); });
       await waitFor(() => expect(cachedModel(queryClient)).toBe('model-y'));

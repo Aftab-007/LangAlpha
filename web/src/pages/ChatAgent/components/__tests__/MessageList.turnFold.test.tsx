@@ -72,7 +72,7 @@ const foldState = (container: HTMLElement) =>
 
 describe('turn fold — reading a turn\'s start time', () => {
   it('folds a turn whose producer writes ISO-string timestamps', () => {
-    // The shape useMarketChat builds: `new Date().toISOString()` on both roles.
+    // An ISO string on both roles, which the untyped record allows beside a Date.
     const startedAt = new Date('2026-09-21T15:04:00.000Z').toISOString();
     const repliedAt = new Date('2026-09-21T15:04:12.000Z').toISOString();
     const { container } = renderList([

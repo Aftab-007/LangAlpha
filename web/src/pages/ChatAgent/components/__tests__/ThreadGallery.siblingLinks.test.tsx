@@ -52,9 +52,8 @@ vi.mock('@/hooks/useWorkspace', () => ({
 vi.mock('@/hooks/useAllWorkspaces', () => ({
   useAllWorkspaces: () => ({ data: { workspaces: Object.values(ROWS) } }),
 }));
-vi.mock('@/hooks/useAllWorkspacesAgent', async (importOriginal) => ({
+vi.mock('@/hooks/useWorkspaceLabel', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  useAllWorkspacesAgent: () => true,
   useWorkspaceLabel: () => (ws: { name?: string } | null | undefined) => ws?.name ?? '',
 }));
 vi.mock('@/components/ui/chat-input', () => ({ default: () => null }));

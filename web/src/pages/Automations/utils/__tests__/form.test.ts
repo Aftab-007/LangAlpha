@@ -272,14 +272,11 @@ describe('validateForm', () => {
   });
 
   it('points a sandbox run without a workspace at the folded options', () => {
+    // The picker offers places, not modes.
     expect(validateForm({ ...INITIAL_FORM, agent_mode: 'ptc' }, now)).toEqual({
-      messageKey: 'automation.workspaceRequired',
+      messageKey: 'agents.workspaceRequired',
       section: 'more',
     });
-    // Under the all-workspaces agent the picker offers places, not modes.
-    expect(validateForm({ ...INITIAL_FORM, agent_mode: 'ptc' }, now, undefined, { allWorkspaces: true })?.messageKey).toBe(
-      'agents.workspaceRequired',
-    );
   });
 
   it("leaves an edit's untouched one-time moment alone, even a past one", () => {

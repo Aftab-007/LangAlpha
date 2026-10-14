@@ -50,14 +50,11 @@ vi.mock('@/components/model/ModelSelector', () => ({
 vi.mock('@/components/model/FallbackModelsPicker', () => ({
   FallbackModelsPicker: () => null,
 }));
-vi.mock('@/hooks/useAllWorkspacesAgent', () => ({
-  useAllWorkspacesAgent: () => false,
-}));
 
 import DefaultsStep from '../DefaultsStep';
 
-const primary = () => screen.getByRole('combobox', { name: 'Primary Model' }) as HTMLSelectElement;
-const flash = () => screen.getByRole('combobox', { name: 'Flash Model' }) as HTMLSelectElement;
+const primary = () => screen.getByRole('combobox', { name: 'Default model' }) as HTMLSelectElement;
+const flash = () => screen.getByRole('combobox', { name: 'Background model' }) as HTMLSelectElement;
 
 beforeEach(() => {
   h.mutateAsync.mockClear();

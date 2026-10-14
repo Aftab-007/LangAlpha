@@ -54,15 +54,15 @@ describe('categorizeFileError', () => {
     });
   });
 
-  it('returns no_sandbox for 400 with "flash" in detail', () => {
-    const err = makeApiError(400, 'Flash workspaces do not have a sandbox');
+  it('returns sandbox_starting for the 400 Home sends before its computer', () => {
+    const err = makeApiError(400, 'Home is not on a computer yet');
     expect(categorizeFileError(err)).toEqual({
-      category: 'no_sandbox',
-      detail: 'Flash workspaces do not have a sandbox',
+      category: 'sandbox_starting',
+      detail: 'Home is not on a computer yet',
     });
   });
 
-  it('returns unknown for 400 without "flash"', () => {
+  it('returns unknown for any other 400', () => {
     const err = makeApiError(400, 'File path is required');
     expect(categorizeFileError(err)).toEqual({
       category: 'unknown',

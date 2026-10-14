@@ -1,8 +1,8 @@
 /**
  * The workspace page's composer starts its thread in the chat view, so the
- * Subagents pick the composer holds rides the navigation there. A flash
- * workspace has no such setting. Rendered with the real composer; only the
- * data around it is stubbed.
+ * Subagents pick the composer holds rides the navigation there, Home's
+ * included. Rendered with the real composer; only the data around it is
+ * stubbed.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
@@ -48,9 +48,9 @@ vi.mock('@/hooks/usePreferences', async () => {
 import ThreadGallery from '../ThreadGallery';
 
 function ChatPage() {
-  const state = useLocation().state as { subagentsAllowed?: boolean; agentMode?: string } | null;
+  const state = useLocation().state as { subagentsAllowed?: boolean; workspaceStatus?: string } | null;
   return (
-    <div data-testid="chat-page" data-mode={state?.agentMode ?? 'ptc'}>
+    <div data-testid="chat-page" data-workspace-status={state?.workspaceStatus ?? ''}>
       {String(state?.subagentsAllowed)}
     </div>
   );
@@ -107,15 +107,18 @@ describe('ThreadGallery: the Subagents toggle', () => {
     expect(await screen.findByTestId('chat-page')).toHaveTextContent('false');
   });
 
-  it('is hidden on a flash workspace, whose send names none', async () => {
+  it("shows on Home too, and a flip rides into Home's new thread", async () => {
     mocks.status = 'flash';
     renderGallery();
     await screen.findByRole('textbox');
-    expect(pill()).toBeNull();
+    expect(pill()).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(pill()!);
     await send('What is AAPL doing?');
 
+    // The flash row's route state names Home to the chat view.
     const page = await screen.findByTestId('chat-page');
-    expect(page).toHaveAttribute('data-mode', 'flash');
-    expect(page).toHaveTextContent('undefined');
+    expect(page).toHaveAttribute('data-workspace-status', 'flash');
+    expect(page).toHaveTextContent('false');
   });
 });
