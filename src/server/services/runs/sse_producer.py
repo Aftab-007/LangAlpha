@@ -173,6 +173,18 @@ def fallback_from_frame(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
 
 
+def kept_error_frame(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A main-lane ``error`` frame as its response row keeps it, so a reload
+    shows the failure as the live stream did: the row alone lacks the model,
+    the hints and the live wording. None for a subagent's, whose failure
+    belongs to its card."""
+    from src.server.services.history.replay.lanes import MAIN_LANE, agent_lane
+
+    if agent_lane(data.get("agent")) != MAIN_LANE:
+        return None
+    return {key: value for key, value in data.items() if key != "thread_id"}
+
+
 class RunSSEProducer:
     """LangGraph workflow SSE producer with reasoning lifecycle tracking, tool-call dedup, and content normalisation."""
 
@@ -236,6 +248,9 @@ class RunSSEProducer:
         # The main agent's model_fallback ui records as emitted: a step that
         # fails or is stopped after one never commits it.
         self._model_fallbacks: List[Dict[str, Any]] = []
+        # The last error frame the main agent's stream sent, for the finalize
+        # of a failed run to keep.
+        self._error_frame: Optional[Dict[str, Any]] = None
         # The sandbox image paths each message the main graph saved still
         # names, by message id: a later write of the message replaces its
         # entry.
@@ -498,6 +513,7 @@ class RunSSEProducer:
                                 "timeout_seconds": self.workflow_timeout,
                             }
                         )
+                        self._error_frame = kept_error_frame(timeout_error.data)
                         yield timeout_error
                         logger.error(
                             f"[TIMEOUT_ERROR] thread_id={self.thread_id} "
@@ -1675,6 +1691,7 @@ class RunSSEProducer:
             ],
             reasoning_ms=self._reasoning.as_facts(),
             model_fallbacks=list(self._model_fallbacks),
+            error_frame=self._error_frame,
         )
 
     def _format_sse_event(self, event_type: str, data: dict[str, Any]) -> str:
@@ -1728,7 +1745,7 @@ class RunSSEProducer:
     ) -> StreamFrame:
         """Build an error frame; ``exc`` enables the classification
         ``error_event_data`` describes."""
-        return self._build_sse_event(
+        frame = self._build_sse_event(
             "error",
             error_event_data(
                 self.thread_id,
@@ -1737,6 +1754,8 @@ class RunSSEProducer:
                 credential_source=getattr(self.agent_config, "credential_source", None),
             ),
         )
+        self._error_frame = kept_error_frame(frame.data)
+        return frame
 
     def _build_credit_usage_event(
         self,

@@ -149,6 +149,22 @@ def _stamp_untaken_input(
     return outcome
 
 
+def _with_detached_failure_kind(outcome: RunOutcome) -> RunOutcome:
+    """Stamp the kind a reload words a failed run with no owner by.
+
+    Its worker or its consumer died, a fault of this service's own, so the
+    row reads as ``internal`` and a reload shows no diagnostic, as the frame
+    sent live does. When the run framed its own failure before it died, a
+    reload replays that frame, so the row carries that frame's kind (none
+    for a time limit's) and the reload reads as the live stream did.
+    """
+    sent = outcome.record.error_frame if outcome.record else None
+    kind = sent.get("error_kind") if sent else "internal"
+    if kind:
+        outcome.metadata = {**(outcome.metadata or {}), "error_kind": kind}
+    return outcome
+
+
 class RunCoordinator:
     """Stateless singleton — all run state lives in Postgres rows and RunHandles."""
 
@@ -473,6 +489,8 @@ class RunCoordinator:
         payload, emitted only when the verified terminal status is ``error``.
         Raises like the CAS it wraps; callers that must never raise wrap it.
         """
+        if outcome.status == "error":
+            outcome = _with_detached_failure_kind(outcome)
         result = await tl_db.finalize_run(
             run_id=run_id,
             thread_id=thread_id,
@@ -518,6 +536,7 @@ class RunCoordinator:
             "content": "background turn failed",
             "error_type": "background_failure",
             "error": error_text or "background turn failed",
+            "error_kind": "internal",
         }
         newest, stamp = await self._detached_input_stamp(thread_id, run_id, label)
         try:

@@ -167,9 +167,9 @@ def project_turn(
     turn_items.extend(projector.manual_context_window_items(thread_id, turn))
 
     _fill_token_thresholds(turn_items)
-    # Terminal error: never in stored events (persisted before it is
-    # yielded live), so it appends after the merge on every turn. A user
-    # stop's close is read off the same row (see stopped.stop_close_item).
+    # The row's terminal error and a user stop's close, after the merge so
+    # each can defer to the copy an older turn's stored events kept: a stored
+    # error frame takes the row's kind instead of gaining a twin.
     turn_items += items.terminal_items(thread_id, response, turn_items)
 
     # After the stored-events merge so both projected and stored-copy

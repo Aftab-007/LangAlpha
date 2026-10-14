@@ -446,6 +446,120 @@ async def test_errored_turn_replays_the_error_without_its_partial(monkeypatch):
     assert _replayed(items) == [("error", "provider exploded")]
 
 
+_PROCESSING = "An error occurred during processing"
+
+
+def _failed(stored, errors, metadata):
+    """A failed turn's response row as finalize leaves it."""
+    return _response(0, stored, status="error") | {
+        "errors": errors,
+        "metadata": metadata,
+    }
+
+
+async def _replayed_errors(monkeypatch, response):
+    """The error items one failed turn replays from its checkpoint and from
+    its stored events, without the envelope replay adds."""
+    _mock_reader(monkeypatch, ThreadHistory(thread_id=THREAD, turns=[_turn(0, [])]))
+    checkpoint = await build_checkpoint_replay_items(
+        thread_rows([_query(0)], {0: response})
+    )
+    stored = build_sse_replay_items(THREAD, [_query(0)], {0: response})
+    envelope = ("thread_id", "turn_index", "response_id")
+    return [
+        [
+            {k: v for k, v in item["data"].items() if k not in envelope}
+            for item in items
+            if item["event"] == "error"
+        ]
+        for items in (checkpoint, stored)
+    ]
+
+
+async def test_a_provider_failure_replays_its_live_frame_once(monkeypatch):
+    """The archived frame carries what the user saw (the model, the models
+    tried, the hints); the row adds the status finalize read off the trace.
+    One item, so neither the web (which keeps the last) nor an older client
+    (the first) loses the card."""
+    frame = {
+        "error": "Error code: 429 - rate limited",
+        "message": _PROCESSING,
+        "error_kind": "upstream",
+        "provider_module": "openai",
+        "hints": ["provider_status", "try_another_model"],
+        "model": "glm-5.3",
+        "attempted_models": [
+            {"model": "glm-5.3", "error": "Error code: 429", "status_code": 429, "attempts": 2}
+        ],
+    }
+    response = _failed(
+        [*_partial_answer(), {"event": "error", "data": frame}],
+        ["Error code: 429 - rate limited"],
+        {"error_kind": "upstream", "error_status_code": 429},
+    )
+
+    for errors in await _replayed_errors(monkeypatch, response):
+        assert errors == [frame | {"status_code": 429}]
+
+
+@pytest.mark.parametrize(
+    "metadata", [{"error_kind": "internal"}, {}], ids=["stamped", "before-kinds"]
+)
+async def test_our_own_fault_replays_its_frame_without_the_diagnostic(
+    monkeypatch, metadata
+):
+    """A fault of this service's own replays once, by its kind and with no
+    text, as the row's own item would: the text is a diagnostic naming the
+    run and its stream. A row from before kinds were stamped leaves the
+    frame's own kind to say so. The archive keeps its text."""
+    diagnostic = "transport_lost: run r1 stream s1"
+    frame = {"error": diagnostic, "message": _PROCESSING, "error_kind": "internal"}
+    response = _failed(
+        [*_partial_answer(), {"event": "error", "data": frame}], [diagnostic], metadata
+    )
+
+    for errors in await _replayed_errors(monkeypatch, response):
+        assert errors == [{"error": "", "message": _PROCESSING, "error_kind": "internal"}]
+    assert response["sse_events"][-1]["data"]["error"] == diagnostic
+
+
+async def test_the_time_limit_replays_its_own_words(monkeypatch):
+    """The time limit's frame is worded for the user; the row holds the
+    exception's text, which must not replace it."""
+    frame = {
+        "error": "Turn timed out after 722 seconds",
+        "type": "timeout_error",
+        "elapsed_seconds": 722,
+        "timeout_seconds": 720,
+    }
+    response = _failed(
+        [*_partial_answer(), {"event": "error", "data": frame}],
+        ["Workflow exceeded timeout of 720 seconds"],
+        {},
+    )
+
+    for errors in await _replayed_errors(monkeypatch, response):
+        assert errors == [frame]
+
+
+async def test_a_failure_that_archived_no_frame_replays_the_rows(monkeypatch):
+    """A run whose stream quota ran out archived no frame, so the row's item
+    is the turn's only error. A subagent's failure frame is its card's: it
+    neither stands in for the turn's nor takes the row's kind."""
+    subagent = {"agent": "task:tsk1", "error": "model call failed"}
+    response = _failed(
+        [*_partial_answer(), {"event": "error", "data": dict(subagent)}],
+        ["transport_lost: stream quota exceeded for run r1"],
+        {"error_kind": "internal"},
+    )
+
+    for errors in await _replayed_errors(monkeypatch, response):
+        assert errors == [
+            subagent,
+            {"error": "", "type": "workflow_error", "error_kind": "internal"},
+        ]
+
+
 async def test_stopped_turn_without_a_boundary_replays_as_a_stub(monkeypatch):
     """A stopped turn whose finalize could not advance the commit pointer has
     no slice and replays as a stub: its question and a close on the turn."""

@@ -3,8 +3,9 @@
 A run's row carries them in ``replay_facts``. The turn's response row holds
 how long the main agent thought over each message it committed
 (``reasoning_ms``), the fallback notices a stopped or failed run streamed
-(``model_fallbacks``), and the URL each sandbox image its saved text still
-named at its end was captured to (``images``). A subagent run's
+(``model_fallbacks``), the error frame a failed run sent (``error_frame``),
+and the URL each sandbox image its saved text still named at its end was
+captured to (``images``). A subagent run's
 ``subagent_runs`` row holds the URL each sandbox image it referenced was
 captured to (``images``) and the steering it handed back unread
 (``steering_returned``). A row settled before the column existed has none,
@@ -35,6 +36,8 @@ class ResponseFacts(TypedDict, total=False):
     reasoning_ms: dict[str, list[int]]
     # A stopped or failed run's model_fallback ui records, as streamed.
     model_fallbacks: list[dict[str, Any]]
+    # A failed run's last main-lane error frame, as streamed, less its thread.
+    error_frame: dict[str, Any]
     # Sandbox image path -> the URL it was captured to as the run ended.
     images: dict[str, str]
 
@@ -151,6 +154,17 @@ def unsaved_fallbacks(
 
 
 # ------------------------------------------------------------------ images
+
+
+def error_frame(
+    thread_id: str, response: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """The error frame a failed run sent, as a replay item of its own."""
+    facts = (response or {}).get("replay_facts")
+    frame = facts.get("error_frame") if isinstance(facts, dict) else None
+    if not isinstance(frame, dict):
+        return None
+    return {"event": "error", "data": {**frame, "thread_id": thread_id}}
 
 
 def images_of(facts: Any) -> dict[str, str]:

@@ -15,10 +15,11 @@ non-derivable remainder from persisted events:
 - ``provenance`` / ``credit_usage`` are table-sourced (provenance_records /
   conversation_usages rows, written at persist time); answered ``interrupt``
   cards project from the resume boundary's ``__interrupt__`` pending writes;
-  the terminal ``error`` event reconstructs from the response row (both replay
-  paths — it is yielded live *after* the persist snapshot, so stored events
-  never contain it). While the sse dual-write is on, a turn with stored events
-  replays the stored copies instead.
+  the terminal ``error`` event replays the frame the live stream sent, from
+  the turn's stored events or its response row's replay facts, with the row's
+  kind stamped on it, and reconstructs from the row when neither holds one
+  (both replay paths). While the sse dual-write is on, a turn with stored
+  events replays the stored copies instead.
 - ``html_widget`` artifacts prefer the stored event when present — the live
   event inlines resolved data files that are deliberately kept out of the
   checkpointer.

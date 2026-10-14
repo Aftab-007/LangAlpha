@@ -160,12 +160,14 @@ class ProducerRecord:
     thinking (a recovered run whose stream or checkpoint could not be read),
     so the row's facts stay unset. ``model_fallbacks`` are the main lane's
     fallback ui records as streamed, kept only for a stopped or failed run,
-    whose last step may never have committed its own.
+    whose last step may never have committed its own. ``error_frame`` is the
+    main lane's last error frame as streamed, kept only for a failed run.
     """
 
     provenance: List[Dict[str, Any]] = field(default_factory=list)
     reasoning_ms: Optional[Dict[str, List[int]]] = None
     model_fallbacks: List[Dict[str, Any]] = field(default_factory=list)
+    error_frame: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -632,6 +634,8 @@ async def finalize_run(
         replay_facts["reasoning_ms"] = record.reasoning_ms
     if record.model_fallbacks:
         replay_facts["model_fallbacks"] = record.model_fallbacks
+    if record.error_frame:
+        replay_facts["error_frame"] = record.error_frame
     if outcome.images:
         replay_facts["images"] = outcome.images
     # A checkpoint the run did not write was there before START. For a fork
