@@ -29,6 +29,11 @@ Four operations:
   tier's own copies of skills the shared tier serves, with no tree-hash guard:
   those bytes are server-owned, so a copy can only be older.
 
+The asset sync writes the shared tier through :func:`install_staged_skills`,
+which swaps pre-staged dirs into place and merges its ledger entries in one
+flock hold, and a link pass reads the shared tier under that flock, so it
+never sees a shared skill missing mid-swap.
+
 The tree hash is defined over exactly the validator/upload projection
 (``__pycache__`` dirs, ``LICENSE.txt`` and macOS litter excluded) so ignored
 files can never produce a false-dirty loop.
@@ -106,7 +111,6 @@ LOCK_VERSION = ARGS["lockVersion"]
 MANAGED_SOURCE_TYPE = ARGS["managedSourceType"]
 ORPHAN_TTL = ARGS["orphanTtl"]
 LOCK_PATH = os.path.join(BASE, "skills-lock.json")
-FLOCK_PATH = os.path.join(BASE, ".skills-sync.flock")
 STAGING = os.path.join(BASE, ".staging")
 
 
@@ -118,9 +122,10 @@ def fail(msg, code=None):
     sys.exit(1)
 
 
-def acquire_flock():
-    os.makedirs(BASE, exist_ok=True)
-    fh = open(FLOCK_PATH, "w")
+def acquire_flock(base=None):
+    base = base or BASE
+    os.makedirs(base, exist_ok=True)
+    fh = open(os.path.join(base, ".skills-sync.flock"), "w")
     deadline = time.time() + 15
     while True:
         try:
@@ -272,6 +277,15 @@ def parse_frontmatter(skill_dir):
     }
 
 
+def remove_path(p):
+    # rmtree removes only a real dir, and an agent can leave a symlink or a
+    # file at a skill's name.
+    if os.path.islink(p) or not os.path.isdir(p):
+        os.unlink(p)
+    else:
+        shutil.rmtree(p, ignore_errors=True)
+
+
 def gc_orphans():
     now = time.time()
     if os.path.isdir(STAGING):
@@ -287,7 +301,7 @@ def gc_orphans():
             p = os.path.join(BASE, entry)
             try:
                 if now - os.lstat(p).st_mtime > ORPHAN_TTL:
-                    shutil.rmtree(p, ignore_errors=True)
+                    remove_path(p)
             except OSError:
                 pass
 
@@ -573,18 +587,27 @@ def unpin_shared_copies(served, own):
 def run_link():
     """Reconcile this tier's links into the computer's shared skill dir.
 
-    The shared dir is read without its own flock: ordering two locks to keep
-    a link from outliving a skill by one pass is not worth the deadlock, and
-    the next pass prunes it.
+    The shared dir is read under its own flock too, so an install's swap is
+    never seen half done and its skill's link pruned. The order is always
+    this tier, then the shared one, and nothing holds the shared flock while
+    it waits for a workspace tier's, so the two cannot deadlock.
     """
     user_base = ARGS["userBase"]
     prefix = ARGS["targetPrefix"]
     disabled = set(ARGS.get("disabled") or [])
     own = set(ARGS.get("own") or [])
     fh = acquire_flock()
-    served = linkable_dirs(user_base)
     # The shared tier's own copies are the ones being linked to.
     same_tier = os.path.realpath(BASE) == os.path.realpath(user_base)
+    if same_tier or not os.path.isdir(user_base):
+        served = linkable_dirs(user_base)
+    else:
+        shared_fh = acquire_flock(user_base)
+        try:
+            served = linkable_dirs(user_base)
+        finally:
+            fcntl.flock(shared_fh, fcntl.LOCK_UN)
+            shared_fh.close()
     unpinned = [] if same_tier else unpin_shared_copies(served, own)
     # A real dir here is the workspace's own skill, which outranks anything
     # it shares a name with in the shared tier. So does a workspace row whose
@@ -628,27 +651,29 @@ def run_link():
     }))
 
 
-def run_merge_authoritative():
-    """merge_lock_files, but against a fresh read under the flock.
+def protected_entry(entry):
+    # Mirrors lock.py is_agent_installed / is_linked: content the asset sync
+    # may never displace.
+    return (
+        entry.get("owner") == "user" and entry.get("sourceType") != MANAGED_SOURCE_TYPE
+    ) or is_linked_entry(entry)
+
+
+def merge_authoritative(auth):
+    """merge_lock_files, but against a fresh read under the caller's flock.
 
     The asset-sync path computes its authoritative (platform + managed)
     entries from a lock snapshot taken before a multi-second prune/upload;
     writing that merge back blind would clobber anything the reconciler
     committed in between. Re-reading here closes the window. Entries the
-    authoritative set may never displace — agent-installed and linked, the
-    same predicates as lock.py — always survive from the fresh read, and a
-    racing claim on an authoritative name is reported rather than taken:
-    the reconciler's next tree-hash check arbitrates the bytes.
+    authoritative set may never displace always survive from the fresh read,
+    and a racing claim on an authoritative name is reported rather than taken.
     """
-    fh = acquire_flock()
     entries = read_lock().get("skills", {})
-    auth = ARGS["entries"]
     merged = {}
     skipped = []
     for name, entry in entries.items():
-        # Mirrors lock.py is_agent_installed / is_linked.
-        if (entry.get("owner") == "user" and entry.get("sourceType") != "langalpha-user") \
-                or (entry.get("sync") or {}).get("linkedSkillId"):
+        if protected_entry(entry):
             merged[name] = entry
             if name in auth:
                 skipped.append(name)
@@ -656,8 +681,68 @@ def run_merge_authoritative():
         if name not in skipped:
             merged[name] = entry
     write_lock({"version": LOCK_VERSION, "skills": merged})
+    return merged, skipped
+
+
+def run_install():
+    """Swap the asset sync's staged skill dirs into place, then merge its
+    entries, in one flock hold.
+
+    A workspace link pass prunes every link the shared tier does not serve,
+    so a skill must never be absent here while its new bytes upload. They
+    land in a staging dir and replace the live dir by rename under the flock
+    the link pass reads this tier under. A name claimed since the
+    caller's snapshot keeps its bytes as well as its entry. A staged dir that
+    is already gone was swapped by an earlier attempt of this same exec, so a
+    retry is harmless.
+    """
+    staging = ARGS["staging"]
+    tag = os.path.basename(staging)
+    fh = acquire_flock()
+    gc_orphans()
+    entries = read_lock().get("skills", {})
+    held = set()
+    trashed = []
+    for name in ARGS["names"]:
+        if protected_entry(entries.get(name) or {}):
+            held.add(name)
+            continue
+        staged = os.path.join(staging, name)
+        if not os.path.isdir(staged):
+            continue
+        live = os.path.join(BASE, name)
+        trash = os.path.join(BASE, ".trash-%s-%s" % (tag, name))
+        displaced = os.path.lexists(live)
+        try:
+            if displaced:
+                os.rename(live, trash)
+            try:
+                os.rename(staged, live)
+            except OSError:
+                # Never leave the name with nothing: put the live dir back
+                # before surfacing the failure.
+                if displaced:
+                    os.rename(trash, live)
+                raise
+        except OSError as e:
+            fail("install %s: %s" % (name, e))
+        if displaced:
+            trashed.append(trash)
+    merged, skipped = merge_authoritative(ARGS["entries"])
     fcntl.flock(fh, fcntl.LOCK_UN)
-    print(json.dumps({"status": "ok", "skills": merged, "skipped": skipped}))
+    # Outside the flock: a link pass waits on it, and a big tree takes a while
+    # to delete. A trash dir nothing deletes is swept once it is an hour old.
+    for trash in trashed:
+        try:
+            remove_path(trash)
+        except OSError:
+            pass
+    shutil.rmtree(staging, ignore_errors=True)
+    print(json.dumps({
+        "status": "ok",
+        "skills": merged,
+        "skipped": sorted(held | set(skipped)),
+    }))
 
 
 if MODE == "report":
@@ -666,8 +751,8 @@ elif MODE == "apply":
     run_apply()
 elif MODE == "download":
     run_download()
-elif MODE == "merge_authoritative":
-    run_merge_authoritative()
+elif MODE == "install":
+    run_install()
 elif MODE == "link":
     run_link()
 else:
@@ -752,21 +837,33 @@ async def apply_actions(
     return payload["results"]
 
 
-async def merge_authoritative_entries(
-    sandbox: "PTCSandbox", entries: dict[str, Any], *, base: str | None = None
+async def install_staged_skills(
+    sandbox: "PTCSandbox",
+    staging: str,
+    names: Iterable[str],
+    entries: dict[str, Any],
+    *,
+    base: str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Fold the asset-sync path's authoritative entries into the live lock,
-    flock-serialized against the reconciler. Returns ``(merged_lock_file,
-    skipped_names)`` — the merged file is the post-write truth (fresh-read
-    based, unlike a host-side merge over a stale snapshot), and ``skipped``
-    names authoritative entries that lost to a racing agent/linked claim.
-    Safe to retry: every run re-reads and re-merges.
+    """Rename each of ``names`` from ``staging`` over its live dir, then fold
+    the asset sync's authoritative ``entries`` into the live lock, all under
+    the tier's flock.
+
+    The asset sync's way to replace shared skills without ever leaving one
+    missing for a link pass on another worker to prune against. Returns
+    ``(merged_lock_file, skipped_names)``: the merged file is the post-write
+    truth, read fresh rather than merged over the caller's stale snapshot,
+    and a skipped name was claimed agent-installed or linked since that
+    snapshot, so neither its bytes nor its entry were replaced. Removes
+    ``staging`` once it succeeds.
     """
     payload = await _run(
         sandbox,
         {
-            "mode": "merge_authoritative",
+            "mode": "install",
             "base": base or skills_base(sandbox),
+            "staging": staging,
+            "names": sorted(names),
             "entries": entries,
         },
         retry_policy=RetryPolicy.SAFE,

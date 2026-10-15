@@ -2,14 +2,16 @@
 
 _prune_remote_skills never removes user-installed skills, removes stale
 platform ones, and preserves everything when the lock is unavailable or has no
-entry for a directory. _upload_skills' clean-slate rm answers to the same
-signal: a lock it could not read means it does not know what it is deleting.
+entry for a directory. _upload_skills' staged swap answers to the same
+signal: a lock it could not read means it does not know what it is replacing.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -335,13 +337,26 @@ class TestUploadOwnershipGuard:
         assert collisions == set()
         assert any("some-skill" in w for w in self._writes(mock_runtime))
 
+    def _script_args(self, mock_runtime) -> list[dict]:
+        """The decoded ARGS of every skill-sync script exec, in call order."""
+        out = []
+        for c in mock_runtime.exec.call_args_list:
+            m = re.search(r"b64decode\('([A-Za-z0-9+/=]+)'\)", c[0][0])
+            if not m:
+                continue
+            script = base64.b64decode(m.group(1)).decode()
+            args = re.search(r'b64decode\("([A-Za-z0-9+/=]+)"\)', script)
+            out.append(json.loads(base64.b64decode(args.group(1))))
+        return out
+
     @patch("ptc_agent.core.sandbox.ptc_sandbox.create_provider")
     @pytest.mark.asyncio
-    async def test_lock_read_succeeded_keeps_the_clean_slate(
+    async def test_lock_read_succeeded_swaps_in_a_staged_copy(
         self, mock_create_provider, mock_provider, mock_runtime
     ):
-        """A readable lock proves ownership, so the dir is cleared before the
-        rewrite even though it is already on disk."""
+        """A readable lock proves ownership, so the dir is replaced even though
+        it is already on disk: staged beside it and swapped in, never cleared
+        first."""
         from ptc_agent.core.sandbox.ptc_sandbox import PTCSandbox
 
         mock_create_provider.return_value = mock_provider
@@ -357,8 +372,16 @@ class TestUploadOwnershipGuard:
             _, collisions = await self._upload(sandbox, tmpdir, existing_lock=lock)
 
         assert collisions == set()
-        rm = [w for w in self._writes(mock_runtime) if "rm -rf" in w]
-        assert len(rm) == 1 and "some-skill" in rm[0]
+        assert not [w for w in self._writes(mock_runtime) if "rm -rf" in w]
+        (batch,) = [c[0][0] for c in mock_runtime.upload_files.call_args_list]
+        (install,) = self._script_args(mock_runtime)
+        assert install["mode"] == "install"
+        assert install["base"] == SANDBOX_BASE
+        assert install["names"] == ["some-skill"]
+        assert install["staging"].startswith(f"{SANDBOX_BASE}/.staging/sync-")
+        assert [dest for _, dest in batch] == [
+            f"{install['staging']}/some-skill/SKILL.md"
+        ]
 
     @patch("ptc_agent.core.sandbox.ptc_sandbox.create_provider")
     @pytest.mark.asyncio
