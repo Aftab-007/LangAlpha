@@ -29,6 +29,7 @@ from ptc_agent.agent.prompts import (
 from ptc_agent.agent.subagents.definition import SubagentDefinition
 
 if TYPE_CHECKING:
+    from ptc_agent.agent.context_stack import SubagentContext
     from ptc_agent.config.agent import AgentConfig
     from ptc_agent.core.project_context import ProjectContext
 
@@ -96,8 +97,13 @@ class SubagentCompiler:
         project: ProjectContext | None = None,
         search_tool: Callable[..., Any] | None = None,
         sandbox_tools: Callable[[frozenset[str]], list[Any]] | None = None,
+        context: SubagentContext | None = None,
     ) -> None:
         self._sandbox = sandbox
+        # What each subagent's runtime-context baseline is built from. Without
+        # it (bare and test construction) a subagent gets no baseline, and its
+        # prompt says nothing that would point at one.
+        self._context = context
         # A subagent runs in the parent turn's workspace folder, so its copy of
         # the path table has to name the same one.
         self._project = project
@@ -153,16 +159,69 @@ class SubagentCompiler:
         )
         model = resolved if resolved is not None else definition.model
         runs_on = model if model is not None else self._default_model
+        sections = self._compute_sections(definition)
+        roster = (
+            self._build_tool_summary(definition)
+            if sections.get("tool_guide", False)
+            else None
+        )
+        if roster is None:
+            # Nothing left to guide it to: the guide would point at an
+            # <mcp-servers> element its baseline does not have.
+            sections["tool_guide"] = False
+        sections.update(self._context_sections(definition))
         result: dict[str, Any] = {
             "name": definition.name,
             "description": definition.description,
-            "system_prompt": self._resolve_prompt(definition, runs_on),
+            "system_prompt": self._resolve_prompt(definition, runs_on, sections),
             "tools": self._resolve_tools(definition),
         }
         if model is not None:
             result["model"] = model
+        # Appended after the default subagent middleware, so the baseline
+        # follows the caching middlewares, as the main agent's does, and its
+        # block lands after their system breakpoint.
+        baseline = self._baseline(definition, roster, sections)
+        if baseline is not None:
+            result["middleware"] = [baseline]
 
         return result
+
+    def _context_sections(self, defn: SubagentDefinition) -> dict[str, bool]:
+        """The sections that follow from what the subagent can do and what
+        its baseline holds, rather than from a switch of their own."""
+        bound = set(defn.tools)
+        runs_code = bool(bound & {"execute_code", "bash"})
+        context = self._context
+        return {
+            "memory_system": bool(
+                context is not None and context.memory_available and defn.memory
+            ),
+            "thread_scratchpad": bool(
+                context is not None
+                and context.scratchpad is not None
+                and (runs_code or "filesystem" in bound)
+            ),
+            "security_policy": runs_code,
+        }
+
+    def _baseline(
+        self,
+        defn: SubagentDefinition,
+        roster: str | None,
+        sections: dict[str, bool],
+    ) -> Any | None:
+        """This subagent's runtime-context baseline, or None without a context."""
+        if self._context is None:
+            return None
+        return self._context.baseline(
+            user_profile=self._user_profile,
+            memory=sections.get("memory_system", False),
+            mcp_servers=roster,
+            files="filesystem" in defn.tools,
+            scratchpad=sections.get("thread_scratchpad", False),
+            guidance=self._guidance(defn),
+        )
 
     def compile_many(
         self, definitions: list[SubagentDefinition]
@@ -172,7 +231,12 @@ class SubagentCompiler:
 
     # ── Prompt resolution ─────────────────────────────────────────────
 
-    def _resolve_prompt(self, defn: SubagentDefinition, model: Any = None) -> str:
+    def _resolve_prompt(
+        self,
+        defn: SubagentDefinition,
+        model: Any = None,
+        sections: dict[str, bool] | None = None,
+    ) -> str:
         """Resolve the system prompt based on priority.
 
         1. ``custom_prompt`` — raw string, used directly.
@@ -180,6 +244,10 @@ class SubagentCompiler:
         3. Base template + role prompt (default).
 
         Each one ends with the preloaded skills.
+
+        Nothing here is the user's or the thread's: the profile, the MCP
+        roster, the skills and the scratchpad ride the baseline, so the
+        prompt is one cached prefix for every user of a definition.
         """
         loader = get_loader()
         preloaded = self._load_preloaded_skills(defn)
@@ -192,7 +260,6 @@ class SubagentCompiler:
         template_kwargs: dict[str, Any] = {
             "current_time": self._current_time,
             "thread_id": self._thread_id,
-            "user_profile": self._user_profile,
             **self._tool_gates(defn),
             **guidance_template_vars(self._guidance(defn)),
             "files_mounted": self._sandbox is not None and self._sandbox.livefs is not None,
@@ -213,15 +280,8 @@ class SubagentCompiler:
             )
 
         # 3. Base template + role prompt (default path)
-        sections = self._compute_sections(defn)
-        if sections.get("tool_guide", False):
-            tool_summary = self._build_tool_summary(defn)
-            if tool_summary is None:
-                # Nothing left to guide it to. With an empty summary the
-                # guide would point at a runtime block subagents never get.
-                sections["tool_guide"] = False
-            else:
-                template_kwargs["tool_summary"] = tool_summary
+        if sections is None:
+            sections = self._compute_sections(defn)
 
         return loader.get_subagent_base_prompt(
             identity_line=self._identity_line(defn),
@@ -419,3 +479,4 @@ class SubagentCompiler:
         tools.extend(defn.extra_tools)
 
         return tools
+

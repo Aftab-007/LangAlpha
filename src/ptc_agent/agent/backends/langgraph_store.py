@@ -222,6 +222,20 @@ class StoreBackend:
     def root_prefix(self) -> str:
         return self._root_prefix
 
+    def read_only_view(self, error: str) -> StoreBackend:
+        """This tier refusing writes with ``error``. The store and the
+        request's cache stay shared, so it reads what a writable view of the
+        tier wrote this turn."""
+        return StoreBackend(
+            store=self._store,
+            namespace_factory=self._namespace_factory,
+            root_prefix=self._root_prefix,
+            sandbox_backend=self._sandbox,
+            read_only=True,
+            read_only_error=error,
+            cache=self._cache,
+        )
+
     def is_writable(self, file_path: str) -> bool:
         return not self._read_only
 

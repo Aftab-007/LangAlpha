@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from ptc_agent.agent.context_stack import SubagentContext
 from ptc_agent.agent.subagents.compiler import SubagentCompiler
 from ptc_agent.agent.subagents.definition import SubagentDefinition
 from ptc_agent.config import AgentConfig, LLMConfig
@@ -20,6 +21,7 @@ from ptc_agent.config.core import (
 )
 from ptc_agent.core.mcp_schema import MCPToolInfo
 from src.server.services.brokerages import BROKERAGES
+from tests.unit.ptc_agent.agent._subagent_baseline import baseline_text
 
 # A connection is a brokerage by its address, so the fixture needs a real
 # vendor host; the name stays neutral to show the name plays no part.
@@ -81,6 +83,7 @@ class _Build:
         self.limits: list[frozenset[str]] = []
         self.compiler = SubagentCompiler(
             config=_config(),
+            context=SubagentContext(),
             mcp_registry=registry,
             tool_sets={
                 "web_search": [MAIN["web_search"], MAIN["web_fetch"]],
@@ -208,20 +211,34 @@ class TestAllowedServers:
         assert build.limits == []
 
 
+def _compiled(registry, **fields) -> dict:
+    return _Build(registry).compiler.compile(_defn("guided", prompt=None, **fields))
+
+
 def _prompt(registry, **fields) -> str:
-    return _Build(registry).compiler.compile(_defn("guided", prompt=None, **fields))["system_prompt"]
+    return _compiled(registry, **fields)["system_prompt"]
+
+
+def _guide(registry, **fields) -> tuple[str, str]:
+    """The prompt, and the roster its baseline states in <mcp-servers>."""
+    compiled = _compiled(registry, **fields)
+    return compiled["system_prompt"], baseline_text(compiled)
 
 
 class TestToolGuide:
     def test_it_lists_only_the_allowed_servers(self):
-        prompt = _prompt(_Registry(SERVERS), brokerages="off")
+        prompt, roster = _guide(_Registry(SERVERS), brokerages="off")
         assert "<tool_guide>" in prompt
-        assert "srv_market" in prompt and "srv_notes" in prompt
-        assert "srv_broker" not in prompt
+        assert "srv_market" in roster and "srv_notes" in roster
+        assert "srv_broker" not in roster
 
     def test_an_unrestricted_subagent_lists_every_server(self):
-        prompt = _prompt(_Registry(SERVERS))
-        assert all(name in prompt for name in SERVERS)
+        _, roster = _guide(_Registry(SERVERS))
+        assert all(name in roster for name in SERVERS)
+
+    def test_the_prompt_names_no_server(self):
+        prompt, _ = _guide(_Registry(SERVERS))
+        assert not any(name in prompt for name in SERVERS)
 
     @pytest.mark.parametrize(
         ("registry", "connectors", "brokerages"),
@@ -233,19 +250,20 @@ class TestToolGuide:
         ids=["all-off", "only-kind-off", "no-registry"],
     )
     def test_no_guide_when_no_connector_is_left(self, registry, connectors, brokerages):
-        prompt = _prompt(registry, connectors=connectors, brokerages=brokerages)
+        prompt, baseline = _guide(registry, connectors=connectors, brokerages=brokerages)
         assert "<tool_guide>" not in prompt
-        assert not any(name in prompt for name in SERVERS)
+        assert "<mcp-servers>" not in baseline
+        assert not any(name in prompt + baseline for name in SERVERS)
 
     @pytest.mark.parametrize("tools", [["bash"], ["web_search", "filesystem"]], ids=["shell", "no-code"])
     def test_no_guide_without_code(self, tools):
         """Code is how a subagent reaches a connector, so without it there is
         none to list, whatever its switches say."""
-        prompt = _prompt(_Registry(SERVERS), tools=tools)
+        prompt, baseline = _guide(_Registry(SERVERS), tools=tools)
         assert "<tool_guide>" not in prompt
-        assert not any(name in prompt for name in SERVERS)
+        assert "<mcp-servers>" not in baseline
 
     def test_preferred_servers_lead_and_never_limit(self):
-        prompt = _prompt(_Registry(SERVERS), preferred_connectors=["srv_notes"])
-        headers = [prompt.index(f"\n{name}:") for name in ("srv_notes", "srv_market", "srv_broker")]
+        _, roster = _guide(_Registry(SERVERS), preferred_connectors=["srv_notes"])
+        headers = [roster.index(f"\n{name}:") for name in ("srv_notes", "srv_market", "srv_broker")]
         assert headers == sorted(headers)

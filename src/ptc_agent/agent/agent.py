@@ -73,11 +73,12 @@ from ptc_agent.agent.middleware.subagent_switch import (
     SubagentSwitchReader,
     subagents_window_carry,
 )
-from ptc_agent.agent.context_stack import build_context_middleware
+from ptc_agent.agent.context_stack import SubagentContext, build_context_middleware
 from ptc_agent.agent.roles import AgentRole
 from ptc_agent.agent.filesystem_routes import (
     build_filesystem_backend,
     resolve_identity_gates,
+    subagent_backend,
 )
 from ptc_agent.agent.middleware.background_subagent.workflow.prebuilt import (
     get_prebuilt_workflows,
@@ -422,14 +423,28 @@ class PTCAgent:
             filesystem_backend,
             operation_callback=operation_callback,
         )
+        search_tools = [
+            create_glob_tool(filesystem_backend),  # overrides middleware glob
+            create_grep_tool(filesystem_backend),  # overrides middleware grep
+        ]
         filesystem_tools = [
             read_file,  # overrides middleware read_file
             write_file,  # overrides middleware write_file
             edit_file,  # overrides middleware edit_file
-            create_glob_tool(filesystem_backend),  # overrides middleware glob
-            create_grep_tool(filesystem_backend),  # overrides middleware grep
+            *search_tools,
         ]
         tools.extend(filesystem_tools)
+        # A subagent's own Read, Write and Edit, over a view whose memory
+        # refuses writes. Glob and Grep never write, so they are shared.
+        subagent_files = subagent_backend(filesystem_backend, workspace_layout)
+        subagent_filesystem_tools = (
+            filesystem_tools
+            if subagent_files is filesystem_backend
+            else [
+                *create_filesystem_tools(subagent_files, operation_callback=operation_callback),
+                *search_tools,
+            ]
+        )
 
         # Kept for a subagent set to another provider or depth.
         search_tool = partial(
@@ -550,9 +565,8 @@ class PTCAgent:
         }
 
         # One per stack rather than one shared instance, because the two stacks
-        # differ in where the manifest goes, and in the one skill above. The
-        # main agent has a baseline to freeze it into; a subagent does not, so
-        # its copy keeps appending the manifest per call.
+        # differ in the one skill above. Both freeze the manifest into their
+        # baseline rather than appending it per call.
         skills_middleware = partial(
             SkillsMiddleware,
             mode="ptc",
@@ -568,7 +582,7 @@ class PTCAgent:
             skill_registry=skill_registry, inject_manifest=False
         )
         subagent_skill_middleware = skills_middleware(
-            skill_registry=subagent_skill_registry, inject_manifest=True
+            skill_registry=subagent_skill_registry, inject_manifest=False
         )
         tools.extend(skill_loader_middleware.tools)
         tools.extend(skill_loader_middleware.get_all_skill_tools())
@@ -623,7 +637,7 @@ class PTCAgent:
         subagent_tool_sets: dict[str, list[Any]] = {
             "execute_code": [execute_code_tool],
             "bash": [bash_tool],
-            "filesystem": list(filesystem_tools) if filesystem_tools else [],
+            "filesystem": subagent_filesystem_tools,
             "web_search": [web_search_tool, web_fetch_tool],
             "finance": finance_tools,
             "think": [think_tool],
@@ -662,6 +676,15 @@ class PTCAgent:
                 code_tool(allowed_servers=allowed),
                 shell_tool(allowed_servers=allowed),
             ],
+            context=SubagentContext.build(
+                turn_context=turn_context,
+                user_profile=user_profile,
+                user_data_counts=user_data_counts,
+                sources=baseline_store_sources,
+                skills=lambda state: subagent_skill_middleware.build_manifest(state)
+                or "",
+                scratchpad=scratchpad.folder if scratchpad is not None else None,
+            ),
         )
         if disable_subagents:
             # Recursion gate: no subagents compiled, none advertised in the
@@ -791,8 +814,9 @@ class PTCAgent:
                 TimeUpToolStopMiddleware(),
                 # The turn row a subagent can act on: when its turn opened,
                 # and that it is a child rather than the main agent. The user's
-                # context stays out, a subagent works from its brief. Its rows
-                # go into history from the agent and model hooks, so where it
+                # context is in its definition's baseline, appended last by the
+                # compiler. Its rows go into history from the agent and model
+                # hooks, so where it
                 # sits among the tool wrappers below does not matter. No clock
                 # is injected: this stack is built once per parent turn and run
                 # for every subagent, so the row reads the clock when its own
@@ -836,9 +860,10 @@ class PTCAgent:
 
         # The turn row, the per-thread baseline and the tail envelope, wired
         # for the main agent: the baseline is agent.md, the memory indices, the
-        # memo pointer and the user's identity + steering, which a subagent
-        # never gets because it works from its brief, not from the user's
-        # workspace. Where each of the three has to sit is on ContextMiddleware.
+        # memo pointer and the user's identity + steering. A subagent's
+        # baseline is its definition's (SubagentContext): the profile, its
+        # roster, skills and scratchpad, and memory when its switch is on.
+        # Where each of the three has to sit is on ContextMiddleware.
         context = build_context_middleware(
             now=request_time,
             guidance=turn.guidance,

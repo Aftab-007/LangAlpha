@@ -8,9 +8,12 @@ one stack and miss the other.
 
 from __future__ import annotations
 
+import posixpath
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+
+from langgraph.config import get_config
 
 from ptc_agent.agent.middleware.runtime_context import (
     BaselineContextMiddleware,
@@ -72,18 +75,7 @@ def build_context_middleware(
     whose wording differs by role; a build that names none is the analyst.
     """
     turn = turn_context or TurnContext()
-    # Both platform reads answer None on failure, and a market or a zone
-    # derived from a failed read is the product default rather than this
-    # user's. None here, for the zone as for the market, lets the turn row
-    # take what the frozen identity block states and the baseline carry the
-    # previous identity forward. ``turn.timezone`` keeps a zone the request
-    # names, which is this user's whatever the profile read did; the locale
-    # default its tools fall back to is ``tool_timezone`` and never comes here.
-    preferred_market = (
-        resolve_preferred_market(user_profile, user_data_counts)
-        if profile_read_answered(user_profile) and user_data_counts is not None
-        else None
-    )
+    preferred_market = _preferred_market(user_profile, user_data_counts)
     return ContextMiddleware(
         turn=TurnContextMiddleware(
             now=now,
@@ -120,3 +112,126 @@ def build_context_middleware(
             model_name=model_name,
         ),
     )
+
+
+def _preferred_market(
+    user_profile: dict | None, user_data_counts: dict[str, Any] | None
+) -> str | None:
+    """The market the identity block reports, or None when the reads failed.
+
+    Both platform reads answer None on failure, and a market or a zone derived
+    from a failed read is the product default rather than this user's. None
+    here, for the zone as for the market, lets the turn row take what the
+    frozen identity block states and the baseline carry the previous identity
+    forward. ``turn.timezone`` keeps a zone the request names, which is this
+    user's whatever the profile read did; the locale default its tools fall
+    back to is ``tool_timezone`` and never comes here.
+    """
+    if profile_read_answered(user_profile) and user_data_counts is not None:
+        return resolve_preferred_market(user_profile, user_data_counts)
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentContext:
+    """What a subagent's baseline is built from, settled once per parent turn.
+
+    The compiler builds one baseline per definition from it, since the MCP
+    roster its connectors allow and the memory switch differ by definition.
+    The stack those baselines join is shared, so what differs by run, the
+    task's own scratchpad, is read from the run's config at its turn boundary.
+    """
+
+    timezone: str | None = None
+    preferred_market: str | None = None
+    #: Memory tiers only: a subagent gets no memo pointer.
+    sources: BaselineSources | None = None
+    skills: BlockReader | None = None
+    #: The thread's scratchpad folder; each task writes a folder inside it.
+    scratchpad: str | None = None
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        turn_context: TurnContext | None,
+        user_profile: dict | None,
+        user_data_counts: dict[str, Any] | None,
+        sources: BaselineSources | None,
+        skills: BlockReader | None,
+        scratchpad: str | None,
+    ) -> SubagentContext:
+        return cls(
+            timezone=(turn_context or TurnContext()).timezone,
+            preferred_market=_preferred_market(user_profile, user_data_counts),
+            sources=(
+                BaselineSources(
+                    store=sources.store,
+                    store_cache=sources.store_cache,
+                    memory=sources.memory,
+                    index_key=sources.index_key,
+                )
+                if sources is not None and sources.memory
+                else None
+            ),
+            skills=skills,
+            scratchpad=scratchpad,
+        )
+
+    @property
+    def memory_available(self) -> bool:
+        return self.sources is not None
+
+    def baseline(
+        self,
+        *,
+        user_profile: dict | None,
+        memory: bool,
+        mcp_servers: str | None,
+        files: bool,
+        scratchpad: bool,
+        guidance: str | None,
+    ) -> BaselineContextMiddleware:
+        """One definition's baseline.
+
+        ``files`` is whether it can open what the memory index points to, and
+        ``scratchpad`` whether it writes files at all.
+        """
+        blocks: dict[str, BlockReader] = {}
+        if mcp_servers is not None:
+            blocks["mcp_servers"] = lambda _state: mcp_servers
+        if self.skills is not None:
+            blocks["skills"] = self.skills
+        if scratchpad and self.scratchpad is not None:
+            folder = self.scratchpad
+            blocks["scratchpad"] = lambda _state: _task_folder(folder)
+        return BaselineContextMiddleware(
+            sources=self.sources if memory else None,
+            blocks=blocks,
+            user_profile=user_profile,
+            # The counts stay with the main agent; empty rather than None, so
+            # the profile reads as answered.
+            user_data_counts={},
+            sandbox_enabled=files,
+            preferred_market=self.preferred_market,
+            timezone=self.timezone,
+            guidance=guidance,
+            subagent=True,
+        )
+
+
+def _task_folder(thread_folder: str) -> str:
+    """The running task's scratchpad, inside its thread's.
+
+    A subagent's checkpoint namespace opens with ``task:<id>``. Outside a run
+    there is no task to name the folder after, which states no folder rather
+    than leaving the block unanswered.
+    """
+    try:
+        namespace = (get_config().get("configurable") or {}).get("checkpoint_ns") or ""
+    except RuntimeError:  # outside a runnable context
+        return ""
+    head = str(namespace).split("|", 1)[0]
+    if not head.startswith("task:") or len(head) <= len("task:"):
+        return ""
+    return posixpath.join(thread_folder, head[len("task:") :]) + "/"
