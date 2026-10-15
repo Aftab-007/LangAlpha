@@ -92,8 +92,3 @@ export function EffortSelect({
     />
   );
 }
-
-/** Whether an effort control has anything to offer for this ladder. */
-export function hasEffortOptions(efforts: readonly string[], stored: string): boolean {
-  return EFFORT_ORDER.some((lv) => (efforts.includes(lv) || lv === stored) && EFFORT_LABELS[lv]);
-}

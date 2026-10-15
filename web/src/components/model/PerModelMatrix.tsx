@@ -5,13 +5,14 @@ import { usePreferences } from '@/hooks/usePreferences';
 import { useModelProfileWriter } from '@/hooks/useModelProfile';
 import { modelPrefs } from '@/lib/modelPreferences';
 import { Select } from '@/components/ui/select';
-import { CompactSelect, EffortSelect, hasEffortOptions } from './EffortSelect';
+import { CompactSelect, EffortSelect } from './EffortSelect';
 import {
   COMPACTION_PROFILE_ORDER,
   EFFORT_LABELS,
   GUIDANCE_LABELS,
   GUIDANCE_LEVELS,
   SPEED_LABELS,
+  hasEffortOptions,
   resolveTuning,
 } from '@/lib/modelTuning';
 import type { GuidanceLevel } from '@/lib/modelTuning';

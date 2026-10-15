@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 import type { WidgetContextSnapshot } from '@/pages/Dashboard/widgets/framework/contextSnapshot';
 import { WidgetContextDeck } from '@/pages/Dashboard/widgets/framework/WidgetContextDeck';
 import { getSlashCommandIcon } from './chat-input.helpers';
-import { SUBAGENT_CORE, SUBAGENT_SEATS } from './subagents-rings';
+import { SUBAGENT_CORE, SUBAGENT_SEATS } from './subagents-rings.geometry';
 import type { FileAttachment, SlashCommand } from './chat-input.types';
 
 const formatFileSize = (bytes: number): string => {

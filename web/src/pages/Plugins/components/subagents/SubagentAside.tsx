@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { CompactSelect, EffortSelect, hasEffortOptions } from '@/components/model/EffortSelect';
+import { CompactSelect, EffortSelect } from '@/components/model/EffortSelect';
 import { ModelSelector } from '@/components/model/ModelSelector';
 import type { ProviderModelsData } from '@/components/model/types';
 import { isPlatformMode } from '@/config/hostMode';
@@ -21,7 +21,7 @@ import { useSkills } from '@/hooks/useSkills';
 import { useUser } from '@/hooks/useUser';
 import { cn } from '@/lib/utils';
 import { modelPrefs, modelProfile } from '@/lib/modelPreferences';
-import { EFFORT_LABELS, EFFORT_ORDER, effortLabelFor, resolveTuning } from '@/lib/modelTuning';
+import { EFFORT_LABELS, EFFORT_ORDER, effortLabelFor, hasEffortOptions, resolveTuning } from '@/lib/modelTuning';
 import type {
   SubagentAudience,
   SubagentFields,

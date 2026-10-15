@@ -42,6 +42,11 @@ export function effortLabelFor(t: (key: string) => string, level: string | null)
  * the composer pill and the settings matrix name the inherited level, and a
  * label that disagrees with what the server runs is worse than none.
  */
+/** Whether an effort control has anything to offer for this ladder. */
+export function hasEffortOptions(efforts: readonly string[], stored: string): boolean {
+  return EFFORT_ORDER.some((lv) => (efforts.includes(lv) || lv === stored) && EFFORT_LABELS[lv]);
+}
+
 export function resolveEffort(requested: string, offered: readonly string[]): string | null {
   if (offered.length === 0) return null;
   if (offered.includes(requested)) return requested;
