@@ -110,6 +110,7 @@ test.describe('Workspace Gallery', () => {
       workspace_id: `a000${String(index).padStart(4, '0')}-0000-4000-8000-000000000000`,
       name: index === 100 ? 'Needle Research' : `Workspace ${index}`,
       status: 'stopped',
+      is_home: false,
       config: {},
       created_at: '2025-01-01T00:00:00Z',
       updated_at: '2025-01-01T00:00:00Z',

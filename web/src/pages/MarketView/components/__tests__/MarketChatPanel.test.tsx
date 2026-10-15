@@ -161,7 +161,7 @@ const baseProps: PanelProps = {
   scope: 'workspace',
   onScopeChange: vi.fn(),
   activeWorkspaceId: 'ws-1',
-  workspaces: [{ workspace_id: 'ws-1', name: 'Workspace 1' }],
+  workspaces: [{ workspace_id: 'ws-1', name: 'Workspace 1', is_home: false }],
   selectedWorkspaceId: 'ws-1',
   onWorkspaceChange: vi.fn(),
   chartImage: null,
@@ -529,7 +529,7 @@ describe('MarketChatPanel', () => {
       previous_dir_names: ['Old Name'],
     });
     renderPanel({
-      workspaces: [{ workspace_id: 'ws-1', name: 'Old Name', dir_name: 'Old Name', previous_dir_names: [] }],
+      workspaces: [{ workspace_id: 'ws-1', name: 'Old Name', is_home: false, dir_name: 'Old Name', previous_dir_names: [] }],
     });
     await vi.waitFor(() => expect(ml.folders?.dirName).toBe('New Name'));
     expect(api.getWorkspace).toHaveBeenCalledWith('ws-1');

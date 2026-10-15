@@ -41,8 +41,8 @@ function Providers({ children }: { children: React.ReactNode }) {
 // menu) with no threads; a pinned one, collapsed, still loading.
 const WORKSPACES: NavWorkspace[] = [
   { workspace_id: 'ws-home', name: 'Home', status: 'running', is_home: true },
-  { workspace_id: 'ws-pinned', name: 'Pinned', is_pinned: true },
-  { workspace_id: 'ws-main', name: 'Main' },
+  { workspace_id: 'ws-pinned', name: 'Pinned', is_pinned: true, is_home: false },
+  { workspace_id: 'ws-main', name: 'Main', is_home: false },
 ];
 
 const THREADS: Record<string, ThreadsData> = {

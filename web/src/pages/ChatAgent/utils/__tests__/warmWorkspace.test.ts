@@ -176,28 +176,6 @@ describe('warmWorkspace', () => {
     expect(patched.workspaces.map((w) => w.status)).toEqual(['starting', 'running']);
   });
 
-  it('keeps a Home row from a backend before is_home as Home once a status lands on it', async () => {
-    const qc = makeClient();
-    // Such a backend sends no is_home and marks Home by its 'flash' status.
-    const home = { workspace_id: 'home-1', computer_id: 'comp-1', status: 'flash' };
-    qc.setQueryData(queryKeys.workspaces.detail('ws-1'), {
-      workspace_id: 'ws-1', computer_id: 'comp-1', status: 'stopped',
-    });
-    qc.setQueryData(queryKeys.workspaces.detail('home-1'), home);
-    const listKey = queryKeys.workspaces.list({ limit: 20, includeHome: true });
-    qc.setQueryData(listKey, {
-      workspaces: [{ workspace_id: 'ws-1', computer_id: 'comp-1', status: 'stopped' }, home],
-      total: 2,
-    });
-
-    await warmWorkspace('ws-1', qc);
-    patchWorkspaceStatusInCaches(qc, 'home-1', 'running');
-
-    expect(qc.getQueryData(queryKeys.workspaces.detail('home-1'))).toMatchObject({ is_home: true, status: 'running' });
-    const list = qc.getQueryData(listKey) as { workspaces: Array<{ is_home?: boolean; status: string }> };
-    expect(list.workspaces.map((w) => [w.is_home, w.status])).toEqual([[undefined, 'starting'], [true, 'running']]);
-  });
-
   it('patches matching workspace in cached list query', async () => {
     const qc = makeClient();
     qc.setQueryData(queryKeys.workspaces.detail('ws-1'), {
@@ -344,33 +322,29 @@ describe('warmWorkspace', () => {
     expect(mockPost).not.toHaveBeenCalled();
   });
 
-  // 'unbound' is Home before its first computer; 'flash' is what Home's row
-  // reads on the wire until the server sends its lifecycle.
-  it.each(['unbound', 'flash'])(
-    "starts Home whatever its row's status (%s), a status that holds back any other workspace",
-    async (status) => {
-      const qc = makeClient();
-      qc.setQueryData(queryKeys.workspaces.detail('ws-1'), {
-        workspace_id: 'ws-1', is_home: false, status,
-      });
-      qc.setQueryData(queryKeys.workspaces.detail('home-1'), {
-        workspace_id: 'home-1', is_home: true, status,
-      });
+  // 'unbound' is Home before its first computer.
+  it("starts Home while it is unbound, a status that holds back any other workspace", async () => {
+    const qc = makeClient();
+    qc.setQueryData(queryKeys.workspaces.detail('ws-1'), {
+      workspace_id: 'ws-1', is_home: false, status: 'unbound',
+    });
+    qc.setQueryData(queryKeys.workspaces.detail('home-1'), {
+      workspace_id: 'home-1', is_home: true, status: 'unbound',
+    });
 
-      await warmWorkspace('ws-1', qc);
-      expect(mockPost).not.toHaveBeenCalled();
+    await warmWorkspace('ws-1', qc);
+    expect(mockPost).not.toHaveBeenCalled();
 
-      // The start binds Home, so the row is read again.
-      mockGet.mockResolvedValueOnce({
-        data: { workspace_id: 'home-1', is_home: true, computer_id: 'comp-1', status: 'starting' },
-      });
-      await warmWorkspace('home-1', qc);
-      expect(mockPost).toHaveBeenCalledWith('/api/v1/workspaces/home-1/start?lazy=true');
-      expect(qc.getQueryData(queryKeys.workspaces.detail('home-1'))).toMatchObject({
-        computer_id: 'comp-1', status: 'starting',
-      });
-    },
-  );
+    // The start binds Home, so the row is read again.
+    mockGet.mockResolvedValueOnce({
+      data: { workspace_id: 'home-1', is_home: true, computer_id: 'comp-1', status: 'starting' },
+    });
+    await warmWorkspace('home-1', qc);
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/workspaces/home-1/start?lazy=true');
+    expect(qc.getQueryData(queryKeys.workspaces.detail('home-1'))).toMatchObject({
+      computer_id: 'comp-1', status: 'starting',
+    });
+  });
 
   it("knows Home from Home's own query, before any list or detail holds its row", async () => {
     const qc = makeClient();
@@ -389,14 +363,13 @@ describe('warmWorkspace', () => {
   it('shows a Home warm on the workspaces sharing its stopped computer', async () => {
     const qc = makeClient();
     mockPost.mockResolvedValueOnce({ data: { workspace_id: 'home-1', status: 'starting' } });
-    // Home's row has not taken its machine's state, so the machine is read
-    // from ws-2 beside it, and the patch then moves Home with the rest.
+    // A bound Home's row carries its machine's state like any row on it.
     qc.setQueryData(queryKeys.workspaces.detail('home-1'), {
-      workspace_id: 'home-1', is_home: true, computer_id: 'comp-1', status: 'running',
+      workspace_id: 'home-1', is_home: true, computer_id: 'comp-1', status: 'stopped',
     });
     qc.setQueryData(queryKeys.workspaces.list({ limit: 100 }), {
       workspaces: [
-        { workspace_id: 'home-1', is_home: true, computer_id: 'comp-1', status: 'running' },
+        { workspace_id: 'home-1', is_home: true, computer_id: 'comp-1', status: 'stopped' },
         { workspace_id: 'ws-2', computer_id: 'comp-1', status: 'stopped' },
       ],
     });

@@ -120,12 +120,10 @@ describe('formStateToPayload', () => {
     expect(payload).not.toHaveProperty('cron_expression');
   });
 
-  // 'ptc' on every save: a backend before is_home reads a create without a
-  // mode as 'flash', which runs in Home whatever workspace it names.
-  it("names the workspace the place resolved to, as 'ptc'", () => {
+  it('names the workspace the place resolved to', () => {
     const payload = formStateToPayload(PLACED, HOME);
     expect(payload.workspace_id).toBe(HOME);
-    expect(payload.agent_mode).toBe('ptc');
+    expect(payload).not.toHaveProperty('agent_mode');
     expect(formStateToPayload({ ...INITIAL_FORM, place: 'ws-123' }, 'ws-123').workspace_id).toBe('ws-123');
   });
 
@@ -142,7 +140,6 @@ describe('formStateToPayload', () => {
 
   it('carries only the fields the server reads', () => {
     expect(Object.keys(formStateToPayload(PLACED, HOME)).sort()).toEqual([
-      'agent_mode',
       'cron_expression',
       'delivery_config',
       'instruction',
@@ -192,14 +189,13 @@ describe('automationToFormState', () => {
 
   it('opens a workspace automation on its workspace, and one naming Home as All workspaces', () => {
     expect(automationToFormState(makeAutomation({ workspace_id: 'ws-1' }), 'UTC', HOME).place).toBe('ws-1');
-    expect(automationToFormState(makeAutomation({ agent_mode: 'ptc', workspace_id: HOME }), 'UTC', HOME).place).toBe(ALL_WORKSPACES);
+    expect(automationToFormState(makeAutomation({ workspace_id: HOME }), 'UTC', HOME).place).toBe(ALL_WORKSPACES);
   });
 
-  it('opens a legacy flash row as All workspaces, whatever workspace it names, with Home unknown too', () => {
-    const legacy = makeAutomation({ agent_mode: 'flash', workspace_id: 'ws-old' });
-    expect(automationToFormState(legacy, 'UTC', HOME).place).toBe(ALL_WORKSPACES);
-    expect(automationToFormState(makeAutomation({ agent_mode: 'flash', workspace_id: null }), 'UTC', HOME).place).toBe(ALL_WORKSPACES);
-    expect(automationToFormState(legacy, 'UTC').place).toBe(ALL_WORKSPACES);
+  it('opens a row naming no workspace unplaced, so the form asks for one', () => {
+    const unplaced = automationToFormState(makeAutomation({ workspace_id: null }), 'UTC', HOME);
+    expect(unplaced.place).toBe('');
+    expect(validateForm(unplaced)?.messageKey).toBe('agents.workspaceRequired');
   });
 
   it('keeps a channel the form does not offer through an edit', () => {
@@ -383,19 +379,12 @@ describe('formStateToUpdatePayload', () => {
     },
   });
 
-  it("saves a legacy flash row where All workspaces resolved to, as 'ptc'", () => {
-    const legacy = makeAutomation({ agent_mode: 'flash', workspace_id: 'ws-old' });
-    const initial = automationToFormState(legacy, 'UTC', HOME);
-    const payload = formStateToUpdatePayload({ ...initial, name: 'Renamed' }, initial, legacy, HOME);
-    expect(payload.workspace_id).toBe(HOME);
-    expect(payload.agent_mode).toBe('ptc');
-  });
-
-  it("moves a legacy flash row to a workspace as 'ptc', which a backend before is_home would keep as 'flash'", () => {
-    const legacy = makeAutomation({ agent_mode: 'flash', workspace_id: null });
-    const initial = automationToFormState(legacy, 'UTC', HOME);
-    const payload = formStateToUpdatePayload({ ...initial, place: 'ws-1' }, initial, legacy, 'ws-1');
-    expect(payload).toMatchObject({ agent_mode: 'ptc', workspace_id: 'ws-1' });
+  it('moves a row from Home to a workspace by its id, with no agent mode', () => {
+    const automation = makeAutomation({ workspace_id: HOME });
+    const initial = automationToFormState(automation, 'UTC', HOME);
+    const payload = formStateToUpdatePayload({ ...initial, place: 'ws-1' }, initial, automation, 'ws-1');
+    expect(payload.workspace_id).toBe('ws-1');
+    expect(payload).not.toHaveProperty('agent_mode');
   });
 
   it('never sends the kind of trigger, and always sends the description', () => {
@@ -489,7 +478,7 @@ describe('an edit of each template', () => {
   it.each(cases)('%s restates the settings a create states, and its trigger only once changed', (id, change, triggerKeys) => {
     const { automation, initial } = reopened(filled(id));
     const settings = pick(formStateToPayload(initial, initial.place), [
-      'name', 'agent_mode', 'workspace_id', 'instruction', 'thread_strategy', 'max_failures', 'delivery_config',
+      'name', 'workspace_id', 'instruction', 'thread_strategy', 'max_failures', 'delivery_config',
     ]);
     const untouched = formStateToUpdatePayload(initial, initial, automation, initial.place);
     expect(untouched).toEqual({ ...settings, description: initial.description });

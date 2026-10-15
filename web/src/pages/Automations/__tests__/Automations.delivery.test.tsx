@@ -96,7 +96,6 @@ const AUTOMATION: Automation = {
   trigger_config: null,
   next_run_at: '2026-09-26T13:00:00Z',
   last_run_at: RUNS[0].completed_at,
-  agent_mode: 'ptc',
   instruction: 'Summarize the market.',
   workspace_id: 'ws-1',
   llm_model: null,
@@ -114,7 +113,6 @@ const AUTOMATION: Automation = {
 const asFeed = (e: AutomationExecution): AutomationRun => ({
   ...e,
   automation_name: AUTOMATION.name,
-  agent_mode: 'ptc',
   trigger_type: 'cron',
   workspace_id: 'ws-1',
 });

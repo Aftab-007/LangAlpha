@@ -116,11 +116,6 @@ describe('useThreadModel', () => {
       expect(result.current.retired).toBeNull();
     });
 
-    it("starts a Flash thread Home is taking over on the default, not Flash's model", () => {
-      const flashRow = { ...row('model-fast'), msg_type: 'flash' } as Thread;
-      expect(setup({}, flashRow).result.current.model).toBe('model-default');
-    });
-
     it('follows the row when its model changes', async () => {
       const { result, queryClient } = setup();
       // Let the mount's own read land first, or it would answer over the move.

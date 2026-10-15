@@ -60,7 +60,7 @@ interface RenderOpts {
 function renderPanel({ agents }: RenderOpts) {
   return render(
     <NavigationPanel
-      workspaces={[{ workspace_id: WS_ID, name: 'Test workspace' }]}
+      workspaces={[{ workspace_id: WS_ID, name: 'Test workspace', is_home: false }]}
       workspaceThreads={{
         [WS_ID]: {
           threads: [{ thread_id: THREAD_ID, title: 'Test thread' }],
@@ -239,9 +239,9 @@ describe('NavigationPanel — workspace render order', () => {
     render(
       <NavigationPanel
         workspaces={[
-          { workspace_id: 'ws-a', name: 'Workspace A' },
-          { workspace_id: 'ws-b', name: 'Workspace B' },
-          { workspace_id: 'ws-c', name: 'Workspace C' },
+          { workspace_id: 'ws-a', name: 'Workspace A', is_home: false },
+          { workspace_id: 'ws-b', name: 'Workspace B', is_home: false },
+          { workspace_id: 'ws-c', name: 'Workspace C', is_home: false },
         ]}
         workspaceThreads={{}}
         currentWorkspaceId="ws-c"
@@ -265,7 +265,7 @@ describe('NavigationPanel — show more threads', () => {
     resetNavPanelExpansion();
     render(
       <NavigationPanel
-        workspaces={[{ workspace_id: WS_ID, name: 'Test workspace' }]}
+        workspaces={[{ workspace_id: WS_ID, name: 'Test workspace', is_home: false }]}
         workspaceThreads={{ [WS_ID]: threadsData }}
         currentWorkspaceId={WS_ID}
         currentThreadId={null}
@@ -326,7 +326,7 @@ describe('NavigationPanel — active-thread auto-reveal', () => {
     render(
       <NavigationPanel
         isActive={opts.isActive ?? true}
-        workspaces={[{ workspace_id: WS_ID, name: 'Test workspace', is_home: opts.isHome }]}
+        workspaces={[{ workspace_id: WS_ID, name: 'Test workspace', is_home: opts.isHome ?? false }]}
         workspaceThreads={{ [WS_ID]: opts.threadsData }}
         currentWorkspaceId={WS_ID}
         currentThreadId={opts.currentThreadId}
@@ -443,7 +443,7 @@ describe('NavigationPanel — workspace drag-reorder affordances', () => {
       <NavigationPanel
         workspaces={[
           { workspace_id: 'ws-home', name: 'Home', status: 'running', is_home: true },
-          { workspace_id: 'ws-a', name: 'Workspace A' },
+          { workspace_id: 'ws-a', name: 'Workspace A', is_home: false },
         ]}
         workspaceThreads={{}}
         currentWorkspaceId="ws-a"
@@ -481,8 +481,8 @@ describe('NavigationPanel — expansion survives remounts', () => {
     return render(
       <NavigationPanel
         workspaces={[
-          { workspace_id: 'ws-a', name: 'Workspace A' },
-          { workspace_id: 'ws-b', name: 'Workspace B' },
+          { workspace_id: 'ws-a', name: 'Workspace A', is_home: false },
+          { workspace_id: 'ws-b', name: 'Workspace B', is_home: false },
         ]}
         workspaceThreads={{
           'ws-a': { threads: [{ thread_id: 'ta-1', title: 'Thread A1' }], loading: false },
@@ -569,8 +569,8 @@ describe('NavigationPanel — shared expansion across instances', () => {
     return render(
       <NavigationPanel
         workspaces={[
-          { workspace_id: 'ws-a', name: 'Workspace A' },
-          { workspace_id: 'ws-b', name: 'Workspace B' },
+          { workspace_id: 'ws-a', name: 'Workspace A', is_home: false },
+          { workspace_id: 'ws-b', name: 'Workspace B', is_home: false },
         ]}
         workspaceThreads={{
           'ws-a': { threads: [{ thread_id: 'ta-1', title: 'Thread A1' }], loading: false },
@@ -620,9 +620,9 @@ describe('NavigationPanel — shared expansion across instances', () => {
     return render(
       <NavigationPanel
         workspaces={[
-          { workspace_id: 'ws-a', name: 'Workspace A' },
-          { workspace_id: 'ws-b', name: 'Workspace B' },
-          { workspace_id: 'ws-c', name: 'Workspace C' },
+          { workspace_id: 'ws-a', name: 'Workspace A', is_home: false },
+          { workspace_id: 'ws-b', name: 'Workspace B', is_home: false },
+          { workspace_id: 'ws-c', name: 'Workspace C', is_home: false },
         ]}
         workspaceThreads={{
           'ws-a': { threads: [{ thread_id: 'ta-1', title: 'Thread A1' }], loading: false },

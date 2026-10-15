@@ -66,7 +66,7 @@ describe('NavigationPanel — archive confirm', () => {
     const onArchiveThread = vi.fn();
     render(
       <NavigationPanel
-        workspaces={[{ workspace_id: WS_ID, name: 'Test workspace' }]}
+        workspaces={[{ workspace_id: WS_ID, name: 'Test workspace', is_home: false }]}
         workspaceThreads={{
           [WS_ID]: { threads: [{ thread_id: THREAD_ID, title: 'Test thread' }], loading: false },
         }}

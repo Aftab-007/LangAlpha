@@ -48,8 +48,8 @@ afterEach(() => {
 
 const label = (key: string, opts?: Record<string, unknown>) => i18n.t(key, opts);
 
-/** A row an older build wrote: it runs in Home, whatever workspace it names. */
-const LEGACY: Automation = {
+/** A row that runs in All workspaces, which names Home's id. */
+const IN_HOME: Automation = {
   automation_id: 'auto-1',
   user_id: 'user-1',
   name: 'Morning briefing',
@@ -60,9 +60,8 @@ const LEGACY: Automation = {
   trigger_config: null,
   next_run_at: '2026-09-26T13:00:00Z',
   last_run_at: null,
-  agent_mode: 'flash',
   instruction: 'Summarize the market.',
-  workspace_id: 'ws-old',
+  workspace_id: 'home-1',
   llm_model: null,
   thread_strategy: 'new',
   conversation_thread_id: null,
@@ -75,16 +74,13 @@ const LEGACY: Automation = {
   last_execution: null,
 };
 
-/** A row this build writes for All workspaces: it names Home's id. */
-const IN_HOME: Automation = { ...LEGACY, name: 'Evening wrap', agent_mode: 'ptc', workspace_id: 'home-1' };
-
 function renderAt(route: string, automations: Automation[]) {
   vi.mocked(api.listAutomations).mockResolvedValue({ data: { automations, total: automations.length } } as never);
   vi.mocked(api.listExecutions).mockResolvedValue({ data: { executions: [], has_more: false } } as never);
   vi.mocked(api.listRecentRuns).mockResolvedValue({ data: { executions: [], has_more: false } } as never);
   vi.mocked(api.getDeliveryOptions).mockResolvedValue({ data: { enabled: false, apps: {}, workspace_id: null } } as never);
-  vi.mocked(api.createAutomation).mockResolvedValue({ data: { ...LEGACY, automation_id: 'auto-new' } } as never);
-  vi.mocked(api.updateAutomation).mockResolvedValue({ data: LEGACY } as never);
+  vi.mocked(api.createAutomation).mockResolvedValue({ data: { ...IN_HOME, automation_id: 'auto-new' } } as never);
+  vi.mocked(api.updateAutomation).mockResolvedValue({ data: IN_HOME } as never);
   renderWithProviders(<Automations />, { route });
 }
 
@@ -99,9 +95,9 @@ async function startFrom(templateKey: string) {
 const created = () => vi.mocked(api.createAutomation).mock.calls[0][0] as AutomationPayload;
 
 describe('where an automation runs', () => {
-  it("opens a legacy flash row as All workspaces and saves Home's id as 'ptc'", async () => {
-    renderAt('/automations?id=auto-1', [LEGACY]);
-    const pane = (await screen.findByRole('heading', { level: 2, name: LEGACY.name })).closest('article')!;
+  it("opens a row naming Home's id as All workspaces and saves that id, with no agent mode", async () => {
+    renderAt('/automations?id=auto-1', [IN_HOME]);
+    const pane = (await screen.findByRole('heading', { level: 2, name: IN_HOME.name })).closest('article')!;
     expect(within(pane).getByText(new RegExp(label('agents.allWorkspaces')))).toBeInTheDocument();
 
     fireEvent.click(within(pane).getByRole('button', { name: label('automation.edit') }));
@@ -112,21 +108,19 @@ describe('where an automation runs', () => {
     const [id, payload] = vi.mocked(api.updateAutomation).mock.calls[0] as [string, AutomationUpdatePayload];
     expect(id).toBe('auto-1');
     expect(payload.workspace_id).toBe('home-1');
-    expect(payload.agent_mode).toBe('ptc');
+    expect(payload).not.toHaveProperty('agent_mode');
   });
 
-  it("creates a blank automation in All workspaces with Home's id as 'ptc'", async () => {
+  it("creates a blank automation in All workspaces with Home's id", async () => {
     await startFrom('automation.blankAutomation');
     fireEvent.click(screen.getByRole('button', { name: label('common.create') }));
 
     await waitFor(() => expect(api.createAutomation).toHaveBeenCalled());
     expect(created().workspace_id).toBe('home-1');
-    expect(created().agent_mode).toBe('ptc');
+    expect(created()).not.toHaveProperty('agent_mode');
   });
 
-  // A backend before is_home reads a create without a mode as 'flash', which
-  // runs in Home whatever workspace it names.
-  it("asks a workspace template for its workspace, then sends that id as 'ptc'", async () => {
+  it('asks a workspace template for its workspace, then sends that id', async () => {
     await startFrom('automation.templateWeeklyReview');
     fireEvent.click(screen.getByRole('button', { name: label('common.create') }));
 
@@ -141,21 +135,6 @@ describe('where an automation runs', () => {
 
     await waitFor(() => expect(api.createAutomation).toHaveBeenCalled());
     expect(created().workspace_id).toBe('ws-1');
-    expect(created().agent_mode).toBe('ptc');
-  });
-
-  it('keeps a row in Home there through an edit', async () => {
-    renderAt('/automations?id=auto-1', [IN_HOME]);
-    const pane = (await screen.findByRole('heading', { level: 2, name: IN_HOME.name })).closest('article')!;
-    expect(within(pane).getByText(new RegExp(label('agents.allWorkspaces')))).toBeInTheDocument();
-
-    fireEvent.click(within(pane).getByRole('button', { name: label('automation.edit') }));
-    expect(await screen.findByText(new RegExp(`^${label('agents.allWorkspaces')} · `))).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: label('automation.saveChanges') }));
-
-    await waitFor(() => expect(api.updateAutomation).toHaveBeenCalled());
-    const [, payload] = vi.mocked(api.updateAutomation).mock.calls[0] as [string, AutomationUpdatePayload];
-    expect(payload).toMatchObject({ workspace_id: 'home-1', agent_mode: 'ptc' });
   });
 });
 
@@ -171,7 +150,7 @@ describe("while Home's request is out", () => {
 
     await answer();
     await waitFor(() => expect(api.createAutomation).toHaveBeenCalledTimes(1));
-    expect(created()).toMatchObject({ name: 'Brief', instruction: 'Summarize.', workspace_id: 'home-1', agent_mode: 'ptc' });
+    expect(created()).toMatchObject({ name: 'Brief', instruction: 'Summarize.', workspace_id: 'home-1' });
   });
 
   it('saves a workspace the reader picked without waiting on Home', async () => {

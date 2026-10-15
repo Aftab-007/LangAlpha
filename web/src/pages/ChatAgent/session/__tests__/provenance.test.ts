@@ -9,11 +9,9 @@ import type { ChatMessage, UserMessage } from '@/types/chat';
 import type { MessageRecord } from '../../hooks/utils/types';
 
 describe('senderProvenance', () => {
-  it('labels a hand-off by the agent that dispatched it, including the legacy flash value', () => {
+  it('labels a hand-off by the agent that dispatched it', () => {
     expect(senderProvenance({ origin: { type: 'agent', id: 'th-home', agent: 'chief_of_staff' } }))
       .toEqual({ kind: 'agent', agent: 'chief_of_staff', threadId: 'th-home' });
-    expect(senderProvenance({ origin: { type: 'agent', id: 'th-legacy', agent: 'flash' } }))
-      .toEqual({ kind: 'agent', agent: 'flash', threadId: 'th-legacy' });
   });
 
   it('leaves the dispatcher open on a hand-off recorded before it was named', () => {
