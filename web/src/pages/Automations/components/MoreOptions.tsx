@@ -13,12 +13,12 @@ import { Disclosure } from '@/components/ui/Disclosure';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
-import { useAgentModeLabels } from '../hooks/useAgentModeLabels';
 import type { DeliveryAttempt } from '@/types/automation';
+import { useAutomationPlace } from '../hooks/useAutomationPlace';
 import { useDeliveryOptions } from '../hooks/useDeliveryOptions';
 import { useWorkspaceOptions, workspaceNameOf } from '../hooks/useWorkspaceOptions';
 import { type DeliveryProblem, deliveryEntryName, deliveryMethodName, deliveryNames } from '../utils/delivery';
-import type { FormPatch, FormState } from '../utils/form';
+import { ALL_WORKSPACES, type FormPatch, type FormState } from '../utils/form';
 import { MIN_COOLDOWN_MINUTES, RETRIGGER_MODES } from '../utils/price';
 import CountInput from './CountInput';
 import DeliveryPicker, { DeliveryProblems } from './DeliveryPicker';
@@ -62,7 +62,6 @@ export default function MoreOptions({
   const { t } = useTranslation();
   const uid = useId();
   const ids = {
-    agent: `${uid}-agent`,
     thread: `${uid}-thread`,
     delivery: `${uid}-delivery`,
     retrigger: `${uid}-retrigger`,
@@ -72,10 +71,14 @@ export default function MoreOptions({
     panel: `${uid}-panel`,
   };
 
+  // The list leaves Home out; All workspaces is offered in its place.
   const workspaces = useWorkspaceOptions();
-  const workspaceName = workspaceNameOf(workspaces, form.workspace_id);
-  const { label: modeLabel } = useAgentModeLabels();
-  const delivery = useDeliveryOptions({ agentMode: form.agent_mode, workspaceId: form.workspace_id });
+  const allWorkspaces = form.place === ALL_WORKSPACES;
+  const workspaceName = workspaceNameOf(workspaces, form.place);
+  const { homeId, label: placeLabel } = useAutomationPlace();
+  // Chats are asked with the workspace the run lands in, which for All
+  // workspaces is Home, once its id is known.
+  const delivery = useDeliveryOptions({ workspaceId: allWorkspaces ? homeId : form.place });
   // With no messaging service, or before its chats load, the form offers the
   // apps alone, as it always has.
   const picker = delivery.options?.enabled ? delivery.options : null;
@@ -88,7 +91,7 @@ export default function MoreOptions({
 
   // What the folded options are set to, so they can stay folded.
   const summary = [
-    modeLabel(form.agent_mode, workspaceName),
+    allWorkspaces ? t('agents.allWorkspaces') : placeLabel({ workspace_id: form.place }, workspaceName),
     t(form.thread_strategy === 'continue' ? 'automation.continueExisting' : 'automation.newThreadEachRun'),
     form.delivery_methods.length
       ? t('automation.deliversTo', { method: form.delivery_methods.map(entryName).join(', ') })
@@ -113,42 +116,29 @@ export default function MoreOptions({
       </button>
 
       <Disclosure open={open} id={ids.panel} className="automation-form-rows automation-form-rows-nested">
-        <FormRow label={t('automation.agentMode')} labelId={ids.agent}>
-          <SegmentedControl
-            labelledBy={ids.agent}
-            value={form.agent_mode}
-            onChange={(mode) => patch('agent_mode', mode)}
-            options={[
-              { value: 'flash', label: modeLabel('flash') },
-              { value: 'ptc', label: modeLabel('ptc') },
-            ]}
-          />
+        <FormRow label={t('thread.workspace')}>
+          <Select
+            aria-label={t('thread.workspace')}
+            selectedKey={form.place || null}
+            onSelectionChange={(key) => patch('place', key == null ? '' : String(key))}
+            placeholder={t('automation.selectWorkspace')}
+            className="max-w-sm"
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopover>
+              <SelectListBox>
+                <SelectItem id={ALL_WORKSPACES}>{t('agents.allWorkspaces')}</SelectItem>
+                {workspaces.map((ws) => (
+                  <SelectItem key={ws.workspace_id} id={ws.workspace_id}>
+                    {ws.name}
+                  </SelectItem>
+                ))}
+              </SelectListBox>
+            </SelectPopover>
+          </Select>
         </FormRow>
-
-        {form.agent_mode === 'ptc' && (
-          <FormRow label={t('thread.workspace')}>
-            <Select
-              aria-label={t('thread.workspace')}
-              selectedKey={form.workspace_id || null}
-              onSelectionChange={(key) => patch('workspace_id', key == null ? '' : String(key))}
-              placeholder={t('automation.selectWorkspace')}
-              className="max-w-sm"
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopover>
-                <SelectListBox>
-                  {workspaces.map((ws) => (
-                    <SelectItem key={ws.workspace_id} id={ws.workspace_id}>
-                      {ws.name}
-                    </SelectItem>
-                  ))}
-                </SelectListBox>
-              </SelectPopover>
-            </Select>
-          </FormRow>
-        )}
 
         <FormRow label={t('automation.threadStrategy')} labelId={ids.thread}>
           <SegmentedControl

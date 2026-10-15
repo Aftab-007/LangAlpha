@@ -23,7 +23,8 @@ import { useTitleFade } from '@/hooks/useTitleFade';
 import { useLocale } from '@/hooks/useLocale';
 import { useNow } from '@/hooks/useNow';
 import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
-import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
+import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { useThreadFlags } from '@/lib/threadLifecycle/store';
 import { sidebarAgentRowLabel, type SidebarAgentRow } from '../session/subagents/subagentStatus';
 import { SubagentStatusIcon } from './taskStatusUi';
@@ -55,7 +56,7 @@ export interface ThreadsData {
 function workspaceGlyph(ws: NavWorkspace, expanded: boolean) {
   const style = { color: 'var(--color-text-tertiary)' };
   const className = 'h-4 w-4 shrink-0';
-  if (ws.status === 'flash') return <FlashRowIcon className={className} style={style} />;
+  if (isHomeWorkspace(ws)) return <HomeRowIcon className={className} style={style} />;
   if (ws.is_pinned) return <Pin className={className} style={style} />;
   return expanded ? <FolderOpen className={className} style={style} /> : <Folder className={className} style={style} />;
 }
@@ -444,7 +445,7 @@ function WorkspaceTreeRowImpl({
   const label = useWorkspaceLabel();
   const { kit } = useNavTree();
   const wsId = ws.workspace_id;
-  const isFlash = ws.status === 'flash';
+  const isHome = isHomeWorkspace(ws);
   const isPinned = Boolean(ws.is_pinned);
   const threads = threadsData?.threads || [];
   // Row-order signature for the thread rows' glide: rows re-measure only when
@@ -452,10 +453,10 @@ function WorkspaceTreeRowImpl({
   const threadOrderSignature = threads.map((th) => th.thread_id).join('|');
   const threadsLoading = threadsData?.loading || false;
   const isRenaming = rename.active;
-  // The options menu isn't offered on the flash workspace (shared, immutable) —
-  // mirrors the gallery hiding its card menu there. New-thread stays available
-  // everywhere: Flash composes threads too.
-  const showWsMenu = !isFlash;
+  // The options menu isn't offered on Home (shared, immutable), mirroring
+  // the gallery hiding its card menu there. New-thread stays available
+  // everywhere: Home composes threads too.
+  const showWsMenu = !isHome;
 
   const handleRowClick = useCallback(() => {
     if (!isRenaming) onToggleWorkspace(wsId);

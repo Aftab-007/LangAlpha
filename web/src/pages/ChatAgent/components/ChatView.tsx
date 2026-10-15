@@ -15,7 +15,7 @@ import {
   type TranscriptDisplay,
 } from '@/lib/transcriptDisplay';
 import { useFeatureEnabled } from '@/hooks/useFeatures';
-import { FLASH_ROUTE_STATE } from '@/hooks/useFlashWorkspace';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { invalidateSubagents } from '@/hooks/useSubagents';
@@ -131,24 +131,18 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // refreshes). The prop is only the pre-fetch seed.
   const { data: workspaceRecord } = useWorkspace(workspaceId);
 
-  // Home: the flash row, named by the navigation or else by the workspace
-  // row. Direct URL navigation carries no route state, so the row is the only
-  // thing left that names it. Home runs the Chief of Staff as a full agent,
+  // Home, named by its row. Home runs the Chief of Staff as a full agent,
   // and it dispatches work into other workspaces: PTC cards open the threads
   // it started, report-backs land here, and file links reach into the
   // workspaces that wrote them.
-  //
-  // The route-state read is captured at mount. ChatAgent keeps up to five
-  // ChatViews rendered at once (display:none, not unmounted) and they all read
-  // the same current location, so a live read would hand every background view
-  // the status of whatever thread the user just opened.
-  const [navIsHome] = useState(() => state?.workspaceStatus === 'flash');
-  const isHome = navIsHome || workspaceRecord?.status === 'flash';
-  // Home is named for what it stands for, also before its row has loaded.
+  const isHome = isHomeWorkspace(workspaceRecord);
+  // Home is named for what it stands for.
   const workspaceName = (isHome ? t('agents.allWorkspaces') : workspaceRecord?.name) || initialWorkspaceName || '';
 
-  // The model a navigation's first message goes out with, frozen for the same
-  // reason as navIsHome; the auto-send below clears the route state.
+  // The model a navigation's first message goes out with, captured at mount:
+  // ChatAgent keeps up to five ChatViews rendered at once (display:none, not
+  // unmounted) and they all read the same current location, and the
+  // auto-send below clears the route state.
   const [navModel] = useState(() => (typeof state?.model === 'string' && state.model ? state.model : null));
   // The navigation bringing a new thread's first message, with the landing
   // composer's Subagents pick. Read per navigation rather than frozen: a new
@@ -957,18 +951,15 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   }, [workspaceId, downloadKeyFor, getRecentWritePaths, handleOpenFileFromChat, t]);
 
   // The thread that handed this one its turn, reached the same way from the
-  // back button and from the label over a hand-off in the transcript: Home's,
-  // which the flash row's route state names. The workspace rides along when
-  // this thread was opened from that one; otherwise the route looks it up.
+  // back button and from the label over a hand-off in the transcript: Home's.
+  // The workspace rides along when this thread was opened from that one;
+  // otherwise the route looks it up.
   const fromThreadId = state?.fromThreadId;
   const fromWorkspaceId = state?.fromWorkspaceId;
   const openDispatcher = useCallback((dispatcherThreadId: string) => {
     intentionalExitRef.current = true;
     navigate(`/chat/t/${dispatcherThreadId}`, {
-      state: {
-        ...(dispatcherThreadId === fromThreadId && fromWorkspaceId ? { workspaceId: fromWorkspaceId } : {}),
-        ...FLASH_ROUTE_STATE,
-      },
+      state: dispatcherThreadId === fromThreadId && fromWorkspaceId ? { workspaceId: fromWorkspaceId } : {},
     });
   }, [navigate, fromThreadId, fromWorkspaceId]);
 
@@ -1010,7 +1001,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
   // The dispatcher's deep-link context for PTC-agent proposal cards. Memoized:
   // a fresh object per render would defeat the bubble memo in Home.
-  const flashContext = useMemo(
+  const dispatcherContext = useMemo(
     () => (isHome && currentThreadId ? { threadId: currentThreadId, workspaceId } : null),
     [isHome, currentThreadId, workspaceId],
   );
@@ -1522,7 +1513,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                             isLoading={isLoading}
                             isLoadingHistory={isLoadingHistory}
                             feedbackByTurn={feedbackByTurn}
-                            flashContext={flashContext}
+                            dispatcherContext={dispatcherContext}
                           />
                         </DispatchStatusProvider>
                       </MessageActionsProvider>
@@ -1671,7 +1662,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                         phase={trayPhase}
                         trayRef={trayRef}
                         dockRef={trayDockRef}
-                        from={flashContext}
+                        from={dispatcherContext}
                         onOpenTask={openTaskFromTray}
                         onOpenWatch={handleOpenStatusFromChat}
                       />

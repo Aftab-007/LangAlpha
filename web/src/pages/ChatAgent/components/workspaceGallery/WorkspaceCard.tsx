@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useWorkspaceText } from '@/hooks/useWorkspaceLabel';
-import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
+import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useLocale } from '@/hooks/useLocale';
 import { shortMonthDay } from '@/lib/format';
@@ -79,22 +80,22 @@ export function WorkspaceCard({ workspace, computer, onSelect, onTogglePin, onRe
   const isMobile = useIsMobile();
   const workspaceText = useWorkspaceText();
   const text = workspaceText(workspace);
-  const isFlash = workspace.status === 'flash';
+  const isHome = isHomeWorkspace(workspace);
 
   // Tier and always-on are the machine's; the workspace row's copies are the
   // fallback for a row whose machine the list does not name.
   const tier = computer ? effectiveTier(computer) : normalizeTier(workspace.resource_tier);
-  const showTierBadge = !isFlash && tier !== 'standard';
-  const showAlwaysOn = !isFlash && (computer?.is_always_on ?? workspace.is_always_on) === true;
+  const showTierBadge = !isHome && tier !== 'standard';
+  const showAlwaysOn = !isHome && (computer?.is_always_on ?? workspace.is_always_on) === true;
   const diskLevel = computer?.disk?.level;
-  const showDiskDot = !isFlash && !!diskLevel && diskLevel !== 'healthy';
+  const showDiskDot = !isHome && !!diskLevel && diskLevel !== 'healthy';
   // Several workspaces share one machine, so the state worth showing is the
   // machine's. The workspace row mirrors it, and is the only source for a
   // workspace that names no computer. The folder is the card title spelled as
   // a path, so the row does not repeat it.
   const machineStatus = computer?.status ?? workspace.status;
   const machineName = computer?.name;
-  const showMachine = !isFlash && !!machineName;
+  const showMachine = !isHome && !!machineName;
 
   return (
     <div
@@ -110,13 +111,13 @@ export function WorkspaceCard({ workspace, computer, onSelect, onTogglePin, onRe
           onClick={() => onSelect(workspace.workspace_id, text.name, workspace.status)}
           className="relative flex cursor-pointer flex-col overflow-hidden rounded-xl py-4 pl-5 pr-4 transition-all ease-in-out hover:shadow-xs active:scale-[0.98] h-full w-full"
           style={{
-            // Flash is a system card: flat elevated surface + crisp hairline,
+            // Home is a system card: flat elevated surface + crisp hairline,
             // a different material from user cards; its amber glyph is the
             // only accent.
-            background: isFlash
+            background: isHome
               ? 'var(--color-bg-elevated)'
               : 'var(--color-bg-card-gradient, linear-gradient(to bottom, var(--color-border-muted), var(--color-border-muted)))',
-            border: isFlash
+            border: isHome
               ? '1px solid var(--color-border-default)'
               : '1px solid var(--color-bg-card-border, var(--color-border-muted))',
             backdropFilter: 'blur(8px)',
@@ -128,10 +129,10 @@ export function WorkspaceCard({ workspace, computer, onSelect, onTogglePin, onRe
               was what overflow-hidden clipped. */}
           <div className="flex flex-col grow gap-3">
             <div className="flex items-center pr-10 overflow-hidden gap-2">
-              {isFlash && (
-                <FlashRowIcon className="h-4 w-4 shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
+              {isHome && (
+                <HomeRowIcon className="h-4 w-4 shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
               )}
-              {!isFlash && workspace.is_pinned && (
+              {!isHome && workspace.is_pinned && (
                 <Pin className="h-3.5 w-3.5 shrink-0 rotate-45" style={{ color: 'var(--color-text-tertiary)' }} />
               )}
               <div className="font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>
@@ -205,7 +206,7 @@ export function WorkspaceCard({ workspace, computer, onSelect, onTogglePin, onRe
         </div>
 
         {/* Menu (no drag handle in normal mode) */}
-        {!isFlash && (
+        {!isHome && (
           <div className={`absolute top-3 right-3 z-10 transition-opacity ${isMobile ? 'opacity-60' : 'opacity-0 group-focus-within:opacity-100 group-hover:opacity-100'}`}>
             <CardMenu
               workspace={workspace}

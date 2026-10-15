@@ -128,7 +128,6 @@ export async function sendChatMessageStream(
   const body: Record<string, unknown> = {
     workspace_id: workspaceId,
     messages,
-    agent_mode: 'ptc',
     locale,
     timezone,
   };
@@ -245,7 +244,7 @@ interface ThreadReportBackStatus {
   // Live tail-subagent writers on a PTC thread (producer-undecided signal):
   // a task report-back only becomes `pending` once its subagent completes, so
   // while this list is non-empty an `idle` read must not be taken as drained.
-  // Optional: older backends and the flash slice omit it.
+  // Optional: older backends and a dispatching thread's slice omit it.
   active_tasks?: string[];
   // The dispatched threads still owed, oldest first; null when the read
   // failed. [] can come with a pending report: a PTC thread's slice names the
@@ -385,7 +384,7 @@ const WATCH_SNAPSHOT_EVENT = 'watch_snapshot';
  * Watch a thread for new workflow activity via SSE (Redis pub/sub backed).
  * Returns an AbortController so the caller can close the connection.
  * Calls onWorkflowStarted(payload) when the backend signals a new workflow;
- * the payload carries the started run_id (e.g. a flash report-back run) so the
+ * the payload carries the started run_id (e.g. a Chief of Staff report-back run) so the
  * caller can attach to that exact run directly.
  * @param {string} threadId - The thread ID to watch
  * @param {Function} onWorkflowStarted - Callback when new workflow is detected
@@ -736,7 +735,6 @@ export async function sendHitlResponse(
     workspace_id: workspaceId,
     messages: [],
     hitl_response: hitlResponse,
-    agent_mode: 'ptc',
   };
   if (llmModel) body.llm_model = llmModel;
   if (reasoningEffort) body.reasoning_effort = reasoningEffort;

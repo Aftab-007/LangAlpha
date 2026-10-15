@@ -14,7 +14,7 @@ type CaptionProps = React.ComponentProps<typeof MessageProvenanceLabel>;
 interface UserBubbleProps {
   provenance?: MessageProvenance;
   readOnly?: boolean;
-  flashContext?: CaptionProps['flashContext'];
+  dispatcherContext?: CaptionProps['dispatcherContext'];
   isMobile?: boolean;
   /** Goes on the outermost element: the captioned column, or the bubble alone. */
   className?: string;
@@ -23,7 +23,7 @@ interface UserBubbleProps {
   children?: React.ReactNode;
 }
 
-export function UserBubble({ provenance, readOnly, flashContext, isMobile, className, children }: UserBubbleProps): React.ReactElement | null {
+export function UserBubble({ provenance, readOnly, dispatcherContext, isMobile, className, children }: UserBubbleProps): React.ReactElement | null {
   const bubble = children === undefined ? null : (
     <div
       className={cn('overflow-hidden rounded-xl', isMobile ? 'px-3 py-2' : 'px-4 py-3', !provenance && className)}
@@ -35,7 +35,7 @@ export function UserBubble({ provenance, readOnly, flashContext, isMobile, class
   if (!provenance) return bubble;
   return (
     <div className={cn('flex min-w-0 max-w-full flex-col items-end gap-1.5', className)}>
-      <MessageProvenanceLabel provenance={provenance} readOnly={readOnly} flashContext={flashContext} />
+      <MessageProvenanceLabel provenance={provenance} readOnly={readOnly} dispatcherContext={dispatcherContext} />
       {bubble}
     </div>
   );

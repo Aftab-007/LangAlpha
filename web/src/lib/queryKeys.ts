@@ -42,7 +42,7 @@ export const queryKeys = {
     list:   (params: Record<string, unknown>) => [...queryKeys.workspaces.lists(), params],
     details: () => [...queryKeys.workspaces.all, 'detail'],
     detail: (id: string) => [...queryKeys.workspaces.details(), id],
-    flash:  () => [...queryKeys.workspaces.all, 'flash'],
+    home:   () => [...queryKeys.workspaces.all, 'home'],
     quota:  () => [...queryKeys.workspaces.all, 'quota'],
   },
   // The signed prefix the owner's report iframes load under, one per workspace

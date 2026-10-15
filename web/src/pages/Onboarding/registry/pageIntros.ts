@@ -18,10 +18,10 @@ export const PAGE_INTROS: PageIntroDef[] = [
         visual: 'twoModes',
       },
       {
-        id: 'flash',
+        id: 'chiefOfStaff',
         titleKey: 'agents.tour.chiefOfStaff.title',
         bodyKey: 'agents.tour.chiefOfStaff.body',
-        visual: 'flashAnswer',
+        visual: 'chiefOfStaffAnswer',
       },
       {
         id: 'ptc',

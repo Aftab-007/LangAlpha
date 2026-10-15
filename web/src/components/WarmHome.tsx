@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
-import { flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
+import { homeWorkspaceQuery } from '@/hooks/useHomeWorkspace';
 import { warmWorkspace } from '@/pages/ChatAgent/utils/warmWorkspace';
 
 /** How long after a warm the next interaction warms again. A computer the
@@ -52,8 +52,8 @@ export function WarmHome(): null {
       // while it would still be loading counts. Best effort, like the warm: a
       // send still starts the computer and shows what failed.
       const current = generation;
-      void queryClient.ensureQueryData(flashWorkspaceQuery(queryClient)).then(
-        (home) => (current === generation ? warmWorkspace(home.workspace_id, queryClient, { home: true }) : undefined),
+      void queryClient.ensureQueryData(homeWorkspaceQuery(queryClient)).then(
+        (home) => (current === generation ? warmWorkspace(home.workspace_id, queryClient) : undefined),
         // A lookup that failed started nothing, so the next interaction
         // retries, unless a power control has since begun its own wait.
         () => {

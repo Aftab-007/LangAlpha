@@ -11,11 +11,12 @@
  */
 import { QueryClient } from '@tanstack/react-query';
 
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { queryKeys } from '@/lib/queryKeys';
 import type { ComputersResponse, Workspace, WorkspacesResponse } from '@/types/api';
 
 import { startWorkspace } from './api';
-import { workspaceDetailQuery } from './workspaceQueries';
+import { cachedHomeRow, workspaceDetailQuery } from './workspaceQueries';
 
 const inFlight = new Map<string, Promise<void>>();
 
@@ -37,14 +38,15 @@ export function cachedWorkspaceLists(queryClient: QueryClient): Workspace[] {
   return rows;
 }
 
-/**
- * A flash row's 'flash' status is a marker, not a lifecycle state: it is how
- * every surface tells the per-user flash row (Home, once bound) apart. A
- * bound Home row carries its computer's id, so a computer-wide patch would
- * otherwise overwrite the marker with the machine's state.
- */
-function holdsFlashMarker(row: { status?: string | null } | null | undefined): boolean {
-  return row?.status === 'flash';
+/** `row` with `status` written in. A backend before is_home marks Home by a
+ * 'flash' status alone, so a Home row gains `is_home` to stay Home. */
+function withStatus<T extends Workspace>(row: T, status: string, computerId?: string): T {
+  return {
+    ...row,
+    status,
+    ...(isHomeWorkspace(row) ? { is_home: true } : {}),
+    ...(computerId ? { computer_id: computerId } : {}),
+  };
 }
 
 /**
@@ -52,8 +54,7 @@ function holdsFlashMarker(row: { status?: string | null } | null | undefined): b
  * workspace-list caches. Shared between `warmWorkspace` (writes the
  * 202 /start response) and `useWarmWorkspaceSandbox` (writes each
  * SSE-pushed transition) so a single status change visibly updates
- * every gallery + detail consumer without a network round-trip. A flash
- * row keeps its marker.
+ * every gallery + detail consumer without a network round-trip.
  */
 export function patchWorkspaceStatusInCaches(
   queryClient: QueryClient,
@@ -63,9 +64,7 @@ export function patchWorkspaceStatusInCaches(
 ): void {
   queryClient.setQueryData(
     workspaceDetailQuery(workspaceId).queryKey,
-    (prev) => prev && !holdsFlashMarker(prev)
-      ? { ...prev, status, ...(computerId ? { computer_id: computerId } : {}) }
-      : prev,
+    (prev) => prev ? withStatus(prev, status, computerId) : prev,
   );
   queryClient.setQueriesData<WorkspacesResponse | undefined>(
     { queryKey: queryKeys.workspaces.lists() },
@@ -74,17 +73,14 @@ export function patchWorkspaceStatusInCaches(
       return {
         ...prev,
         workspaces: prev.workspaces.map((w) =>
-          w.workspace_id === workspaceId && !holdsFlashMarker(w)
-            ? { ...w, status, ...(computerId ? { computer_id: computerId } : {}) }
-            : w,
+          w.workspace_id === workspaceId ? withStatus(w, status, computerId) : w,
         ),
       };
     },
   );
 }
 
-/** Update one machine and every cached workspace bound to it, except a flash
- * row, whose status stays its marker. */
+/** Update one machine and every cached workspace bound to it. */
 export function patchComputerStatusInCaches(
   queryClient: QueryClient,
   computerId: string,
@@ -101,15 +97,14 @@ export function patchComputerStatusInCaches(
   );
   queryClient.setQueriesData<Workspace | undefined>(
     { queryKey: queryKeys.workspaces.details() },
-    (prev) => prev?.computer_id === computerId && prev.status !== 'deleted' && !holdsFlashMarker(prev)
-      ? { ...prev, status }
+    (prev) => prev?.computer_id === computerId && prev.status !== 'deleted'
+      ? withStatus(prev, status)
       : prev,
   );
   const workspaceIds = new Set(
     cachedWorkspaceLists(queryClient)
       .filter((workspace) =>
-        workspace.computer_id === computerId && workspace.status !== 'deleted'
-        && !holdsFlashMarker(workspace))
+        workspace.computer_id === computerId && workspace.status !== 'deleted')
       .map((workspace) => workspace.workspace_id),
   );
   for (const id of workspaceIds) patchWorkspaceStatusInCaches(queryClient, id, status);
@@ -130,14 +125,15 @@ async function homeComputerId(queryClient: QueryClient, workspaceId: string): Pr
 }
 
 /** What the caches believe a machine is doing: its own row, else a workspace
- * bound to it. */
+ * bound to it other than Home, whose row may not have taken its machine's
+ * state yet. */
 function cachedComputerStatus(queryClient: QueryClient, computerId: string): string | undefined {
   for (const [, data] of queryClient.getQueriesData<ComputersResponse>({ queryKey: queryKeys.computers.lists() })) {
     const computer = data?.computers?.find((c) => c.computer_id === computerId);
     if (computer) return computer.status;
   }
   return cachedWorkspaceLists(queryClient)
-    .find((w) => w.computer_id === computerId && !holdsFlashMarker(w) && w.status !== 'deleted')
+    .find((w) => w.computer_id === computerId && !isHomeWorkspace(w) && w.status !== 'deleted')
     ?.status;
 }
 
@@ -162,26 +158,28 @@ export function mergeWarmingDisplay(
   return workspaceStarting || warmingState || false;
 }
 
-export function warmWorkspace(
-  workspaceId: string,
-  queryClient: QueryClient,
-  { home = false }: {
-    /**
-     * The per-user flash row, Home. Its row reads 'flash' whatever its
-     * computer is doing, so the status gate below would skip it; the start
-     * itself binds Home to the computer and answers from the computer's state.
-     */
-    home?: boolean;
-  } = {},
-): Promise<void> {
+/** Whether the caches know `workspaceId` as Home. Every warm follows a read
+ * of the row: Home's own query, a list holding it, or its detail. */
+function isCachedHome(queryClient: QueryClient, workspaceId: string): boolean {
+  if (cachedHomeRow(queryClient, workspaceId)) return true;
+  return isHomeWorkspace(
+    queryClient.getQueryData(workspaceDetailQuery(workspaceId).queryKey)
+      ?? cachedWorkspaceLists(queryClient).find((w) => w.workspace_id === workspaceId),
+  );
+}
+
+export function warmWorkspace(workspaceId: string, queryClient: QueryClient): Promise<void> {
   if (!workspaceId) return Promise.resolve();
 
   const existing = inFlight.get(workspaceId);
   if (existing) return existing;
 
-  if (home) {
-    // Home's row keeps its 'flash' marker; the start moves its computer, which
-    // the workspaces beside it on that machine show, so patch the machine.
+  // Home's row status can be one the gate below skips (a Home not yet bound
+  // to a computer has none of its own); the start itself binds Home to the
+  // computer and answers from the computer's state.
+  if (isCachedHome(queryClient, workspaceId)) {
+    // The start moves Home's computer, which the workspaces beside it on that
+    // machine show too, so patch the machine.
     const p = startWorkspace(workspaceId, { lazy: true })
       .then(async (resp) => {
         const computerId = await homeComputerId(queryClient, workspaceId);

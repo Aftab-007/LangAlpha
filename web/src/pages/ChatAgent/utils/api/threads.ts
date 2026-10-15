@@ -34,7 +34,7 @@ export async function createThreadWithTitle(opts: {
 }): Promise<ThreadCreatedInfo> {
   const { workspaceId, firstQuery, platform, timezone, subagentsAllowed, timeoutMs = 8000 } = opts;
 
-  const body: Record<string, unknown> = { first_query: firstQuery, agent_mode: 'ptc' };
+  const body: Record<string, unknown> = { first_query: firstQuery };
   if (workspaceId) body.workspace_id = workspaceId;
   if (platform) body.platform = platform;
   if (timezone) body.timezone = timezone;

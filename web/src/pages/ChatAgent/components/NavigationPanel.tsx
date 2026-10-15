@@ -359,7 +359,7 @@ function NavigationPanel({
           {workspaces.map((ws) => {
             const wsId = ws.workspace_id;
             // While a drag is live, rows across the pin boundary from the
-            // lifted workspace (Flash counts as pinned) stop being drop
+            // lifted workspace (Home counts as pinned) stop being drop
             // targets, so the preview can never show an arrangement the drop
             // handler refuses — releasing there used to silently snap back.
             const crossBlock = !!activeDragWs && activeDragId !== wsId &&

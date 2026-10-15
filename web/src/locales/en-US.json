@@ -1640,7 +1640,6 @@
     },
     "provenance": {
       "fromChiefOfStaff": "From Chief of Staff",
-      "fromFlash": "From Flash",
       "automation": "Automation",
       "automationNamed": "Automation · {{name}}",
       "viaChannel": "Via {{platform}}",

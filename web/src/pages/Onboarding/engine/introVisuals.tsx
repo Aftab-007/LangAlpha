@@ -14,7 +14,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
+import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
 import type { IntroVisualId } from '../registry';
 import { useAgentNames } from './introAgents';
 import './pageIntro.css';
@@ -136,14 +136,14 @@ function InputDock({ hot = false, delay, chip }: { hot?: boolean; delay?: number
 /** A workspace card in the gallery wireframe: title, blurb, updated-at.
     The All workspaces card is fully color-filled, which is how users tell it
     apart from regular (unfilled) workspace cards in the real gallery. */
-function WsCard({ hot = false, flash = false, delay }: { hot?: boolean; flash?: boolean; delay: number }) {
+function WsCard({ hot = false, home = false, delay }: { hot?: boolean; home?: boolean; delay: number }) {
   return (
     <Region
       hot={hot}
       delay={delay}
       className="flex flex-col gap-1 p-2"
       style={
-        flash
+        home
           ? {
               background:
                 'linear-gradient(135deg, hsl(var(--primary) / 0.22), hsl(var(--primary) / 0.08))',
@@ -153,7 +153,7 @@ function WsCard({ hot = false, flash = false, delay }: { hot?: boolean; flash?: 
       }
     >
       <div className="flex items-center gap-1">
-        {flash && <FlashRowIcon className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
+        {home && <HomeRowIcon className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
         <Ln w="52%" h={4} c="var(--iv-line-2)" />
       </div>
       <Ln w="88%" />
@@ -177,7 +177,7 @@ function TwoModes() {
         {/* Chief of Staff half: coordinating the desk, with quick answers on the side */}
         <Region hot delay={0.12} className="flex flex-1 flex-col gap-1.5 p-2">
           <div className="flex items-center gap-1.5" style={{ color: 'var(--iv-accent)' }}>
-            <FlashRowIcon className="h-2.5 w-2.5" />
+            <HomeRowIcon className="h-2.5 w-2.5" />
             <span className="font-mono text-[0.5rem]">{names.home}</span>
           </div>
           <OrchRow
@@ -249,7 +249,7 @@ function WorkspaceGrid() {
         {/* no hot card here — the step is about the gallery as a whole, and a
             highlighted card would read as a second All workspaces card */}
         <div className="grid flex-1 auto-rows-fr grid-cols-2 gap-2">
-          <WsCard flash delay={0.24} />
+          <WsCard home delay={0.24} />
           <WsCard delay={0.32} />
           <WsCard delay={0.4} />
           <WsCard delay={0.48} />
@@ -338,7 +338,7 @@ function OrchRow({
 /** Orchestration first: the Chief of Staff sets up a workspace, dispatches
     the heavy task to its Analyst, and schedules an automation; a quick price
     check follows so fast QA reads as part of the job, not the whole job. */
-function FlashAnswer() {
+function ChiefOfStaffAnswer() {
   const names = useAgentNames();
   return (
     <Frame topbar={<><Ln w="22%" /><Tag>{names.home}</Tag></>}>
@@ -359,7 +359,7 @@ function FlashAnswer() {
         </div>
         <Region hot delay={0.2} className="flex flex-col gap-1.5 p-2">
           <div className="flex items-center gap-1.5" style={{ color: 'var(--iv-accent)' }}>
-            <FlashRowIcon className="h-2.5 w-2.5" />
+            <HomeRowIcon className="h-2.5 w-2.5" />
             <span className="font-mono text-[0.5rem]">{names.homeRun} · orchestrating</span>
           </div>
           <OrchRow
@@ -394,7 +394,7 @@ function FlashAnswer() {
         </div>
         <Region delay={0.62} className="flex flex-col gap-1.5 p-2">
           <div className="flex items-center gap-1.5" style={{ color: 'var(--iv-accent)' }}>
-            <FlashRowIcon className="h-2.5 w-2.5" />
+            <HomeRowIcon className="h-2.5 w-2.5" />
             <span className="font-mono text-[0.5rem]">{names.homeRun} · 0.9s</span>
           </div>
           <div className="grid grid-cols-2 gap-1.5">
@@ -550,7 +550,7 @@ function CreateWorkspace() {
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <WsCard flash delay={0} />
+              <WsCard home delay={0} />
               <WsCard delay={0} />
               <WsCard delay={0} />
               <WsCard delay={0} />
@@ -994,7 +994,7 @@ function DashboardAttach() {
 export const INTRO_VISUALS: Record<IntroVisualId, () => ReactNode> = {
   twoModes: TwoModes,
   workspaceGrid: WorkspaceGrid,
-  flashAnswer: FlashAnswer,
+  chiefOfStaffAnswer: ChiefOfStaffAnswer,
   ptcSandbox: PtcSandbox,
   createWorkspace: CreateWorkspace,
   filePanel: FilePanel,
@@ -1014,7 +1014,7 @@ export const INTRO_VISUAL_ANCHOR: Record<IntroVisualId, 'left' | 'right' | 'cent
   // centered: symmetric comparison, fades its own edges
   twoModes: 'center',
   workspaceGrid: 'left',
-  flashAnswer: 'left',
+  chiefOfStaffAnswer: 'left',
   ptcSandbox: 'left',
   // centered: the scene fades its own edges instead of bleeding one side
   createWorkspace: 'center',

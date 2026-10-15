@@ -14,7 +14,7 @@ import { usePreferences } from '@/hooks/usePreferences';
 import { useDefaultModel } from '@/hooks/useSlotDefaultModels';
 import { useEffectiveTuning, useModelProfileWriter } from '@/hooks/useModelProfile';
 import { useFeatureEnabled } from '@/hooks/useFeatures';
-import { flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
+import { homeWorkspaceQuery } from '@/hooks/useHomeWorkspace';
 import { useAllModels } from '@/hooks/useAllModels';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useQuickAccessModels } from '@/hooks/useQuickAccessModels';
@@ -276,12 +276,12 @@ function ChatInput({
   const mentions = useMentions({ textareaRef, message, setMessage, workspaceFiles });
   // The workspace context scopes the slash menu: inside a workspace the
   // enabled-skill list is the workspace-effective one (workspace-scoped
-  // skills included, its disables applied). All workspaces runs in Home, the
-  // flash row, which loads its skills as any workspace does, so the menu
-  // lists Home's rather than those of the workspace the picker remembers.
+  // skills included, its disables applied). All workspaces runs in Home,
+  // which loads its skills as any workspace does, so the menu lists Home's
+  // rather than those of the workspace the picker remembers.
   const queryClient = useQueryClient();
   const { data: homeWorkspaceId = null } = useQuery({
-    ...flashWorkspaceQuery(queryClient),
+    ...homeWorkspaceQuery(queryClient),
     enabled: scope === 'all',
     select: (workspace) => workspace.workspace_id,
   });

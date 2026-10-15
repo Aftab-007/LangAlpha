@@ -16,7 +16,6 @@ import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdow
 import { Loader } from '@/components/ui/loader';
 import { brokerageArt } from '@/lib/brandArt';
 import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
-import { useFlashWorkspace } from '@/hooks/useFlashWorkspace';
 import {
   activeRungs,
   connectBlock,
@@ -25,6 +24,7 @@ import {
   type CapabilityGroup,
   type ResolvedBroker,
 } from '../brokerages';
+import { useHomeOption } from '../hooks/useWorkspaceOptions';
 import { isEffectivelyEnabled, isPluginOwned } from '../utils/provenance';
 import { ConnectButton, OauthMenuItems, VendorNotes } from './OauthRowParts';
 import { partialReachText } from './pluginsPage/pluginReach';
@@ -88,7 +88,7 @@ export function BrokerageCard({
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
-  const home = useFlashWorkspace();
+  const home = useHomeOption();
   const {
     b: brokerage,
     row,

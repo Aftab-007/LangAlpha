@@ -42,7 +42,7 @@ export interface SubagentMuxDeps {
   muxOpenTaskIds: () => Set<string>;
   /** useReportBackWatch's high-level arm (mark awaiting + keyed watch + optional poke). */
   armReportBackWatch: (
-    flashThreadId: string | null | undefined,
+    dispatcherThreadId: string | null | undefined,
     reportBackRunId: string | null | undefined,
     pokeSource: string | null,
   ) => void;

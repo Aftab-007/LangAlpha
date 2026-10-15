@@ -31,10 +31,10 @@ const TERMINAL: ReadonlySet<PTCDispatchStatus> = new Set(['completed', 'failed',
 // 'running' within seconds, so this only trips on a stuck dispatch, or on a read
 // that keeps failing before it ever saw the run.
 const STARTING_POLL_CAP = 30;
-// The batched liveness read is cheap, but a flash turn can register several
-// dispatched runs at once, so stay responsive for the first few polls (quick
-// completion / HITL prompt) then back off — a dispatched analysis runs for
-// minutes.
+// The batched liveness read is cheap, but a Chief of Staff turn can register
+// several dispatched runs at once, so stay responsive for the first few polls
+// (quick completion / HITL prompt) then back off: a dispatched analysis runs
+// for minutes.
 const POLL_FAST_MS = 4_000;
 const POLL_STEADY_MS = 10_000;
 const POLL_FAST_COUNT = 5;
@@ -111,7 +111,7 @@ interface DispatchStatusContextValue {
 const DispatchStatusContext = createContext<DispatchStatusContextValue | null>(null);
 
 /**
- * Runs ONE batched dispatch-liveness query for every PTC card in a flash turn.
+ * Runs ONE batched dispatch-liveness query for every PTC card in a Chief of Staff turn.
  * Cards register/unregister their thread id; the provider polls the sorted id
  * set once and distributes a per-id status slice via context — collapsing N
  * per-card `/status` polls into a single request on a single timer.

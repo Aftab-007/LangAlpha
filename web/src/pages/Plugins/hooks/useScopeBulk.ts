@@ -42,7 +42,7 @@ export interface ScopeBulkAdapter<T> {
    * choice) switches it off, or the badge the action leaves behind counts
    * Home against what the button promised.
    */
-  flashWorkspaceId?: (row: T) => string | null;
+  homeWorkspaceId?: (row: T) => string | null;
   /** Flip one workspace's deny marker on a deny-eligible row. */
   setWorkspaceEnabled: (
     row: T,
@@ -89,8 +89,8 @@ export function useScopeBulk<T>(
   function denyTarget(row: T, chosen: ReadonlySet<string> | null): BulkTarget | null {
     const markers = adapter.denyMarkers(row);
     if (!markers) return null;
-    const flashId = adapter.flashWorkspaceId?.(row) ?? null;
-    const reach = flashId ? [...liveWsIds, flashId] : liveWsIds;
+    const homeId = adapter.homeWorkspaceId?.(row) ?? null;
+    const reach = homeId ? [...liveWsIds, homeId] : liveWsIds;
     const plan = chosen ? onlyInPlan(markers, reach, chosen) : clearDenyPlan(markers, reach);
     const setNew = adapter.newWorkspaces?.(row, chosen === null) ?? null;
     if (plan.length === 0 && !setNew) return null;

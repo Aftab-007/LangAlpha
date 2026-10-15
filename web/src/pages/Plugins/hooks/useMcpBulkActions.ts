@@ -8,7 +8,7 @@ import {
   type BuiltinMcpServer,
   type CatalogServer,
 } from '@/pages/ChatAgent/utils/api';
-import { useFlashWorkspace } from '@/hooks/useFlashWorkspace';
+import { useHomeWorkspaceId } from '@/hooks/useHomeWorkspace';
 import type { BulkScopeSpec } from '../components/BulkScopeMenu';
 import { scopeLocked, type ScopeWorkspace } from '../components/ScopeControl';
 import type { BulkRunOptions } from '../components/useBulkSelection';
@@ -37,7 +37,7 @@ export function useMcpBulkActions({
 }): BulkActions & { scope: BulkScopeSpec } {
   const { t } = useTranslation();
   const { selected } = surface.selection;
-  const homeId = useFlashWorkspace()?.id ?? null;
+  const homeId = useHomeWorkspaceId() ?? null;
 
   const rows: ConnectorRow[] = [
     ...builtins.map((server) => ({ tier: 'builtin' as const, server })),
@@ -56,7 +56,7 @@ export function useMcpBulkActions({
     denyMarkers: (row) =>
       scopeLocked(row.server) ? null : (row.server.disabled_workspace_ids ?? []),
     // Home, for user rows only, as each row's checklist offers it.
-    flashWorkspaceId: (row) => (row.tier === 'catalog' ? homeId : null),
+    homeWorkspaceId: (row) => (row.tier === 'catalog' ? homeId : null),
     setWorkspaceEnabled: (row, workspaceId, enabled) =>
       setWorkspaceMcpServerEnabled(workspaceId, row.server.name, enabled),
     // Only a user row (brokerages included) has the setting. Absent reads as

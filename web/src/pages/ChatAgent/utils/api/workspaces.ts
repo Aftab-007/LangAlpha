@@ -13,9 +13,11 @@ const WORKSPACE_MUTATION_TIMEOUT_MS = 120000;
 
 const WORKSPACE_QUERY_TIMEOUT_MS = 15000;
 
-export async function getWorkspaces(limit: number = 20, offset: number = 0, sortBy: string = 'custom', includeFlash: boolean = false): Promise<WorkspacesResponse> {
+export async function getWorkspaces(limit: number = 20, offset: number = 0, sortBy: string = 'custom', includeHome: boolean = false): Promise<WorkspacesResponse> {
+  // A backend before is_home reads only include_flash.
+  const home = includeHome ? { include_home: true, include_flash: true } : {};
   const { data } = await api.get<WorkspacesResponse>('/api/v1/workspaces', {
-    params: { limit, offset, sort_by: sortBy, ...(includeFlash ? { include_flash: true } : {}) },
+    params: { limit, offset, sort_by: sortBy, ...home },
   });
   return data;
 }
@@ -39,13 +41,21 @@ export async function getWorkspace(workspaceId: string): Promise<Workspace> {
 }
 
 /**
- * Ensure the shared flash workspace exists for the current user.
- * Idempotent — safe to call on every app load.
- * @returns {Promise<Object>} Flash workspace record
+ * Get or create the user's Home, the workspace All workspaces runs in.
+ * Idempotent, so safe to call on every app load.
  */
-export async function getFlashWorkspace(): Promise<Workspace> {
-  const { data } = await api.post('/api/v1/workspaces/flash');
-  return data;
+export async function getHomeWorkspace(): Promise<Workspace> {
+  try {
+    const { data } = await api.post<Workspace>('/api/v1/workspaces/home');
+    return data;
+  } catch (err) {
+    // A backend before is_home has no /home, which it answers 405 (POST on
+    // its GET /{workspace_id}) or 404, and serves Home at /flash.
+    const status = (err as { response?: { status?: number } } | null)?.response?.status;
+    if (status !== 404 && status !== 405) throw err;
+    const { data } = await api.post<Workspace>('/api/v1/workspaces/flash');
+    return data;
+  }
 }
 
 export async function updateWorkspace(workspaceId: string, updates: Record<string, unknown>) {

@@ -130,7 +130,7 @@ export interface RecoveryDeps {
   reportBackWatch: {
     onStreamEnd: () => void;
     arm: (
-      flashThreadId: string | null | undefined,
+      dispatcherThreadId: string | null | undefined,
       reportBackRunId: string | null | undefined,
       pokeSource: string | null,
     ) => void;

@@ -70,7 +70,7 @@ interface MessageContentSegmentsProps {
   creditPauses?: Record<string, CreditPauseState>;
   toolApprovals?: Record<string, ToolApprovalState>;
   htmlWidgetProcesses?: Record<string, Record<string, unknown>>;
-  flashContext?: { threadId: string; workspaceId: string } | null;
+  dispatcherContext?: { threadId: string; workspaceId: string } | null;
 }
 
 interface TextBlockProps {
@@ -142,7 +142,7 @@ function TextBlock({ block, isStreaming, isSubagentView, isReplyStart, onOpenFil
   return isReplyStart && rendersNow ? <div data-reply-start="">{textEl}</div> : textEl;
 }
 
-export const MessageContentSegments = memo(function MessageContentSegments({ segments, contentProjection, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, fold = 'unfolded', isTurnTail = false, isSubagentView = false, readOnly = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, flashContext }: MessageContentSegmentsProps): React.ReactElement {
+export const MessageContentSegments = memo(function MessageContentSegments({ segments, contentProjection, reasoningProcesses, toolCallProcesses, todoListProcesses: _todoListProcesses, subagentTasks, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, fold = 'unfolded', isTurnTail = false, isSubagentView = false, readOnly = false, ptcAgentProposals = EMPTY_OBJ, secretaryActionProposals = EMPTY_OBJ, creditPauses = EMPTY_OBJ, toolApprovals = EMPTY_OBJ, htmlWidgetProcesses = EMPTY_OBJ, dispatcherContext }: MessageContentSegmentsProps): React.ReactElement {
   const { turnDisplay } = useTranscriptDisplay();
   const {
     onOpenSubagentTask, onOpenFile, onToolCallDetailClick, onOpenChart,
@@ -381,7 +381,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
               proposalData={pad as any}
               onApprove={onApprovePTCAgent ? (overrides?: { report_back?: boolean }) => onApprovePTCAgent(pad, overrides, (block as PTCAgentRenderBlock).segment.proposalId!, pad.interruptId as string) : undefined}
               onReject={onRejectPTCAgent ? () => onRejectPTCAgent(pad, (block as PTCAgentRenderBlock).segment.proposalId!, pad.interruptId as string) : undefined}
-              flashContext={flashContext}
+              dispatcherContext={dispatcherContext}
             />
           );
         }

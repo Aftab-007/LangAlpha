@@ -35,15 +35,15 @@ interface MessageProvenanceProps {
   readOnly?: boolean;
   /** The thread this transcript belongs to when it hands work out, which an
    *  Analyst's thread opened from here links back to (as its hand-off card does). */
-  flashContext?: DispatcherContext | null;
+  dispatcherContext?: DispatcherContext | null;
   className?: string;
 }
 
-export function MessageProvenanceLabel({ provenance, readOnly, flashContext, className }: MessageProvenanceProps): React.ReactElement | null {
+export function MessageProvenanceLabel({ provenance, readOnly, dispatcherContext, className }: MessageProvenanceProps): React.ReactElement | null {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const guardLeave = useRouteLeaveGuard();
-  const openDispatchedThread = useOpenDispatchedThread(flashContext);
+  const openDispatchedThread = useOpenDispatchedThread(dispatcherContext);
   const { onOpenDispatcher, onOpenSubagentTask } = useMessageActions();
 
   let Icon: LucideIcon;
@@ -58,11 +58,10 @@ export function MessageProvenanceLabel({ provenance, readOnly, flashContext, cla
       // as shares have always shown it.
       if (!provenance.agent && readOnly) return null;
       Icon = Bot;
-      // A hand-off recorded before the row named its dispatcher reads as the
-      // Chief of Staff, the same reading the thread's back button makes.
-      label = provenance.agent === 'flash'
-        ? t('chat.provenance.fromFlash')
-        : t('chat.provenance.fromChiefOfStaff');
+      // Only the Chief of Staff hands turns out. A row recorded before it named
+      // its dispatcher, or naming the agent it replaced, reads the same, as
+      // the thread's back button does.
+      label = t('chat.provenance.fromChiefOfStaff');
       const { threadId } = provenance;
       if (threadId && onOpenDispatcher) open = () => guardLeave(() => onOpenDispatcher(threadId));
       break;

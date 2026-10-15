@@ -8,7 +8,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
-import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
+import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { getRecentThreads } from '@/pages/ChatAgent/utils/api';
 import { workspaceThreadsQuery } from '@/pages/ChatAgent/utils/threadQueries';
 import { clearChatSession } from '@/pages/ChatAgent/hooks/utils/chatSessionRestore';
@@ -60,14 +61,14 @@ function ThreadRow({
   onOpen,
   bucket,
   workspaceLabel,
-  isFlash,
+  isHome,
   instanceId,
 }: {
   thread: Thread;
   onOpen: () => void;
   bucket: BucketKey;
   workspaceLabel?: string;
-  isFlash?: boolean;
+  isHome?: boolean;
   instanceId: string;
 }) {
   const { t } = useTranslation();
@@ -104,8 +105,8 @@ function ThreadRow({
         }
       }}
     >
-      {isFlash ? (
-        <FlashRowIcon
+      {isHome ? (
+        <HomeRowIcon
           className="h-3 w-3 shrink-0"
           style={{ color: 'var(--color-accent-primary)' }}
         />
@@ -206,7 +207,7 @@ function BucketSection({
               bucket={bucket}
               onOpen={() => onOpen(thread)}
               workspaceLabel={wsLabel(ws)}
-              isFlash={ws?.status === 'flash'}
+              isHome={isHomeWorkspace(ws)}
               instanceId={instanceId}
             />
           );
@@ -280,7 +281,7 @@ function RecentThreadsWidget({ instance }: WidgetRenderProps<RecentThreadsConfig
             th.title ||
             ((th as { first_query_content?: string }).first_query_content as string | undefined) ||
             t('dashboard.widgets.recentThreads.untitled'),
-          workspace: ws?.status === 'flash' ? label(ws) : ws?.name ?? '',
+          workspace: isHomeWorkspace(ws) ? label(ws) : ws?.name ?? '',
           when: th.updated_at ?? '',
           thread_id: th.thread_id,
         };

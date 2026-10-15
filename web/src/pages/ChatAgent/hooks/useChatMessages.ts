@@ -51,8 +51,9 @@ import { useMarketWatch } from './useMarketWatch';
 import { refreshComputersAfterTurn } from './useComputers';
 // Chart-annotation live bridge: writes agent-drawn annotations into the
 // shared MarketView store so the desktop MarketView chat panel (which uses
-// this engine for both flash and PTC) renders them live. Harmless on the
-// standalone /chat page — the store simply has no chart consumer there.
+// this engine for both Chief of Staff and PTC threads) renders them live.
+// Harmless on the standalone /chat page: the store simply has no chart
+// consumer there.
 
 // --- Module scope extracted to session/types + utils (W1) ---
 import type {
@@ -273,7 +274,7 @@ export function useChatMessages(
   // The thread a reconnect stream is attached to (set when reconnectToStream
   // marks isStreamingRef). Lets the thread-load effect tell "this thread is
   // streaming" (skip the load) from "a DIFFERENT thread is streaming" (e.g. a
-  // flash report-back) — in the latter case it supersedes that stream so the
+  // report-back), in which case it supersedes that stream so the
   // navigated-to thread can still load and reconnect. Null when no reconnect
   // stream is in flight.
   const streamingThreadIdRef = useRef<string | null>(null);
@@ -1188,18 +1189,18 @@ export function useChatMessages(
     const reloadAsked = reloadTrigger !== reloadSeenRef.current;
     reloadSeenRef.current = reloadTrigger;
     // A reconnect stream is live on a DIFFERENT thread than the one we're now
-    // loading — e.g. a flash report-back is streaming on the flash thread and the
-    // user clicked the dispatch card to jump into the running PTC thread. Without
-    // this, the isStreamingRef guard below would skip the PTC load and it would
-    // appear blank (the report-back stream "holds" the global streaming flag).
-    // Supersede that stream: abort it (it continues server-side and replays on
+    // loading, e.g. a report-back is streaming on the Chief of Staff thread and
+    // the user clicked the dispatch card to jump into the running PTC thread.
+    // Without this, the isStreamingRef guard below would skip the PTC load and
+    // it would appear blank (the report-back stream "holds" the global
+    // streaming flag). Supersede that stream: abort it (it continues server-side and replays on
     // return) so THIS thread can load and reconnect. The aborted stream's finally
     // is a no-op now (its `stillActive` check fails — see reconnectToStream).
     //
-    // We do NOT stop the report-back watch here. Superseding the visible flash
+    // We do NOT stop the report-back watch here. Superseding the visible
     // reader (so the PTC thread can take the slot) must not erase the independent
     // pending report-back: the keyed watch persists, holds its run ids, and
-    // renders again when the user returns to the flash thread.
+    // renders again when the user returns to the Chief of Staff thread.
     const supersedeOtherThreadStream =
       isStreamingRef.current &&
       streamingThreadIdRef.current !== null &&
@@ -1428,7 +1429,7 @@ export function useChatMessages(
       // already on screen, so this never double-streams.
       if (shouldArmForStatus(status)) {
         if (import.meta.env.DEV) console.log('[ReportBack] Pending report-back detected on load, opening watch');
-        // Key the watch to THIS thread (pending_report_back is a flash-thread
+        // Key the watch to THIS thread (pending_report_back is a dispatching-thread
         // property) and seed the run /status already named. Poke a catch-up
         // reconcile ONLY when the thread isn't also active — poking would race
         // the reconnect branch's attach of status.run_id (double-attach); the
@@ -1533,7 +1534,7 @@ export function useChatMessages(
 
     // Cleanup: Cancel loading if workspace or thread changes or component unmounts.
     // The report-back watch is deliberately NOT torn down here — it is keyed to its
-    // flash thread and must survive navigation into the dispatched PTC thread (a
+    // dispatching thread and must survive navigation into the dispatched PTC thread (a
     // dedicated unmount-only effect stops it when the component truly goes away).
     return () => {
       cancelled = true;
@@ -1573,7 +1574,7 @@ export function useChatMessages(
     return () => window.removeEventListener('online', retryFailedLoad);
   }, [workspaceId, threadId, reloadTrigger]);
 
-  // The report-back watch survives thread navigation (so a flash report-back and a
+  // The report-back watch survives thread navigation (so a report-back and a
   // live PTC stream coexist); useReportBackWatch owns its own unmount-time
   // teardown, so the thread-load effect above deliberately doesn't touch it.
 
@@ -1771,7 +1772,7 @@ export function useChatMessages(
     // (c) The thread mux stays attached: the backend cancel finalizes this
     // turn's task runs, and their terminal frames flip the cards to their
     // real outcome (cancelled) instead of a client-side guess. Leave the
-    // report-back watch running: this flash-thread cancel does not stop the
+    // report-back watch running: this Chief of Staff thread cancel does not stop the
     // background PTC analyses on their own threads, so their summaries should
     // still surface live. The aborted reader's finally clears isStreamingRef, so
     // the watch's next reconcile can attach the next head run or drain.

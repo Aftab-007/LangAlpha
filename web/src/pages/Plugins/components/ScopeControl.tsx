@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { ArrowRightLeft, Check, ChevronDown, FolderOpen, Globe, PowerOff } from 'lucide-react';
+import { ArrowRightLeft, Check, ChevronDown, FolderOpen, Globe, House, PowerOff } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -14,7 +14,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
-import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
 import { scopeOff, type ScopeOff } from '../utils/scopeOff';
 
 /**
@@ -77,7 +76,7 @@ export type ScopeReach =
 export function readChecklist(
   workspaces: ScopeWorkspace[],
   disabledWorkspaceIds: string[] = [],
-  flashWorkspace?: ScopeWorkspace,
+  homeWorkspace?: ScopeWorkspace,
   newWorkspacesOn?: boolean,
 ): {
   checklist: ScopeWorkspace[];
@@ -85,7 +84,7 @@ export function readChecklist(
   active: ScopeWorkspace[];
   reach: ScopeReach;
 } {
-  const checklist = flashWorkspace ? [...workspaces, flashWorkspace] : workspaces;
+  const checklist = homeWorkspace ? [...workspaces, homeWorkspace] : workspaces;
   const disabled = new Set(disabledWorkspaceIds);
   const active = checklist.filter((w) => !disabled.has(w.id));
   const off = checklist.length - active.length;
@@ -126,7 +125,7 @@ export function ScopeControl({
   moveBlockedReason = null,
   moveToAllBlockedReason = null,
   busy = false,
-  flashWorkspace,
+  homeWorkspace,
   newWorkspacesOn,
   loading = false,
   onSetWorkspaceDisabled,
@@ -152,7 +151,7 @@ export function ScopeControl({
   busy?: boolean;
   /** Adds Home to the checklist, and to nothing else: a row can be switched
    * off there, but never moved there. */
-  flashWorkspace?: ScopeWorkspace;
+  homeWorkspace?: ScopeWorkspace;
   /** What a workspace created later starts with, on rows that have their own
    * setting. `false` also switches the badge from the deny-list wording to
    * the workspaces the row is on in. */
@@ -175,7 +174,7 @@ export function ScopeControl({
   const { checklist, disabled, reach } = readChecklist(
     workspaces,
     disabledWorkspaceIds,
-    flashWorkspace,
+    homeWorkspace,
     newWorkspacesOn,
   );
   const inherits = reach.kind === 'all' || reach.kind === 'allExcept';
@@ -268,8 +267,8 @@ export function ScopeControl({
                     className="h-3.5 w-3.5 mr-2"
                     style={{ opacity: active ? 1 : 0 }}
                   />
-                  {ws === flashWorkspace ? (
-                    <FlashRowIcon home className="h-3.5 w-3.5 mr-1.5 shrink-0" />
+                  {ws === homeWorkspace ? (
+                    <House className="h-3.5 w-3.5 mr-1.5 shrink-0" />
                   ) : null}
                   <span className="truncate">{ws.name}</span>
                 </DropdownMenuCheckboxItem>

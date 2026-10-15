@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import type { Workspace } from '@/types/api';
 import { apiErrorStatus } from '../../ChatAgent/utils/api';
 import { workspaceDetailQuery } from '../../ChatAgent/utils/workspaceQueries';
@@ -29,8 +30,8 @@ type Standing = 'open' | 'gone' | 'unknown';
 async function checkStanding(queryClient: QueryClient, workspaceId: string): Promise<Standing> {
   try {
     const workspace = await queryClient.fetchQuery({ ...workspaceDetailQuery(workspaceId), staleTime: 0, retry: false });
-    // The list this check stands in for leaves flash workspaces out.
-    return workspace.status === 'flash' ? 'gone' : 'open';
+    // The list this check stands in for leaves Home out.
+    return isHomeWorkspace(workspace) ? 'gone' : 'open';
   } catch (err) {
     const status = apiErrorStatus(err);
     return status === 404 || status === 403 ? 'gone' : 'unknown';

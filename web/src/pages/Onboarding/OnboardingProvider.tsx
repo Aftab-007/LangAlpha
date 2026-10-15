@@ -336,7 +336,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     if (hasStocks && !stocksStamped) markTaskDone('stocks');
   }, [hasStocks, stocksStamped, markTaskDone]);
 
-  // "Create your first workspace" — any non-flash workspace exists. An
+  // "Create your first workspace": any workspace other than Home exists. An
   // independent lightweight probe (limit:1 keys its own cache entry, distinct
   // from the gallery's limit:20); only fetched while the card needs it, and
   // stamped once true like the stocks task.

@@ -6,7 +6,6 @@ import { oauthLabelKey } from '@/pages/ChatAgent/components/mcp/McpStatusPill';
 import { probeRowState } from '@/pages/ChatAgent/components/mcp/mcpState';
 import { useMcpCatalogServerTools } from '@/hooks/useMcpServers';
 import { useUserVaultSecrets } from '@/hooks/useUserVault';
-import { useFlashWorkspace } from '@/hooks/useFlashWorkspace';
 import { brokerageArt, mcpServerArt } from '@/lib/brandArt';
 import { builtinServerMark } from '../utils/pluginSurface';
 import { settledGrant, type Brokerage } from '../brokerages';
@@ -16,7 +15,7 @@ import { connectorState, switchOnBlock } from '../utils/connectorState';
 import { isPluginOwned } from '../utils/provenance';
 import { useSectionNav } from '../hooks/useSectionNav';
 import { useVendorOf } from '../hooks/useVendorOf';
-import { useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
+import { useHomeOption, useWorkspaceOptions } from '../hooks/useWorkspaceOptions';
 import {
   DetailAsideBlock,
   DetailHeader,
@@ -102,7 +101,7 @@ export function ServerDetail({
   const labelId = useId();
   const { openDetail } = useSectionNav();
   const openPlugin = (plugin: string) => openDetail({ kind: 'plugin', name: plugin });
-  const home = useFlashWorkspace();
+  const home = useHomeOption();
   const { workspaces, loading: workspacesLoading } = useWorkspaceOptions();
   const { data: vault } = useUserVaultSecrets();
   const { origin } = data;
@@ -272,7 +271,7 @@ export function ServerDetail({
                 scopeWorkspaceId={null}
                 disabledWorkspaceIds={(catalog ?? builtin)?.disabled_workspace_ids ?? []}
                 off={scopeOff(catalog ?? builtin ?? {})}
-                flashWorkspace={catalog ? home : undefined}
+                homeWorkspace={catalog ? home : undefined}
                 newWorkspacesOn={catalog?.enabled_in_new_workspaces}
                 loading={workspacesLoading}
                 busy={scope.busy}

@@ -19,9 +19,9 @@ function newWorkspacesOn(part: Part): boolean | undefined {
 
 /** A part's reach as its own page's control words it; off everywhere when it
  *  or its plugin is switched off. */
-export function partReach(part: Part, workspaces: ScopeWorkspace[], flash?: ScopeWorkspace): ScopeReach {
+export function partReach(part: Part, workspaces: ScopeWorkspace[], home?: ScopeWorkspace): ScopeReach {
   if (!isEffectivelyEnabled(part)) return { kind: 'none' };
-  return readChecklist(workspaces, part.disabled_workspace_ids, flash, newWorkspacesOn(part)).reach;
+  return readChecklist(workspaces, part.disabled_workspace_ids, home, newWorkspacesOn(part)).reach;
 }
 
 /** Which workspaces a part is on in, and whether the next one gets it: two
@@ -62,15 +62,15 @@ export function pluginReachText(t: TFunction, reach: PluginReach): string {
  * A cell's reach, said only when it is not everywhere, in the badge's words
  * ("All except 2", "Only in Research"): the exception is the only thing worth
  * reading on a cell, and a part that is off already says so in its state.
- * `flash` is Home, when the part's own checklist offers it.
+ * `home` is Home, when the part's own checklist offers it.
  */
 export function partialReachText(
   t: TFunction,
   part: Part,
   workspaces: ScopeWorkspace[],
-  flash?: ScopeWorkspace,
+  home?: ScopeWorkspace,
 ): string | null {
   if (!isEffectivelyEnabled(part)) return null;
-  const reach = partReach(part, workspaces, flash);
+  const reach = partReach(part, workspaces, home);
   return reach.kind === 'all' ? null : reachText(t, reach);
 }

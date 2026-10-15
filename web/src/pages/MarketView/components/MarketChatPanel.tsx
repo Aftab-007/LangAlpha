@@ -29,7 +29,6 @@ import { DispatchStatusProvider } from '../../ChatAgent/hooks/usePTCDispatchStat
 import { useStreamFollow } from '../../ChatAgent/components/chatView/streamFollow';
 import { useTranscriptFollow } from '../../ChatAgent/components/chatView/useTranscriptFollow';
 import { useActiveThreadPublisher } from '@/lib/threadLifecycle/useActiveThreadPublisher';
-import { FLASH_ROUTE_STATE } from '@/hooks/useFlashWorkspace';
 import { appendPathSuffix, getPreviewUrl, summarizeThread, offloadThread } from '../../ChatAgent/utils/api';
 import { attachmentsToContexts } from '../../ChatAgent/utils/fileUpload';
 import {
@@ -150,7 +149,7 @@ function MarketChatScope(props: MarketChatPanelProps): React.ReactElement {
   // moved it out of, which the turn file deck needs to tell the workspace's
   // own notes file from a deliverable. Read through the detail query, which a
   // turn re-reads once the folder has settled. The page's list never does, nor
-  // does the flash row, which can predate the turn that gave Home its folder.
+  // does Home's cached row, which can predate the turn that gave Home its folder.
   const { data: activeWorkspace } = useWorkspace(activeWorkspaceId);
   // No sibling list: this page opens no files, so a sibling's has nowhere to go.
   const folders = useMemo(() => computerFolders(activeWorkspace, null), [activeWorkspace]);
@@ -727,7 +726,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   // proposal so its "open in chat" deep-link lands back here. Null in a
   // workspace, since only All workspaces hands work off to the workspaces.
   // Memoized: a fresh object per render would defeat the memoized bubbles downstream.
-  const flashContext = useMemo(
+  const dispatcherContext = useMemo(
     () =>
       scope === 'all' && threadId && threadId !== '__default__'
         ? { threadId, workspaceId: activeWorkspaceId }
@@ -744,9 +743,9 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   const handleOpenInChat = useCallback(() => {
     if (!threadId || threadId === '__default__') return;
     navigate(`/chat/t/${threadId}`, {
-      state: { workspaceId: activeWorkspaceId, ...(scope === 'all' ? FLASH_ROUTE_STATE : {}) },
+      state: { workspaceId: activeWorkspaceId },
     });
-  }, [navigate, threadId, activeWorkspaceId, scope]);
+  }, [navigate, threadId, activeWorkspaceId]);
 
   // Shared styling for the header's right-hand action chip.
   const headerBtnStyle: React.CSSProperties = {
@@ -865,7 +864,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
                       isLoading={isLoading}
                       isLoadingHistory={isLoadingHistory}
                       feedbackByTurn={feedbackByTurn}
-                      flashContext={flashContext}
+                      dispatcherContext={dispatcherContext}
                     />
                   </DispatchStatusProvider>
                 </MessageActionsProvider>

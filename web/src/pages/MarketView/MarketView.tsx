@@ -14,7 +14,7 @@ import MarketSidebarPanel from './components/MarketSidebarPanel';
 import { INTERVALS } from './utils/chartConstants';
 import { MARKET_VIEW_ROUTE_PARAMS, readMarketViewRoute } from './utils/marketRoute';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
-import { FLASH_ROUTE_STATE, flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
+import { homeWorkspaceQuery, resolveChatWorkspace } from '@/hooks/useHomeWorkspace';
 import type { Workspace } from '@/types/api';
 import type { StockSearchHit } from '@/lib/marketUtils';
 import type { Freshness } from '@/types/market';
@@ -159,8 +159,8 @@ function MarketViewInner() {
   // Workspaces for the selector. The shared query, not a local
   // fetch — a rename elsewhere invalidates this key, and a copy in local state
   // would keep showing the old name until the page remounts. The list is
-  // already PTC-only: this key carries includeFlash=false, and the server
-  // filters flash rows out of that response.
+  // already the user's own workspaces: this key carries includeHome=false,
+  // and the server leaves Home out of that response.
   // refetchOnMount 'always': the reconcile in useRestoredWorkspace only accepts
   // a fetch that happened during this mount, and the 30s staleTime would
   // otherwise serve a remount from cache with no request at all, so the check
@@ -233,16 +233,16 @@ function MarketViewInner() {
   // it into the thread it opens.
   const subagents = useThreadSubagents({ threadId: null });
 
-  // Home's id (the flash row), which All workspaces runs in. Retried, since
+  // Home's id, which All workspaces runs in. Retried, since
   // a failed first fetch would otherwise leave All workspaces annotations
   // unscoped until something refetches it.
-  const { data: flashWorkspace } = useQuery({ ...flashWorkspaceQuery(queryClient), retry: 3 });
+  const { data: homeWorkspace } = useQuery({ ...homeWorkspaceQuery(queryClient), retry: 3 });
 
   // The workspace the chat runs in: Home under All workspaces, the selected
   // one otherwise. The chart shows the agent-drawn instance for it, and since
   // annotations are keyed by (workspace_id, chart_id), this single id scopes
   // both the persistence sync and the live chart selection.
-  const activeWorkspaceId = scope === 'all' ? flashWorkspace?.workspace_id ?? null : selectedWorkspaceId;
+  const activeWorkspaceId = scope === 'all' ? homeWorkspace?.workspace_id ?? null : selectedWorkspaceId;
   useChartAnnotationSync(activeWorkspaceId, selectedStock);
 
   // Switch the chart to a given instance — used by the live-add auto-focus
@@ -489,18 +489,10 @@ function MarketViewInner() {
     metaItems.push(...selectionAttachments);
     const attachmentMeta = metaItems.length > 0 ? metaItems : null;
 
-    // The selected workspace, or under All workspaces the flash row, which
-    // the server runs as Home on the full agent.
-    const toHome = scope === 'all';
+    // The selected workspace, or under All workspaces Home, which the server
+    // runs on the full agent. A failed Home lookup is the setup toast below.
     try {
-      // A failed Home lookup is the setup toast below, not the catch-all.
-      const workspaceId = toHome
-        ? (await queryClient.ensureQueryData(flashWorkspaceQuery(queryClient)).catch(() => null))?.workspace_id
-        : selectedWorkspaceId;
-      if (toHome && !workspaceId) {
-        toast({ variant: 'destructive', title: t('common.error'), description: t('agents.market.setupFailed') });
-        return;
-      }
+      const workspaceId = await resolveChatWorkspace(queryClient, scope, selectedWorkspaceId);
       if (!workspaceId) {
         toast({
           variant: 'destructive',
@@ -513,7 +505,6 @@ function MarketViewInner() {
       navigate(`/chat/t/__default__`, {
         state: {
           workspaceId,
-          ...(toHome ? FLASH_ROUTE_STATE : {}),
           initialMessage: outgoingMessage,
           ...(subagents.toSend !== undefined ? { subagentsAllowed: subagents.toSend } : {}),
           additionalContext: imageContext,

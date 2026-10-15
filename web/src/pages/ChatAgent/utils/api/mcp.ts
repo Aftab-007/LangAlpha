@@ -404,7 +404,7 @@ export interface WorkspaceMcpServerSaved {
 
 /**
  * Create the server on the account and turn it on in this workspace only; it
- * starts off everywhere else, Flash included. A taken name or the account cap
+ * starts off everywhere else, Home included. A taken name or the account cap
  * answers 409 with a human `detail`.
  */
 export async function addWorkspaceMcpServer(

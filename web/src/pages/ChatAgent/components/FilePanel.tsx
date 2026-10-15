@@ -10,6 +10,7 @@ import {
   MemoDiffModal,
 } from './FilePanelMemo';
 import { useWorkspace } from '@/hooks/useWorkspace';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useNarrowContainer } from '@/hooks/useNarrowContainer';
 import {
@@ -196,7 +197,7 @@ function FilePanel({
   }, [apiAdapter, workspaceId]);
 
   const { data: wsData } = useWorkspace(workspaceId);
-  const isFlashWorkspace = wsData?.status === 'flash';
+  const isHome = isHomeWorkspace(wsData);
   const folders = useWorkspaceFolders();
   // The reader's memory and memo stores open here as tabs. A share reads
   // through an adapter with no workspace id: it browses someone else's files
@@ -830,7 +831,7 @@ function FilePanel({
               onOpenPreview={openPreviewTab}
               onOpenMemory={stores ? openMemory : null}
               onOpenMemo={viewInMemo}
-              onOpenSettings={!readOnly && !isFlashWorkspace ? openSettings : null}
+              onOpenSettings={!readOnly && !isHome ? openSettings : null}
               workspaceName={wsData?.name}
               filesRestoreIncomplete={filesRestoreIncomplete}
               overlay={narrow}

@@ -561,7 +561,8 @@ export interface AgentArtifactRouting {
  * id — caller-supplied context wins. When neither is provided for a workspace-
  * tier memory path, we emit `clearWorkspaceId: true` so a stale
  * filePanelWorkspaceId from a prior cross-workspace click doesn't leak into
- * the new query (flash-mode regression guard).
+ * the new query (a regression guard for chats whose links name other
+ * workspaces).
  *
  * A path through a sibling's folder (`siblingWorkspacePath`) routes as the
  * `__wsref__` link to that workspace would. It is read as a path, which is
@@ -593,7 +594,7 @@ export function computeAgentArtifactRouting(
   if (info.kind === 'memory') {
     if (info.tier === 'user') {
       // User memory is global to the user — workspace context is meaningless,
-      // and any stale ws id from a flash `ws://` link must be cleared so the
+      // and any stale ws id from a cross-workspace `ws://` link must be cleared so the
       // memory query doesn't leak into the wrong workspace.
       return {
         ...base,
@@ -605,9 +606,9 @@ export function computeAgentArtifactRouting(
     // Workspace memory:
     //  - With a resolved wsid (caller-supplied OR embedded `__wsref__`), set
     //    it on the panel so MemoryPanel queries the correct workspace.
-    //  - Without one, clear filePanelWorkspaceId. Flash mode previously left
-    //    it as-is, leaking a stale wsid from a prior cross-workspace click
-    //    into the new memory list query.
+    //  - Without one, clear filePanelWorkspaceId. Leaving it as-is leaks a
+    //    stale wsid from a prior cross-workspace click into the new memory
+    //    list query.
     if (resolvedWsid) {
       return {
         ...base,

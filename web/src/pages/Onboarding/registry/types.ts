@@ -27,7 +27,7 @@ export interface AnnouncementDef {
 export type IntroVisualId =
   | 'twoModes'
   | 'workspaceGrid'
-  | 'flashAnswer'
+  | 'chiefOfStaffAnswer'
   | 'ptcSandbox'
   | 'createWorkspace'
   | 'filePanel'
@@ -79,7 +79,7 @@ export interface GettingStartedTaskDef {
    * Derived completion signal — live done state without a prefs stamp.
    * `hasStocks`: watchlist or portfolio has at least one entry (stamped once
    * true so the lookup stops re-running). `hasWorkspace`: at least one
-   * non-flash workspace exists (also stamped once true). `hasPreferences`:
+   * workspace other than Home exists (also stamped once true). `hasPreferences`:
    * any risk / investment / agent preference field is filled (never stamped,
    * so a preferences reset un-checks it).
    */

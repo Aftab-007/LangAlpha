@@ -7,7 +7,7 @@ import { ConfirmStrip, HeaderButton } from '@/components/mcp/McpPrimitives';
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/use-toast';
 import { useAllModels } from '@/hooks/useAllModels';
-import { FLASH_ROUTE_STATE, flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
+import { resolveChatWorkspace } from '@/hooks/useHomeWorkspace';
 import { usePlugins } from '@/hooks/usePlugins';
 import {
   invalidateSubagents,
@@ -122,13 +122,9 @@ export function SubagentsList() {
   // that workspace's thread list rather than the user's own.
   async function startChat() {
     try {
-      const home = await qc.fetchQuery(flashWorkspaceQuery(qc));
+      const workspaceId = await resolveChatWorkspace(qc, 'all');
       navigate('/chat/t/__default__', {
-        state: {
-          workspaceId: home.workspace_id,
-          ...FLASH_ROUTE_STATE,
-          draftMessage: t('plugins.subagents.chatPrefill'),
-        },
+        state: { workspaceId, draftMessage: t('plugins.subagents.chatPrefill') },
       });
     } catch {
       toast({ variant: 'destructive', title: t('plugins.subagents.chatFailed') });

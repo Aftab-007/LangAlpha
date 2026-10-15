@@ -1636,7 +1636,6 @@
     },
     "provenance": {
       "fromChiefOfStaff": "来自 CoS Agent",
-      "fromFlash": "来自 Flash",
       "automation": "自动化",
       "automationNamed": "自动化 · {{name}}",
       "viaChannel": "来自 {{platform}}",

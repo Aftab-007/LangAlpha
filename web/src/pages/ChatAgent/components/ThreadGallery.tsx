@@ -3,7 +3,8 @@ import { ArrowLeft, Folder, FileText, Archive } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
-import { FLASH_ROUTE_STATE, FlashRowIcon } from '@/hooks/useFlashWorkspace';
+import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { useNavigate, useParams, useLocation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
@@ -80,12 +81,11 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
   const { data: wsData, error: wsError } = useWorkspace(workspaceId);
   // Keep location.state values as instant display fallbacks during navigation
   const locationState = location.state as Record<string, unknown> | null;
-  const workspaceStatus = (wsData?.status || locationState?.workspaceStatus || null) as string | null;
   const label = useWorkspaceLabel();
   const workspaceName = (label(wsData) || locationState?.workspaceName || '') as string;
-  // The flash row is Home: the full agent with a folder of its own, so its
-  // files show. It still has no machine controls of its own.
-  const isFlash = workspaceStatus === 'flash';
+  // Home runs the full agent with a folder of its own, so its files show. It
+  // still has no machine controls of its own.
+  const isHome = isHomeWorkspace(wsData);
 
   // Archived view toggle. Both views live under the byWorkspace prefix
   // (queryKeys.threads.gallery), so prefix invalidations refresh both — and
@@ -202,7 +202,7 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
     mentionFiles: ownFiles,
     panelAccess,
   } = usePanelFiles({
-    isHome: isFlash,
+    isHome,
     workspaceId,
     workspaceName,
     includeSystem: showSystemFiles,
@@ -530,7 +530,6 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
         state: {
           workspaceId,
           initialMessage: message.trim(),
-          ...(isFlash ? FLASH_ROUTE_STATE : {}),
           ...(subagentsAllowed !== undefined ? { subagentsAllowed } : {}),
           ...(additionalContext ? { additionalContext } : {}),
           ...(attachmentMeta ? { attachmentMeta } : {}),
@@ -681,10 +680,10 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
             <div className="w-full flex flex-col items-center mt-2 md:mt-[8vh] enter-fade-up enter-fade-up-d1">
               <div
                 className="flex items-center justify-center transition-colors cursor-pointer"
-                onClick={!isFlash ? () => setShowSandboxPanel(true) : undefined}
+                onClick={!isHome ? () => setShowSandboxPanel(true) : undefined}
               >
-                {isFlash ? (
-                  <FlashRowIcon className="w-10 h-10" style={{ color: 'var(--color-accent-primary)' }} />
+                {isHome ? (
+                  <HomeRowIcon className="w-10 h-10" style={{ color: 'var(--color-accent-primary)' }} />
                 ) : (
                   <img src={iconComputer} alt="Workspace" className="w-10 h-10" />
                 )}

@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useAllWorkspaces } from '@/hooks/useAllWorkspaces';
-import { useFlashWorkspace } from '@/hooks/useFlashWorkspace';
+import { useHomeWorkspaceId } from '@/hooks/useHomeWorkspace';
 import type { ScopeWorkspace } from '../components/ScopeControl';
 
 /**
@@ -26,10 +26,21 @@ export interface WorkspaceOptions {
   nameById: Map<string, string>;
 }
 
+/**
+ * Home as a scope-control option, or `undefined` until it resolves. It is
+ * named Home here, with a house for its glyph, because "All workspaces"
+ * already means every workspace in a plugin's scope.
+ */
+export function useHomeOption(): ScopeWorkspace | undefined {
+  const { t } = useTranslation();
+  const id = useHomeWorkspaceId();
+  return id ? { id, name: t('agents.home') } : undefined;
+}
+
 export function useWorkspaceOptions(): WorkspaceOptions {
   const { t } = useTranslation();
   const { data, isError, refetch } = useAllWorkspaces();
-  const flashWorkspace = useFlashWorkspace();
+  const homeWorkspace = useHomeOption();
 
   const rows = data?.workspaces ?? [];
   const workspaces: ScopeWorkspace[] = rows.map((w) => ({
@@ -42,7 +53,7 @@ export function useWorkspaceOptions(): WorkspaceOptions {
     loadFailed: data === undefined && isError,
     retry: () => void refetch(),
     nameById: new Map(
-      [...workspaces, ...(flashWorkspace ? [flashWorkspace] : [])].map((w) => [w.id, w.name]),
+      [...workspaces, ...(homeWorkspace ? [homeWorkspace] : [])].map((w) => [w.id, w.name]),
     ),
   };
 }

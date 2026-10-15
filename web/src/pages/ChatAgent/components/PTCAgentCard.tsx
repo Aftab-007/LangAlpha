@@ -24,7 +24,7 @@ interface PTCAgentCardProps {
   proposalData: ProposalData | null;
   onApprove?: (overrides?: { report_back?: boolean }) => void;
   onReject?: () => void;
-  flashContext?: DispatcherContext | null;
+  dispatcherContext?: DispatcherContext | null;
 }
 
 // Featured-surface visual language (matches ConversationWidget / AIDailyBriefCard).
@@ -165,12 +165,12 @@ function MissionPanel({
  *              (starting → running → completed/needs-input/failed/stopped)
  *   rejected — quiet collapsed "Research declined" row
  */
-function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAgentCardProps) {
+function PTCAgentCard({ proposalData, onApprove, onReject, dispatcherContext }: PTCAgentCardProps) {
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(true);
   const [reportBack, setReportBack] = useState(proposalData?.report_back ?? true);
   const { approveAlways, saving } = useApproveAlways(AUTO_APPROVE.handoffs);
-  const openDispatchedThread = useOpenDispatchedThread(flashContext);
+  const openDispatchedThread = useOpenDispatchedThread(dispatcherContext);
   const detailId = useId();
 
   const status = proposalData?.status;

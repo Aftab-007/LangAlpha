@@ -4,10 +4,11 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../../components/ui/use-toast';
 import type { ComposerScope } from '../../../components/ui/chat-input.types';
+import type { Workspace } from '@/types/api';
 import { attachmentsToContexts, widgetSnapshotsToContexts } from '../../ChatAgent/utils/fileUpload';
 import { warmWorkspace } from '../../ChatAgent/utils/warmWorkspace';
 import { useWorkspaces } from '../../../hooks/useWorkspaces';
-import { FLASH_ROUTE_STATE, flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
+import { resolveChatWorkspace } from '@/hooks/useHomeWorkspace';
 import { ContextBus } from '@/lib/contextBus';
 import type { WidgetContextSnapshot } from '../widgets/framework/contextSnapshot';
 
@@ -34,6 +35,8 @@ interface SendOptions {
   subagentsAllowed?: boolean;
 }
 
+const EMPTY_WORKSPACES: Workspace[] = [];
+
 const MAX_LOCATION_STATE_BYTES = 5 * 1024 * 1024; // ~5MB structured-clone safety net
 
 /**
@@ -41,10 +44,9 @@ const MAX_LOCATION_STATE_BYTES = 5 * 1024 * 1024; // ~5MB structured-clone safet
  * the send handler. The message and the Subagents pick are owned by ChatInput
  * and passed through via handleSend.
  *
- * The scope is All workspaces (the user's flash row, which the server runs as
- * Home) or the selected workspace, both on the full agent. `composing` is the
- * host's report that the user is writing a message, which warms a picked
- * workspace's computer.
+ * The scope is All workspaces (the user's Home) or the selected workspace,
+ * both on the full agent. `composing` is the host's report that the user is
+ * writing a message, which warms a picked workspace's computer.
  */
 export function useChatInput({ composing = false }: { composing?: boolean } = {}) {
   const [isLoading, setIsLoading] = useState(false);
@@ -60,7 +62,7 @@ export function useChatInput({ composing = false }: { composing?: boolean } = {}
   // dashboard widgets (RecentThreads, ConversationWidget, WorkspacePicker) so all
   // four share a single React Query cache entry instead of four separate ones.
   const { data: wsData } = useWorkspaces({ limit: 100, offset: 0 });
-  const workspaces = (wsData?.workspaces || []).filter((ws) => ws.status !== 'flash');
+  const workspaces = wsData?.workspaces ?? EMPTY_WORKSPACES;
 
   // Auto-select first workspace when data arrives
   useEffect(() => {
@@ -88,7 +90,7 @@ export function useChatInput({ composing = false }: { composing?: boolean } = {}
 
   /**
    * Navigates to the ChatAgent workspace with the composed message payload:
-   * the flash row for All workspaces, else the selected workspace.
+   * Home for All workspaces, else the selected workspace.
    */
   const handleSend = async (
     message: string,
@@ -145,12 +147,9 @@ export function useChatInput({ composing = false }: { composing?: boolean } = {}
         }
       }
 
-      // The flash row is Home, which runs the full agent, so the Subagents
-      // pick rides there as to any workspace.
-      const toFlashRow = scope === 'all';
-      const workspaceId = toFlashRow
-        ? (await queryClient.ensureQueryData(flashWorkspaceQuery(queryClient))).workspace_id
-        : selectedWorkspaceId;
+      // Home runs the full agent, so the Subagents pick rides there as to any
+      // workspace.
+      const workspaceId = await resolveChatWorkspace(queryClient, scope, selectedWorkspaceId);
       if (!workspaceId) {
         toast({ variant: 'destructive', title: t('agents.workspaceRequired') });
         return;
@@ -158,7 +157,6 @@ export function useChatInput({ composing = false }: { composing?: boolean } = {}
       navigate(`/chat/t/__default__`, {
         state: {
           workspaceId,
-          ...(toFlashRow ? FLASH_ROUTE_STATE : {}),
           initialMessage: message.trim(),
           ...(subagentsAllowed !== undefined ? { subagentsAllowed } : {}),
           ...(additionalContext ? { additionalContext } : {}),

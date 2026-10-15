@@ -8,9 +8,9 @@ import { oauthLabelKey } from '@/pages/ChatAgent/components/mcp/McpStatusPill';
 import { probeStillLanding } from '@/pages/ChatAgent/components/mcp/mcpState';
 import type { BuiltinMcpServer, CatalogServer } from '@/pages/ChatAgent/utils/api';
 import { brokerageArt, mcpServerArt } from '@/lib/brandArt';
-import { useFlashWorkspace } from '@/hooks/useFlashWorkspace';
 import { useNow } from '@/hooks/useNow';
 import { connectBlock, type Brokerage } from '../../brokerages';
+import { useHomeOption } from '../../hooks/useWorkspaceOptions';
 import { connectorState, switchOnBlock } from '../../utils/connectorState';
 import { builtinServerMark } from '../../utils/pluginSurface';
 import { isEffectivelyEnabled, isPluginOwned } from '../../utils/provenance';
@@ -56,7 +56,7 @@ export function ConnectorCell({
   menu?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const home = useFlashWorkspace();
+  const home = useHomeOption();
   const state = connectorState(server);
   const now = useNow(5_000, (at) => probeStillLanding(server, at));
   const checking = probeStillLanding(server, now);
