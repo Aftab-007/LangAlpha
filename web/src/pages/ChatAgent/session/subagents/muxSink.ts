@@ -13,6 +13,7 @@ import {
   type SubagentTerminalStatus,
 } from './subagentStatus';
 import { settleWorkflowRunFromClosure } from './liveEventHandlers';
+import type { TaskTranscriptMeta } from './hydrateTaskTranscript';
 import { isTaskAgentId, taskIdFromAgentId } from '../../utils/agentId';
 import type { SSEEvent } from '../types';
 import type { SubagentRuntime } from '../runtime';
@@ -45,6 +46,8 @@ export interface SubagentMuxDeps {
     reportBackRunId: string | null | undefined,
     pokeSource: string | null,
   ) => void;
+  /** useSubagentHistory's checkpoint read for one settled task. */
+  hydrateTaskTranscript: (agentId: string, meta?: TaskTranscriptMeta) => Promise<unknown>;
 }
 
 /**
@@ -114,20 +117,21 @@ export function createSubagentMuxController(rt: SubagentRuntime, deps: SubagentM
         const agentId = typeof ev.agent === 'string' ? ev.agent : '';
         const shortId = taskIdFromAgentId(agentId) ?? '';
         const hist = rt.subagentHistory.get().entries[agentId];
-        if (isSettledTask(shortId)) {
-          return;
-        }
         // Run-level guard: a task can be live under a successor run while a
         // stale drain re-delivers a settled predecessor. The watermark is
         // stamped by the projection build from the runs it actually claimed,
         // so anything at or before it is on screen already; a run the
         // projection excluded (still executing at build) or never saw starts
         // after it and still flows.
-        if (
-          typeof ev._runStartedMs === 'number' &&
-          typeof hist?.projectedRunStartedMs === 'number' &&
-          ev._runStartedMs <= hist.projectedRunStartedMs
-        ) {
+        const watermark = hist?.projectedRunStartedMs;
+        const runStarted = ev._runStartedMs;
+        if (typeof runStarted === 'number' && typeof watermark === 'number') {
+          if (runStarted <= watermark) return;
+          // Past the watermark the history's terminal status belongs to an
+          // earlier run: a task resumed by the open turn. Only a closure this
+          // page saw live means the run's content is on screen.
+          if (rt.terminalTaskOutcomesRef.current.has(shortId)) return;
+        } else if (isSettledTask(shortId)) {
           return;
         }
       }
@@ -177,6 +181,18 @@ export function createSubagentMuxController(rt: SubagentRuntime, deps: SubagentM
       // with no open channel is not terminal (its chan_open may simply not
       // have landed yet), and its own closure/ledger stamp will flip it.
       setInlineSubagentTaskStatus(`task:${shortTaskId}`, status);
+      // A lane that closed news here with nothing delivered drained a stream
+      // that expired before this page could read it: a run the still-running
+      // turn launched, which no history load covers yet. Its durable copy is
+      // the checkpoint; for a workflow run, the only progress the panels have.
+      const taskRefs = rt.subagentStateRefsRef.current[`task:${shortTaskId}`];
+      if (news && !taskRefs?.workflowRun && !taskRefs?.messages?.length) {
+        void deps.hydrateTaskTranscript(`task:${shortTaskId}`, {
+          status,
+          // A resume retracts the outcome recorded above.
+          stillCurrent: () => rt.terminalTaskOutcomesRef.current.get(shortTaskId) === status,
+        });
+      }
       // Workflow-level flag only when ALL run channels have closed. No status
       // sweep: each task's card/chip was already stamped terminal by its own
       // chan_close above (positive closure per task). A blanket completion

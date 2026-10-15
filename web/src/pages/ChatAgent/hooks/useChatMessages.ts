@@ -1551,6 +1551,7 @@ export function useChatMessages(
   const { isSettledTask, attachSubagentMux } = createSubagentMuxController(runtime, {
     muxOpenTaskIds,
     armReportBackWatch,
+    hydrateTaskTranscript,
   });
 
   const cleanupAfterStreamEnd = (assistantMessageId: string) =>

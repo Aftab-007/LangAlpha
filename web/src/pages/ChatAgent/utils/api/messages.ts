@@ -565,6 +565,7 @@ export async function openThreadMuxStream(
   onLine: (line: string) => void,
   signal: AbortSignal,
   sinceAgeS = 0,
+  openTurn = false,
 ): Promise<void> {
   if (!threadId) throw new Error('Thread ID is required');
   const authHeaders = await getAuthHeaders();
@@ -572,6 +573,8 @@ export async function openThreadMuxStream(
   // Knowledge-horizon age: how far the client's snapshot/last-frame lags
   // this connect. The server widens its settled-run catch-up window by it.
   if (sinceAgeS > 0) qs += `&since_age_s=${Math.ceil(sinceAgeS)}`;
+  // Drain the executing turn's settled runs, which no history load holds.
+  if (openTurn) qs += '&open_turn=true';
   const res = await fetch(
     `${baseURL}/api/v1/threads/${threadId}/stream?contract=v2${qs}`,
     {

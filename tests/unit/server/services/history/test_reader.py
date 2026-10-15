@@ -322,6 +322,7 @@ async def test_project_task_transcript_serves_unprojected_lanes(monkeypatch):
         "resolve_task_details",
         AsyncMock(return_value={"wf1": {"status": "completed"}}),
     )
+    monkeypatch.setattr(task_lane.sr_db, "get_task", AsyncMock(return_value=None))
 
     items = await project_task_transcript(THREAD, "wf1")
 

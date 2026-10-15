@@ -17,6 +17,7 @@ from src.server.handlers.chat.thread_stream_mux_v2 import (
     _PENDING_TTL_S,
     _admission_meta,
     _load_pending,
+    _settled_runs_of_open_turn,
     _store_pending,
 )
 from tests.unit.redis_mock_pipeline import attach_pipeline
@@ -109,3 +110,28 @@ async def test_main_lane_admits_without_start_order():
     ):
         meta = await _admission_meta("run-1", "main", False, None)
     assert meta == (False, None)
+
+
+@pytest.mark.asyncio
+async def test_open_turn_failures_read_as_unserved():
+    # The client stops asking for the open turn once it hears ``attached``, so
+    # a failed discovery or deferral must be distinguishable from "nothing to
+    # drain" for attach to withhold the ack.
+    with patch(
+        f"{SR_DB}.list_settled_runs_of_unseen_turns",
+        new=AsyncMock(side_effect=RuntimeError("db down")),
+    ):
+        assert await _settled_runs_of_open_turn("t-1", None, 10) is None
+    settled = [{"task_run_id": "run-1", "task_id": "abc"}]
+    with patch(
+        f"{SR_DB}.list_settled_runs_of_unseen_turns",
+        new=AsyncMock(return_value=settled),
+    ) as listed:
+        assert await _settled_runs_of_open_turn("t-1", "root-1", 10) == settled
+    listed.assert_awaited_once_with("t-1", "root-1", 10)
+
+    cache = MagicMock()
+    cache.client.hset = AsyncMock(side_effect=RuntimeError("redis down"))
+    cache.client.expire = AsyncMock()
+    attach_pipeline(cache.client)
+    assert await _store_pending(cache, "t-1", "run-1", "task:abc") is False
