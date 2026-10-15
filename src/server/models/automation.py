@@ -454,14 +454,18 @@ class AutomationCreate(_ScheduleFields):
     )
 
     # Agent config
-    agent_mode: Literal["ptc", "flash"] = Field(
-        default="flash", description="Agent mode for execution"
+    agent_mode: Optional[Literal["ptc", "flash"]] = Field(
+        default=None,
+        description="Former way to pick Home: 'flash' runs it in the user's Home "
+        "whatever workspace_id says. Name Home's id in workspace_id instead.",
     )
     instruction: str = Field(
         ..., min_length=1, description="The prompt/instruction for the agent"
     )
     workspace_id: Optional[UUID] = Field(
-        None, description="Workspace ID (required for 'ptc' mode)"
+        None,
+        description="Workspace each run happens in; Home's id (POST "
+        "/workspaces/home) for the user's Home. Required unless agent_mode is 'flash'.",
     )
     llm_model: Optional[str] = Field(
         None, max_length=100, description="LLM model name override"
@@ -517,7 +521,8 @@ class AutomationUpdate(_ScheduleFields):
 
     trigger_type: Optional[TriggerType] = None
 
-    # Agent config
+    # Agent config. 'flash' moves the automation to the user's Home, as
+    # naming Home's id in workspace_id does.
     agent_mode: Optional[Literal["ptc", "flash"]] = None
     instruction: Optional[str] = Field(None, min_length=1)
     workspace_id: Optional[UUID] = None

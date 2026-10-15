@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 # Every table keyed by a workspace either moves or stays, and a test reads the
 # schema for any it finds in neither, so a new one gets a decision.
 MOVES: dict[str, str] = {
+    # Before the threads, in this order: a row pinned to one of them runs in
+    # it, so it moves with the thread wherever it was stored.
+    "automations": """
+        UPDATE automations SET workspace_id = %(home)s
+        WHERE workspace_id = %(former)s OR conversation_thread_id IN (
+            SELECT conversation_thread_id FROM conversation_threads
+            WHERE workspace_id = %(former)s
+        )
+    """,
     # thread_index is unique per workspace, so a row's threads append after
     # Home's in the order they were started. updated_at stays, so the thread
     # list keeps its order.
@@ -46,10 +55,6 @@ MOVES: dict[str, str] = {
         UPDATE conversation_threads t
         SET workspace_id = %(home)s, thread_index = moved.thread_index
         FROM moved WHERE t.conversation_thread_id = moved.conversation_thread_id
-    """,
-    "automations": """
-        UPDATE automations SET workspace_id = %(home)s
-        WHERE workspace_id = %(former)s
     """,
     # Where Home already holds the same key, Home's stays and the former one
     # is left on the retired row.

@@ -147,7 +147,7 @@ async def create_automation(
     timezone: str = "UTC",
     trigger_config: Optional[Dict[str, Any]] = None,
     next_run_at: Optional[datetime] = None,
-    agent_mode: str = "flash",
+    agent_mode: str = "ptc",
     workspace_id: Optional[str] = None,
     llm_model: Optional[str] = None,
     additional_context: Optional[List[Dict[str, Any]]] = None,

@@ -33,7 +33,7 @@ from src.server.services.automation_settlement import (
 )
 from src.server.services.runs.admission import BUSY_STATES
 from src.server.services.thread_lifecycle_feed import publish_automation_wait
-from src.server.services.turn_runtime import TurnRoute, ensure_home, turn_route
+from src.server.services.turn_runtime import TurnRoute, turn_route
 from src.server.services.webhook_client import WebhookClient
 from src.observability.tracing import hash_id as _obs_hash_id, tracer as _otel_tracer
 
@@ -259,35 +259,61 @@ def _pinned_thread(automation: Dict[str, Any]) -> Optional[str]:
     return str(thread_id)
 
 
-async def _turn_workspace(automation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The workspace row the automation's turn names; None runs it in Home.
+@dataclass(frozen=True)
+class _Place:
+    """Where a firing runs: the workspace row its turn names (None runs it in
+    Home), and the pinned thread it continues (None starts one)."""
 
-    A flash automation names the workspace of the thread it continues, so it
-    runs there as a message sent on that thread would, and names none until
-    it has one. A PTC one names its stored workspace, whose ownership was
-    verified when the automation was written; for the Chief of Staff's own
-    automations that is its flash row, which routes Home.
+    workspace: Optional[Dict[str, Any]]
+    thread_id: Optional[str]
+
+
+async def _turn_place(automation: Dict[str, Any]) -> _Place:
+    """Where the automation's turn runs.
+
+    A pinned thread runs in its own workspace, as a message sent on it would:
+    a turn sent elsewhere would run apart from the thread's files. A pinned
+    thread that is gone is made again where the automation lives, and one
+    whose workspace was deleted is left there, the run starting a new thread
+    where the automation lives. That is its stored workspace, whose ownership
+    was verified when the automation was written, or Home for a row a former
+    build stored as 'flash'.
     """
+    thread_id = _pinned_thread(automation)
+    if thread_id is not None:
+        from src.server.database.conversation import get_thread_auth_meta
+        from src.server.database.workspace import get_workspace
+
+        meta = await get_thread_auth_meta(thread_id)
+        if meta is not None:
+            # The turn runs on the pinned thread wherever it is routed, so a
+            # thread another account holds fails the firing.
+            if str(meta["user_id"]) != str(automation["user_id"]):
+                raise ValueError("The automation's thread belongs to another account")
+            workspace = await get_workspace(str(meta["workspace_id"]))
+            if workspace is not None:
+                return _Place(workspace, thread_id)
+            logger.info(
+                f"[AUTOMATION_EXEC] The pinned thread's workspace was deleted, "
+                f"starting a new thread where the automation lives: "
+                f"automation_id={automation.get('automation_id')} thread_id={thread_id}"
+            )
+            thread_id = None
+    return _Place(await _stored_workspace(automation), thread_id)
+
+
+async def _stored_workspace(automation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The workspace row the automation lives in; None for Home, where a row
+    a former build stored as 'flash' runs. For an automation stored in Home
+    that is Home's row, which routes there."""
     from src.server.database.workspace import get_workspace
 
     if automation["agent_mode"] == "flash":
-        thread_id = _pinned_thread(automation)
-        if thread_id is None:
-            return None
-        from src.server.database.conversation import get_thread_auth_meta
-
-        meta = await get_thread_auth_meta(thread_id)
-        if meta is None:
-            return None
-        # The turn runs on the pinned thread wherever it is routed, so a
-        # thread another account holds fails the firing.
-        if str(meta["user_id"]) != str(automation["user_id"]):
-            raise ValueError("The automation's thread belongs to another account")
-        return await get_workspace(str(meta["workspace_id"]))
+        return None
     ws_id = automation.get("workspace_id")
     if not ws_id:
         raise ValueError(
-            "PTC mode requires a workspace_id, but automation has none "
+            "The automation names no workspace "
             "(workspace may have been deleted)"
         )
     workspace = await get_workspace(str(ws_id))
@@ -363,13 +389,12 @@ class AutomationExecutor:
             logger.warning(f"[AUTOMATION_EXEC] Thread pre-create failed: {e}")
 
     async def _resolve_thread(
-        self, automation: Dict[str, Any], workspace_id: str
+        self, automation: Dict[str, Any], place: _Place, workspace_id: str
     ) -> str:
-        """The pinned thread under 'continue', else a new titled one, which
-        'continue' pins when it has none yet."""
-        pinned = _pinned_thread(automation)
-        if pinned is not None:
-            return pinned
+        """The pinned thread ``place`` continues, else a new titled one, which
+        'continue' pins in place of any pin the run left behind."""
+        if place.thread_id is not None:
+            return place.thread_id
         thread_id = str(uuid4())
         if automation.get("thread_strategy") == "continue":
             await auto_db.update_automation(
@@ -565,13 +590,9 @@ class AutomationExecutor:
         try:
             if firing.route is None:
                 automation = firing.automation
-                route = turn_route(
-                    automation["user_id"], await _turn_workspace(automation)
+                firing.route = turn_route(
+                    automation["user_id"], (await _turn_place(automation)).workspace
                 )
-                # A flash automation names no workspace of its own, so one
-                # that never started reports none unless its thread is in one.
-                if route.role == "analyst" or automation["agent_mode"] != "flash":
-                    firing.route = route
         except Exception as e:
             logger.warning(
                 f"[AUTOMATION_EXEC] No route for the delivery of a firing that "
@@ -710,7 +731,6 @@ class AutomationExecutor:
             if firing.delivery is not None:
                 run_metadata.update(automation_delivery.run_metadata(firing.delivery))
             request = ChatRequest(
-                agent_mode="ptc",
                 workspace_id=firing.workspace_id,
                 messages=[ChatMessage(role="user", content=instruction)],
                 llm_model=automation.get("llm_model"),
@@ -849,13 +869,12 @@ class AutomationExecutor:
             await enforce_credit_limit(user_id, byok=has_cred)
 
             # ─── Resolve workspace + thread ───────────────────────
-            workspace = await _turn_workspace(firing.automation)
-            route = turn_route(user_id, workspace)
-            if route.role == "chief_of_staff":
-                await ensure_home(user_id, workspace)
+            place = await _turn_place(firing.automation)
+            route = turn_route(user_id, place.workspace)
+            await route.bind(user_id, place.workspace)
             firing.route = route
             firing.thread_id = await self._resolve_thread(
-                firing.automation, firing.workspace_id
+                firing.automation, place, firing.workspace_id
             )
             # The thread exists from here on, so record it on the run now: a
             # live run can then be opened and watched while it streams, not

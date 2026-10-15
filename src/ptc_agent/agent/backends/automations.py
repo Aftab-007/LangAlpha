@@ -81,8 +81,7 @@ first, which is refused or becomes an automation of its own.
   "cron_expression": "0 9 * * 1-5",
   "timezone": "America/New_York",
   "instruction": "Summarize overnight moves for my watchlist: top movers, news, one line each.",
-  "agent_mode": "all_workspaces",
-  "workspace_id": null,
+  "workspace_id": "home",
   "thread": "new",
   "llm_model": null,
   "delivery": ["slack"],
@@ -106,7 +105,7 @@ A new one needs only what has no default, e.g. `aapl-below-200.json`:
     "conditions": [{"type": "price_below", "value": 200}]
   },
   "instruction": "AAPL just fell below $200. Summarize the news and analyst moves behind it.",
-  "agent_mode": "all_workspaces"
+  "workspace_id": "home"
 }
 ```
 
@@ -123,11 +122,10 @@ A new one needs only what has no default, e.g. `aapl-below-200.json`:
 | trigger_config | price | See Price alerts. |
 | timezone       | no  | IANA region name, e.g. `America/New_York` (not `EST`, which ignores daylight saving). Defaults to the user's timezone. Changing it keeps a one-time automation's moment, since `next_run_at` carries its offset. |
 | instruction    | yes | The prompt each run executes. |
-| agent_mode     | no  | `ptc` (default here): runs as you do, in `workspace_id`, with code execution. `all_workspaces`: the Chief of Staff runs it from the user's Home rather than in one workspace; best for price alerts and quick lookups. |
-| workspace_id   | ptc | Defaults to this workspace. |
+| workspace_id   | no  | Where each run happens. Defaults to this workspace. `home`: the Chief of Staff runs it from the user's Home rather than in one workspace; best for price alerts and quick lookups. Another workspace's id runs it there. |
 | thread         | no  | `new` (default): a fresh thread each run. `persistent`: one thread that every run continues, created by the first run (`state.last_run.thread_id` names it). `current`: continue in this conversation. A thread id: continue in that thread. |
 | llm_model      | no  | A model the user can run; `null` uses their default. An unknown name is refused with the list. |
-| delivery       | no  | Where results also go besides the app: a chat app, e.g. `["slack"]`, or one chat there by address, e.g. `["slack:T1/C0123"]` from `.agents/user/channels/available.json`, which lists every chat on each connected app; `[]` for none. A chat is checked when you save, and so is an app, which is refused while the user hasn't linked it. An app alone posts to the chat set for this workspace's automations on that app, else the app's preferred chat, else the user's direct messages; to always post to the direct messages, name them, e.g. `["discord:@me"]` (`slack:<team>` on Slack). Leave sending out of `instruction`: each run sends its result there itself, a chat it missed gets the final answer, and a failed or stopped run posts a short notice. |
+| delivery       | no  | Where results also go besides the app: a chat app, e.g. `["slack"]`, or one chat there by address, e.g. `["slack:T1/C0123"]` from `.agents/user/channels/available.json`, which lists every chat on each connected app; `[]` for none. A chat is checked when you save, and so is an app, which is refused while the user hasn't linked it. An app alone posts to the chat set for the automations of the workspace it runs in (Home has none), else the app's preferred chat, else the user's direct messages; to always post to the direct messages, name them, e.g. `["discord:@me"]` (`slack:<team>` on Slack). Leave sending out of `instruction`: each run sends its result there itself, a chat it missed gets the final answer, and a failed or stopped run posts a short notice. |
 | max_failures   | no  | 1–100, default 3. Consecutive failed runs before it is disabled. |
 
 ## Price alerts
