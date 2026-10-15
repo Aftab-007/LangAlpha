@@ -2,9 +2,11 @@
 
 Every entry that starts a turn asks here, so a thread's type and the runs it
 carries cannot disagree. A turn in a workspace runs that workspace's analyst;
-work outside one runs the Chief of Staff in the user's Home. The wire keeps
-``agent_mode='flash'`` for "outside a workspace": channels, the CLI, stored
-automations and report-backs still send it.
+work outside one runs the Chief of Staff in the user's Home. A client asks for
+Home by naming Home's id (``POST /workspaces/home`` returns it), the same way
+it names any workspace. ``agent_mode='flash'`` with no workspace still means
+Home, for senders that predate that, such as channel gateways and older CLI
+builds.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from src.server.database.home_workspace import get_flash_workspace_id, is_flash_row
+from src.server.database.home_workspace import get_flash_workspace_id, is_flash_row, is_home_id
 
 if TYPE_CHECKING:
     from ptc_agent.agent.agent import AgentRole
@@ -59,7 +61,8 @@ async def requested_workspace(
     Checked before the credit gate, as a malformed or foreign request is the
     client's error whatever its balance, and before any route is taken, so a
     turn that is refused never binds Home. Only a flash turn may name none,
-    since a request that leaves the mode out asks for 'ptc'.
+    since a request that leaves the mode out asks for a workspace. Home's id
+    is the caller's by derivation, so it routes to Home before its row exists.
     """
     from src.server.database.workspace import get_workspace
     from src.server.utils.api import require_workspace_owner
@@ -76,6 +79,8 @@ async def requested_workspace(
     if not workspace_id:
         return None
     workspace = await get_workspace(workspace_id)
+    if workspace is None and is_home_id(user_id, workspace_id):
+        return None
     # A fresh thread id must not run inside another user's workspace. The
     # report-back dispatch sets X-User-Id to the owner, so it passes.
     require_workspace_owner(workspace, user_id=user_id)
@@ -98,7 +103,7 @@ async def ensure_home(
     from src.server.services.workspace_manager import WorkspaceManager
 
     home_id = get_flash_workspace_id(user_id)
-    if flash_workspace is None or str(flash_workspace.get("workspace_id")) != home_id:
+    if flash_workspace is None or not is_home_id(user_id, flash_workspace.get("workspace_id")):
         try:
             await get_or_create_flash_workspace(user_id)
         except FlashWorkspaceTaken:

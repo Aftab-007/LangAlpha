@@ -309,7 +309,6 @@ async def dispatch(
                     f"{self_base_url}/api/v1/threads/{thread_id}/messages",
                     json={
                         "messages": [{"role": "user", "content": question}],
-                        "agent_mode": "ptc",
                         "workspace_id": workspace_id,
                         # Durable provenance on the thread row. Unconditional —
                         # unlike origin_flash_thread_id below, which is a

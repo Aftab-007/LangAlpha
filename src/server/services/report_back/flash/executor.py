@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from src.server.database.home_workspace import get_flash_workspace_id
 from src.server.services import automation_delivery
 from src.server.services.report_back.flash import leases, pointer, requested_from, wake
 from src.server.services.report_back.flash.keys import (
@@ -492,8 +493,10 @@ async def _post_report_back(
     message, report_source = await report_message(ptc_thread_id, origin, final_status)
     body = {
         "messages": [{"role": "user", "content": message}],
-        "agent_mode": "flash",
-        "workspace_id": origin.get("flash_workspace_id"),
+        # The dispatching thread's workspace, which is Home; a record that
+        # names none still reports back there.
+        "workspace_id": origin.get("flash_workspace_id")
+        or get_flash_workspace_id(origin.get("user_id")),
         "query_type": "system",
         # Lets the report-back flash run identify which watch member to clear
         # on its own completion.

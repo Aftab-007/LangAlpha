@@ -466,10 +466,9 @@ async def _handle_send_message(
                 detail="PTC Agent not initialized. Check server startup logs.",
             )
 
-        # A flash request naming no workspace, or any turn in the flash
-        # workspace (a HITL resume whose client didn't resend
-        # agent_mode='flash'), runs in Home. The workspace guard comes first:
-        # it pairs with the thread guard above. Home is bound once the
+        # A turn naming Home's id, a flash request naming no workspace, or any
+        # turn on a thread in Home, runs in Home. The workspace guard comes
+        # first: it pairs with the thread guard above. Home is bound once the
         # admission gates below pass.
         workspace = await requested_workspace(user_id, agent_mode, workspace_id)
         route = turn_route(user_id, workspace)

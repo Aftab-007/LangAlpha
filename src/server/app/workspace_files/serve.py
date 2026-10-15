@@ -21,6 +21,7 @@ from src.server.utils.error_sanitization import single_line
 from src.server.utils.http_headers import content_disposition
 from fastapi.responses import Response
 
+from src.server.database.home_workspace import is_unbound
 from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services.workspace_manager import WorkspaceManager
 from src.server.services.workspace_layout import WorkspaceLayoutUnavailable
@@ -41,7 +42,6 @@ from ._containment import (
 from ._shared import (
     _is_text_content_type,
     _is_utf8,
-    _is_flash_workspace,
     _is_serve_blocked_path,
     _record_fs_bytes,
     _to_client_path,
@@ -414,7 +414,7 @@ async def serve_workspace_file(
             workspace = await db_get_workspace(workspace_id)
         except Exception:
             raise HTTPException(status_code=404, detail="Not found") from None
-    if not workspace or _is_flash_workspace(workspace):
+    if not workspace or is_unbound(workspace):
         raise HTTPException(status_code=404, detail="Not found")
 
     work_dir = _served_work_dir(workspace, workspace_id)
@@ -500,7 +500,7 @@ async def render_workspace_file_pdf(
             workspace = await db_get_workspace(workspace_id)
         except Exception:
             raise HTTPException(status_code=404, detail="Not found") from None
-    if not workspace or _is_flash_workspace(workspace):
+    if not workspace or is_unbound(workspace):
         raise HTTPException(status_code=404, detail="Not found")
 
     work_dir = _served_work_dir(workspace, workspace_id)

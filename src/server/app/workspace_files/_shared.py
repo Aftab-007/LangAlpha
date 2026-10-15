@@ -33,6 +33,7 @@ from ptc_agent.core.paths import (
 )
 from ptc_agent.core.sandbox.runtime import STREAM_CHUNK_BYTES
 from src.server.database.blob_keys import RELAY_MAX_BYTES
+from src.server.database.home_workspace import is_unbound
 from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.database.workspace_folders import (
     WorkspaceFolderMoving,
@@ -53,6 +54,7 @@ from src.server.services.persistence.resolve import (
     resolve_file_bytes,
     too_large_to_serve,
 )
+from src.server.utils.api import require_workspace_owner
 from src.server.utils.error_sanitization import (
     sandbox_unreachable_detail,
     single_line,
@@ -327,12 +329,23 @@ def _decode_file_text(raw_bytes: bytes) -> str | None:
 
 
 # Home joins the user's computer on its first start or turn (ensure_home);
-# until then a request for its files or sandbox has nothing to reach.
+# until then a request for its files or sandbox has nothing to reach. The
+# reason is the same fact for a response that answers rather than refuses.
 HOME_NOT_ON_COMPUTER = "Home is not on a computer yet"
+HOME_NOT_ON_COMPUTER_REASON = "home_not_on_computer"
 
 
-def _is_flash_workspace(workspace: dict[str, Any]) -> bool:
-    return workspace.get("status") == "flash"
+async def owned_workspace_on_computer(workspace_id: str, user_id: str) -> dict[str, Any]:
+    """The caller's workspace, for a route that reaches its files or sandbox.
+
+    Refused as any owner check refuses, and with a 400 while it is Home not
+    yet on a computer.
+    """
+    workspace = await db_get_workspace(workspace_id)
+    require_workspace_owner(workspace, user_id=user_id)
+    if is_unbound(workspace):
+        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
+    return workspace
 
 
 async def _acquire_sandbox(

@@ -317,14 +317,16 @@ class ChatRequest(BaseModel):
     # Agent mode selection
     agent_mode: Optional[Literal["ptc", "flash"]] = Field(
         default=None,
-        description="Agent mode: 'ptc' (default) runs in the named workspace; "
-        "'flash' runs outside any workspace, in the user's Home",
+        description="Former way to pick Home: 'flash' with no workspace_id runs "
+        "in the user's Home. Name Home's id in workspace_id instead.",
     )
 
     # Identity fields (user_id comes from Bearer token JWT sub claim)
     workspace_id: Optional[str] = Field(
         default=None,
-        description="Workspace identifier - required for 'ptc' mode, optional for 'flash' mode",
+        description="Workspace the turn runs in; Home's id (POST /workspaces/home) "
+        "runs it in the user's Home. Required on a new thread, unless "
+        "agent_mode is 'flash'; a follow-up turn defaults to its thread's.",
     )
 
     # Messages

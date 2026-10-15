@@ -24,8 +24,7 @@ from pydantic import BaseModel, Field
 from src.server.app.share_access import ShareScope, shared_path_visible
 from src.server.app.workspace_files._containment import contained_relative_path
 from src.server.app.workspace_files._shared import (
-    HOME_NOT_ON_COMPUTER,
-    _is_flash_workspace,
+    owned_workspace_on_computer,
     owner_work_dir,
     previous_dir_names_of,
 )
@@ -50,7 +49,7 @@ from src.server.app.share_manifest import (
     build_manifest,
     manifest_drift,
 )
-from src.server.utils.api import CurrentUserId, require_workspace_owner
+from src.server.utils.api import CurrentUserId
 
 router = APIRouter(prefix="/api/v1/workspaces", tags=["Share Links"])
 owner_router = APIRouter(prefix="/api/v1/share-links", tags=["Share Links"])
@@ -103,10 +102,7 @@ def _to_model(link: ShareLink) -> ShareLinkResponse:
 
 
 async def _owned_workspace(workspace_id: str, user_id: str) -> tuple[dict[str, Any], str]:
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=user_id)
-    if _is_flash_workspace(workspace):
-        raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
+    workspace = await owned_workspace_on_computer(workspace_id, user_id)
     return workspace, owner_work_dir(workspace)
 
 
