@@ -61,3 +61,48 @@ describe('muxSink: when a closed task went quiet', () => {
     expect(written()).toEqual([{ status: 'completed', isActive: false }]);
   });
 });
+
+describe('muxSink: drain of a task the history loaded as settled', () => {
+  const PROJECTED = 1_700_000_000_000;
+
+  function drainSetup() {
+    const processed: unknown[] = [];
+    const rt = {
+      subagentHistory: {
+        get: () => ({ entries: { 'task:Qm3xLp': { status: 'completed', projectedRunStartedMs: PROJECTED } } }),
+      },
+      terminalTaskOutcomesRef: { current: new Map<string, string>() },
+      updateSubagentCard: vi.fn(),
+      subagentStateRefsRef: { current: {} },
+      subagentProcessEventRef: { current: null },
+      setHasActiveSubagents: vi.fn(),
+      setMessages: vi.fn(),
+      isStreamingRef: { current: true },
+      threadIdRef: { current: 'thread-1' },
+    } as unknown as SubagentRuntime;
+    createSubagentMuxController(rt, { muxOpenTaskIds: () => new Set(), armReportBackWatch: vi.fn(), hydrateTaskTranscript: vi.fn(async () => null) })
+      .attachSubagentMux('thread-1', (ev) => { processed.push(ev); });
+    const drain = (runStartedMs: number) =>
+      attached.sink!.onTaskEvent({ agent: 'task:Qm3xLp', _drain: true, _runStartedMs: runStartedMs });
+    return { rt, drain, processed };
+  }
+
+  it('drops the run the history projected', () => {
+    const { drain, processed } = drainSetup();
+    drain(PROJECTED);
+    expect(processed).toEqual([]);
+  });
+
+  it('delivers a later run the open turn resumed it under', () => {
+    const { drain, processed } = drainSetup();
+    drain(PROJECTED + 60_000);
+    expect(processed).toHaveLength(1);
+  });
+
+  it('drops that later run once this page saw it close', () => {
+    const { rt, drain, processed } = drainSetup();
+    rt.terminalTaskOutcomesRef.current.set('Qm3xLp', 'completed');
+    drain(PROJECTED + 60_000);
+    expect(processed).toEqual([]);
+  });
+});

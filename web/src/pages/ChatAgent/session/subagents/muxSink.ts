@@ -117,20 +117,21 @@ export function createSubagentMuxController(rt: SubagentRuntime, deps: SubagentM
         const agentId = typeof ev.agent === 'string' ? ev.agent : '';
         const shortId = taskIdFromAgentId(agentId) ?? '';
         const hist = rt.subagentHistory.get().entries[agentId];
-        if (isSettledTask(shortId)) {
-          return;
-        }
         // Run-level guard: a task can be live under a successor run while a
         // stale drain re-delivers a settled predecessor. The watermark is
         // stamped by the projection build from the runs it actually claimed,
         // so anything at or before it is on screen already; a run the
         // projection excluded (still executing at build) or never saw starts
         // after it and still flows.
-        if (
-          typeof ev._runStartedMs === 'number' &&
-          typeof hist?.projectedRunStartedMs === 'number' &&
-          ev._runStartedMs <= hist.projectedRunStartedMs
-        ) {
+        const watermark = hist?.projectedRunStartedMs;
+        const runStarted = ev._runStartedMs;
+        if (typeof runStarted === 'number' && typeof watermark === 'number') {
+          if (runStarted <= watermark) return;
+          // Past the watermark the history's terminal status belongs to an
+          // earlier run: a task resumed by the open turn. Only a closure this
+          // page saw live means the run's content is on screen.
+          if (rt.terminalTaskOutcomesRef.current.has(shortId)) return;
+        } else if (isSettledTask(shortId)) {
           return;
         }
       }
