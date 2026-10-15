@@ -66,6 +66,7 @@ class SSEStreamClient:
         self.user_id = user_id or os.getenv("AUTH_USER_ID", "cli_user")
         self.timeout = timeout
         self.client = httpx.AsyncClient(timeout=timeout)
+        self._home_workspace_id: Optional[str] = None
 
         # Session state
         self.workspace_id: Optional[str] = None
@@ -216,6 +217,18 @@ class SSEStreamClient:
                     )
         response.raise_for_status()
         return response.json()
+
+    async def home_workspace_id(self) -> str:
+        """The id of the user's Home, where a turn outside any workspace runs.
+
+        It derives from the user, so one call per client is enough.
+        """
+        if self._home_workspace_id is None:
+            url = urljoin(self.base_url, "/api/v1/workspaces/home")
+            response = await self.client.post(url, headers=self._make_headers())
+            response.raise_for_status()
+            self._home_workspace_id = response.json()["workspace_id"]
+        return self._home_workspace_id
 
     async def get_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -409,7 +422,8 @@ class SSEStreamClient:
             thread_id: Thread identifier for conversation continuity
             hitl_response: HITL interrupt response (for resume)
             llm_model: LLM model name from models.json (e.g., 'minimax-m3')
-            agent_mode: Agent mode ('flash' for Flash Agent, None for default)
+            agent_mode: 'flash' runs the turn in the user's Home, None in the
+                client's workspace
             **kwargs: Additional request parameters
 
         Yields:
@@ -425,23 +439,15 @@ class SSEStreamClient:
         else:
             url = urljoin(self.base_url, f"/api/v1/threads/{effective_thread_id}/messages")
 
-        # Only require workspace for non-flash mode
-        if agent_mode != "flash":
-            workspace_id = self._require_workspace()
+        if agent_mode == "flash":
+            workspace_id = await self.home_workspace_id()
         else:
-            workspace_id = None
+            workspace_id = self._require_workspace()
 
         request_body = {
             "messages": [{"role": "user", "content": message}] if message else [],
+            "workspace_id": workspace_id,
         }
-
-        # Add workspace_id only if not flash mode
-        if workspace_id:
-            request_body["workspace_id"] = workspace_id
-
-        # Add agent_mode if specified
-        if agent_mode:
-            request_body["agent_mode"] = agent_mode
 
         # Add LLM model if specified
         if llm_model:

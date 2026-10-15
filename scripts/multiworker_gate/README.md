@@ -40,7 +40,7 @@ uv run python scripts/multiworker_gate/gate.py --user … --clean # delete gate 
 
 Requirements: Docker access to this worktree's stack, `INTERNAL_SERVICE_TOKEN`
 in the backend container, a working key for the user's default model, and the
-user's computer (`agent_mode: "flash"` turns run as the Chief of Staff in Home,
+user's computer (gate turns name Home's id and run as the Chief of Staff there,
 so they are real LLM calls on a sandbox). Cell 14 needs one manifest model
 whose provider key is **absent** so a run fails deterministically after START
 (default `claude-sonnet-5-5`; override with `GATE_FAIL_MODEL`).

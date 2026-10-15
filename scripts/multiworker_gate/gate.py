@@ -13,7 +13,8 @@ ownership, or the workspace<->sandbox binding:
     uv run python scripts/multiworker_gate/gate.py --cells 1,7,13   # subset
 
 Requires: the worktree's docker stack up, service-token auth
-(INTERNAL_SERVICE_TOKEN in the container env), and a flash-capable LLM key.
+(INTERNAL_SERVICE_TOKEN in the container env), and an LLM key for the user's
+default model.
 Cell 18 additionally needs a working sandbox provider — it creates, recreates
 and deletes a real sandbox; cells 21-22 run analyst turns in a running
 workspace of the user (GATE_WORKSPACE overrides the pick). Threads created by the gate are kept for inspection
@@ -107,6 +108,7 @@ class Stack:
         self.user_id = user_id
         self.token = token
         self.threads: list[str] = []
+        self._home: str | None = None
 
     @classmethod
     def detect(cls, user_id: str) -> "Stack":
@@ -235,15 +237,22 @@ class Stack:
 
     # -- turn helpers ------------------------------------------------------
 
+    def home(self, worker: str) -> str:
+        """Home's id. Gate turns run there, as the Chief of Staff."""
+        if self._home is None:
+            code, text = self.api(worker, "POST", "/api/v1/workspaces/home")
+            if code != 200:
+                sys.exit(f"POST /api/v1/workspaces/home failed: {code} {text[:200]}")
+            self._home = json.loads(text)["workspace_id"]
+        return self._home
+
     def dispatch(self, worker: str, prompt: str, thread_id: str | None = None,
                  request_key: str | None = None, llm_model: str | None = None,
                  workspace_id: str | None = None) -> tuple[int, dict]:
-        # A workspace makes it an analyst (PTC) turn; without one it is the
-        # Flash path, which runs in Home when the all-workspaces flag is on.
-        body: dict = {"agent_mode": "ptc" if workspace_id else "flash",
+        # A workspace makes it an analyst turn; without one it runs in Home,
+        # as the Chief of Staff.
+        body: dict = {"workspace_id": workspace_id or self.home(worker),
                       "messages": [{"role": "user", "content": prompt}]}
-        if workspace_id:
-            body["workspace_id"] = workspace_id
         if request_key:
             body["request_key"] = request_key
         if llm_model:
@@ -297,11 +306,9 @@ class Stack:
         """A user steer into the thread's running turn (``steer_only``: it
         never starts a turn itself). Returns (accepted, request_key, detail)."""
         key = str(uuid.uuid4())
-        body: dict = {"agent_mode": "ptc" if workspace_id else "flash",
+        body: dict = {"workspace_id": workspace_id or self.home(worker),
                       "steer_only": True, "request_key": key,
                       "messages": [{"role": "user", "content": content}]}
-        if workspace_id:
-            body["workspace_id"] = workspace_id
         code, text = self.api(worker, "POST",
                               f"/api/v1/threads/{thread_id}/messages", body,
                               max_time=20)
@@ -411,8 +418,8 @@ class Stack:
         """A running analyst workspace of the user (GATE_WORKSPACE wins)."""
         if os.environ.get("GATE_WORKSPACE"):
             return os.environ["GATE_WORKSPACE"]
-        # The flash row (Home once bound) sits at a fixed uuid5 of the user,
-        # as src/server/database/home_workspace.py derives it.
+        # Home sits at a fixed uuid5 of the user, as
+        # src/server/database/home_workspace.py derives it.
         home = uuid.uuid5(uuid.UUID("f1a50000-0000-5000-e000-f1a500000000"),
                           self.user_id)
         ws = self.pq(
@@ -519,7 +526,7 @@ def cell_13_request_key_replay(st: Stack) -> tuple[bool, str]:
     if c1 not in (200, 202):
         return False, f"first dispatch failed: {c1} {r1}"
     c2, r2 = st.api("B", "POST", f"/api/v1/threads/{tid}/messages",
-                    {"agent_mode": "flash", "request_key": key,
+                    {"workspace_id": st.home("B"), "request_key": key,
                      "messages": [{"role": "user", "content": QUICK_PROMPT}]},
                     dispatch=True)
     rows = st.pq("SELECT count(*) FROM conversation_responses WHERE "
@@ -875,15 +882,14 @@ def cell_21_cos_steer(st: Stack) -> tuple[bool, str]:
     The POST is the one ``src/tools/secretary/dispatch.py`` sends: dispatched,
     service-token auth, ``origin`` agent plus the report-back wiring
     (``origin_flash_thread_id`` / ``origin_dispatch_gen``). The Home thread is
-    a fresh Flash-path thread of the gate's own, so a report-back it may get
+    a fresh Home thread of the gate's own, so a report-back it may get
     never lands in the user's real Home conversation.
     """
     ws = st.steer_workspace()
     if not ws:
         return False, "no running analyst workspace (set GATE_WORKSPACE)"
     home_tid = st.settled_thread("A")
-    home_runs = st.thread_runs(home_tid)
-    agent = "chief_of_staff" if home_runs and home_runs[0]["msg_type"] == "ptc" else "flash"
+    agent = "chief_of_staff"
     # "late" times the hand-off at half a calibration turn on the same (warm)
     # thread: inside the analyst's final answer, which then misses it.
     plans = [("mid", NO_TOOLS_LONG_PROMPT, 8.0), ("late", SHORT_PROMPT, None)]
@@ -910,7 +916,7 @@ def cell_21_cos_steer(st: Stack) -> tuple[bool, str]:
         body = {
             "messages": [{"role": "user", "content":
                           f"{token}: when you finish, also state the word MANGO."}],
-            "agent_mode": "ptc", "workspace_id": ws,
+            "workspace_id": ws,
             "origin": {"type": "agent", "id": home_tid, "agent": agent},
             "origin_flash_thread_id": home_tid,
             "origin_dispatch_gen": gen,
@@ -1086,7 +1092,8 @@ def cell_23_missed_steer_vs_send(st: Stack) -> tuple[bool, str]:
         final, _ = st.run_until_terminal(rid, step=0.15)
         n_tok = f"G23N{uuid.uuid4().hex[:10]}"
         ncode, ntext = st.api(send_on, "POST", f"/api/v1/threads/{tid}/messages",
-                              {"agent_mode": "flash", "request_key": str(uuid.uuid4()),
+                              {"workspace_id": st.home(send_on),
+                               "request_key": str(uuid.uuid4()),
                                "messages": [{"role": "user", "content":
                                              f"{n_tok}: reply with the single word KIWI."}]},
                               max_time=15)

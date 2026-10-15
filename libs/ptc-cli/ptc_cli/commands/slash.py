@@ -69,9 +69,8 @@ async def _ensure_workspace_running(client: "SSEStreamClient", workspace_id: str
         workspace = await client.get_workspace(workspace_id)
         if not workspace:
             return False
-        status = workspace.get("status")
-        # "flash" workspaces have no sandbox - skip start
-        if status not in ("running", "flash"):
+        # Home joins the computer on its first turn - skip start
+        if workspace.get("status") != "running" and not workspace.get("is_home"):
             await client.start_workspace(workspace_id)
         return True
     except Exception:
@@ -821,9 +820,8 @@ async def handle_command(
                 console.print(f"[red]Workspace not found: {workspace_id}[/red]")
                 console.print()
                 return "handled"
-            status = ws.get("status")
-            # "flash" workspaces have no sandbox - skip start
-            if status not in ("running", "flash"):
+            # Home joins the computer on its first turn - skip start
+            if ws.get("status") != "running" and not ws.get("is_home"):
                 await client.start_workspace(workspace_id)
         except Exception as e:
             console.print(f"[yellow]Could not start workspace: {e}[/yellow]")
