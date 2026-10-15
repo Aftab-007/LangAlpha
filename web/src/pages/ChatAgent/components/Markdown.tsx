@@ -16,6 +16,7 @@ import { appRoutePath } from '@/lib/appRoutes';
 import WorkspaceImage from './WorkspaceImage';
 import { isFilePath, isImagePath, normalizeFilePath, parseSiblingHref, parseWsPath } from '../utils/filePaths';
 import { useWorkspaceFolders } from '../contexts/WorkspaceContext';
+import { useShareLinkOpener } from '../contexts/ShareLinkOpenerContext';
 import { parseAgentPath } from '../utils/agentPaths';
 import { normalizeFileRefs } from '../utils/normalizeFileRefs';
 import { splitFileLocation, type OpenFileHandler } from '../utils/fileLocation';
@@ -334,11 +335,19 @@ const chatBlockquote = ({ node: _node, ...props }: MarkdownComponentProps) => (
 );
 // A page of this app opens in place, through the router and past the host's
 // leave guard; anything else opens in a new tab so the conversation survives
-// the detour.
+// the detour, unless the chat around it takes the click (an app or file link
+// it opens as a panel tab). A modified click is always the new tab.
 function MarkdownLink({ href, ...props }: MarkdownComponentProps) {
   const route = useInRouterContext() ? appRoutePath(href) : null;
+  const openShareLink = useShareLinkOpener();
   if (route !== null) return <GuardedLink to={route} {...props} />;
-  return <a href={href} target="_blank" rel="noopener noreferrer" {...props} />;
+  const onClick = openShareLink && href
+    ? (e: React.MouseEvent) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+        if (openShareLink(href)) e.preventDefault();
+      }
+    : undefined;
+  return <a href={href} target="_blank" rel="noopener noreferrer" onClick={onClick} {...props} />;
 }
 const chatA = ({ node: _node, ...props }: MarkdownComponentProps) => (
   <MarkdownLink className="underline hover:opacity-80 transition-opacity break-all" style={{ color: 'var(--color-accent-primary)' }} {...props} />

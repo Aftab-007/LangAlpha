@@ -62,7 +62,7 @@ const SETUP_DIR = path.join(__dirname, '..', 'setup')
  *
  * Returns 'handled' when OAuth took it, or whatever `policy` says otherwise.
  */
-function decide(url, win, { isMainWindow }) {
+function decide(url, win, { isMainWindow, isWindowOpen = false }) {
   // A refused interception falls through to the ordinary policy, and must: the
   // authorize check matches on a pathname suffix, so ANY host can present
   // `/auth/v1/authorize?redirect_to=…` and be recognised. `begin` then declines
@@ -71,6 +71,9 @@ function decide(url, win, { isMainWindow }) {
   // this window with the preload bridge. Declining to take a navigation over is
   // not the same as vouching for it.
   if (oauth.isAuthorizeUrl(url) && oauth.begin(url, win)) return 'handled'
+  if (isWindowOpen) {
+    return policy.classifyWindowOpen(url, { isMainWindow, openerUrl: win.webContents.getURL() })
+  }
   return policy.classifyNavigation(url, { isMainWindow })
 }
 
@@ -211,15 +214,9 @@ function attachPolicy(win, { isMainWindow }) {
     // which will-navigate above then intercepts.
     if (url === 'about:blank') return { action: 'deny' }
 
-    const verdict = decide(url, win, { isMainWindow })
-    // 'allow' means the URL is ours, which for a *navigation* means "stay put".
-    // A window.open is the opposite request — a second surface — and loading it
-    // into the first one is not a lesser version of that, it is the destructive
-    // one: the app opens served HTML this way for its new-tab and print actions,
-    // and doing it here replaced whatever turn was streaming in this window.
-    // The shell keeps no popup windows, so the second surface is the browser.
-    if (verdict === 'allow') openExternally(url)
-    else applyVerdict(verdict, { url, win, isMainWindow, isTopLevel: false })
+    // Never 'allow': a window.open of ours is a request for a second surface,
+    // which `classifyWindowOpen` resolves to a window or the browser.
+    applyVerdict(decide(url, win, { isMainWindow, isWindowOpen: true }), { url, win, isMainWindow, isTopLevel: false })
     return { action: 'deny' }
   })
 

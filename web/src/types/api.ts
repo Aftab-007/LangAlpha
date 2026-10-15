@@ -394,6 +394,8 @@ export type ShareLinkKind = 'file' | 'app';
 
 interface ShareLinkBase {
   code: string;
+  /** The workspace the item lives in. */
+  workspace_id: string;
   /** App-relative, `/a/<code>`. */
   url: string;
   title: string | null;

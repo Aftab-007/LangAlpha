@@ -10,6 +10,7 @@ Endpoints, all owner-only:
 - GET   /api/v1/workspaces/{id}/share-links                - the shared links here
 - GET   /api/v1/workspaces/{id}/share-links/{code}/files   - the current file list
 - PATCH /api/v1/workspaces/{id}/share-links/{code}         - share with a reviewed list, or stop
+- GET   /api/v1/share-links/{code}                         - one of the owner's links, any workspace
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ from src.server.app.share_manifest import (
 from src.server.utils.api import CurrentUserId, require_workspace_owner
 
 router = APIRouter(prefix="/api/v1/workspaces", tags=["Share Links"])
+owner_router = APIRouter(prefix="/api/v1/share-links", tags=["Share Links"])
 
 
 class ShareLinkCreate(BaseModel):
@@ -66,6 +68,7 @@ class ShareLinkUpdate(BaseModel):
 
 class ShareLinkResponse(BaseModel):
     code: str
+    workspace_id: str
     url: str
     kind: str
     path: str | None
@@ -85,6 +88,7 @@ class FileGrantResponse(BaseModel):
 def _to_model(link: ShareLink) -> ShareLinkResponse:
     return ShareLinkResponse(
         code=link.code,
+        workspace_id=link.workspace_id,
         url=share_path(link.code),
         kind=link.kind,
         path=link.path,
@@ -225,3 +229,20 @@ async def update_share_link(
     if shared is None:
         raise HTTPException(status_code=409, detail={"code": "link_changed"})
     return _to_model(shared)
+
+
+@owner_router.get("/{code}", response_model=ShareLinkResponse)
+async def get_share_link(code: str, x_user_id: CurrentUserId) -> ShareLinkResponse:
+    """What one of the owner's links points at, so their app can open it in place.
+
+    The workspace list holds shared links only, and an app link is never shared,
+    so an ``/a/`` link in a reply is mapped back to its port or file through
+    this. Any of the owner's workspaces answers, since a report-back carries an
+    analyst's links into Home; the link names the workspace to open it in.
+    Another user's code is not found rather than forbidden.
+    """
+    link = await get_link(code)
+    workspace = await db_get_workspace(link.workspace_id) if link else None
+    if link is None or workspace is None or workspace.get("user_id") != x_user_id:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    return _to_model(link)

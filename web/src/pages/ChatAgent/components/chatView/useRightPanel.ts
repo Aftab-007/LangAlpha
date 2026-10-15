@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { appendPathSuffix, getPreviewUrl } from '../../utils/api';
+import { getShareLink, parseShareLinkHref } from '../../utils/api/shareLinks';
+import { desktop } from '@/lib/desktop';
+import { opensShareLinksInPanel } from '@/lib/shareLinkOpen';
 import type { ComputerFolders } from '../../utils/agentPaths';
 import { collectRecentWritePaths, collectWriteLog } from '../../utils/fileRefResolver';
 import { useStableHandler } from '@/hooks/useStableHandler';
@@ -22,6 +25,9 @@ export { nextPanelOverride } from './usePanelLinks';
 
 // A running app or a live chart opens wide, so its toolbar has room.
 const PREVIEW_MAX_RATIO = 0.92;
+
+// Held for a shortcut or a modified click; no intent of their own.
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta']);
 
 /** Right-panel controller (carved out of ChatView, 5.9c): panel type/width,
  * target routing, tool-call detail, multi-port preview resolution,
@@ -76,6 +82,7 @@ export function useRightPanel({
   const {
     panelTarget,
     askPanel,
+    askCount,
     handleTargetHandled,
     handleTargetMemoryHandled,
     handleTargetMemoHandled,
@@ -119,6 +126,11 @@ export function useRightPanel({
   const previewMapRef = useRef<Map<number, PreviewData>>(new Map());
   const activePreviewPortRef = useRef<number | null>(null);
   const reloadCounterRef = useRef(0);
+  // The latest `/a/` link click, advanced again by any input after it. A
+  // lookup does not ask the panel, so a newer input is told apart here, and an
+  // open nobody clicked (the stream's) by `askCount`, or on the mobile sheet by
+  // advancing this too.
+  const shareLinkClickRef = useRef(0);
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const panelWrapperRef = useRef<HTMLDivElement>(null);
 
@@ -412,7 +424,7 @@ export function useRightPanel({
     resolvePreviewUrl(wid, port, command)
       .then((baseUrl: string) => {
         const entry = previewMapRef.current.get(port);
-        if (!entry) return;
+        if (entry?.workspaceId !== wid) return;
         const url = appendPathSuffix(baseUrl, pathSuffix ?? entry.path);
         const updated = { ...entry, url, loading: false, error: undefined };
         previewMapRef.current.set(port, updated);
@@ -420,7 +432,7 @@ export function useRightPanel({
       })
       .catch(() => {
         const entry = previewMapRef.current.get(port);
-        if (!entry) return;
+        if (entry?.workspaceId !== wid) return;
         const updated = { ...entry, url: '', loading: false, error: true };
         previewMapRef.current.set(port, updated);
         if (activePreviewPortRef.current === port) setPreviewData(updated);
@@ -430,26 +442,113 @@ export function useRightPanel({
   /**
    * Show a running app. On desktop it lands as a tab in the file panel beside
    * the files it serves; the panel mints and refreshes its URL from there, so
-   * nothing is resolved here. Mobile keeps the bottom sheet.
+   * nothing is resolved here. Mobile keeps the bottom sheet. An app in a
+   * sibling (`data.workspaceId`) runs there and is asked for there.
    */
   const handleOpenPreview = useCallback((data: PreviewData) => {
+    const appWorkspaceId = data.workspaceId ?? workspaceId;
     if (!isMobile) {
-      return landInFilePanel(
+      const land = () => landInFilePanel(
         { kind: 'preview', port: data.port, title: data.title, path: data.path, command: data.command },
         { maxRatio: PREVIEW_MAX_RATIO },
       );
+      // The panel mints an app's URL for the workspace it shows, so it shows
+      // the app's: the view's own, or the sibling the app runs in.
+      const next = appWorkspaceId && appWorkspaceId !== workspaceId ? appWorkspaceId : null;
+      if (next !== filePanelWorkspaceId && (ownFiles || next)) {
+        leaveFiles(() => {
+          setFilePanelWorkspaceId(next);
+          land();
+        });
+      } else {
+        land();
+      }
+      return;
     }
-    previewMapRef.current.set(data.port, data);
+    // The sheet takes no ask, so an app opened on it, the stream's included,
+    // gives a pending link its notice here.
+    shareLinkClickRef.current += 1;
+    // Each entry names its workspace, so a URL minted for one never lands on
+    // another's app on the same port.
+    const entry = { ...data, workspaceId: appWorkspaceId ?? undefined };
+    previewMapRef.current.set(data.port, entry);
     activePreviewPortRef.current = data.port;
-    setPreviewData(data);
+    setPreviewData(entry);
     setRightPanelType('preview');
     applyPanelWidth(DEFAULT_PANEL_WIDTH, PREVIEW_MAX_RATIO);
     pushPanelHistory();
     // If opened with loading state (no URL yet), resolve via authenticated endpoint
-    if (data.loading && !data.url && workspaceId) {
-      resolveAndSetPreview(workspaceId, data.port, data.command, data.path);
+    if (data.loading && !data.url && appWorkspaceId) {
+      resolveAndSetPreview(appWorkspaceId, data.port, data.command, data.path);
     }
-  }, [isMobile, landInFilePanel, applyPanelWidth, pushPanelHistory, workspaceId, resolveAndSetPreview]);
+  }, [isMobile, landInFilePanel, ownFiles, filePanelWorkspaceId, leaveFiles, setFilePanelWorkspaceId, applyPanelWidth, pushPanelHistory, workspaceId, resolveAndSetPreview]);
+
+  /**
+   * An `/a/` link in a reply, opened as the panel tab its item already has:
+   * the app on its port at the page the link names, or the file. Desktop shell
+   * only, by the user's setting; the browser keeps its new tab. A code that is
+   * not the user's, or that no longer resolves, goes to the browser as the
+   * link would have.
+   */
+  const handleOpenShareLink = useCallback((href: string): boolean => {
+    const target = parseShareLinkHref(href);
+    if (!target || !workspaceId || !opensShareLinksInPanel()) return false;
+    const click = ++shareLinkClickRef.current;
+    const asked = askCount();
+    // Any input after the click is a newer intent than the link: a tab picked,
+    // a sheet opened, the panel closed. Most of those never ask the panel, so
+    // the window hears them instead.
+    const supersede = (e: Event) => {
+      if (e instanceof KeyboardEvent && MODIFIER_KEYS.has(e.key)) return;
+      shareLinkClickRef.current += 1;
+    };
+    window.addEventListener('pointerdown', supersede, true);
+    window.addEventListener('keydown', supersede, true);
+    const superseded = () => click !== shareLinkClickRef.current || askCount() !== asked;
+    getShareLink(target.code)
+      .then((link) => {
+        if (superseded()) return;
+        // A report-back carries an analyst's links into Home: each opens in
+        // the workspace it lives in, shown in this panel.
+        const sibling = link.workspace_id !== workspaceId ? link.workspace_id : undefined;
+        if (link.kind === 'app') {
+          // Always a page, the root as `/`: no path keeps the page a tab
+          // already on this port shows.
+          const page = target.path ?? link.path ?? '';
+          handleOpenPreview({
+            url: '',
+            port: link.port,
+            title: link.title ?? undefined,
+            path: `/${page.replace(/^\/+/, '')}`,
+            loading: true,
+            reloadToken: ++reloadCounterRef.current,
+            workspaceId: sibling,
+          });
+        } else {
+          handleOpenFileFromChat(link.path, sibling);
+        }
+      })
+      // The click's gesture is spent by now, so the shell is asked directly
+      // rather than through a window.open it may treat as a popup. It opens
+      // absolute URLs only, and a link may be relative.
+      .catch(() => {
+        if (superseded()) return;
+        const url = new URL(href, window.location.origin).href;
+        if (desktop?.openExternal) void desktop.openExternal(url);
+        else window.open(url, '_blank', 'noopener,noreferrer');
+      })
+      .finally(() => {
+        window.removeEventListener('pointerdown', supersede, true);
+        window.removeEventListener('keydown', supersede, true);
+      });
+    return true;
+  }, [workspaceId, askCount, handleOpenPreview, handleOpenFileFromChat]);
+
+  // A lookup still pending when its thread is left must not open a tab or hand
+  // the browser a link. A cached view is left by going inactive, any other by
+  // unmounting, and a view moved to another workspace leaves this one's links
+  // behind; each runs this cleanup.
+  useEffect(() => () => { shareLinkClickRef.current += 1; }, [isActive, workspaceId]);
 
   // The sheets are the only surfaces that show a `preview` or `detail` panel
   // type; the desktop column shows a running app or a tool result as a Files
@@ -475,11 +574,10 @@ export function useRightPanel({
       setRightPanelType(null);
       return;
     }
-    landInFilePanel(
-      { kind: 'preview', port: data.port, title: data.title, path: data.path, command: data.command },
-      { maxRatio: PREVIEW_MAX_RATIO },
-    );
-  }, [isMobile, rightPanelType, previewData, detailToolCallId, getToolCallProcess, landInFilePanel]);
+    // Through the opener, so the panel shows the workspace the app runs in,
+    // a sibling's for an `/a/` link, before it mints the tab's URL.
+    handleOpenPreview(data);
+  }, [isMobile, rightPanelType, previewData, detailToolCallId, getToolCallProcess, landInFilePanel, handleOpenPreview]);
 
   /** The full MarketView page on one symbol, with a way back to this chat. */
   const handleOpenInMarketView = useCallback((spec: ChartTabSpec) => {
@@ -532,7 +630,7 @@ export function useRightPanel({
       // short-lived and re-minted, so the tab opens loading rather than on a
       // link that may have expired.
       const cached = previewMapRef.current.get(port);
-      if (cached?.url) {
+      if (cached?.url && cached.workspaceId === workspaceId) {
         // Loading with no URL: handleOpenPreview resolves it on the sheet too.
         handleOpenPreview({ ...cached, url: '', loading: true, error: undefined, reloadToken: token, path });
         return;
@@ -582,23 +680,27 @@ export function useRightPanel({
 
   // Refresh preview: restart process + resolve fresh signed URL (force bypasses cache)
   const handleRefreshPreview = useCallback(async () => {
-    if (!previewData || !workspaceId) return;
+    const wid = previewData?.workspaceId ?? workspaceId;
+    if (!previewData || !wid) return;
     // Capture values before async gap to avoid stale closure if user switches ports
     const { port, command, path } = previewData;
     const loadingEntry = { ...previewData, loading: true, error: undefined };
     previewMapRef.current.set(port, loadingEntry);
     setPreviewData(loadingEntry);
     try {
-      const result = await getPreviewUrl(workspaceId, port, command, true);
+      const result = await getPreviewUrl(wid, port, command, true);
       const token = ++reloadCounterRef.current;
       const url = appendPathSuffix(result.url, path);
       const entry = previewMapRef.current.get(port);
+      // Another workspace's app took the port meanwhile.
+      if (entry && entry.workspaceId !== wid) return;
       const updated = { ...(entry ?? previewData), url, loading: false, reloadToken: token };
       previewMapRef.current.set(port, updated);
       if (activePreviewPortRef.current === port) setPreviewData(updated);
     } catch (e) {
       console.error('Failed to refresh preview:', e);
       const entry = previewMapRef.current.get(port);
+      if (entry && entry.workspaceId !== wid) return;
       const updated = { ...(entry ?? previewData), loading: false, error: true };
       previewMapRef.current.set(port, updated);
       if (activePreviewPortRef.current === port) setPreviewData(updated);
@@ -650,6 +752,7 @@ export function useRightPanel({
     handleActiveTabKindChange,
     leaveFiles,
     handleOpenPreview,
+    handleOpenShareLink,
     handleOpenChart,
     handleOpenInMarketView,
     detailToolCall,

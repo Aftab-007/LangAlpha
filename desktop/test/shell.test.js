@@ -235,6 +235,26 @@ describe('which window a page lands in', () => {
     assert.equal(policy.classifyNavigation('https://app.example.com/chat', { isMainWindow: true }), 'allow')
   })
 
+  // A window.open of ours is a second surface, and the shell keeps no popups,
+  // so it goes to the browser rather than over a turn streaming in this window.
+  test('a new window of ours goes to the browser', () => {
+    const { policy } = loadShell({ edition: 'saas' })
+    const share = 'https://app.example.com/a/TnVftlXfU0nN?path=index.html'
+    assert.equal(policy.classifyWindowOpen(share, { isMainWindow: true, openerUrl: APP }), 'external')
+    assert.equal(policy.classifyWindowOpen(CONSOLE, { isMainWindow: true, openerUrl: APP }), 'external')
+    assert.equal(policy.classifyWindowOpen(APP, { isMainWindow: true, openerUrl: CONSOLE + '/x' }), 'app-window')
+  })
+
+  // The usage page's thread links: the console has no turn to lose, and the
+  // browser may not be signed in to the app, so the thread opens in place.
+  test('except the console opening the app in the window they share', () => {
+    const { policy } = loadShell({ edition: 'saas' })
+    const thread = 'https://app.example.com/chat/t/123'
+    assert.equal(policy.classifyWindowOpen(thread, { isMainWindow: true, openerUrl: CONSOLE }), 'app-window')
+    assert.equal(policy.classifyWindowOpen(thread, { isMainWindow: false, openerUrl: CONSOLE }), 'app-window')
+    assert.equal(policy.classifyWindowOpen('https://evil.example.com/', { isMainWindow: true, openerUrl: CONSOLE }), 'external')
+  })
+
   // Observed, not predicted. Classifying a navigation must not record it: a
   // verdict of 'allow' on a link that then drops would retire onboarding for an
   // install that never once reached the app, and every later launch would open
