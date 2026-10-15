@@ -68,6 +68,11 @@ export async function hydrateTaskTranscript(
       (item) => ({ ...(item.data || {}), event: item.event }),
     ) as SSEEvent[];
     if (!events.length) return null;
+    // The checks above ran before the fetch: a task resumed meanwhile has a
+    // successor writing its lane, which this terminal checkpoint must not
+    // overwrite.
+    if (rt.subagentStateRefsRef.current[agentId]?.messages?.length) return null;
+    if (rt.subagentHistory.get().entries[agentId]?.messages?.length) return null;
     projectSubagentHistory(
       rt,
       new Map([
