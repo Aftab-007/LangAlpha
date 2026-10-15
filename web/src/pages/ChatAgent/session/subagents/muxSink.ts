@@ -187,7 +187,11 @@ export function createSubagentMuxController(rt: SubagentRuntime, deps: SubagentM
       // the checkpoint; for a workflow run, the only progress the panels have.
       const taskRefs = rt.subagentStateRefsRef.current[`task:${shortTaskId}`];
       if (news && !taskRefs?.workflowRun && !taskRefs?.messages?.length) {
-        void deps.hydrateTaskTranscript(`task:${shortTaskId}`, { status });
+        void deps.hydrateTaskTranscript(`task:${shortTaskId}`, {
+          status,
+          // A resume retracts the outcome recorded above.
+          stillCurrent: () => rt.terminalTaskOutcomesRef.current.get(shortTaskId) === status,
+        });
       }
       // Workflow-level flag only when ALL run channels have closed. No status
       // sweep: each task's card/chip was already stamped terminal by its own

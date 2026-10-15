@@ -18,6 +18,9 @@ export interface TaskTranscriptMeta {
   description?: string;
   type?: string;
   status?: string;
+  /** Re-asked once the transcript arrives: false when the run the caller
+   * hydrates for is no longer the task's latest (a resume landed meanwhile). */
+  stillCurrent?: () => boolean;
 }
 
 /** Resolves to the entry in the history, or null when none landed. */
@@ -69,10 +72,11 @@ export async function hydrateTaskTranscript(
     ) as SSEEvent[];
     if (!events.length) return null;
     // The checks above ran before the fetch: a task resumed meanwhile has a
-    // successor writing its lane, which this terminal checkpoint must not
-    // overwrite.
+    // successor writing its lane, possibly still empty, which this terminal
+    // checkpoint must not overwrite.
     if (rt.subagentStateRefsRef.current[agentId]?.messages?.length) return null;
     if (rt.subagentHistory.get().entries[agentId]?.messages?.length) return null;
+    if (meta?.stillCurrent && !meta.stillCurrent()) return null;
     projectSubagentHistory(
       rt,
       new Map([
