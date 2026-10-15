@@ -384,7 +384,9 @@ async def _seed_channels(
     return out
 
 
-async def _settled_runs_of_open_turn(thread_id: str) -> Optional[list[dict]]:
+async def _settled_runs_of_open_turn(
+    thread_id: str, root_id: Optional[str]
+) -> Optional[list[dict]]:
     """Terminal task runs the thread's executing turn launched.
 
     The history projection a client attaches with stops before the open turn,
@@ -393,17 +395,19 @@ async def _settled_runs_of_open_turn(thread_id: str) -> Optional[list[dict]]:
     their cards running until the turn ends. Drained from 0; a client that
     already holds one drops the backlog by its own settled check. None on a
     failed read, so the caller withholds ``attached`` and the client asks
-    again on its next socket."""
+    again on its next socket. ``root_id`` is the root the attach seed saw
+    open: a turn that finalizes between the two reads still has its runs
+    drained, since the client's snapshot left that turn out."""
     try:
         from src.server.database.runs import lifecycle as tl_db
         from src.server.database.runs import subagent_runs as sr_db
 
-        root = await tl_db.get_active_run(thread_id)
-        if root is None:
-            return []
-        return await sr_db.list_settled_runs_for_parent(
-            thread_id, str(root["conversation_response_id"])
-        )
+        if root_id is None:
+            root = await tl_db.get_active_run(thread_id)
+            if root is None:
+                return []
+            root_id = str(root["conversation_response_id"])
+        return await sr_db.list_settled_runs_for_parent(thread_id, root_id)
     except Exception:
         logger.warning(
             "[mux2] open-turn settled seed failed for %s", thread_id, exc_info=True
@@ -545,7 +549,9 @@ async def stream_thread_mux_v2(
     # next socket's client re-sends its cursors on attach, so only this
     # socket's rescan needs them). Popped when the channel finally opens.
     pending_cursors: dict[str, str] = {}
-    for run_id, lane, started_ms in await _seed_channels(thread_id):
+    seeds = await _seed_channels(thread_id)
+    seeded_root = next((rid for rid, lane, _ in seeds if lane == "main"), None)
+    for run_id, lane, started_ms in seeds:
         if _open_count() >= _MAX_CHANNELS:
             break
         cursor = cursor_map.get(run_id)
@@ -610,7 +616,9 @@ async def stream_thread_mux_v2(
         )
         attach_frames.append(_chan_open_frame(chan, "drain"))
 
-    open_turn_runs = await _settled_runs_of_open_turn(thread_id) if open_turn else []
+    open_turn_runs = (
+        await _settled_runs_of_open_turn(thread_id, seeded_root) if open_turn else []
+    )
     # Acknowledged only when every run is open or durably deferred: the client
     # stops asking once it hears ``attached``, so a failed read or store must
     # leave the ask standing for its next socket.

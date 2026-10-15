@@ -121,12 +121,24 @@ async def test_open_turn_failures_read_as_unserved():
         "src.server.database.runs.lifecycle.get_active_run",
         new=AsyncMock(side_effect=RuntimeError("db down")),
     ):
-        assert await _settled_runs_of_open_turn("t-1") is None
+        assert await _settled_runs_of_open_turn("t-1", None) is None
     with patch(
         "src.server.database.runs.lifecycle.get_active_run",
         new=AsyncMock(return_value=None),
     ):
-        assert await _settled_runs_of_open_turn("t-1") == []
+        assert await _settled_runs_of_open_turn("t-1", None) == []
+
+    # The root the seed saw open is read, not a second lookup that a turn
+    # finalizing in between would answer with "nothing open".
+    settled = [{"task_run_id": "run-1", "task_id": "abc"}]
+    with patch(
+        "src.server.database.runs.lifecycle.get_active_run",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        f"{SR_DB}.list_settled_runs_for_parent", new=AsyncMock(return_value=settled)
+    ) as listed:
+        assert await _settled_runs_of_open_turn("t-1", "root-1") == settled
+    listed.assert_awaited_once_with("t-1", "root-1")
 
     cache = MagicMock()
     cache.client.hset = AsyncMock(side_effect=RuntimeError("redis down"))
