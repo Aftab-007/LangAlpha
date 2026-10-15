@@ -108,6 +108,7 @@ EXPECTED_RELATIVE = {
     "MEMO_USER_DIR": ".agents/user/memo",
     "USER_PROFILE_DIR": ".agents/user/profile",
     "AUTOMATIONS_DIR": ".agents/user/automations",
+    "USER_AGENTS_DIR": ".agents/user/agents",
     "CHANNELS_DIR": ".agents/user/channels",
     "WORKFLOWS_DIR": ".agents/workflows",
     "TMP_DIR": ".agents/tmp",
@@ -1132,9 +1133,13 @@ class TestGeneratedFrontendModule:
             "  'home/daytona/',",
             "  '.agents/user/profile': ['portfolio.json', 'watchlist.json', 'preference.json', 'user.json'],",
             "export const AUTOMATIONS_DIR = '.agents/user/automations';",
-            "export const USER_DATA_DIRS = [\n  '.agents/user/profile',\n  '.agents/user/automations',\n] as const;",
+            "export const USER_AGENTS_DIR = '.agents/user/agents';",
+            "export const USER_DATA_DIRS = [\n  '.agents/user/profile',\n  '.agents/user/automations',\n"
+            "  '.agents/user/agents',\n] as const;",
             # One file per automation, under a name the server also checks.
             "export const AUTOMATION_FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\\.json$/;",
+            # One file per subagent, named after it.
+            "export const SUBAGENT_FILE_NAME = /^[a-z0-9][a-z0-9-]{0,47}\\.md$/;",
             # Root directories an earlier layout owned. A sandbox reused
             # across its migration still has them, so the file panel filters
             # on them by name.

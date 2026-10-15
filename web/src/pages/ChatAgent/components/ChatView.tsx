@@ -19,6 +19,7 @@ import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { FLASH_ROUTE_STATE } from '@/hooks/useFlashWorkspace';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
+import { invalidateSubagents } from '@/hooks/useSubagents';
 import { useLocale } from '@/hooks/useLocale';
 import { onboardingKickoff } from '@/pages/Onboarding/connect/kickoff';
 import { cardDownloadKey, trackPending } from '../utils/downloadNotice';
@@ -35,7 +36,7 @@ import { saveChatSession, getChatSession, clearChatSession } from '../hooks/util
 import type { PreviewData } from '../hooks/utils/types';
 import { useCardState } from '../hooks/useCardState';
 import { useWorkspace } from '@/hooks/useWorkspace';
-import { classifyAgentPath } from '../utils/agentPaths';
+import { classifyAgentPath, isSubagentFilePath } from '../utils/agentPaths';
 import { fileArtifactPath } from '../utils/fileArtifact';
 import type { FileOperationArtifactPayload } from '@/types/api';
 import { taskIdFromAgentId } from '../utils/agentId';
@@ -274,6 +275,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       // server writes on save, and the turn may write several.
       profileWrittenRef.current = true;
     }
+    // The Subagents pane is a page away, so this only marks its list stale
+    // for the way back.
+    if (isSubagentFilePath(filePath)) invalidateSubagents(queryClient);
   }, [refreshOwnFiles, queryClient, isFlashMode, workspaceId, effectiveFileWorkspaceId]);
 
   // Stable ref-based callback for opening preview URLs from SSE events.

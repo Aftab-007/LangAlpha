@@ -10,7 +10,15 @@ The per-turn merge that turns rows into the roster a build compiles stays in
 ``ptc_agent.agent.subagents.merge``; nothing here runs during a turn.
 """
 
-from .context import Connector, SubagentContext, SubagentsUnavailable, load_context
+from .context import (
+    Connector,
+    SubagentContext,
+    SubagentsUnavailable,
+    list_connectors,
+    load_context,
+    load_main_values,
+    roster,
+)
 from .rules import (
     CUSTOM_KEYS,
     DESCRIPTION_MAX,
@@ -38,6 +46,7 @@ from .view import (
     definition_values,
     editable_values,
     render_base_body,
+    value_views,
     version_of,
 )
 from .writes import (
@@ -45,7 +54,9 @@ from .writes import (
     SubagentNotFound,
     VersionConflict,
     delete_subagent,
+    file_values,
     list_subagents,
+    rename_subagent,
     save_subagent,
 )
 
@@ -77,12 +88,18 @@ __all__ = [
     "description_match_note",
     "description_matches",
     "editable_values",
+    "file_values",
+    "list_connectors",
     "list_subagents",
     "load_context",
+    "load_main_values",
     "normalize_value",
+    "rename_subagent",
     "render_base_body",
+    "roster",
     "save_subagent",
     "validate_fields",
     "validate_new_name",
+    "value_views",
     "version_of",
 ]

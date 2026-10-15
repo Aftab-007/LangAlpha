@@ -28,7 +28,7 @@ from ptc_agent.agent.subagents.merge import (
     tool_words,
 )
 
-from .rules import EDITABLE_KEYS, NAME_RE, ROLE_ORDER, WRITABLE_KEYS, description_matches
+from .rules import EDITABLE_KEYS, NAME_RE, RESERVED_NAMES, ROLE_ORDER, WRITABLE_KEYS, description_matches
 
 if TYPE_CHECKING:
     from .context import SubagentContext
@@ -44,9 +44,9 @@ def agent_file(name: str) -> str | None:
     """The subagent's file under the user's folder; None for a name no file can carry."""
     from ptc_agent.core.paths import SandboxLayout
 
-    if not NAME_RE.fullmatch(name):
+    if name in RESERVED_NAMES or not NAME_RE.fullmatch(name):
         return None
-    return f"{SandboxLayout.USER_DIR}/agents/{name}.md"
+    return f"{SandboxLayout.USER_AGENTS_DIR}/{name}.md"
 
 
 def render_base_body(defn: SubagentDefinition) -> str:
@@ -270,24 +270,20 @@ async def _search_problems(ctx: SubagentContext, defn: SubagentDefinition) -> li
     return problems
 
 
-async def build_views(
-    ctx: SubagentContext, rows: Iterable[Mapping[str, Any]], *, problems: bool = True
-) -> list[dict[str, Any]]:
-    """Every subagent the user has, in roster order, then orphaned overrides.
+# A view with the definition it shows and its base (None for a custom one).
+_Pair = tuple[dict[str, Any], SubagentDefinition, BaseSubagent | None]
 
-    The offered bases come first in the deployment's order, then the user's
-    own; each carries its effective values, its base's, its problems and its
-    version. Thread titles are left for ``attach_titles``. ``problems=False``
-    skips the checks that read keys and plans, for a writer that only needs
-    values and versions (they touch no connection, so it can hold a lock).
-    """
+
+def _views(
+    bases: Mapping[str, BaseSubagent], offered: Iterable[str], rows: Iterable[Mapping[str, Any]]
+) -> tuple[list[dict[str, Any]], list[_Pair], set[str]]:
     rows = [r for r in rows if r.get("workspace_id") is None]
     by_name = {r["name"]: r for r in rows}
-    resolved = merge_subagents(ctx.bases, ctx.offered, rows)
+    resolved = merge_subagents(bases, tuple(offered), rows)
     on = set(resolved.enabled)
 
     views: list[dict[str, Any]] = []
-    pairs: list[tuple[dict[str, Any], SubagentDefinition, BaseSubagent | None]] = []
+    pairs: list[_Pair] = []
     for name, defn in resolved.definitions.items():
         row = by_name.get(name)
         if defn.source == "custom":
@@ -295,11 +291,11 @@ async def build_views(
             if name in resolved.shadowed:
                 view["problems"].append({
                     "code": "name_collision",
-                    "detail": _source_of_key(ctx.bases[name].key),
+                    "detail": _source_of_key(bases[name].key),
                 })
             pairs.append((view, defn, None))
         else:
-            base = ctx.bases[name]
+            base = bases[name]
             applies = row is not None and row.get("base_key") == base.key
             view = _base_view(
                 defn, base, row if applies else None,
@@ -311,7 +307,28 @@ async def build_views(
     for name in resolved.orphaned:
         if name not in resolved.definitions:
             views.append(_orphan_view(by_name[name]))
+    return views, pairs, on
 
+
+def value_views(
+    bases: Mapping[str, BaseSubagent], offered: Iterable[str], rows: Iterable[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """``build_views`` without problems, for a reader that has no user context."""
+    return _views(bases, offered, rows)[0]
+
+
+async def build_views(
+    ctx: SubagentContext, rows: Iterable[Mapping[str, Any]], *, problems: bool = True
+) -> list[dict[str, Any]]:
+    """Every subagent the user has, in roster order, then orphaned overrides.
+
+    The offered bases come first in the deployment's order, then the user's
+    own; each carries its effective values, its base's, its problems and its
+    version. Thread titles are left for ``attach_titles``. ``problems=False``
+    skips the checks that read keys and plans, for a writer that only needs
+    values and versions (they touch no connection, so it can hold a lock).
+    """
+    views, pairs, on = _views(ctx.bases, ctx.offered, rows)
     if not problems:
         return views
     enabled_texts = [

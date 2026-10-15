@@ -17,7 +17,7 @@ from typing import Any
 
 from ptc_agent.agent.subagents.merge import BaseSubagent
 
-from .context import SubagentContext, load_context
+from .context import SubagentContext, load_context, roster
 from .rules import (
     EDITABLE_KEYS,
     INHERIT,
@@ -29,7 +29,7 @@ from .rules import (
     validate_fields,
     validate_new_name,
 )
-from .view import attach_titles, build_views, definition_values
+from .view import attach_titles, build_views, definition_values, value_views
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,15 @@ async def list_subagents(
     views = await build_views(ctx, await list_user_subagents(user_id))
     await attach_titles(user_id, views)
     return ctx, views
+
+
+async def file_values(user_id: str) -> list[dict[str, Any]]:
+    """Every subagent's view without problems or titles: what its file shows,
+    and its version. Reads nothing of the user's but the rows."""
+    from src.server.database.user_subagents import list_user_subagents
+
+    bases, offered = roster()
+    return value_views(bases, offered, await list_user_subagents(user_id))
 
 
 def _stored_effective(key: str, value: Any) -> Any:
@@ -347,3 +356,59 @@ async def delete_subagent(user_id: str, name: str, *, version: str | None) -> bo
             if await get_user_subagent(user_id, name, conn=conn, for_update=True) is None:
                 return False
             return await delete_user_subagent(user_id, name, conn=conn)
+
+
+async def rename_subagent(
+    user_id: str,
+    name: str,
+    new_name: str,
+    *,
+    updated_by: str = "user",
+    thread_id: str | None = None,
+) -> bool:
+    """Give a custom subagent another name, keeping everything else.
+
+    False when it is gone by the time the lock is held. A base keeps its name,
+    which is how overrides find it, so renaming one is refused, as is a name a
+    base or another subagent holds. Raises ``SubagentInvalid`` and
+    ``SubagentNotFound``.
+    """
+    from psycopg.errors import UniqueViolation
+
+    from src.server.database.pool import get_db_connection
+    from src.server.database.user_subagents import (
+        get_user_subagent,
+        list_user_subagents,
+        rename_user_subagent,
+    )
+
+    bases, offered = roster()
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            await _lock(conn, user_id)
+            views = {
+                v["name"]: v
+                for v in value_views(bases, offered, await list_user_subagents(user_id, conn=conn))
+            }
+            target = views.get(name)
+            if target is None:
+                raise SubagentNotFound(name)
+            if target["kind"] != "custom":
+                raise SubagentInvalid([FieldError(
+                    "name", f"{name} is a built-in subagent, so it keeps its name."
+                )])
+            errors = validate_new_name(new_name, base_names=bases, custom_count=0)
+            if not errors and await get_user_subagent(user_id, new_name, conn=conn) is not None:
+                errors.append(FieldError("name", f"{new_name} is taken. Pick another name."))
+            if errors:
+                raise SubagentInvalid(errors)
+            try:
+                moved = await rename_user_subagent(
+                    user_id, name, new_name, updated_by=updated_by,
+                    updated_thread_id=thread_id, conn=conn,
+                )
+            except UniqueViolation as exc:
+                raise SubagentInvalid([
+                    FieldError("name", f"{new_name} is taken. Pick another name.")
+                ]) from exc
+            return moved is not None

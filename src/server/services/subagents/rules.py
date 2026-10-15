@@ -19,11 +19,12 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ptc_agent.agent.roles import ALL_ROLES
 from ptc_agent.agent.subagents.merge import BROKERAGE_ACCESS, TOOL_WORDS
+from ptc_agent.core.paths import SUBAGENT_NAME
 
 if TYPE_CHECKING:
     from .context import SubagentContext
 
-NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+NAME_RE = re.compile(SUBAGENT_NAME)
 RESERVED_NAMES = frozenset({"main"})
 MAX_CUSTOM = 20
 DESCRIPTION_MAX = 400

@@ -85,6 +85,9 @@ class SandboxLayout:
     MEMO_USER_DIR: ClassVar[str] = ".agents/user/memo"
     USER_PROFILE_DIR: ClassVar[str] = ".agents/user/profile"
     AUTOMATIONS_DIR: ClassVar[str] = ".agents/user/automations"
+    # The user's subagents, one markdown file each, plus a read-only main.md
+    # for the agent itself.
+    USER_AGENTS_DIR: ClassVar[str] = ".agents/user/agents"
     # The user's chat-app settings, kept by the channel gateway. Only the file
     # tools reach it: it is no mount tier and no user data dir, and Bash and
     # code are refused a command that names it.
@@ -479,14 +482,22 @@ WORKFLOW_DIR: str = SandboxLayout.WORKFLOWS_DIR
 
 # The directories whose files are rows in Postgres, each beside a README.md:
 # the user's portfolio, watchlists, preferences and account under the fixed
-# names in USER_DATA_FILES, and one file per automation under a name the agent
-# picks, which AUTOMATION_FILE_NAME matches. The routes, the file panel and the
-# browser's path classifier all read these.
+# names in USER_DATA_FILES, one file per automation under a name the agent
+# picks, which AUTOMATION_FILE_NAME matches, and one file per subagent named
+# after it, which SUBAGENT_FILE_NAME matches. The routes, the file panel and
+# the browser's path classifier all read these.
 USER_DATA_FILES: dict[str, tuple[str, ...]] = {
     SandboxLayout.USER_PROFILE_DIR: ("portfolio.json", "watchlist.json", "preference.json", "user.json"),
 }
-USER_DATA_DIRS: tuple[str, ...] = (SandboxLayout.USER_PROFILE_DIR, SandboxLayout.AUTOMATIONS_DIR)
+USER_DATA_DIRS: tuple[str, ...] = (
+    SandboxLayout.USER_PROFILE_DIR,
+    SandboxLayout.AUTOMATIONS_DIR,
+    SandboxLayout.USER_AGENTS_DIR,
+)
 AUTOMATION_FILE_NAME = r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.json"
+# A subagent's name, which is also its file's name before ``.md``.
+SUBAGENT_NAME = r"[a-z0-9][a-z0-9-]{0,47}"
+SUBAGENT_FILE_NAME = SUBAGENT_NAME + r"\.md"
 
 # The automations folder's tail, the same in a sandbox path and a mount path.
 _AUTOMATIONS_TAIL = SandboxLayout.AUTOMATIONS_DIR.removeprefix(SandboxLayout.AGENTS_DIR)

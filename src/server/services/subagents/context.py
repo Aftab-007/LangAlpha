@@ -155,29 +155,7 @@ class SubagentContext:
         """What the agent itself runs on: the default model for new threads, the
         effort a turn on it gets with nothing chosen in the composer, and the
         user's search pair. Read-only to both writers (``main.md``)."""
-        from src.llms.model_spec import (
-            clamp_reasoning_effort,
-            default_reasoning_effort,
-            reasoning_block,
-        )
-        from src.llms.preferences import resolve_tuning
-        from src.server.services.llm.thread_model import effective_default_models
-        from src.server.services.llm.user_models import model_entry
-
-        model = effective_default_models(self.model_pref).get("ptc")
-        effort = None
-        if model:
-            block = reasoning_block(model_entry(self.model_pref, model) or {})
-            ladder = self.effort_ladder(model)
-            default = default_reasoning_effort(ladder, block.get("default"))
-            chosen = resolve_tuning(self.model_pref, model).reasoning_effort
-            effort = clamp_reasoning_effort(ladder, default, chosen) if chosen else default
-        return {
-            "model": model,
-            "effort": effort,
-            "search_provider": self.search_provider,
-            "search_depth": self.search_depth,
-        }
+        return _main_values(self.model_pref, self.search_provider, self.search_depth)
 
     async def gate_search(self, provider: str | None, depth: str | None):
         """A subagent's saved search pair as its turn would run it."""
@@ -189,6 +167,59 @@ class SubagentContext:
             effective_depth=self.search_depth,
             permits=self.permits,
         )
+
+
+def _main_values(model_pref: dict, search_provider: str, search_depth: str) -> dict[str, Any]:
+    from src.llms.model_spec import (
+        canonical_reasoning_efforts,
+        clamp_reasoning_effort,
+        default_reasoning_effort,
+        reasoning_block,
+    )
+    from src.llms.preferences import resolve_tuning
+    from src.server.services.llm.thread_model import effective_default_models
+    from src.server.services.llm.user_models import model_entry
+
+    model = effective_default_models(model_pref).get("ptc")
+    effort = None
+    if model:
+        block = reasoning_block(model_entry(model_pref, model) or {})
+        ladder = canonical_reasoning_efforts(block.get("efforts"))
+        default = default_reasoning_effort(ladder, block.get("default"))
+        chosen = resolve_tuning(model_pref, model).reasoning_effort
+        effort = clamp_reasoning_effort(ladder, default, chosen) if chosen else default
+    return {
+        "model": model,
+        "effort": effort,
+        "search_provider": search_provider,
+        "search_depth": search_depth,
+    }
+
+
+async def load_main_values(user_id: str) -> dict[str, Any]:
+    """``SubagentContext.main_values`` without the facts only the subagents' checks need."""
+    from src.server.services.llm import user_models
+    from src.server.services.llm.capabilities import gate_capabilities
+
+    agent_config = _agent_config()
+    model_pref = await user_models.get_model_preference(user_id)
+    probe = agent_config.model_copy(
+        update={"features": {**(agent_config.features or {}), "site_crawl": False}}
+    )
+    await gate_capabilities(probe, user_id, model_pref)
+    return _main_values(model_pref, probe.search_api, probe.search_depth)
+
+
+def roster() -> tuple[dict[str, BaseSubagent], tuple[str, ...]]:
+    """The deployment's bases and the names it offers: all a view of values needs."""
+    subagents = _agent_config().subagents
+    return base_subagents(subagents), tuple(dict.fromkeys(subagents.enabled))
+
+
+async def list_connectors(user_id: str) -> tuple[Connector, ...]:
+    """The names a preferred list may hold, without the rest of the context."""
+    connectors, _ = await _connectors(user_id, _agent_config())
+    return connectors
 
 
 def _agent_config() -> AgentConfig:

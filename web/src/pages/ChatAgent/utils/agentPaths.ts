@@ -12,6 +12,8 @@ import {
   MEMORY_WORKSPACE_DIR,
   SANDBOX_ROOT_PREFIXES,
   SKILLS_DIR,
+  SUBAGENT_FILE_NAME,
+  USER_AGENTS_DIR,
   USER_DATA_DIRS,
   USER_DATA_FILES,
 } from './agentPaths.generated';
@@ -68,6 +70,18 @@ function userDataEntity(norm: string): UserDataEntity | undefined {
 export function isUserDataReadmePath(rawPath: string): boolean {
   if (!rawPath) return false;
   return USER_DATA_README_PATHS.has(workspaceRelativePath(rawPath));
+}
+
+/**
+ * True for a subagent's file (`.agents/user/agents/<name>.md`), under any
+ * prefix the agent emits. The README beside them and anything nested are not
+ * one.
+ */
+export function isSubagentFilePath(rawPath: string): boolean {
+  if (!rawPath) return false;
+  const norm = workspaceRelativePath(rawPath);
+  const name = norm.startsWith(`${USER_AGENTS_DIR}/`) ? norm.slice(USER_AGENTS_DIR.length + 1) : '';
+  return SUBAGENT_FILE_NAME.test(name);
 }
 
 /**

@@ -182,7 +182,14 @@ class TestOtherRoutesStayOnTheComputer:
         ("gate", "expected"),
         [
             ("memo", {f"{ROOT}/{MEMO_USER_DIR}/"}),
-            ("user_data", {f"{ROOT}/.agents/user/profile/", f"{ROOT}/.agents/user/automations/"}),
+            (
+                "user_data",
+                {
+                    f"{ROOT}/.agents/user/profile/",
+                    f"{ROOT}/.agents/user/automations/",
+                    f"{ROOT}/.agents/user/agents/",
+                },
+            ),
         ],
     )
     def test_user_scoped_routes_are_not_moved_into_the_workspace(self, gate, expected):

@@ -7,6 +7,7 @@ import {
   computeAgentArtifactRouting,
   computerFolders,
   isAgentNotesPath,
+  isSubagentFilePath,
   isUserDataReadmePath,
   normalizeAgentHref,
   normalizeAgentPath,
@@ -484,6 +485,34 @@ describe('isUserDataReadmePath', () => {
   it('handles empty / nonsense input safely', () => {
     expect(isUserDataReadmePath('')).toBe(false);
     expect(isUserDataReadmePath('not-a-path')).toBe(false);
+  });
+});
+
+describe('isSubagentFilePath', () => {
+  it('matches a subagent file under any prefix the agent emits', () => {
+    expect(isSubagentFilePath('.agents/user/agents/research.md')).toBe(true);
+    expect(isSubagentFilePath('/home/workspace/.agents/user/agents/research.md')).toBe(true);
+    expect(isSubagentFilePath('home/daytona/.agents/user/agents/filings-reader.md')).toBe(true);
+    expect(isSubagentFilePath('file:///home/workspace/.agents/user/agents/research.md')).toBe(true);
+    expect(isSubagentFilePath('./.agents/user/agents/research.md')).toBe(true);
+    expect(isSubagentFilePath('__wsref__/ws-7/.agents/user/agents/research.md')).toBe(true);
+  });
+
+  it('does not match the README, a nested file, or a name the server refuses', () => {
+    expect(isSubagentFilePath('.agents/user/agents/README.md')).toBe(false);
+    expect(isSubagentFilePath('.agents/user/agents/drafts/research.md')).toBe(false);
+    expect(isSubagentFilePath('.agents/user/agents/')).toBe(false);
+    expect(isSubagentFilePath('.agents/user/agents/Research.md')).toBe(false);
+    expect(isSubagentFilePath('.agents/user/agents/research.md.tmp')).toBe(false);
+    expect(isSubagentFilePath('.agents/user/agents/-research.md')).toBe(false);
+  });
+
+  it('does not match other files', () => {
+    expect(isSubagentFilePath('research.md')).toBe(false);
+    expect(isSubagentFilePath('work/.agents/user/agents/research.md')).toBe(false);
+    expect(isSubagentFilePath('.agents/user/automations/research.md')).toBe(false);
+    expect(isSubagentFilePath('.agents/user/memory/research.md')).toBe(false);
+    expect(isSubagentFilePath('')).toBe(false);
   });
 });
 

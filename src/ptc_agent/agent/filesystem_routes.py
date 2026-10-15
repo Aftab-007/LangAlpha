@@ -28,6 +28,7 @@ from ptc_agent.agent.backends import (
 from ptc_agent.agent.backends.automations import AutomationsBackend
 from ptc_agent.agent.backends.channels import ChannelsBackend
 from ptc_agent.agent.backends.db_json_route import DbJsonRoute
+from ptc_agent.agent.backends.subagents import SubagentsBackend
 from ptc_agent.agent.backends.user_data import UserDataBackend
 from ptc_agent.agent.middleware.background_subagent.workflow.prebuilt import (
     get_prebuilt_workflows,
@@ -50,7 +51,7 @@ from ptc_agent.core.sandbox.livefs_mount import CallContext
 
 # The routes that serve the user's database rows as files, one per directory
 # of ``USER_DATA_DIRS``.
-USER_DATA_ROUTES = (UserDataBackend, AutomationsBackend)
+USER_DATA_ROUTES = (UserDataBackend, AutomationsBackend, SubagentsBackend)
 
 
 def route_for(path: str) -> type[DbJsonRoute] | None:
