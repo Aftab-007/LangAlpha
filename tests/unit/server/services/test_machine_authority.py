@@ -472,7 +472,13 @@ class TestStopOwnershipFence(_Base):
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "state,settles",
-        [("stopped", True), ("archived", True), ("error", True), ("starting", False)],
+        [
+            ("stopped", True),
+            ("archived", True),
+            ("archiving", True),
+            ("error", True),
+            ("starting", False),
+        ],
     )
     async def test_an_errored_sandbox_settles_an_abandoned_stop(self, state, settles):
         from ptc_agent.core.sandbox.runtime import RuntimeState

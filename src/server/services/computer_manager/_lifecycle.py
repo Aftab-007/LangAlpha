@@ -511,8 +511,9 @@ class SessionLifecycleMixin:
         # flight is left to finish and be re-read on the next request. An
         # errored sandbox is settled too: no stop will ever finish on it, and
         # the start's reconnect is what recovers it or rebuilds from the backup,
-        # so a row left 'stopping' would refuse that start forever.
-        if state in ("stopped", "archived", "error"):
+        # so a row left 'stopping' would refuse that start forever. An archive
+        # in progress only ends down, and one has been seen to run for days.
+        if state in ("stopped", "archived", "archiving", "error"):
             await self._settle_machine_stop(computer_id, ComputerStatus.STOPPED)
         elif state == "running":
             await self._settle_machine_stop(computer_id, ComputerStatus.RUNNING)

@@ -1419,7 +1419,10 @@ class TestStoppingASandboxTheProviderAlreadyStopped(_Base):
         return manager
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("state", [RuntimeState.STOPPED, RuntimeState.ARCHIVED])
+    @pytest.mark.parametrize(
+        "state",
+        [RuntimeState.STOPPED, RuntimeState.ARCHIVED, RuntimeState.ARCHIVING],
+    )
     async def test_a_stop_of_a_sandbox_already_down_succeeds(self, state):
         await self._manager(state)._detached_sandbox_teardown(
             "sandbox-abc", delete=False, binding=_make_binding()

@@ -229,6 +229,114 @@ class TestPTCSandboxDelegation:
 
     @patch("ptc_agent.core.sandbox.ptc_sandbox.create_provider")
     @pytest.mark.asyncio
+    async def test_archiving_sandbox_waits_for_the_archive_then_restores(
+        self, mock_create_provider, mock_provider, mock_runtime
+    ):
+        """A start mid-archive can land after the container is gone and strand the sandbox."""
+        from ptc_agent.core.sandbox.ptc_sandbox import PTCSandbox
+
+        mock_create_provider.return_value = mock_provider
+        states = iter(
+            [RuntimeState.ARCHIVING, RuntimeState.ARCHIVING, RuntimeState.ARCHIVED]
+        )
+        reads = []
+
+        async def get_state():
+            state = next(states)
+            reads.append(state)
+            return state
+
+        async def start(**kwargs):
+            assert reads[-1] is RuntimeState.ARCHIVED
+
+        mock_runtime.get_state = AsyncMock(side_effect=get_state)
+        mock_runtime.start = AsyncMock(side_effect=start)
+        mock_runtime.fetch_working_dir = AsyncMock(return_value="/home/workspace")
+        observed = MagicMock()
+        sandbox = PTCSandbox(config=_make_config())
+
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await sandbox.reconnect("archiving-sandbox", on_state_observed=observed)
+
+        assert len(reads) == 3
+        mock_runtime.start.assert_awaited_once()
+        assert mock_runtime.start.await_args.kwargs["timeout"] == 300
+        observed.assert_called_once_with("archived")
+
+    @patch("ptc_agent.core.sandbox.ptc_sandbox.create_provider")
+    @pytest.mark.asyncio
+    async def test_sandbox_still_archiving_is_transient_and_never_started(
+        self, mock_create_provider, mock_provider, mock_runtime
+    ):
+        """Still archiving is a sandbox that exists, so a retry and never a replacement."""
+        from ptc_agent.core.sandbox.ptc_sandbox import PTCSandbox
+        from ptc_agent.core.sandbox.runtime import SandboxTransientError
+
+        mock_create_provider.return_value = mock_provider
+        mock_runtime.get_state = AsyncMock(return_value=RuntimeState.ARCHIVING)
+        sandbox = PTCSandbox(config=_make_config())
+        clock = [0.0]
+
+        async def sleep(seconds):
+            clock[0] += seconds + 1  # each poll also pays a provider read
+
+        with (
+            patch("asyncio.sleep", new=AsyncMock(side_effect=sleep)),
+            patch(
+                "ptc_agent.core.sandbox.ptc_sandbox.time.monotonic",
+                side_effect=lambda: clock[0],
+            ),
+        ):
+            with pytest.raises(SandboxTransientError) as excinfo:
+                await sandbox.reconnect("archiving-sandbox")
+
+        assert not isinstance(excinfo.value, SandboxGoneError)
+        assert "being archived" in str(excinfo.value)
+        assert clock[0] <= 47  # the wait is bounded by time, not poll count
+        mock_runtime.start.assert_not_awaited()
+
+    @patch("ptc_agent.core.sandbox.ptc_sandbox.create_provider")
+    @pytest.mark.asyncio
+    async def test_archive_cancelled_mid_wait_starts_the_stopped_sandbox(
+        self, mock_create_provider, mock_provider, mock_runtime
+    ):
+        """A cancelled archive ends stopped, which is safe to start."""
+        from ptc_agent.core.sandbox.ptc_sandbox import PTCSandbox
+
+        mock_create_provider.return_value = mock_provider
+        mock_runtime.get_state = AsyncMock(
+            side_effect=[RuntimeState.ARCHIVING, RuntimeState.STOPPED]
+        )
+        mock_runtime.fetch_working_dir = AsyncMock(return_value="/home/workspace")
+        sandbox = PTCSandbox(config=_make_config())
+
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await sandbox.reconnect("archiving-sandbox")
+
+        mock_runtime.start.assert_awaited_once()
+
+    @patch("ptc_agent.core.sandbox.ptc_sandbox.create_provider")
+    @pytest.mark.asyncio
+    async def test_archive_cancelled_into_running_is_used_as_is(
+        self, mock_create_provider, mock_provider, mock_runtime
+    ):
+        """Something else started it mid-wait: usable, so no retry and no start."""
+        from ptc_agent.core.sandbox.ptc_sandbox import PTCSandbox
+
+        mock_create_provider.return_value = mock_provider
+        mock_runtime.get_state = AsyncMock(
+            side_effect=[RuntimeState.ARCHIVING, RuntimeState.RUNNING]
+        )
+        mock_runtime.fetch_working_dir = AsyncMock(return_value="/home/workspace")
+        sandbox = PTCSandbox(config=_make_config())
+
+        with patch("asyncio.sleep", new=AsyncMock()):
+            await sandbox.reconnect("archiving-sandbox")
+
+        mock_runtime.start.assert_not_awaited()
+
+    @patch("ptc_agent.core.sandbox.ptc_sandbox.create_provider")
+    @pytest.mark.asyncio
     async def test_errored_sandbox_the_provider_cannot_recover_is_gone(
         self, mock_create_provider, mock_provider, mock_runtime
     ):

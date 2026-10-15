@@ -69,7 +69,7 @@ _GLOB_SCRIPT_B64 = base64.b64encode(
 ).decode("ascii")
 
 # States a sandbox can still come back from. ``reconnect`` knows how to start a
-# stopped or archived sandbox, so reporting those as Gone would answer a merely
+# stopped, archiving or archived sandbox, so reporting those as Gone would answer a merely
 # idle sandbox by deleting it and rebuilding from the last backup — losing
 # everything written since. Only an unrecoverable state counts as absence.
 #
@@ -83,6 +83,7 @@ _RECOVERABLE_STATES = frozenset(
         RuntimeState.STOPPED,
         RuntimeState.STOPPING,
         RuntimeState.ARCHIVED,
+        RuntimeState.ARCHIVING,
         RuntimeState.ERROR,
     }
 )
