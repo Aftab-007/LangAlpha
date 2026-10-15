@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.server.database.home_workspace import get_flash_workspace_id
-from src.server.services.automation_executor import _turn_workspace
+from src.server.services.automation_executor import AutomationExecutor, _Place, _turn_place
 from src.server.services.turn_runtime import turn_route
 
 _USER = "user-1"
@@ -38,7 +38,7 @@ async def _route(automation, *, thread_meta=None, workspace=None):
             new=AsyncMock(return_value=workspace),
         ),
     ):
-        route = turn_route(_USER, await _turn_workspace(automation))
+        route = turn_route(_USER, (await _turn_place(automation)).workspace)
     return route.workspace_id, route.role
 
 
@@ -95,3 +95,106 @@ async def test_a_ptc_firing_runs_in_its_stored_workspace(workspace, expected):
 async def test_a_ptc_firing_whose_workspace_is_gone_fails_before_any_thread():
     with pytest.raises(ValueError, match="may have been deleted"):
         await _route(_automation(agent_mode="ptc", workspace_id=_WS), workspace=None)
+
+
+
+# One rule for every row: the pinned thread's workspace first, then the row's.
+
+_OTHER_WS = "33333333-3333-3333-3333-333333333333"
+_OTHER = {"workspace_id": _OTHER_WS, "user_id": _USER, "status": "running"}
+
+
+async def _place_by_id(automation, *, thread_meta, rows):
+    """As ``_route``, with each workspace read answered by its id, and the
+    thread the run continues (None starts one)."""
+    with (
+        patch(
+            "src.server.database.conversation.get_thread_auth_meta",
+            new=AsyncMock(return_value=thread_meta),
+        ),
+        patch(
+            "src.server.database.workspace.get_workspace",
+            new=AsyncMock(side_effect=lambda ws_id: rows.get(ws_id)),
+        ),
+    ):
+        place = await _turn_place(automation)
+    route = turn_route(_USER, place.workspace)
+    return route.workspace_id, route.role, place.thread_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [_WS, _HOME], ids=["workspace", "home"])
+async def test_a_pinned_thread_runs_in_its_own_workspace_not_the_stored_one(stored):
+    """A turn sent elsewhere would run apart from the thread's files."""
+    automation = _automation(agent_mode="ptc", workspace_id=stored)
+    rows = {_WS: _PROJECT, _HOME: _FLASH_ROW, _OTHER_WS: _OTHER}
+    assert await _place_by_id(
+        automation,
+        thread_meta={"user_id": _USER, "workspace_id": _OTHER_WS},
+        rows=rows,
+    ) == (_OTHER_WS, "analyst", _THREAD)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "automation, expected",
+    [
+        (_automation(agent_mode="flash", workspace_id=_WS), (_HOME, "chief_of_staff")),
+        (_automation(agent_mode="ptc", workspace_id=_WS), (_WS, "analyst")),
+        (_automation(agent_mode="ptc", workspace_id=_HOME), (_HOME, "chief_of_staff")),
+    ],
+    ids=["legacy-flash-row", "workspace-row", "home-row"],
+)
+async def test_a_pinned_thread_whose_workspace_was_deleted_starts_one_where_the_row_lives(
+    automation, expected
+):
+    """The deleted workspace keeps its thread; the automation runs on."""
+    assert await _place_by_id(
+        automation,
+        thread_meta={"user_id": _USER, "workspace_id": _OTHER_WS},
+        rows={_WS: _PROJECT, _HOME: _FLASH_ROW},
+    ) == (*expected, None)
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_pin_beside_a_deleted_workspace_still_fails():
+    automation = _automation(agent_mode="ptc", workspace_id=_WS)
+    with pytest.raises(ValueError, match="may have been deleted"):
+        await _place_by_id(
+            automation,
+            thread_meta={"user_id": _USER, "workspace_id": _OTHER_WS},
+            rows={_HOME: _FLASH_ROW},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "automation, expected",
+    [
+        (_automation(agent_mode="flash", workspace_id=_WS), (_HOME, "chief_of_staff")),
+        (_automation(agent_mode="ptc", workspace_id=_WS), (_WS, "analyst")),
+    ],
+    ids=["legacy-flash-row", "workspace-row"],
+)
+async def test_a_pinned_thread_that_is_gone_is_made_again_where_the_row_lives(automation, expected):
+    assert await _place_by_id(
+        automation, thread_meta=None, rows={_WS: _PROJECT, _HOME: _FLASH_ROW}
+    ) == (*expected, _THREAD)
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_leaves_its_pin_behind_pins_the_thread_it_starts():
+    """So the next run continues the new thread, not the deleted workspace's."""
+    executor = AutomationExecutor()
+    automation = _automation(agent_mode="ptc", workspace_id=_WS, automation_id="auto-1")
+    with (
+        patch("src.server.services.automation_executor.auto_db") as auto_db,
+        patch.object(executor, "_precreate_titled_thread", new=AsyncMock()),
+    ):
+        auto_db.update_automation = AsyncMock()
+        thread_id = await executor._resolve_thread(automation, _Place(_PROJECT, None), _WS)
+
+    assert thread_id != _THREAD
+    auto_db.update_automation.assert_awaited_once_with(
+        "auto-1", _USER, conversation_thread_id=thread_id
+    )

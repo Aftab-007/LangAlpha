@@ -386,6 +386,21 @@ async def test_update_takes_the_users_own_time_and_zone(client, fields, field, s
     assert update.await_args.kwargs["fields"][field] == stored
 
 
+HOME_ID = "6f18b8ab-0000-5000-8000-000000000000"
+
+
+@pytest.fixture
+def in_home():
+    """Home's row is there: a create naming Home, and an edit of a row a
+    former build stored as 'flash', both place the automation in it."""
+    with patch(
+        "src.server.services.automations.lifecycle._home",
+        new_callable=AsyncMock,
+        return_value=HOME_ID,
+    ):
+        yield
+
+
 @pytest.fixture
 def unknown_models():
     """The user can run no model by the name asked for."""
@@ -408,7 +423,7 @@ def unknown_models():
 
 
 @pytest.mark.asyncio
-async def test_create_with_an_unknown_model_is_409(client, unknown_models):
+async def test_create_with_an_unknown_model_is_409(client, unknown_models, in_home):
     with patch(HANDLER_DB) as db:
         db.create_automation = AsyncMock()
         resp = await client.post(
@@ -418,6 +433,7 @@ async def test_create_with_an_unknown_model_is_409(client, unknown_models):
                 "trigger_type": "cron",
                 "cron_expression": "0 8 * * *",
                 "instruction": "Give me a market summary",
+                "workspace_id": _home()["workspace_id"],
                 "llm_model": "no-such-model",
             },
         )
@@ -429,7 +445,7 @@ async def test_create_with_an_unknown_model_is_409(client, unknown_models):
 
 
 @pytest.mark.asyncio
-async def test_update_to_an_unknown_model_is_409(client, unknown_models):
+async def test_update_to_an_unknown_model_is_409(client, unknown_models, in_home):
     with patch(HANDLER_DB) as db:
         db.get_automation = AsyncMock(return_value=_automation())
         db.update_automation = AsyncMock()
@@ -1151,6 +1167,7 @@ _PAST_THE_LIMIT = {
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_home")
 async def test_create_with_too_many_delivery_entries_is_refused(client):
     with patch(f"{HANDLER_DB}.create_automation", new_callable=AsyncMock) as create:
         resp = await client.post(
@@ -1160,6 +1177,7 @@ async def test_create_with_too_many_delivery_entries_is_refused(client):
                 "trigger_type": "cron",
                 "cron_expression": "0 8 * * *",
                 "instruction": "test",
+                "workspace_id": _home()["workspace_id"],
                 "delivery_config": {"methods": _TWENTY_ONE},
             },
         )
@@ -1170,6 +1188,7 @@ async def test_create_with_too_many_delivery_entries_is_refused(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_home")
 async def test_update_with_an_overlong_delivery_entry_is_refused(client):
     entry = "slack:" + "C" * 300
     with (

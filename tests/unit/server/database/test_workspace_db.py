@@ -13,6 +13,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.server.database.home_workspace import get_flash_workspace_id
+from src.server.database.sql_fences import EXCLUDE_HOME
+
 
 # ---------------------------------------------------------------------------
 # Fixture: patch get_db_connection at the workspace module's import location
@@ -384,9 +387,22 @@ async def test_get_workspaces_for_user(ws_mock_db, mock_cursor):
 
     assert total == 2
     assert len(workspaces) == 2
-    # Verify flash filter is applied
-    count_sql = mock_cursor.execute.call_args_list[0][0][0]
-    assert "status != 'flash'" in count_sql
+    # Home stays out by its id and by its status, as every listing leaves it.
+    count_sql, params = mock_cursor.execute.call_args_list[0][0]
+    assert EXCLUDE_HOME in count_sql
+    assert params["home_id"] == get_flash_workspace_id("user-1")
+
+
+@pytest.mark.asyncio
+async def test_get_workspace_names_leaves_home_out_as_the_listing_does(ws_mock_db, mock_cursor):
+    from src.server.database.workspace import get_workspace_names
+
+    mock_cursor.fetchall.return_value = []
+    await get_workspace_names("user-1")
+
+    sql, params = mock_cursor.execute.call_args[0]
+    assert EXCLUDE_HOME in sql
+    assert params["home_id"] == get_flash_workspace_id("user-1")
 
 
 @pytest.mark.asyncio

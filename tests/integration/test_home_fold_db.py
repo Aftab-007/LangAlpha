@@ -81,6 +81,7 @@ async def test_former_rows_fold_into_home_and_retire(seed_user, test_db_pool):
     user_id = seed_user["user_id"]
     now = datetime.now(timezone.utc)
     home = str((await workspaces.get_or_create_flash_workspace(user_id))["workspace_id"])
+    elsewhere = str((await workspaces.create_workspace(user_id, "Research"))["workspace_id"])
     await _thread(test_db_pool, home, 0, now - _DAY)
     first = await _former(user_id, "old-account-1")
     second = await _former(user_id, "old-account-2")
@@ -106,6 +107,14 @@ async def test_former_rows_fold_into_home_and_retire(seed_user, test_db_pool):
             "(user_id, name, trigger_type, instruction, workspace_id) "
             "VALUES (%s, 'daily', 'cron', 'hi', %s)",
             (user_id, second),
+        )
+        # Stored elsewhere by a build that let a pin sit in another workspace.
+        await conn.execute(
+            "INSERT INTO automations "
+            "(user_id, name, trigger_type, instruction, workspace_id, "
+            " thread_strategy, conversation_thread_id) "
+            "VALUES (%s, 'pinned', 'cron', 'hi', %s, 'continue', %s)",
+            (user_id, elsewhere, middle),
         )
 
     resolved = await workspaces.get_or_create_flash_workspace(user_id)
@@ -137,10 +146,12 @@ async def test_former_rows_fold_into_home_and_retire(seed_user, test_db_pool):
         home,
     )
     assert annotation["payload"] == {"from": "home"}
-    (automation,) = await _rows(
-        test_db_pool, "SELECT workspace_id::text AS ws FROM automations"
+    automations = await _rows(
+        test_db_pool,
+        "SELECT name, workspace_id::text AS ws FROM automations ORDER BY name",
     )
-    assert automation["ws"] == home
+    # The pinned one follows its thread.
+    assert automations == [{"name": "daily", "ws": home}, {"name": "pinned", "ws": home}]
 
 
 @pytest.mark.parametrize("background", [False, True], ids=["root", "subagent"])

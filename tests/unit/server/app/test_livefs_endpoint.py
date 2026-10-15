@@ -34,6 +34,7 @@ from src.observability.private_query import drop_span_query
 from src.server.app import livefs as livefs_app
 from src.server.app import setup as setup_mod
 from src.server.database import user as user_db
+from src.server.database.home_workspace import get_flash_workspace_id
 from src.server.services.automations.file import AutomationFile, Document, FilePlan
 from src.server.services.livefs import cache, outcomes, tokens
 from tests.conftest import create_test_app
@@ -139,7 +140,7 @@ def automation(monkeypatch) -> MagicMock:
     file.unchanged = None
     file.fetch = AsyncMock(return_value=["row"])
     file.render = MagicMock(return_value=(SERVED, ROWS_VERSION))
-    file.parse = AsyncMock(return_value=Document(fields={}, shown=None, timezone="UTC", model_pref=None))
+    file.parse = AsyncMock(return_value=Document(fields={}, shown=None, timezone="UTC", model_pref=None, home_id=get_flash_workspace_id(USER)))
     file.plan = MagicMock(return_value=Plan(FilePlan()))
     file.plan_delete = MagicMock(return_value=Plan(FilePlan()))
     file.hold = AsyncMock(return_value=None)

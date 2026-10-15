@@ -220,7 +220,7 @@ async def sandbox_client(mock_session, sandbox):
 
     with (
         patch(
-            "src.server.app.workspace_sandbox.db_get_workspace",
+            "src.server.app.workspace_files._shared.db_get_workspace",
             AsyncMock(return_value=_make_workspace()),
         ),
         patch("src.server.app.workspace_sandbox.WorkspaceManager") as MockWM,

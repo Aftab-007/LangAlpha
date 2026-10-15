@@ -20,7 +20,7 @@ from fastapi import HTTPException
 from ptc_agent.agent.backends.automations import AutomationsBackend
 from ptc_agent.agent.backends.user_data import UserDataBackend
 from ptc_agent.agent.filesystem_routes import route_for
-from src.server.app.workspace_files import crud
+from src.server.app.workspace_files import _shared, crud
 from src.server.app.workspace_files._shared import (
     _present_virtual_file,
     _virtual_file,
@@ -129,6 +129,7 @@ async def test_a_reference_the_names_cannot_be_read_for_resolves_to_its_route(mo
 @pytest.fixture
 def workspace(monkeypatch):
     monkeypatch.setattr(crud, "db_get_workspace", AsyncMock(return_value=WORKSPACE))
+    monkeypatch.setattr(_shared, "db_get_workspace", AsyncMock(return_value=WORKSPACE))
     monkeypatch.setattr(crud, "owner_work_dir", lambda _ws: ROOT)
     monkeypatch.setattr(crud, "owner_layout", lambda _ws: SimpleNamespace(workspace=ROOT))
 
@@ -226,7 +227,9 @@ def held_elsewhere(monkeypatch):
     copy are never asked for one, running or stopped."""
 
     def _status(status: str) -> None:
-        monkeypatch.setattr(crud, "db_get_workspace", AsyncMock(return_value={**WORKSPACE, "status": status}))
+        read = AsyncMock(return_value={**WORKSPACE, "status": status})
+        monkeypatch.setattr(crud, "db_get_workspace", read)
+        monkeypatch.setattr(_shared, "db_get_workspace", read)
 
     @asynccontextmanager
     async def _acquire(*_):

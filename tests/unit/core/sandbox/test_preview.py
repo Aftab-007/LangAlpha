@@ -604,10 +604,10 @@ class TestWorkspaceScopedPreviewCommands:
                   AsyncMock(return_value=(MagicMock(), sandbox))),
             patch("src.server.app.workspace_sandbox._set_cached_signed_url", AsyncMock()),
             patch("src.server.app.workspace_files._shared.workspace_folder_in_use", hold),
+            # Every read of the row, the owner check's included, goes through
+            # here, so one outside the hold shows as out of order rather than
+            # missing.
             patch("src.server.app.workspace_files._shared.db_get_workspace", read),
-            # A read outside the hold is recorded the same way, so it shows as
-            # out of order rather than missing.
-            patch("src.server.app.workspace_sandbox.db_get_workspace", read),
         )
 
     @pytest.mark.asyncio

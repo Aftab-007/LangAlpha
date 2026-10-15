@@ -34,7 +34,7 @@ class TestFile:
         shown = json.loads(content)
         assert list(shown) == [
             "name", "description", "status", "trigger_type", "cron_expression", "timezone", "instruction",
-            "agent_mode", "workspace_id", "thread", "llm_model", "delivery", "max_failures", "state",
+            "workspace_id", "thread", "llm_model", "delivery", "max_failures", "state",
         ]
         assert content == json.dumps(shown, indent=2, ensure_ascii=False) + "\n"
 

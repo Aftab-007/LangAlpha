@@ -52,7 +52,7 @@ class TestAutomationCreate:
             instruction="Summarise market news",
         )
         assert a.trigger_type == "cron"
-        assert a.agent_mode == "flash"
+        assert a.agent_mode is None
         assert a.thread_strategy == "new"
         assert a.max_failures == 3
         assert a.timezone == "UTC"

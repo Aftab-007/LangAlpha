@@ -34,6 +34,7 @@ from ptc_agent.agent.backends.db_json_route import Plan
 from ptc_agent.core.sandbox.livefs_mount import CallContext
 from ptc_agent.core.sandbox.livefs_runtime.protocol import INLINE_MAX_BYTES
 from src.server.database import workspace as workspace_db
+from src.server.database.home_workspace import get_flash_workspace_id
 from src.server.database.thread_transcripts import ListedFile, StoredFile
 from src.server.database.workspace_folders import MOVING_DIR
 from src.server.services.automations.file import (
@@ -87,7 +88,7 @@ SERVED = '{"name": "Morning brief", "status": "active"}\n'
 EDITED = '{"name": "Morning brief", "status": "paused"}\n'
 ROWS_VERSION = "sha256:rows-v1"
 REPORT = 'Saved morning-brief.json: updated "Morning brief": paused'
-DOCUMENT = Document(fields={}, shown=None, timezone="UTC", model_pref=None)
+DOCUMENT = Document(fields={}, shown=None, timezone="UTC", model_pref=None, home_id=get_flash_workspace_id(USER))
 
 
 def _sha(data: bytes) -> str:
