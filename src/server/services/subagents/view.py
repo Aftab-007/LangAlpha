@@ -105,11 +105,11 @@ def _source_of_key(key: str | None) -> str:
     return prefix if prefix in ("builtin", "deployment", "plugin") else "deployment"
 
 
-def _plugin_of_key(key: str | None) -> dict[str, str] | None:
+def _plugin_of_key(key: str | None) -> dict[str, Any] | None:
     if not key or not key.startswith("plugin:"):
         return None
     plugin = key.split(":", 1)[1].split("/", 1)[0]
-    return {"name": plugin, "display_name": plugin}
+    return {"name": plugin, "display_name": plugin, "installed": True}
 
 
 def _roles(roles: Iterable[str]) -> list[str]:
@@ -207,8 +207,11 @@ def _base_view(
     )
 
 
-def _orphan_view(row: Mapping[str, Any]) -> dict[str, Any]:
+def _orphan_view(row: Mapping[str, Any], installed_plugins: frozenset[str]) -> dict[str, Any]:
     """An override whose base is gone: listed so the user can delete it, nothing else."""
+    plugin = _plugin_of_key(row.get("base_key"))
+    if plugin:
+        plugin["installed"] = plugin["name"] in installed_plugins
     blank = SubagentDefinition(name=row["name"], description="", tools=[], source="deployment")
     defn = apply_override(blank, row.get("fields") or {})
     fields = row.get("fields") or {}
@@ -217,7 +220,7 @@ def _orphan_view(row: Mapping[str, Any]) -> dict[str, Any]:
             "name": row["name"],
             "kind": "base",
             "source": _source_of_key(row.get("base_key")),
-            "plugin": _plugin_of_key(row.get("base_key")),
+            "plugin": plugin,
             "edited": True,
             "user_fields": _user_fields(row),
             "description": "",
@@ -282,6 +285,13 @@ def _views(
     bases: Mapping[str, BaseSubagent], offered: Iterable[str], rows: Iterable[Mapping[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[_Pair], set[str]]:
     rows = [r for r in rows if r.get("workspace_id") is None]
+    # The bases hold every installed plugin's subagents, switched on or off,
+    # and bundles. A plugin that ships none any more can only have left an
+    # override behind through an older build's uninstall, so calling it not
+    # installed at worst drops a link.
+    installed_plugins = frozenset(
+        p["name"] for b in bases.values() if (p := _plugin_of_key(b.key))
+    )
     by_name = {r["name"]: r for r in rows}
     resolved = merge_subagents(bases, tuple(offered), rows)
     on = set(resolved.enabled)
@@ -314,7 +324,7 @@ def _views(
         # its plugin off) keeps the user's changes for when it is back.
         dormant = name in bases and bases[name].key == row.get("base_key")
         if name not in resolved.definitions and not dormant:
-            views.append(_orphan_view(row))
+            views.append(_orphan_view(row, installed_plugins))
     return views, pairs, on
 
 

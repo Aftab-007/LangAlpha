@@ -166,8 +166,11 @@ function packagedAs(
   plugin: string,
   locale: string,
 ): string {
-  const skills = components.filter((c) => c.kind === 'skill').length;
-  const subagents = components.filter((c) => c.kind === 'subagent').length;
+  // A deleted row is what an update took away, not something the folder
+  // carries: counting it named two subagents for a folder of one.
+  const carried = components.filter((c) => c.status !== 'deleted');
+  const skills = carried.filter((c) => c.kind === 'skill').length;
+  const subagents = carried.filter((c) => c.kind === 'subagent').length;
   if (subagents === 0) return t('plugins.install.packagedAs', { count: skills, plugin });
   if (skills === 0) return t('plugins.install.packagedAsSubagents', { count: subagents, plugin });
   const parts = formatList(

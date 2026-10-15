@@ -57,7 +57,9 @@ export interface SubagentView {
   name: string;
   kind: 'base' | 'custom';
   source: 'builtin' | 'deployment' | 'plugin' | 'custom';
-  plugin: { name: string; display_name: string } | null;
+  /** `installed` is false on an override whose plugin is gone, and absent
+   *  from a server that predates it. */
+  plugin: { name: string; display_name: string; installed?: boolean } | null;
   /** A base with an override row. */
   edited: boolean;
   /** Keys the user's row sets. */

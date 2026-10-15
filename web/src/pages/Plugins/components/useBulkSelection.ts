@@ -101,6 +101,9 @@ export interface BulkRunOptions {
    * and a sign-in that lands lets the next switch through or names the next.
    */
   signIn?: (servers: McpSignInNeeded[]) => void;
+  /** Lines about what the rows that succeeded took with them, from the
+   *  values their runs returned, said before any failure. */
+  outcome?: (results: unknown[]) => string[];
 }
 
 /** Names a result spells out before it counts the rest. */
@@ -131,9 +134,14 @@ export function useBulkRunner(
       if (targets.length === 0) return;
       setProgress({ done: 0, total: targets.length });
       try {
-        const result = await runBulk(targets, (target) => target.run(), {
-          onProgress: (done, total) => setProgress({ done, total }),
-        });
+        const results: unknown[] = [];
+        const result = await runBulk(
+          targets,
+          async (target) => {
+            results.push(await target.run());
+          },
+          { onProgress: (done, total) => setProgress({ done, total }) },
+        );
         // A refused sign-in is a next step, not a fault: it is said apart from
         // the failures, by name, and offered rather than reported.
         const refused = result.failed.flatMap(({ item, error }) => {
@@ -154,7 +162,7 @@ export function useBulkRunner(
         const what = t(`plugins.bulk.noun.${opts.noun}`, {
           count: done ? result.ok.length : targets.length,
         });
-        const lines: string[] = [];
+        const lines: string[] = done && opts.outcome ? opts.outcome(results) : [];
         if (refused.length > 0) {
           lines.push(
             t('plugins.bulk.needSignIn', {

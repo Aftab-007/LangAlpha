@@ -58,6 +58,11 @@ describe('PluginReportStep packaged note', () => {
       [row('skill', 'charts'), row('skill', 'tables')],
       "No plugin.json, so these 2 skills were packaged as 'demo'",
     ],
+    [
+      // An update by a folder of one subagent that drops another.
+      [row('subagent', 'screener'), { ...row('subagent', 'writer'), status: 'deleted' as const }],
+      "No plugin.json, so this subagent was packaged as 'demo'",
+    ],
   ])('counts what the folder carried: %#', (components, note) => {
     renderWithProviders(
       <PluginReportStep report={packaged(components)} plugin="demo" onLeave={() => {}} />,

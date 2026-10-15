@@ -64,6 +64,32 @@ async def test_get_lists_the_roster_then_customs_then_orphans(client):
 
 
 @pytest.mark.parametrize(
+    ("plugin", "installed"),
+    [
+        # Its plugin is gone (an older build's uninstall left the row behind).
+        ("gone-kit", False),
+        # Its plugin is still there but no longer ships it.
+        ("toolkit", True),
+    ],
+)
+async def test_an_orphaned_plugin_override_says_whether_its_plugin_is_installed(monkeypatch, plugin, installed):
+    from src.server.app.subagents import router
+
+    world = install(monkeypatch)
+    world.override("ghost", base_key="builtin:ghost")
+    world.override("old-reader", base_key=f"plugin:{plugin}/old-reader")
+    async with AsyncClient(transport=ASGITransport(app=create_test_app(router)), base_url="http://test") as c:
+        views = await _views(c)
+
+    orphan = views["old-reader"]
+    assert (orphan["kind"], orphan["source"], [p["code"] for p in orphan["problems"]]) == (
+        "base", "plugin", ["base_removed"],
+    )
+    assert orphan["plugin"] == {"name": plugin, "display_name": plugin, "installed": installed}
+    assert views["ghost"]["plugin"] is None
+
+
+@pytest.mark.parametrize(
     ("name", "version", "start_from", "fields", "status", "field"),
     [
         ("alpha", "stale", None, {"enabled": False}, 409, None),

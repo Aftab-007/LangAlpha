@@ -3,11 +3,11 @@ import { Link } from 'react-router';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useAllModels } from '@/hooks/useAllModels';
-import { modelLabel } from '@/lib/modelLabel';
 import { effortLabelFor } from '@/lib/modelTuning';
 import type { PluginInfo, SubagentsResponse } from '@/pages/ChatAgent/utils/api';
 import { failureBucket, type FailureBucket, type PluginProblem } from '../../utils/connectorState';
 import { StatusDot } from '../surface/Surface';
+import { modelName } from '../subagents/subagentText';
 import type { Section } from './sections';
 import type { ShellData } from './useShellData';
 
@@ -204,7 +204,7 @@ function MainAgentClause({ main }: { main: SubagentsResponse['main'] }) {
   const { t } = useTranslation();
   const { metadata } = useAllModels();
   const settings = <Link to="/settings?tab=model" className="plugins-summary-link" />;
-  const model = main.model ? modelLabel(main.model, metadata) : null;
+  const model = main.model ? modelName(main.model, metadata) : null;
   const effort = effortLabelFor(t, main.effort);
   if (!model) {
     return <Trans i18nKey="plugins.shell.summary.mainDefault" components={{ settings }} />;

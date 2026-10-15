@@ -19,7 +19,6 @@ import { useLocale } from '@/hooks/useLocale';
 import { usePreferences } from '@/hooks/usePreferences';
 import { useSkills } from '@/hooks/useSkills';
 import { useUser } from '@/hooks/useUser';
-import { modelLabel } from '@/lib/modelLabel';
 import { cn } from '@/lib/utils';
 import { modelPrefs, modelProfile } from '@/lib/modelPreferences';
 import { EFFORT_LABELS, EFFORT_ORDER, effortLabelFor, resolveTuning } from '@/lib/modelTuning';
@@ -43,6 +42,7 @@ import {
   brokerageText,
   fieldWrite,
   hasProblem,
+  modelName,
   orderedTools,
   preferredSkillOptions,
   sameTools,
@@ -98,12 +98,13 @@ export function ModelBlock({ view, models, write }: AsideProps) {
       title={t('plugins.subagents.model')}
       side={
         base
-          ? baseSide(t, view, base.model ? modelLabel(base.model, metadata) : t('plugins.subagents.threadsModel'))
+          ? baseSide(t, view, base.model ? modelName(base.model, metadata) : t('plugins.subagents.threadsModel'))
           : undefined
       }
     >
       <ModelSelector
         ariaLabel={t('plugins.subagents.modelAria', { name: view.name })}
+        nameOf={(m) => modelName(m, metadata)}
         value={view.model ?? ''}
         onChange={(v) => write({ model: fieldWrite(view, 'model', v || null) })}
         models={models.models}
@@ -115,8 +116,8 @@ export function ModelBlock({ view, models, write }: AsideProps) {
         // doesn't list (a key the user can't pick today) may well still run.
         missingLabel={(m) =>
           unavailable
-            ? t('plugins.subagents.modelUnavailableOption', { model: modelLabel(m, metadata) })
-            : modelLabel(m, metadata)
+            ? t('plugins.subagents.modelUnavailableOption', { model: modelName(m, metadata) })
+            : modelName(m, metadata)
         }
       />
       {unavailable ? (
@@ -133,13 +134,21 @@ export function ModelBlock({ view, models, write }: AsideProps) {
  * own setting, or the thread's when the model follows the thread. A pinned
  * model offers only its own ladder; following the thread offers every level,
  * and the server steps a level down to what the thread's model supports.
+ * A pin that is unavailable runs on the thread's model, so it reads as one
+ * that follows the thread rather than naming a model that never runs. Its
+ * levels are still the pin's own: the server holds a set level to the model
+ * it runs on once the pin is back, so that is all a save can hold.
  */
 export function EffortBlock({ view, models, write }: AsideProps) {
   const { t } = useTranslation();
   const { preferences } = usePreferences();
   const { metadata } = models;
-  const pinned = view.model;
+  const unavailablePin = hasProblem(view, 'model_unavailable') ? view.model : null;
+  const pinned = unavailablePin ? null : view.model;
   const stored = view.effort ?? '';
+  // A name the catalog no longer has gets no ladder on the server either, and
+  // any level saves.
+  const pinMeta = unavailablePin ? metadata[unavailablePin] : undefined;
 
   // Every level some model the user can pick offers, to tell a pinned
   // model's short ladder from the vocabulary itself.
@@ -163,7 +172,7 @@ export function EffortBlock({ view, models, write }: AsideProps) {
     defaultLabel = named
       ? t('plugins.subagents.modelsSettingNamed', { effort: named })
       : t('plugins.subagents.modelsSetting');
-    const model = modelLabel(pinned, metadata);
+    const model = modelName(pinned, metadata);
     // A set level hides what the model would pick, so that comes first; left
     // on the model's setting, the select already names it.
     if (efforts.length === 0) {
@@ -176,9 +185,13 @@ export function EffortBlock({ view, models, write }: AsideProps) {
       hint = t('plugins.subagents.effortHintUnlisted', { model });
     }
   } else {
-    efforts = EFFORT_ORDER.filter((lv) => EFFORT_LABELS[lv]);
+    const offered = pinMeta && (pinMeta.reasoning_efforts ?? []);
+    efforts = EFFORT_ORDER.filter((lv) => EFFORT_LABELS[lv] && (!offered || offered.includes(lv)));
     defaultLabel = t('plugins.subagents.threadsSetting');
-    hint = t('plugins.subagents.effortHintInherit');
+    hint =
+      unavailablePin && offered && efforts.length === 0
+        ? t('plugins.subagents.effortNone', { model: modelName(unavailablePin, metadata) })
+        : t('plugins.subagents.effortHintInherit');
   }
 
   const base = view.base;

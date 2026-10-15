@@ -4379,7 +4379,7 @@
       "keysCancel": "取消",
       "keysInstall": "检查并安装",
       "openingSignIn": "正在打开登录页面…",
-      "sourceHint": "插件仓库，或任何包含 SKILL.md 技能的文件夹。想找经过审核的插件？<discover>浏览“发现”</discover>",
+      "sourceHint": "插件仓库，或任何包含 SKILL.md 技能或 agents/ 子 Agent 的文件夹。想找经过审核的插件？<discover>浏览“发现”</discover>",
       "remove": "移除",
       "removeZip": "移除 {{name}}",
       "showKey": "显示密钥",
@@ -4421,7 +4421,7 @@
       "keyFormatLengthAtLeast_other": "当前长度为 {{count}} 个字符，插件要求至少 {{min}} 个。",
       "keyFormatCharacters": "其中有插件格式不允许的字符。",
       "hideKey": "隐藏密钥",
-      "sourceHintNoCatalog": "插件仓库，或任何包含 SKILL.md 技能的文件夹。"
+      "sourceHintNoCatalog": "插件仓库，或任何包含 SKILL.md 技能或 agents/ 子 Agent 的文件夹。"
     },
     "bulk": {
       "select": "选择",
@@ -4430,6 +4430,9 @@
       "disable": "关闭 {{count}} 项",
       "uninstall": "卸载 {{count}} 个",
       "confirmUninstall_other": "卸载 {{count}} 个插件？其中的连接器和技能会一并移除。",
+      "confirmUninstallSubagents_other": "卸载 {{count}} 个插件？其中的连接器、技能和子 Agent 会一并移除。",
+      "subagentChangesGo": "你对其中子 Agent 的修改也会一并移除。",
+      "subagentChangesGone": "你对其中子 Agent 的修改也已一并移除。",
       "progress": "正在处理 {{done}} / {{total}}",
       "scope": "工作区…",
       "scopeAria": "为所选项选择工作区",
@@ -4687,7 +4690,7 @@
       "sourceUploaded": "本地上传",
       "sourceBuiltIn": "内置",
       "by": "作者 {{author}}",
-      "offNote": "已关闭，其连接器和技能在所有工作区中均已关闭。",
+      "offNote": "已关闭，其连接器、技能和子 Agent 在所有工作区中均已关闭。",
       "connectors": "连接器",
       "skills": "技能",
       "subagents": "子 Agent",
@@ -4914,7 +4917,7 @@
         "remove": "移除"
       },
       "definition": {
-        "plugins": "连接器和技能的组合包",
+        "plugins": "连接器、技能和子 Agent 的组合包",
         "mcp": "Agent 调用的工具",
         "skills": "Agent 遵循的指令",
         "brokerages": "Agent 可以交易的账户",
@@ -5163,6 +5166,8 @@
       "collisionTitle": "现在有一个内置子 Agent 使用了这个名称",
       "collisionBody": "Agent 会使用内置的那个。如需继续使用这个，请复制并换一个新名称。",
       "baseBanner": "内置指令会随 langalpha 的改进保持更新。如需编写自己的指令，请以它为起点新建一个子 Agent。",
+      "baseBannerPlugin": "指令来自 {{plugin}}，会随该插件更新而变化。如需编写自己的指令，请以它为起点新建一个子 Agent。",
+      "baseBannerDeployment": "指令由运行此服务器的人设定，会随其更新而变化。如需编写自己的指令，请以它为起点新建一个子 Agent。",
       "duplicateToEdit": "复制后编辑",
       "instructions": "指令",
       "readOnly": "只读",
@@ -5185,6 +5190,7 @@
       "sizeOf": "{{used}} / {{max}}",
       "instructionsPlaceholder": "它做什么、怎么做，以及交回什么结果",
       "draftConflict": "你编辑期间 Agent 修改了这里。你的草稿已保留。",
+      "draftConflictElsewhere": "你编辑期间这个子 Agent 已在别处被修改。你的草稿已保留。",
       "saveMine": "仍保存我的版本",
       "loadSaved": "载入已保存的版本",
       "appliesNextTurn": "修改从下一轮起生效。",

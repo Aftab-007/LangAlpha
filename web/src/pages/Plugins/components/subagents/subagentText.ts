@@ -1,5 +1,5 @@
 import type { TFunction } from 'i18next';
-import { modelLabel } from '@/lib/modelLabel';
+import { getModelDisplayName } from '@/components/ui/chat-input.helpers';
 import { effortLabelFor } from '@/lib/modelTuning';
 import type { ModelMetadataEntry } from '@/hooks/useFilteredModels';
 import type {
@@ -170,6 +170,24 @@ export function sourceText(t: TFunction, view: SubagentView): string {
   return t('plugins.subagents.source.builtin');
 }
 
+/** Where a base's read-only instructions come from, and so what moves them:
+ *  langalpha's built-ins, the plugin that ships it, or the server's own
+ *  configuration. */
+export function baseBannerText(t: TFunction, view: SubagentView): string {
+  if (view.source === 'plugin' && view.plugin) {
+    return t('plugins.subagents.baseBannerPlugin', { plugin: view.plugin.display_name });
+  }
+  if (view.source === 'deployment') return t('plugins.subagents.baseBannerDeployment');
+  return t('plugins.subagents.baseBanner');
+}
+
+/** A model as the composer's pill prints it, so the pane and the thread
+ *  name one model alike. A key the catalog doesn't list stays as saved: a
+ *  name made up from it would read as a model that exists. */
+export function modelName(key: string, metadata?: Record<string, ModelMetadataEntry>): string {
+  return metadata?.[key] ? getModelDisplayName(key, metadata) : key;
+}
+
 /** "Built in: X" or "From Filings Toolkit: X", the side of a base's aside
  *  heading. */
 export function baseSide(t: TFunction, view: SubagentView, value: string): string {
@@ -271,7 +289,7 @@ export function modelMeta(
   values: Pick<SubagentBaseValues, 'model' | 'effort'>,
   metadata: Record<string, ModelMetadataEntry>,
 ): string[] {
-  const parts = [values.model ? modelLabel(values.model, metadata) : t('plugins.subagents.threadsModel')];
+  const parts = [values.model ? modelName(values.model, metadata) : t('plugins.subagents.threadsModel')];
   const effort = effortLabelFor(t, values.effort);
   if (effort) parts.push(effort);
   return parts;

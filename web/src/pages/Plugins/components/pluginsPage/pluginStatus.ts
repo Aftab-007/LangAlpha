@@ -143,11 +143,12 @@ export function statusLine(
  * stored keys the plugin's connectors read, which uninstall leaves in
  * Secrets. A connector or skill the user customized survives, but it no
  * longer says which plugin it came from, so neither side can name it and
- * neither claims any.
+ * neither claims any. `plugins` is how many go at once (Select mode), which
+ * only the subagent sentence's "its" or "their" depends on.
  */
 export function uninstallLines(
   t: TFunction,
-  removed: { connectors: number; skills: number; subagents: number; changedSubagents: number },
+  removed: { connectors: number; skills: number; subagents: number; changedSubagents: number; plugins?: number },
   keptKeys: readonly string[],
   when: 'before' | 'after',
 ): string[] {
@@ -174,10 +175,11 @@ export function uninstallLines(
     );
   }
   if (removed.subagents > 0 && removed.changedSubagents > 0) {
+    const many = (removed.plugins ?? 1) > 1;
     lines.push(
       when === 'before'
-        ? t('plugins.pluginsPage.subagentChangesGo')
-        : t('plugins.card.subagentChangesGone'),
+        ? t(many ? 'plugins.bulk.subagentChangesGo' : 'plugins.pluginsPage.subagentChangesGo')
+        : t(many ? 'plugins.bulk.subagentChangesGone' : 'plugins.card.subagentChangesGone'),
     );
   }
   if (keptKeys.length === 1) lines.push(t('plugins.pluginsPage.keyStays', { key: keptKeys[0] }));
@@ -186,11 +188,40 @@ export function uninstallLines(
 }
 
 /**
- * The plugin's subagents the user has changed, as the Subagents list reads
- * them; none when the list has not been read, so no sentence claims any.
+ * The plugin's subagents the user has changed. While it is on, as the
+ * Subagents list reads them, the fresher read since the agent edits them
+ * mid-thread; none when the list has not been read, so no sentence claims
+ * any. A switched-off plugin's subagents leave that list, as does one a
+ * deployment subagent of the same name shadows, but uninstall still deletes
+ * the user's changes to them, so its components say which.
  */
 export function changedSubagents(plugin: PluginInfo, views: readonly SubagentView[] | undefined): number {
-  return (views ?? []).filter((v) => v.edited && v.source === 'plugin' && v.plugin?.name === plugin.name).length;
+  const owned = plugin.components.filter((c) => c.kind === 'subagent');
+  if (!plugin.enabled) return owned.filter((c) => c.edited).length;
+  if (!views) return 0;
+  const listed = views.filter((v) => v.source === 'plugin' && v.plugin?.name === plugin.name);
+  const unlisted = owned.filter((c) => c.edited && !listed.some((v) => v.name === c.name));
+  return listed.filter((v) => v.edited).length + unlisted.length;
+}
+
+/**
+ * Select mode's uninstall confirm. The bar has room for a question, not the
+ * page's counts, so it names the kinds that go, subagents only when one of
+ * the plugins carries any, and the user's changes to them only when there
+ * are some, as the single uninstall says it.
+ */
+export function bulkUninstallConfirm(
+  t: TFunction,
+  plugins: readonly PluginInfo[],
+  views: readonly SubagentView[] | undefined,
+): string {
+  const count = plugins.length;
+  const carries = plugins.some((p) => p.components.some((c) => c.kind === 'subagent'));
+  if (!carries) return t('plugins.bulk.confirmUninstall', { count });
+  const changed = plugins.reduce((sum, p) => sum + changedSubagents(p, views), 0);
+  const ask = t('plugins.bulk.confirmUninstallSubagents', { count });
+  if (changed === 0) return ask;
+  return `${ask} ${t(count > 1 ? 'plugins.bulk.subagentChangesGo' : 'plugins.pluginsPage.subagentChangesGo')}`;
 }
 
 /** "7 connectors", "20 skills", "4 connectors, 2 skills", "1 skill, 2 subagents". */

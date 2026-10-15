@@ -4435,7 +4435,7 @@
       "keysCancel": "Cancel",
       "keysInstall": "Check and install",
       "openingSignIn": "Opening the sign-in page…",
-      "sourceHint": "A plugin repo or any folder of SKILL.md skills. Looking for vetted plugins? <discover>Browse Discover</discover>",
+      "sourceHint": "A plugin repo, or any folder of SKILL.md skills or an agents/ folder of subagents. Looking for vetted plugins? <discover>Browse Discover</discover>",
       "remove": "Remove",
       "removeZip": "Remove {{name}}",
       "showKey": "Show key",
@@ -4485,7 +4485,7 @@
       "keyFormatLengthAtLeast_other": "This is {{count}} characters long; the plugin expects at least {{min}}.",
       "keyFormatCharacters": "This has characters the plugin's format does not allow.",
       "hideKey": "Hide key",
-      "sourceHintNoCatalog": "A plugin repo or any folder of SKILL.md skills."
+      "sourceHintNoCatalog": "A plugin repo, or any folder of SKILL.md skills or an agents/ folder of subagents."
     },
     "bulk": {
       "select": "Select",
@@ -4495,6 +4495,10 @@
       "uninstall": "Uninstall {{count}}",
       "confirmUninstall_one": "Uninstall {{count}} plugin? Its connectors and skills go with it.",
       "confirmUninstall_other": "Uninstall {{count}} plugins? Their connectors and skills go with them.",
+      "confirmUninstallSubagents_one": "Uninstall {{count}} plugin? Its connectors, skills and subagents go with it.",
+      "confirmUninstallSubagents_other": "Uninstall {{count}} plugins? Their connectors, skills and subagents go with them.",
+      "subagentChangesGo": "Your changes to their subagents are removed too.",
+      "subagentChangesGone": "Your changes to their subagents were removed too.",
       "progress": "Working on {{done}} of {{total}}",
       "scope": "Workspaces…",
       "scopeAria": "Choose workspaces for the selected items",
@@ -4769,7 +4773,7 @@
       "sourceUploaded": "Uploaded",
       "sourceBuiltIn": "Built in",
       "by": "by {{author}}",
-      "offNote": "Switched off. Its connectors and skills are off in every workspace.",
+      "offNote": "Switched off. Its connectors, skills and subagents are off in every workspace.",
       "connectors": "Connectors",
       "skills": "Skills",
       "subagents": "Subagents",
@@ -5017,7 +5021,7 @@
         "remove": "Remove"
       },
       "definition": {
-        "plugins": "Bundles of connectors and skills",
+        "plugins": "Bundles of connectors, skills and subagents",
         "mcp": "Tools the agent calls",
         "skills": "Instructions the agent follows",
         "brokerages": "Accounts the agent can trade in",
@@ -5267,6 +5271,8 @@
       "collisionTitle": "A built-in subagent now has this name",
       "collisionBody": "The agent uses the built-in one. Duplicate this one under a new name to keep using it.",
       "baseBanner": "Built-in instructions stay current as langalpha improves them. To write your own, start a new subagent from this one.",
+      "baseBannerPlugin": "Instructions come from {{plugin}} and change when it updates. To write your own, start a new subagent from this one.",
+      "baseBannerDeployment": "Instructions are set by whoever runs this server and change when they update them. To write your own, start a new subagent from this one.",
       "duplicateToEdit": "Duplicate to edit",
       "instructions": "Instructions",
       "readOnly": "Read only",
@@ -5289,6 +5295,7 @@
       "sizeOf": "{{used}} of {{max}}",
       "instructionsPlaceholder": "What it does, how it works, and what it hands back",
       "draftConflict": "The agent changed this while you were editing. Your draft is kept.",
+      "draftConflictElsewhere": "This subagent was changed somewhere else while you were editing. Your draft is kept.",
       "saveMine": "Save mine anyway",
       "loadSaved": "Load the saved version",
       "appliesNextTurn": "Changes apply from the next turn.",

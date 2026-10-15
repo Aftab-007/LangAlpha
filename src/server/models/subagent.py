@@ -47,6 +47,8 @@ class SubagentValues(BaseModel):
 class SubagentPlugin(BaseModel):
     name: str
     display_name: str
+    #: False on an override whose plugin is gone, which has no page to open.
+    installed: bool = True
 
 
 class SubagentView(SubagentValues):

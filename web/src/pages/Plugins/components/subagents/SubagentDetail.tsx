@@ -41,6 +41,7 @@ import {
 } from './SubagentAside';
 import {
   audienceFacts,
+  baseBannerText,
   byteLength,
   capitalize,
   charLength,
@@ -83,9 +84,12 @@ export function SubagentDetail({
   const orphan = isOrphan(view);
   const write = (fields: SubagentFields) => patch.mutate({ name: view.name, fields });
   const aside = { view, data, models, write };
+  const provenance = useProvenance(view);
 
+  // An override left behind by a plugin that is gone keeps its name, but
+  // there is no plugin page to open.
   const source =
-    view.source === 'plugin' && view.plugin ? (
+    view.source === 'plugin' && view.plugin && view.plugin.installed !== false ? (
       // One span: the meta line is a flex row, which would split the text
       // around the link into items and drop the spaces beside it.
       <span>
@@ -134,7 +138,7 @@ export function SubagentDetail({
           name={view.name}
           labelId={labelId}
           kind="subagent"
-          meta={<MetaLine parts={[<span key="source">{source}</span>, <Provenance key="by" view={view} />]} />}
+          meta={<MetaLine parts={[<span key="source">{source}</span>, provenance]} />}
           description={!custom && view.description ? view.description : undefined}
           controls={
             <OnOffControl
@@ -172,7 +176,7 @@ export function SubagentDetail({
             // A note, not a callout: nothing is wrong, so it reads as body text.
             <div className="sa-banner" role="note">
               <Info aria-hidden />
-              <p>{t('plugins.subagents.baseBanner')}</p>
+              <p>{baseBannerText(t, view)}</p>
               <button type="button" className="sa-banner-action" onClick={onDuplicate}>
                 {t('plugins.subagents.duplicateToEdit')}
               </button>
@@ -202,8 +206,10 @@ export function SubagentDetail({
 }
 
 /** Who changed it last, and where: the agent edits these files mid-thread,
- *  so its change names the thread it was asked in. */
-function Provenance({ view }: { view: SubagentView }) {
+ *  so its change names the thread it was asked in. A hook rather than a
+ *  component: the meta line drops a null part with its separator, and an
+ *  element that renders nothing is not null, so it left a stray dot. */
+function useProvenance(view: SubagentView): ReactNode {
   const { t } = useTranslation();
   const locale = useLocale();
   const now = useNow();
@@ -391,6 +397,10 @@ function TextFields({ view, data }: { view: SubagentView; data: SubagentsRespons
     setDraft(server);
   }
   const conflict = moved && dirty && !sameText(server, draft);
+  // A refused save whose text moved underneath is the conflict box's to
+  // explain: "the page now shows the latest version" would contradict its
+  // "your draft is kept". The line stays for a refusal the text survived.
+  const shownFailure = conflict ? null : failure;
 
   const { description_max: descMax, instructions_max_bytes: instrMax } = data.limits;
   const descUsed = charLength(draft.description);
@@ -445,7 +455,10 @@ function TextFields({ view, data }: { view: SubagentView; data: SubagentsRespons
               ? t('plugins.subagents.sayWhen', { name: matches.detail ?? '' })
               : t('plugins.subagents.whenToUseHint')}
             {t('plugins.subagents.sep')}
-            {t('plugins.subagents.charCount', { used: descUsed, max: descMax })}
+            {/* One unit: on a phone the hint wraps, and "40 /" over "400" reads as two numbers. */}
+            <span className="whitespace-nowrap">
+              {t('plugins.subagents.charCount', { used: descUsed, max: descMax })}
+            </span>
           </span>
         </div>
         <textarea
@@ -478,7 +491,11 @@ function TextFields({ view, data }: { view: SubagentView; data: SubagentsRespons
       </div>
       {conflict && (
         <div className="sa-conflict" role="status">
-          {t('plugins.subagents.draftConflict')}
+          {/* The saved text is the newer write, so its writer is who moved it:
+              the agent mid-thread, or the user in another tab or the API. */}
+          {view.updated_by === 'agent'
+            ? t('plugins.subagents.draftConflict')
+            : t('plugins.subagents.draftConflictElsewhere')}
           <div className="sa-conflict-actions">
             <PageButton onClick={submit} disabled={save.isPending || descOver || instrOver || blank}>
               {t('plugins.subagents.saveMine')}
@@ -503,8 +520,8 @@ function TextFields({ view, data }: { view: SubagentView; data: SubagentsRespons
         >
           {save.isPending ? t('common.saving') : t('common.save')}
         </PageButton>
-        <span className={failure ? 'sa-savebar-note is-warn' : 'sa-savebar-note'}>
-          {failure ?? t('plugins.subagents.appliesNextTurn')}
+        <span className={shownFailure ? 'sa-savebar-note is-warn' : 'sa-savebar-note'}>
+          {shownFailure ?? t('plugins.subagents.appliesNextTurn')}
         </span>
       </div>
     </div>

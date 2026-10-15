@@ -43,6 +43,8 @@ export interface ModelSelectorProps {
   /** Names a saved value no group lists, which would otherwise show as the
    *  placeholder and hide that the setting points somewhere unusable. */
   missingLabel?: (value: string) => string
+  /** How an option prints its model; the manifest's name, else the key. */
+  nameOf?: (model: string) => string
 }
 
 export function ModelSelector({
@@ -60,9 +62,11 @@ export function ModelSelector({
   ariaLabel,
   disabledModels,
   missingLabel,
+  nameOf,
 }: ModelSelectorProps) {
   const { t } = useTranslation()
   const id = useId()
+  const name = nameOf ?? ((m: string) => modelLabel(m, metadata))
 
   const filteredModels = useMemo(() => {
     if (!filterProviders || filterProviders.length === 0) return models
@@ -160,13 +164,13 @@ export function ModelSelector({
                   const suffix = access ? ` (${t(ACCESS_LABEL_KEYS[access])})` : ""
                   return (
                     <option key={m} value={m}>
-                      {modelLabel(m, metadata)}{suffix}
+                      {name(m)}{suffix}
                     </option>
                   )
                 })}
                 {locked.map((m) => (
                   <option key={m} value={m} disabled>
-                    {modelLabel(m, metadata)} ({t(ACCESS_LABEL_KEYS.locked)})
+                    {name(m)} ({t(ACCESS_LABEL_KEYS.locked)})
                   </option>
                 ))}
               </optgroup>

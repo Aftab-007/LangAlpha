@@ -5,7 +5,6 @@ import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { useLocale } from '@/hooks/useLocale';
 import { useCreateSubagent } from '@/hooks/useSubagents';
 import { formatBytes } from '@/lib/format';
-import { modelLabel } from '@/lib/modelLabel';
 import { effortLabelFor } from '@/lib/modelTuning';
 import { cn } from '@/lib/utils';
 import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
@@ -34,6 +33,7 @@ import {
   isCustom,
   isOrphan,
   modelMeta,
+  modelName,
   reachesNoAgent,
   toolsSummary,
 } from './subagentText';
@@ -268,7 +268,9 @@ export function SubagentNew({
                   ? t('plugins.subagents.sayWhen', { name: source.name })
                   : t('plugins.subagents.whenToUseHint')}
                 {t('plugins.subagents.sep')}
-                {t('plugins.subagents.charCount', { used: descUsed, max: descMax })}
+                <span className="whitespace-nowrap">
+                  {t('plugins.subagents.charCount', { used: descUsed, max: descMax })}
+                </span>
               </span>
             </div>
             <textarea
@@ -383,7 +385,7 @@ function CopyFacts({
     <div className="sa-facts">
       <DetailFacts
         items={[
-          [t('plugins.subagents.model'), pinned ? modelLabel(pinned, models.metadata) : t('plugins.subagents.threadsModel')],
+          [t('plugins.subagents.model'), pinned ? modelName(pinned, models.metadata) : t('plugins.subagents.threadsModel')],
           [t('plugins.subagents.effort'), effort],
           [t('plugins.subagents.tools'), toolsSummary(t, source ? source.tools : BLANK_TOOLS, locale)],
           // A blank one gets every connector and connected brokerages, as

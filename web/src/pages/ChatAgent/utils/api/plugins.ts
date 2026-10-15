@@ -83,6 +83,8 @@ export interface PluginComponentRef {
   kind: 'mcp' | 'skill' | 'subagent';
   name: string;
   key: string;
+  /** Subagents only: the user changed it. */
+  edited?: boolean;
 }
 
 export interface PluginInfo {
