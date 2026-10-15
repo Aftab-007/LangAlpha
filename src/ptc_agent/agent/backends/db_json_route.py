@@ -1,7 +1,8 @@
-"""DbJsonRoute: a mounted directory of JSON files that are rows in Postgres.
+"""DbJsonRoute: a mounted directory of files that are rows in Postgres.
 
-The shared plumbing behind ``UserDataBackend`` (`.agents/user/profile/`) and
-``AutomationsBackend`` (`.agents/user/automations/`). Reads render live rows.
+The shared plumbing behind ``UserDataBackend`` (`.agents/user/profile/`),
+``AutomationsBackend`` (`.agents/user/automations/`) and ``SubagentsBackend``
+(`.agents/user/agents/`, markdown rather than JSON). Reads render live rows.
 Every save, from the Write and Edit tools or through the file mount, runs the
 same flow: check the content for everything the rows don't decide, then under
 the user's lock check the version the writer last saw, plan the write from the

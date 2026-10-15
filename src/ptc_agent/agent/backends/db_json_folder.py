@@ -1,4 +1,4 @@
-"""DbJsonFolderRoute: a mounted folder of JSON files, one per row in Postgres.
+"""DbJsonFolderRoute: a mounted folder of files, one per row in Postgres.
 
 Where ``DbJsonRoute`` serves a fixed set of files every user has, a folder
 holds one file per row, under a name the writer picks: writing a new name
@@ -23,7 +23,7 @@ from ptc_agent.agent.backends.results import WriteTextResult
 
 
 class DbJsonFolderRoute(DbJsonRoute):
-    """A folder of DB-backed JSON files, one per row, plus a README. A
+    """A folder of DB-backed files, one per row, plus a README. A
     subclass names its files from its rows, overriding ``file_named``,
     ``names`` and ``rendered``."""
 

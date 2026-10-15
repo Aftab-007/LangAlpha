@@ -19,7 +19,7 @@ __all__ = ["README_FILE", "SubagentsBackend"]
 
 
 class SubagentsBackend(DbJsonFolderRoute):
-    """Filesystem surface backed by the `user_subagents` table and the deployment's bases."""
+    """Filesystem surface backed by the `user_subagents` table and the bases a turn merges."""
 
     directory = SandboxLayout.USER_AGENTS_DIR
     read_only_files = frozenset({file.MAIN_FILE})
