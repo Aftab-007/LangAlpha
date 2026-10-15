@@ -102,7 +102,7 @@ def _pending_key(thread_id: str) -> str:
     return f"mux2:pending:{thread_id}"
 
 
-async def _store_pending(cache, thread_id: str, run_id: str, lane: str) -> None:
+async def _store_pending(cache, thread_id: str, run_id: str, lane: str) -> bool:
     try:
         key = _pending_key(thread_id)
         # One connection, one round trip — and the TTL can no longer be
@@ -117,6 +117,8 @@ async def _store_pending(cache, thread_id: str, run_id: str, lane: str) -> None:
             "[mux2] pending store failed for %s/%s", thread_id, run_id,
             exc_info=True,
         )
+        return False
+    return True
 
 
 async def _load_pending(cache, thread_id: str) -> Optional[dict[str, str]]:
@@ -382,14 +384,16 @@ async def _seed_channels(
     return out
 
 
-async def _settled_runs_of_open_turn(thread_id: str) -> list[dict]:
+async def _settled_runs_of_open_turn(thread_id: str) -> Optional[list[dict]]:
     """Terminal task runs the thread's executing turn launched.
 
     The history projection a client attaches with stops before the open turn,
     and the turn can outlive its runs by any margin, so these are settled yet
     unseen however old: the horizon-bounded catch-up would miss them and leave
     their cards running until the turn ends. Drained from 0; a client that
-    already holds one drops the backlog by its own settled check."""
+    already holds one drops the backlog by its own settled check. None on a
+    failed read, so the caller withholds ``attached`` and the client asks
+    again on its next socket."""
     try:
         from src.server.database.runs import lifecycle as tl_db
         from src.server.database.runs import subagent_runs as sr_db
@@ -404,7 +408,7 @@ async def _settled_runs_of_open_turn(thread_id: str) -> list[dict]:
         logger.warning(
             "[mux2] open-turn settled seed failed for %s", thread_id, exc_info=True
         )
-        return []
+        return None
 
 
 async def _resolve_lane(
@@ -607,7 +611,11 @@ async def stream_thread_mux_v2(
         attach_frames.append(_chan_open_frame(chan, "drain"))
 
     open_turn_runs = await _settled_runs_of_open_turn(thread_id) if open_turn else []
-    for run in open_turn_runs:
+    # Acknowledged only when every run is open or durably deferred: the client
+    # stops asking once it hears ``attached``, so a failed read or store must
+    # leave the ask standing for its next socket.
+    open_turn_served = open_turn_runs is not None
+    for run in open_turn_runs or []:
         run_id = str(run["task_run_id"])
         if run_id in channels:
             continue
@@ -616,7 +624,8 @@ async def stream_thread_mux_v2(
             # Durable, like any deferral: the client's next socket will not
             # ask for the open turn again once this one acknowledged it.
             pending_admissions[run_id] = lane
-            await _store_pending(cache, thread_id, run_id, lane)
+            if not await _store_pending(cache, thread_id, run_id, lane):
+                open_turn_served = False
             continue
         chan = _open(run_id, lane, b"0", _row_started_ms(run))
         attach_frames.append(_chan_open_frame(chan, "drain"))
@@ -674,7 +683,7 @@ async def stream_thread_mux_v2(
             )
             attach_frames.append(_chan_close_frame(chan, "resync_required"))
 
-    if open_turn:
+    if open_turn and open_turn_served:
         attach_frames.append(_control("attached", {}))
     for frame in attach_frames:
         yield frame
