@@ -188,15 +188,7 @@ async def project_task_transcript(
 
     reader = CheckpointHistoryReader.get_instance()
     history = await reader.aget_task_history(thread_id, task_id)
-    try:
-        task = await sr_db.get_task(thread_id, task_id)
-    except Exception:
-        logger.warning(
-            "[REPLAY] task row read failed for %s/%s", thread_id, task_id,
-            exc_info=True,
-        )
-        task = None
-    if task is not None and task.get("subagent_type") == WORKFLOW_SUBAGENT_TYPE:
+    if await _is_workflow_run(thread_id, task_id, history):
         return projector.workflow_run_items(
             history,
             task_id=task_id,
@@ -204,6 +196,18 @@ async def project_task_transcript(
             ledger_failure=detail.get("error"),
         )
     return _run_items(thread_id, history, f"task:{task_id}")
+
+
+async def _is_workflow_run(thread_id: str, task_id: str, history: SpanDelta) -> bool:
+    """The driver's ui snapshot answers without a read; the task row only for
+    a driver that died before its first one. An unreadable row raises, since
+    the transcript path would hand the client an empty panel for good."""
+    if any(
+        r.get("name") == projector.WORKFLOW_RUN_UI_NAME for r in history.new_ui_records
+    ):
+        return True
+    task = await sr_db.get_task(thread_id, task_id)
+    return task is not None and task.get("subagent_type") == WORKFLOW_SUBAGENT_TYPE
 
 
 async def _gather_bounded(coros: list[Any]) -> list[Any]:
