@@ -291,7 +291,11 @@ async def validate_fields(
 
     search_pair = _pair_after(("search_provider", "search_depth"), patch, current, base)
     if search_pair is not None:
-        from src.tools.web.manifest import CAPABILITY_SEARCH, providers_with_capability
+        from src.tools.web.manifest import (
+            CAPABILITY_SEARCH,
+            providers_with_capability,
+            search_levels,
+        )
 
         providers = providers_with_capability(CAPABILITY_SEARCH)
         provider = patch.get("search_provider")
@@ -306,15 +310,10 @@ async def validate_fields(
             # The rule Settings applies to the user's own pair: a set provider
             # holds the depth to its levels; on inherit any level passes, since
             # which provider runs is not known until the turn.
+            levels = search_levels(runs_on)
             if runs_on in providers:
-                levels = [lv.name for lv in providers[runs_on].capability(CAPABILITY_SEARCH).levels]
                 message = f"{runs_on} doesn't offer {depth} depth."
             else:
-                levels = list(dict.fromkeys(
-                    lv.name
-                    for spec in providers.values()
-                    for lv in spec.capability(CAPABILITY_SEARCH).levels
-                ))
                 message = f"Unknown search depth: {depth}."
             if depth not in levels:
                 errors.append(FieldError("search_depth", message, levels))

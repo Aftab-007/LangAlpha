@@ -45,10 +45,15 @@ UNSAVABLE = re.compile("[\x00\ud800-\udfff]")
 def unsavable_char(value: Any) -> str | None:
     """A character saved text can't hold in a string anywhere in ``value``,
     key or item, or None. A lone surrogate wins over a NUL wherever each
-    sits, since a refusal can echo a NUL but not a surrogate. Walked without
-    recursion, since YAML may nest deeper than Python recurses.
+    sits, since a refusal can echo a NUL but not a surrogate.
+
+    Walked without recursion, since YAML may nest deeper than Python
+    recurses, and each container once: a YAML alias is the same object
+    wherever it is used, so a few hundred bytes of nested aliases walked as
+    a tree would take hours.
     """
     stack = [value]
+    seen: set[int] = set()
     nul = None
     while stack:
         node = stack.pop()
@@ -57,12 +62,63 @@ def unsavable_char(value: Any) -> str | None:
                 if found.group() != "\x00":
                     return found.group()
                 nul = "\x00"
-        elif isinstance(node, dict):
+        elif isinstance(node, (dict, list)) and id(node) not in seen:
+            seen.add(id(node))
             stack.extend(node)
-            stack.extend(node.values())
-        elif isinstance(node, list):
-            stack.extend(node)
+            if isinstance(node, dict):
+                stack.extend(node.values())
     return nul
+
+
+class FrontmatterFault(Exception):
+    """Why a subagent file's frontmatter didn't load, worded without a final
+    period so each reader can end it its own way.
+
+    ``kind`` is ``fences`` (no frontmatter between two ``---`` lines),
+    ``nul`` (a raw NUL, which YAML refuses by character position), ``yaml``
+    (not valid YAML) or ``mapping`` (valid YAML, but not key: value lines).
+    ``quotable`` marks a ``yaml`` fault that quoting the value would fix.
+    """
+
+    def __init__(self, kind: str, message: str, *, quotable: bool = False) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
+        self.quotable = quotable
+
+
+def load_frontmatter(content: str) -> tuple[dict[Any, Any], str]:
+    """(the frontmatter as a mapping, the body after it), or a FrontmatterFault."""
+    parts = split_frontmatter(content)
+    if parts is None:
+        raise FrontmatterFault(
+            "fences",
+            "a subagent file starts with its frontmatter between two --- lines, then its "
+            "instructions",
+        )
+    front, body, first_line = parts
+    if "\x00" in front:
+        raise FrontmatterFault(
+            "nul", "the frontmatter holds a NUL character (\\x00), which saved text can't hold"
+        )
+    try:
+        loaded = yaml.load(front, Loader=StrictLoader)  # noqa: S506 - a SafeLoader subclass
+    except (yaml.YAMLError, RecursionError, ValueError) as exc:
+        # ValueError: a value YAML types and can't build (``2026-13-45``),
+        # which quoting keeps a string; RecursionError: nesting too deep.
+        mark = getattr(exc, "problem_mark", None)
+        where = f" (line {mark.line + first_line})" if mark is not None else ""
+        problem = getattr(exc, "problem", None) or str(exc)
+        raise FrontmatterFault(
+            "yaml",
+            f"the frontmatter is not valid YAML{where}: {problem}",
+            quotable=not isinstance(exc, (yaml.constructor.ConstructorError, RecursionError)),
+        ) from None
+    if loaded is None:
+        return {}, body
+    if not isinstance(loaded, dict):
+        raise FrontmatterFault("mapping", "the frontmatter must be key: value lines")
+    return loaded, body
 
 
 def split_frontmatter(content: str) -> tuple[str, str, int] | None:

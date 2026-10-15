@@ -69,9 +69,8 @@ async def get_subagents(user_id: CurrentUserId):
 @handle_api_exceptions("save subagent", logger)
 async def put_subagent(name: str, body: SubagentWrite, user_id: CurrentUserId):
     try:
-        result = await save_subagent(
-            user_id, name, body.fields,
-            version=body.version, start_from=body.start_from, updated_by="user",
+        return await save_subagent(
+            user_id, name, body.fields, version=body.version, start_from=body.start_from
         )
     except SubagentInvalid as exc:
         raise HTTPException(
@@ -81,7 +80,6 @@ async def put_subagent(name: str, body: SubagentWrite, user_id: CurrentUserId):
         raise _conflict()
     except SubagentsUnavailable:
         raise _unavailable()
-    return result.view
 
 
 @router.delete("/subagents/{name:path}", status_code=204)

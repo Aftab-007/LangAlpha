@@ -17,7 +17,7 @@ import pytest
 
 from ptc_agent.agent.subagents.definition import SubagentDefinition
 from ptc_agent.agent.subagents.merge import BaseSubagent
-from src.server.services.subagents import Connector, SubagentContext
+from src.server.services.subagents.context import Connector, SubagentContext
 
 USER = "user-fake-1"
 THREAD = "00000000-0000-4000-8000-00000000bbbb"
@@ -110,10 +110,12 @@ class FakeContext(SubagentContext):
 
 class _Conn:
     """A save's connection: its transaction rolls the rows back on a raise,
-    and the advisory lock is the moment a test can move the world under it."""
+    and taking or releasing the advisory lock is the moment a test can move
+    the world around it."""
 
     def __init__(self, world: World) -> None:
         self.world = world
+        self.locked = False
 
     @contextlib.asynccontextmanager
     async def transaction(self):
@@ -123,8 +125,12 @@ class _Conn:
         except BaseException:
             self.world.rows = before
             raise
+        if self.locked and self.world.on_release is not None:
+            hook, self.world.on_release = self.world.on_release, None
+            hook()
 
     async def execute(self, sql: str, params: Any = None) -> None:
+        self.locked = True
         self.world.locks += 1
         hook, self.world.on_lock = self.world.on_lock, None
         if hook is not None:
@@ -143,6 +149,8 @@ class World:
         self.locks = 0
         # Runs once, as the next writer takes the user's lock.
         self.on_lock: Callable[[], None] | None = None
+        # Runs once, as the next writer to take it commits and lets it go.
+        self.on_release: Callable[[], None] | None = None
 
     # --- seeding ---
 
@@ -166,7 +174,7 @@ class World:
 
     def ctx(self) -> FakeContext:
         return FakeContext(
-            user_id=USER, subagents=None, bases=dict(self.bases), offered=tuple(self.offered),
+            user_id=USER, bases=dict(self.bases), offered=tuple(self.offered),
             model_pref={}, is_byok=False, permits=None,
             search_provider="tavily", search_depth="standard",
             skills=SKILLS, connectors=CONNECTORS,
@@ -187,10 +195,6 @@ class World:
 
     async def list_user_subagents(self, user_id: str, *, conn: Any = None) -> list[dict[str, Any]]:
         return [copy.deepcopy(self.rows[n]) for n in sorted(self.rows)]
-
-    async def get_user_subagent(self, user_id: str, name: str, *, conn: Any = None,
-                                for_update: bool = False) -> dict[str, Any] | None:
-        return copy.deepcopy(self.rows.get(name))
 
     async def upsert_user_subagent(self, user_id: str, name: str, *, kind: str, fields: dict[str, Any],
                                    updated_by: str, base_key: str | None = None,
@@ -218,15 +222,18 @@ class World:
 
 def install(monkeypatch: pytest.MonkeyPatch) -> World:
     """Point the service's reads and writes at a fresh ``World``."""
+    from ptc_agent.agent.backends import db_json_route
     from src.server.database import pool, user_subagents
     from src.server.database.conversation import threads_read
     from src.server.services.subagents import file, writes
 
     world = World()
     monkeypatch.setattr(writes, "load_context", world.load_context)
+    monkeypatch.setattr(file, "load_context", world.load_context)
     monkeypatch.setattr(writes, "roster", world.roster)
     monkeypatch.setattr(pool, "get_db_connection", world.connection)
-    for name in ("list_user_subagents", "get_user_subagent", "upsert_user_subagent",
+    monkeypatch.setattr(db_json_route, "get_db_connection", world.connection)
+    for name in ("list_user_subagents", "upsert_user_subagent",
                  "delete_user_subagent", "rename_user_subagent"):
         monkeypatch.setattr(user_subagents, name, getattr(world, name))
 
@@ -248,7 +255,7 @@ def install(monkeypatch: pytest.MonkeyPatch) -> World:
 async def views(world: World) -> dict[str, dict[str, Any]]:
     """Every view as the pane reads it, problems included, by name."""
     from src.server.models.subagent import SubagentView
-    from src.server.services.subagents import list_subagents
+    from src.server.services.subagents.writes import list_subagents
 
     _, out = await list_subagents(USER, ctx=world.ctx())
     # Through the wire model too, so a problem code the response can't carry fails here.

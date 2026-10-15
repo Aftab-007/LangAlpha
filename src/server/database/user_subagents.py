@@ -30,6 +30,18 @@ _COLUMNS = (
 )
 
 
+async def lock_user_subagents(user_id: str, *, conn) -> None:
+    """One writer of the user's subagents at a time, for the rest of
+    ``conn``'s transaction: versions, the custom cap and renames read then
+    write, and a plugin changing its bases takes the same lock so a save
+    racing it finds the base gone rather than outliving it."""
+    from src.server.database.sql_fences import advisory_key
+
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(%s)", (advisory_key("user_subagents", user_id),)
+    )
+
+
 def _row_to_dict(row: dict[str, Any] | None) -> dict[str, Any] | None:
     """UUIDs to str and timestamps to ISO 8601, as the other row readers do."""
     if row is None:
@@ -57,39 +69,6 @@ async def list_user_subagents(user_id: str, *, conn=None) -> list[dict[str, Any]
                 (user_id,),
             )
             return [_row_to_dict(r) for r in await cur.fetchall()]
-
-
-async def get_user_subagent(
-    user_id: str, name: str, *, conn=None, for_update: bool = False
-) -> dict[str, Any] | None:
-    """One row, or None.
-
-    ``for_update`` locks it for the caller's transaction, which a writer
-    checking a version against the stored values needs so that a concurrent
-    save cannot land between the check and the write.
-    """
-    lock = " FOR UPDATE" if for_update else ""
-    async with get_db_connection(conn) as db:
-        async with db.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                f"SELECT {_COLUMNS} FROM user_subagents "
-                "WHERE user_id = %s AND name = %s AND workspace_id IS NULL" + lock,
-                (user_id, name),
-            )
-            return _row_to_dict(await cur.fetchone())
-
-
-async def count_custom_user_subagents(user_id: str, *, conn=None) -> int:
-    """How many subagents of their own the user has, for the per-user cap."""
-    async with get_db_connection(conn) as db:
-        async with db.cursor() as cur:
-            await cur.execute(
-                "SELECT COUNT(*) FROM user_subagents "
-                "WHERE user_id = %s AND workspace_id IS NULL AND kind = 'custom'",
-                (user_id,),
-            )
-            row = await cur.fetchone()
-            return row[0] if row else 0
 
 
 async def upsert_user_subagent(
@@ -156,8 +135,8 @@ async def rename_user_subagent(
 ) -> dict[str, Any] | None:
     """Rename a custom subagent; None when there is no such row.
 
-    An occupied target raises the unique violation, which the caller reports
-    as the name being taken.
+    The caller checks that the target is free under the user's lock, which
+    every writer of these rows takes.
     """
     async with get_db_connection(conn) as db:
         async with db.cursor(row_factory=dict_row) as cur:

@@ -83,6 +83,18 @@ def base_key(definition: SubagentDefinition) -> str:
     return f"deployment:{definition.name}"
 
 
+def plan_gated(defn: SubagentDefinition, base: BaseSubagent | None) -> bool:
+    """Whether the user's plan gates ``defn``'s pinned model: one the user
+    chose, a plugin's included since the user installed it. A deployment's
+    own pin is the operator's call, and gating it would change the turn of a
+    user who never touched their subagents."""
+    return (
+        defn.source in ("custom", "plugin")
+        or base is None
+        or base.definition.model != defn.model
+    )
+
+
 def base_subagents(subagents: SubagentsConfig) -> dict[str, BaseSubagent]:
     """Every base the deployment defines, offered or not."""
     registry = SubagentRegistry(user_definitions=subagents.definitions or None)

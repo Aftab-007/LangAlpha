@@ -9,7 +9,8 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from src.server.services.subagents import SubagentsUnavailable, writes
+from src.server.services.subagents import writes
+from src.server.services.subagents.context import SubagentsUnavailable
 from tests.conftest import create_test_app
 from tests.unit.server.services.subagents._fakes import install
 
@@ -206,10 +207,11 @@ async def test_delete(client, world, name, version, status, row_after):
     ],
 )
 async def test_503_with_retry_after_while_the_agent_config_loads(client, monkeypatch, method, path, kwargs):
-    async def not_loaded(user_id):
+    async def not_loaded(user_id, *args, **kwargs):
         raise SubagentsUnavailable("agent configuration not loaded")
 
     monkeypatch.setattr(writes, "load_context", not_loaded)
+    monkeypatch.setattr(writes, "roster", not_loaded)
 
     resp = await client.request(method, path, **kwargs)
 

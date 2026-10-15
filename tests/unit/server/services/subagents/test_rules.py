@@ -6,19 +6,17 @@ from typing import Any
 
 import pytest
 
-from src.server.services.subagents import (
-    MAX_CUSTOM,
-    SubagentInvalid,
-    description_matches,
-    validate_fields,
-    validate_new_name,
-)
 from src.server.services.subagents.rules import (
+    MAX_CUSTOM,
     NUL_MESSAGE,
     SURROGATE_MESSAGE,
     WRITABLE_KEYS,
     FieldError,
+    SubagentInvalid,
     content_errors,
+    description_matches,
+    validate_fields,
+    validate_new_name,
 )
 from tests.unit.server.services.subagents._fakes import World
 

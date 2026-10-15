@@ -3,103 +3,33 @@
 Two writers share this package: REST for the pane (``app/subagents.py``) and
 the file route over ``.agents/user/agents/``. Both read the same view
 (``view``), refuse the same values (``rules``) and save through the same
-function (``writes``), so a value one of them refuses the other refuses too,
-and a save from either moves the version the other checks.
+steps (``writes``: ``prepare_save`` before the user's lock, ``apply_save``
+under it), so a value one of them refuses the other refuses too, and a save
+from either moves the version the other checks.
 
 The per-turn merge that turns rows into the roster a build compiles stays in
 ``ptc_agent.agent.subagents.merge``; nothing here runs during a turn.
 """
 
-from .context import (
-    Connector,
-    SubagentContext,
-    SubagentsUnavailable,
-    list_connectors,
-    load_context,
-    load_main_values,
-    roster,
-)
-from .rules import (
-    CUSTOM_KEYS,
-    DESCRIPTION_MAX,
-    EDITABLE_KEYS,
-    INHERIT,
-    INSTRUCTIONS_MAX_BYTES,
-    MAX_CUSTOM,
-    NAME_RE,
-    FieldError,
-    SubagentInvalid,
-    changed_fields,
-    content_errors,
-    custom_text_errors,
-    description_match_note,
-    description_matches,
-    normalize_value,
-    validate_fields,
-    validate_new_name,
-)
-from .view import (
-    BODY_GUIDANCE,
-    agent_file,
-    attach_titles,
-    build_views,
-    definition_values,
-    editable_values,
-    render_base_body,
-    value_views,
-    version_of,
-)
+from .context import SubagentsUnavailable
+from .rules import DESCRIPTION_MAX, INSTRUCTIONS_MAX_BYTES, MAX_CUSTOM, SubagentInvalid
 from .writes import (
-    SaveResult,
     SubagentNotFound,
     VersionConflict,
     delete_subagent,
-    file_values,
     list_subagents,
-    rename_subagent,
     save_subagent,
 )
 
 __all__ = [
-    "BODY_GUIDANCE",
-    "CUSTOM_KEYS",
     "DESCRIPTION_MAX",
-    "EDITABLE_KEYS",
-    "INHERIT",
     "INSTRUCTIONS_MAX_BYTES",
     "MAX_CUSTOM",
-    "NAME_RE",
-    "Connector",
-    "FieldError",
-    "SaveResult",
-    "SubagentContext",
     "SubagentInvalid",
     "SubagentNotFound",
     "SubagentsUnavailable",
     "VersionConflict",
-    "agent_file",
-    "attach_titles",
-    "build_views",
-    "changed_fields",
-    "content_errors",
-    "custom_text_errors",
-    "definition_values",
     "delete_subagent",
-    "description_match_note",
-    "description_matches",
-    "editable_values",
-    "file_values",
-    "list_connectors",
     "list_subagents",
-    "load_context",
-    "load_main_values",
-    "normalize_value",
-    "rename_subagent",
-    "render_base_body",
-    "roster",
     "save_subagent",
-    "validate_fields",
-    "validate_new_name",
-    "value_views",
-    "version_of",
 ]

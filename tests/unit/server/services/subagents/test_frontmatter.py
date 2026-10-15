@@ -22,3 +22,12 @@ from src.server.services.subagents.frontmatter import unsavable_char
 )
 def test_a_lone_surrogate_wins_over_a_nul_wherever_each_sits(value, found):
     assert unsavable_char(value) == found
+
+
+def test_a_value_aliased_in_many_places_is_walked_once():
+    # What nested YAML aliases load to: 2**60 strings as a tree, 60 lists as objects.
+    node: list = ["x"]
+    for _ in range(60):
+        node = [node, node]
+
+    assert unsavable_char({"k": node}) is None

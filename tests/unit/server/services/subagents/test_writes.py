@@ -8,12 +8,8 @@ import pytest
 
 from ptc_agent.agent.subagents.definition import SubagentDefinition
 from ptc_agent.agent.subagents.merge import BaseSubagent
-from src.server.services.subagents import (
-    EDITABLE_KEYS,
-    VersionConflict,
-    delete_subagent,
-    save_subagent,
-)
+from src.server.services.subagents.rules import EDITABLE_KEYS
+from src.server.services.subagents.writes import VersionConflict, delete_subagent, save_subagent
 from tests.unit.server.services.subagents._fakes import USER, research_base, views
 
 pytestmark = pytest.mark.asyncio
@@ -61,6 +57,34 @@ async def test_a_version_read_before_a_change_is_a_conflict(world, op, name, mov
     assert world.on_lock is None
 
 
+async def test_a_subagent_removed_right_after_its_save_is_a_conflict(world):
+    """The save committed, but the view it answers with is gone: the pane
+    reloads on a conflict rather than failing the request."""
+    world.custom("alpha", model="model-a")
+    version = (await views(world))["alpha"]["version"]
+    world.on_release = lambda: world.rows.pop("alpha")
+
+    with pytest.raises(VersionConflict):
+        await save_subagent(USER, "alpha", {"effort": "high"}, version=version)
+
+    assert world.on_release is None
+
+
+async def test_resetting_a_base_hidden_since_the_read_is_a_conflict(world):
+    """Switching its plugin off hides a base but keeps the user's override for
+    when it is back, so a reset aimed at it must not answer "already gone"."""
+    world.offered = (*world.offered, "filings-reader")
+    world.override("filings-reader", model="model-a")
+    version = (await views(world))["filings-reader"]["version"]
+    world.offered = tuple(n for n in world.offered if n != "filings-reader")
+    rows = copy.deepcopy(world.rows)
+
+    with pytest.raises(VersionConflict):
+        await delete_subagent(USER, "filings-reader", version=version)
+
+    assert world.rows == rows
+
+
 @pytest.mark.parametrize(
     ("name", "stored", "fields", "row"),
     [
@@ -83,12 +107,11 @@ async def test_an_override_stores_only_what_differs_from_its_base(world, name, s
         world.override(name, **stored)
     version = (await views(world))[name]["version"]
 
-    result = await save_subagent(USER, name, fields, version=version)
+    view = await save_subagent(USER, name, fields, version=version)
 
     assert (world.rows[name]["fields"] if name in world.rows else None) == row
-    assert result.reset is (row is None)
-    assert result.view["edited"] is (row is not None)
-    assert set(result.view["user_fields"]) == set(row or ())
+    assert view["edited"] is (row is not None)
+    assert set(view["user_fields"]) == set(row or ())
 
 
 @pytest.mark.parametrize("source", ["research", "trader"])
@@ -98,9 +121,8 @@ async def test_start_from_copies_the_effective_values(world, source):
                  instructions="Trade carefully.", roles=["analyst"])
     original = (await views(world))[source]
 
-    result = await save_subagent(USER, "my-copy", {}, version=None, start_from=source)
+    copied = await save_subagent(USER, "my-copy", {}, version=None, start_from=source)
 
-    copied = result.view
     assert copied["kind"] == "custom"
     assert {k: copied[k] for k in EDITABLE_KEYS} == {k: original[k] for k in EDITABLE_KEYS}
     keys = ("description", "instructions", "available_to")
@@ -113,7 +135,7 @@ async def test_a_copy_leaves_out_a_base_pin_its_plan_lacks(world):
     rather than saving a pin it could only ever fall back from."""
     assert (await views(world))["data-prep"]["problems"] == []
 
-    copied = (await save_subagent(USER, "my-prep", {"description": "Mine."}, version=None, start_from="data-prep")).view
+    copied = await save_subagent(USER, "my-prep", {"description": "Mine."}, version=None, start_from="data-prep")
 
     assert "model" not in world.rows["my-prep"]["fields"]
     assert (copied["model"], copied["effort"]) == (None, "low")
@@ -131,11 +153,10 @@ async def test_a_copy_leaves_out_a_base_pin_its_plan_lacks(world):
 async def test_a_description_another_subagent_has_saves_with_a_problem(world, other_on, description, matches):
     world.custom("alpha", enabled=other_on)
 
-    result = await save_subagent(USER, "beta", {"description": description}, version=None)
+    view = await save_subagent(USER, "beta", {"description": description}, version=None)
 
     assert "beta" in world.rows
-    assert result.description_matches == matches
-    assert [p["detail"] for p in result.view["problems"] if p["code"] == "description_matches"] == matches
+    assert [p["detail"] for p in view["problems"] if p["code"] == "description_matches"] == matches
     # A base's description is read-only, so only the custom one is asked to differ.
     assert not [p for p in (await views(world))["research"]["problems"] if p["code"] == "description_matches"]
 
@@ -147,10 +168,10 @@ async def test_a_stale_value_the_save_leaves_alone_shows_as_a_problem(world):
     )
     version = (await views(world))["alpha"]["version"]
 
-    result = await save_subagent(USER, "alpha", {"enabled": False}, version=version)
+    view = await save_subagent(USER, "alpha", {"enabled": False}, version=version)
 
     assert world.rows["alpha"]["fields"]["enabled"] is False
-    assert {(p["code"], p["detail"]) for p in result.view["problems"]} >= {
+    assert {(p["code"], p["detail"]) for p in view["problems"]} >= {
         ("model_unavailable", "model-off-plan"),
         ("skill_missing", "gone"),
         ("connector_missing", "ghost"),
@@ -160,9 +181,9 @@ async def test_a_stale_value_the_save_leaves_alone_shows_as_a_problem(world):
 
 @pytest.mark.parametrize(("start_from", "memory"), [(None, True), ("research", False)])
 async def test_a_new_subagent_reads_memory_unless_it_copies_one_that_does_not(world, start_from, memory):
-    result = await save_subagent(USER, "neo", {"description": "Desk work."}, version=None, start_from=start_from)
+    view = await save_subagent(USER, "neo", {"description": "Desk work."}, version=None, start_from=start_from)
 
-    assert result.view["memory"] is memory
+    assert view["memory"] is memory
 
 
 async def test_a_reset_clears_an_override_whose_base_was_replaced(world):

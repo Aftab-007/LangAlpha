@@ -38,7 +38,6 @@ class SubagentContext:
     """One user's facts for one request; created per request, never shared."""
 
     user_id: str
-    subagents: SubagentsConfig
     bases: dict[str, BaseSubagent]
     #: The deployment's offered names, then the subagents of plugins that are on.
     offered: tuple[str, ...]
@@ -196,16 +195,26 @@ def _main_values(model_pref: dict, search_provider: str, search_depth: str) -> d
 
 async def load_main_values(user_id: str) -> dict[str, Any]:
     """``SubagentContext.main_values`` without the facts only the subagents' checks need."""
+    model_pref, _, search_provider, search_depth = await _gated(_agent_config(), user_id)
+    return _main_values(model_pref, search_provider, search_depth)
+
+
+async def _gated(agent_config: AgentConfig, user_id: str) -> tuple[dict, TierPermits, str, str]:
+    """The user's model settings, then the turn's own gate over them, so the
+    plan check and the search pair are the ones a turn gets.
+
+    The gate runs on a copy that keeps the shared config untouched. Crawl is
+    pinned off: its gate needs a tier fetch these reads have no use for.
+    """
     from src.server.services.llm import user_models
     from src.server.services.llm.capabilities import gate_capabilities
 
-    agent_config = _agent_config()
     model_pref = await user_models.get_model_preference(user_id)
     probe = agent_config.model_copy(
         update={"features": {**(agent_config.features or {}), "site_crawl": False}}
     )
-    await gate_capabilities(probe, user_id, model_pref)
-    return _main_values(model_pref, probe.search_api, probe.search_depth)
+    permits = await gate_capabilities(probe, user_id, model_pref)
+    return model_pref, permits, probe.search_api, probe.search_depth
 
 
 async def roster(
@@ -340,35 +349,29 @@ async def _oauth_accounts(user_id: str) -> dict[str, str]:
 async def load_context(user_id: str) -> SubagentContext:
     """Everything but the rows, for one request."""
     from src.server.database.api_keys import is_byok_active
-    from src.server.services.llm import user_models
-    from src.server.services.llm.capabilities import gate_capabilities
 
     agent_config = _agent_config()
-    model_pref, is_byok, oauth_accounts = await asyncio.gather(
-        user_models.get_model_preference(user_id), is_byok_active(user_id),
+    # Each read opens its own connection; only the gate waits, for the model settings.
+    (
+        gated, is_byok, oauth_accounts, skills, (connectors, connected), (bases, offered)
+    ) = await asyncio.gather(
+        _gated(agent_config, user_id),
+        is_byok_active(user_id),
         _oauth_accounts(user_id),
-    )
-    # The turn's own gate, on a copy that keeps the shared config untouched,
-    # so the user's search pair and the plan check are the ones a turn gets.
-    # Crawl is pinned off: its gate needs a tier fetch this view has no use for.
-    probe = agent_config.model_copy(
-        update={"features": {**(agent_config.features or {}), "site_crawl": False}}
-    )
-    permits = await gate_capabilities(probe, user_id, model_pref)
-    skills, (connectors, connected), (bases, offered) = await asyncio.gather(
-        _skill_names(user_id), _connectors(user_id, agent_config),
+        _skill_names(user_id),
+        _connectors(user_id, agent_config),
         roster(user_id, agent_config.subagents),
     )
+    model_pref, permits, search_provider, search_depth = gated
     return SubagentContext(
         user_id=user_id,
-        subagents=agent_config.subagents,
         bases=bases,
         offered=offered,
         model_pref=model_pref,
         is_byok=is_byok,
         permits=permits,
-        search_provider=probe.search_api,
-        search_depth=probe.search_depth,
+        search_provider=search_provider,
+        search_depth=search_depth,
         skills=skills,
         connectors=connectors,
         brokerages_connected=connected,

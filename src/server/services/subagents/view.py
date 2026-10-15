@@ -25,10 +25,11 @@ from ptc_agent.agent.subagents.merge import (
     BaseSubagent,
     apply_override,
     merge_subagents,
+    plan_gated,
     tool_words,
 )
 
-from .rules import EDITABLE_KEYS, NAME_RE, RESERVED_NAMES, ROLE_ORDER, WRITABLE_KEYS, description_matches
+from .rules import NAME_RE, RESERVED_NAMES, ROLE_ORDER, WRITABLE_KEYS, description_matches
 
 if TYPE_CHECKING:
     from .context import SubagentContext
@@ -207,6 +208,11 @@ def _base_view(
     )
 
 
+def is_orphan(view: Mapping[str, Any]) -> bool:
+    """Settings of a base that is gone, which have no file: only the pane deletes them."""
+    return view["kind"] == "base" and view["base"] is None
+
+
 def _orphan_view(row: Mapping[str, Any], installed_plugins: frozenset[str]) -> dict[str, Any]:
     """An override whose base is gone: listed so the user can delete it, nothing else."""
     plugin = _plugin_of_key(row.get("base_key"))
@@ -246,12 +252,7 @@ async def _model_unavailable(
     """
     if not ctx.model_known(defn.model):
         return True
-    user_set = (
-        base is None
-        or base.definition.source == "plugin"
-        or base.definition.model != defn.model
-    )
-    if user_set and not await ctx.model_on_plan(defn.model):
+    if plan_gated(defn, base) and not await ctx.model_on_plan(defn.model):
         return True
     return not await ctx.model_has_key(defn.model)
 
@@ -283,7 +284,7 @@ _Pair = tuple[dict[str, Any], SubagentDefinition, BaseSubagent | None]
 
 def _views(
     bases: Mapping[str, BaseSubagent], offered: Iterable[str], rows: Iterable[Mapping[str, Any]]
-) -> tuple[list[dict[str, Any]], list[_Pair], set[str]]:
+) -> tuple[list[dict[str, Any]], list[_Pair]]:
     rows = [r for r in rows if r.get("workspace_id") is None]
     # The bases hold every installed plugin's subagents, switched on or off,
     # and bundles. A plugin that ships none any more can only have left an
@@ -325,7 +326,7 @@ def _views(
         dormant = name in bases and bases[name].key == row.get("base_key")
         if name not in resolved.definitions and not dormant:
             views.append(_orphan_view(row, installed_plugins))
-    return views, pairs, on
+    return views, pairs
 
 
 def value_views(
@@ -335,25 +336,32 @@ def value_views(
     return _views(bases, offered, rows)[0]
 
 
-async def build_views(
-    ctx: SubagentContext, rows: Iterable[Mapping[str, Any]], *, problems: bool = True
-) -> list[dict[str, Any]]:
+def matching_descriptions(views: Mapping[str, Mapping[str, Any]], name: str) -> list[str]:
+    """The subagents that are on whose description reads the same as ``name``'s.
+
+    A base's description is read-only, so only one of the user's own that is
+    on is asked to say how it differs.
+    """
+    view = views[name]
+    if view["kind"] != "custom" or not view["enabled"]:
+        return []
+    others = [
+        (v["name"], v["description"], v["available_to"])
+        for v in views.values()
+        if v["name"] != name and v["enabled"] and not is_orphan(v)
+    ]
+    return description_matches(view["description"], view["available_to"], others)
+
+
+async def build_views(ctx: SubagentContext, rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Every subagent the user has, in roster order, then orphaned overrides.
 
     The offered bases come first in the deployment's order, then the user's
     own; each carries its effective values, its base's, its problems and its
-    version. Thread titles are left for ``attach_titles``. ``problems=False``
-    skips the checks that read keys and plans, for a writer that only needs
-    values and versions (they touch no connection, so it can hold a lock).
+    version. Thread titles are left for ``attach_titles``.
     """
-    views, pairs, on = _views(ctx.bases, ctx.offered, rows)
-    if not problems:
-        return views
-    enabled_texts = [
-        (defn.name, defn.description, defn.roles)
-        for _, defn, _ in pairs
-        if defn.name in on
-    ]
+    views, pairs = _views(ctx.bases, ctx.offered, rows)
+    by_name = {v["name"]: v for v in views}
     for view, defn, base in pairs:
         found = view["problems"]
         if defn.model and await _model_unavailable(ctx, defn, base):
@@ -375,14 +383,10 @@ async def build_views(
             for c in defn.preferred_connectors if c not in ctx.connector_names
         ]
         found += await _search_problems(ctx, defn)
-        # A base's description is read-only, so only a custom one is asked to
-        # say how it differs.
-        if base is None and defn.name in on:
-            others = [t for t in enabled_texts if t[0] != defn.name]
-            found += [
-                {"code": "description_matches", "detail": other}
-                for other in description_matches(defn.description, defn.roles, others)
-            ]
+        found += [
+            {"code": "description_matches", "detail": other}
+            for other in matching_descriptions(by_name, defn.name)
+        ]
     return views
 
 
@@ -399,9 +403,3 @@ async def attach_titles(user_id: str, views: Iterable[dict[str, Any]]) -> None:
         thread = view.get("updated_thread_id")
         if thread:
             view["updated_thread_title"] = titles.get(thread)
-
-
-def editable_values(view: Mapping[str, Any]) -> dict[str, Any]:
-    """The values a writer may change on this view's subagent."""
-    keys = WRITABLE_KEYS if view["kind"] == "custom" else EDITABLE_KEYS
-    return {k: view[k] for k in keys}

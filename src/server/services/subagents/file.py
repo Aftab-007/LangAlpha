@@ -6,10 +6,10 @@ shows effective values whatever the row stores, so a save that keeps only
 differences from a base still reads back as written. ``main.md`` shows what
 the agent itself runs on and takes no save.
 
-A save sends only the keys that differ from the file as it stands to the
-``save_subagent`` the pane's REST route uses, which checks the version again
-under its own lock, so the route holds no transaction (as the channels route
-holds none). The file's own rules live here: the file name names the
+A save sends only the keys that differ from the file as it stands through
+the checks the pane's REST route runs, before the route's lock
+(``prepare_save``), and makes it in the route's own transaction
+(``apply_save``). The file's own rules live here: the file name names the
 subagent, read-only keys are ignored with a note rather than refused, and a
 base's body is refused.
 """
@@ -21,7 +21,7 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import yaml
@@ -35,10 +35,8 @@ from ptc_agent.agent.backends.db_json_route import (
 from ptc_agent.core.paths import SUBAGENT_FILE_NAME
 from ptc_agent.core.sandbox.livefs_mount import CallContext
 
-from .context import list_connectors, load_main_values
-from .frontmatter import StrictLoader as _Loader
-from .frontmatter import split_frontmatter as _split
-from .frontmatter import unsavable_char
+from .context import list_connectors, load_context, load_main_values
+from .frontmatter import FrontmatterFault, load_frontmatter, unsavable_char
 from .rules import (
     DESCRIPTION_MAX,
     EDITABLE_KEYS,
@@ -46,19 +44,15 @@ from .rules import (
     INHERITABLE_KEYS,
     MAX_CUSTOM,
     WRITABLE_KEYS,
+    FieldError,
     SubagentInvalid,
     changed_fields,
     description_match_note,
     normalize_value,
+    validate_new_name,
 )
-from .writes import (
-    SubagentNotFound,
-    VersionConflict,
-    delete_subagent,
-    file_values,
-    rename_subagent,
-    save_subagent,
-)
+from .view import is_orphan, matching_descriptions
+from .writes import PreparedSave, Subagents, apply_save, prepare_save, read_subagents
 
 logger = logging.getLogger(__name__)
 
@@ -109,18 +103,9 @@ def file_named(name: str) -> SubagentFile | MainFile | None:
     return None
 
 
-def _orphan(view: dict[str, Any]) -> bool:
-    """Settings of a base that is gone, which have no file: only the pane deletes them."""
-    return view["kind"] == "base" and view["base"] is None
-
-
-def _has_file(view: dict[str, Any]) -> bool:
-    return view["file"] is not None and not _orphan(view)
-
-
 async def file_names(user_id: str) -> list[str]:
-    names = [f"{v['name']}.md" for v in await file_values(user_id) if _has_file(v)]
-    return sorted([*names, MAIN_FILE])
+    views = (await read_subagents(user_id)).views
+    return sorted([*(f"{name}.md" for name, v in views.items() if v["file"] is not None), MAIN_FILE])
 
 
 async def _main_values(user_id: str) -> dict[str, Any] | None:
@@ -133,8 +118,11 @@ async def _main_values(user_id: str) -> dict[str, Any] | None:
 
 
 async def rendered_files(user_id: str) -> dict[str, tuple[str, str]]:
-    views, main = await asyncio.gather(file_values(user_id), _main_values(user_id))
-    out = {f"{v['name']}.md": (render_subagent(v), v["version"]) for v in views if _has_file(v)}
+    found, main = await asyncio.gather(read_subagents(user_id), _main_values(user_id))
+    out = {
+        f"{name}.md": (render_subagent(v), v["version"])
+        for name, v in found.views.items() if v["file"] is not None
+    }
     if main is not None:
         out[MAIN_FILE] = render_main(main)
     return out
@@ -152,7 +140,7 @@ def _scalar(value: str) -> str:
         try:
             if yaml.safe_load(f"k: {value}") == {"k": value}:
                 return value
-        except yaml.YAMLError:
+        except (yaml.YAMLError, ValueError):  # ValueError: a date YAML can't build
             pass
     return json.dumps(value, ensure_ascii=False)
 
@@ -161,7 +149,7 @@ def _item(value: str) -> str:
     try:
         if _PLAIN_ITEM.fullmatch(value) and yaml.safe_load(value) == value:
             return value
-    except yaml.YAMLError:
+    except (yaml.YAMLError, ValueError):
         pass
     return json.dumps(value, ensure_ascii=False)
 
@@ -246,25 +234,42 @@ def _option_text(options: list[str] | None) -> str:
 
 @dataclass
 class Change:
-    """What one save or delete of a subagent's file does."""
+    """What one save or delete of a subagent's file does. ``stale`` is a save
+    whose subagent moved between its checks and the lock."""
 
-    action: Literal["none", "save", "delete"] = "none"
+    action: Literal["none", "save", "delete", "stale"] = "none"
     fields: dict[str, Any] = field(default_factory=dict)
-    # The version the route checked; None creates.
-    version: str | None = None
     start_from: str | None = None
     thread_id: str | None = None
     kind: str = "custom"
     notes: list[str] = field(default_factory=list)
+    # A save as checked before the lock, and the subagents the lock found,
+    # which it is made over.
+    prepared: PreparedSave | None = None
+    locked: Subagents | None = None
 
     def __bool__(self) -> bool:
         return self.action != "none"
 
 
+@dataclass(frozen=True)
+class Planned:
+    """A written file planned and checked over the subagents an unlocked read
+    found, where its subagent stood at ``version`` (None: there was none).
+
+    A refusal waits for the route's version check, so a writer whose Read is
+    stale hears that rather than a refusal judged against a file it never saw.
+    """
+
+    version: str | None
+    change: Change | None = None
+    refused: UserDataValidationError | None = None
+
+
 _Views = dict[str, dict[str, Any]]
 
 
-class SubagentFile(DbJsonFile[_Views, Written, Change]):
+class SubagentFile(DbJsonFile[Subagents, Planned, Change]):
     """The subagent named ``name``, or the custom one a save there makes."""
 
     def __init__(self, name: str) -> None:
@@ -275,8 +280,8 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
     def _refuse(self, error_type: Any, hint: str, file: str | None = None) -> UserDataValidationError:
         return UserDataValidationError(error_type=error_type, file=file or self.file, field_path="", hint=hint)
 
-    def _invalid(self, exc: SubagentInvalid, file: str | None = None) -> UserDataValidationError:
-        problems = [(e.field, e.message + _option_text(e.options)) for e in exc.errors]
+    def _invalid(self, errors: list[FieldError], file: str | None = None) -> UserDataValidationError:
+        problems = [(e.field, e.message + _option_text(e.options)) for e in errors]
         return UserDataValidationError(
             error_type="schema_error",
             file=file or self.file,
@@ -285,50 +290,27 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
             problems=problems,
         )
 
-    async def fetch(self, user_id: str, conn: Any = None) -> _Views:
-        return {v["name"]: v for v in await file_values(user_id)}
+    async def fetch(self, user_id: str, conn: Any = None) -> Subagents:
+        return await read_subagents(user_id, conn=conn)
 
-    def render(self, views: _Views) -> tuple[str, str] | None:
-        view = views.get(self.name)
-        if view is None or not _has_file(view):
+    def render(self, found: Subagents) -> tuple[str, str] | None:
+        view = found.views.get(self.name)
+        if view is None or view["file"] is None:
             return None
         return render_subagent(view), view["version"]
 
     async def lock(self, user_id: str, conn: Any) -> None:
-        # ``save_subagent`` takes the user's lock and checks the version under it.
-        return None
+        from src.server.database.user_subagents import lock_user_subagents
 
-    async def parse(self, user_id: str, call: CallContext, content: str, served: str | None) -> Written:
-        parts = _split(content)
-        if parts is None:
-            raise self._refuse(
-                "parse_error",
-                "a subagent file starts with its frontmatter between two --- lines, then its "
-                "instructions.",
-            )
-        front, body, first_line = parts
-        if "\x00" in front:
-            # YAML's own refusal names a character position and asks for quotes.
-            raise self._refuse(
-                "parse_error",
-                "the frontmatter holds a NUL character (\\x00), which saved text can't hold.",
-            )
+        await lock_user_subagents(user_id, conn=conn)
+
+    def written(self, content: str) -> Written:
+        """``content`` as a subagent file, refused for what no rows decide."""
         try:
-            loaded = yaml.load(front, Loader=_Loader)  # noqa: S506 - a SafeLoader subclass
-        except yaml.YAMLError as exc:
-            mark = getattr(exc, "problem_mark", None)
-            where = f" (line {mark.line + first_line})" if mark is not None else ""
-            problem = getattr(exc, "problem", None) or str(exc)
-            quote = "" if isinstance(exc, yaml.constructor.ConstructorError) else (
-                " Quote a value that holds ': ' or ' #'."
-            )
-            raise self._refuse(
-                "parse_error", f"the frontmatter is not valid YAML{where}: {problem}.{quote}"
-            ) from None
-        if loaded is None:
-            loaded = {}
-        if not isinstance(loaded, dict):
-            raise self._refuse("parse_error", "the frontmatter must be key: value lines.")
+            loaded, body = load_frontmatter(content)
+        except FrontmatterFault as fault:
+            quote = " Quote a value that holds ': ' or ' #'." if fault.quotable else ""
+            raise self._refuse("parse_error", f"{fault.message}.{quote}") from None
         # A YAML "\ud800" escape can put one in a key or a name, and every
         # refusal below echoes those; a NUL echoes fine and is refused per field.
         if unsavable_char(loaded) not in (None, "\x00"):
@@ -351,6 +333,26 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
         values = {k: _text_key(k, v) for k, v in loaded.items() if k not in _KEPT_KEYS}
         return Written(values, body.strip(), loaded.get("name"), loaded.get("source"))
 
+    async def parse(self, user_id: str, call: CallContext, content: str, served: str | None) -> Planned:
+        """``content`` planned over the subagents as they stand, and a save
+        checked as the pane's is, all before the lock: the checks read keys
+        and plans over other connections."""
+        written = self.written(content)
+        found = await read_subagents(user_id)
+        version = found.version(self.name)
+        try:
+            change = self._change(call, written, found.views)
+            if change.action == "save":
+                change.prepared = await prepare_save(
+                    await load_context(user_id), found, self.name, change.fields,
+                    version=version, start_from=change.start_from,
+                )
+        except UserDataValidationError as refused:
+            return Planned(version, refused=refused)
+        except SubagentInvalid as exc:
+            return Planned(version, refused=self._invalid(exc.errors))
+        return Planned(version, change)
+
     def _orphan_taken(self, name: str, file: str | None = None) -> UserDataValidationError:
         return self._refuse(
             "constraint_error",
@@ -359,12 +361,20 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
             file,
         )
 
-    def plan(self, call: CallContext, written: Written, views: _Views) -> Plan[Change]:
+    def plan(self, call: CallContext, planned: Planned, found: Subagents) -> Plan[Change]:
+        """What ``parse`` planned, while the subagent stands as its read found it."""
+        if found.version(self.name) != planned.version:
+            return Plan(Change("stale"))
+        if planned.refused is not None:
+            raise planned.refused
+        return Plan(replace(planned.change, locked=found))
+
+    def _change(self, call: CallContext, written: Written, views: _Views) -> Change:
         current = views.get(self.name)
-        if current is not None and _orphan(current):
+        if current is not None and is_orphan(current):
             raise self._orphan_taken(self.name)
         if current is None:
-            return Plan(self._plan_create(call, written, views))
+            return self._create(call, written, views)
 
         notes: list[str] = []
         custom = current["kind"] == "custom"
@@ -397,20 +407,17 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
         if custom and written.body != (current["instructions"] or "").strip():
             fields["instructions"] = written.body
         if not fields:
-            return Plan(Change(notes=notes))
-        return Plan(Change(
-            "save", fields, version=current["version"], thread_id=call.thread_id,
-            kind=current["kind"], notes=notes,
-        ))
+            return Change(notes=notes)
+        return Change("save", fields, thread_id=call.thread_id, notes=notes)
 
-    def _plan_create(self, call: CallContext, written: Written, views: _Views) -> Change:
+    def _create(self, call: CallContext, written: Written, views: _Views) -> Change:
         """A new custom subagent. A ``name`` naming another subagent makes it a
         copy of that one (what ``cp`` writes), carrying every key the file
         leaves as it was; any other ``name`` is ignored."""
         notes: list[str] = []
         named = written.name if isinstance(written.name, str) and written.name != self.name else None
         source = views.get(named) if named else None
-        if source is not None and _orphan(source):
+        if source is not None and is_orphan(source):
             source = None
         if source is not None:
             keys = tuple(k for k in WRITABLE_KEYS if k != "instructions")
@@ -430,13 +437,13 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
             fields["instructions"] = written.body
         return Change("save", fields, thread_id=call.thread_id, notes=notes)
 
-    def plan_delete(self, views: _Views) -> Plan[Change]:
-        current = views[self.name]
+    def plan_delete(self, found: Subagents) -> Plan[Change]:
+        current = found.views[self.name]
         if current["kind"] == "custom":
-            return Plan(Change("delete", version=current["version"]))
+            return Plan(Change("delete"))
         stale = any(p["code"] == "base_removed" for p in current["problems"])
         if current["edited"] or stale:
-            return Plan(Change("delete", version=current["version"], kind="base"))
+            return Plan(Change("delete", kind="base"))
         raise self._refuse(
             "constraint_error",
             f"{self.name} is a built-in subagent with none of your changes, so there is nothing to "
@@ -444,33 +451,23 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
         )
 
     async def commit(self, user_id: str, change: Change, conn: Any) -> str | None:
+        if change.action == "stale":
+            raise StaleVersion()
         if not change:
             return "\n".join([self.unchanged, *(f"Note: {n}" for n in change.notes)])
         if change.action == "delete":
-            return await self._delete(user_id, change)
+            return await self._delete(user_id, change, conn)
         try:
-            result = await save_subagent(
-                user_id,
-                self.name,
-                change.fields,
-                version=change.version,
-                start_from=change.start_from,
-                updated_by="agent",
-                thread_id=change.thread_id,
+            row = await apply_save(
+                change.prepared, change.locked, conn, updated_by="agent", thread_id=change.thread_id
             )
-        except VersionConflict:
-            if change.version is None:
-                raise self._refuse(
-                    "exists", f"another writer created {self.file} meanwhile. Read it, then write it again."
-                ) from None
-            raise StaleVersion() from None
         except SubagentInvalid as exc:
-            raise self._invalid(exc) from None
-        return self._report(change, result)
+            raise self._invalid(exc.errors) from None
+        return self._report(change, change.locked.saved(self.name, row))
 
-    def _report(self, change: Change, result: Any) -> str:
-        view = result.view
-        if result.created:
+    def _report(self, change: Change, after: Subagents) -> str:
+        view = after.views[self.name]
+        if change.prepared.version is None:
             copy = f", a copy of {change.start_from}" if change.start_from else ""
             head = (
                 f"Saved: new subagent {self.name}{copy} "
@@ -490,22 +487,19 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
             if "instructions" in change.fields:
                 changed.append("instructions updated")
             head = f"Saved: {self.name}: {', '.join(changed)}."
-            if result.reset:
+            if self.name not in after.rows:
                 head += " It now matches its built-in settings."
             tail = _NEXT_TURN
         notes = [
             *change.notes,
-            *(f"{description_match_note(other)}." for other in result.description_matches),
+            *(f"{description_match_note(other)}." for other in matching_descriptions(after.views, self.name)),
         ]
         return "\n".join([f"{head} {tail}", *(f"Note: {n}" for n in notes)])
 
-    async def _delete(self, user_id: str, change: Change) -> str | None:
-        try:
-            await delete_subagent(user_id, self.name, version=change.version)
-        except VersionConflict:
-            raise StaleVersion() from None
-        except SubagentNotFound:
-            return None
+    async def _delete(self, user_id: str, change: Change, conn: Any) -> str:
+        from src.server.database.user_subagents import delete_user_subagent
+
+        await delete_user_subagent(user_id, self.name, conn=conn)
         if change.kind == "custom":
             return f"Deleted subagent {self.name}. It leaves your roster from your next turn."
         return (
@@ -513,9 +507,11 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
         )
 
     async def rename(self, user_id: str, to: str, conn: Any, call: CallContext) -> str | None:
-        views = await self.fetch(user_id)
-        current = views.get(self.name)
-        if current is None or _orphan(current):
+        from src.server.database.user_subagents import rename_user_subagent
+
+        found = await self.fetch(user_id, conn)
+        current = found.views.get(self.name)
+        if current is None or is_orphan(current):
             return None
         if current["kind"] != "custom":
             raise self._refuse(
@@ -524,20 +520,18 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
                 "own version, copy it to a new name.",
             )
         new_name = to.removesuffix(".md")
-        target = views.get(new_name)
-        if target is not None and _orphan(target):
+        target = found.views.get(new_name)
+        if target is not None and is_orphan(target):
             raise self._orphan_taken(new_name, to)
-        try:
-            moved = await rename_subagent(
-                user_id, self.name, new_name, updated_by="agent", thread_id=call.thread_id
-            )
-        except SubagentNotFound:
-            return None
-        except SubagentInvalid as exc:
-            raise self._invalid(exc, file=to) from None
-        if not moved:
-            return None
-        return f"Renamed subagent {self.name} to {new_name}. {_NEXT_TURN}"
+        errors = validate_new_name(new_name, base_names=found.bases, custom_count=0)
+        if not errors and new_name in found.rows:
+            errors.append(FieldError("name", f"{new_name} is taken. Pick another name."))
+        if errors:
+            raise self._invalid(errors, file=to)
+        moved = await rename_user_subagent(
+            user_id, self.name, new_name, updated_by="agent", updated_thread_id=call.thread_id, conn=conn
+        )
+        return f"Renamed subagent {self.name} to {new_name}. {_NEXT_TURN}" if moved else None
 
 
 class MainFile(DbJsonFile[dict[str, Any] | None, None, None]):
@@ -561,17 +555,15 @@ def _codes(names: Any) -> str:
 
 def _search_lines() -> tuple[str, str, str]:
     """The search providers, each with its levels, and every level there is."""
-    from src.tools.web.manifest import CAPABILITY_SEARCH, providers_with_capability
+    from src.tools.web.manifest import (
+        CAPABILITY_SEARCH,
+        providers_with_capability,
+        search_levels,
+    )
 
     providers = providers_with_capability(CAPABILITY_SEARCH)
-    pairs = [
-        f"`{name}` ({_codes(lv.name for lv in spec.capability(CAPABILITY_SEARCH).levels)})"
-        for name, spec in providers.items()
-    ]
-    levels = dict.fromkeys(
-        lv.name for spec in providers.values() for lv in spec.capability(CAPABILITY_SEARCH).levels
-    )
-    return _codes(providers), ", ".join(pairs), _codes(levels)
+    pairs = [f"`{name}` ({_codes(search_levels(name))})" for name in providers]
+    return _codes(providers), ", ".join(pairs), _codes(search_levels())
 
 
 async def _connector_line(user_id: str) -> str:

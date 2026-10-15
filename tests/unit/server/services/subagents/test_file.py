@@ -13,7 +13,7 @@ from ptc_agent.agent.backends.subagents import SubagentsBackend
 from ptc_agent.agent.subagents.definition import SubagentDefinition
 from ptc_agent.agent.subagents.merge import BaseSubagent
 from ptc_agent.core.sandbox.livefs_mount import CallContext
-from src.server.services.subagents import changed_fields
+from src.server.services.subagents.rules import changed_fields
 from src.server.services.subagents.file import SubagentFile, render_subagent
 from tests.unit.server.services.subagents._fakes import THREAD, USER, research_base, views
 
@@ -42,8 +42,8 @@ def _set(content: str, key: str, value: str) -> str:
 async def _plan(name: str, content: str):
     """What a save of ``content`` over ``name``'s file would change."""
     file = SubagentFile(name)
-    written = await file.parse(USER, CALL, content, None)
-    return file.plan(CALL, written, await file.fetch(USER)).changes
+    planned = await file.parse(USER, CALL, content, None)
+    return file.plan(CALL, planned, await file.fetch(USER)).changes
 
 
 # Each is read differently by YAML when left plain.
@@ -65,6 +65,7 @@ DESCRIPTIONS = [
     "back\\slash",
     "line separator",
     "Ünïcødé ✓ 中文",
+    "2026-02-30",  # date-shaped, and a date YAML can't build
 ]
 
 
@@ -79,7 +80,7 @@ async def test_a_custom_file_parses_back_to_the_values_it_shows(world, descripti
     view = (await views(world))["alpha"]
     content = render_subagent(view)
 
-    written = await SubagentFile("alpha").parse(USER, CALL, content, None)
+    written = SubagentFile("alpha").written(content)
 
     assert written.values["description"] == description
     assert changed_fields({k: view[k] for k in written.values}, written.values) == {}
@@ -94,7 +95,7 @@ async def test_a_base_file_parses_back_to_the_values_it_shows(world, name):
     view = (await views(world))[name]
     content = render_subagent(view)
 
-    written = await SubagentFile(name).parse(USER, CALL, content, None)
+    written = SubagentFile(name).written(content)
 
     assert changed_fields({k: view[k] for k in written.values}, written.values) == {}
     change = await _plan(name, content)
@@ -111,6 +112,8 @@ async def test_a_base_file_parses_back_to_the_values_it_shows(world, name):
         ("---\ndescription: never closed\n", "parse_error", []),
         ("---\n- a list\n---\n", "parse_error", []),
         ("---\ndescription: holds: a colon\n---\n", "parse_error", []),
+        ("---\ndescription: 2026-13-45\n---\n", "parse_error", []),
+        ("---\ntools: " + "[" * 3000 + "]" * 3000 + "\n---\n", "parse_error", []),
     ],
 )
 async def test_a_file_the_frontmatter_rules_refuse(world, content, error_type, fields):
@@ -238,6 +241,21 @@ async def test_a_base_that_moves_after_the_read_is_a_version_conflict(world, bac
     assert exc.value.error_type == "version_conflict"
     assert world.rows == rows
     assert world.on_lock is None
+
+
+async def test_a_save_hands_the_mount_its_own_file_not_a_later_writers(world, backend):
+    """The file and version a save settles on are read before it lets the
+    user's lock go, so a pane save right after it is a change the mount has
+    not seen rather than one it holds as its own."""
+    world.custom("alpha", model="model-a")
+    content, version = await backend.aread_versioned(_path("alpha"))
+    world.on_release = lambda: world.rows["alpha"]["fields"].update(model="model-flat")
+
+    stored = await backend.awrite_versioned(_path("alpha"), _set(content, "effort", "high"), version)
+
+    assert world.on_release is None
+    assert "\nmodel: model-a\neffort: high\n" in stored.content
+    assert stored.version != (await backend.aread_versioned(_path("alpha")))[1]
 
 
 @pytest.mark.parametrize(

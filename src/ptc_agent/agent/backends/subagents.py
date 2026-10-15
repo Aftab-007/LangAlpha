@@ -8,8 +8,6 @@ same write the Subagents pane makes.
 
 from __future__ import annotations
 
-import contextlib
-
 from ptc_agent.agent.backends.db_json_folder import DbJsonFolderRoute
 from ptc_agent.agent.backends.db_json_route import README_FILE, UserDataValidationError
 from ptc_agent.core.paths import SandboxLayout
@@ -50,12 +48,6 @@ class SubagentsBackend(DbJsonFolderRoute):
     @classmethod
     async def rendered(cls, user_id: str) -> dict[str, tuple[str, str]]:
         return await file.rendered_files(user_id)
-
-    @staticmethod
-    def _transaction() -> contextlib.nullcontext[None]:
-        # ``save_subagent`` checks the version under its own lock and
-        # transaction, so a save here holds no second connection around it.
-        return contextlib.nullcontext()
 
     async def _readme(self) -> str:
         # Once per route, which lives for one request: it names the user's
