@@ -13,12 +13,12 @@ import pytest
 
 from src.server.services import automation_delivery
 from src.server.services.automation_delivery import Delivery, Target
-from src.server.services.report_back.flash import requested_from as RF
-from src.server.services.report_back.flash import reserve as R
-from src.server.services.report_back.flash.keys import flash_rb_run_key, ptc_origin_key
+from src.server.services.report_back.handoff import requested_from as RF
+from src.server.services.report_back.handoff import reserve as R
+from src.server.services.report_back.handoff.keys import rb_run_key, ptc_origin_key
 from tests.unit.server.handlers.chat.redis_fakes import FakeCache
 
-FLASH = "flash-1"
+DISPATCHER = "cos-1"
 PTC = "ptc-1"
 
 DESK = Target(entry="slack:T/C", address="slack:T/C", name="#desk", ok=True)
@@ -34,7 +34,7 @@ def _run_turn(*targets: Target, run_id: str = "exec-1") -> dict:
 
 
 def _record(*entries: dict) -> dict:
-    return {"flash_thread_id": FLASH, RF.KEY: list(entries)}
+    return {"flash_thread_id": DISPATCHER, RF.KEY: list(entries)}
 
 
 class TestWhatADispatchRecords:
@@ -94,41 +94,41 @@ class TestWhatADispatchRecords:
 class TestTheRecordKeepsTheRequestsStillWaiting:
     def test_a_first_dispatch_records_its_own(self):
         assert RF.recorded(
-            {"asked": "a"}, None, flash_thread_id=FLASH, reported=False
+            {"asked": "a"}, None, dispatcher_thread_id=DISPATCHER, reported=False
         ) == [{"asked": "a"}]
 
     def test_an_unreported_record_keeps_its_requests_first(self):
         previous = _record({"asked": "a", "surface": "slack"})
         kept = RF.recorded(
-            {"asked": "b"}, previous, flash_thread_id=FLASH, reported=False
+            {"asked": "b"}, previous, dispatcher_thread_id=DISPATCHER, reported=False
         )
         assert kept == [{"asked": "a", "surface": "slack"}, {"asked": "b"}]
 
     def test_a_reported_record_keeps_nothing(self):
         previous = _record({"asked": "a", "surface": "slack"})
         kept = RF.recorded(
-            {"asked": "b"}, previous, flash_thread_id=FLASH, reported=True
+            {"asked": "b"}, previous, dispatcher_thread_id=DISPATCHER, reported=True
         )
         assert kept == [{"asked": "b"}]
 
     def test_another_threads_record_keeps_nothing(self):
-        previous = {**_record({"asked": "a"}), "flash_thread_id": "flash-2"}
+        previous = {**_record({"asked": "a"}), "flash_thread_id": "cos-2"}
         kept = RF.recorded(
-            {"asked": "b"}, previous, flash_thread_id=FLASH, reported=False
+            {"asked": "b"}, previous, dispatcher_thread_id=DISPATCHER, reported=False
         )
         assert kept == [{"asked": "b"}]
 
     def test_the_same_request_from_the_same_place_is_kept_once_at_its_latest(self):
         previous = _record({"asked": "a"}, {"asked": "b"})
         kept = RF.recorded(
-            {"asked": "a"}, previous, flash_thread_id=FLASH, reported=False
+            {"asked": "a"}, previous, dispatcher_thread_id=DISPATCHER, reported=False
         )
         assert kept == [{"asked": "b"}, {"asked": "a"}]
 
     def test_the_oldest_go_first_past_the_cap(self):
         previous = _record(*({"asked": str(i)} for i in range(RF.MAX_ENTRIES)))
         kept = RF.recorded(
-            {"asked": "new"}, previous, flash_thread_id=FLASH, reported=False
+            {"asked": "new"}, previous, dispatcher_thread_id=DISPATCHER, reported=False
         )
         assert len(kept) == RF.MAX_ENTRIES
         assert kept[0] == {"asked": "1"} and kept[-1] == {"asked": "new"}
@@ -178,7 +178,7 @@ class TestTheReminder:
         [
             _record(RF.of_turn({"platform": "web"}, "Value NVDA")),
             _record(RF.of_turn({}, "Value NVDA"), RF.of_turn({}, "And AMD")),
-            {"flash_thread_id": FLASH, "report_back": True, "dispatch_gen": "g1"},
+            {"flash_thread_id": DISPATCHER, "report_back": True, "dispatch_gen": "g1"},
             None,
         ],
         ids=["web", "web twice", "a record from before", "no record"],
@@ -267,7 +267,7 @@ class TestTheRunsTheTurnSendsFor:
         "record",
         [
             _record(RF.of_turn({"platform": "slack"}, "a")),
-            {"flash_thread_id": FLASH},
+            {"flash_thread_id": DISPATCHER},
             None,
             _record({"delivery": {"id": "exec-1", "targets": [UNLINKED.as_dict()]}}),
         ],
@@ -286,7 +286,7 @@ def cache(monkeypatch):
 
 async def _reserve(entry: dict | None) -> str:
     kwargs = {} if entry is None else {"requested_from": entry}
-    async with R.reserve(FLASH, PTC, "ws-1", "fws-1", "u-1", **kwargs) as slot:
+    async with R.reserve(DISPATCHER, PTC, "ws-1", "fws-1", "u-1", **kwargs) as slot:
         assert slot.error is None
         slot.commit()
         return slot.dispatch_gen
@@ -321,7 +321,7 @@ class TestTheReservedRecord:
         first = RF.of_turn(_run_turn(DESK), "Value NVDA")
         second = RF.of_turn({"platform": "slack"}, "And AMD")
         gen = await _reserve(first)
-        cache.kv[flash_rb_run_key(FLASH, PTC)] = {
+        cache.kv[rb_run_key(DISPATCHER, PTC)] = {
             "run_id": "run-1",
             "dispatch_gen": gen,
         }
@@ -335,7 +335,7 @@ class TestTheReservedRecord:
         first = RF.of_turn(_run_turn(DESK), "Value NVDA")
         second = RF.of_turn({"platform": "slack"}, "And AMD")
         await _reserve(first)
-        cache.kv[flash_rb_run_key(FLASH, PTC)] = {
+        cache.kv[rb_run_key(DISPATCHER, PTC)] = {
             "run_id": "run-0",
             "dispatch_gen": "g-old",
         }
@@ -345,7 +345,7 @@ class TestTheReservedRecord:
     @pytest.mark.asyncio
     async def test_a_record_from_before_adds_only_this_request(self, cache):
         cache.kv[ptc_origin_key(PTC)] = {
-            "flash_thread_id": FLASH,
+            "flash_thread_id": DISPATCHER,
             "ptc_thread_id": PTC,
             "report_back": True,
             "user_id": "u-1",
@@ -362,7 +362,7 @@ class TestTheReservedRecord:
         real = cache.get_strict
 
         async def flaky(key):
-            if key == flash_rb_run_key(FLASH, PTC):
+            if key == rb_run_key(DISPATCHER, PTC):
                 raise ConnectionError("blip")
             return await real(key)
 

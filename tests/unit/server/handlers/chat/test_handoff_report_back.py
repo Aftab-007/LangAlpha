@@ -1,9 +1,9 @@
-"""Flash report-back execution path (outbox-executor model, v4 2.3).
+"""Hand-off report-back execution path (outbox-executor model, v4 2.3).
 
 ``execute_report_back`` runs one durable ``report_back`` outbox job: it POSTs
 the summary turn (with a job-deterministic request_key), persists the
 dispatched run id for crash-resume, and holds the job open — lease-heartbeated
-— until the summary run's row reaches terminal. Per-flash ordering is enforced
+— until the summary run's row reaches terminal. Per-thread ordering is enforced
 by the outbox claim query's ordering-key gate (DB-level, exercised in E2E);
 these tests lock the executor's half: dispatch idempotency, teardown paths,
 and the hold-until-terminal contract.
@@ -19,9 +19,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.server.services.report_back.flash import core
+from src.server.services.report_back.handoff import core
 from src.server.services.report_back import notify_turn
-from src.server.services.report_back.flash import executor, keys, leases, pointer, reserve, status, wake
+from src.server.services.report_back.handoff import executor, keys, leases, pointer, reserve, status, wake
 from tests.unit.server.handlers.chat.redis_fakes import (
     FakeCache as _FakeCache,
     origin as _origin,
@@ -30,7 +30,7 @@ from tests.unit.server.handlers.chat.redis_fakes import (
 
 
 def _job(
-    ptc: str, job_id: str = "job-1", ordering_key: str = "flash-1", **payload_extra
+    ptc: str, job_id: str = "job-1", ordering_key: str = "cos-1", **payload_extra
 ) -> dict:
     return {
         "hook_outbox_id": job_id,
@@ -112,31 +112,31 @@ class _ExecHarness:
 
 
 # ---------------------------------------------------------------------------
-# clear_flash_report_back — full per-pair teardown
+# clear_handoff_report_back — full per-pair teardown
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_clear_tears_down_all_per_pair_state():
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
-    cache.kv[keys.flash_rb_run_key(flash, ptc)] = {"run_id": "rb-1"}
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
+    cache.kv[keys.rb_run_key(dispatcher, ptc)] = {"run_id": "rb-1"}
 
-    await pointer.clear_flash_report_back(cache, ptc, flash)
+    await pointer.clear_handoff_report_back(cache, ptc, dispatcher)
 
     assert f"ptc_origin:{ptc}" not in cache.kv
-    assert keys.flash_rb_run_key(flash, ptc) not in cache.kv
-    assert ptc not in cache.client.sets.get(keys.flash_watch_key(flash), set())
+    assert keys.rb_run_key(dispatcher, ptc) not in cache.kv
+    assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
     assert ptc not in cache.client.sets.get("flash_user_pending:u-1", set())
 
 
 @pytest.mark.asyncio
-async def test_clear_without_flash_thread_id_only_deletes_origin():
+async def test_clear_without_dispatcher_thread_id_only_deletes_origin():
     cache = _FakeCache()
     cache.kv["ptc_origin:ptc-1"] = _origin("ptc-1")
 
-    await pointer.clear_flash_report_back(cache, "ptc-1", None)
+    await pointer.clear_handoff_report_back(cache, "ptc-1", None)
 
     assert "ptc_origin:ptc-1" not in cache.kv
 
@@ -147,9 +147,9 @@ async def test_clear_teardown_is_one_atomic_script_then_drained_record():
     pipeline would race a concurrent reserve()); the drained-run record
     follows in its own best-effort pipeline, never interleaved."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
-    cache.kv[keys.flash_rb_run_key(flash, ptc)] = {"run_id": "rb-1"}
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
+    cache.kv[keys.rb_run_key(dispatcher, ptc)] = {"run_id": "rb-1"}
 
     batches: list[list[str]] = []
     orig_pipeline = cache.client.pipeline
@@ -167,15 +167,15 @@ async def test_clear_teardown_is_one_atomic_script_then_drained_record():
 
     cache.client.pipeline = _recording_pipeline
 
-    cleared = await pointer.clear_flash_report_back(cache, ptc, flash)
+    cleared = await pointer.clear_handoff_report_back(cache, ptc, dispatcher)
 
     assert cleared
     assert f"ptc_origin:{ptc}" not in cache.kv
-    assert keys.flash_rb_run_key(flash, ptc) not in cache.kv
-    assert ptc not in cache.client.sets.get(keys.flash_watch_key(flash), set())
+    assert keys.rb_run_key(dispatcher, ptc) not in cache.kv
+    assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
     # Only the drained-run record uses a pipeline; the teardown itself is Lua.
     assert batches == [["lrem", "lpush", "ltrim", "expire"]]
-    assert cache.client.lists[keys.flash_rb_done_key(flash)] == ["rb-1"]
+    assert cache.client.lists[keys.rb_done_key(dispatcher)] == ["rb-1"]
 
 
 @pytest.mark.asyncio
@@ -183,19 +183,19 @@ async def test_clear_with_stale_gen_is_skipped_entirely():
     """Incarnation fence: a clear carrying an OLD dispatch generation finds a
     re-dispatched origin and must leave origin/pointer/membership/cap intact."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     cache.kv[f"ptc_origin:{ptc}"]["dispatch_gen"] = "g-NEW"
-    cache.kv[keys.flash_rb_run_key(flash, ptc)] = {"run_id": "rb-NEW"}
+    cache.kv[keys.rb_run_key(dispatcher, ptc)] = {"run_id": "rb-NEW"}
 
-    cleared = await pointer.clear_flash_report_back(
-        cache, ptc, flash, expected_gen="g-OLD"
+    cleared = await pointer.clear_handoff_report_back(
+        cache, ptc, dispatcher, expected_gen="g-OLD"
     )
 
     assert not cleared
     assert f"ptc_origin:{ptc}" in cache.kv
-    assert cache.kv[keys.flash_rb_run_key(flash, ptc)] == {"run_id": "rb-NEW"}
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert cache.kv[keys.rb_run_key(dispatcher, ptc)] == {"run_id": "rb-NEW"}
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert ptc in cache.client.sets["flash_user_pending:u-1"]
 
 
@@ -204,18 +204,18 @@ async def test_clear_with_matching_or_absent_gen_proceeds():
     """Same generation clears; a legacy origin without a generation (or a
     missing origin) never blocks the teardown."""
     cache = _FakeCache()
-    flash = "flash-1"
-    _seed_dispatched(cache, flash, ["ptc-1", "ptc-2"])
+    dispatcher = "cos-1"
+    _seed_dispatched(cache, dispatcher, ["ptc-1", "ptc-2"])
     cache.kv["ptc_origin:ptc-1"]["dispatch_gen"] = "g-1"
 
-    assert await pointer.clear_flash_report_back(
-        cache, "ptc-1", flash, expected_gen="g-1"
+    assert await pointer.clear_handoff_report_back(
+        cache, "ptc-1", dispatcher, expected_gen="g-1"
     )
     # Legacy origin (no gen field) + fenced clear: proceeds.
-    assert await pointer.clear_flash_report_back(
-        cache, "ptc-2", flash, expected_gen="g-x"
+    assert await pointer.clear_handoff_report_back(
+        cache, "ptc-2", dispatcher, expected_gen="g-x"
     )
-    assert not cache.client.sets.get(keys.flash_watch_key(flash))
+    assert not cache.client.sets.get(keys.watch_key(dispatcher))
 
 
 @pytest.mark.asyncio
@@ -224,41 +224,41 @@ async def test_genless_clear_never_touches_a_generated_origin():
     destroy (legacy job, unresolvable crash context) must not clear a
     GENERATED origin — 'unknown' degrades to a TTL leak, never to erasure."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     cache.kv[f"ptc_origin:{ptc}"]["dispatch_gen"] = "g-LIVE"
 
-    cleared = await pointer.clear_flash_report_back(cache, ptc, flash)
+    cleared = await pointer.clear_handoff_report_back(cache, ptc, dispatcher)
 
     assert not cleared
     assert f"ptc_origin:{ptc}" in cache.kv
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert ptc in cache.client.sets["flash_user_pending:u-1"]
 
 
 @pytest.mark.asyncio
 async def test_offchain_clear_refuses_while_a_run_pointer_is_live():
-    """Codex round-19 P1: a gen-MATCHED crash clear (off the flash ordering
-    chain) must not drain a pair whose summary admission another lineage
+    """Codex round-19 P1: a gen-MATCHED crash clear (off the dispatching thread's
+    ordering chain) must not drain a pair whose summary admission another lineage
     already claimed — the pointer is that admission's consummation record,
     and only its serialized lifecycle may drain it. The refusal is atomic
     inside the teardown script and touches NOTHING (no tombstone: nothing
     was fenced by a generation, so no rollback may complete it)."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     cache.kv[f"ptc_origin:{ptc}"]["dispatch_gen"] = "g-CRASHED"
-    cache.kv[keys.flash_rb_run_key(flash, ptc)] = {"run_id": "rb-live"}
+    cache.kv[keys.rb_run_key(dispatcher, ptc)] = {"run_id": "rb-live"}
 
-    outcome = await pointer.clear_flash_report_back(
-        cache, ptc, flash, expected_gen="g-CRASHED", refuse_if_pointer=True
+    outcome = await pointer.clear_handoff_report_back(
+        cache, ptc, dispatcher, expected_gen="g-CRASHED", refuse_if_pointer=True
     )
 
     assert not outcome.cleared
     assert outcome.fencer_gen is None
     assert f"ptc_origin:{ptc}" in cache.kv
-    assert cache.kv[keys.flash_rb_run_key(flash, ptc)] == {"run_id": "rb-live"}
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert cache.kv[keys.rb_run_key(dispatcher, ptc)] == {"run_id": "rb-live"}
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert ptc in cache.client.sets["flash_user_pending:u-1"]
     assert f"ptc_rb_tombstone:{ptc}" not in cache.client.sets
 
@@ -268,15 +268,15 @@ async def test_offchain_clear_proceeds_when_no_pointer_exists():
     """The refusal is pointer-scoped: a rowless crash with no admission in
     flight still tears its own pair down."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     cache.kv[f"ptc_origin:{ptc}"]["dispatch_gen"] = "g-CRASHED"
 
-    assert await pointer.clear_flash_report_back(
-        cache, ptc, flash, expected_gen="g-CRASHED", refuse_if_pointer=True
+    assert await pointer.clear_handoff_report_back(
+        cache, ptc, dispatcher, expected_gen="g-CRASHED", refuse_if_pointer=True
     )
     assert f"ptc_origin:{ptc}" not in cache.kv
-    assert ptc not in cache.client.sets.get(keys.flash_watch_key(flash), set())
+    assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
 
 
 # ---------------------------------------------------------------------------
@@ -293,18 +293,18 @@ async def test_fenced_clear_tombstones_and_rollback_completes_it():
     records the consumed run pointer as drained (the fenced teardown never
     got to), preserving the client's discovery path."""
     cache = _FakeCache()
-    flash, ptc, user = "flash-1", "ptc-1", "u-1"
-    _seed_dispatched(cache, flash, [ptc], user)
+    dispatcher, ptc, user = "cos-1", "ptc-1", "u-1"
+    _seed_dispatched(cache, dispatcher, [ptc], user)
     cache.kv[keys.ptc_origin_key(ptc)]["dispatch_gen"] = "g-1"
-    cache.kv[keys.flash_rb_run_key(flash, ptc)] = {"run_id": "rb-1"}
+    cache.kv[keys.rb_run_key(dispatcher, ptc)] = {"run_id": "rb-1"}
     tomb = keys.ptc_teardown_tombstone_key(ptc)
 
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
-        async with reserve.reserve(flash, ptc, "ws-1", "fws-1", user) as slot:
+        async with reserve.reserve(dispatcher, ptc, "ws-1", "fws-1", user) as slot:
             assert slot.error is None
             # G1's terminal teardown lands mid-reservation: fenced + tombstoned.
-            cleared = await pointer.clear_flash_report_back(
-                cache, ptc, flash, expected_gen="g-1"
+            cleared = await pointer.clear_handoff_report_back(
+                cache, ptc, dispatcher, expected_gen="g-1"
             )
             assert not cleared
             assert "g-1" in cache.client.sets[tomb]
@@ -312,12 +312,12 @@ async def test_fenced_clear_tombstones_and_rollback_completes_it():
 
     assert keys.ptc_origin_key(ptc) not in cache.kv
     assert tomb not in cache.client.sets
-    assert keys.flash_rb_run_key(flash, ptc) not in cache.kv
-    assert ptc not in cache.client.sets.get(keys.flash_watch_key(flash), set())
+    assert keys.rb_run_key(dispatcher, ptc) not in cache.kv
+    assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
     assert ptc not in cache.client.sets.get(
-        keys.flash_user_pending_key(user), set()
+        keys.user_pending_key(user), set()
     )
-    assert cache.client.lists[keys.flash_rb_done_key(flash)] == ["rb-1"]
+    assert cache.client.lists[keys.rb_done_key(dispatcher)] == ["rb-1"]
 
 
 @pytest.mark.asyncio
@@ -326,22 +326,22 @@ async def test_two_fenced_clears_both_survive_in_the_tombstone_set():
     window must not overwrite G1's tombstone — the rollback must still see
     that the stashed predecessor G1's teardown arrived."""
     cache = _FakeCache()
-    flash, ptc, user = "flash-1", "ptc-1", "u-1"
-    _seed_dispatched(cache, flash, [ptc], user)
+    dispatcher, ptc, user = "cos-1", "ptc-1", "u-1"
+    _seed_dispatched(cache, dispatcher, [ptc], user)
     cache.kv[keys.ptc_origin_key(ptc)]["dispatch_gen"] = "g-1"
 
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
-        async with reserve.reserve(flash, ptc, "ws-1", "fws-1", user):
-            assert not await pointer.clear_flash_report_back(
-                cache, ptc, flash, expected_gen="g-1"
+        async with reserve.reserve(dispatcher, ptc, "ws-1", "fws-1", user):
+            assert not await pointer.clear_handoff_report_back(
+                cache, ptc, dispatcher, expected_gen="g-1"
             )
-            assert not await pointer.clear_flash_report_back(
-                cache, ptc, flash, expected_gen="g-0"
+            assert not await pointer.clear_handoff_report_back(
+                cache, ptc, dispatcher, expected_gen="g-0"
             )
             # No commit → rollback must honor g-1 despite g-0 arriving later.
 
     assert keys.ptc_origin_key(ptc) not in cache.kv
-    assert ptc not in cache.client.sets.get(keys.flash_watch_key(flash), set())
+    assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
 
 
 @pytest.mark.asyncio
@@ -351,22 +351,22 @@ async def test_legacy_predecessor_fenced_clear_completes_on_rollback():
     on ANY fenced clear (every teardown is authorized against a legacy
     origin) instead of resurrecting it."""
     cache = _FakeCache()
-    flash, ptc, user = "flash-1", "ptc-1", "u-1"
-    _seed_dispatched(cache, flash, [ptc], user)  # legacy: no dispatch_gen
+    dispatcher, ptc, user = "cos-1", "ptc-1", "u-1"
+    _seed_dispatched(cache, dispatcher, [ptc], user)  # legacy: no dispatch_gen
 
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
-        async with reserve.reserve(flash, ptc, "ws-1", "fws-1", user):
+        async with reserve.reserve(dispatcher, ptc, "ws-1", "fws-1", user):
             # A legacy (gen-less) teardown lands mid-reservation: fenced.
-            assert not await pointer.clear_flash_report_back(
-                cache, ptc, flash
+            assert not await pointer.clear_handoff_report_back(
+                cache, ptc, dispatcher
             )
             tomb = keys.ptc_teardown_tombstone_key(ptc)
             assert "__legacy__" in cache.client.sets[tomb]
 
     assert keys.ptc_origin_key(ptc) not in cache.kv
-    assert ptc not in cache.client.sets.get(keys.flash_watch_key(flash), set())
+    assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
     assert ptc not in cache.client.sets.get(
-        keys.flash_user_pending_key(user), set()
+        keys.user_pending_key(user), set()
     )
 
 
@@ -375,14 +375,14 @@ async def test_successful_clear_removes_stale_tombstone():
     """A completed teardown deletes any lingering tombstone so it can't
     poison a FUTURE incarnation's rollback into over-clearing."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     cache.kv[keys.ptc_origin_key(ptc)]["dispatch_gen"] = "g-1"
     tomb = keys.ptc_teardown_tombstone_key(ptc)
     cache.client.sets[tomb] = {"g-0"}
 
-    cleared = await pointer.clear_flash_report_back(
-        cache, ptc, flash, expected_gen="g-1"
+    cleared = await pointer.clear_handoff_report_back(
+        cache, ptc, dispatcher, expected_gen="g-1"
     )
 
     assert cleared
@@ -395,17 +395,17 @@ async def test_rollback_ignores_tombstone_for_a_different_generation():
     naming some other generation must not stop the restore of a GENERATED
     predecessor."""
     cache = _FakeCache()
-    flash, ptc, user = "flash-1", "ptc-1", "u-1"
-    _seed_dispatched(cache, flash, [ptc], user)
+    dispatcher, ptc, user = "cos-1", "ptc-1", "u-1"
+    _seed_dispatched(cache, dispatcher, [ptc], user)
     cache.kv[keys.ptc_origin_key(ptc)]["dispatch_gen"] = "g-1"
     cache.client.sets[keys.ptc_teardown_tombstone_key(ptc)] = {"g-OTHER"}
 
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
-        async with reserve.reserve(flash, ptc, "ws-1", "fws-1", user):
+        async with reserve.reserve(dispatcher, ptc, "ws-1", "fws-1", user):
             pass  # no commit → rollback
 
     assert cache.kv[keys.ptc_origin_key(ptc)]["dispatch_gen"] == "g-1"
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
 
 
 @pytest.mark.asyncio
@@ -415,15 +415,15 @@ async def test_claim_replaces_a_stale_incarnations_pointer():
     run (adopting would ack G2's summary without ever running it). A retry
     of the SAME incarnation still dedups to the incumbent."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    key = keys.flash_rb_run_key(flash, ptc)
+    dispatcher, ptc = "cos-1", "ptc-1"
+    key = keys.rb_run_key(dispatcher, ptc)
     cache.kv[key] = {"run_id": "rb-G1", "dispatch_gen": "g-1"}
     # G2's admission implies a live pair (its reserve created the membership).
-    cache.client.sets.setdefault(keys.flash_watch_key(flash), set()).add(ptc)
+    cache.client.sets.setdefault(keys.watch_key(dispatcher), set()).add(ptc)
 
     # New incarnation: stale pointer replaced, claim won.
     result = await pointer.claim_report_back_run(
-        cache, flash, ptc, "rb-G2", "g-2"
+        cache, dispatcher, ptc, "rb-G2", "g-2"
     )
     assert (result.winning_run_id, result.claimed) == ("rb-G2", True)
     assert cache.kv[key]["run_id"] == "rb-G2"
@@ -431,14 +431,14 @@ async def test_claim_replaces_a_stale_incarnations_pointer():
 
     # Same-incarnation retry: incumbent honored, no second run.
     result = await pointer.claim_report_back_run(
-        cache, flash, ptc, "rb-G2-retry", "g-2"
+        cache, dispatcher, ptc, "rb-G2-retry", "g-2"
     )
     assert (result.winning_run_id, result.claimed) == ("rb-G2", False)
 
     # A legacy (gen-less) claimer keeps today's semantics: adopt whatever is
     # there — it cannot prove the pointer stale.
     result = await pointer.claim_report_back_run(
-        cache, flash, ptc, "rb-legacy", None
+        cache, dispatcher, ptc, "rb-legacy", None
     )
     assert (result.winning_run_id, result.claimed) == ("rb-G2", False)
 
@@ -447,29 +447,29 @@ async def test_claim_replaces_a_stale_incarnations_pointer():
 async def test_clear_releases_cap_slot_via_explicit_user_id_when_origin_expired():
     """Origin TTL-expired: an explicit user_id still releases the per-user cap slot."""
     cache = _FakeCache()
-    flash, ptc, user = "flash-1", "ptc-1", "u-1"
-    cache.client.sets[keys.flash_watch_key(flash)] = {ptc}
+    dispatcher, ptc, user = "cos-1", "ptc-1", "u-1"
+    cache.client.sets[keys.watch_key(dispatcher)] = {ptc}
     cache.client.sets[f"flash_user_pending:{user}"] = {ptc}
     # ptc_origin intentionally absent (expired) -> can't be read for the user id.
 
-    await pointer.clear_flash_report_back(cache, ptc, flash, user_id=user)
+    await pointer.clear_handoff_report_back(cache, ptc, dispatcher, user_id=user)
 
     assert ptc not in cache.client.sets.get(f"flash_user_pending:{user}", set())
-    assert ptc not in cache.client.sets.get(keys.flash_watch_key(flash), set())
+    assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
 
 
 @pytest.mark.asyncio
 async def test_clear_warns_when_cap_slot_user_unresolvable():
     """No explicit user_id and no origin -> warn (leak observable) but still tear down."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    cache.client.sets[keys.flash_watch_key(flash)] = {ptc}
+    dispatcher, ptc = "cos-1", "ptc-1"
+    cache.client.sets[keys.watch_key(dispatcher)] = {ptc}
 
     with patch.object(core.logger, "warning") as warn:
-        await pointer.clear_flash_report_back(cache, ptc, flash)
+        await pointer.clear_handoff_report_back(cache, ptc, dispatcher)
 
     assert warn.called
-    assert ptc not in cache.client.sets.get(keys.flash_watch_key(flash), set())
+    assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
 
 
 # ---------------------------------------------------------------------------
@@ -480,13 +480,13 @@ async def test_clear_warns_when_cap_slot_user_unresolvable():
 @pytest.mark.asyncio
 async def test_execute_skips_non_member_and_non_report_back():
     cache = _FakeCache()
-    flash = "flash-1"
+    dispatcher = "cos-1"
     # origin present but PTC was never a watch member (cap rollback / already cleared)
-    cache.kv["ptc_origin:ptc-gone"] = _origin("ptc-gone", flash)
+    cache.kv["ptc_origin:ptc-gone"] = _origin("ptc-gone", dispatcher)
     # origin present, report_back disabled
-    cache.kv["ptc_origin:ptc-noflag"] = _origin("ptc-noflag", flash)
+    cache.kv["ptc_origin:ptc-noflag"] = _origin("ptc-noflag", dispatcher)
     cache.kv["ptc_origin:ptc-noflag"]["report_back"] = False
-    cache.client.sets[keys.flash_watch_key(flash)] = {"ptc-noflag"}
+    cache.client.sets[keys.watch_key(dispatcher)] = {"ptc-noflag"}
 
     h = _ExecHarness(cache)
     await h.run(_job("ptc-gone"))
@@ -501,9 +501,9 @@ async def test_duplicate_job_execution_after_clear_is_a_noop():
     """At-least-once outbox delivery: a re-executed job whose member was
     already terminal-cleared returns without POSTing a second summary."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
-    await pointer.clear_flash_report_back(cache, ptc, flash)
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
+    await pointer.clear_handoff_report_back(cache, ptc, dispatcher)
 
     h = _ExecHarness(cache)
     await h.run(_job(ptc))
@@ -524,8 +524,8 @@ async def test_execute_dispatches_with_deterministic_request_key_and_holds_open(
     mark_active(N+1) invariant — the DB half is the claim query's
     ordering-key gate."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(
         cache, run_statuses=("in_progress", "in_progress", "completed")
@@ -545,7 +545,7 @@ async def test_execute_dispatches_with_deterministic_request_key_and_holds_open(
     )
     # /status reattach pointer re-asserted while membership held, scoped to
     # this job's request identity.
-    pointer = cache.kv[keys.flash_rb_run_key(flash, ptc)]
+    pointer = cache.kv[keys.rb_run_key(dispatcher, ptc)]
     assert pointer["run_id"] == "rb-run"
     assert pointer["request_key"] == str(
         uuid.uuid5(executor.RB_REQUEST_NS, "job-42")
@@ -565,17 +565,17 @@ async def test_execute_parks_while_the_watcher_thread_is_busy():
     thread's next dead-turn finalize, posting nothing and tearing nothing
     down."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, thread_busy=True)
     await h.run(_job(ptc, job_id="job-42"))
 
     h.park.assert_awaited_once()
-    assert h.park.await_args.args == ("job-42", 1, flash)
+    assert h.park.await_args.args == ("job-42", 1, dispatcher)
     h.post.assert_not_awaited()
     h.merge_payload.assert_not_awaited()
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
 
 
 @pytest.mark.asyncio
@@ -587,7 +587,7 @@ async def test_execute_tells_the_summary_how_the_run_ended(payload, told):
     """Jobs enqueued before the field existed carry no status, and only
     completed runs were enqueued then."""
     cache = _FakeCache()
-    _seed_dispatched(cache, "flash-1", ["ptc-1"])
+    _seed_dispatched(cache, "cos-1", ["ptc-1"])
     h = _ExecHarness(cache, run_statuses=("completed",))
     await h.run(_job("ptc-1", **payload))
     assert h.post.await_args.kwargs["final_status"] == told
@@ -596,13 +596,13 @@ async def test_execute_tells_the_summary_how_the_run_ended(payload, told):
 @pytest.mark.asyncio
 async def test_execute_drop_clears_member_so_chain_advances():
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, post_result=("drop", None))
     await h.run(_job(ptc))
 
-    assert not cache.client.sets.get(keys.flash_watch_key(flash))
+    assert not cache.client.sets.get(keys.watch_key(dispatcher))
     assert f"ptc_origin:{ptc}" not in cache.kv
     h.get_run.assert_not_called()  # no run to await
 
@@ -621,15 +621,15 @@ async def test_a_dropped_summary_still_wakes_the_watcher(final_status, wake):
     and drops the chat tip; a silent drop left the tip up until the watch
     recycled."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, post_result=("cap", None))
     with patch.object(executor.wake, "publish_wake", AsyncMock()) as publish:
         await h.run(_job(ptc, final_status=final_status))
 
-    assert not cache.client.sets.get(keys.flash_watch_key(flash))
-    publish.assert_awaited_once_with(cache, flash, **wake)
+    assert not cache.client.sets.get(keys.watch_key(dispatcher))
+    publish.assert_awaited_once_with(cache, dispatcher, **wake)
 
 
 @pytest.mark.asyncio
@@ -640,8 +640,8 @@ async def test_a_report_back_overtaken_by_a_newer_run_leaves_it_the_pair():
     posted. The newer run carries the same pair and reports when it ends, so
     nothing is torn down and nothing is woken."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     # The watcher is busy at the first POST; the newer run starts meanwhile.
     busy = MagicMock(status=409)
     busy.__aenter__.return_value = busy
@@ -672,7 +672,7 @@ async def test_a_report_back_overtaken_by_a_newer_run_leaves_it_the_pair():
         await h.run(job)
 
     assert session.post.call_count == 1
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert f"ptc_origin:{ptc}" in cache.kv
     publish.assert_not_called()
     h.merge_payload.assert_not_called()
@@ -687,10 +687,10 @@ async def test_drop_refused_by_live_pointer_nacks():
     teardown (nack, retry adopts/takes over/finds released), never be cleared
     out from under it. The chain lease binds the executor, not that route."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     # A route mid-admission holds the pointer claim for this pair.
-    cache.kv[keys.flash_rb_run_key(flash, ptc)] = {
+    cache.kv[keys.rb_run_key(dispatcher, ptc)] = {
         "run_id": "rt-run",
         "claimed_at": 12345.0,
     }
@@ -700,21 +700,21 @@ async def test_drop_refused_by_live_pointer_nacks():
         await h.run(_job(ptc))
 
     # Everything intact: membership, origin, and the claim itself.
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert f"ptc_origin:{ptc}" in cache.kv
-    assert keys.flash_rb_run_key(flash, ptc) in cache.kv
+    assert keys.rb_run_key(dispatcher, ptc) in cache.kv
 
 
 @pytest.mark.asyncio
-async def test_execute_deleted_discards_whole_flash_thread():
+async def test_execute_deleted_discards_whole_dispatcher_thread():
     cache = _FakeCache()
-    flash = "flash-1"
-    _seed_dispatched(cache, flash, ["ptc-1", "ptc-2", "ptc-3"])
+    dispatcher = "cos-1"
+    _seed_dispatched(cache, dispatcher, ["ptc-1", "ptc-2", "ptc-3"])
 
     h = _ExecHarness(cache, post_result=("deleted", None))
     await h.run(_job("ptc-1"))
 
-    assert not cache.client.sets.get(keys.flash_watch_key(flash))
+    assert not cache.client.sets.get(keys.watch_key(dispatcher))
     for ptc in ["ptc-1", "ptc-2", "ptc-3"]:
         assert f"ptc_origin:{ptc}" not in cache.kv
 
@@ -726,8 +726,8 @@ async def test_discard_nacks_on_transient_origin_read_failure():
     clear would refuse a generated origin and then delete the set (its only
     reference), stranding origin/pointer/cap state forever."""
     cache = _FakeCache()
-    flash = "flash-1"
-    _seed_dispatched(cache, flash, ["ptc-1", "ptc-2"])
+    dispatcher = "cos-1"
+    _seed_dispatched(cache, dispatcher, ["ptc-1", "ptc-2"])
     cache.kv["ptc_origin:ptc-2"]["dispatch_gen"] = "g-live"
 
     real_get_strict = cache.get_strict
@@ -739,21 +739,21 @@ async def test_discard_nacks_on_transient_origin_read_failure():
 
     cache.get_strict = _flaky
     with pytest.raises(ConnectionError):
-        await executor._discard_flash_thread(cache, flash)
+        await executor._discard_dispatcher_thread(cache, dispatcher)
 
     # Watch set retained: the nacked job's retry re-reads remaining members.
-    assert "ptc-2" in cache.client.sets[keys.flash_watch_key(flash)]
+    assert "ptc-2" in cache.client.sets[keys.watch_key(dispatcher)]
     assert "ptc_origin:ptc-2" in cache.kv
 
 
 @pytest.mark.asyncio
 async def test_discard_nacks_when_member_clear_is_refused():
     """A member whose clear is refused (generation moved between read and
-    CAS, still owned by THIS flash) must nack the whole job rather than
+    CAS, still owned by THIS thread) must nack the whole job rather than
     fall through to deleting the watch set."""
     cache = _FakeCache()
-    flash = "flash-1"
-    _seed_dispatched(cache, flash, ["ptc-1"])
+    dispatcher = "cos-1"
+    _seed_dispatched(cache, dispatcher, ["ptc-1"])
     cache.kv["ptc_origin:ptc-1"]["dispatch_gen"] = "g-1"
 
     real_get_strict = cache.get_strict
@@ -769,27 +769,27 @@ async def test_discard_nacks_when_member_clear_is_refused():
 
     cache.get_strict = _racing
     with pytest.raises(RuntimeError, match="refused"):
-        await executor._discard_flash_thread(cache, flash)
+        await executor._discard_dispatcher_thread(cache, dispatcher)
 
-    assert "ptc-1" in cache.client.sets[keys.flash_watch_key(flash)]
+    assert "ptc-1" in cache.client.sets[keys.watch_key(dispatcher)]
     assert cache.kv["ptc_origin:ptc-1"]["dispatch_gen"] == "g-2"
 
 
 @pytest.mark.asyncio
-async def test_discard_drops_only_our_reference_for_cross_flash_members():
-    """A member whose origin moved to a different flash thread loses only
+async def test_discard_drops_only_our_reference_for_cross_dispatcher_members():
+    """A member whose origin moved to a different Chief of Staff thread loses only
     OUR stale watch reference — its live dispatch keeps origin/pointer/cap."""
     cache = _FakeCache()
-    flash = "flash-1"
-    _seed_dispatched(cache, flash, ["ptc-1", "ptc-x"])
-    cache.kv["ptc_origin:ptc-x"] = _origin("ptc-x", flash="flash-OTHER")
+    dispatcher = "cos-1"
+    _seed_dispatched(cache, dispatcher, ["ptc-1", "ptc-x"])
+    cache.kv["ptc_origin:ptc-x"] = _origin("ptc-x", dispatcher="cos-OTHER")
 
-    await executor._discard_flash_thread(cache, flash)
+    await executor._discard_dispatcher_thread(cache, dispatcher)
 
-    assert not cache.client.sets.get(keys.flash_watch_key(flash))
+    assert not cache.client.sets.get(keys.watch_key(dispatcher))
     assert "ptc_origin:ptc-1" not in cache.kv  # ours: fully cleared
     assert "ptc_origin:ptc-x" in cache.kv  # theirs: untouched
-    assert "ptc-x" in cache.client.sets[keys.flash_user_pending_key("u-1")]
+    assert "ptc-x" in cache.client.sets[keys.user_pending_key("u-1")]
 
 
 @pytest.mark.asyncio
@@ -799,9 +799,9 @@ async def test_discard_spares_a_member_reserved_after_the_snapshot():
     DEL removed it, so its completion later acked as a non-member and the
     summary was dropped."""
     cache = _FakeCache()
-    flash = "flash-1"
-    _seed_dispatched(cache, flash, ["ptc-1"])
-    watch_key = keys.flash_watch_key(flash)
+    dispatcher = "cos-1"
+    _seed_dispatched(cache, dispatcher, ["ptc-1"])
+    watch_key = keys.watch_key(dispatcher)
     real_smembers = cache.client.smembers
 
     async def _snapshot_then_rival(key):
@@ -810,12 +810,12 @@ async def test_discard_spares_a_member_reserved_after_the_snapshot():
             # A concurrent reserve lands right after our snapshot (SADD +
             # origin write are one atomic script in prod).
             cache.client.sets[watch_key].add("ptc-2")
-            cache.kv[keys.ptc_origin_key("ptc-2")] = _origin("ptc-2", flash)
+            cache.kv[keys.ptc_origin_key("ptc-2")] = _origin("ptc-2", dispatcher)
         return snapshot
 
     cache.client.smembers = _snapshot_then_rival
 
-    await executor._discard_flash_thread(cache, flash)
+    await executor._discard_dispatcher_thread(cache, dispatcher)
 
     # The snapshotted member is fully cleared; the late one survives intact.
     assert "ptc_origin:ptc-1" not in cache.kv
@@ -824,23 +824,23 @@ async def test_discard_spares_a_member_reserved_after_the_snapshot():
 
 
 @pytest.mark.asyncio
-async def test_stale_ordering_key_requeues_onto_flash_chain():
+async def test_stale_ordering_key_requeues_onto_dispatcher_chain():
     """A pre-deploy job claimed under its PTC-thread key must be requeued onto
-    the real flash chain, not executed: N such jobs busy-wait their caps
-    CONCURRENTLY against one flash admission gate and can drop summaries."""
+    the dispatching thread's chain, not executed: N such jobs busy-wait their caps
+    CONCURRENTLY against one thread's admission gate and can drop summaries."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache)
     await h.run(_job(ptc, job_id="job-7", ordering_key=ptc))
 
     h.requeue.assert_awaited_once_with(
-        "job-7", attempts=1, ordering_key=flash, max_attempts=5
+        "job-7", attempts=1, ordering_key=dispatcher, max_attempts=5
     )
     h.post.assert_not_called()
     # Nothing touched: the requeued row runs later at the chain head.
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert not cache.client.published
 
 
@@ -849,14 +849,14 @@ async def test_drop_clear_is_fenced_to_own_generation():
     """The drop-path clear carries the job's dispatch generation: when the
     pair was re-dispatched (origin holds a newer gen), the teardown skips."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     cache.kv[f"ptc_origin:{ptc}"]["dispatch_gen"] = "g-NEW"
 
     h = _ExecHarness(cache, post_result=("drop", None))
     await h.run(_job(ptc, dispatch_gen="g-OLD"))
 
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert f"ptc_origin:{ptc}" in cache.kv
 
 
@@ -865,14 +865,14 @@ async def test_drop_without_guard_ownership_does_no_teardown():
     """The row-lock fence lost between POST and teardown: the reclaiming
     owner decides the teardown; the loser must leave everything intact."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, post_result=("drop", None), guard_owned=False)
     await h.run(_job(ptc))
 
     assert h.guard_entries == 1
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert f"ptc_origin:{ptc}" in cache.kv
 
 
@@ -881,15 +881,15 @@ async def test_reassert_never_overwrites_a_different_runs_pointer():
     """ABA guard: a stale owner's re-assert must not repoint a re-dispatched
     pair at its own (dead) run — the Lua sets only absent-or-same run_id."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     # A newer incarnation already owns the pointer.
-    cache.kv[keys.flash_rb_run_key(flash, ptc)] = {"run_id": "rb-NEW"}
+    cache.kv[keys.rb_run_key(dispatcher, ptc)] = {"run_id": "rb-NEW"}
 
     h = _ExecHarness(cache, run_statuses=("completed",))
     await h.run(_job(ptc))  # POSTs and re-asserts rb-run
 
-    assert cache.kv[keys.flash_rb_run_key(flash, ptc)] == {
+    assert cache.kv[keys.rb_run_key(dispatcher, ptc)] == {
         "run_id": "rb-NEW"
     }
     # Pointer refused -> the wake is suppressed too: clients must never be
@@ -903,18 +903,18 @@ async def test_reassert_replaces_a_stale_incarnations_pointer():
     generation, a pointer left behind by a PREVIOUS incarnation (its clear
     was gen-skipped) is replaced, so clients reattach to the live run."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
     cache.kv[f"ptc_origin:{ptc}"]["dispatch_gen"] = "g-2"
     # G1's terminal pointer survived its skipped gen-mismatch clear.
-    cache.kv[keys.flash_rb_run_key(flash, ptc)] = {
+    cache.kv[keys.rb_run_key(dispatcher, ptc)] = {
         "run_id": "rb-G1", "dispatch_gen": "g-1",
     }
 
     h = _ExecHarness(cache, run_statuses=("completed",))
     await h.run(_job(ptc, dispatch_gen="g-2"))
 
-    pointer = cache.kv[keys.flash_rb_run_key(flash, ptc)]
+    pointer = cache.kv[keys.rb_run_key(dispatcher, ptc)]
     assert pointer["run_id"] == "rb-run"
     assert pointer["dispatch_gen"] == "g-2"
     assert pointer["request_key"] == str(
@@ -928,8 +928,8 @@ async def test_resume_without_guard_ownership_publishes_no_wake():
     """Stale resume: a reclaimed job's old owner waking clients toward its
     (possibly superseded) run id would race the live owner's delivery."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, guard_owned=False)
     await h.run(_job(ptc, dispatched_run_id="rb-old"))
@@ -944,8 +944,8 @@ async def test_execute_resumes_dispatched_run_id_without_reposting():
     """A reclaimed job (worker crash mid terminal-wait) resumes via the merged
     dispatched_run_id instead of POSTing — and paying for — a second summary."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, run_statuses=("completed",))
     await h.run(_job(ptc, dispatched_run_id="prior-run"))
@@ -961,13 +961,13 @@ async def test_reassert_skipped_when_membership_already_cleared():
     """A fast terminal during the POST must not have its deleted run pointer
     resurrected by the post-dispatch re-assert."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     async def _post_then_clear(*args, **kwargs):
         # Terminal fires during the POST: clears the run pointer AND the watch
         # membership before we return "dispatched".
-        await pointer.clear_flash_report_back(cache, ptc, flash)
+        await pointer.clear_handoff_report_back(cache, ptc, dispatcher)
         return "dispatched", "rb-run"
 
     h = _ExecHarness(cache, run_statuses=("completed",))
@@ -975,7 +975,7 @@ async def test_reassert_skipped_when_membership_already_cleared():
     await h.run(_job(ptc))
 
     # Membership was gone at re-assert time, so the deleted pointer stays deleted.
-    assert keys.flash_rb_run_key(flash, ptc) not in cache.kv
+    assert keys.rb_run_key(dispatcher, ptc) not in cache.kv
 
 
 @pytest.mark.asyncio
@@ -984,8 +984,8 @@ async def test_execute_no_run_id_raises_to_nack():
     release the chain early. Raise (nack): the retry re-POSTs the SAME
     request_key and recovers the id via 409 duplicate_request adoption."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, post_result=("dispatched", None))
     with pytest.raises(RuntimeError, match="without a run_id"):
@@ -994,7 +994,7 @@ async def test_execute_no_run_id_raises_to_nack():
     h.get_run.assert_not_called()
     h.merge_payload.assert_not_called()
     # Nothing torn down, no wake — the retry owns the delivery.
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert not cache.client.published
 
 
@@ -1005,17 +1005,17 @@ async def test_execute_no_run_id_raises_to_nack():
 
 @pytest.mark.asyncio
 async def test_terminal_wait_cap_force_clears_stuck_member(monkeypatch):
-    """A summary run that never reaches terminal must not wedge the flash
-    thread's chain forever."""
+    """A summary run that never reaches terminal must not wedge the Chief of
+    Staff thread's chain forever."""
     monkeypatch.setattr(leases, "RB_TERMINAL_WAIT_CAP", -1.0)
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, run_statuses=("in_progress",))
     await h.run(_job(ptc))
 
-    assert not cache.client.sets.get(keys.flash_watch_key(flash))
+    assert not cache.client.sets.get(keys.watch_key(dispatcher))
     assert f"ptc_origin:{ptc}" not in cache.kv
 
 
@@ -1024,14 +1024,14 @@ async def test_lease_lost_stands_down_without_clearing():
     """A reclaimed lease means another drainer owns the job now; the loser
     must not tear anything down."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, run_statuses=("in_progress",), lease_ok=False)
     await h.run(_job(ptc, dispatched_run_id="rb-run"))
 
     # Member intact — the new owner resumes the wait.
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert f"ptc_origin:{ptc}" in cache.kv
 
 
@@ -1041,15 +1041,15 @@ async def test_missing_run_row_is_polled_through_not_torn_down():
     commits, so an early poll can legitimately see no row — the wait must
     poll through it, never treat it as deletion."""
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, run_statuses=(None, None, "completed"))
     await h.run(_job(ptc, dispatched_run_id="rb-run"))
 
     assert h.get_run.await_count == 3
     # No teardown: the member awaits the summary run's own watch_clear job.
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
     assert f"ptc_origin:{ptc}" in cache.kv
 
 
@@ -1059,31 +1059,30 @@ async def test_permanently_missing_run_row_force_cleared_at_cap(monkeypatch):
     the deadline — not the missing row itself — releases the watch + caps."""
     monkeypatch.setattr(leases, "RB_TERMINAL_WAIT_CAP", -1.0)
     cache = _FakeCache()
-    flash, ptc = "flash-1", "ptc-1"
-    _seed_dispatched(cache, flash, [ptc])
+    dispatcher, ptc = "cos-1", "ptc-1"
+    _seed_dispatched(cache, dispatcher, [ptc])
 
     h = _ExecHarness(cache, run_statuses=(None,))
     await h.run(_job(ptc, dispatched_run_id="rb-run"))
 
-    assert not cache.client.sets.get(keys.flash_watch_key(flash))
+    assert not cache.client.sets.get(keys.watch_key(dispatcher))
     assert f"ptc_origin:{ptc}" not in cache.kv
 
 
 # ---------------------------------------------------------------------------
-# Consumption clear (1.7): the completed report-back flash run enqueues a
+# Consumption clear (1.7): the completed report-back run enqueues a
 # watch_clear outbox job gated on report_back_ptc_thread_id — no in-process
 # completion hook remains. Ordering keys follow the one rule: the watching
-# flash thread (origin_flash_thread_id, else the run's own thread).
+# dispatching thread (origin_flash_thread_id, else the run's own thread).
 # ---------------------------------------------------------------------------
 
 
-def test_completed_flash_with_report_back_id_enqueues_consumption_clear():
+def test_completed_summary_with_report_back_id_enqueues_consumption_clear():
     from src.server.database.runs.outbox import build_finalize_jobs
 
     jobs = build_finalize_jobs(
         run_id="run-1",
-        thread_id="flash-1",
-        msg_type="flash",
+        thread_id="cos-1",
         user_id="u-1",
         report_back_ptc_thread_id="ptc-1",
     )("completed")
@@ -1092,18 +1091,17 @@ def test_completed_flash_with_report_back_id_enqueues_consumption_clear():
     assert len(clears) == 1
     assert clears[0].payload["ptc_thread_id"] == "ptc-1"
     assert clears[0].payload["error_wake"] is False  # consumption, not failure
-    # The summary run IS the watching flash thread — same chain as the
+    # The summary run IS the watching Chief of Staff thread — same chain as the
     # report_back job that dispatched it.
-    assert clears[0].ordering_key == "flash-1"
+    assert clears[0].ordering_key == "cos-1"
 
 
-def test_completed_flash_without_report_back_id_skips_clear():
+def test_completed_summary_without_report_back_id_skips_clear():
     from src.server.database.runs.outbox import build_finalize_jobs
 
     jobs = build_finalize_jobs(
         run_id="run-1",
-        thread_id="flash-1",
-        msg_type="flash",
+        thread_id="cos-1",
         user_id="u-1",
     )("completed")
 
@@ -1141,28 +1139,28 @@ def _stub_ledger():
 def _seed_phantom(cache, gen: str = "g-PHANTOM", ptr: dict | None = None):
     """Dispatched pair whose origin carries ``gen`` with no admission stamp
     and no ledger row — the lost-409 phantom shape."""
-    _seed_dispatched(cache, "flash-1", ["ptc-1"])
+    _seed_dispatched(cache, "cos-1", ["ptc-1"])
     cache.kv[keys.ptc_origin_key("ptc-1")]["dispatch_gen"] = gen
     if ptr is not None:
-        cache.kv[keys.flash_rb_run_key("flash-1", "ptc-1")] = ptr
+        cache.kv[keys.rb_run_key("cos-1", "ptc-1")] = ptr
 
 
 @pytest.mark.asyncio
 async def test_resolve_phantom_resolves_pending_spares_origin_and_receipts():
     cache = _FakeCache()
     _seed_phantom(cache, ptr={"run_id": "rb-9", "request_key": "rk-9"})
-    ptr_key = keys.flash_rb_run_key("flash-1", "ptc-1")
+    ptr_key = keys.rb_run_key("cos-1", "ptc-1")
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-PHANTOM"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-PHANTOM"
     )
 
     assert (resolved, drained) == (True, "rb-9")
     assert "ptc-1" not in cache.client.sets.get(
-        keys.flash_watch_key("flash-1"), set()
+        keys.watch_key("cos-1"), set()
     )
     assert "ptc-1" not in cache.client.sets.get(
-        keys.flash_user_pending_key("u-1"), set()
+        keys.user_pending_key("u-1"), set()
     )
     assert ptr_key not in cache.kv
     # The origin is SPARED: only an authorized gen-matched teardown may
@@ -1171,9 +1169,9 @@ async def test_resolve_phantom_resolves_pending_spares_origin_and_receipts():
     receipt_key = keys.ptc_rb_resolved_key("ptc-1")
     assert "g-PHANTOM" in cache.client.sets[receipt_key]
     assert cache.client.ttls[receipt_key] == reserve.RESOLVED_RECEIPT_TTL
-    from src.server.services.report_back.flash.keys import flash_rb_done_key
+    from src.server.services.report_back.handoff.keys import rb_done_key
 
-    assert cache.client.lists[flash_rb_done_key("flash-1")] == ["rb-9"]
+    assert cache.client.lists[rb_done_key("cos-1")] == ["rb-9"]
 
 
 @pytest.mark.asyncio
@@ -1182,18 +1180,18 @@ async def test_resolve_is_idempotent():
     no duplicate drained record, receipt/memberships already settled."""
     cache = _FakeCache()
     _seed_phantom(cache, ptr={"run_id": "rb-9"})
-    from src.server.services.report_back.flash.keys import flash_rb_done_key
+    from src.server.services.report_back.handoff.keys import rb_done_key
 
     first = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-PHANTOM"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-PHANTOM"
     )
     second = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-PHANTOM"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-PHANTOM"
     )
 
     assert first == (True, "rb-9")
     assert second == (True, None)
-    assert cache.client.lists[flash_rb_done_key("flash-1")] == ["rb-9"]
+    assert cache.client.lists[rb_done_key("cos-1")] == ["rb-9"]
     assert cache.kv[keys.ptc_origin_key("ptc-1")] is not None
 
 
@@ -1206,13 +1204,13 @@ async def test_resolve_suppressed_when_origin_moved():
     _seed_phantom(cache, gen="g-NEWER", ptr={"run_id": "rb-9"})
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-PHANTOM"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-PHANTOM"
     )
 
     assert (resolved, drained) == (False, None)
-    assert "ptc-1" in cache.client.sets[keys.flash_watch_key("flash-1")]
-    assert "ptc-1" in cache.client.sets[keys.flash_user_pending_key("u-1")]
-    assert keys.flash_rb_run_key("flash-1", "ptc-1") in cache.kv
+    assert "ptc-1" in cache.client.sets[keys.watch_key("cos-1")]
+    assert "ptc-1" in cache.client.sets[keys.user_pending_key("u-1")]
+    assert keys.rb_run_key("cos-1", "ptc-1") in cache.kv
     assert keys.ptc_rb_resolved_key("ptc-1") not in cache.client.sets
 
 
@@ -1227,12 +1225,12 @@ async def test_resolve_suppressed_when_fencer_was_admitted(_stub_ledger):
     _stub_ledger.has_gen.return_value = True
 
     resolved, _ = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-2"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-2"
     )
 
     assert resolved is False
     _stub_ledger.has_gen.assert_awaited_once_with("ptc-1", "g-2")
-    assert "ptc-1" in cache.client.sets[keys.flash_watch_key("flash-1")]
+    assert "ptc-1" in cache.client.sets[keys.watch_key("cos-1")]
     assert keys.ptc_rb_resolved_key("ptc-1") not in cache.client.sets
 
 
@@ -1252,13 +1250,13 @@ async def test_resolve_suppressed_by_live_foreign_run(_stub_ledger):
     }
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-2"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-2"
     )
 
     assert (resolved, drained) == (False, None)
-    assert "ptc-1" in cache.client.sets[keys.flash_watch_key("flash-1")]
-    assert "ptc-1" in cache.client.sets[keys.flash_user_pending_key("u-1")]
-    assert keys.flash_rb_run_key("flash-1", "ptc-1") in cache.kv
+    assert "ptc-1" in cache.client.sets[keys.watch_key("cos-1")]
+    assert "ptc-1" in cache.client.sets[keys.user_pending_key("u-1")]
+    assert keys.rb_run_key("cos-1", "ptc-1") in cache.kv
     assert keys.ptc_rb_resolved_key("ptc-1") not in cache.client.sets
 
 
@@ -1275,13 +1273,13 @@ async def test_resolve_suppressed_by_pre_start_intent_stamp():
     # No ledger row, no active run — mid-window between gate and START.
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-2"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-2"
     )
 
     assert (resolved, drained) == (False, None)
-    assert "ptc-1" in cache.client.sets[keys.flash_watch_key("flash-1")]
-    assert "ptc-1" in cache.client.sets[keys.flash_user_pending_key("u-1")]
-    assert keys.flash_rb_run_key("flash-1", "ptc-1") in cache.kv
+    assert "ptc-1" in cache.client.sets[keys.watch_key("cos-1")]
+    assert "ptc-1" in cache.client.sets[keys.user_pending_key("u-1")]
+    assert keys.rb_run_key("cos-1", "ptc-1") in cache.kv
     assert keys.ptc_rb_resolved_key("ptc-1") not in cache.client.sets
 
 
@@ -1295,18 +1293,18 @@ async def test_resolve_suppressed_when_ledger_probe_fails(_stub_ledger):
     _stub_ledger.has_gen.side_effect = RuntimeError("ledger unavailable")
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-PHANTOM"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-PHANTOM"
     )
 
     assert (resolved, drained) == (False, None)
-    assert "ptc-1" in cache.client.sets[keys.flash_watch_key("flash-1")]
-    assert keys.flash_rb_run_key("flash-1", "ptc-1") in cache.kv
+    assert "ptc-1" in cache.client.sets[keys.watch_key("cos-1")]
+    assert keys.rb_run_key("cos-1", "ptc-1") in cache.kv
     assert keys.ptc_rb_resolved_key("ptc-1") not in cache.client.sets
 
 
 @pytest.mark.asyncio
 async def test_resolve_records_drained_run_inside_the_script():
-    """Codex round-14 P1: pointer delete and the flash_rb_done record happen
+    """Codex round-14 P1: pointer delete and the drained-run record happen
     in ONE script — a wrapper crash after the eval can no longer lose the
     drained run's only discovery record (a retry finds the pointer already
     gone and could never reconstruct it)."""
@@ -1315,14 +1313,14 @@ async def test_resolve_records_drained_run_inside_the_script():
 
     with patch.object(pointer, "record_drained_run", AsyncMock()) as rec:
         resolved, drained = await reserve.resolve_orphaned_watch(
-            cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-PHANTOM"
+            cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-PHANTOM"
         )
 
     assert (resolved, drained) == (True, "rb-9")
     rec.assert_not_awaited()
-    from src.server.services.report_back.flash.keys import flash_rb_done_key
+    from src.server.services.report_back.handoff.keys import rb_done_key
 
-    assert cache.client.lists[flash_rb_done_key("flash-1")] == ["rb-9"]
+    assert cache.client.lists[rb_done_key("cos-1")] == ["rb-9"]
 
 
 @pytest.mark.asyncio
@@ -1335,7 +1333,7 @@ async def test_resolve_consults_both_ledger_probes(_stub_ledger):
     _seed_phantom(cache, ptr={"run_id": "rb-9"})
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-PHANTOM"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-PHANTOM"
     )
 
     assert (resolved, drained) == (True, "rb-9")
@@ -1358,24 +1356,24 @@ async def test_resolve_leaves_memberships_inherited_from_intermediate_lineage():
     rollback ever re-adds memberships, and execute_report_back acks without
     posting once membership is gone."""
     cache = _FakeCache()
-    _seed_dispatched(cache, "flash-1", ["ptc-1"])
+    _seed_dispatched(cache, "cos-1", ["ptc-1"])
     cache.kv[keys.ptc_origin_key("ptc-1")].update(
         dispatch_gen="g-3", owns_watch=False, owns_user=False, prev_gen="g-2"
     )
-    cache.kv[keys.flash_rb_run_key("flash-1", "ptc-1")] = {
+    cache.kv[keys.rb_run_key("cos-1", "ptc-1")] = {
         "run_id": "rb-2",
         "dispatch_gen": "g-2",
     }
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-3", job_gen="g-1"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-3", job_gen="g-1"
     )
 
     assert (resolved, drained) == (True, None)
     assert "g-3" in cache.client.sets[keys.ptc_rb_resolved_key("ptc-1")]
-    assert "ptc-1" in cache.client.sets[keys.flash_watch_key("flash-1")]
-    assert "ptc-1" in cache.client.sets[keys.flash_user_pending_key("u-1")]
-    assert keys.flash_rb_run_key("flash-1", "ptc-1") in cache.kv
+    assert "ptc-1" in cache.client.sets[keys.watch_key("cos-1")]
+    assert "ptc-1" in cache.client.sets[keys.user_pending_key("u-1")]
+    assert keys.rb_run_key("cos-1", "ptc-1") in cache.kv
 
 
 @pytest.mark.asyncio
@@ -1385,29 +1383,29 @@ async def test_resolve_surrogate_clears_the_displaced_lineages_state():
     lineage's blocked teardown — memberships fall and its pointer drains
     onto the discovery list."""
     cache = _FakeCache()
-    _seed_dispatched(cache, "flash-1", ["ptc-1"])
+    _seed_dispatched(cache, "cos-1", ["ptc-1"])
     cache.kv[keys.ptc_origin_key("ptc-1")].update(
         dispatch_gen="g-2p", owns_watch=False, owns_user=False, prev_gen="g-1"
     )
-    cache.kv[keys.flash_rb_run_key("flash-1", "ptc-1")] = {
+    cache.kv[keys.rb_run_key("cos-1", "ptc-1")] = {
         "run_id": "rb-1",
         "dispatch_gen": "g-1",
     }
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-2p", job_gen="g-1"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-2p", job_gen="g-1"
     )
 
     assert (resolved, drained) == (True, "rb-1")
     assert "ptc-1" not in cache.client.sets.get(
-        keys.flash_watch_key("flash-1"), set()
+        keys.watch_key("cos-1"), set()
     )
     assert "ptc-1" not in cache.client.sets.get(
-        keys.flash_user_pending_key("u-1"), set()
+        keys.user_pending_key("u-1"), set()
     )
-    from src.server.services.report_back.flash.keys import flash_rb_done_key
+    from src.server.services.report_back.handoff.keys import rb_done_key
 
-    assert cache.client.lists[flash_rb_done_key("flash-1")] == ["rb-1"]
+    assert cache.client.lists[rb_done_key("cos-1")] == ["rb-1"]
 
 
 @pytest.mark.asyncio
@@ -1418,30 +1416,30 @@ async def test_resolve_surrogate_drains_even_a_third_generations_pointer():
     nobody can discover survives them (/status only reads the pointer behind
     membership, so a spared-but-orphaned pointer is unreachable forever)."""
     cache = _FakeCache()
-    _seed_dispatched(cache, "flash-1", ["ptc-1"])
+    _seed_dispatched(cache, "cos-1", ["ptc-1"])
     cache.kv[keys.ptc_origin_key("ptc-1")].update(
         dispatch_gen="g-2p", owns_watch=False, owns_user=False, prev_gen="g-1"
     )
-    cache.kv[keys.flash_rb_run_key("flash-1", "ptc-1")] = {
+    cache.kv[keys.rb_run_key("cos-1", "ptc-1")] = {
         "run_id": "rb-0",
         "dispatch_gen": "g-0",
     }
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-2p", job_gen="g-1"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-2p", job_gen="g-1"
     )
 
     assert (resolved, drained) == (True, "rb-0")
-    assert keys.flash_rb_run_key("flash-1", "ptc-1") not in cache.kv
+    assert keys.rb_run_key("cos-1", "ptc-1") not in cache.kv
     assert "ptc-1" not in cache.client.sets.get(
-        keys.flash_watch_key("flash-1"), set()
+        keys.watch_key("cos-1"), set()
     )
     assert "ptc-1" not in cache.client.sets.get(
-        keys.flash_user_pending_key("u-1"), set()
+        keys.user_pending_key("u-1"), set()
     )
-    from src.server.services.report_back.flash.keys import flash_rb_done_key
+    from src.server.services.report_back.handoff.keys import rb_done_key
 
-    assert cache.client.lists[flash_rb_done_key("flash-1")] == ["rb-0"]
+    assert cache.client.lists[rb_done_key("cos-1")] == ["rb-0"]
 
 
 @pytest.mark.asyncio
@@ -1452,7 +1450,7 @@ async def test_resolve_surrogate_matches_the_carried_owner_gen():
     still surrogate-authorizes the pair teardown instead of stranding the
     memberships and cap slot to the 24h TTL."""
     cache = _FakeCache()
-    _seed_dispatched(cache, "flash-1", ["ptc-1"])
+    _seed_dispatched(cache, "cos-1", ["ptc-1"])
     cache.kv[keys.ptc_origin_key("ptc-1")].update(
         dispatch_gen="g-3",
         owns_watch=False,
@@ -1462,15 +1460,15 @@ async def test_resolve_surrogate_matches_the_carried_owner_gen():
     )
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-3", job_gen="g-1"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-3", job_gen="g-1"
     )
 
     assert (resolved, drained) == (True, None)
     assert "ptc-1" not in cache.client.sets.get(
-        keys.flash_watch_key("flash-1"), set()
+        keys.watch_key("cos-1"), set()
     )
     assert "ptc-1" not in cache.client.sets.get(
-        keys.flash_user_pending_key("u-1"), set()
+        keys.user_pending_key("u-1"), set()
     )
     assert "g-3" in cache.client.sets[keys.ptc_rb_resolved_key("ptc-1")]
 
@@ -1484,13 +1482,13 @@ async def test_reserve_records_immediate_prev_and_carries_the_owner_anchor():
     phantom, taken verbatim from an admitted predecessor, and granted to a
     legacy blob without lineage flags (round-15 parity)."""
     cache = _FakeCache()
-    flash, ptc, user = "flash-1", "ptc-1", "u-1"
+    dispatcher, ptc, user = "cos-1", "ptc-1", "u-1"
     origin_key = keys.ptc_origin_key(ptc)
 
     lineage_fields = ("owns_watch", "owns_user", "prev_gen", "owner_gen", "admitted_gen")
 
     async def _reserve_over(predecessor: dict) -> dict:
-        _seed_dispatched(cache, flash, [ptc], user)
+        _seed_dispatched(cache, dispatcher, [ptc], user)
         base = {
             k: v
             for k, v in cache.kv[origin_key].items()
@@ -1500,7 +1498,7 @@ async def test_reserve_records_immediate_prev_and_carries_the_owner_anchor():
         with patch(
             "src.utils.cache.redis_cache.get_cache_client", return_value=cache
         ):
-            async with reserve.reserve(flash, ptc, "ws-1", "fws-1", user) as slot:
+            async with reserve.reserve(dispatcher, ptc, "ws-1", "fws-1", user) as slot:
                 assert slot.error is None
                 stored = dict(cache.kv[origin_key])
                 assert stored["dispatch_gen"] == slot.dispatch_gen
@@ -1547,36 +1545,36 @@ async def test_refresh_reservation_phantom_resolution_spares_predecessor_deliver
     origin AND both memberships must survive the whole dance — its queued
     summary still delivers."""
     cache = _FakeCache()
-    flash, ptc, user = "flash-1", "ptc-1", "u-1"
-    _seed_dispatched(cache, flash, [ptc], user)
+    dispatcher, ptc, user = "cos-1", "ptc-1", "u-1"
+    _seed_dispatched(cache, dispatcher, [ptc], user)
     cache.kv[keys.ptc_origin_key(ptc)].update(
         dispatch_gen="g-2", admitted_gen="g-2"
     )
 
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
-        async with reserve.reserve(flash, ptc, "ws-1", "fws-1", user) as slot:
+        async with reserve.reserve(dispatcher, ptc, "ws-1", "fws-1", user) as slot:
             assert slot.error is None
             g3 = slot.dispatch_gen
             # G1's stale error clear lands mid-reservation: fenced by G3.
-            outcome = await pointer.clear_flash_report_back(
-                cache, ptc, flash, expected_gen="g-1"
+            outcome = await pointer.clear_handoff_report_back(
+                cache, ptc, dispatcher, expected_gen="g-1"
             )
             assert not outcome
             assert outcome.fencer_gen == g3
             resolved, _ = await reserve.resolve_orphaned_watch(
-                cache, ptc, flash, user, fencer_gen=g3, job_gen="g-1"
+                cache, ptc, dispatcher, user, fencer_gen=g3, job_gen="g-1"
             )
             assert resolved
             assert g3 in cache.client.sets[keys.ptc_rb_resolved_key(ptc)]
             # Inherited pair state untouched mid-flight.
-            assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
+            assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
             # No commit → G3's refused admission (receipt → 503) rolls back.
 
     restored = cache.kv[keys.ptc_origin_key(ptc)]
     assert restored["dispatch_gen"] == "g-2"
     assert restored["admitted_gen"] == "g-2"
-    assert ptc in cache.client.sets[keys.flash_watch_key(flash)]
-    assert ptc in cache.client.sets[keys.flash_user_pending_key(user)]
+    assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
+    assert ptc in cache.client.sets[keys.user_pending_key(user)]
 
 
 @pytest.mark.asyncio
@@ -1587,12 +1585,12 @@ async def test_a_summarys_clear_fenced_by_a_phantom_continuation_still_drains_th
     consumption clear for G1 is fenced by G2, and nothing else would drain
     the pair before the origin expires: the clear itself must resolve it."""
     cache = _FakeCache()
-    flash, ptc, user = "flash-1", "ptc-1", "u-1"
-    _seed_dispatched(cache, flash, [ptc], user)
+    dispatcher, ptc, user = "cos-1", "ptc-1", "u-1"
+    _seed_dispatched(cache, dispatcher, [ptc], user)
     cache.kv[keys.ptc_origin_key(ptc)].update(
         dispatch_gen="g-1", admitted_gen="g-1"
     )
-    cache.kv[keys.flash_rb_run_key(flash, ptc)] = {
+    cache.kv[keys.rb_run_key(dispatcher, ptc)] = {
         "run_id": "rb-1",
         "request_key": "rk-1",
         "dispatch_gen": "g-1",
@@ -1606,7 +1604,7 @@ async def test_a_summarys_clear_fenced_by_a_phantom_continuation_still_drains_th
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
         patch("src.server.database.runs.outbox.fenced_job_guard", _owned),
     ):
-        async with reserve.reserve(flash, ptc, "ws-1", "fws-1", user) as slot:
+        async with reserve.reserve(dispatcher, ptc, "ws-1", "fws-1", user) as slot:
             assert slot.error is None
             g2 = slot.dispatch_gen
             slot.commit()  # the ambiguous POST retains the reservation
@@ -1623,14 +1621,14 @@ async def test_a_summarys_clear_fenced_by_a_phantom_continuation_still_drains_th
                 },
                 "run_id": "rb-1",
                 "attempts": 1,
-                "ordering_key": flash,
+                "ordering_key": dispatcher,
             }
         )
 
-    assert ptc not in cache.client.sets.get(keys.flash_watch_key(flash), set())
-    assert ptc not in cache.client.sets.get(keys.flash_user_pending_key(user), set())
+    assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
+    assert ptc not in cache.client.sets.get(keys.user_pending_key(user), set())
     assert g2 in cache.client.sets[keys.ptc_rb_resolved_key(ptc)]
-    assert cache.client.lists[keys.flash_rb_done_key(flash)] == ["rb-1"]
+    assert cache.client.lists[keys.rb_done_key(dispatcher)] == ["rb-1"]
     ((_, wake_msg),) = cache.client.published
     assert '"cleared": true' in wake_msg
     assert "error" not in wake_msg
@@ -1642,7 +1640,7 @@ async def test_resolve_suppressed_when_origin_gone():
     cache = _FakeCache()
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-PHANTOM"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-PHANTOM"
     )
 
     assert (resolved, drained) == (False, None)
@@ -1659,7 +1657,7 @@ async def test_resolve_suppressed_when_origin_gone():
 
 def _gate_cache(gen: str = "g-1"):
     cache = _FakeCache()
-    _seed_dispatched(cache, "flash-1", ["ptc-1"])
+    _seed_dispatched(cache, "cos-1", ["ptc-1"])
     cache.kv[keys.ptc_origin_key("ptc-1")]["dispatch_gen"] = gen
     return cache
 
@@ -1750,10 +1748,10 @@ async def test_resolve_spares_a_foreign_generations_pointer():
     re-established survives the phantom's resolution."""
     cache = _FakeCache()
     _seed_phantom(cache, ptr={"run_id": "rb-NEW", "dispatch_gen": "g-3"})
-    ptr_key = keys.flash_rb_run_key("flash-1", "ptc-1")
+    ptr_key = keys.rb_run_key("cos-1", "ptc-1")
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-PHANTOM"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-PHANTOM"
     )
 
     assert (resolved, drained) == (True, None)
@@ -1761,8 +1759,8 @@ async def test_resolve_spares_a_foreign_generations_pointer():
 
 
 @pytest.mark.asyncio
-async def test_resolve_without_flash_thread():
-    """Unresolvable flash thread: only the user membership can fall — the ''
+async def test_resolve_without_dispatcher_thread():
+    """Unresolvable dispatching thread: only the user membership can fall — the ''
     KEYS guards keep the script off the watch/pointer keys entirely."""
     cache = _FakeCache()
     cache.kv[keys.ptc_origin_key("ptc-1")] = {
@@ -1771,7 +1769,7 @@ async def test_resolve_without_flash_thread():
         "owns_user": True,
     }
     cache.client.sets.setdefault(
-        keys.flash_user_pending_key("u-1"), set()
+        keys.user_pending_key("u-1"), set()
     ).add("ptc-1")
 
     resolved, drained = await reserve.resolve_orphaned_watch(
@@ -1780,7 +1778,7 @@ async def test_resolve_without_flash_thread():
 
     assert (resolved, drained) == (True, None)
     assert "ptc-1" not in cache.client.sets.get(
-        keys.flash_user_pending_key("u-1"), set()
+        keys.user_pending_key("u-1"), set()
     )
 
 
@@ -1795,7 +1793,7 @@ async def test_failing_stampers_retract_spares_same_gen_siblings_intent(
     winner. Only after B's own retract does the generation resolve as a
     true phantom."""
     cache = _gate_cache()
-    watch_key = keys.flash_watch_key("flash-1")
+    watch_key = keys.watch_key("cos-1")
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
         assert await reserve.admit_dispatch_gen("ptc-1", "g-1", "run-A") is True
         assert await reserve.admit_dispatch_gen("ptc-1", "g-1", "run-B") is True
@@ -1806,7 +1804,7 @@ async def test_failing_stampers_retract_spares_same_gen_siblings_intent(
     assert origin["pending_runs"] == {"run-B": True}  # B's protection survives
 
     resolved, _ = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-1"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-1"
     )
     assert resolved is False
     assert "ptc-1" in cache.client.sets[watch_key]
@@ -1814,7 +1812,7 @@ async def test_failing_stampers_retract_spares_same_gen_siblings_intent(
     with patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache):
         await reserve.retract_dispatch_gen("ptc-1", "g-1", "run-B")
     resolved, _ = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-1"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-1"
     )
     assert resolved is True
     assert "ptc-1" not in cache.client.sets.get(watch_key, set())
@@ -1834,12 +1832,12 @@ async def test_resolve_restores_memberships_when_same_gen_start_raced(
     _stub_ledger.has_gen.side_effect = [False, True]  # pre-probe, revalidation
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-1"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-1"
     )
 
     assert (resolved, drained) == (False, None)
-    watch_key = keys.flash_watch_key("flash-1")
-    user_key = keys.flash_user_pending_key("u-1")
+    watch_key = keys.watch_key("cos-1")
+    user_key = keys.user_pending_key("u-1")
     assert "ptc-1" in cache.client.sets[watch_key]
     assert "ptc-1" in cache.client.sets[user_key]
     assert cache.client.ttls[watch_key] == keys.PTC_ORIGIN_TTL
@@ -1865,12 +1863,12 @@ async def test_resolve_restores_memberships_when_foreign_start_raced(
     ]
 
     resolved, drained = await reserve.resolve_orphaned_watch(
-        cache, "ptc-1", "flash-1", "u-1", fencer_gen="g-1"
+        cache, "ptc-1", "cos-1", "u-1", fencer_gen="g-1"
     )
 
     assert (resolved, drained) == (False, None)
-    assert "ptc-1" in cache.client.sets[keys.flash_watch_key("flash-1")]
-    assert "ptc-1" in cache.client.sets[keys.flash_user_pending_key("u-1")]
+    assert "ptc-1" in cache.client.sets[keys.watch_key("cos-1")]
+    assert "ptc-1" in cache.client.sets[keys.user_pending_key("u-1")]
     assert "g-1" in cache.client.sets[keys.ptc_rb_resolved_key("ptc-1")]
 
 
@@ -1885,7 +1883,7 @@ async def test_resolve_restores_memberships_when_foreign_start_raced(
 
 @pytest.fixture
 def wake_listener():
-    from src.server.services.report_back.flash.wake_listener import ThreadWakeListener
+    from src.server.services.report_back.handoff.wake_listener import ThreadWakeListener
 
     ThreadWakeListener._instance = None
     inst = ThreadWakeListener.get_instance()

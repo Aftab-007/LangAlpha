@@ -2,7 +2,7 @@
 Tests for src/server/database/workspace.py
 
 Verifies workspace CRUD operations: create, get, update, delete,
-batch sort order, status updates, and flash workspace upsert.
+batch sort order, status updates, and the Home upsert.
 """
 
 import uuid
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.server.database.home_workspace import get_flash_workspace_id
+from src.server.database.home_workspace import get_home_workspace_id
 from src.server.database.sql_fences import EXCLUDE_HOME
 
 
@@ -66,7 +66,7 @@ def selection():
 
 @pytest.fixture
 def fold():
-    """The fold of a former flash row into Home, which every Home resolve
+    """The fold of a former Home row into Home, which every Home resolve
     awaits; its SQL is pinned against a real Postgres in
     tests/integration/test_home_fold_db.py."""
     fold = AsyncMock(return_value=[])
@@ -129,32 +129,32 @@ def _workspace_row(
 
 
 @pytest.mark.asyncio
-async def test_get_flash_workspace_id_deterministic():
-    """Same user always produces the same flash workspace ID."""
-    from src.server.database.home_workspace import get_flash_workspace_id
+async def test_get_home_workspace_id_deterministic():
+    """Same user always produces the same Home ID."""
+    from src.server.database.home_workspace import get_home_workspace_id
 
-    id1 = get_flash_workspace_id("user-42")
-    id2 = get_flash_workspace_id("user-42")
+    id1 = get_home_workspace_id("user-42")
+    id2 = get_home_workspace_id("user-42")
     assert id1 == id2
 
-    id3 = get_flash_workspace_id("user-99")
+    id3 = get_home_workspace_id("user-99")
     assert id3 != id1
 
 
 @pytest.mark.asyncio
-async def test_an_existing_flash_workspace_costs_one_statement_and_no_lock(
+async def test_an_existing_home_costs_one_statement_and_no_lock(
     ws_mock_db, mock_cursor, selection
 ):
-    """Every Flash turn lands here, so the row that exists is only touched."""
-    from src.server.database.workspace import get_or_create_flash_workspace
+    """Every turn in Home lands here, so the row that exists is only touched."""
+    from src.server.database.workspace import get_or_create_home_workspace
 
-    row = _workspace_row(name="Flash", status="flash")
+    row = _workspace_row(name="Home", status="unbound")
     mock_cursor.fetchone.return_value = row
 
-    result = await get_or_create_flash_workspace("user-1")
+    result = await get_or_create_home_workspace("user-1")
 
-    assert result["name"] == "Flash"
-    assert result["status"] == "flash"
+    assert result["name"] == "Home"
+    assert result["status"] == "unbound"
     mock_cursor.execute.assert_awaited_once()
     assert mock_cursor.execute.call_args[0][0].split()[0] == "UPDATE"
     selection.lock.assert_not_awaited()
@@ -162,28 +162,29 @@ async def test_an_existing_flash_workspace_costs_one_statement_and_no_lock(
 
 
 @pytest.mark.asyncio
-async def test_a_first_flash_turn_upserts_and_starts_the_selection_once(
+async def test_a_first_home_turn_upserts_and_starts_the_selection_once(
     ws_mock_db, mock_cursor, selection
 ):
     """A concurrent first turn that inserted it first already started the
     selection; the upsert says which of the two this one was."""
-    from src.server.database.home_workspace import get_flash_workspace_id
-    from src.server.database.workspace import get_or_create_flash_workspace
+    from src.server.database.home_workspace import get_home_workspace_id
+    from src.server.database.workspace import get_or_create_home_workspace
 
-    row = _workspace_row(name="Flash", status="flash")
+    row = _workspace_row(name="Home", status="unbound")
     mock_cursor.fetchone.side_effect = [None, {**row, "inserted": True}]
-    result = await get_or_create_flash_workspace("user-1")
+    result = await get_or_create_home_workspace("user-1")
 
     assert "inserted" not in result
     sql = mock_cursor.execute.call_args[0][0]
     assert "INSERT INTO workspaces" in sql and "ON CONFLICT" in sql
+    assert mock_cursor.execute.call_args[0][1][2:] == ("Home", "unbound")
     selection.lock.assert_awaited_once_with(mock_cursor, "user-1")
     selection.start.assert_awaited_once_with(
-        mock_cursor, "user-1", get_flash_workspace_id("user-1")
+        mock_cursor, "user-1", get_home_workspace_id("user-1")
     )
 
     mock_cursor.fetchone.side_effect = [None, {**row, "inserted": False}]
-    await get_or_create_flash_workspace("user-1")
+    await get_or_create_home_workspace("user-1")
     selection.start.assert_awaited_once()
 
 
@@ -191,20 +192,20 @@ async def test_a_first_flash_turn_upserts_and_starts_the_selection_once(
 async def test_every_resolve_folds_former_rows_into_home(
     ws_mock_db, mock_cursor, fold
 ):
-    """An account merge leaves the merged account's flash row beside Home, which
+    """An account merge leaves the merged account's Home beside this one, which
     the account would list as a second All workspaces entry. Whether there is
     one is the fold's own read, so a first resolve that inserts Home folds too."""
-    from src.server.database.home_workspace import get_flash_workspace_id
-    from src.server.database.workspace import get_or_create_flash_workspace
+    from src.server.database.home_workspace import get_home_workspace_id
+    from src.server.database.workspace import get_or_create_home_workspace
 
-    home_id = get_flash_workspace_id("user-1")
-    row = _workspace_row(workspace_id=home_id, name="Flash", status="flash")
+    home_id = get_home_workspace_id("user-1")
+    row = _workspace_row(workspace_id=home_id, name="Home", status="unbound")
     mock_cursor.fetchone.return_value = row
-    await get_or_create_flash_workspace("user-1", conn=ws_mock_db)
+    await get_or_create_home_workspace("user-1", conn=ws_mock_db)
     fold.assert_awaited_once_with("user-1", home_id, ws_mock_db)
 
     mock_cursor.fetchone.side_effect = [None, {**row, "inserted": True}]
-    await get_or_create_flash_workspace("user-1")
+    await get_or_create_home_workspace("user-1")
     assert fold.await_args_list[-1].args == ("user-1", home_id, None)
 
 
@@ -212,13 +213,13 @@ async def test_every_resolve_folds_former_rows_into_home(
 async def test_a_failed_fold_still_resolves_home(ws_mock_db, mock_cursor, fold):
     """Every turn outside a workspace resolves Home here; the fold runs again
     on the next resolve, so its failure must not take the turn with it."""
-    from src.server.database.workspace import get_or_create_flash_workspace
+    from src.server.database.workspace import get_or_create_home_workspace
 
-    row = _workspace_row(name="Flash")
+    row = _workspace_row(name="Home")
     mock_cursor.fetchone.return_value = row
     fold.side_effect = RuntimeError("unique violation")
 
-    result = await get_or_create_flash_workspace("user-1")
+    result = await get_or_create_home_workspace("user-1")
 
     assert result["workspace_id"] == row["workspace_id"]
 
@@ -231,9 +232,9 @@ async def test_a_failed_fold_still_resolves_home(ws_mock_db, mock_cursor, fold):
         lambda W: W.create_workspace_on_computer(
             "user-1", "Research", "11111111-1111-1111-1111-111111111111"
         ),
-        lambda W: W.get_or_create_flash_workspace("user-1"),
+        lambda W: W.get_or_create_home_workspace("user-1"),
     ],
-    ids=["create_workspace", "create_workspace_on_computer", "flash"],
+    ids=["create_workspace", "create_workspace_on_computer", "home"],
 )
 async def test_the_user_lock_is_taken_before_the_workspace_insert(
     create, ws_mock_db, mock_cursor, selection
@@ -250,7 +251,7 @@ async def test_the_user_lock_is_taken_before_the_workspace_insert(
         order.append("insert" if "INSERT INTO workspaces" in sql else "other")
 
     mock_cursor.execute.side_effect = execute
-    # Flash updates an existing row first; None sends it on to the insert.
+    # Home updates an existing row first; None sends it on to the insert.
     mock_cursor.fetchone.side_effect = lambda: (
         None
         if order[-1] == "other"
@@ -293,7 +294,7 @@ async def test_create_workspace_with_explicit_id(ws_mock_db, mock_cursor):
     mock_cursor.fetchone.return_value = row
 
     result = await create_workspace(
-        "user-1", "WS", workspace_id=ws_id, status="flash"
+        "user-1", "WS", workspace_id=ws_id, status="unbound"
     )
 
     assert result["workspace_id"] == ws_id
@@ -390,7 +391,7 @@ async def test_get_workspaces_for_user(ws_mock_db, mock_cursor):
     # Home stays out by its id and by its status, as every listing leaves it.
     count_sql, params = mock_cursor.execute.call_args_list[0][0]
     assert EXCLUDE_HOME in count_sql
-    assert params["home_id"] == get_flash_workspace_id("user-1")
+    assert params["home_id"] == get_home_workspace_id("user-1")
 
 
 @pytest.mark.asyncio
@@ -402,7 +403,7 @@ async def test_get_workspace_names_leaves_home_out_as_the_listing_does(ws_mock_d
 
     sql, params = mock_cursor.execute.call_args[0]
     assert EXCLUDE_HOME in sql
-    assert params["home_id"] == get_flash_workspace_id("user-1")
+    assert params["home_id"] == get_home_workspace_id("user-1")
 
 
 @pytest.mark.asyncio
@@ -691,14 +692,14 @@ async def test_a_soft_delete_leaves_the_machine_alone(ws_mock_db, mock_cursor):
 
 
 @pytest.mark.asyncio
-async def test_a_flash_workspace_has_no_machine_to_move(ws_mock_db, mock_cursor):
-    """'flash' is not in 046's CHECK set, so mirroring it would fail the
+async def test_an_unbound_home_has_no_machine_to_move(ws_mock_db, mock_cursor):
+    """'unbound' is not in 046's CHECK set, so mirroring it would fail the
     statement after it had already moved the workspace row."""
     from src.server.database.workspace import update_workspace_status
 
-    mock_cursor.fetchone.return_value = _workspace_row(status="flash")
+    mock_cursor.fetchone.return_value = _workspace_row(status="unbound")
 
-    await update_workspace_status("ws-1", "flash")
+    await update_workspace_status("ws-1", "unbound")
 
     assert "computers" not in mock_cursor.execute.call_args[0][0]
 

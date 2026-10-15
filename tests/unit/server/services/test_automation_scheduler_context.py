@@ -1,9 +1,9 @@
 """A firing runs in the scheduler's context, never in whoever dispatched it.
 
-Flash's ``manage_automation`` trigger dispatches from inside an agent turn,
-whose context carries that turn's LangChain runnable config. A firing that
-inherited it streamed its own events into the chat that triggered it. The firing must see the context
-the scheduler started in, and nothing its caller set since.
+A trigger from inside an agent turn dispatches with that turn's context,
+which carries its LangChain runnable config. A firing that inherited it
+streamed its own events into the chat that triggered it. The firing must see
+the context the scheduler started in, and nothing its caller set since.
 """
 
 from __future__ import annotations

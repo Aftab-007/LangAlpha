@@ -2,8 +2,8 @@
 
 An interrupted summary releases nothing, and the turn that answers it is a
 public request stripped of the pair. ``carried_pair`` stamps that turn with
-the summary's pair from the thread's latest attempt, on Flash and on Home
-alike, so its finalize releases the pair under the summary's generation.
+the summary's pair from the thread's latest attempt, so its finalize
+releases the pair under the summary's generation.
 """
 
 from types import SimpleNamespace
@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.server.database.runs.hook_jobs import build_finalize_jobs_from_run_row
-from src.server.services.report_back.flash.carry import carried_pair
+from src.server.services.report_back.handoff.carry import carried_pair
 
 _LATEST = "src.server.database.runs.lifecycle.get_latest_attempt"
 
@@ -37,8 +37,8 @@ async def test_the_turn_after_an_interrupted_summary_takes_its_pair():
     next one carries it on."""
     latest = AsyncMock(return_value=_attempt("interrupted", **_SUMMARY_PAIR))
     with patch(_LATEST, latest):
-        assert await carried_pair(_request(), "flash-1") == _SUMMARY_PAIR
-    latest.assert_awaited_once_with("flash-1")
+        assert await carried_pair(_request(), "cos-1") == _SUMMARY_PAIR
+    latest.assert_awaited_once_with("cos-1")
 
 
 @pytest.mark.asyncio
@@ -46,7 +46,7 @@ async def test_a_summary_names_its_own_pair_and_reads_nothing():
     latest = AsyncMock(return_value=_attempt("interrupted", **_SUMMARY_PAIR))
     with patch(_LATEST, latest):
         req = _request(report_back_ptc_thread_id="ptc-2", origin_dispatch_gen="gen-5")
-        assert await carried_pair(req, "flash-1") == {}
+        assert await carried_pair(req, "cos-1") == {}
     latest.assert_not_awaited()
 
 
@@ -65,34 +65,29 @@ async def test_nothing_is_carried_past_a_settled_or_pairless_turn(latest):
     """A summary that ended released its own pair, and an interrupt outside a
     report-back holds none."""
     with patch(_LATEST, AsyncMock(return_value=latest)):
-        assert await carried_pair(_request(), "flash-1") == {}
+        assert await carried_pair(_request(), "cos-1") == {}
 
 
 @pytest.mark.asyncio
 async def test_a_failed_read_fails_the_turn_start():
     with patch(_LATEST, AsyncMock(side_effect=ConnectionError("db down"))):
         with pytest.raises(ConnectionError):
-            await carried_pair(_request(), "flash-1")
+            await carried_pair(_request(), "cos-1")
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("thread_id", "msg_type"), [("flash-1", "flash"), ("home-1", "ptc")]
-)
-async def test_the_carrying_turn_releases_the_pair_under_its_generation(
-    thread_id, msg_type
-):
+async def test_the_carrying_turn_releases_the_pair_under_its_generation():
     """What the turn stamps is what its finalize reads: a release fenced to
     the summary's generation, ordered on the watching thread, so a pair
     dispatched again since survives it. Interrupted, it releases nothing."""
     with patch(
         _LATEST, AsyncMock(return_value=_attempt("interrupted", **_SUMMARY_PAIR))
     ):
-        carried = await carried_pair(_request(), thread_id)
+        carried = await carried_pair(_request(), "home-1")
     row = {
         "conversation_response_id": "run-8",
-        "conversation_thread_id": thread_id,
-        "metadata": {"msg_type": msg_type, "user_id": "u-1", **carried},
+        "conversation_thread_id": "home-1",
+        "metadata": {"msg_type": "ptc", "user_id": "u-1", **carried},
     }
 
     jobs = build_finalize_jobs_from_run_row(row)("completed")
@@ -104,7 +99,7 @@ async def test_the_carrying_turn_releases_the_pair_under_its_generation(
         "error_wake": False,
         "dispatch_gen": "gen-3",
     }
-    assert wc.ordering_key == thread_id
+    assert wc.ordering_key == "home-1"
     assert [j.hook_type for j in build_finalize_jobs_from_run_row(row)("interrupted")] == [
         "user_feed"
     ]

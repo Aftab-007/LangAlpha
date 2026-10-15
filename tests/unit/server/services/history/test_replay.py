@@ -1173,8 +1173,8 @@ async def test_the_newest_page_raises_its_turns_error_before_its_interrupts(
 
 
 async def test_system_query_tagged_and_synthetic_human_dropped(monkeypatch):
-    # Report-back (flash dispatches PTC, the PTC completion is injected as a new
-    # flash turn): the turn's boundary input is a <system>-wrapped HumanMessage
+    # Report-back (the Chief of Staff dispatches PTC, the PTC completion is
+    # injected as a new Chief of Staff turn): the turn's boundary input is a <system>-wrapped HumanMessage
     # and its query row is type="system". Checkpoint replay reads that raw
     # HumanMessage from checkpoint state, so it must (a) tag the user_message
     # query_type="system" (the frontend hides the bubble) and (b) never surface

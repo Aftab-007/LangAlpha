@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.server.database.home_workspace import get_flash_workspace_id
-from src.server.database.workspace import FlashWorkspaceTaken
+from src.server.database.home_workspace import get_home_workspace_id
+from src.server.database.workspace import HomeWorkspaceTaken
 from src.server.services.automations import lifecycle
 from src.server.services.automations.lifecycle import (
     AutomationRefusal,
@@ -27,7 +27,7 @@ OTHER = "user-other"
 AUTOMATION_ID = str(uuid.uuid4())
 WORKSPACE_ID = str(uuid.uuid4())
 THREAD_ID = str(uuid.uuid4())
-HOME = get_flash_workspace_id(OWNER)
+HOME = get_home_workspace_id(OWNER)
 
 _THREAD_OWNER = "src.server.database.conversation.get_thread_owner_id"
 _THREAD_META = "src.server.database.conversation.get_thread_auth_meta"
@@ -39,7 +39,7 @@ def _thread_in(workspace_id):
 
 @pytest.fixture(autouse=True)
 def _home(monkeypatch):
-    """Home's row, which a 'flash' write makes sure of, is the caller's."""
+    """Home's row, which a write naming Home makes sure of, is the caller's."""
     monkeypatch.setattr(lifecycle, "_home", AsyncMock(return_value=HOME))
 
 
@@ -88,7 +88,7 @@ class TestCreateTargetOwnership:
 
         with pytest.raises(TargetRefused) as exc:
             await create_automation(
-                OWNER, _create_data(agent_mode="ptc", workspace_id=WORKSPACE_ID),
+                OWNER, _create_data(workspace_id=WORKSPACE_ID),
             )
 
         assert exc.value.status_code == 403
@@ -105,35 +105,12 @@ class TestCreateTargetOwnership:
 
         with pytest.raises(TargetRefused) as exc:
             await create_automation(
-                OWNER, _create_data(agent_mode="ptc", workspace_id=WORKSPACE_ID),
+                OWNER, _create_data(workspace_id=WORKSPACE_ID),
             )
 
         assert exc.value.status_code == 404
         assert exc.value.field == "workspace_id"
         mock_auto_db.create_automation.assert_not_called()
-
-    @pytest.mark.asyncio
-    @patch("src.server.services.automations.lifecycle.auto_db")
-    @patch("src.server.services.automations.lifecycle.get_workspace")
-    async def test_flash_stores_home_and_never_the_workspace_it_named(
-        self, mock_get_workspace, mock_auto_db,
-    ):
-        """A foreign id named beside 'flash' is never stored, so nothing can
-        activate it later."""
-        mock_get_workspace.return_value = {
-            "workspace_id": WORKSPACE_ID, "user_id": OTHER,
-        }
-        mock_auto_db.create_automation = AsyncMock(
-            return_value={"automation_id": AUTOMATION_ID}
-        )
-
-        await create_automation(
-            OWNER, _create_data(agent_mode="flash", workspace_id=WORKSPACE_ID),
-        )
-
-        written = mock_auto_db.create_automation.call_args.kwargs
-        assert (written["agent_mode"], written["workspace_id"]) == ("ptc", HOME)
-        mock_get_workspace.assert_not_called()
 
     @pytest.mark.asyncio
     @patch("src.server.services.automations.lifecycle.auto_db")
@@ -194,7 +171,6 @@ class TestCreateTargetOwnership:
         await create_automation(
             OWNER,
             _create_data(
-                agent_mode="ptc",
                 workspace_id=WORKSPACE_ID,
                 thread_strategy="continue",
                 conversation_thread_id=THREAD_ID,
@@ -334,7 +310,7 @@ class TestPinnedThreadPlace:
     @patch("src.server.services.automations.lifecycle.auto_db")
     async def test_update_refuses_a_new_pin_in_another_workspace(self, mock_auto_db):
         mock_auto_db.get_automation = AsyncMock(
-            return_value=_current_row(agent_mode="ptc", workspace_id=HOME)
+            return_value=_current_row(workspace_id=HOME)
         )
 
         with patch(_THREAD_META, new=_thread_in(WORKSPACE_ID)):
@@ -348,12 +324,11 @@ class TestPinnedThreadPlace:
 
     @pytest.mark.asyncio
     @patch("src.server.services.automations.lifecycle.auto_db")
-    async def test_a_row_stored_with_its_pin_elsewhere_stays_editable(self, mock_auto_db):
+    async def test_restating_the_stored_pin_checks_nothing(self, mock_auto_db):
         """Restating the stored pin without a move checks nothing, so an edit
         to anything else still saves."""
         mock_auto_db.get_automation = AsyncMock(
             return_value=_current_row(
-                agent_mode="ptc",
                 workspace_id=HOME,
                 thread_strategy="continue",
                 conversation_thread_id=uuid.UUID(THREAD_ID),
@@ -374,10 +349,52 @@ class TestPinnedThreadPlace:
 
     @pytest.mark.asyncio
     @patch("src.server.services.automations.lifecycle.auto_db")
+    async def test_switching_to_continue_checks_a_pin_left_on_the_row(self, mock_auto_db):
+        """A row that started a new thread each run can hold a pin nothing
+        checked; continuing it would run one place and name another."""
+        mock_auto_db.get_automation = AsyncMock(
+            return_value=_current_row(
+                workspace_id=HOME,
+                thread_strategy="new",
+                conversation_thread_id=uuid.UUID(THREAD_ID),
+            )
+        )
+
+        with patch(_THREAD_META, new=_thread_in(WORKSPACE_ID)):
+            with pytest.raises(AutomationRefusal) as exc:
+                await update_automation(
+                    AUTOMATION_ID, OWNER, {"thread_strategy": "continue"},
+                )
+
+        assert exc.value.field == "conversation_thread_id"
+        mock_auto_db.update_automation.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("src.server.services.automations.lifecycle.auto_db")
+    async def test_a_pin_on_a_row_with_no_workspace_asks_for_one(self, mock_auto_db):
+        """A row whose workspace was deleted runs nowhere, so a pin there
+        needs a workspace named with it."""
+        mock_auto_db.get_automation = AsyncMock(
+            return_value=_current_row(workspace_id=None, thread_strategy="new")
+        )
+
+        with patch(_THREAD_META, new=_thread_in(WORKSPACE_ID)):
+            with pytest.raises(AutomationRefusal) as exc:
+                await update_automation(
+                    AUTOMATION_ID,
+                    OWNER,
+                    {"thread_strategy": "continue", "conversation_thread_id": THREAD_ID},
+                )
+
+        assert exc.value.field == "workspace_id"
+        assert str(exc.value) == lifecycle._NO_WORKSPACE
+        mock_auto_db.update_automation.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("src.server.services.automations.lifecycle.auto_db")
     async def test_a_move_to_the_pinned_threads_workspace_keeps_the_pin(self, mock_auto_db):
         mock_auto_db.get_automation = AsyncMock(
             return_value=_current_row(
-                agent_mode="ptc",
                 workspace_id=HOME,
                 thread_strategy="continue",
                 conversation_thread_id=uuid.UUID(THREAD_ID),
@@ -415,26 +432,24 @@ class TestHome:
     @pytest.fixture
     def upsert(self, monkeypatch):
         upsert = AsyncMock()
-        monkeypatch.setattr(lifecycle, "get_or_create_flash_workspace", upsert)
+        monkeypatch.setattr(lifecycle, "get_or_create_home_workspace", upsert)
         return upsert
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("named", [{"workspace_id": HOME}, {"agent_mode": "flash"}])
     @patch("src.server.services.automations.lifecycle.auto_db")
     @patch("src.server.services.automations.lifecycle.get_workspace")
     async def test_home_is_made_when_the_user_has_none(
-        self, mock_get_workspace, mock_auto_db, upsert, named,
+        self, mock_get_workspace, mock_auto_db, upsert,
     ):
         mock_get_workspace.return_value = None
         mock_auto_db.create_automation = AsyncMock(
             return_value={"automation_id": AUTOMATION_ID}
         )
 
-        await create_automation(OWNER, _create_data(**{"workspace_id": None, **named}))
+        await create_automation(OWNER, _create_data())
 
         assert upsert.await_args.args == (OWNER,)
-        written = mock_auto_db.create_automation.call_args.kwargs
-        assert (written["agent_mode"], written["workspace_id"]) == ("ptc", HOME)
+        assert mock_auto_db.create_automation.call_args.kwargs["workspace_id"] == HOME
 
     @pytest.mark.asyncio
     @patch("src.server.services.automations.lifecycle.auto_db")
@@ -463,7 +478,7 @@ class TestHome:
             mock_get_workspace.return_value = {"workspace_id": HOME, "user_id": OTHER}
         else:
             mock_get_workspace.return_value = None
-            upsert.side_effect = FlashWorkspaceTaken(HOME, OWNER)
+            upsert.side_effect = HomeWorkspaceTaken(HOME, OWNER)
 
         with pytest.raises(TargetRefused) as exc:
             await create_automation(OWNER, _create_data())

@@ -50,7 +50,7 @@ def _app():
 
 
 @contextmanager
-def _send_stubs(*, owner_id, stored_model=None, turn_model=None, msg_type="ptc"):
+def _send_stubs(*, owner_id, stored_model=None, turn_model=None):
     """Everything past the route stubbed; yields the mocks a test asserts on.
 
     ``turn_model`` is what ``thread_model.turn_model`` answers.
@@ -63,7 +63,7 @@ def _send_stubs(*, owner_id, stored_model=None, turn_model=None, msg_type="ptc")
         {
             "user_id": owner_id,
             "is_shared": False,
-            "msg_type": msg_type,
+            "msg_type": "ptc",
             "workspace_id": "ws-placeholder",
             "llm_model": stored_model,
         }
@@ -113,7 +113,6 @@ async def _send(
 ):
     body = {
         "messages": [{"role": "user", "content": "test query"}],
-        "agent_mode": "ptc",
     }
     if workspace_id is not None:
         body["workspace_id"] = workspace_id
@@ -139,20 +138,6 @@ async def test_a_turn_naming_no_model_runs_the_threads_own():
     assert _resolved_model(m["resolve"]) == "m-pin"
     # Nothing new was named, so there is nothing to keep.
     assert m["astream"].call_args.kwargs["named_model"] is None
-
-
-@pytest.mark.asyncio
-async def test_a_flash_thread_the_full_agent_takes_over_passes_over_flashs_model():
-    """Its promotion forgets the model only once the turn runs, so the first
-    turn already runs the full agent's default."""
-    with _send_stubs(
-        owner_id=USER, stored_model="m-flash", turn_model=None, msg_type="flash"
-    ) as m:
-        resp = await _send()
-
-    assert resp.status_code == 200
-    m["turn_model"].assert_awaited_once_with(USER, "tid-mine", named=None, held=None)
-    assert _resolved_model(m["resolve"]) is None
 
 
 @pytest.mark.asyncio

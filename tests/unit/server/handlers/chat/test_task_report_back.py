@@ -20,7 +20,7 @@ from src.server.services.report_back.subagent import (
     task_report_message,
 )
 
-WAKE_MOD = "src.server.services.report_back.flash.wake"
+WAKE_MOD = "src.server.services.report_back.handoff.wake"
 
 
 # ---------------------------------------------------------------------------

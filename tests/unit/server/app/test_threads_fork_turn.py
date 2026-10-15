@@ -42,7 +42,7 @@ async def _post(body):
         ) as client:
             resp = await client.post(
                 "/api/v1/threads/tid-mine/messages",
-                json={"workspace_id": "ws-placeholder", "agent_mode": "ptc", **body},
+                json={"workspace_id": "ws-placeholder", **body},
             )
     return resp, workflow
 

@@ -240,14 +240,14 @@ class TestWorkspaceCatalogServer:
         user_id = seed_workspace["user_id"]
         here = str(seed_workspace["workspace_id"])
         sibling = await self._workspace(user_id, "Sibling", "stopped")
-        flash = await self._workspace(user_id, "Flash", "flash")
+        home = await self._workspace(user_id, "Home", "unbound")
         gone = await self._workspace(user_id, "Gone", "deleted")
         # A leftover tombstone here would switch the new server off in the one
         # workspace that asked for it; a stale enabled row elsewhere must not
         # keep it on.
         await upsert_workspace_server(here, "acme", source="user", enabled=False)
         await upsert_workspace_server(sibling, "acme", source="user", enabled=True)
-        before = {wid: await _version(wid) for wid in (here, sibling, flash)}
+        before = {wid: await _version(wid) for wid in (here, sibling, home)}
 
         row = await create_workspace_catalog_server(
             user_id, here, "acme", transport="stdio", command="npx",
@@ -256,7 +256,7 @@ class TestWorkspaceCatalogServer:
         assert row["name"] == "acme"
         assert (await get_catalog_server(user_id, "acme"))["enabled"] is True
         assert await self._slot(here, "acme") is None
-        for wid in (sibling, flash):
+        for wid in (sibling, home):
             slot = await self._slot(wid, "acme")
             assert (slot["source"], slot["enabled"], slot["config"]) == (
                 "user", False, None,

@@ -37,7 +37,6 @@ def _make_automation(
         "trigger_type": trigger_type,
         "cron_expression": cron_expression,
         "timezone": timezone_name,
-        "agent_mode": "flash",
         "instruction": "Do something",
         "workspace_id": None,
         "_execution_id": str(uuid.uuid4()),

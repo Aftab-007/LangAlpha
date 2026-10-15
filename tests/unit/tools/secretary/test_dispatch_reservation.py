@@ -24,14 +24,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from src.server.services.report_back.flash import keys, reserve
+from src.server.services.report_back.handoff import keys, reserve
 from src.tools.secretary.chief_of_staff import delegate_to_analyst
 from tests.unit.server.handlers.chat.redis_fakes import FakeCache as _FakeCache
 
 from .conftest import FakeResp, FakeSession
 
 USER_ID = "user-1"
-FLASH_THREAD_ID = "flash-thread-1"
+DISPATCHER_THREAD_ID = "cos-thread-1"
 WORKSPACE_ID = "22222222-2222-2222-2222-222222222222"
 
 
@@ -47,7 +47,7 @@ def _new_thread() -> dict:
 
 def _config() -> dict:
     # thread_id = the dispatching thread -> report_back wiring is live.
-    return {"configurable": {"user_id": USER_ID, "thread_id": FLASH_THREAD_ID}}
+    return {"configurable": {"user_id": USER_ID, "thread_id": DISPATCHER_THREAD_ID}}
 
 
 def _payload(result) -> dict:
@@ -76,15 +76,15 @@ def cache(monkeypatch):
     return c
 
 
-def _fill_flash_cap(cache) -> None:
-    cache.client.sets[keys.flash_watch_key(FLASH_THREAD_ID)] = {
-        f"p{i}" for i in range(reserve.MAX_DISPATCH_PER_FLASH)
+def _fill_thread_cap(cache) -> None:
+    cache.client.sets[keys.watch_key(DISPATCHER_THREAD_ID)] = {
+        f"p{i}" for i in range(reserve.MAX_DISPATCH_PER_THREAD)
     }
     # Live origins too: originless members would be reaped as orphans on the
     # over-cap retry, and the cap wouldn't hold.
-    for i in range(reserve.MAX_DISPATCH_PER_FLASH):
+    for i in range(reserve.MAX_DISPATCH_PER_THREAD):
         cache.kv[keys.ptc_origin_key(f"p{i}")] = {
-            "flash_thread_id": FLASH_THREAD_ID,
+            "flash_thread_id": DISPATCHER_THREAD_ID,
             "report_back": True,
         }
 
@@ -92,7 +92,7 @@ def _fill_flash_cap(cache) -> None:
 @pytest.mark.asyncio
 async def test_a_full_cap_refuses_before_any_request(cache):
     """A cap hit in reserve() aborts the dispatch with nothing sent."""
-    _fill_flash_cap(cache)
+    _fill_thread_cap(cache)
     with patch(
         "src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})
     ), patch(
@@ -155,7 +155,7 @@ async def test_dispatch_timeout_with_probe_down_keeps_the_reservation(cache, led
 
 def _reservation(cache) -> str | None:
     """The reserved ptc thread id, or None when the reservation was rolled back."""
-    members = cache.client.sets.get(keys.flash_watch_key(FLASH_THREAD_ID), set())
+    members = cache.client.sets.get(keys.watch_key(DISPATCHER_THREAD_ID), set())
     if not members:
         return None
     (ptc,) = members
@@ -474,13 +474,13 @@ PRIOR_GEN = "gen-prior"
 
 
 def _seed_predecessor(cache) -> None:
-    """A prior wired dispatch of the same (flash, ptc) pair, still live."""
-    cache.client.sets[keys.flash_watch_key(FLASH_THREAD_ID)] = {PTC_THREAD_ID}
-    cache.client.sets[keys.flash_user_pending_key(USER_ID)] = {PTC_THREAD_ID}
+    """A prior wired dispatch of the same (dispatcher, ptc) pair, still live."""
+    cache.client.sets[keys.watch_key(DISPATCHER_THREAD_ID)] = {PTC_THREAD_ID}
+    cache.client.sets[keys.user_pending_key(USER_ID)] = {PTC_THREAD_ID}
     cache.kv[keys.ptc_origin_key(PTC_THREAD_ID)] = {
         "origin": "flash",
         "report_back": True,
-        "flash_thread_id": FLASH_THREAD_ID,
+        "flash_thread_id": DISPATCHER_THREAD_ID,
         "ptc_thread_id": PTC_THREAD_ID,
         "user_id": USER_ID,
         "dispatch_gen": PRIOR_GEN,
@@ -537,7 +537,7 @@ async def test_continuation_ambiguous_no_marker_retains_provisional(cache):
     assert payload["error"] == "dispatch_failed"
     assert payload["outcome"] == "unknown_retained"
     assert cache.kv[keys.ptc_origin_key(PTC_THREAD_ID)]["dispatch_gen"] != PRIOR_GEN
-    assert PTC_THREAD_ID in cache.client.sets[keys.flash_watch_key(FLASH_THREAD_ID)]
+    assert PTC_THREAD_ID in cache.client.sets[keys.watch_key(DISPATCHER_THREAD_ID)]
 
 
 @pytest.mark.asyncio
@@ -553,7 +553,7 @@ async def test_continuation_foreign_marker_is_not_success(cache, ledger):
     assert payload["success"] is False
     assert payload["outcome"] == "unknown_retained"
     assert cache.kv[keys.ptc_origin_key(PTC_THREAD_ID)]["dispatch_gen"] != PRIOR_GEN
-    assert PTC_THREAD_ID in cache.client.sets[keys.flash_watch_key(FLASH_THREAD_ID)]
+    assert PTC_THREAD_ID in cache.client.sets[keys.watch_key(DISPATCHER_THREAD_ID)]
 
 
 @pytest.mark.asyncio
@@ -609,7 +609,7 @@ async def test_a_busy_thread_says_so_and_restores_the_running_hand_off(cache):
 
     assert payload == {"success": False, "error": _THREAD_BUSY}
     assert cache.kv[keys.ptc_origin_key(PTC_THREAD_ID)]["dispatch_gen"] == PRIOR_GEN
-    assert PTC_THREAD_ID in cache.client.sets[keys.flash_watch_key(FLASH_THREAD_ID)]
+    assert PTC_THREAD_ID in cache.client.sets[keys.watch_key(DISPATCHER_THREAD_ID)]
 
 
 @pytest.mark.asyncio

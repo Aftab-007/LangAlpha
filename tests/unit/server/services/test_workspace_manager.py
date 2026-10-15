@@ -789,26 +789,26 @@ class TestIdentityIsStale:
         assert self._check({"status": "running", "sandbox_id": "sandbox-abc"}) is None
 
     @pytest.mark.asyncio
-    async def test_a_flash_project_never_reaches_the_predicate(self):
-        """Flash is not a serving status here any more; it is not a status this
-        predicate can see. A flash project has no machine, so resolving its
-        binding refuses it before any session is looked up.
+    async def test_an_unbound_home_never_reaches_the_predicate(self):
+        """'unbound' is not a status this predicate can see. A Home on no
+        computer yet has no machine, so resolving its binding refuses it
+        before any session is looked up.
         """
         from src.server.services.computer_manager._types import (
             WorkspaceNotOnComputer,
         )
 
         wm = WorkspaceManager(_make_config())
-        flash = _make_workspace(status="flash", sandbox_id=None)
+        home = _make_workspace(status="unbound", sandbox_id=None)
         with (
             patch(
                 "src.server.services.computer_manager._sessions.get_computer_for_workspace",
                 AsyncMock(return_value=None),
             ),
-            patch(f"{_MACHINES}.db_get_workspace", AsyncMock(return_value=flash)),
+            patch(f"{_MACHINES}.db_get_workspace", AsyncMock(return_value=home)),
         ):
             with pytest.raises(WorkspaceNotOnComputer):
-                await wm.resolve_binding(str(flash["workspace_id"]))
+                await wm.resolve_binding(str(home["workspace_id"]))
 
     def test_missing_row_is_stale(self):
         assert "row is gone" in self._check(None)
@@ -6124,10 +6124,10 @@ class TestDuplicateWorkspace:
 
     @pytest.mark.asyncio
     @patch("src.server.services.workspace_entitlements.db_get_workspace")
-    async def test_flash_source_rejected(self, mock_get_ws):
+    async def test_home_source_rejected(self, mock_get_ws):
         manager = self._make_manager()
-        mock_get_ws.return_value = _make_workspace(status="flash", user_id="user-1")
-        with pytest.raises(ValueError, match="flash"):
+        mock_get_ws.return_value = _make_workspace(status="unbound", user_id="user-1")
+        with pytest.raises(ValueError, match="Cannot duplicate Home"):
             await manager.duplicate_workspace("ws-x", "user-1")
 
     @pytest.mark.asyncio

@@ -24,14 +24,12 @@ class TestCreateAutomation:
             instruction="Summarize today's market highlights",
             cron_expression="0 9 * * 1-5",
             timezone="America/New_York",
-            agent_mode="flash",
         )
 
         assert auto["name"] == "Daily Market Briefing"
         assert auto["trigger_type"] == "cron"
         assert auto["cron_expression"] == "0 9 * * 1-5"
         assert auto["timezone"] == "America/New_York"
-        assert auto["agent_mode"] == "flash"
         assert auto["status"] == "active"
         assert auto["failure_count"] == 0
         assert auto["max_failures"] == 3
@@ -265,7 +263,6 @@ class TestPriceTriggerAutomation:
             trigger_type="price",
             instruction="Analyze why AAPL dropped below $150",
             trigger_config=trigger_config,
-            agent_mode="flash",
         )
 
         assert auto["name"] == "AAPL Price Alert"

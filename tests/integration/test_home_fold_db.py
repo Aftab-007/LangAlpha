@@ -1,6 +1,6 @@
-"""Folding an account's former flash rows into Home, on a real Postgres.
+"""Folding an account's former Home rows into Home, on a real Postgres.
 
-An account merge leaves the merged account's flash row beside the Home the
+An account merge leaves the merged account's Home beside the Home the
 account's own id derives. Resolving Home moves what that row holds into it and
 retires the row, so the account lists one All workspaces entry with all its
 history.
@@ -13,7 +13,7 @@ import pytest
 
 from src.server.database import workspace as workspaces
 from src.server.database.home_fold import MOVES, STAYS
-from src.server.database.home_workspace import get_flash_workspace_id
+from src.server.database.home_workspace import get_home_workspace_id
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="session")]
 
@@ -24,9 +24,9 @@ _STATUS = "SELECT status FROM workspaces WHERE workspace_id = %s"
 async def _former(user_id, old_user_id) -> str:
     row = await workspaces.create_workspace(
         user_id,
-        "Flash",
-        workspace_id=get_flash_workspace_id(old_user_id),
-        status="flash",
+        "Home",
+        workspace_id=get_home_workspace_id(old_user_id),
+        status="unbound",
     )
     return str(row["workspace_id"])
 
@@ -38,7 +38,7 @@ async def _thread(pool, workspace_id, index, created_at) -> str:
             "INSERT INTO conversation_threads "
             "(conversation_thread_id, workspace_id, msg_type, current_status, "
             " thread_index, created_at, updated_at) "
-            "VALUES (%s, %s, 'flash', 'completed', %s, %s, %s)",
+            "VALUES (%s, %s, 'ptc', 'completed', %s, %s, %s)",
             (thread_id, workspace_id, index, created_at, created_at),
         )
     return thread_id
@@ -80,7 +80,7 @@ async def test_every_workspace_keyed_table_moves_or_stays(test_db_pool):
 async def test_former_rows_fold_into_home_and_retire(seed_user, test_db_pool):
     user_id = seed_user["user_id"]
     now = datetime.now(timezone.utc)
-    home = str((await workspaces.get_or_create_flash_workspace(user_id))["workspace_id"])
+    home = str((await workspaces.get_or_create_home_workspace(user_id))["workspace_id"])
     elsewhere = str((await workspaces.create_workspace(user_id, "Research"))["workspace_id"])
     await _thread(test_db_pool, home, 0, now - _DAY)
     first = await _former(user_id, "old-account-1")
@@ -126,7 +126,7 @@ async def test_former_rows_fold_into_home_and_retire(seed_user, test_db_pool):
             (user_id, newest, first, user_id, first),
         )
 
-    resolved = await workspaces.get_or_create_flash_workspace(user_id)
+    resolved = await workspaces.get_or_create_home_workspace(user_id)
 
     assert str(resolved["workspace_id"]) == home
     threads = await _rows(
@@ -180,7 +180,7 @@ async def test_a_former_row_with_a_run_in_progress_waits(
     )
 
     user_id = seed_user["user_id"]
-    await workspaces.get_or_create_flash_workspace(user_id)
+    await workspaces.get_or_create_home_workspace(user_id)
     former = await _former(user_id, "old-account")
     thread = await _thread(test_db_pool, former, 0, datetime.now(timezone.utc))
     run = str(uuid.uuid4())
@@ -189,8 +189,8 @@ async def test_a_former_row_with_a_run_in_progress_waits(
     else:
         await seed_response(run, thread, 0, status="in_progress")
 
-    await workspaces.get_or_create_flash_workspace(user_id)
-    assert (await _rows(test_db_pool, _STATUS, former))[0]["status"] == "flash"
+    await workspaces.get_or_create_home_workspace(user_id)
+    assert (await _rows(test_db_pool, _STATUS, former))[0]["status"] == "unbound"
 
     if background:
         await finalize_task_run(task_run_id=run, status="completed")
@@ -201,18 +201,18 @@ async def test_a_former_row_with_a_run_in_progress_waits(
                 "WHERE conversation_response_id = %s",
                 (run,),
             )
-    await workspaces.get_or_create_flash_workspace(user_id)
+    await workspaces.get_or_create_home_workspace(user_id)
     assert (await _rows(test_db_pool, _STATUS, former))[0]["status"] == "deleted"
 
 
 async def test_a_bound_home_receives_a_former_rows_threads(seed_user, test_db_pool):
-    """With the all-workspaces agent on, Home is bound to a computer and takes
-    its status, so the fold finds Home by id, never by status."""
+    """Bound to a computer, Home takes its status, so the fold finds Home by
+    id, never by status."""
     from src.server.database.computer import create_computer
     from src.server.database.workspace_names import HOME_FOLDER
 
     user_id = seed_user["user_id"]
-    home = str((await workspaces.get_or_create_flash_workspace(user_id))["workspace_id"])
+    home = str((await workspaces.get_or_create_home_workspace(user_id))["workspace_id"])
     computer = await create_computer(user_id, kind="docker", name="Home test")
     assert await workspaces.bind_workspace_to_computer(
         home,
@@ -223,9 +223,9 @@ async def test_a_bound_home_receives_a_former_rows_threads(seed_user, test_db_po
     former = await _former(user_id, "old-account")
     thread = await _thread(test_db_pool, former, 0, datetime.now(timezone.utc))
 
-    resolved = await workspaces.get_or_create_flash_workspace(user_id)
+    resolved = await workspaces.get_or_create_home_workspace(user_id)
 
-    assert resolved["status"] != "flash"
+    assert resolved["status"] != "unbound"
     assert str(resolved["computer_id"]) == str(computer["computer_id"])
     (moved,) = await _rows(
         test_db_pool,
@@ -238,10 +238,10 @@ async def test_a_bound_home_receives_a_former_rows_threads(seed_user, test_db_po
     assert (await _rows(test_db_pool, _STATUS, home))[0]["status"] != "deleted"
 
 
-async def test_a_flash_id_another_account_holds_is_left_alone(
+async def test_a_home_id_another_account_holds_is_left_alone(
     seed_user, test_db_pool
 ):
-    """An account merge leaves the merged id's flash row with the account it
+    """An account merge leaves the merged id's Home with the account it
     joined; that row is the one a turn would run in and Home would bind."""
     from src.server.database.user import create_user
 
@@ -249,15 +249,15 @@ async def test_a_flash_id_another_account_holds_is_left_alone(
     other = await create_user(user_id="other-account", email="other@example.com")
     held = await workspaces.create_workspace(
         other["user_id"],
-        "Flash",
-        workspace_id=get_flash_workspace_id(user_id),
-        status="flash",
+        "Home",
+        workspace_id=get_home_workspace_id(user_id),
+        status="unbound",
     )
     columns = "SELECT user_id, updated_at, is_pinned FROM workspaces WHERE workspace_id = %s"
     before = await _rows(test_db_pool, columns, str(held["workspace_id"]))
 
-    with pytest.raises(workspaces.FlashWorkspaceTaken):
-        await workspaces.get_or_create_flash_workspace(user_id)
+    with pytest.raises(workspaces.HomeWorkspaceTaken):
+        await workspaces.get_or_create_home_workspace(user_id)
 
     assert await _rows(test_db_pool, columns, str(held["workspace_id"])) == before
     assert before[0]["user_id"] == "other-account"

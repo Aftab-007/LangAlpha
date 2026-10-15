@@ -176,7 +176,7 @@ async def test_close_failure_keeps_the_reports_already_held():
     assert reports == [_report(1)]
 
 
-_OVERTAKING = "src.server.services.report_back.flash.executor.overtaking_run"
+_OVERTAKING = "src.server.services.report_back.handoff.executor.overtaking_run"
 
 
 def _held_analyst(n: int, run_id: str) -> dict:
@@ -329,7 +329,7 @@ async def test_task_offer_steers_an_owed_report():
 # ---------------------------------------------------------------------------
 
 _CACHE = "src.utils.cache.redis_cache.get_cache_client"
-_DELIVERIES = "src.server.services.report_back.flash.requested_from.deliveries"
+_DELIVERIES = "src.server.services.report_back.handoff.requested_from.deliveries"
 
 
 def _analyst_cache(origin: dict, *, member: bool = True) -> MagicMock:
@@ -411,7 +411,7 @@ async def test_analyst_offer_leaves_a_report_whose_summary_run_started(_no_admit
 
 @pytest.mark.asyncio
 async def test_analyst_offer_leaves_a_report_its_executor_is_posting():
-    from src.server.services.report_back.flash.executor import analyst_request_key
+    from src.server.services.report_back.handoff.executor import analyst_request_key
 
     cache = _analyst_cache(_origin())
     cache.get_strict = AsyncMock(
@@ -446,7 +446,7 @@ async def test_analyst_offer_carries_where_the_work_was_asked_for_inline():
     with (
         patch(_CACHE, return_value=_analyst_cache(_origin())),
         patch(
-            "src.server.services.report_back.flash.requested_from.reminder",
+            "src.server.services.report_back.handoff.requested_from.reminder",
             return_value="Asked in a Slack conversation.",
         ),
     ):

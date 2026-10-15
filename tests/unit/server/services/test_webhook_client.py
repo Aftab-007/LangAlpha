@@ -15,7 +15,6 @@ _AUTOMATION = {
     "automation_id": "auto-1",
     "name": "Morning briefing",
     "user_id": "user-1",
-    "agent_mode": "flash",
     "delivery_config": {"methods": ["slack", "discord"]},
 }
 

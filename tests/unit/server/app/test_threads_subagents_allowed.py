@@ -226,7 +226,6 @@ async def _post(path, extra):
     )
     body = {
         "messages": [{"role": "user", "content": "test query"}],
-        "agent_mode": "ptc",
         "workspace_id": "ws-placeholder",
         **extra,
     }

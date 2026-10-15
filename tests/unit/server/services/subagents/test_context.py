@@ -193,3 +193,20 @@ async def test_a_skill_behind_a_feature_counts_once_the_user_turns_it_on(monkeyp
     assert (gated.name in names) is opted_in
     assert "my-notes" in names
     assert "chart-annotation" not in names
+
+
+@pytest.mark.parametrize("saved", [True, False])
+async def test_the_main_agents_model_is_the_one_its_threads_run(monkeypatch, saved):
+    # The pane compares each subagent with the main agent, so the main agent's
+    # model is the account default a new thread runs: the saved one, or the
+    # deployment's when none is saved.
+    from src.server.services.llm import thread_model
+
+    first, second = list(LLM.get_model_config().llm_config)[:2]
+    monkeypatch.setattr(thread_model, "system_default_models", lambda: {"default_model": second})
+    pref = {"preferred_model": first} if saved else {}
+
+    values = context._main_values(pref, "tavily", "basic")
+
+    assert values["model"] == (first if saved else second)
+    assert (values["search_provider"], values["search_depth"]) == ("tavily", "basic")

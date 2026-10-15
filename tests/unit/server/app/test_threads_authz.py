@@ -132,7 +132,6 @@ def _stub_downstream(owner_id, ws_owner=CALLER):
 _PTC_BODY = {
     "workspace_id": "ws-placeholder",
     "messages": [{"role": "user", "content": "test query"}],
-    "agent_mode": "ptc",
 }
 
 

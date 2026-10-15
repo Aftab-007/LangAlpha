@@ -30,6 +30,7 @@ from tests.unit.server.services.automations.file._support import (
     PATH,
     UNKNOWN_THREAD,
     USER,
+    WORKSPACE,
     _create,
     _once_row,
     _other_row,
@@ -358,9 +359,8 @@ class TestLockOrder:
     async def test_home_made_in_a_save_is_made_on_its_connection_after_both_locks(
         self, db, backend, monkeypatch
     ):
-        """A former 'flash' row moves to Home on its next edit, which makes
-        Home when the user has none yet."""
-        db.add(_row(agent_mode="flash", workspace_id=None))
+        """A move to Home makes Home when the user has none yet."""
+        db.add(_row(workspace_id=UUID(WORKSPACE)))
         homes: list[Any] = []
 
         async def no_home_yet(workspace_id: str, conn: Any = None) -> None:
@@ -372,12 +372,12 @@ class TestLockOrder:
             return {"workspace_id": HOME, "user_id": user_id}
 
         monkeypatch.setattr(lifecycle, "get_workspace", no_home_yet)
-        monkeypatch.setattr(lifecycle, "get_or_create_flash_workspace", make_home)
+        monkeypatch.setattr(lifecycle, "get_or_create_home_workspace", make_home)
 
-        await _write(backend, {**_shown(db.list()[0]), "instruction": "Summarize the news."})
+        await _write(backend, {**_shown(db.list()[0]), "workspace_id": "home"})
 
         assert homes == [db.conn]
         made = db.sql.index("make home")
         assert _locks(db) == ["user", "row"]
         assert all(made > i for i, sql in enumerate(db.sql) if _USER_WRITES in sql or _ROW_LOCK in sql)
-        assert (db.rows[BRIEF]["agent_mode"], db.rows[BRIEF]["workspace_id"]) == ("ptc", UUID(HOME))
+        assert db.rows[BRIEF]["workspace_id"] == UUID(HOME)

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.server.database.home_workspace import get_flash_workspace_id
+from src.server.database.home_workspace import get_home_workspace_id
 from src.server.services.automations.lifecycle import (
     AutomationRefusal,
     pause_automation,
@@ -25,7 +25,7 @@ OWNER = "user-owner"
 AUTOMATION_ID = str(uuid.uuid4())
 WORKSPACE_ID = str(uuid.uuid4())
 OTHER_WORKSPACE_ID = str(uuid.uuid4())
-HOME = get_flash_workspace_id(OWNER)
+HOME = get_home_workspace_id(OWNER)
 _LIFECYCLE = "src.server.services.automations.lifecycle"
 _THREAD_META = "src.server.database.conversation.get_thread_auth_meta"
 
@@ -38,29 +38,13 @@ def _row(**overrides):
         "cron_expression": "0 9 * * 1-5",
         "timezone": "UTC",
         "status": "active",
-        "agent_mode": "ptc",
         "workspace_id": WORKSPACE_ID,
     }
     row.update(overrides)
     return row
 
 
-def _former_flash_row(**overrides):
-    """A row a former build stored as 'flash', with no workspace or a stale one."""
-    return _row(**{"agent_mode": "flash", "workspace_id": None, **overrides})
-
-
 class TestPlacement:
-    @pytest.mark.asyncio
-    @patch(f"{_LIFECYCLE}.auto_db")
-    async def test_ptc_on_a_former_flash_row_with_no_workspace_is_refused(self, mock_auto_db):
-        mock_auto_db.get_automation = AsyncMock(return_value=_former_flash_row())
-
-        with pytest.raises(ValueError, match="workspace_id is required"):
-            await update_automation(AUTOMATION_ID, OWNER, {"agent_mode": "ptc"})
-
-        mock_auto_db.update_automation.assert_not_called()
-
     @pytest.mark.asyncio
     @patch(f"{_LIFECYCLE}.auto_db")
     @patch(f"{_LIFECYCLE}.get_workspace")
@@ -76,55 +60,8 @@ class TestPlacement:
         await update_automation(AUTOMATION_ID, OWNER, {"workspace_id": OTHER_WORKSPACE_ID})
 
         written = mock_auto_db.update_automation.call_args.kwargs
-        assert (written["agent_mode"], written["workspace_id"]) == ("ptc", OTHER_WORKSPACE_ID)
+        assert written["workspace_id"] == OTHER_WORKSPACE_ID
         assert mock_get_workspace.call_args.args == (OTHER_WORKSPACE_ID,)
-
-    @pytest.mark.asyncio
-    @patch(f"{_LIFECYCLE}.auto_db")
-    @patch(f"{_LIFECYCLE}.get_workspace")
-    async def test_ptc_on_a_row_that_already_stores_one_keeps_it_unread(
-        self, mock_get_workspace, mock_auto_db,
-    ):
-        """The stored workspace was ownership-checked when it was written, so
-        the mode alone neither re-looks it up nor needs to."""
-        mock_auto_db.get_automation = AsyncMock(
-            return_value=_former_flash_row(workspace_id=WORKSPACE_ID)
-        )
-        mock_auto_db.update_automation = AsyncMock(return_value=_row())
-
-        await update_automation(AUTOMATION_ID, OWNER, {"agent_mode": "ptc"})
-
-        mock_get_workspace.assert_not_called()
-        written = mock_auto_db.update_automation.call_args.kwargs
-        assert (written["agent_mode"], written["workspace_id"]) == ("ptc", WORKSPACE_ID)
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("row", "fields"),
-        [
-            (_row(), {"agent_mode": "flash"}),
-            (_row(), {"agent_mode": "flash", "workspace_id": OTHER_WORKSPACE_ID}),
-            (_former_flash_row(), {"name": "renamed"}),
-            (_former_flash_row(workspace_id=WORKSPACE_ID), {"name": "renamed"}),
-        ],
-        ids=["flash", "flash-beside-a-workspace", "former-row", "former-row-stale-id"],
-    )
-    @patch(f"{_LIFECYCLE}.auto_db")
-    @patch(f"{_LIFECYCLE}.get_workspace")
-    async def test_flash_and_any_edit_of_a_former_flash_row_store_home(
-        self, mock_get_workspace, mock_auto_db, row, fields,
-    ):
-        """This build writes no 'flash' row, and a workspace named beside
-        'flash' is neither stored nor checked."""
-        mock_auto_db.get_automation = AsyncMock(return_value=row)
-        mock_auto_db.update_automation = AsyncMock(return_value=_row())
-        mock_get_workspace.return_value = {"workspace_id": HOME, "user_id": OWNER}
-
-        await update_automation(AUTOMATION_ID, OWNER, fields)
-
-        written = mock_auto_db.update_automation.call_args.kwargs
-        assert (written["agent_mode"], written["workspace_id"]) == ("ptc", HOME)
-        assert [c.args[0] for c in mock_get_workspace.call_args_list] == [HOME]
 
     @pytest.mark.asyncio
     @patch(f"{_LIFECYCLE}.auto_db")
@@ -350,8 +287,9 @@ def _owned_workspace(workspace_id, conn=None):
 
 
 class TestMoveUnpinsTheThread:
-    """A pinned thread decides where each run happens, so a move that names
-    no thread unpins it, or every later run would stay in the old place."""
+    """A run continues its pinned thread only in the automation's workspace,
+    so a move that names no thread unpins it: the next run starts one in the
+    new place."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -360,9 +298,8 @@ class TestMoveUnpinsTheThread:
             (_row(), OTHER_WORKSPACE_ID),
             (_row(), HOME),
             (_row(workspace_id=HOME), WORKSPACE_ID),
-            (_former_flash_row(), WORKSPACE_ID),
         ],
-        ids=["to-another-workspace", "to-home", "out-of-home", "former-flash-row-out-of-home"],
+        ids=["to-another-workspace", "to-home", "out-of-home"],
     )
     @patch(f"{_LIFECYCLE}.auto_db")
     @patch(f"{_LIFECYCLE}.get_workspace", new=AsyncMock(side_effect=_owned_workspace))
@@ -387,11 +324,8 @@ class TestMoveUnpinsTheThread:
         [
             (_row(), {"workspace_id": WORKSPACE_ID, "thread_strategy": "continue"}),
             (_row(workspace_id=HOME), {"workspace_id": HOME}),
-            # Normalized to Home, where it already ran.
-            (_former_flash_row(), {"name": "renamed"}),
-            (_former_flash_row(workspace_id=WORKSPACE_ID), {"workspace_id": HOME}),
         ],
-        ids=["same-workspace", "same-home", "former-flash-row-edited", "former-flash-row-to-home"],
+        ids=["same-workspace", "same-home"],
     )
     @patch(f"{_LIFECYCLE}.auto_db")
     @patch(f"{_LIFECYCLE}.get_workspace", new=AsyncMock(side_effect=_owned_workspace))

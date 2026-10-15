@@ -18,7 +18,7 @@ from src.server.handlers.chat.request_prep import PriorThread
 from src.server.models.chat import ChatRequest
 from src.server.services import automation_delivery
 from src.server.services.automation_delivery import DELIVERY_KEY, Delivery, Target
-from src.server.services.report_back.flash.carry import carried_delivery
+from src.server.services.report_back.handoff.carry import carried_delivery
 from src.server.services.turn_runtime import TurnRoute
 
 PTC = "src.server.handlers.chat.ptc_run"

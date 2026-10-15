@@ -40,7 +40,6 @@ def _automation(automation_id=None, user_id="test-user-123", **overrides):
         "trigger_config": None,
         "next_run_at": NOW,
         "last_run_at": None,
-        "agent_mode": "flash",
         "instruction": "Give me a market summary",
         "workspace_id": None,
         "llm_model": None,
@@ -391,8 +390,7 @@ HOME_ID = "6f18b8ab-0000-5000-8000-000000000000"
 
 @pytest.fixture
 def in_home():
-    """Home's row is there: a create naming Home, and an edit of a row a
-    former build stored as 'flash', both place the automation in it."""
+    """Home's row is there, so a create naming Home places the automation in it."""
     with patch(
         "src.server.services.automations.lifecycle._home",
         new_callable=AsyncMock,
@@ -445,7 +443,7 @@ async def test_create_with_an_unknown_model_is_409(client, unknown_models, in_ho
 
 
 @pytest.mark.asyncio
-async def test_update_to_an_unknown_model_is_409(client, unknown_models, in_home):
+async def test_update_to_an_unknown_model_is_409(client, unknown_models):
     with patch(HANDLER_DB) as db:
         db.get_automation = AsyncMock(return_value=_automation())
         db.update_automation = AsyncMock()
@@ -592,7 +590,7 @@ def _run(**overrides):
     """An execution as the run query returns it, its automation's identity
     included."""
     return _execution(
-        automation_name="Daily Briefing", agent_mode="flash", trigger_type="cron",
+        automation_name="Daily Briefing", trigger_type="cron",
         **overrides,
     )
 
@@ -785,10 +783,10 @@ OPTIONS_URL = f"/api/v1/automations/delivery-options?workspace_id={WS_ID}"
 
 def _home() -> dict:
     """The user's Home, bound to their computer so it reads its status."""
-    from src.server.database.home_workspace import get_flash_workspace_id
+    from src.server.database.home_workspace import get_home_workspace_id
 
     return {
-        "workspace_id": get_flash_workspace_id("test-user-123"),
+        "workspace_id": get_home_workspace_id("test-user-123"),
         "user_id": "test-user-123",
         "status": "running",
     }
@@ -1188,7 +1186,6 @@ async def test_create_with_too_many_delivery_entries_is_refused(client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("in_home")
 async def test_update_with_an_overlong_delivery_entry_is_refused(client):
     entry = "slack:" + "C" * 300
     with (

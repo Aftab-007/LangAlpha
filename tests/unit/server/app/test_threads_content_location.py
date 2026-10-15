@@ -117,7 +117,6 @@ class TestContentLocationHeader:
                 json={
                     "workspace_id": "ws-1",
                     "messages": [{"role": "user", "content": "hi"}],
-                    "agent_mode": "ptc",
                 },
             ) as resp:
                 assert resp.status_code == 200

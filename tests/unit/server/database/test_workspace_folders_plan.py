@@ -38,12 +38,11 @@ def test_a_folder_already_named_after_its_workspace_stays():
 
 
 def home(dir_name, *, previous=()):
-    return FolderRow(A, "Flash", dir_name, False, tuple(previous), home=True)
+    return FolderRow(A, "Home", dir_name, False, tuple(previous), home=True)
 
 
 def test_home_keeps_the_folder_it_was_bound_to():
-    """Home is the flash row: its stored name is "Flash", its folder is not,
-    and a workspace named Home before the name was reserved stays out of it."""
+    """A workspace named Home before the name was reserved stays out of it."""
     assert not plan_folder_moves([home("Home")])
     assert not plan_folder_moves([home("Home"), row(B, "Home", "Research")])
 
@@ -66,7 +65,6 @@ def test_home_bound_on_a_placeholder_moves_in_when_nothing_holds_its_folder():
 
 
 def test_staged_home_that_cannot_land_goes_to_a_home_placeholder():
-    """Its stored name is "Flash", which names none of Home's folders."""
     rows = [
         home(moving_path(A), previous=["Research"]),
         row(B, "Home", "Home"),

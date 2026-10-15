@@ -106,7 +106,7 @@ class TestEnsureThread:
         request = MagicMock()
         request.external_thread_id = None
         request.platform = None
-        request.origin = ThreadOrigin(type="agent", id="flash-t-1")
+        request.origin = ThreadOrigin(type="agent", id="home-t-1")
         request.subagents_allowed = None
 
         with patch(
@@ -119,7 +119,7 @@ class TestEnsureThread:
             )
 
         assert mock_db.call_args.kwargs["metadata"] == {
-            "origin": {"type": "agent", "id": "flash-t-1"}
+            "origin": {"type": "agent", "id": "home-t-1"}
         }
 
     @pytest.mark.asyncio
@@ -477,7 +477,7 @@ class TestBuildTurnContext:
 
         ctx = build_turn_context(
             self._request(
-                origin=ThreadOrigin(type="agent", id="flash-t-1", agent="flash")
+                origin=ThreadOrigin(type="agent", id="home-t-1", agent="chief_of_staff")
             ),
             PriorThread(),
             user_profile=None,

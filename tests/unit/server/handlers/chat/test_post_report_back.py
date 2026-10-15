@@ -13,11 +13,11 @@ import pytest
 
 from src.server.services import automation_delivery
 from src.server.services.automation_delivery import Delivery, Target
-from src.server.services.report_back.flash import executor, leases, requested_from
+from src.server.services.report_back.handoff import executor, leases, requested_from
 
 _ORIGIN = {
     "ptc_workspace_id": "ws-ptc",
-    "flash_workspace_id": "ws-flash",
+    "flash_workspace_id": "ws-cos",
     "user_id": "u-1",
 }
 
@@ -86,7 +86,7 @@ async def _run(steps, final_status="completed", origin=_ORIGIN, **kwargs):
     with sess_patch, patch("asyncio.sleep", new=AsyncMock()):
         outcome = await executor._post_report_back(
             cache=None,
-            flash_thread_id="flash-1",
+            dispatcher_thread_id="cos-1",
             ptc_thread_id="ptc-1",
             origin=origin,
             final_status=final_status,
@@ -111,7 +111,7 @@ async def test_2xx_without_parseable_run_id_dispatches_with_none():
 
 @pytest.mark.asyncio
 async def test_404_returns_deleted():
-    """Flash thread gone -> caller discards the whole queue."""
+    """Chief of Staff thread gone -> caller discards the whole queue."""
     outcome, session = await _run([_FakeResp(404, text_data="not found")])
     assert outcome == ("deleted", None)
     assert session.post_calls == 1
@@ -165,7 +165,7 @@ _DESK = Target(entry="slack:T/C", address="slack:T/C", name="#desk", ok=True)
 
 
 def _asked_from(*entries: dict) -> dict:
-    return {**_ORIGIN, "flash_thread_id": "flash-1", requested_from.KEY: list(entries)}
+    return {**_ORIGIN, "flash_thread_id": "cos-1", requested_from.KEY: list(entries)}
 
 
 @pytest.mark.asyncio
@@ -247,7 +247,7 @@ async def test_409_duplicate_request_adopts_existing_run():
                     "detail": {
                         "code": "duplicate_request",
                         "run_id": "rid-orig",
-                        "thread_id": "flash-1",
+                        "thread_id": "cos-1",
                         "run_status": "in_progress",
                     }
                 },
@@ -312,10 +312,10 @@ async def test_immediate_success_never_heartbeats():
 
 @pytest.mark.asyncio
 async def test_busy_wait_cap_exhausted_returns_cap():
-    """A flash thread that never frees up -> give up at the busy-wait cap.
+    """A Chief of Staff thread that never frees up -> give up at the busy-wait cap.
 
     The distinct ``cap`` outcome lets each caller pick its disposition
-    (flash drops the member; task report-backs re-park as deferred)."""
+    (hand-offs drop the member; task report-backs re-park as deferred)."""
     session, sess_patch = _patch_session([_FakeResp(409, text_data="busy")])
     with (
         sess_patch,
@@ -325,7 +325,7 @@ async def test_busy_wait_cap_exhausted_returns_cap():
     ):
         outcome = await executor._post_report_back(
             cache=None,
-            flash_thread_id="flash-1",
+            dispatcher_thread_id="cos-1",
             ptc_thread_id="ptc-1",
             origin=_ORIGIN,
             final_status="completed",
@@ -390,7 +390,7 @@ async def test_an_unknown_ending_raises_instead_of_reading_as_completed():
     with sess_patch, pytest.raises(KeyError):
         await executor._post_report_back(
             cache=None,
-            flash_thread_id="flash-1",
+            dispatcher_thread_id="cos-1",
             ptc_thread_id="ptc-1",
             origin=_ORIGIN,
             final_status="interrupted",

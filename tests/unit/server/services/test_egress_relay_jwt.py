@@ -288,9 +288,9 @@ class TestMachineIdentity:
         assert claims.identity == COMPUTER_ID
 
     def test_a_token_naming_no_machine_validates(self):
-        """The sandbox-less host callers: a Flash turn, or an unprovisioned
-        session. Authorization is the grant lookup keyed by workspace, so a
-        token with no machine claim is a valid credential."""
+        """The sandbox-less host callers, such as a session whose sandbox is
+        not provisioned yet. Authorization is the grant lookup keyed by
+        workspace, so a token with no machine claim is a valid credential."""
         token = mint_relay_jwt(
             SECRET, user_id=USER_ID, workspace_id=WORKSPACE_ID
         ).token

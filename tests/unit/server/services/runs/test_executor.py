@@ -1965,7 +1965,7 @@ class TestMutationAdmissionGuard:
 
 
 # ---------------------------------------------------------------------------
-# _clear_report_back_watch — terminal runs clear the flash report-back watch
+# _clear_report_back_watch — terminal runs clear the report-back watch
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """The transcript export rides the post-finalize tail.
 
-A PTC thread's transcript renders after every won finalize, whatever the
+A thread's transcript renders after every won finalize, whatever the
 terminal status and whoever finalized: the CAS stamps the checkpoint it reads,
 and another thread may read this one's transcript before the next turn ends.
 Exporting only on a completed turn left a stopped, failed or recovered turn's
@@ -26,12 +26,12 @@ NEWEST = NewestCheckpoint("cp-1", "run-1")
 EXPORT = "src.server.services.transcripts.schedule_thread_export"
 
 
-def _row(status: str, msg_type: str = "ptc") -> dict:
+def _row(status: str) -> dict:
     return {
         "conversation_response_id": "run-1",
         "conversation_thread_id": "thread-1",
         "status": status,
-        "metadata": {"msg_type": msg_type, "workspace_id": "ws-1"},
+        "metadata": {"msg_type": "ptc", "workspace_id": "ws-1"},
     }
 
 
@@ -85,15 +85,6 @@ async def test_a_lost_cas_does_not_export():
 
 
 @pytest.mark.asyncio
-async def test_a_flash_run_does_not_export():
-    export, _ = await _owner_finalize(
-        "cancelled", FinalizeResult(applied=True, run=_row("cancelled", "flash"))
-    )
-
-    export.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_a_detached_finalize_exports():
     executor = MagicMock()
     executor.append_run_end_event = AsyncMock()
@@ -112,42 +103,15 @@ async def test_a_detached_finalize_exports():
     export.assert_called_once_with("thread-1", "ws-1")
 
 
-@pytest.mark.parametrize(("msg_type", "asked"), [("ptc", True), ("flash", False)])
-def test_a_ptc_run_end_asks_for_its_threads_archive_prune(msg_type, asked):
+def test_a_run_end_asks_for_its_threads_archive_prune():
     """An archived thread keeps its scratchpad while a run writes to it, and
     nothing else prunes it once that run ends."""
     with patch(EXPORT), patch(
         "src.server.services.workspace_manager.prune_if_archived_soon"
     ) as prune:
-        _coordinator().post_finalize_tail("thread-1", _row("completed", msg_type))
+        _coordinator().post_finalize_tail("thread-1", _row("completed"))
 
-    assert prune.call_args_list == ([call("thread-1")] if asked else [])
-
-
-@pytest.mark.parametrize(
-    ("run", "reached"),
-    [
-        (_row("completed"), True),
-        (_row("completed", "flash"), False),
-        (_row("completed", "task"), False),
-        ({**_row("completed"), "metadata": {"workspace_id": "ws-1"}}, False),
-        ({**_row("completed"), "metadata": None}, False),
-        (None, False),
-    ],
-    ids=["ptc", "flash", "task", "unstamped", "no-metadata", "no-row"],
-)
-def test_only_a_run_stamped_ptc_reaches_its_computer(run, reached):
-    """The prune and the export both need the run's computer, which only a
-    run the full agent started has. Every other row is left alone."""
-    with patch(EXPORT) as export, patch(
-        "src.server.services.workspace_manager.prune_if_archived_soon"
-    ) as prune:
-        _coordinator().post_finalize_tail("thread-1", run)
-
-    assert prune.call_args_list == ([call("thread-1")] if reached else [])
-    assert export.call_args_list == (
-        [call("thread-1", "ws-1")] if reached else []
-    )
+    assert prune.call_args_list == [call("thread-1")]
 
 
 @pytest.mark.asyncio

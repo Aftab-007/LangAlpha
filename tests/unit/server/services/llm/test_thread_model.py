@@ -1,8 +1,8 @@
 """A thread's own model and the account default it falls back to.
 
-Locks the rules the composer shares with the server: the effective default per
-mode, which threads a changed default moves (only those still on the old name,
-per mode), when a write moves them at all (``existing_threads`` only), and which
+Locks the rules the composer shares with the server: the effective default,
+which threads a changed default moves (only those still on the old name), when
+a write moves them at all (``existing_threads`` only), and which
 model a turn runs (a named one, else the thread's own; a held model that no
 longer resolves is cleared and the default runs, a named one is left for the
 resolver to refuse).
@@ -27,56 +27,23 @@ def _catalog(names):
 
 
 # ---------------------------------------------------------------------------
-# Effective default per mode (the composer's rule)
+# Effective default (the composer's rule)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "pref, system, expected",
     [
-        ({}, SYSTEM, {"ptc": "sys-main", "flash": "sys-flash"}),
-        # A PTC preference is also the flash default when no flash one is saved.
-        ({"preferred_model": "m-a"}, SYSTEM, {"ptc": "m-a", "flash": "m-a"}),
-        (
-            {"preferred_model": "m-a", "preferred_flash_model": "m-f"},
-            SYSTEM,
-            {"ptc": "m-a", "flash": "m-f"},
-        ),
-        ({"preferred_flash_model": "m-f"}, SYSTEM, {"ptc": "sys-main", "flash": "m-f"}),
-        # Auto for flash keeps the deployment's flash model beside a saved primary,
-        # and a saved flash model still beats it.
-        (
-            {"preferred_model": "m-a", "flash_follows": "deployment"},
-            SYSTEM,
-            {"ptc": "m-a", "flash": "sys-flash"},
-        ),
-        (
-            {"preferred_model": "m-a", "preferred_flash_model": "m-f", "flash_follows": "deployment"},
-            SYSTEM,
-            {"ptc": "m-a", "flash": "m-f"},
-        ),
-        (
-            {"preferred_model": "m-a", "flash_follows": "primary"},
-            SYSTEM,
-            {"ptc": "m-a", "flash": "m-a"},
-        ),
-        # No deployment flash model: flash runs the deployment's main one.
-        ({}, {"default_model": "sys-main", "flash_model": ""}, {"ptc": "sys-main", "flash": "sys-main"}),
-        ({}, {"default_model": "", "flash_model": ""}, {"ptc": None, "flash": None}),
+        ({}, SYSTEM, "sys-main"),
+        ({"preferred_model": "m-a"}, SYSTEM, "m-a"),
+        # The flash tier's default is not a thread's.
+        ({"preferred_flash_model": "m-f"}, SYSTEM, "sys-main"),
+        ({}, {"default_model": "", "flash_model": "sys-flash"}, None),
     ],
 )
 def test_effective_default_follows_the_composer_rule(pref, system, expected):
     with patch(f"{_MOD}.system_default_models", return_value=system):
-        assert thread_model.effective_default_models(pref) == expected
-
-
-def test_only_modes_whose_default_changed_move():
-    before = {"ptc": "m-a", "flash": "m-f"}
-    assert thread_model.default_moves(before, {"ptc": "m-b", "flash": "m-f"}) == {
-        "ptc": ("m-a", "m-b")
-    }
-    # No old default means no thread can be on it.
-    assert thread_model.default_moves({"ptc": None, "flash": "m-f"}, {"ptc": "m-b", "flash": "m-f"}) == {}
+        assert thread_model.effective_default_model(pref) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -223,15 +190,15 @@ async def test_a_runnable_model_is_accepted(name, pref):
 # ---------------------------------------------------------------------------
 
 
-async def _carry(after, apply_to, before=None):
+async def _carry(after, apply_to, before=None, system=SYSTEM):
     reassign = AsyncMock(return_value=3)
     with (
-        patch(f"{_MOD}.system_default_models", return_value=SYSTEM),
+        patch(f"{_MOD}.system_default_models", return_value=system),
         patch(f"{_MOD}.threads_write.reassign_thread_llm_models", reassign),
     ):
         moved = await thread_model.carry_default_change(
             "user-1",
-            before=before or {"preferred_model": "m-a"},
+            before={"preferred_model": "m-a"} if before is None else before,
             after=after,
             apply_to=apply_to,
         )
@@ -262,26 +229,32 @@ async def test_the_saved_scope_moves_threads_when_the_write_names_none():
     after = {"preferred_model": "m-b", "default_model_scope": "existing_threads"}
     moved, reassign = await _carry(after, None)
     assert moved == 3
-    reassign.assert_awaited_once_with(
-        "user-1", {"ptc": ("m-a", "m-b"), "flash": ("m-a", "m-b")}, conn=None
-    )
+    reassign.assert_awaited_once_with("user-1", "m-a", "m-b", conn=None)
 
 
 @pytest.mark.asyncio
 async def test_the_one_shot_answer_overrides_the_saved_scope():
-    after = {
-        "preferred_model": "m-b",
-        "preferred_flash_model": "m-a",
-        "default_model_scope": "new_threads",
-    }
+    after = {"preferred_model": "m-b", "default_model_scope": "new_threads"}
     moved, reassign = await _carry(after, "existing_threads")
     assert moved == 3
-    # The flash default did not change, so flash threads stay.
-    reassign.assert_awaited_once_with("user-1", {"ptc": ("m-a", "m-b")}, conn=None)
+    reassign.assert_awaited_once_with("user-1", "m-a", "m-b", conn=None)
 
 
 @pytest.mark.asyncio
 async def test_an_unchanged_default_moves_nothing():
     moved, reassign = await _carry({"preferred_model": "m-a"}, "existing_threads")
+    assert moved == 0
+    reassign.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_old_default_moves_nothing():
+    """No thread can be on a default that was never set."""
+    moved, reassign = await _carry(
+        {"preferred_model": "m-b"},
+        "existing_threads",
+        before={},
+        system={"default_model": "", "flash_model": ""},
+    )
     assert moved == 0
     reassign.assert_not_awaited()

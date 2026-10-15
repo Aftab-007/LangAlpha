@@ -190,7 +190,7 @@ async def test_a_retry_after_an_update_on_the_failed_step_stores_each_result_onc
 
 async def test_an_update_that_carries_the_finished_result_keeps_it_once():
     """Another agent's turn answers a waiting step with an update that carries
-    the finished sibling's result over (``flash_handover``)."""
+    the finished sibling's result over (``agent_change``)."""
     graph = _tools(InMemorySaver(), {"ask": True})
     thread = {"configurable": {"thread_id": "carry"}}
     await graph.ainvoke(_user("go"), thread)

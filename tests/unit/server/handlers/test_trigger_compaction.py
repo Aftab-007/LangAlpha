@@ -219,7 +219,7 @@ async def test_manual_compact_uses_user_compaction_model(base_config):
 THREAD_MODEL = "src.server.services.llm.thread_model"
 
 
-async def _compact_on_thread_model(base_config, resolve_stub, msg_type="ptc"):
+async def _compact_on_thread_model(base_config, resolve_stub):
     """Run a manual /compact on a thread holding ``m-thread``; returns the
     ``(model, mode)`` pairs ``resolve_llm_config`` was asked for, in order."""
     from src.server.handlers.thread_maintenance import trigger_compaction
@@ -239,7 +239,7 @@ async def _compact_on_thread_model(base_config, resolve_stub, msg_type="ptc"):
         patch(
             "src.server.database.conversation.get_thread_auth_meta",
             new_callable=AsyncMock,
-            return_value={"llm_model": "m-thread", "msg_type": msg_type},
+            return_value={"llm_model": "m-thread", "msg_type": "ptc"},
         ),
         patch(f"{THREAD_MODEL}.turn_model", new_callable=AsyncMock, side_effect=lambda *a, held, **k: held),
         patch(f"{LLM_HANDLER}.resolve_llm_config", new=_resolve),
@@ -258,19 +258,6 @@ async def test_manual_compact_runs_the_threads_own_model(base_config):
         return base_cfg.model_copy(deep=True)
 
     assert await _compact_on_thread_model(base_config, _resolve) == [("m-thread", "ptc")]
-
-
-@pytest.mark.asyncio
-async def test_manual_compact_resolves_a_flash_thread_in_flash_mode(base_config):
-    """A flash thread's model sits in the flash slot, which the compaction model
-    falls back to; PTC mode would summarize on the account's flash default
-    while automatic compaction ran on the thread's model."""
-
-    async def _resolve(base_cfg, model):
-        return base_cfg.model_copy(deep=True)
-
-    asked = await _compact_on_thread_model(base_config, _resolve, msg_type="flash")
-    assert asked == [("m-thread", "flash")]
 
 
 @pytest.mark.asyncio

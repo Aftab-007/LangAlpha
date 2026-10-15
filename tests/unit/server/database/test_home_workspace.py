@@ -7,14 +7,14 @@ import uuid
 import pytest
 
 from src.server.database.home_workspace import (
-    get_flash_workspace_id,
-    is_flash_row,
+    get_home_workspace_id,
     is_home_id,
+    is_home_row,
     is_unbound,
 )
 
 USER = "user-home-1"
-HOME = get_flash_workspace_id(USER)
+HOME = get_home_workspace_id(USER)
 
 
 @pytest.mark.parametrize(
@@ -23,7 +23,7 @@ HOME = get_flash_workspace_id(USER)
         (HOME, True),
         (HOME.upper(), True),
         (uuid.UUID(HOME), True),
-        (get_flash_workspace_id("someone-else"), False),
+        (get_home_workspace_id("someone-else"), False),
         (str(uuid.uuid4()), False),
         (None, False),
         ("", False),
@@ -39,16 +39,16 @@ def test_no_user_has_no_home():
 
 
 @pytest.mark.parametrize(
-    "row, flash_row, unbound",
+    "row, home_row, unbound",
     [
-        ({"workspace_id": HOME, "user_id": USER, "status": "flash"}, True, True),
+        ({"workspace_id": HOME, "user_id": USER, "status": "unbound"}, True, True),
         ({"workspace_id": uuid.UUID(HOME), "user_id": USER, "status": "running"}, True, False),
-        ({"workspace_id": str(uuid.uuid4()), "user_id": USER, "status": "flash"}, True, True),
+        ({"workspace_id": str(uuid.uuid4()), "user_id": USER, "status": "unbound"}, True, True),
         ({"workspace_id": str(uuid.uuid4()), "user_id": USER, "status": "running"}, False, False),
         (None, False, False),
     ],
-    ids=["home-unbound", "home-bound", "former-flash-row", "a-workspace", "no-row"],
+    ids=["home-unbound", "home-bound", "former-home-row", "a-workspace", "no-row"],
 )
-def test_a_flash_row_is_home_by_id_or_unbound_by_status(row, flash_row, unbound):
-    assert is_flash_row(row) is flash_row
+def test_a_home_row_is_home_by_id_or_unbound_by_status(row, home_row, unbound):
+    assert is_home_row(row) is home_row
     assert is_unbound(row) is unbound

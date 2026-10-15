@@ -23,8 +23,8 @@ from src.server.database import automation as automation_db
 # What update_automation's query builder sets: a None is written only to a
 # nullable column, and a JSON column ignores None.
 _PLAIN = {
-    "name", "description", "cron_expression", "timezone", "agent_mode", "instruction",
-    "workspace_id", "llm_model", "thread_strategy", "conversation_thread_id", "status",
+    "name", "description", "cron_expression", "timezone", "instruction", "workspace_id",
+    "llm_model", "thread_strategy", "conversation_thread_id", "status",
     "max_failures", "failure_count", "disable_reason", "next_run_at", "last_run_at",
 }
 _NULLABLE = {"next_run_at", "last_run_at", "conversation_thread_id", "disable_reason", "description", "llm_model"}
@@ -173,7 +173,6 @@ class FakeAutomationsDb:
         timezone: str = "UTC",
         trigger_config: dict[str, Any] | None = None,
         next_run_at: Any = None,
-        agent_mode: str = "flash",
         workspace_id: str | None = None,
         llm_model: str | None = None,
         additional_context: list[dict[str, Any]] | None = None,
@@ -209,7 +208,6 @@ class FakeAutomationsDb:
             "trigger_config": trigger_config or {},
             "timezone": timezone,
             "instruction": instruction,
-            "agent_mode": agent_mode,
             "workspace_id": _uuid(workspace_id),
             "thread_strategy": thread_strategy,
             "conversation_thread_id": _uuid(conversation_thread_id),

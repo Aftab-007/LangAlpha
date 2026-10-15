@@ -381,9 +381,9 @@ class TestAdoptingTheMachinesSandbox:
         assert "w.status <> comp.status" in sql
 
     @pytest.mark.asyncio
-    async def test_flash_is_out_of_reach_of_the_repair(self, db):
-        """A flash workspace has no machine; handing it one of these shadows
+    async def test_an_unbound_home_is_out_of_reach_of_the_repair(self, db):
+        """An unbound Home has no machine; handing it one of these shadows
         would invent a sandbox it never asked for."""
         db.fetchall = AsyncMock(return_value=[])
         await W.adopt_computer_sandbox_into_workspaces(COMPUTER_ID)
-        assert "w.status NOT IN ('deleted', 'flash')" in _sql(db)
+        assert "w.status NOT IN ('deleted', 'unbound')" in _sql(db)

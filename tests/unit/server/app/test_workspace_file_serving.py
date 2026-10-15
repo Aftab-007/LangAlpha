@@ -245,7 +245,7 @@ async def test_system_and_hidden_paths_return_404(mock_ws, _wd, mock_fp, blocked
     mock_fp.get_file_content.assert_not_called()
 
 
-# --- Unknown / flash workspace → uniform 404 ------------------------------
+# --- Unknown workspace or unbound Home → uniform 404 ----------------------
 
 
 @pytest.mark.asyncio
@@ -273,8 +273,8 @@ async def test_db_lookup_error_returns_uniform_404(mock_ws, _wd):
 @pytest.mark.asyncio
 @patch(_WD_PATCH, return_value="/home/workspace")
 @patch(_DBWS_PATCH, new_callable=AsyncMock)
-async def test_flash_workspace_returns_uniform_404(mock_ws, _wd):
-    mock_ws.return_value = _workspace("flash")
+async def test_unbound_home_returns_uniform_404(mock_ws, _wd):
+    mock_ws.return_value = _workspace("unbound")
     with pytest.raises(HTTPException) as exc:
         await serve_workspace_file(WS_ID, "results/report.html", inject_theme=False)
     assert exc.value.status_code == 404

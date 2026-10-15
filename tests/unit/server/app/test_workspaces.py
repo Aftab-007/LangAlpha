@@ -2,7 +2,7 @@
 Tests for the Workspaces API router (src/server/app/workspaces.py).
 
 Covers CRUD operations, start/stop/archive/delete lifecycle actions,
-flash workspace, reorder, and ownership guards.
+Home, reorder, and ownership guards.
 
 The lifecycle routes are aliases over the project-addressed manager: each
 resolves the workspace to its machine inside ``WorkspaceManager`` and runs one
@@ -80,16 +80,20 @@ async def client():
         yield c
 
 
-def test_home_answers_as_the_flash_row_while_bound():
-    """Clients know Home by this status alone. Bound to a computer, its row
-    carries the computer's status, and reporting that would make Home an
-    ordinary workspace on every surface."""
+def test_home_is_told_by_is_home_and_reads_its_real_status():
+    """Bound to a computer, Home's row carries the computer's status like any
+    workspace on it, so clients tell Home by ``is_home``, never by status."""
     from src.server.app.workspaces import _workspace_to_response
-    from src.server.database.home_workspace import get_flash_workspace_id
+    from src.server.database.home_workspace import get_home_workspace_id
 
-    home = _ws(workspace_id=get_flash_workspace_id("test-user-123"), name="Flash")
-    assert _workspace_to_response(home).status == "flash"
-    assert _workspace_to_response(_ws()).status == "running"
+    home_id = get_home_workspace_id("test-user-123")
+    bound = _workspace_to_response(_ws(workspace_id=home_id, name="Home"))
+    assert (bound.status, bound.is_home) == ("running", True)
+    unbound = _workspace_to_response(
+        _ws(workspace_id=home_id, name="Home", status="unbound", computer_id=None)
+    )
+    assert (unbound.status, unbound.is_home) == ("unbound", True)
+    assert _workspace_to_response(_ws()).is_home is False
 
 
 # ---------------------------------------------------------------------------
@@ -243,48 +247,49 @@ async def test_create_workspace_validation_empty_name(client):
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/workspaces/flash
+# POST /api/v1/workspaces/home
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_flash_workspace(client):
-    ws = _ws(status="flash")
+async def test_get_home_workspace(client):
+    ws = _ws(name="Home", status="unbound", computer_id=None)
     with patch(
-        "src.server.app.workspaces.get_or_create_flash_workspace",
+        "src.server.app.workspaces.get_or_create_home_workspace",
         new_callable=AsyncMock,
         return_value=ws,
     ):
-        resp = await client.post("/api/v1/workspaces/flash")
+        resp = await client.post("/api/v1/workspaces/home")
 
     assert resp.status_code == 200
     assert resp.json()["workspace_id"] == ws["workspace_id"]
+    assert resp.json()["is_home"] is True
 
 
 @pytest.mark.asyncio
-async def test_get_flash_workspace_error(client):
+async def test_get_home_workspace_error(client):
     with patch(
-        "src.server.app.workspaces.get_or_create_flash_workspace",
+        "src.server.app.workspaces.get_or_create_home_workspace",
         new_callable=AsyncMock,
         side_effect=RuntimeError("db down"),
     ):
-        resp = await client.post("/api/v1/workspaces/flash")
+        resp = await client.post("/api/v1/workspaces/home")
 
     assert resp.status_code == 500
 
 
 @pytest.mark.asyncio
-async def test_a_flash_id_another_account_holds_is_forbidden(client):
-    """An account merge carries the merged account's flash row onto the account
-    it joins. Every app load asks for it, and no retry makes it the caller's."""
-    from src.server.database.workspace import FlashWorkspaceTaken
+async def test_a_home_id_another_account_holds_is_forbidden(client):
+    """An account merge carries the merged account's Home onto the account it
+    joins. Every app load asks for it, and no retry makes it the caller's."""
+    from src.server.database.workspace import HomeWorkspaceTaken
 
     with patch(
-        "src.server.app.workspaces.get_or_create_flash_workspace",
+        "src.server.app.workspaces.get_or_create_home_workspace",
         new_callable=AsyncMock,
-        side_effect=FlashWorkspaceTaken("flash-ws", "test-user-123"),
+        side_effect=HomeWorkspaceTaken("home-ws", "test-user-123"),
     ):
-        resp = await client.post("/api/v1/workspaces/flash")
+        resp = await client.post("/api/v1/workspaces/home")
 
     assert resp.status_code == 403
 
@@ -355,7 +360,7 @@ async def test_list_workspaces_with_params(client):
     assert resp.status_code == 200
     mock_list.assert_awaited_once_with(
         user_id="test-user-123", limit=5, offset=10, sort_by="activity",
-        include_flash=False,
+        include_home=False,
     )
 
 
@@ -758,10 +763,10 @@ async def test_start_workspace_not_found(client):
 
 
 @pytest.mark.asyncio
-async def test_starting_a_former_flash_row_that_home_folded_in_is_not_found(client):
-    """Binding Home folds the user's other flash rows into it and retires
+async def test_starting_a_former_home_that_home_folded_in_is_not_found(client):
+    """Binding Home folds the user's former Home rows into it and retires
     them, so the row this start named is gone by the time it is read again."""
-    former = _ws(status="flash", computer_id=None)
+    former = _ws(status="unbound", computer_id=None)
     ensure_home = AsyncMock()
     with (
         patch(
@@ -1714,8 +1719,15 @@ async def test_delete_workspace_success(client):
 
 
 @pytest.mark.asyncio
-async def test_delete_flash_workspace_blocked(client):
-    ws = _ws(status="flash")
+@pytest.mark.parametrize("bound", [False, True], ids=["unbound", "bound"])
+async def test_deleting_home_is_refused(client, bound):
+    from src.server.database.home_workspace import get_home_workspace_id
+
+    ws = _ws(
+        workspace_id=get_home_workspace_id("test-user-123"),
+        name="Home",
+        **({} if bound else {"status": "unbound", "computer_id": None}),
+    )
     with patch(
         "src.server.app.workspaces.db_get_workspace",
         new_callable=AsyncMock,
@@ -1726,7 +1738,7 @@ async def test_delete_flash_workspace_blocked(client):
         )
 
     assert resp.status_code == 400
-    assert "flash" in resp.json()["detail"].lower()
+    assert resp.json()["detail"] == "Cannot delete Home"
 
 
 @pytest.mark.asyncio

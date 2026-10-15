@@ -93,7 +93,7 @@ async def test_publish_is_noop_when_redis_disabled(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_publish_without_a_computer_uses_the_workspace_channel(monkeypatch):
-    """A flash workspace and a backfill loser have no machine, and must not lose
+    """An unbound Home and a backfill loser have no machine, and must not lose
     the publish: they keep the workspace-keyed channel, and the payload keeps
     exactly the pre-split shape."""
     client = _FakeRedisClient()

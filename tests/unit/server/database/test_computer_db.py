@@ -229,10 +229,10 @@ class TestTombstoneFence:
     async def test_a_deleted_workspace_is_never_revived_by_its_machine(
         self, db, cursor
     ):
-        """Its computer moving must not resurrect a soft-deleted project, and a
-        flash workspace has no machine to follow."""
+        """Its computer moving must not resurrect a soft-deleted workspace, and
+        an unbound Home has no machine to follow."""
         await C.update_computer_status(COMPUTER_ID, "running")
-        assert "w.status NOT IN ('deleted', 'flash')" in _sql(cursor)
+        assert "w.status NOT IN ('deleted', 'unbound')" in _sql(cursor)
 
 
 class TestFences:
@@ -287,10 +287,10 @@ class TestFences:
     async def test_a_status_outside_the_check_set_is_refused_before_the_write(
         self, db, cursor
     ):
-        """'flash' is a workspace state; sending it would fail 046's CHECK at the
-        end of a statement that has already moved workspaces rows."""
-        with pytest.raises(ValueError, match="flash"):
-            await C.update_computer_status(COMPUTER_ID, "flash")
+        """'unbound' is a workspace state; sending it would fail 046's CHECK at
+        the end of a statement that has already moved workspaces rows."""
+        with pytest.raises(ValueError, match="unbound"):
+            await C.update_computer_status(COMPUTER_ID, "unbound")
         cursor.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -543,7 +543,7 @@ class TestOneWriterOfTheBinding:
             C.bind_provider_ref_statement(authority="nonsense", returning="1")
 
     def test_a_workspace_with_no_computer_keeps_the_pre_computer_predicate(self):
-        """The whole backward-compatibility story: flash workspaces and the
+        """The whole backward-compatibility story: an unbound Home and the
         backfill's shared-sandbox losers still bind through this one statement."""
         sql = C.bind_provider_ref_statement(authority="workspace", returning="1")
         assert "(w.computer_id IS NULL OR m.mirrored > 0)" in re.sub(
