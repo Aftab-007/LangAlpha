@@ -38,15 +38,9 @@ export function cachedWorkspaceLists(queryClient: QueryClient): Workspace[] {
   return rows;
 }
 
-/** `row` with `status` written in. A backend before is_home marks Home by a
- * 'flash' status alone, so a Home row gains `is_home` to stay Home. */
+/** `row` with `status` written in, and the computer when the writer names one. */
 function withStatus<T extends Workspace>(row: T, status: string, computerId?: string): T {
-  return {
-    ...row,
-    status,
-    ...(isHomeWorkspace(row) ? { is_home: true } : {}),
-    ...(computerId ? { computer_id: computerId } : {}),
-  };
+  return { ...row, status, ...(computerId ? { computer_id: computerId } : {}) };
 }
 
 /**
@@ -125,15 +119,14 @@ async function homeComputerId(queryClient: QueryClient, workspaceId: string): Pr
 }
 
 /** What the caches believe a machine is doing: its own row, else a workspace
- * bound to it other than Home, whose row may not have taken its machine's
- * state yet. */
+ * bound to it. */
 function cachedComputerStatus(queryClient: QueryClient, computerId: string): string | undefined {
   for (const [, data] of queryClient.getQueriesData<ComputersResponse>({ queryKey: queryKeys.computers.lists() })) {
     const computer = data?.computers?.find((c) => c.computer_id === computerId);
     if (computer) return computer.status;
   }
   return cachedWorkspaceLists(queryClient)
-    .find((w) => w.computer_id === computerId && !isHomeWorkspace(w) && w.status !== 'deleted')
+    .find((w) => w.computer_id === computerId && w.status !== 'deleted')
     ?.status;
 }
 
@@ -174,9 +167,9 @@ export function warmWorkspace(workspaceId: string, queryClient: QueryClient): Pr
   const existing = inFlight.get(workspaceId);
   if (existing) return existing;
 
-  // Home's row status can be one the gate below skips (a Home not yet bound
-  // to a computer has none of its own); the start itself binds Home to the
-  // computer and answers from the computer's state.
+  // Before its first computer Home's row reads 'unbound', which the gate
+  // below skips; the start itself binds Home to the computer and answers
+  // from the computer's state.
   if (isCachedHome(queryClient, workspaceId)) {
     // The start moves Home's computer, which the workspaces beside it on that
     // machine show too, so patch the machine.

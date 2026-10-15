@@ -85,9 +85,11 @@ export type ResourceTier = 'standard' | 'performance' | 'max';
 export interface Workspace {
   workspace_id: string;
   name: string;
+  /** Lifecycle of the workspace's computer. Home reads `'unbound'` until its
+   *  first start or turn puts it on one. */
   status?: string;
   /** The user's Home, where All workspaces runs. Never read Home off `status`. */
-  is_home?: boolean;
+  is_home: boolean;
   description?: string;
   config?: Record<string, unknown>;
   /** Sandbox resource tier. Absent on Home and legacy rows. */
@@ -282,9 +284,8 @@ export interface ReorderItem {
 
 // --- Thread ---
 
-/** An agent that hands turns to a workspace's thread. `'flash'` is a row
- *  written before the Chief of Staff replaced it, and reads as the Chief of Staff. */
-export type DispatchingAgent = 'chief_of_staff' | 'flash';
+/** An agent that hands turns to a workspace's thread. */
+export type DispatchingAgent = 'chief_of_staff';
 
 /**
  * Who initiated a thread, or one turn of it (a query row's metadata carries

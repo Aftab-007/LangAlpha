@@ -67,7 +67,7 @@ export default function AutomationInspector({
   const deliveryMethods = a.delivery_config?.methods ?? [];
   const { executions, loading } = useExecutions(a.automation_id, deliveryMethods.length > 0);
   const place = useAutomationPlace();
-  const workspaceId = place.workspaceOf(a);
+  const workspaceId = a.workspace_id;
   const workspaceName = workspaceNameOf(useWorkspaceOptions(), workspaceId);
   const delivery = useDeliveryOptions({ workspaceId, enabled: deliveryMethods.length > 0 });
   // The runs' own names, newest first, name a chat the apps no longer list.

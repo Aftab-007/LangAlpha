@@ -11,8 +11,6 @@ import { cronToHuman } from '../../../Automations/utils/cron';
 import { isPriceTriggerConfig, formatPriceTrigger, formatRetriggerMode } from '../../../Automations/utils/price';
 import type { PriceTriggerConfig } from '@/types/automation';
 import { formatDateTime, formatDuration } from '../../../Automations/utils/time';
-import { useAutomationPlace } from '../../../Automations/hooks/useAutomationPlace';
-import type { PlaceRow } from '../../../Automations/utils/place';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -150,10 +148,13 @@ function scheduleLabel(auto: Record<string, unknown> | null | undefined, t: TFun
   return (auto.schedule as string) || '\u2014';
 }
 
-/** Whether the card says where the automation runs. An older card may name
- *  only its mode, and a newer one only its workspace. */
-function hasPlace(auto: PlaceRow): boolean {
-  return !!auto.agent_mode || !!auto.workspace_id;
+/** Where the card's automation ran, or null when the card does not say.
+ *  The tool that drew these cards is gone, so every one is kept history, and
+ *  names the agent it ran on rather than a workspace: `ptc` ran in one, and
+ *  the other, outside any, is All workspaces now. */
+function cardPlace(auto: Record<string, unknown>, t: TFunction): string | null {
+  if (!auto.agent_mode) return null;
+  return auto.agent_mode === 'ptc' ? t('automation.detailWorkspace') : t('agents.allWorkspaces');
 }
 
 const ACCENT = 'var(--color-accent-primary)';
@@ -209,7 +210,6 @@ interface ListPanelProps {
 
 function ListPanel({ automations, total }: ListPanelProps): React.ReactElement {
   const { t } = useTranslation();
-  const { label: placeLabel } = useAutomationPlace();
   const locale = useLocale();
   const now = useNow();
   if (automations.length === 0) {
@@ -229,6 +229,7 @@ function ListPanel({ automations, total }: ListPanelProps): React.ReactElement {
         const isCron = a.trigger_type === 'cron';
         const isPrice = a.trigger_type === 'price';
         const Icon = isPrice ? TrendingUp : isCron ? Clock : Timer;
+        const place = cardPlace(a, t);
         return (
           <div
             key={(a.automation_id as string) || i}
@@ -253,7 +254,7 @@ function ListPanel({ automations, total }: ListPanelProps): React.ReactElement {
               {!!a.next_run_at && (
                 <span>{t('toolArtifact.next', { time: relativeTime(a.next_run_at as string, locale, now) })}</span>
               )}
-              {hasPlace(a) && (
+              {place && (
                 <span
                   style={{
                     fontSize: '0.625rem',
@@ -264,7 +265,7 @@ function ListPanel({ automations, total }: ListPanelProps): React.ReactElement {
                     color: 'var(--color-text-tertiary)',
                   }}
                 >
-                  {placeLabel(a)}
+                  {place}
                 </span>
               )}
             </div>
@@ -286,7 +287,6 @@ interface DetailPanelProps {
 
 function DetailPanel({ automation, executions, totalExecutions }: DetailPanelProps): React.ReactElement | null {
   const { t } = useTranslation();
-  const { label: placeLabel } = useAutomationPlace();
   const locale = useLocale();
   const now = useNow();
   if (!automation) return null;
@@ -294,6 +294,7 @@ function DetailPanel({ automation, executions, totalExecutions }: DetailPanelPro
   const isCron = automation.trigger_type === 'cron';
   const isPrice = automation.trigger_type === 'price';
   const Icon = isPrice ? TrendingUp : isCron ? Clock : Timer;
+  const place = cardPlace(automation, t);
 
   return (
     <div className="space-y-4">
@@ -373,9 +374,7 @@ function DetailPanel({ automation, executions, totalExecutions }: DetailPanelPro
           {t('toolArtifact.configuration')}
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
-          {hasPlace(automation) && (
-            <ConfigRow label={t('automation.agentMode')} value={placeLabel(automation)} />
-          )}
+          {place && <ConfigRow label={t('automation.agentMode')} value={place} />}
           <ConfigRow label={t('toolArtifact.triggerType')} value={isPrice ? t('toolArtifact.priceTrigger') : isCron ? t('toolArtifact.recurringCron') : t('toolArtifact.oneTime')} />
         </div>
       </div>
