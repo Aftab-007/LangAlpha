@@ -31,6 +31,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
+from src.server.database.home_workspace import is_unbound
 from src.server.database.mcp_servers import (
     MAX_CATALOG_SERVERS_PER_USER,
     create_workspace_catalog_server,
@@ -561,7 +562,7 @@ async def _apply_toggle_now(
     reconcile reads through any active grant of the user's.
     """
     await _sync_sandbox_grants_now(workspace_id, user_id)
-    if workspace.get("status") != "flash":
+    if not is_unbound(workspace):
         schedule_proactive_apply(workspace_id, user_id)
 
 

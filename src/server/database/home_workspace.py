@@ -20,13 +20,22 @@ def get_flash_workspace_id(user_id: str) -> str:
     return str(uuid.uuid5(FLASH_WORKSPACE_NAMESPACE, user_id))
 
 
+def is_home_id(user_id: Any, workspace_id: Any) -> bool:
+    """Whether ``workspace_id`` names ``user_id``'s Home, in any case a client spells it."""
+    if not user_id or not workspace_id:
+        return False
+    return str(workspace_id).lower() == get_flash_workspace_id(str(user_id))
+
+
+def is_unbound(workspace: Optional[Mapping[str, Any]]) -> bool:
+    """Whether ``workspace`` is a flash row on no computer yet."""
+    return bool(workspace) and workspace.get("status") == "flash"
+
+
 def is_flash_row(workspace: Optional[Mapping[str, Any]]) -> bool:
     """Whether ``workspace`` is its owner's flash row, bound as Home or not."""
     if not workspace:
         return False
-    if workspace.get("status") == "flash":
+    if is_unbound(workspace):
         return True
-    user_id = workspace.get("user_id")
-    return bool(user_id) and str(workspace.get("workspace_id")) == get_flash_workspace_id(
-        str(user_id)
-    )
+    return is_home_id(workspace.get("user_id"), workspace.get("workspace_id"))

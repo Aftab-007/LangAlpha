@@ -30,6 +30,7 @@ from fastapi import APIRouter, HTTPException, Path as PathParam, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
+from src.server.database.home_workspace import is_unbound
 from src.server.database.share_codes import share_url
 from src.server.database.share_links import ensure_app_link
 from src.server.utils.api import CurrentUserId, require_workspace_owner
@@ -293,7 +294,7 @@ async def _get_sandbox(workspace_id: str, user_id: str) -> Any:
     workspace = await db_get_workspace(workspace_id)
     require_workspace_owner(workspace, user_id=user_id)
 
-    if workspace.get("status") == "flash":
+    if is_unbound(workspace):
         raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
 
     manager = WorkspaceManager.get_instance()
@@ -485,7 +486,7 @@ async def get_sandbox_stats(
     workspace = await db_get_workspace(workspace_id)
     require_workspace_owner(workspace, user_id=x_user_id)
 
-    if workspace.get("status") == "flash":
+    if is_unbound(workspace):
         raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
 
     if workspace.get("status") == "running":

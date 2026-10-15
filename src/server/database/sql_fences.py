@@ -21,6 +21,12 @@ FENCE_NOT_DELETED = "status <> 'deleted'"
 # machine-scoped write must not reach it and overwrite the 'flash' marker.
 FENCE_LIVE_WORKSPACE = "status NOT IN ('deleted', 'flash')"
 
+# A listing of the user's workspaces leaves Home out by its id, since bound as
+# Home it reads its computer's status, and leaves out by status a flash row at
+# another id, which an account merge leaves until the fold. The caller binds
+# ``home_id``.
+EXCLUDE_HOME = "status <> 'flash' AND workspace_id <> %(home_id)s"
+
 # The worker running a spec change stamps heartbeat_at on its record every
 # SPEC_CHANGE_HEARTBEAT_SECONDS. A record still in progress with no stamp for
 # SPEC_CHANGE_STALE_SECONDS has lost its worker (a crash never runs the
