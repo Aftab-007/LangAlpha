@@ -102,7 +102,7 @@ export function PluginDetail({
   const subagentNames = plugin.components.filter((c) => c.kind === 'subagent').map((c) => c.name);
   // Only this plugin's: a name it ships may also be the user's own subagent.
   const pluginSubagents = (subagentList?.subagents ?? []).filter(
-    (v) => v.source === 'plugin' && v.plugin?.name === plugin.name,
+    (v) => v.source === 'plugin' && v.plugin.name === plugin.name,
   );
   const skillByName = new Map<string, SkillInfo>();
   for (const skill of skillList ?? []) {

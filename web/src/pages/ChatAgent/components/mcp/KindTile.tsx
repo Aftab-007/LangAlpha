@@ -13,8 +13,7 @@ import {
 import { cn } from '@/lib/utils';
 import { LangAlphaMark } from '@/components/brand/LangAlphaMark';
 import { SubagentsRings } from '@/components/ui/subagents-rings';
-import { TILE_SIZES, type TileSize } from './IdentityTile';
-import { identityTint } from './identityTint';
+import { IdentityTile, TILE_SIZES, type TileSize } from './IdentityTile';
 
 /**
  * What a thing with no logo of its own looks like: what kind of thing it is.
@@ -92,15 +91,10 @@ export function KindTile({
 }) {
   if (kind === 'subagent' && name) {
     const Glyph = SUBAGENT_GLYPH[name] ?? SubagentsRings;
-    const [bg, fg] = identityTint(name);
     return (
-      <div
-        aria-hidden
-        className={cn('shrink-0 flex items-center justify-center', TILE_SIZES[size], className)}
-        style={{ backgroundColor: bg, color: fg }}
-      >
+      <IdentityTile name={name} size={size} className={className}>
         <Glyph className={GLYPH_SIZES[size]} />
-      </div>
+      </IdentityTile>
     );
   }
   const Glyph = KIND_GLYPH[kind];

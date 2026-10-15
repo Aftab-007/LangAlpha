@@ -12,6 +12,7 @@ import { FLASH_ROUTE_STATE, flashWorkspaceQuery } from '@/hooks/useFlashWorkspac
 import { usePlugins } from '@/hooks/usePlugins';
 import {
   invalidateSubagents,
+  sendSubagentEdit,
   useDeleteSubagent,
   usePatchSubagent,
   useSubagents,
@@ -21,8 +22,8 @@ import { formatList } from '@/lib/format';
 import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
 import {
   deleteSubagent,
-  putSubagent,
   type PluginInfo,
+  type SubagentPlugin,
   type SubagentView,
 } from '@/pages/ChatAgent/utils/api';
 import { buildBulkActions } from '../../utils/bulkActions';
@@ -52,13 +53,15 @@ import { SubagentDetail } from './SubagentDetail';
 import { SubagentNew } from './SubagentNew';
 import {
   capitalize,
-  fieldWrite,
   fieldsPhrase,
   isCustom,
   isOrphan,
   isResettable,
   modelMeta,
   problemText,
+  removalCopy,
+  resetLabel,
+  untouchedNote,
 } from './subagentText';
 import '../pluginsPage/pluginsPage.css';
 import './subagents.css';
@@ -73,8 +76,6 @@ import './subagents.css';
  * the cell. A base is never removed, only reset: its menu offers that once the
  * user has changed it, and says why it can't go before then.
  */
-
-type Pending = { name: string; action: 'remove' | 'reset' };
 
 export function SubagentsList() {
   const { t } = useTranslation();
@@ -91,7 +92,8 @@ export function SubagentsList() {
   const models = useAllModels();
   const patch = usePatchSubagent();
   const remove = useDeleteSubagent();
-  const [pending, setPending] = useState<Pending | null>(null);
+  // The row whose removal is being confirmed.
+  const [pending, setPending] = useState<string | null>(null);
 
   const rows = data?.subagents ?? [];
   const plugins = pluginData?.plugins ?? [];
@@ -163,8 +165,8 @@ export function SubagentsList() {
   const detailView = detail.target;
 
   const own = visible.filter((s) => isCustom(s) || isOrphan(s));
-  const pluginGroups = groupByPlugin(visible.filter((s) => !isCustom(s) && !isOrphan(s) && s.source === 'plugin' && s.plugin));
-  const builtIn = visible.filter((s) => !isCustom(s) && !isOrphan(s) && !(s.source === 'plugin' && s.plugin));
+  const pluginGroups = groupByPlugin(visible.filter((s) => !isCustom(s) && !isOrphan(s)));
+  const builtIn = visible.filter((s) => !isCustom(s) && !isOrphan(s) && s.source !== 'plugin');
 
   const selected = visible.filter((s) => list.selection.selected.has(s.name));
   const bulk = buildBulkActions(t, list, selected, {
@@ -174,8 +176,7 @@ export function SubagentsList() {
     isOn: (s) => s.enabled && !isOrphan(s),
     // An orphan runs nowhere, so switching it on would change nothing.
     enableLocked: isOrphan,
-    setEnabled: (s, on) =>
-      putSubagent(s.name, { version: s.version, fields: { enabled: fieldWrite(s, 'enabled', on) } }),
+    setEnabled: (s, on) => sendSubagentEdit(qc, s.name, { enabled: on }),
     remove: {
       verb: 'remove',
       labelKey: 'plugins.bulk.remove',
@@ -190,8 +191,7 @@ export function SubagentsList() {
 
   function confirmPending() {
     if (!pending) return;
-    const name = pending.name;
-    remove.mutate(name, { onSettled: () => setPending(null) });
+    remove.mutate(pending, { onSettled: () => setPending(null) });
   }
 
   function renderCell(view: SubagentView) {
@@ -201,17 +201,12 @@ export function SubagentsList() {
           view={view}
           metadata={models.metadata}
           providerName={providerName}
-          pending={pending?.name === view.name ? pending.action : null}
+          asking={pending === view.name}
           busy={remove.isPending}
           onOpen={() => detail.open(view.name)}
-          onToggle={() =>
-            patch.mutate({
-              name: view.name,
-              fields: { enabled: fieldWrite(view, 'enabled', !view.enabled) },
-            })
-          }
+          onToggle={() => patch.mutate({ name: view.name, edit: { enabled: !view.enabled } })}
           onDuplicate={() => openNew(view.name)}
-          onAsk={(action) => setPending({ name: view.name, action })}
+          onAsk={() => setPending(view.name)}
           onConfirm={confirmPending}
           onCancel={() => setPending(null)}
           resetFields={fieldsPhrase(t, view.user_fields, locale, formatList)}
@@ -310,14 +305,15 @@ export function SubagentsList() {
 }
 
 interface PluginGroup {
-  plugin: NonNullable<SubagentView['plugin']>;
+  plugin: SubagentPlugin;
   rows: SubagentView[];
 }
 
+/** The plugins' rows, one group per plugin; every other row is left out. */
 function groupByPlugin(rows: SubagentView[]): PluginGroup[] {
   const groups = new Map<string, PluginGroup>();
   for (const row of rows) {
-    if (!row.plugin) continue;
+    if (row.source !== 'plugin') continue;
     const group = groups.get(row.plugin.name);
     if (group) group.rows.push(row);
     else groups.set(row.plugin.name, { plugin: row.plugin, rows: [row] });
@@ -333,7 +329,7 @@ function SubagentListCell({
   view,
   metadata,
   providerName,
-  pending,
+  asking,
   busy,
   onOpen,
   onToggle,
@@ -346,12 +342,13 @@ function SubagentListCell({
   view: SubagentView;
   metadata: ReturnType<typeof useAllModels>['metadata'];
   providerName: (name: string) => string;
-  pending: Pending['action'] | null;
+  /** Its removal is being confirmed. */
+  asking: boolean;
   busy: boolean;
   onOpen: () => void;
   onToggle: () => void;
   onDuplicate: () => void;
-  onAsk: (action: Pending['action']) => void;
+  onAsk: () => void;
   onConfirm: () => void;
   onCancel: () => void;
   resetFields: string | null;
@@ -362,24 +359,11 @@ function SubagentListCell({
   const custom = isCustom(view);
   const on = view.enabled && !orphan;
 
-  if (pending) {
-    const message =
-      pending === 'remove'
-        ? t('plugins.subagents.removeConfirm', { name: view.name })
-        : resetFields
-          ? t('plugins.subagents.resetConfirm', { name: view.name, fields: resetFields })
-          : t('plugins.subagents.resetConfirmPlain', { name: view.name });
+  if (asking) {
     return (
       <div className="pp-confirm">
         <ConfirmStrip
-          message={message}
-          confirmLabel={
-            busy
-              ? t('common.loading')
-              : pending === 'remove'
-                ? t('plugins.subagents.removeYes')
-                : t('plugins.subagents.resetYes')
-          }
+          {...removalCopy(t, view, resetFields, busy)}
           cancelLabel={t('plugins.skills.deleteConfirmNo')}
           pending={busy}
           onConfirm={onConfirm}
@@ -405,8 +389,6 @@ function SubagentListCell({
     </span>
   );
 
-  const builtin = view.source === 'builtin' || view.source === 'deployment';
-  const resetLabel = builtin ? t('plugins.subagents.resetToBuiltIn') : t('plugins.subagents.resetToDefault');
   return (
     <SurfaceCell
       mark={<BrandMark name={view.name} kind="subagent" size="md" />}
@@ -432,21 +414,17 @@ function SubagentListCell({
             </>
           )}
           {custom || orphan ? (
-            <DropdownMenuItem variant="destructive" onSelect={() => onAsk('remove')}>
+            <DropdownMenuItem variant="destructive" onSelect={onAsk}>
               <Trash2 className="h-3.5 w-3.5" />
               {t('plugins.subagents.remove')}
             </DropdownMenuItem>
           ) : isResettable(view) ? (
-            <DropdownMenuItem onSelect={() => onAsk('reset')}>
+            <DropdownMenuItem onSelect={onAsk}>
               <RotateCcw className="h-3.5 w-3.5" />
-              {resetLabel}
+              {resetLabel(t, view)}
             </DropdownMenuItem>
           ) : (
-            <p className="pp-menu-note">
-              {view.source === 'plugin' && view.plugin
-                ? t('plugins.subagents.pluginNote', { plugin: view.plugin.display_name })
-                : t('plugins.subagents.builtinNote')}
-            </p>
+            <p className="pp-menu-note">{untouchedNote(t, view)}</p>
           )}
         </CellMenu>
       }

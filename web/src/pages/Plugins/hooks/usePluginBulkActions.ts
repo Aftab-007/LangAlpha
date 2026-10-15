@@ -39,7 +39,6 @@ export function usePluginBulkActions(
     remove: {
       verb: 'uninstall',
       labelKey: 'plugins.bulk.uninstall',
-      confirmKey: 'plugins.bulk.confirmUninstall',
       confirm: (plugins) => bulkUninstallConfirm(t, plugins, views),
       eligible: hasLifecycle,
       run: async (p) => ({ deleted: (await deletePlugin(p.name)).deleted, changed: changedSubagents(p, views) }),

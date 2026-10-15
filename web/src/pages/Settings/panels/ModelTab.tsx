@@ -3,7 +3,7 @@ import { useMutationState } from '@tanstack/react-query';
 import { Search, Pin, Settings2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import { Select } from '@/components/ui/select';
-import { useUser } from '@/hooks/useUser';
+import { useSearchTierAllows } from '@/hooks/useSearchTierAllows';
 import { usePreferences } from '@/hooks/usePreferences';
 import { PREFERENCE_MUTATION_KEY, useUpdatePreferences } from '@/hooks/useUpdatePreferences';
 import { ModelTierConfig } from '@/components/model/ModelTierConfig';
@@ -16,7 +16,6 @@ import { useDefaultModelChange } from '@/hooks/useDefaultModelChange';
 import { useAllModels } from '@/hooks/useAllModels';
 import { useQuickAccessModels } from '@/hooks/useQuickAccessModels';
 import { modelLabel, modelMatches } from '@/lib/modelLabel';
-import { isPlatformMode } from '@/config/hostMode';
 import { Trans, useTranslation } from 'react-i18next';
 import { ConnectedAccounts } from './ConnectedAccounts';
 import { FLASH_AUTO, flashDefaultChoice, modelPrefs, readDefaultModelScope, splitPreferenceWrite } from '@/lib/modelPreferences';
@@ -59,7 +58,7 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
  * settings a scheduled turn actually runs. */
 export function ModelTab() {
   const navigate = useNavigate();
-  const { user: authUser } = useUser();
+  const tierAllows = useSearchTierAllows();
   const { preferences: prefsData } = usePreferences();
   const { mutate } = useUpdatePreferences();
   const { models: visibleModels, metadata: modelMetadata, modelAccessMap, systemDefaults: hookSystemDefaults, validModelNames, rawModels, isLoading: modelsLoading, compactionProfiles, searchProviders } = useAllModels();
@@ -148,11 +147,6 @@ export function ModelTab() {
     return () => document.removeEventListener('mousedown', handler);
   }, [showModelPicker]);
 
-  // Search provider/depth options are tier-gated per the manifest (min_tier
-  // comes pre-resolved from the API) in platform mode; OSS is ungated.
-  // Server enforces this at resolve time — the disabled state is UX only.
-  const tierAllows = (minTier: number) =>
-    !isPlatformMode || (authUser?.access_tier ?? -1) >= minTier;
   const providerOptions = Object.entries(searchProviders ?? {});
   const canCustomizeSearchProvider = providerOptions.some(([, p]) => tierAllows(p.min_tier));
   // A stored provider the catalog no longer declares reads as Default.

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useModels } from './useModels';
 import { usePreferences } from './usePreferences';
-import { usePlatformModels, useModelAccessMap } from './usePlatformModels';
+import { getModelAccess, usePlatformModels, useModelAccessMap } from './usePlatformModels';
 import { buildVisibleModels, augmentPlatformWithLocal } from './useFilteredModels';
 import type { BuildVisibleModelsResult, ModelMetadataEntry } from './useFilteredModels';
 import { useConfiguredProviders } from './useConfiguredProviders';
@@ -53,6 +53,9 @@ export interface UseAllModelsResult {
   rawModels: Record<string, ProviderModelsData>;
   /** Model-name → access status map for badge display (undefined when no platform). */
   modelAccessMap: Record<string, ModelAccess> | undefined;
+  /** The models the plan holds back, by provider: listed in a picker, but
+   *  not pickable. */
+  lockedModels: Record<string, ProviderModelsData>;
   /** Platform response (null in OSS mode or when endpoint unavailable). */
   platform: PlatformModelsResponse | null;
   /** System-level default model selections from the API. */
@@ -193,11 +196,26 @@ export function useAllModels(): UseAllModelsResult {
     visible.customPairs,
   );
 
+  const lockedModels = useMemo(() => {
+    const { rawModels, validModelNames, metadata } = visible;
+    const out: Record<string, ProviderModelsData> = {};
+    for (const [provider, data] of Object.entries(rawModels)) {
+      const locked = (data.models ?? []).filter(
+        (m) =>
+          !validModelNames.has(m) &&
+          getModelAccess(metadata[m]?.tier ?? 0, metadata[m]?.provider ?? provider, platform) === 'locked',
+      );
+      if (locked.length > 0) out[provider] = { ...data, models: locked };
+    }
+    return out;
+  }, [visible, platform]);
+
   return {
     models: visible.models,
     metadata: visible.metadata,
     rawModels: visible.rawModels,
     modelAccessMap,
+    lockedModels,
     platform,
     systemDefaults,
     customModels,

@@ -175,12 +175,7 @@ export function uninstallLines(
     );
   }
   if (removed.subagents > 0 && removed.changedSubagents > 0) {
-    const many = (removed.plugins ?? 1) > 1;
-    lines.push(
-      when === 'before'
-        ? t(many ? 'plugins.bulk.subagentChangesGo' : 'plugins.pluginsPage.subagentChangesGo')
-        : t(many ? 'plugins.bulk.subagentChangesGone' : 'plugins.card.subagentChangesGone'),
-    );
+    lines.push(t(subagentChangesKey(when, (removed.plugins ?? 1) > 1)));
   }
   if (keptKeys.length === 1) lines.push(t('plugins.pluginsPage.keyStays', { key: keptKeys[0] }));
   else if (keptKeys.length > 1) lines.push(t('plugins.pluginsPage.keysStay', { n: keptKeys.length }));
@@ -199,7 +194,7 @@ export function changedSubagents(plugin: PluginInfo, views: readonly SubagentVie
   const owned = plugin.components.filter((c) => c.kind === 'subagent');
   if (!plugin.enabled) return owned.filter((c) => c.edited).length;
   if (!views) return 0;
-  const listed = views.filter((v) => v.source === 'plugin' && v.plugin?.name === plugin.name);
+  const listed = views.filter((v) => v.source === 'plugin' && v.plugin.name === plugin.name);
   const unlisted = owned.filter((c) => c.edited && !listed.some((v) => v.name === c.name));
   return listed.filter((v) => v.edited).length + unlisted.length;
 }
@@ -221,7 +216,14 @@ export function bulkUninstallConfirm(
   const changed = plugins.reduce((sum, p) => sum + changedSubagents(p, views), 0);
   const ask = t('plugins.bulk.confirmUninstallSubagents', { count });
   if (changed === 0) return ask;
-  return `${ask} ${t(count > 1 ? 'plugins.bulk.subagentChangesGo' : 'plugins.pluginsPage.subagentChangesGo')}`;
+  return `${ask} ${t(subagentChangesKey('before', count > 1))}`;
+}
+
+/** That the user's changes to the subagents go with them, before or after
+ *  the uninstall, of one plugin or several. */
+function subagentChangesKey(when: 'before' | 'after', many: boolean): string {
+  if (when === 'before') return many ? 'plugins.bulk.subagentChangesGo' : 'plugins.pluginsPage.subagentChangesGo';
+  return many ? 'plugins.bulk.subagentChangesGone' : 'plugins.card.subagentChangesGone';
 }
 
 /** "7 connectors", "20 skills", "4 connectors, 2 skills", "1 skill, 2 subagents". */

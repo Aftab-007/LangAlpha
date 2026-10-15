@@ -13,15 +13,17 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import '@testing-library/jest-dom';
 import type React from 'react';
 import { act, render, waitFor } from '@testing-library/react';
-import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate, type NavigateFunction } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createTestQueryClient } from '@/test/utils';
 import { queryKeys } from '@/lib/queryKeys';
+import { FLASH_ROUTE_STATE } from '@/hooks/useFlashWorkspace';
 
 const mocks = vi.hoisted(() => ({
   getThread: vi.fn(),
   getWorkspace: vi.fn(),
   updateThread: vi.fn(),
+  setValue: vi.fn(),
 }));
 
 vi.mock('@/lib/framer', async () => (await import('./chatViewHarness')).framerMock());
@@ -34,7 +36,17 @@ vi.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: 'light', setTheme: () => {} }),
 }));
 vi.mock('../Markdown', async () => (await import('./chatViewHarness')).markdownMock());
-vi.mock('../../../../components/ui/chat-input', async () => (await import('./chatViewHarness')).chatInputMock());
+// The harness's composer, with the one handle method a draft is seeded through.
+vi.mock('../../../../components/ui/chat-input', async () => {
+  const { useImperativeHandle } = await import('react');
+  const { default: Stub } = (await import('./chatViewHarness')).chatInputMock();
+  return {
+    default: function ChatInputStub(props: Record<string, unknown>) {
+      useImperativeHandle(props.ref as React.Ref<unknown>, () => ({ setValue: mocks.setValue }));
+      return Stub(props);
+    },
+  };
+});
 vi.mock('../../hooks/useChatMessages', async (importOriginal) =>
   (await import('./chatViewHarness')).chatMessagesMock(await importOriginal()));
 vi.mock('../../hooks/useWorkspaceFiles', async () => (await import('./chatViewHarness')).workspaceFilesMock());
@@ -73,6 +85,7 @@ beforeEach(() => {
   mocks.getThread.mockReset();
   mocks.getWorkspace.mockReset();
   mocks.updateThread.mockReset();
+  mocks.setValue.mockReset();
 });
 
 describe('ChatView: the subagents setting on a send', () => {
@@ -243,5 +256,35 @@ describe('ChatView: a new chat view taken up by a later landing send', () => {
     await waitFor(() => expect(chatState.handleSendMessage).toHaveBeenCalledTimes(1));
     expect((chatState.handleSendMessage.mock.calls[0][3] as Record<string, unknown>).subagentsAllowed).toBeUndefined();
     expect(chatInput.props?.subagentsAllowed).toBe(true);
+  });
+});
+
+describe("ChatView: a draft from Subagents' Create with the agent", () => {
+  it('lands in the composer unsent, once, and leaves the navigation state', async () => {
+    mocks.getWorkspace.mockResolvedValue({ workspace_id: WORKSPACE_ID, name: 'Harness WS', status: 'flash' });
+    chatState.threadId = '__default__';
+    let state = null as Record<string, unknown> | null;
+    const Probe = () => {
+      state = useLocation().state as Record<string, unknown> | null;
+      return null;
+    };
+    const entry = {
+      pathname: '/chat/t/__default__',
+      state: { workspaceId: WORKSPACE_ID, ...FLASH_ROUTE_STATE, draftMessage: 'Set up a subagent that ' },
+    };
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <MemoryRouter initialEntries={[entry]}>
+          <Probe />
+          <ChatView workspaceId={WORKSPACE_ID} threadId="__default__" onBack={vi.fn()} workspaceName="Harness WS" />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(state?.draftMessage).toBeUndefined());
+    expect(state?.workspaceId).toBe(WORKSPACE_ID);
+    expect(mocks.setValue).toHaveBeenCalledTimes(1);
+    expect(mocks.setValue).toHaveBeenCalledWith('Set up a subagent that ');
+    expect(chatState.handleSendMessage).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { EFFORT_LABELS, EFFORT_ORDER } from '@/lib/modelTuning';
+import { EFFORT_LABELS, effortOptions } from '@/lib/modelTuning';
 
 export interface CompactOption {
   value: string;
@@ -77,16 +77,13 @@ export function EffortSelect({
   fill?: boolean;
 }) {
   const { t } = useTranslation();
-  const ordered = EFFORT_ORDER.filter(
-    (lv) => (efforts.includes(lv) || lv === value) && EFFORT_LABELS[lv],
-  );
   return (
     <CompactSelect
       value={value}
       onChange={onChange}
       ariaLabel={ariaLabel}
       defaultLabel={defaultLabel}
-      options={ordered.map((lv) => ({ value: lv, label: t(EFFORT_LABELS[lv]) }))}
+      options={effortOptions(efforts, value).map((lv) => ({ value: lv, label: t(EFFORT_LABELS[lv]) }))}
       disabled={disabled}
       fill={fill}
     />

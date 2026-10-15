@@ -28,15 +28,15 @@ export interface BulkSpec<T, R = unknown> {
   remove: {
     verb: 'remove' | 'uninstall';
     labelKey: string;
-    confirmKey: string;
-    /** In place of `confirmKey`, for a confirm that depends on what the rows
-     *  carry. */
-    confirm?: (rows: readonly T[]) => string;
     eligible: (row: T) => boolean;
     run: (row: T) => Promise<R>;
     /** What the rows that went took with them, from what each run returned. */
     outcome?: (results: R[]) => string[];
-  };
+  } & (
+    | { confirmKey: string }
+    /** A confirm that depends on what the rows carry. */
+    | { confirm: (rows: readonly T[]) => string }
+  );
   /** Why the rows the third action leaves out are left out. */
   keptKey: string;
   /** Starts the sign-in a switch-on was refused for. */
@@ -56,7 +56,7 @@ export function buildBulkActions<T, R = unknown>(
   selected: readonly T[],
   spec: BulkSpec<T, R>,
 ): BulkActions {
-  const target = (row: T, run: () => Promise<unknown>): BulkTarget => ({
+  const target = <V>(row: T, run: () => Promise<V>): BulkTarget<V> => ({
     key: spec.key(row),
     name: spec.name(row),
     run,
@@ -91,14 +91,14 @@ export function buildBulkActions<T, R = unknown>(
       label: t(spec.remove.labelKey, { count: removable.length }),
       destructive: true,
       disabled: removable.length === 0,
-      confirmMessage: spec.remove.confirm
-        ? spec.remove.confirm(removable)
-        : t(spec.remove.confirmKey, { count: removable.length }),
+      confirmMessage:
+        'confirm' in spec.remove
+          ? spec.remove.confirm(removable)
+          : t(spec.remove.confirmKey, { count: removable.length }),
       run: () =>
         surface.run(
           removable.map((row) => target(row, () => spec.remove.run(row))),
-          // Each value came from this spec's own run, so it is an R.
-          { verb, noun: spec.noun, outcome: outcome && ((results) => outcome(results as R[])) },
+          { verb, noun: spec.noun, outcome },
         ),
     },
   ];

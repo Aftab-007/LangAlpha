@@ -101,9 +101,9 @@ export function hasDiscover(section: Section): section is InstallSection {
   return INSTALLS.includes(section);
 }
 
-/** A section with a header search and an Add menu. */
+/** A section with a header search and an Add menu: every Customize one. */
 export function hasAdd(section: Section): section is AddSection {
-  return hasDiscover(section) || section === 'subagents';
+  return CUSTOMIZE.includes(section);
 }
 
 function asSection(param: string | null | undefined): Section | null {

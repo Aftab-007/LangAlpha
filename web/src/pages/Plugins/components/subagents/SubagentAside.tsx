@@ -11,20 +11,17 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { CompactSelect, EffortSelect } from '@/components/model/EffortSelect';
 import { ModelSelector } from '@/components/model/ModelSelector';
-import type { ProviderModelsData } from '@/components/model/types';
-import { isPlatformMode } from '@/config/hostMode';
 import type { useAllModels } from '@/hooks/useAllModels';
-import { getModelAccess } from '@/hooks/usePlatformModels';
 import { useLocale } from '@/hooks/useLocale';
 import { usePreferences } from '@/hooks/usePreferences';
+import { useSearchTierAllows } from '@/hooks/useSearchTierAllows';
 import { useSkills } from '@/hooks/useSkills';
-import { useUser } from '@/hooks/useUser';
 import { cn } from '@/lib/utils';
 import { modelPrefs, modelProfile } from '@/lib/modelPreferences';
 import { EFFORT_LABELS, EFFORT_ORDER, effortLabelFor, hasEffortOptions, resolveTuning } from '@/lib/modelTuning';
+import type { SubagentEdit } from '@/hooks/useSubagents';
 import type {
   SubagentAudience,
-  SubagentFields,
   SubagentsResponse,
   SubagentTool,
   SubagentView,
@@ -40,10 +37,11 @@ import {
   audienceChoice,
   baseSide,
   brokerageText,
-  fieldWrite,
+  effortOrSetting,
   hasProblem,
   memoryText,
   modelName,
+  offerBasePin,
   orderedTools,
   preferredSkillOptions,
   sameTools,
@@ -68,32 +66,24 @@ export interface AsideProps {
   view: SubagentView;
   data: SubagentsResponse;
   models: SubagentModels;
-  write: (fields: SubagentFields) => void;
-}
-
-/** The model the plan holds back, listed but not pickable in its group. */
-function useLockedModels(models: SubagentModels): Record<string, ProviderModelsData> {
-  const { rawModels, validModelNames, metadata, platform } = models;
-  return useMemo(() => {
-    const out: Record<string, ProviderModelsData> = {};
-    for (const [provider, data] of Object.entries(rawModels)) {
-      const locked = (data.models ?? []).filter(
-        (m) =>
-          !validModelNames.has(m) &&
-          getModelAccess(metadata[m]?.tier ?? 0, metadata[m]?.provider ?? provider, platform) === 'locked',
-      );
-      if (locked.length > 0) out[provider] = { ...data, models: locked };
-    }
-    return out;
-  }, [rawModels, validModelNames, metadata, platform]);
+  write: (edit: SubagentEdit) => void;
 }
 
 export function ModelBlock({ view, models, write }: AsideProps) {
   const { t } = useTranslation();
-  const locked = useLockedModels(models);
   const { metadata } = models;
   const unavailable = hasProblem(view, 'model_unavailable');
   const base = view.base;
+  const offered = offerBasePin(models.models, models.lockedModels, base?.model ?? null);
+
+  // As a provider change does the depth: a set effort stays if the new model
+  // offers it and goes if not, since a save holds it to that model's ladder.
+  // Following the thread keeps any level, which the turn steps down.
+  function pickModel(next: string) {
+    const keep = !next || !view.effort || (metadata[next]?.reasoning_efforts ?? []).includes(view.effort);
+    write({ model: next || null, ...(keep ? {} : { effort: null }) });
+  }
+
   return (
     <DetailAsideBlock
       title={t('plugins.subagents.model')}
@@ -107,12 +97,12 @@ export function ModelBlock({ view, models, write }: AsideProps) {
         ariaLabel={t('plugins.subagents.modelAria', { name: view.name })}
         nameOf={(m) => modelName(m, metadata)}
         value={view.model ?? ''}
-        onChange={(v) => write({ model: fieldWrite(view, 'model', v || null) })}
-        models={models.models}
+        onChange={pickModel}
+        models={offered.models}
         placeholder={t('plugins.subagents.threadsModel')}
         modelAccess={models.modelAccessMap}
         metadata={metadata}
-        disabledModels={locked}
+        disabledModels={offered.locked}
         // The server says whether a saved model still runs; one this picker
         // doesn't list (a key the user can't pick today) may well still run.
         missingLabel={(m) =>
@@ -196,19 +186,15 @@ export function EffortBlock({ view, models, write }: AsideProps) {
   }
 
   const base = view.base;
-  const baseEffort = base
-    ? (effortLabelFor(t, base.effort) ??
-      (pinned ? t('plugins.subagents.modelsSetting') : t('plugins.subagents.threadsSetting')))
-    : null;
   return (
     <DetailAsideBlock
       title={t('plugins.subagents.effort')}
-      side={base && baseEffort ? baseSide(t, view, baseEffort) : undefined}
+      side={base ? baseSide(t, view, effortOrSetting(t, base.effort, pinned)) : undefined}
     >
       {hasEffortOptions(efforts, stored) ? (
         <EffortSelect
           value={stored}
-          onChange={(v) => write({ effort: fieldWrite(view, 'effort', v || null) })}
+          onChange={(v) => write({ effort: v || null })}
           ariaLabel={t('plugins.subagents.effortAria', { name: view.name })}
           defaultLabel={defaultLabel}
           efforts={efforts}
@@ -235,10 +221,7 @@ function PresetMenu({ view, write }: Pick<AsideProps, 'view' | 'write'>) {
         {PRESETS.map((preset) => {
           const on = sameTools(view.tools, preset.tools);
           return (
-            <DropdownMenuItem
-              key={preset.id}
-              onSelect={() => write({ tools: fieldWrite(view, 'tools', [...preset.tools]) })}
-            >
+            <DropdownMenuItem key={preset.id} onSelect={() => write({ tools: [...preset.tools] })}>
               <span className="flex min-w-0 flex-col">
                 <span>{t(preset.label)}</span>
                 <span className="text-[0.6875rem]" style={{ color: 'var(--color-text-tertiary)' }}>
@@ -255,17 +238,17 @@ function PresetMenu({ view, write }: Pick<AsideProps, 'view' | 'write'>) {
 }
 
 /**
- * Its own search provider and depth, by Settings' rules: a level above the
- * plan is listed but not pickable, Depth shows for a provider with more than
- * one level and also to clear a saved level the provider lacks, and a
- * provider change drops a depth the new one lacks. Untouched, both follow the
- * user's own, which the hint names.
+ * Its own search provider and depth. As in Settings, a level above the plan
+ * is listed but not pickable, and Depth shows for a provider with more than
+ * one level, and also to clear a saved level the provider lacks. A provider
+ * change keeps the depth if the new provider offers it and drops it if not,
+ * where Settings drops it on Default and on any provider with more than one
+ * level. Untouched, both follow the user's own, which the hint names.
  */
 function SearchSettings({ view, data, models, write }: AsideProps) {
   const { t } = useTranslation();
-  const { user } = useUser();
+  const tierAllows = useSearchTierAllows();
   const catalog = models.searchProviders ?? {};
-  const tierAllows = (minTier: number) => !isPlatformMode || (user?.access_tier ?? -1) >= minTier;
   const providerName = (name: string) => catalog[name]?.display_name ?? name;
   const levelName = (provider: string | null, level: string) => {
     const info = provider ? catalog[provider]?.depths.find((d) => d.name === level) : undefined;
@@ -320,10 +303,7 @@ function SearchSettings({ view, data, models, write }: AsideProps) {
     const nextProvider = next || yours.search_provider;
     const offered = nextProvider ? (catalog[nextProvider]?.depths ?? []) : [];
     const keep = !view.search_depth || offered.some((d) => d.name === view.search_depth);
-    write({
-      search_provider: fieldWrite(view, 'search_provider', next || null),
-      ...(keep ? {} : { search_depth: fieldWrite(view, 'search_depth', null) }),
-    });
+    write({ search_provider: next || null, ...(keep ? {} : { search_depth: null }) });
   }
 
   const yoursLine = yours.search_provider
@@ -360,7 +340,7 @@ function SearchSettings({ view, data, models, write }: AsideProps) {
           <span className="sa-search-label">{t('plugins.subagents.depth')}</span>
           <CompactSelect
             value={view.search_depth ?? ''}
-            onChange={(v) => write({ search_depth: fieldWrite(view, 'search_depth', v || null) })}
+            onChange={(v) => write({ search_depth: v || null })}
             ariaLabel={t('plugins.subagents.depth')}
             defaultLabel={depthDefault}
             options={depthOptions}
@@ -396,7 +376,7 @@ export function ToolsBlock(props: AsideProps) {
   const has = (tool: SubagentTool) => view.tools.includes(tool);
   function toggle(tool: SubagentTool) {
     const next = has(tool) ? view.tools.filter((x) => x !== tool) : orderedTools([...view.tools, tool]);
-    write({ tools: fieldWrite(view, 'tools', next) });
+    write({ tools: next });
   }
   const base = view.base;
   const hint = !base
@@ -419,7 +399,7 @@ export function ToolsBlock(props: AsideProps) {
                   desc={t('plugins.subagents.connectorsDesc')}
                   enabled={view.connectors}
                   disabled={false}
-                  onToggle={() => write({ connectors: fieldWrite(view, 'connectors', !view.connectors) })}
+                  onToggle={() => write({ connectors: !view.connectors })}
                 />
               </ul>
             ) : null}
@@ -490,7 +470,7 @@ export function BrokeragesBlock({ view, write }: Pick<AsideProps, 'view' | 'writ
           enabled={access && codeOn}
           disabled={!codeOn}
           locked={!codeOn}
-          onToggle={() => write({ brokerages: fieldWrite(view, 'brokerages', access ? 'off' : 'on') })}
+          onToggle={() => write({ brokerages: access ? 'off' : 'on' })}
         />
       </ul>
     </DetailAsideBlock>
@@ -515,7 +495,7 @@ export function MemoryBlock({ view, write }: Pick<AsideProps, 'view' | 'write'>)
           desc={t('plugins.subagents.memoryDesc')}
           enabled={view.memory}
           disabled={false}
-          onToggle={() => write({ memory: fieldWrite(view, 'memory', !view.memory) })}
+          onToggle={() => write({ memory: !view.memory })}
         />
       </ul>
     </DetailAsideBlock>
@@ -536,9 +516,8 @@ export function PreferredBlock({ view, data, write }: AsideProps) {
     ? baseSide(t, view, shipped.length > 0 ? shipped.join(t('plugins.shell.summary.sep')) : t('plugins.subagents.none'))
     : undefined;
 
-  const setConnectors = (next: string[]) =>
-    write({ preferred_connectors: fieldWrite(view, 'preferred_connectors', next) });
-  const setSkills = (next: string[]) => write({ preferred_skills: fieldWrite(view, 'preferred_skills', next) });
+  const setConnectors = (next: string[]) => write({ preferred_connectors: next });
+  const setSkills = (next: string[]) => write({ preferred_skills: next });
 
   return (
     <DetailAsideBlock title={t('plugins.subagents.preferred')} side={side}>

@@ -10,13 +10,13 @@ import {
   useDeleteSubagent,
   usePatchSubagent,
   useSaveSubagentText,
+  type SubagentEdit,
 } from '@/hooks/useSubagents';
 import {
   formatApiErrorDetail,
   isSubagentVersionConflict,
   subagentFieldErrors,
   type SubagentFieldError,
-  type SubagentFields,
   type SubagentsResponse,
   type SubagentView,
 } from '@/pages/ChatAgent/utils/api';
@@ -45,16 +45,20 @@ import {
   baseBannerText,
   byteLength,
   capitalize,
-  charLength,
-  fieldWrite,
   fieldsPhrase,
   isCustom,
   isOrphan,
   isResettable,
   offersAudience,
   promptSectionsAsMarkdown,
+  removalCopy,
+  resetLabel,
   sourceText,
+  untouchedNote,
+  textLimits,
+  type SubagentText,
 } from './subagentText';
+import { DescriptionField, InstructionsField } from './TextFields';
 
 /**
  * A subagent's page. A custom one is the user's text, edited here and saved
@@ -83,14 +87,14 @@ export function SubagentDetail({
   const patch = usePatchSubagent();
   const custom = isCustom(view);
   const orphan = isOrphan(view);
-  const write = (fields: SubagentFields) => patch.mutate({ name: view.name, fields });
+  const write = (edit: SubagentEdit) => patch.mutate({ name: view.name, edit });
   const aside = { view, data, models, write };
   const provenance = useProvenance(view);
 
   // An override left behind by a plugin that is gone keeps its name, but
   // there is no plugin page to open.
   const source =
-    view.source === 'plugin' && view.plugin && view.plugin.installed !== false ? (
+    view.source === 'plugin' && view.plugin.installed !== false ? (
       // One span: the meta line is a flex row, which would split the text
       // around the link into items and drop the spaces beside it.
       <span>
@@ -102,7 +106,7 @@ export function SubagentDetail({
               <button
                 type="button"
                 className="pp-note-link pp-meta-link"
-                onClick={() => view.plugin && onOpenPlugin(view.plugin.name)}
+                onClick={() => onOpenPlugin(view.plugin.name)}
               />
             ),
           }}
@@ -146,7 +150,7 @@ export function SubagentDetail({
               enabled={view.enabled && !orphan}
               name={view.name}
               disabled={orphan}
-              onToggle={() => write({ enabled: fieldWrite(view, 'enabled', !view.enabled) })}
+              onToggle={() => write({ enabled: !view.enabled })}
             />
           }
         />
@@ -297,26 +301,11 @@ function Footer({ view, onDuplicate }: { view: SubagentView; onDuplicate: () => 
   const custom = isCustom(view);
   const orphan = isOrphan(view);
   const fields = fieldsPhrase(t, view.user_fields, locale, formatList);
-  const builtin = view.source === 'builtin' || view.source === 'deployment';
 
   if (asking) {
-    const resetting = !custom && !orphan;
     return (
       <ConfirmStrip
-        message={
-          resetting
-            ? fields
-              ? t('plugins.subagents.resetConfirm', { name: view.name, fields })
-              : t('plugins.subagents.resetConfirmPlain', { name: view.name })
-            : t('plugins.subagents.removeConfirm', { name: view.name })
-        }
-        confirmLabel={
-          remove.isPending
-            ? t('common.loading')
-            : resetting
-              ? t('plugins.subagents.resetYes')
-              : t('plugins.subagents.removeYes')
-        }
+        {...removalCopy(t, view, fields, remove.isPending)}
         cancelLabel={t('plugins.skills.deleteConfirmNo')}
         pending={remove.isPending}
         onConfirm={() => remove.mutate(view.name, { onSettled: () => setAsking(false) })}
@@ -346,7 +335,7 @@ function Footer({ view, onDuplicate }: { view: SubagentView; onDuplicate: () => 
     return (
       <div className="pp-verbs">
         <PageButton icon={<RotateCcw />} onClick={() => setAsking(true)}>
-          {builtin ? t('plugins.subagents.resetToBuiltIn') : t('plugins.subagents.resetToDefault')}
+          {resetLabel(t, view)}
         </PageButton>
         <p className="pp-note">
           {fields
@@ -356,21 +345,10 @@ function Footer({ view, onDuplicate }: { view: SubagentView; onDuplicate: () => 
       </div>
     );
   }
-  return (
-    <p className="pp-note">
-      {view.source === 'plugin' && view.plugin
-        ? t('plugins.subagents.pluginNote', { plugin: view.plugin.display_name })
-        : t('plugins.subagents.builtinNote')}
-    </p>
-  );
+  return <p className="pp-note">{untouchedNote(t, view)}</p>;
 }
 
-interface Text {
-  description: string;
-  instructions: string;
-}
-
-const sameText = (a: Text, b: Text) => a.description === b.description && a.instructions === b.instructions;
+const sameText = (a: SubagentText, b: SubagentText) => a.description === b.description && a.instructions === b.instructions;
 
 /**
  * A custom subagent's own words, saved on Save. The draft remembers the text
@@ -382,11 +360,9 @@ function TextFields({ view, data }: { view: SubagentView; data: SubagentsRespons
   const { t } = useTranslation();
   const locale = useLocale();
   const save = useSaveSubagentText();
-  const descId = useId();
-  const instrId = useId();
-  const server: Text = { description: view.description, instructions: view.instructions };
-  const [origin, setOrigin] = useState<Text>(server);
-  const [draft, setDraft] = useState<Text>(server);
+  const server: SubagentText = { description: view.description, instructions: view.instructions };
+  const [origin, setOrigin] = useState<SubagentText>(server);
+  const [draft, setDraft] = useState<SubagentText>(server);
   const [errors, setErrors] = useState<SubagentFieldError[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -404,11 +380,7 @@ function TextFields({ view, data }: { view: SubagentView; data: SubagentsRespons
   // "your draft is kept". The line stays for a refusal the text survived.
   const shownFailure = conflict ? null : failure;
 
-  const { description_max: descMax, instructions_max_bytes: instrMax } = data.limits;
-  const descUsed = charLength(draft.description);
-  const instrUsed = byteLength(draft.instructions);
-  const descOver = descUsed > descMax;
-  const instrOver = instrUsed > instrMax;
+  const { descUsed, descMax, descOver, instrUsed, instrMax, instrOver } = textLimits(draft, data.limits);
   // The agent routes on the description, so it can't go; the instructions can.
   const blank = !draft.description.trim();
   const matches = view.problems.find((p) => p.code === 'description_matches');
@@ -418,7 +390,7 @@ function TextFields({ view, data }: { view: SubagentView; data: SubagentsRespons
     setFailure(null);
     const sent = draft;
     save.mutate(
-      { name: view.name, fields: { description: sent.description, instructions: sent.instructions } },
+      { name: view.name, edit: { description: sent.description, instructions: sent.instructions } },
       {
         onSuccess: (saved) => {
           const text = { description: saved.description, instructions: saved.instructions };
@@ -442,55 +414,32 @@ function TextFields({ view, data }: { view: SubagentView; data: SubagentsRespons
     );
   }
 
-  const set = (patch: Partial<Text>) => {
+  const set = (patch: Partial<SubagentText>) => {
     setDraft((prev) => ({ ...prev, ...patch }));
     setFailure(null);
   };
 
   return (
     <div className="sa-fields">
-      <div>
-        <div className="sa-field-head">
-          <label htmlFor={descId}>{t('plugins.subagents.whenToUse')}</label>
-          <span className={descOver ? 'sa-field-aside is-over' : matches ? 'sa-field-aside is-warn' : 'sa-field-aside'}>
-            {matches && !descOver
-              ? t('plugins.subagents.sayWhen', { name: matches.detail ?? '' })
-              : t('plugins.subagents.whenToUseHint')}
-            {t('plugins.subagents.sep')}
-            {/* One unit: on a phone the hint wraps, and "40 /" over "400" reads as two numbers. */}
-            <span className="whitespace-nowrap">
-              {t('plugins.subagents.charCount', { used: descUsed, max: descMax })}
-            </span>
-          </span>
-        </div>
-        <textarea
-          id={descId}
-          className="sa-input"
-          rows={3}
-          value={draft.description}
-          onChange={(e) => set({ description: e.target.value })}
-        />
-        {errorFor('description') && <p className="sa-field-error">{errorFor('description')}</p>}
-      </div>
-      <div>
-        <div className="sa-field-head">
-          <label htmlFor={instrId}>{t('plugins.subagents.instructions')}</label>
-          <span className={instrOver ? 'sa-field-aside is-over' : 'sa-field-aside'}>
-            {t('plugins.subagents.markdownSize', {
-              used: formatBytes(instrUsed, locale),
-              max: formatBytes(instrMax, locale),
-            })}
-          </span>
-        </div>
-        <textarea
-          id={instrId}
-          className="sa-input is-code"
-          value={draft.instructions}
-          spellCheck={false}
-          onChange={(e) => set({ instructions: e.target.value })}
-        />
-        {errorFor('instructions') && <p className="sa-field-error">{errorFor('instructions')}</p>}
-      </div>
+      <DescriptionField
+        value={draft.description}
+        onChange={(description) => set({ description })}
+        used={descUsed}
+        max={descMax}
+        over={descOver}
+        sameAs={matches ? (matches.detail ?? '') : null}
+        error={errorFor('description')}
+      />
+      <InstructionsField
+        value={draft.instructions}
+        onChange={(instructions) => set({ instructions })}
+        over={instrOver}
+        aside={t('plugins.subagents.markdownSize', {
+          used: formatBytes(instrUsed, locale),
+          max: formatBytes(instrMax, locale),
+        })}
+        error={errorFor('instructions')}
+      />
       {conflict && (
         <div className="sa-conflict" role="status">
           {/* The saved text is the newer write, so its writer is who moved it:

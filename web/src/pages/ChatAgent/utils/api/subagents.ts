@@ -7,7 +7,7 @@
  * carry the view's `version`, and a stale one is refused with a 409 so two
  * writers (this pane, the agent editing the file) never overwrite each other.
  */
-import { api } from '@/api/client';
+import { api, ApiError } from '@/api/client';
 import { apiErrorCoded, apiErrorObject, apiErrorStatus } from './errors';
 
 export type SubagentTool = 'web' | 'market_data' | 'code' | 'shell';
@@ -54,13 +54,23 @@ export interface SubagentBaseValues {
   enabled: boolean;
 }
 
-export interface SubagentView {
+export interface SubagentPlugin {
+  name: string;
+  display_name: string;
+  /** False on an override whose plugin is gone, and absent from a server
+   *  that predates it. */
+  installed?: boolean;
+}
+
+/** The server reads both from one key, so a plugin's comes with its plugin
+ *  and no other source has one. */
+type SubagentOrigin =
+  | { source: 'plugin'; plugin: SubagentPlugin }
+  | { source: 'builtin' | 'deployment' | 'custom'; plugin: null };
+
+export type SubagentView = SubagentOrigin & {
   name: string;
   kind: 'base' | 'custom';
-  source: 'builtin' | 'deployment' | 'plugin' | 'custom';
-  /** `installed` is false on an override whose plugin is gone, and absent
-   *  from a server that predates it. */
-  plugin: { name: string; display_name: string; installed?: boolean } | null;
   /** A base with an override row. */
   edited: boolean;
   /** Keys the user's row sets. */
@@ -93,7 +103,7 @@ export interface SubagentView {
   file: string | null;
   /** Send back on PUT and DELETE. */
   version: string;
-}
+};
 
 export interface SubagentConnector {
   name: string;
@@ -170,9 +180,7 @@ async function whenReady<T>(call: () => Promise<T>): Promise<T> {
       return await call();
     } catch (err) {
       if (apiErrorStatus(err) !== 503 || attempt >= NOT_READY_TRIES) throw err;
-      const header = (err as { response?: { headers?: Record<string, string> } }).response?.headers?.[
-        'retry-after'
-      ];
+      const header = err instanceof ApiError ? err.response?.headers['retry-after'] : undefined;
       const seconds = Math.min(Number.parseInt(header ?? '', 10) || 2, 10);
       await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
     }

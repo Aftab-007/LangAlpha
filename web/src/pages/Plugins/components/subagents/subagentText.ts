@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next';
+import type { ProviderModelsData } from '@/components/model/types';
 import { getModelDisplayName } from '@/components/ui/chat-input.helpers';
 import { effortLabelFor } from '@/lib/modelTuning';
 import type { ModelMetadataEntry } from '@/hooks/useFilteredModels';
@@ -13,7 +14,6 @@ import type {
   SubagentView,
   SubagentsResponse,
 } from '@/pages/ChatAgent/utils/api';
-import { SUBAGENT_INHERIT } from '@/pages/ChatAgent/utils/api';
 
 /**
  * The Subagents pane's vocabulary: what each problem, tool, field and source
@@ -170,7 +170,7 @@ export function audienceFacts(t: TFunction, audiences: readonly SubagentAudience
 /** Where a subagent comes from, as its Info and header say it. */
 export function sourceText(t: TFunction, view: SubagentView): string {
   if (view.source === 'custom') return t('plugins.subagents.source.custom');
-  if (view.source === 'plugin' && view.plugin) {
+  if (view.source === 'plugin') {
     return t('plugins.subagents.source.plugin', { plugin: view.plugin.display_name });
   }
   return t('plugins.subagents.source.builtin');
@@ -180,7 +180,7 @@ export function sourceText(t: TFunction, view: SubagentView): string {
  *  langalpha's built-ins, the plugin that ships it, or the server's own
  *  configuration. */
 export function baseBannerText(t: TFunction, view: SubagentView): string {
-  if (view.source === 'plugin' && view.plugin) {
+  if (view.source === 'plugin') {
     return t('plugins.subagents.baseBannerPlugin', { plugin: view.plugin.display_name });
   }
   if (view.source === 'deployment') return t('plugins.subagents.baseBannerDeployment');
@@ -197,7 +197,7 @@ export function modelName(key: string, metadata?: Record<string, ModelMetadataEn
 /** "Built in: X" or "From Filings Toolkit: X", the side of a base's aside
  *  heading. */
 export function baseSide(t: TFunction, view: SubagentView, value: string): string {
-  return view.source === 'plugin' && view.plugin
+  return view.source === 'plugin'
     ? t('plugins.subagents.sideFrom', { plugin: view.plugin.display_name, value })
     : t('plugins.subagents.sideBuiltIn', { value });
 }
@@ -239,6 +239,93 @@ export function hasProblem(view: SubagentView, code: SubagentProblemCode, detail
  *  written against a base the name no longer resolves to, which no turn reads. */
 export function isResettable(view: SubagentView): boolean {
   return view.kind === 'base' && !isOrphan(view) && (view.edited || hasProblem(view, 'base_removed'));
+}
+
+/** What taking a row away does: a custom one or an orphan goes, and a base
+ *  the user changed loses only their row. */
+function removal(view: SubagentView): 'remove' | 'reset' {
+  return isCustom(view) || isOrphan(view) ? 'remove' : 'reset';
+}
+
+/** The confirm for `removal`, its message naming `fields`, the ones a reset
+ *  drops. */
+export function removalCopy(
+  t: TFunction,
+  view: SubagentView,
+  fields: string | null,
+  busy: boolean,
+): { message: string; confirmLabel: string } {
+  const reset = removal(view) === 'reset';
+  return {
+    message: !reset
+      ? t('plugins.subagents.removeConfirm', { name: view.name })
+      : fields
+        ? t('plugins.subagents.resetConfirm', { name: view.name, fields })
+        : t('plugins.subagents.resetConfirmPlain', { name: view.name }),
+    confirmLabel: busy
+      ? t('common.loading')
+      : reset
+        ? t('plugins.subagents.resetYes')
+        : t('plugins.subagents.removeYes'),
+  };
+}
+
+export function resetLabel(t: TFunction, view: SubagentView): string {
+  return view.source === 'builtin' || view.source === 'deployment'
+    ? t('plugins.subagents.resetToBuiltIn')
+    : t('plugins.subagents.resetToDefault');
+}
+
+/** Why a base the user has not changed has nothing to remove or reset. */
+export function untouchedNote(t: TFunction, view: SubagentView): string {
+  return view.source === 'plugin'
+    ? t('plugins.subagents.pluginNote', { plugin: view.plugin.display_name })
+    : t('plugins.subagents.builtinNote');
+}
+
+/** An effort's name, or what an unset one runs: the pinned model's own
+ *  setting, or the thread's. */
+export function effortOrSetting(t: TFunction, effort: string | null, pinned: string | null): string {
+  return (
+    effortLabelFor(t, effort) ??
+    (pinned ? t('plugins.subagents.modelsSetting') : t('plugins.subagents.threadsSetting'))
+  );
+}
+
+type ModelGroups = Record<string, ProviderModelsData>;
+
+/**
+ * A base's picker with the base's own model pickable even above the plan.
+ * The turn runs a base's pin whatever the plan, and picking it drops the
+ * user's key, so it is the one way back to it short of a whole reset.
+ */
+export function offerBasePin(
+  models: ModelGroups,
+  locked: ModelGroups,
+  pin: string | null,
+): { models: ModelGroups; locked: ModelGroups } {
+  const provider = pin ? Object.keys(locked).find((p) => locked[p].models?.includes(pin)) : undefined;
+  if (!pin || !provider) return { models, locked };
+  const nextLocked = { ...locked };
+  const rest = (locked[provider].models ?? []).filter((m) => m !== pin);
+  if (rest.length > 0) nextLocked[provider] = { ...locked[provider], models: rest };
+  else delete nextLocked[provider];
+  const group = models[provider] ?? { ...locked[provider], models: [] };
+  return {
+    models: { ...models, [provider]: { ...group, models: [...(group.models ?? []), pin] } },
+    locked: nextLocked,
+  };
+}
+
+/**
+ * The model a copy of `source` keeps. A copy is the user's own subagent and
+ * held to the plan, so a pin its source runs only as a base's leaves it on
+ * the thread's model, as the server leaves it out.
+ */
+export function copiedModel(source: SubagentView | null, locked: ModelGroups): string | null {
+  const pin = source?.model ?? null;
+  if (!source || !pin || hasProblem(source, 'model_unavailable')) return pin;
+  return Object.values(locked).some((g) => g.models?.includes(pin)) ? null : pin;
 }
 
 /** A skill a Preferred chip can name, and whether it is switched off. */
@@ -301,49 +388,6 @@ export function modelMeta(
   return parts;
 }
 
-/** The base's own value for a field, or undefined on a custom subagent. */
-export function baseValue<K extends keyof SubagentBaseValues>(
-  view: SubagentView,
-  key: K,
-): SubagentBaseValues[K] | undefined {
-  return view.base ? view.base[key] : undefined;
-}
-
-/** Fields where null means "follow the thread" (or the user's own setting). */
-const INHERITABLE: ReadonlySet<keyof SubagentBaseValues> = new Set([
-  'model',
-  'effort',
-  'search_provider',
-  'search_depth',
-]);
-
-/** Lists the agent reads in order: preferred connectors lead its roster and
- *  preferred skills preload in it. The others are sets. */
-const ORDERED: ReadonlySet<string> = new Set(['preferred_connectors', 'preferred_skills']);
-
-/**
- * What one control sends. On a base, a value equal to what the base ships
- * with goes as null, which drops the user's key rather than pinning a copy
- * of today's base value that would hold once the base moves on. Choosing to
- * follow the thread on a base that pins a value goes as `inherit`, since a
- * null there would clear the key and land back on the pin.
- */
-export function fieldWrite<K extends keyof SubagentBaseValues>(
-  view: SubagentView,
-  key: K,
-  value: SubagentBaseValues[K],
-): SubagentBaseValues[K] | null {
-  if (!view.base) return value;
-  const shipped = view.base[key];
-  const same = Array.isArray(value) && Array.isArray(shipped)
-    ? value.length === shipped.length &&
-      value.every((v, i) => (ORDERED.has(key) ? (shipped as unknown[])[i] === v : (shipped as unknown[]).includes(v)))
-    : value === shipped;
-  if (same) return null;
-  if (value === null && INHERITABLE.has(key)) return SUBAGENT_INHERIT as SubagentBaseValues[K];
-  return value;
-}
-
 const SECTION_OPEN = /^\s*<([a-z][a-z0-9_-]*)>\s*$/i;
 const SECTION_CLOSE = /^\s*<\/([a-z][a-z0-9_-]*)>\s*$/i;
 
@@ -383,4 +427,15 @@ export function charLength(text: string): number {
 
 export function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
+}
+
+/** A custom subagent's two texts, the page's editor and the New form alike. */
+export type SubagentText = Pick<SubagentView, 'description' | 'instructions'>;
+
+/** How much of each limit a draft takes, counted as the server counts it. */
+export function textLimits(draft: SubagentText, limits: SubagentsResponse['limits']) {
+  const descUsed = charLength(draft.description);
+  const instrUsed = byteLength(draft.instructions);
+  const { description_max: descMax, instructions_max_bytes: instrMax } = limits;
+  return { descUsed, descMax, descOver: descUsed > descMax, instrUsed, instrMax, instrOver: instrUsed > instrMax };
 }

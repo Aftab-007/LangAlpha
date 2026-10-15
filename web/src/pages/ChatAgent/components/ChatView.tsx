@@ -1261,45 +1261,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     }
   }, [location.state, workspaceId, threadId, isLoading, isLoadingHistory, handleSendMessage, navigate, location.pathname, isActive, subagentsToSend]);
 
-  // Re-seed the widget context deck from navigation state when there's no
+  // Re-seed the composer from navigation state when there's no
   // initialMessage (the auto-send branch above already consumes them inline).
   // Used by the ContextOverflowPill click handoff: dashboard → /chat with
-  // queued widget cards but no auto-send.
-  const widgetSnapshotReseedRef = useRef(false);
+  // queued widget cards but no auto-send. And by Plugins → Subagents' "Create
+  // with the agent", which hands it a sentence to finish rather than send.
+  const composerReseedRef = useRef(false);
   useEffect(() => {
-    if (widgetSnapshotReseedRef.current) return;
+    if (composerReseedRef.current) return;
     const navState = location.state as LocationState | null;
     const snaps = navState?.widgetSnapshots;
-    if (!snaps?.length || navState?.initialMessage) return;
-    widgetSnapshotReseedRef.current = true;
-    snaps.forEach((s) => chatInputRef.current?.addWidgetSnapshot(s));
-    navigate(location.pathname, { replace: true, state: { ...navState, widgetSnapshots: undefined } });
-  }, [location.state, location.pathname, navigate]);
-
-  // A composer handed a sentence to finish rather than a message to send
-  // (Plugins → Subagents' "Create with the agent"). The input can mount a
-  // few frames after the route does, so the seed waits for it, and the state
-  // is spent only once it lands.
-  const draftSeedRef = useRef(false);
-  useEffect(() => {
-    if (draftSeedRef.current) return;
-    const navState = location.state as LocationState | null;
     const draft = navState?.draftMessage;
-    if (!draft || navState?.initialMessage) return;
-    let frame = 0;
-    let tries = 0;
-    const seed = () => {
-      const input = chatInputRef.current;
-      if (!input) {
-        if (++tries < 120) frame = requestAnimationFrame(seed);
-        return;
-      }
-      draftSeedRef.current = true;
-      input.setValue(draft);
-      navigate(location.pathname, { replace: true, state: { ...navState, draftMessage: undefined } });
-    };
-    seed();
-    return () => cancelAnimationFrame(frame);
+    if ((!snaps?.length && !draft) || navState?.initialMessage) return;
+    composerReseedRef.current = true;
+    snaps?.forEach((s) => chatInputRef.current?.addWidgetSnapshot(s));
+    if (draft) chatInputRef.current?.setValue(draft);
+    navigate(location.pathname, { replace: true, state: { ...navState, widgetSnapshots: undefined, draftMessage: undefined } });
   }, [location.state, location.pathname, navigate]);
 
 

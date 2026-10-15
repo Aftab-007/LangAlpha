@@ -46,7 +46,6 @@ export interface ShellData {
   skills: { total: number; off: number } | null;
   subagents: {
     total: number;
-    off: number;
     /** Rows with a problem, which the Needs attention pill counts too. */
     attention: number;
     /** What the agent itself runs on, which the summary names. */
@@ -154,7 +153,6 @@ export function useShellData(): ShellData {
     subagents: subagentData
       ? {
           total: subagentData.subagents.length,
-          off: subagentData.subagents.filter((s) => !s.enabled).length,
           attention: subagentData.subagents.filter((s) => s.problems.length > 0).length,
           main: subagentData.main,
         }

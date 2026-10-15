@@ -27,9 +27,9 @@ import {
   RESERVED_NAMES,
   audienceFacts,
   brokerageText,
-  byteLength,
-  charLength,
+  copiedModel,
   countCustom,
+  effortOrSetting,
   isCustom,
   isOrphan,
   memoryText,
@@ -37,7 +37,10 @@ import {
   modelName,
   reachesNoAgent,
   toolsSummary,
+  textLimits,
+  type SubagentText,
 } from './subagentText';
+import { DescriptionField, InstructionsField } from './TextFields';
 
 /**
  * A new custom subagent: Blank, or a copy of one the user already has. A copy
@@ -52,11 +55,6 @@ import {
 const BLANK_TOOLS: readonly SubagentTool[] = ['web', 'market_data', 'code', 'shell'];
 // The fields the form shows an error under; any other is said by the button.
 const PLACED_FIELDS = new Set(['name', 'description', 'instructions', 'start_from']);
-
-interface Text {
-  description: string;
-  instructions: string;
-}
 
 export function SubagentNew({
   data,
@@ -76,8 +74,6 @@ export function SubagentNew({
   const locale = useLocale();
   const labelId = useId();
   const nameId = useId();
-  const descId = useId();
-  const instrId = useId();
   const allWorkspaces = useAllWorkspacesAgent();
   const create = useCreateSubagent();
 
@@ -86,14 +82,14 @@ export function SubagentNew({
     (s) => !isOrphan(s) && (!isCustom(s) || s.name === startFrom),
   );
   const find = (name: string | null) => (name ? (sources.find((s) => s.name === name) ?? null) : null);
-  const seed = (name: string | null): Text => {
+  const seed = (name: string | null): SubagentText => {
     const source = find(name);
     return source ? { description: source.description, instructions: source.instructions } : { description: '', instructions: '' };
   };
 
   const [from, setFrom] = useState<string | null>(find(startFrom)?.name ?? null);
   const [name, setName] = useState('');
-  const [draft, setDraft] = useState<Text>(() => seed(find(startFrom)?.name ?? null));
+  const [draft, setDraft] = useState<SubagentText>(() => seed(find(startFrom)?.name ?? null));
   const [errors, setErrors] = useState<SubagentFieldError[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const source = find(from);
@@ -123,12 +119,8 @@ export function SubagentNew({
           : null;
   const serverError = (field: string) => errors.find((e) => e.field === field)?.message ?? null;
 
-  const { description_max: descMax, instructions_max_bytes: instrMax, max_custom: maxCustom } = data.limits;
-  const descUsed = charLength(draft.description);
-  const instrUsed = byteLength(draft.instructions);
-  const descOver = descUsed > descMax;
-  const instrOver = instrUsed > instrMax;
-  const matchesSource = !!source && draft.description.trim() === source.description.trim();
+  const { descUsed, descMax, descOver, instrUsed, instrMax, instrOver } = textLimits(draft, data.limits);
+  const maxCustom = data.limits.max_custom;
   const full = countCustom(data) >= maxCustom;
   const ready =
     !!trimmed &&
@@ -211,7 +203,7 @@ export function SubagentNew({
                   name={s.name}
                   meta={startMeta(t, s, models, locale)}
                   line={
-                    s.source === 'plugin' && s.plugin
+                    s.source === 'plugin'
                       ? t('plugins.subagents.fromPluginLine', { plugin: s.plugin.display_name, description: s.description })
                       : s.description
                   }
@@ -256,38 +248,22 @@ export function SubagentNew({
               <p className="sa-field-error">{nameError ?? serverError('name')}</p>
             )}
           </div>
-          <div>
-            <div className="sa-field-head">
-              <label htmlFor={descId}>{t('plugins.subagents.whenToUse')}</label>
-              <span
-                className={cn(
-                  'sa-field-aside',
-                  descOver ? 'is-over' : matchesSource && 'is-warn',
-                )}
-              >
-                {matchesSource && !descOver && source
-                  ? t('plugins.subagents.sayWhen', { name: source.name })
-                  : t('plugins.subagents.whenToUseHint')}
-                {t('plugins.subagents.sep')}
-                <span className="whitespace-nowrap">
-                  {t('plugins.subagents.charCount', { used: descUsed, max: descMax })}
-                </span>
-              </span>
-            </div>
-            <textarea
-              id={descId}
-              className="sa-input"
-              rows={3}
-              value={draft.description}
-              placeholder={t('plugins.subagents.whenToUsePlaceholder')}
-              onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
-            />
-            {serverError('description') && <p className="sa-field-error">{serverError('description')}</p>}
-          </div>
-          <div>
-            <div className="sa-field-head">
-              <label htmlFor={instrId}>{t('plugins.subagents.instructions')}</label>
-              <span className={cn('sa-field-aside', instrOver && 'is-over')}>
+          <DescriptionField
+            value={draft.description}
+            onChange={(description) => setDraft((d) => ({ ...d, description }))}
+            used={descUsed}
+            max={descMax}
+            over={descOver}
+            sameAs={source && draft.description.trim() === source.description.trim() ? source.name : null}
+            error={serverError('description')}
+            placeholder={t('plugins.subagents.whenToUsePlaceholder')}
+          />
+          <InstructionsField
+            value={draft.instructions}
+            onChange={(instructions) => setDraft((d) => ({ ...d, instructions }))}
+            over={instrOver}
+            aside={
+              <>
                 {source && draft.instructions === source.instructions
                   ? t('plugins.subagents.copiedMarkdown', { name: source.name })
                   : t('plugins.subagents.markdown')}
@@ -296,18 +272,11 @@ export function SubagentNew({
                     used: formatBytes(instrUsed, locale),
                     max: formatBytes(instrMax, locale),
                   })}`}
-              </span>
-            </div>
-            <textarea
-              id={instrId}
-              className="sa-input is-code"
-              value={draft.instructions}
-              placeholder={t('plugins.subagents.instructionsPlaceholder')}
-              spellCheck={false}
-              onChange={(e) => setDraft((d) => ({ ...d, instructions: e.target.value }))}
-            />
-            {serverError('instructions') && <p className="sa-field-error">{serverError('instructions')}</p>}
-          </div>
+              </>
+            }
+            error={serverError('instructions')}
+            placeholder={t('plugins.subagents.instructionsPlaceholder')}
+          />
           <div className="sa-savebar">
             <PageButton variant="primary" onClick={submit} disabled={!ready}>
               {create.isPending ? t('common.loading') : t('plugins.subagents.create')}
@@ -376,11 +345,8 @@ function CopyFacts({
 }) {
   const { t } = useTranslation();
   const locale = useLocale();
-  const pinned = source?.model ?? null;
-  const effort = source
-    ? (effortLabelFor(t, source.effort) ??
-      (pinned ? t('plugins.subagents.modelsSetting') : t('plugins.subagents.threadsSetting')))
-    : t('plugins.subagents.threadsSetting');
+  const pinned = copiedModel(source, models.lockedModels);
+  const effort = effortOrSetting(t, source?.effort ?? null, pinned);
   const audiences: readonly SubagentAudience[] = source ? source.available_to : AUDIENCES;
   return (
     <div className="sa-facts">

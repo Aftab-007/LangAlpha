@@ -1,5 +1,5 @@
+import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
-import { identityTint } from './identityTint';
 
 /**
  * The per-item identity mark on Plugins / MCP rows: a rounded tile whose tint
@@ -8,6 +8,27 @@ import { identityTint } from './identityTint';
  * is the whole point, so never salt the hash with the item's kind or origin.
  * Purely decorative: the accessible name of a row stays its text.
  */
+
+// Literal pairs (not computed names) so the tokenRefs guard can see them.
+const TINTS: ReadonlyArray<readonly [bg: string, fg: string]> = [
+  ['var(--color-identity-0-bg)', 'var(--color-identity-0-fg)'],
+  ['var(--color-identity-1-bg)', 'var(--color-identity-1-fg)'],
+  ['var(--color-identity-2-bg)', 'var(--color-identity-2-fg)'],
+  ['var(--color-identity-3-bg)', 'var(--color-identity-3-fg)'],
+  ['var(--color-identity-4-bg)', 'var(--color-identity-4-fg)'],
+  ['var(--color-identity-5-bg)', 'var(--color-identity-5-fg)'],
+  ['var(--color-identity-6-bg)', 'var(--color-identity-6-fg)'],
+  ['var(--color-identity-7-bg)', 'var(--color-identity-7-fg)'],
+];
+
+/** djb2 over the name → a stable tint index. Exported for tests. */
+export function identityIndex(name: string): number {
+  let hash = 5381;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) + hash + name.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % TINTS.length;
+}
 
 function monogram(name: string): string {
   // First grapheme (handles CJK + astral chars), uppercased for latin.
@@ -39,13 +60,16 @@ export function IdentityTile({
   name,
   size = 'sm',
   className = '',
+  children,
 }: {
   name: string;
   size?: TileSize;
   /** Extra geometry from the caller (e.g. a round mask on the model picker). */
   className?: string;
+  /** Drawn on the name's tint in place of the monogram. */
+  children?: ReactNode;
 }) {
-  const [bg, fg] = identityTint(name);
+  const [bg, fg] = TINTS[identityIndex(name)];
   return (
     <span
       aria-hidden
@@ -57,7 +81,7 @@ export function IdentityTile({
       )}
       style={{ color: fg, backgroundColor: bg }}
     >
-      {monogram(name)}
+      {children ?? monogram(name)}
     </span>
   );
 }

@@ -79,11 +79,11 @@ export function bulkSelectionKey(targetKeys: Iterable<string>): string {
 }
 
 /** One executable unit of a bulk action. */
-export interface BulkTarget {
+export interface BulkTarget<R = unknown> {
   key: string;
   /** What the user calls the row, which the result names it by if it fails. */
   name: string;
-  run: () => Promise<unknown>;
+  run: () => Promise<R>;
 }
 
 /** What a bulk action did, which its result is titled by. */
@@ -91,7 +91,7 @@ export type BulkVerb = 'enable' | 'disable' | 'remove' | 'uninstall' | 'scope';
 /** What a tab's rows are, which the result counts. */
 export type BulkNoun = 'plugin' | 'connector' | 'skill' | 'subagent';
 
-export interface BulkRunOptions {
+export interface BulkRunOptions<R = unknown> {
   verb: BulkVerb;
   noun: BulkNoun;
   /**
@@ -103,7 +103,7 @@ export interface BulkRunOptions {
   signIn?: (servers: McpSignInNeeded[]) => void;
   /** Lines about what the rows that succeeded took with them, from the
    *  values their runs returned, said before any failure. */
-  outcome?: (results: unknown[]) => string[];
+  outcome?: (results: R[]) => string[];
 }
 
 /** Names a result spells out before it counts the rest. */
@@ -130,11 +130,11 @@ export function useBulkRunner(
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const run = useCallback(
-    async (targets: BulkTarget[], opts: BulkRunOptions) => {
+    async <R>(targets: BulkTarget<R>[], opts: BulkRunOptions<R>) => {
       if (targets.length === 0) return;
       setProgress({ done: 0, total: targets.length });
       try {
-        const results: unknown[] = [];
+        const results: R[] = [];
         const result = await runBulk(
           targets,
           async (target) => {

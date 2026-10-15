@@ -9,6 +9,7 @@ import {
   isSubagentVersionConflict,
   putSubagent,
   SUBAGENT_INHERIT,
+  type SubagentBaseValues,
   type SubagentFields,
   type SubagentsResponse,
   type SubagentView,
@@ -63,25 +64,51 @@ function putRow(qc: QueryClient, view: SubagentView) {
   });
 }
 
+/** An edit as a control makes it: the value it now shows. */
+export type SubagentEdit = Partial<SubagentBaseValues> &
+  Pick<SubagentFields, 'description' | 'instructions' | 'available_to'>;
+
+/** Fields where null means "follow the thread" (or the user's own setting). */
+const INHERITABLE: ReadonlySet<string> = new Set(['model', 'effort', 'search_provider', 'search_depth']);
+
+/** Lists the agent reads in order: preferred connectors lead its roster and
+ *  preferred skills preload in it. The others are sets. */
+const ORDERED: ReadonlySet<string> = new Set(['preferred_connectors', 'preferred_skills']);
+
 /**
- * What a patch shows before the server answers. A null clears the user's
- * value, which on a base means the base's own, and on a custom one means
- * following the thread; `inherit` follows the thread either way.
+ * What an edit sends. On a base, a value equal to what the base ships with
+ * goes as null, which drops the user's key rather than pinning a copy of
+ * today's base value that would hold once the base moves on. Choosing to
+ * follow the thread on a base that pins a value goes as `inherit`, since a
+ * null there would clear the key and land back on the pin.
  */
-function applyFields(view: SubagentView, fields: SubagentFields): SubagentView {
-  const next: Record<string, unknown> = { ...view };
-  for (const [key, value] of Object.entries(fields)) {
-    next[key] =
-      value === SUBAGENT_INHERIT
-        ? null
-        : value === null && view.base && key in view.base
-          ? view.base[key as keyof typeof view.base]
-          : value;
+function encodeEdit(view: SubagentView, edit: SubagentEdit): SubagentFields {
+  const base = view.base;
+  if (!base) return edit;
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(edit)) {
+    const shipped: unknown = base[key as keyof SubagentBaseValues];
+    const same = Array.isArray(value) && Array.isArray(shipped)
+      ? value.length === shipped.length &&
+        value.every((v, i) => (ORDERED.has(key) ? shipped[i] === v : shipped.includes(v)))
+      : value === shipped;
+    fields[key] = same ? null : value === null && INHERITABLE.has(key) ? SUBAGENT_INHERIT : value;
   }
-  return next as unknown as SubagentView;
+  return fields as SubagentFields;
 }
 
-function invalidate(qc: QueryClient) {
+/**
+ * Sends an edit to an existing subagent, encoded against the row the cache
+ * holds when the write runs rather than when it was asked for: an earlier
+ * write has replaced the version by then.
+ */
+export function sendSubagentEdit(qc: QueryClient, name: string, edit: SubagentEdit): Promise<SubagentView> {
+  const view = cachedView(qc, name);
+  return putSubagent(name, { version: view?.version ?? null, fields: view ? encodeEdit(view, edit) : edit });
+}
+
+/** A write's radius, and the bulk bar's after its whole run: the one list. */
+export function invalidateSubagents(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: queryKeys.subagents.all });
 }
 
@@ -102,7 +129,20 @@ function useConflictToast() {
 
 export interface SubagentPatch {
   name: string;
-  fields: SubagentFields;
+  edit: SubagentEdit;
+}
+
+/** What an edit to an existing subagent shares: the scope, the version read
+ *  when it runs, and the server's answer landing in the list. */
+function editOptions(qc: QueryClient) {
+  return {
+    scope: WRITE_SCOPE,
+    mutationFn: ({ name, edit }: SubagentPatch) => sendSubagentEdit(qc, name, edit),
+    onSuccess: (view: SubagentView) => {
+      putRow(qc, view);
+      invalidateSubagents(qc);
+    },
+  };
 }
 
 /**
@@ -114,24 +154,14 @@ export function usePatchSubagent() {
   const qc = useQueryClient();
   const conflict = useConflictToast();
   return useMutation({
-    scope: WRITE_SCOPE,
-    mutationFn: ({ name, fields }: SubagentPatch) => {
-      // Read when the write runs, not when it was asked for: an earlier write
-      // in the scope has replaced the version by then.
-      const version = cachedView(qc, name)?.version ?? null;
-      return putSubagent(name, { version, fields });
-    },
-    onMutate: async ({ name, fields }) => {
+    ...editOptions(qc),
+    onMutate: async ({ name, edit }) => {
       await qc.cancelQueries({ queryKey: queryKeys.subagents.list() });
       const view = cachedView(qc, name);
-      if (view) putRow(qc, applyFields(view, fields));
-    },
-    onSuccess: (view) => {
-      putRow(qc, view);
-      invalidate(qc);
+      if (view) putRow(qc, { ...view, ...edit });
     },
     onError: (err) => {
-      invalidate(qc);
+      invalidateSubagents(qc);
       if (conflict(err)) return;
       toast({
         variant: 'destructive',
@@ -161,9 +191,9 @@ export function useCreateSubagent() {
     }) => putSubagent(name, { version: null, start_from: startFrom, fields }),
     onSuccess: (view) => {
       putRow(qc, view);
-      invalidate(qc);
+      invalidateSubagents(qc);
     },
-    onError: () => invalidate(qc),
+    onError: () => invalidateSubagents(qc),
   });
 }
 
@@ -176,16 +206,8 @@ export function useCreateSubagent() {
 export function useSaveSubagentText() {
   const qc = useQueryClient();
   return useMutation({
-    scope: WRITE_SCOPE,
-    mutationFn: ({ name, fields }: SubagentPatch) => {
-      const version = cachedView(qc, name)?.version ?? null;
-      return putSubagent(name, { version, fields });
-    },
-    onSuccess: (view) => {
-      putRow(qc, view);
-      invalidate(qc);
-    },
-    onError: () => invalidate(qc),
+    ...editOptions(qc),
+    onError: () => invalidateSubagents(qc),
   });
 }
 
@@ -200,9 +222,9 @@ export function useDeleteSubagent() {
       const version = cachedView(qc, name)?.version ?? '';
       return deleteSubagent(name, version);
     },
-    onSuccess: () => invalidate(qc),
+    onSuccess: () => invalidateSubagents(qc),
     onError: (err) => {
-      invalidate(qc);
+      invalidateSubagents(qc);
       if (conflict(err)) return;
       toast({
         variant: 'destructive',
@@ -211,9 +233,4 @@ export function useDeleteSubagent() {
       });
     },
   });
-}
-
-/** The bulk bar's radius: one list, re-read once after the whole run. */
-export function invalidateSubagents(qc: QueryClient) {
-  invalidate(qc);
 }

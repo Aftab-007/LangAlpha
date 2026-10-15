@@ -2,7 +2,6 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../../../components/ui/dialog';
 import { lastInputWasPointer } from '@/lib/inputModality';
-import { cn } from '@/lib/utils';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -13,15 +12,12 @@ interface ConfirmDialogProps {
   onOpenChange?: (open: boolean) => void;
   /** Open on the confirm button, so Enter confirms as a native confirm() does. */
   focusConfirm?: boolean;
-  /** `danger` fills the confirm button in the loss colour, for a yes that
-   *  lets something spend real money. */
-  tone?: 'default' | 'danger';
 }
 
 /**
  * Reusable confirmation dialog. Uses color tokens only.
  */
-function ConfirmDialog({ open, title, message, confirmLabel, onConfirm, onOpenChange, focusConfirm = false, tone = 'default' }: ConfirmDialogProps) {
+function ConfirmDialog({ open, title, message, confirmLabel, onConfirm, onOpenChange, focusConfirm = false }: ConfirmDialogProps) {
   const { t } = useTranslation();
   const confirmRef = React.useRef<HTMLButtonElement>(null);
   // Radix hands focus back to a Dialog.Trigger, and this dialog opens from
@@ -71,15 +67,8 @@ function ConfirmDialog({ open, title, message, confirmLabel, onConfirm, onOpenCh
             ref={confirmRef}
             type="button"
             onClick={handleConfirm}
-            className={cn(
-              'px-4 py-1.5 rounded text-sm font-medium hover:opacity-90',
-              tone === 'danger' && 'bg-destructive text-destructive-foreground',
-            )}
-            style={
-              tone === 'danger'
-                ? undefined
-                : { backgroundColor: 'var(--color-btn-primary-bg)', color: 'var(--color-btn-primary-text)' }
-            }
+            className="px-4 py-1.5 rounded text-sm font-medium hover:opacity-90"
+            style={{ backgroundColor: 'var(--color-btn-primary-bg)', color: 'var(--color-btn-primary-text)' }}
           >
             {confirmLabel || t('common.delete')}
           </button>
