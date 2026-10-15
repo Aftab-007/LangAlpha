@@ -65,18 +65,20 @@ def _empty_user_skill_bundle(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_user_subagents(monkeypatch):
-    """Stub each user's subagent rows to none for unit tests.
+    """Stub each user's subagent rows, and their plugins' subagents, to none
+    for unit tests.
 
     ``resolve_llm_config`` reads them from Postgres on every PTC turn, and
     unit tests have no pool. A user with no rows is also the case whose turn
     must match a build that never read any.
     """
-    from src.server.database import user_subagents
+    from src.server.database import plugin_subagents, user_subagents
 
     async def _none(user_id, *, conn=None):
         return []
 
     monkeypatch.setattr(user_subagents, "list_user_subagents", _none)
+    monkeypatch.setattr(plugin_subagents, "list_user_plugin_subagents", _none)
 
 
 @pytest.fixture(scope="session")

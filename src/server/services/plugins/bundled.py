@@ -6,9 +6,10 @@ is called, who wrote it, and which servers and skills it owns. They are read
 from disk rather than installed -- nothing fetches them, they occupy none of a
 user's plugin slots, and uninstall has nothing to remove.
 
-A bundle's components are its files: the servers ``mcp.json`` names, and the
-directories under its own ``skills/``. Nothing here reads a skill declaration,
-so a package cannot claim a skill it does not carry.
+A bundle's components are its files: the servers ``mcp.json`` names, the
+directories under its own ``skills/`` and the files under its ``agents/``.
+Nothing here reads a skill declaration, so a package cannot claim a skill it
+does not carry.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
-from ptc_agent.config.plugins import Bundle, bundles
+from ptc_agent.config.plugins import BUNDLES_DIR, Bundle, bundles
 from src.server.models.plugin import PluginComponentRef, PluginInfo
+from src.server.services.plugins.agents import AGENTS_DIR, AgentPlan, collect_agents
 from src.server.services.icon_urls import source_icon_url
 from src.server.services.plugins.icons import icon_value
 
@@ -103,7 +105,52 @@ def _components(bundle: Bundle) -> list[PluginComponentRef]:
         PluginComponentRef(kind="skill", name=name, key=name)
         for name in skills
         if name in listed
+    ] + [
+        PluginComponentRef(kind="subagent", name=plan.name, key=plan.name)
+        for plan in _agent_plans(bundle)
+        if plan.skip_code is None
     ]
+
+
+def _agent_plans(bundle: Bundle) -> list[AgentPlan]:
+    """The bundle's ``agents/*.md``, read as an upload's are. Never raises."""
+    agents_dir = bundle.path / AGENTS_DIR.rstrip("/")
+    if not agents_dir.is_dir():
+        return []
+    try:
+        files = {
+            f"{AGENTS_DIR}{p.name}": p.read_bytes()
+            for p in sorted(agents_dir.iterdir())
+            if p.is_file() and p.suffix == ".md"
+        }
+    except OSError as e:
+        logger.error("bundled plugin: cannot read %s: %s", agents_dir, e)
+        return []
+    plans, _ = collect_agents(files)
+    for plan in plans:
+        if plan.skip_code is not None:
+            logger.warning(
+                "bundled plugin: %s/%s.md is not a subagent: %s",
+                agents_dir, plan.name, plan.skip_reason,
+            )
+    return plans
+
+
+def bundled_agent_plans() -> list[tuple[str, AgentPlan]]:
+    """Every bundle's subagents that read, as (bundle name, plan), in bundle order.
+
+    Read from disk on each call, as ``bundles()`` is, so the roster and the
+    Plugins page agree with the files without a cache to keep in step.
+    """
+    if not any(BUNDLES_DIR.glob(f"*/{AGENTS_DIR}")):
+        return []  # every turn asks; no manifest needs reading without the folder
+    out: list[tuple[str, AgentPlan]] = []
+    for bundle in bundles():
+        name = _name(bundle)
+        if name is None:
+            continue
+        out += [(name, plan) for plan in _agent_plans(bundle) if plan.skip_code is None]
+    return out
 
 
 class BundleOwnershipUnavailable(RuntimeError):

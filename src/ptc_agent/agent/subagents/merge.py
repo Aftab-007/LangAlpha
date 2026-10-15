@@ -1,10 +1,11 @@
 """One user's subagents: the deployment's base with the user's own rows on top.
 
 The base is the built-ins under the deployment's YAML, which still replaces a
-built-in wholesale. A user's row then either overrides a base field by field,
-storing only what the user changed so later improvements to the base still
-reach them, or is a subagent of their own. Pure: rows come in, finished
-definitions go out, and nothing here reads storage or the turn.
+built-in wholesale, then the subagents the user's plugins ship. A user's row
+then either overrides a base field by field, storing only what the user
+changed so later improvements to the base still reach them, or is a subagent
+of their own. Pure: rows come in, finished definitions go out, and nothing
+here reads storage or the turn.
 """
 
 from __future__ import annotations
@@ -45,11 +46,11 @@ BROKERAGE_ACCESS = ("off", "on")
 class BaseSubagent:
     """A subagent the user did not write, keyed the way an override names it.
 
-    ``key`` is ``builtin:<name>``, ``deployment:<name>`` or, once plugins ship
-    subagents, ``plugin:<plugin name>/<agent>``. An override applies only to
-    the base it was written against, so a name that changes hands (a YAML
-    definition replacing a built-in, a plugin removed) orphans it instead of
-    silently reshaping a different subagent.
+    ``key`` is ``builtin:<name>``, ``deployment:<name>`` or
+    ``plugin:<plugin name>/<agent>``. An override applies only to the base it
+    was written against, so a name that changes hands (a YAML definition
+    replacing a built-in, a plugin removed) orphans it instead of silently
+    reshaping a different subagent.
     """
 
     key: str
@@ -62,8 +63,8 @@ class ResolvedSubagents:
 
     ``definitions`` covers every offered base and every custom subagent,
     including ones switched off, so a reader can show them; ``enabled`` is the
-    roster in order. ``orphaned`` names overrides whose base is gone,
-    ``shadowed`` bases a custom subagent of the same name hides, and
+    roster in order. ``orphaned`` names overrides the turn could not apply,
+    their base gone or not offered, ``shadowed`` bases a custom subagent of the same name hides, and
     ``unavailable`` maps a subagent to the saved model the turn could not
     serve, which it ran without.
     """
@@ -212,6 +213,42 @@ def custom_definition(row: Mapping[str, Any]) -> SubagentDefinition:
     )
     changes = _common_changes(fields, base)
     return replace(base, **changes) if changes else base
+
+
+def plugin_definition(row: Mapping[str, Any]) -> SubagentDefinition:
+    """A plugin's subagent as a base, built the way a custom one is.
+
+    ``row`` is shaped like a custom row (``name``, ``fields``, ``instructions``,
+    ``roles``), so a package's instructions are passed as text under the
+    frame too: nothing a package ships is rendered as a template.
+    """
+    # A package's instructions are written for the tools its file names.
+    return replace(custom_definition(row), source="plugin", tools_narrowed=False)
+
+
+def add_plugin_bases(
+    bases: Mapping[str, BaseSubagent],
+    offered: Sequence[str],
+    plugin_bases: Iterable[tuple[BaseSubagent, bool]],
+) -> tuple[dict[str, BaseSubagent], tuple[str, ...]]:
+    """The deployment's bases and offered names with the plugins' after them.
+
+    Each plugin base comes with whether its plugin is on; one that is off
+    stays a base, so the user's changes to it wait for it rather than show
+    as a removed base. A name the deployment defines, offered or not, stays the
+    deployment's, and between plugins the first keeps it. Install refuses
+    both, so this settles only a deploy that later takes a plugin's name.
+    """
+    out = dict(bases)
+    names = list(dict.fromkeys(offered))
+    for base, on in plugin_bases:
+        name = base.definition.name
+        if name in out:
+            continue
+        out[name] = base
+        if on:
+            names.append(name)
+    return out, tuple(names)
 
 
 def _enabled(fields: Mapping[str, Any]) -> bool:

@@ -60,6 +60,7 @@ from src.server.database.account_disables import (
     set_account_disable,
 )
 from src.server.database.mcp_servers import list_catalog_servers
+from src.server.database.plugin_subagents import list_user_plugin_subagents
 from src.server.database.plugins import (
     MAX_PLUGINS_PER_USER,
     get_plugin,
@@ -167,7 +168,7 @@ CurrentPlugin = Annotated[dict[str, Any], Depends(_require_plugin)]
 async def _components_by_plugin(
     user_id: str,
 ) -> dict[str, list[PluginComponentRef]]:
-    """plugin_id → still-owned component refs, in two queries total."""
+    """plugin_id → still-owned component refs, one query per kind."""
     out: dict[str, list[PluginComponentRef]] = {}
     for row in await list_catalog_servers(user_id):
         plugin_id = row.get("plugin_id")
@@ -189,6 +190,10 @@ async def _components_by_plugin(
                     key=row.get("plugin_skill_dir") or row["name"],
                 )
             )
+    for row in await list_user_plugin_subagents(user_id):
+        out.setdefault(row["plugin_id"], []).append(
+            PluginComponentRef(kind="subagent", name=row["name"], key=row["name"])
+        )
     return out
 
 

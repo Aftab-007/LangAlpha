@@ -19,8 +19,9 @@ class Diagnostic(BaseModel):
     # info = how the package was read, not a problem with it.
     level: Literal["info", "warning", "error"] = "warning"
     # plugin = the whole bundle; mcp = the MCP component; entry = one mcp.json
-    # server; skill = one skills/ directory; file = an archive member.
-    scope: Literal["plugin", "mcp", "entry", "skill", "file"] = "plugin"
+    # server; skill = one skills/ directory; subagent = one agents/ file;
+    # file = an archive member.
+    scope: Literal["plugin", "mcp", "entry", "skill", "subagent", "file"] = "plugin"
     # The entry key / skill dir / file path the finding is about; "" = whole
     # plugin.
     target: str = ""
@@ -46,11 +47,12 @@ ComponentStatus = Literal[
 
 
 class ComponentResult(BaseModel):
-    """The outcome for one declared component (an mcp.json entry or a skill)."""
+    """The outcome for one declared component (an mcp.json entry, a skill or a subagent)."""
 
-    kind: Literal["mcp", "skill"]
-    # The component's identity in the package: the mcp.json key or the
-    # skills/ directory name. Stable across renames, so update diffs use it.
+    kind: Literal["mcp", "skill", "subagent"]
+    # The component's identity in the package: the mcp.json key, the
+    # skills/ directory name or the agents/ file name. Stable across renames,
+    # so update diffs use it.
     key: str
     # The installed row name (post name-coercion); "" when nothing landed.
     name: str = ""
@@ -104,6 +106,7 @@ class InstallReport(BaseModel):
     dropped_files: list[str] = Field(default_factory=list)
     servers_created: int = 0
     skills_created: int = 0
+    subagents_created: int = 0
 
     @property
     def landed_whole(self) -> bool:
@@ -133,7 +136,7 @@ class InstallReport(BaseModel):
 class PluginComponentRef(BaseModel):
     """A component row still owned by the plugin — the detail view's chips."""
 
-    kind: Literal["mcp", "skill"]
+    kind: Literal["mcp", "skill", "subagent"]
     name: str
     key: str
 
@@ -194,6 +197,7 @@ class UninstalledComponents(BaseModel):
 
     servers: list[str]
     skills: list[str]
+    subagents: list[str] = Field(default_factory=list)
 
 
 class UninstallResponse(BaseModel):

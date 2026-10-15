@@ -1680,6 +1680,9 @@ class TestBindPrefix:
         with patch(
             "src.server.services.plugins.export.list_plugin_skill_names",
             new=AsyncMock(return_value=[]),
+        ), patch(
+            "src.server.services.plugins.export.list_plugin_subagents",
+            new=AsyncMock(return_value=[]),
         ):
             exported = await export_plugin_zip("u1", stored)
 

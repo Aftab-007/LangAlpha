@@ -43,6 +43,12 @@ from src.server.database.plugins import (
     plugin_fan_out_lock,
     update_plugin_row,
 )
+from src.server.database.plugin_subagents import (
+    delete_plugin_subagents,
+    list_plugin_subagents,
+    overrides_locked,
+    replace_plugin_subagent,
+)
 from src.server.database.user_skills import (
     SkillNotOwned,
     delete_user_skill,
@@ -94,6 +100,7 @@ from src.server.services.plugins.package import (
 )
 from src.server.services.plugins.reconcile import ReconcileArms, reconcile
 from src.server.services.plugins.server_fanout import fan_out_servers
+from src.server.services.plugins.subagent_fanout import fan_out_subagents
 from src.server.services.plugins.skill_fanout import (
     fan_out_skills,
     store_skill_archive,
@@ -891,6 +898,70 @@ async def _update_skills(
     )
 
 
+async def _update_subagents(
+    user_id: str,
+    plugin: Mapping[str, Any],
+    package: ValidatedPackage,
+    report: InstallReport,
+) -> None:
+    """Reconcile the plugin's subagents by file name.
+
+    A user's change to one is an override row, never an edit of the plugin's,
+    so nothing detaches: an update replaces the base under the override, and
+    the version the pane holds moves with it. One the package dropped goes
+    with the user's changes to it, as at uninstall. All of it runs in one
+    transaction under the override lock, so a pane save lands wholly before
+    it or diffs against the bases it leaves.
+    """
+    plugin_id = plugin["user_plugin_id"]
+    incoming = {p.name: p for p in package.agent_plans}
+    async with overrides_locked(user_id) as conn:
+        owned = {
+            r["name"]: r
+            for r in await list_plugin_subagents(user_id, plugin_id, conn=conn)
+        }
+
+        async def delete(name: str, _row: dict[str, Any]) -> None:
+            if await delete_plugin_subagents(
+                user_id, plugin_id, plugin["name"], names=[name], conn=conn
+            ):
+                report.components.append(
+                    ComponentResult(kind="subagent", key=name, name=name, status="deleted")
+                )
+
+        async def update(name: str, row: dict[str, Any], plan) -> None:
+            report.diagnostics.extend(plan.diagnostics)
+            if plan.skip_code is not None:
+                report.components.append(ComponentResult.of(
+                    plan, "skipped", reason=(plan.skip_reason or "") + "; existing one kept",
+                ))
+                return
+            if row["file_text"] == plan.text and all(
+                row[k] == v for k, v in plan.values.items()
+            ):
+                report.components.append(ComponentResult.of(plan, "unchanged"))
+                return
+            # Under the fan-out lock, which uninstall holds too, so the row is there.
+            await replace_plugin_subagent(
+                user_id, plugin_id, name, plan.values, plan.text, conn=conn
+            )
+            report.components.append(ComponentResult.of(plan, "updated"))
+
+        async def detached(_name: str, _plan) -> bool:
+            return False
+
+        async def create(plans: list[Any]) -> None:
+            await fan_out_subagents(user_id, plugin_id, plans, report, conn=conn)
+
+        await reconcile(
+            owned,
+            incoming,
+            arms=ReconcileArms(
+                delete=delete, update=update, create=create, detached=detached
+            ),
+        )
+
+
 async def update_plugin_package(
     user_id: str,
     plugin: dict[str, Any],
@@ -980,6 +1051,7 @@ async def update_plugin_package(
         await _update_skills(
             user_id, plugin_id, package, report, installed_at=stored["installed_at"]
         )
+        await _update_subagents(user_id, plugin, package, report)
 
         # An unreadable mcp.json left the servers untouched above, so the stored
         # document is still the one that describes them. Replacing it with NULL

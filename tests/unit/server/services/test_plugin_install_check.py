@@ -50,6 +50,8 @@ def _install_env(
         "create_plugin": AsyncMock(return_value={"user_plugin_id": PLUGIN_ID, "name": "demo"}),
         "fan_out_servers": AsyncMock(),
         "fan_out_skills": AsyncMock(),
+        "clear_plugin_overrides": AsyncMock(return_value=0),
+        "fan_out_subagents": AsyncMock(),
         "claim_plugin_secrets": AsyncMock(),
         "after_secrets_changed": AsyncMock(),
         "write_supplied": AsyncMock(return_value=([], [])),
@@ -57,6 +59,7 @@ def _install_env(
     }
     stack.enter_context(patch(L + "bundled_names", return_value=frozenset()))
     stack.enter_context(patch(L + "plugin_fan_out_lock", lambda _: nullcontext()))
+    stack.enter_context(patch(L + "overrides_locked", lambda _: nullcontext()))
     stack.enter_context(patch(L + "get_plugin", new=AsyncMock(return_value=None)))
     stack.enter_context(patch(L + "list_plugins", new=AsyncMock(return_value=[])))
     stack.enter_context(patch(L + "list_catalog_servers", new=AsyncMock(return_value=[])))

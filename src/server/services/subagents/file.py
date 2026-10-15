@@ -36,6 +36,9 @@ from ptc_agent.core.paths import SUBAGENT_FILE_NAME
 from ptc_agent.core.sandbox.livefs_mount import CallContext
 
 from .context import list_connectors, load_main_values
+from .frontmatter import StrictLoader as _Loader
+from .frontmatter import split_frontmatter as _split
+from .frontmatter import unsavable_char
 from .rules import (
     DESCRIPTION_MAX,
     EDITABLE_KEYS,
@@ -202,30 +205,6 @@ def render_main(values: dict[str, Any]) -> tuple[str, str]:
 # =============================================================================
 
 
-class _Loader(yaml.SafeLoader):
-    """Safe YAML that refuses a key given twice, where plain YAML keeps the last."""
-
-
-def _mapping(loader: _Loader, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
-    loader.flatten_mapping(node)
-    seen: set[Any] = set()
-    for key_node, _ in node.value:
-        key = loader.construct_object(key_node, deep=True)
-        try:
-            duplicate = key in seen
-        except TypeError:
-            continue  # construct_mapping refuses an unhashable key
-        if duplicate:
-            raise yaml.constructor.ConstructorError(
-                None, None, f"{key} is given twice", key_node.start_mark
-            )
-        seen.add(key)
-    return loader.construct_mapping(node, deep=deep)
-
-
-_Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
-
-
 @dataclass(frozen=True)
 class Written:
     """A saved file as written: its frontmatter keys besides ``name`` and
@@ -235,20 +214,6 @@ class Written:
     body: str
     name: Any = None
     source: Any = None
-
-
-def _split(content: str) -> tuple[str, str, int] | None:
-    """(frontmatter, body, line the frontmatter starts on), or None without fences."""
-    lines = content.removeprefix("﻿").replace("\r\n", "\n").split("\n")
-    start = 0
-    while start < len(lines) and not lines[start].strip():
-        start += 1
-    if start == len(lines) or lines[start].rstrip() != "---":
-        return None
-    for end in range(start + 1, len(lines)):
-        if lines[end].rstrip() == "---":
-            return "\n".join(lines[start + 1:end]), "\n".join(lines[end + 1:]), start + 2
-    return None
 
 
 def _text_key(key: str, value: Any) -> Any:
@@ -341,6 +306,12 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
                 "instructions.",
             )
         front, body, first_line = parts
+        if "\x00" in front:
+            # YAML's own refusal names a character position and asks for quotes.
+            raise self._refuse(
+                "parse_error",
+                "the frontmatter holds a NUL character (\\x00), which saved text can't hold.",
+            )
         try:
             loaded = yaml.load(front, Loader=_Loader)  # noqa: S506 - a SafeLoader subclass
         except yaml.YAMLError as exc:
@@ -357,6 +328,14 @@ class SubagentFile(DbJsonFile[_Views, Written, Change]):
             loaded = {}
         if not isinstance(loaded, dict):
             raise self._refuse("parse_error", "the frontmatter must be key: value lines.")
+        # A YAML "\ud800" escape can put one in a key or a name, and every
+        # refusal below echoes those; a NUL echoes fine and is refused per field.
+        if unsavable_char(loaded) not in (None, "\x00"):
+            raise self._refuse(
+                "parse_error",
+                "the frontmatter holds an unpaired surrogate (\\ud800 to \\udfff), which saved "
+                "text can't hold.",
+            )
         unknown = [str(k) for k in loaded if k not in FILE_KEYS]
         if unknown:
             allowed = ", ".join(FILE_KEYS)
@@ -625,9 +604,9 @@ Confirm with the user before you create or delete a subagent or change its
 model, and change only what they asked for.
 
 - `main.md` is you. It is read-only: the user sets it in Settings.
-- A built-in subagent (`source: builtin` or `deployment`): its frontmatter
-  keys below are editable; its instructions, `description` and `available_to`
-  are not. To change those, copy the file to a new name.
+- A built-in subagent (`source: builtin`, `deployment` or `plugin`): its
+  frontmatter keys below are editable; its instructions, `description` and
+  `available_to` are not. To change those, copy the file to a new name.
 - One of your own (`source: custom`): every key and the instructions.
 
 ## Changing them

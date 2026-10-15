@@ -73,6 +73,7 @@ function mergeReport(
     dropped_files: unique([...base.dropped_files, ...followUp.dropped_files]),
     servers_created: base.servers_created + followUp.servers_created,
     skills_created: base.skills_created + followUp.skills_created,
+    subagents_created: (base.subagents_created ?? 0) + (followUp.subagents_created ?? 0),
   };
 }
 

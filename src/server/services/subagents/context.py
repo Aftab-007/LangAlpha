@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from ptc_agent.agent.subagents.merge import BaseSubagent, base_subagents
+from ptc_agent.agent.subagents.merge import BaseSubagent, add_plugin_bases, base_subagents
 
 if TYPE_CHECKING:
     from ptc_agent.config.agent import AgentConfig, SubagentsConfig
@@ -40,6 +40,8 @@ class SubagentContext:
     user_id: str
     subagents: SubagentsConfig
     bases: dict[str, BaseSubagent]
+    #: The deployment's offered names, then the subagents of plugins that are on.
+    offered: tuple[str, ...]
     model_pref: dict
     is_byok: bool
     permits: TierPermits
@@ -53,10 +55,6 @@ class SubagentContext:
     #: its plan, lowercase ("" when the provider didn't say).
     oauth_accounts: Mapping[str, str]
     _byok_cache: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def offered(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(self.subagents.enabled))
 
     @property
     def connector_names(self) -> frozenset[str]:
@@ -73,9 +71,9 @@ class SubagentContext:
         Shared with the per-turn merge so a model the pane accepts is one the
         turn runs, and a key or subscription for its provider lifts the plan.
         """
-        from src.server.services.llm.subagents import _on_plan
+        from src.server.services.llm.subagents import model_on_plan
 
-        return await _on_plan(
+        return await model_on_plan(
             self.user_id, name, model_pref=self.model_pref, permits=self.permits,
             is_byok=self.is_byok, byok_cache=self._byok_cache,
         )
@@ -210,10 +208,20 @@ async def load_main_values(user_id: str) -> dict[str, Any]:
     return _main_values(model_pref, probe.search_api, probe.search_depth)
 
 
-def roster() -> tuple[dict[str, BaseSubagent], tuple[str, ...]]:
-    """The deployment's bases and the names it offers: all a view of values needs."""
-    subagents = _agent_config().subagents
-    return base_subagents(subagents), tuple(dict.fromkeys(subagents.enabled))
+async def roster(
+    user_id: str, subagents: SubagentsConfig | None = None, *, conn=None
+) -> tuple[dict[str, BaseSubagent], tuple[str, ...]]:
+    """The user's bases and the names offered to them: all a view of values needs.
+
+    The deployment's, then the ones the user's plugins ship. ``conn`` reads
+    the plugins' under a writer's lock, which uninstall takes too.
+    """
+    from .plugin_bases import plugin_bases
+
+    subagents = subagents or _agent_config().subagents
+    return add_plugin_bases(
+        base_subagents(subagents), subagents.enabled, await plugin_bases(user_id, conn=conn)
+    )
 
 
 async def list_connectors(user_id: str) -> tuple[Connector, ...]:
@@ -347,13 +355,15 @@ async def load_context(user_id: str) -> SubagentContext:
         update={"features": {**(agent_config.features or {}), "site_crawl": False}}
     )
     permits = await gate_capabilities(probe, user_id, model_pref)
-    skills, (connectors, connected) = await asyncio.gather(
+    skills, (connectors, connected), (bases, offered) = await asyncio.gather(
         _skill_names(user_id), _connectors(user_id, agent_config),
+        roster(user_id, agent_config.subagents),
     )
     return SubagentContext(
         user_id=user_id,
         subagents=agent_config.subagents,
-        bases=base_subagents(agent_config.subagents),
+        bases=bases,
+        offered=offered,
         model_pref=model_pref,
         is_byok=is_byok,
         permits=permits,

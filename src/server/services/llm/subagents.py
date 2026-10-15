@@ -15,6 +15,7 @@ from typing import Any
 from ptc_agent.agent.subagents.merge import (
     BaseSubagent,
     ResolvedSubagents,
+    add_plugin_bases,
     base_subagents,
     merge_subagents,
     narrow_to_request,
@@ -61,13 +62,16 @@ async def resolve_user_subagents(
     would run a subagent they turned off.
     """
     from src.server.database.user_subagents import list_user_subagents
+    from src.server.services.subagents.plugin_bases import plugin_bases
 
     rows = await list_user_subagents(user_id, conn=conn)
-    bases = base_subagents(subagents)
-    resolved = merge_subagents(bases, subagents.enabled, rows)
+    bases, offered = add_plugin_bases(
+        base_subagents(subagents), subagents.enabled, await plugin_bases(user_id, conn=conn)
+    )
+    resolved = merge_subagents(bases, offered, rows)
     if resolved.orphaned:
         logger.info(
-            f"[CHAT] Ignoring subagent overrides whose base is gone for user={user_id}: "
+            f"[CHAT] Ignoring subagent overrides whose base is gone or not offered for user={user_id}: "
             f"{list(resolved.orphaned)}"
         )
     if resolved.shadowed:
@@ -147,9 +151,10 @@ async def _demote_unservable(
     """Pinned models this turn cannot run, as Inherit.
 
     By name for every pin, since a name the manifest lacks fails the build.
-    By plan only for a model the user chose: a deployment's own pin is the
-    operator's call, and gating it would change the turn of a user who never
-    touched their subagents.
+    By plan only for a model the user chose, a plugin's pin included since
+    the user installed it: a deployment's own pin is the operator's call, and
+    gating it would change the turn of a user who never touched their
+    subagents.
     """
     definitions = dict(resolved.definitions)
     unavailable = dict(resolved.unavailable)
@@ -161,13 +166,13 @@ async def _demote_unservable(
             continue
         base = bases.get(name)
         user_set = (
-            defn.source == "custom"
+            defn.source in ("custom", "plugin")
             or base is None
             or base.definition.model != defn.model
         )
         if model_resolves(model_pref, defn.model) and (
             not user_set
-            or await _on_plan(
+            or await model_on_plan(
                 user_id, defn.model, model_pref=model_pref, permits=permits,
                 is_byok=is_byok, byok_cache=byok_cache,
             )
@@ -185,7 +190,7 @@ async def _demote_unservable(
     return replace(resolved, definitions=definitions, unavailable=unavailable)
 
 
-async def _on_plan(
+async def model_on_plan(
     user_id: str,
     model: str,
     *,

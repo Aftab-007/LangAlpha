@@ -152,10 +152,17 @@ async def validate_source(
     """Validate a source's package; ``expected_name`` is the plugin an update
     means. Raises PluginFatal, and PluginAmbiguous for an archive of several
     plugins that ``expected_name`` does not settle."""
+    # An upload's file name is whatever the browser saved it as, so an update
+    # names a synthesized manifest after the plugin it updates, which is what
+    # that plugin's install named it after. A guess from "download.zip" would
+    # land in the stored description, and in the tree hash as a change.
+    hint = source.name_hint
+    if expected_name is not None and source.source_type == "zip":
+        hint = expected_name
     return await _validated(
         source.raw,
         subdir=source.subdir,
-        name_hint=source.name_hint,
+        name_hint=hint,
         expected_name=expected_name,
     )
 

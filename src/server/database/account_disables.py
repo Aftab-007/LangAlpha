@@ -31,10 +31,10 @@ class AccountDisables:
     bundles: frozenset[str]
 
 
-async def list_account_disables(user_id: str) -> AccountDisables:
+async def list_account_disables(user_id: str, *, conn=None) -> AccountDisables:
     """Everything this account has switched off, split by kind."""
-    async with get_db_connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
+    async with get_db_connection(conn) as db:
+        async with db.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 "SELECT kind, name FROM user_mcp_builtin_disables WHERE user_id = %s",
                 (user_id,),

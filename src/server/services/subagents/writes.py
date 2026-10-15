@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ptc_agent.agent.subagents.merge import BaseSubagent
@@ -74,7 +74,7 @@ async def file_values(user_id: str) -> list[dict[str, Any]]:
     and its version. Reads nothing of the user's but the rows."""
     from src.server.database.user_subagents import list_user_subagents
 
-    bases, offered = roster()
+    bases, offered = await roster(user_id)
     return value_views(bases, offered, await list_user_subagents(user_id))
 
 
@@ -169,6 +169,17 @@ async def _lock(conn, user_id: str) -> None:
     )
 
 
+async def _locked(ctx: SubagentContext, conn) -> SubagentContext:
+    """``ctx`` with the plugins' subagents read again under the lock.
+
+    Uninstall takes the same lock to drop the overrides of a plugin's
+    subagents, so a save that loses the race finds the base gone (a
+    conflict) rather than writing an override that outlives the plugin.
+    """
+    bases, offered = await roster(ctx.user_id, ctx.subagents, conn=conn)
+    return replace(ctx, bases=bases, offered=offered)
+
+
 async def save_subagent(
     user_id: str,
     name: str,
@@ -204,10 +215,13 @@ async def save_subagent(
     target = views.get(name)
     creating = version is None
     if creating and target is not None:
-        if target["kind"] == "base" and target["base"] is not None:
-            raise SubagentInvalid([
-                FieldError("name", f"{name} is a built-in subagent. Pick another name.")
-            ])
+        if target["kind"] == "base":
+            raise SubagentInvalid([FieldError("name", (
+                f"{name} is a built-in subagent. Pick another name."
+                if target["base"] is not None
+                else f"{name} holds the settings of a built-in subagent that was removed. "
+                "Delete them, or pick another name."
+            ))])
         raise VersionConflict()
     if not creating and (target is None or target["version"] != version):
         raise VersionConflict()
@@ -250,8 +264,12 @@ async def save_subagent(
         errors += exc.errors
         patch = {}
     if kind == "custom":
+        # The text as sent when another field refused the save and left no
+        # patch, so a description that was sent is never reported missing.
         final = {
-            key: (patch[key] or "") if key in patch else current.get(key)
+            key: (patch[key] or "") if key in patch
+            else fields[key] if isinstance(fields.get(key), str)
+            else current.get(key)
             for key in ("description", "instructions")
         }
         refused = {e.field for e in errors}
@@ -265,9 +283,10 @@ async def save_subagent(
     async with get_db_connection() as conn:
         async with conn.transaction():
             await _lock(conn, user_id)
+            now = await _locked(ctx, conn)
             rows = await list_user_subagents(user_id, conn=conn)
             locked = {
-                v["name"]: v for v in await build_views(ctx, rows, problems=False)
+                v["name"]: v for v in await build_views(now, rows, problems=False)
             }.get(name)
             row = await get_user_subagent(user_id, name, conn=conn, for_update=True)
             if creating:
@@ -275,7 +294,7 @@ async def save_subagent(
                     raise VersionConflict()
                 errors = validate_new_name(
                     name,
-                    base_names=ctx.bases,
+                    base_names=now.bases,
                     custom_count=sum(1 for r in rows if r.get("kind") == "custom"),
                 )
                 if errors:
@@ -300,7 +319,7 @@ async def save_subagent(
                     updated_by=updated_by, updated_thread_id=thread_id, conn=conn,
                 )
             else:
-                base = ctx.bases[name]
+                base = now.bases[name]
                 new_fields = _override_fields(base, row, patch)
                 if new_fields:
                     await upsert_user_subagent(
@@ -347,7 +366,8 @@ async def delete_subagent(user_id: str, name: str, *, version: str | None) -> bo
             await _lock(conn, user_id)
             rows = await list_user_subagents(user_id, conn=conn)
             target = {
-                v["name"]: v for v in await build_views(ctx, rows, problems=False)
+                v["name"]: v
+                for v in await build_views(await _locked(ctx, conn), rows, problems=False)
             }.get(name)
             if target is None:
                 raise SubagentNotFound(name)
@@ -382,10 +402,10 @@ async def rename_subagent(
         rename_user_subagent,
     )
 
-    bases, offered = roster()
     async with get_db_connection() as conn:
         async with conn.transaction():
             await _lock(conn, user_id)
+            bases, offered = await roster(user_id, conn=conn)
             views = {
                 v["name"]: v
                 for v in value_views(bases, offered, await list_user_subagents(user_id, conn=conn))

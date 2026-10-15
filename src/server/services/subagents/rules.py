@@ -12,6 +12,7 @@ the thread's (or the user's) value explicitly, anything else is the value.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from ptc_agent.agent.roles import ALL_ROLES
 from ptc_agent.agent.subagents.merge import BROKERAGE_ACCESS, TOOL_WORDS
 from ptc_agent.core.paths import SUBAGENT_NAME
+
+from .frontmatter import UNSAVABLE
 
 if TYPE_CHECKING:
     from .context import SubagentContext
@@ -53,6 +56,8 @@ WRITABLE_KEYS = EDITABLE_KEYS + CUSTOM_KEYS
 INHERITABLE_KEYS = frozenset({"model", "effort", "search_provider", "search_depth"})
 ROLE_ORDER = tuple(sorted(ALL_ROLES))
 
+NUL_MESSAGE = "Remove the NUL character (\\x00). Saved text can't hold one."
+SURROGATE_MESSAGE = "Remove the unpaired surrogate (\\ud800 to \\udfff). Saved text can't hold one."
 
 Kind = Literal["custom", "override"]
 
@@ -62,6 +67,14 @@ class FieldError:
     field: str
     message: str
     options: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        # A message may echo what was sent (an unknown model, a key), and a lone
+        # surrogate there would fail the response's UTF-8 encoding.
+        for name in ("field", "message"):
+            value = getattr(self, name)
+            if isinstance(value, str):
+                object.__setattr__(self, name, value.encode("utf-8", "backslashreplace").decode("utf-8"))
 
     def as_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"field": self.field, "message": self.message}
@@ -317,23 +330,40 @@ async def validate_fields(
     return patch
 
 
+def unsavable_message(text: str) -> str | None:
+    """Why Postgres can't store ``text`` (see ``UNSAVABLE``), or None."""
+    found = UNSAVABLE.search(text)
+    if found is None:
+        return None
+    return NUL_MESSAGE if found.group() == "\x00" else SURROGATE_MESSAGE
+
+
 def content_errors(values: Mapping[str, Any]) -> list[FieldError]:
-    """The size limits on a custom subagent's own text."""
+    """The limits on a custom subagent's own text: its size, and no character
+    Postgres can't store. Its other values are names checked against what
+    exists, so only these two are saved as sent."""
     errors: list[FieldError] = []
     description = values.get("description")
-    if isinstance(description, str) and len(description) > DESCRIPTION_MAX:
+    unsavable = unsavable_message(description) if isinstance(description, str) else None
+    if unsavable is not None:
+        errors.append(FieldError("description", unsavable))
+    elif isinstance(description, str) and len(description) > DESCRIPTION_MAX:
         errors.append(FieldError(
             "description",
             f"Keep it to {DESCRIPTION_MAX} characters (this is {len(description)}).",
         ))
     instructions = values.get("instructions")
-    if isinstance(instructions, str):
+    unsavable = unsavable_message(instructions) if isinstance(instructions, str) else None
+    if unsavable is not None:
+        errors.append(FieldError("instructions", unsavable))
+    elif isinstance(instructions, str):
         size = len(instructions.encode("utf-8"))
         if size > INSTRUCTIONS_MAX_BYTES:
+            # Rounded up, so a size just over the limit never reads as the limit.
             errors.append(FieldError(
                 "instructions",
-                f"Keep instructions under {INSTRUCTIONS_MAX_BYTES // 1024} KB "
-                f"(this is {size / 1024:.1f} KB).",
+                f"Keep instructions to {INSTRUCTIONS_MAX_BYTES // 1024} KB or less "
+                f"(this is {math.ceil(size / 102.4) / 10:.1f} KB).",
             ))
     return errors
 

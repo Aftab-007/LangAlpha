@@ -458,6 +458,7 @@ async def _update_with_secrets(
         patch.object(update, "claim_plugin_secrets", AsyncMock()),
         patch.object(update, "_update_servers", AsyncMock()),
         patch.object(update, "_update_skills", AsyncMock()),
+        patch.object(update, "_update_subagents", AsyncMock()),
         patch.object(update, "update_plugin_row", AsyncMock(return_value=plugin)),
         patch.object(update, "after_secrets_changed", AsyncMock()),
         patch.object(update, "pending_secret_declarations", AsyncMock(return_value=[])),

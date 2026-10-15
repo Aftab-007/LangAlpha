@@ -5,6 +5,7 @@ import { Download, ExternalLink, KeyRound, Plug, RefreshCw } from 'lucide-react'
 import { ConfirmStrip } from '@/components/mcp/McpPrimitives';
 import { useBuiltinMcpServers, useMcpCatalog } from '@/hooks/useMcpServers';
 import { useSkills } from '@/hooks/useSkills';
+import { useSubagents } from '@/hooks/useSubagents';
 import { useLocale } from '@/hooks/useLocale';
 import { secretUsage } from '@/hooks/useSecretUsage';
 import { useUserVaultSecrets } from '@/hooks/useUserVault';
@@ -32,9 +33,10 @@ import {
 } from './DetailPage';
 import { SurfaceGrid } from './surface/Surface';
 import { BuiltinConnectorCell, ConnectorCell } from './connectors/ConnectorCells';
-import { PluginBareCell, SkillCell } from './pluginsPage/componentCells';
+import { PluginBareCell, SkillCell, SubagentCell } from './pluginsPage/componentCells';
 import { MetaLine, OnOffControl, PageButton } from './pluginsPage/parts';
 import {
+  changedSubagents,
   partsLabel,
   pluginStatus,
   reasonLabel,
@@ -47,9 +49,10 @@ import { usePluginLifecycle } from './pluginsPage/usePluginLifecycle';
 
 /**
  * A plugin's page: what it is and where it came from, the one problem worth
- * fixing first, then what it carries (connectors and skills, each opening its
- * own page with its real state), and beside that the keys it reads, its facts
- * and its verbs. The plugin never re-renders what those pages own.
+ * fixing first, then what it carries (connectors, skills and subagents, each
+ * opening its own page with its real state), and beside that the keys it
+ * reads, its facts and its verbs. The plugin never re-renders what those
+ * pages own.
  *
  * A bundle has no lifecycle: Update, Export and Uninstall all answer 404 for a
  * name with no install behind it, so its side column says it can only be
@@ -73,6 +76,7 @@ export function PluginDetail({
   const { data: catalog } = useMcpCatalog();
   const { data: builtinData } = useBuiltinMcpServers();
   const { data: skillList } = useSkills(null, { includeDisabled: true, allScopes: true });
+  const { data: subagentList } = useSubagents();
   const vendorOf = useVendorOf();
   const { openDetail } = useSectionNav();
   const { data: vault } = useUserVaultSecrets();
@@ -95,6 +99,11 @@ export function PluginDetail({
 
   const mcpNames = plugin.components.filter((c) => c.kind === 'mcp').map((c) => c.name);
   const skillNames = plugin.components.filter((c) => c.kind === 'skill').map((c) => c.name);
+  const subagentNames = plugin.components.filter((c) => c.kind === 'subagent').map((c) => c.name);
+  // Only this plugin's: a name it ships may also be the user's own subagent.
+  const pluginSubagents = (subagentList?.subagents ?? []).filter(
+    (v) => v.source === 'plugin' && v.plugin?.name === plugin.name,
+  );
   const skillByName = new Map<string, SkillInfo>();
   for (const skill of skillList ?? []) {
     // The plugin's own row wins over a same-named skill elsewhere.
@@ -129,9 +138,9 @@ export function PluginDetail({
    *  answered, or a vendor's flow this build cannot finish, holds it. */
   const canConnect = (server: CatalogServer) => connectBlock(vendorOf(server.url)) === null;
 
-  /** A connector's or a skill's own page, on the section that lists it. */
-  const openComponent = (kind: 'mcp' | 'skill', name: string) =>
-    openDetail({ kind: kind === 'mcp' ? 'server' : 'skill', name });
+  /** A part's own page, on the section that lists it. */
+  const openComponent = (kind: 'mcp' | 'skill' | 'subagent', name: string) =>
+    openDetail({ kind: kind === 'mcp' ? 'server' : kind, name });
 
   function openSecrets(name?: string) {
     navigate(name ? secretSetupHref(name) : '/plugins?tab=secrets');
@@ -279,6 +288,16 @@ export function PluginDetail({
         />
       );
     });
+  const subagentCells = [...subagentNames]
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => (
+      <SubagentCell
+        key={name}
+        name={name}
+        view={pluginSubagents.find((v) => v.name === name) ?? null}
+        onOpen={() => openComponent('subagent', name)}
+      />
+    ));
 
   // ── Side column ─────────────────────────────────────────────────────────
   const keyBlock =
@@ -380,7 +399,12 @@ export function PluginDetail({
 
   const uninstallNote = uninstallLines(
     t,
-    { connectors: mcpNames.length, skills: skillNames.length },
+    {
+      connectors: mcpNames.length,
+      skills: skillNames.length,
+      subagents: subagentNames.length,
+      changedSubagents: changedSubagents(plugin, subagentList?.subagents),
+    },
     storedKeys(status.keys, storedNames),
     'before',
   );
@@ -479,7 +503,12 @@ export function PluginDetail({
             <SurfaceGrid className="is-wide">{skillCells}</SurfaceGrid>
           </DetailSection>
         )}
-        {connectorCells.length === 0 && skillCells.length === 0 && (
+        {subagentCells.length > 0 && (
+          <DetailSection title={t('plugins.pluginsPage.subagents')} count={subagentCells.length}>
+            <SurfaceGrid className="is-wide">{subagentCells}</SurfaceGrid>
+          </DetailSection>
+        )}
+        {connectorCells.length === 0 && skillCells.length === 0 && subagentCells.length === 0 && (
           <p className="pp-empty-line">{t('plugins.pluginsPage.nothingInside')}</p>
         )}
       </DetailPage>

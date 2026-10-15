@@ -37,6 +37,8 @@ from collections.abc import Collection, Iterator
 
 from src.server.models.plugin import Diagnostic
 from src.server.services.os_litter import is_os_litter
+from src.server.services.plugins.agents import AGENTS_DIR, is_agent_file
+from src.server.services.plugins.discover import _VENDOR_DIRS
 from src.server.services.plugins.errors import PluginFatal
 from src.server.services.plugins.paths import split_member
 
@@ -572,16 +574,38 @@ def _extract_tar(raw: bytes) -> tuple[dict[str, bytes], dict[str, str]]:
     return files, links
 
 
+# What inside a lone ``agents/`` makes it a plugin's folder rather than the
+# subagents folder: discovery's manifest folders, or an ``agents/`` of its own.
+_PLUGIN_FOLDER_DIRS = (AGENTS_DIR, *(f"{d}/" for d in _VENDOR_DIRS))
+
+
 def _single_root_prefix(paths: Collection[str]) -> str:
     """The wrapping ``repo-ref/`` directory to strip, or "" when there is none.
 
     Any member at the top level means there is no wrapper, even one named
-    like the directory beside it: stripping would drop it.
+    like the directory beside it: stripping would drop it. Nor is a lone
+    ``agents/`` holding a subagent file, which is that folder zipped on its
+    own: stripped, its files would read as no package at all. A stray file
+    beside the subagents leaves it that folder, since install reports the
+    file and keeps the rest, but a manifest or an ``agents/`` inside makes it
+    a plugin folder that happens to bear the name.
     """
     if not paths or any("/" not in path for path in paths):
         return ""
     roots = {path.split("/", 1)[0] for path in paths}
-    return f"{roots.pop()}/" if len(roots) == 1 else ""
+    if len(roots) != 1:
+        return ""
+    root = roots.pop()
+    if (
+        f"{root}/" == AGENTS_DIR
+        and any(is_agent_file(path) for path in paths)
+        and not any(
+            rest == "plugin.json" or rest.startswith(_PLUGIN_FOLDER_DIRS)
+            for rest in (path.removeprefix(AGENTS_DIR) for path in paths)
+        )
+    ):
+        return ""
+    return f"{root}/"
 
 
 def _links_holding_content(

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { TFunction } from 'i18next';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { ChevronRight, KeyRound } from 'lucide-react';
@@ -70,8 +71,10 @@ const STATUS_WORD: Record<Exclude<PluginComponentStatus, 'upgradable'>, string> 
   detached: 'statusDetached',
 };
 
+const HREF_KIND = { mcp: 'server', skill: 'skill', subagent: 'subagent' } as const;
+
 function componentHref(result: PluginComponentResult): string {
-  return detailHref({ kind: result.kind === 'mcp' ? 'server' : 'skill', name: result.name });
+  return detailHref({ kind: HREF_KIND[result.kind], name: result.name });
 }
 
 function ComponentRow({
@@ -155,6 +158,28 @@ const ROW_ORDER: Record<PluginComponentStatus, number> = {
   upgradable: 5,
 };
 
+/** How a package with no plugin.json was read: a folder of skills, of
+ *  subagents (a top-level agents/), or of both. */
+function packagedAs(
+  t: TFunction,
+  components: PluginComponentResult[],
+  plugin: string,
+  locale: string,
+): string {
+  const skills = components.filter((c) => c.kind === 'skill').length;
+  const subagents = components.filter((c) => c.kind === 'subagent').length;
+  if (subagents === 0) return t('plugins.install.packagedAs', { count: skills, plugin });
+  if (skills === 0) return t('plugins.install.packagedAsSubagents', { count: subagents, plugin });
+  const parts = formatList(
+    [
+      t('plugins.install.skillCount', { count: skills }),
+      t('plugins.install.subagentCount', { count: subagents }),
+    ],
+    locale,
+  );
+  return t('plugins.install.packagedAsBoth', { parts, plugin });
+}
+
 export function PluginReportStep({
   report,
   plugin,
@@ -188,9 +213,11 @@ export function PluginReportStep({
   const inPlace = components.filter((c) => IN_PLACE.has(c.status));
   const connectorCount = inPlace.filter((c) => c.kind === 'mcp').length;
   const skillCount = inPlace.filter((c) => c.kind === 'skill').length;
+  const subagentCount = inPlace.filter((c) => c.kind === 'subagent').length;
   const parts = [
     connectorCount > 0 ? t('plugins.install.connectorCount', { count: connectorCount }) : null,
     skillCount > 0 ? t('plugins.install.skillCount', { count: skillCount }) : null,
+    subagentCount > 0 ? t('plugins.install.subagentCount', { count: subagentCount }) : null,
   ].filter((part): part is string => part !== null);
   const lead =
     parts.length > 0
@@ -208,6 +235,7 @@ export function PluginReportStep({
       .sort((a, b) => ROW_ORDER[a.status] - ROW_ORDER[b.status]);
   const connectorRows = rows('mcp');
   const skillRows = rows('skill');
+  const subagentRows = rows('subagent');
   const upgradable = components.filter((c) => c.status === 'upgradable');
 
   const packaged = diagnostics.find((d) => d.code === 'synthesized_manifest');
@@ -255,10 +283,7 @@ export function PluginReportStep({
           </p>
           {packaged && (
             <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-              {t('plugins.install.packagedAs', {
-                count: components.filter((c) => c.kind === 'skill').length,
-                plugin,
-              })}
+              {packagedAs(t, components, plugin, locale)}
             </p>
           )}
         </div>
@@ -319,6 +344,9 @@ export function PluginReportStep({
       )}
       {skillRows.length > 0 && (
         <Group title={t('plugins.install.groupSkills')}>{componentList(skillRows)}</Group>
+      )}
+      {subagentRows.length > 0 && (
+        <Group title={t('plugins.install.groupSubagents')}>{componentList(subagentRows)}</Group>
       )}
 
       {upgradable.length > 0 && (

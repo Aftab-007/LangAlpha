@@ -120,5 +120,5 @@ class SubagentDefinition:
 
     # ── Source tracking ───────────────────────────────────────────────
     source: str = "builtin"
-    """``"builtin"``, ``"user"`` (deployment YAML) or ``"custom"`` (a user's
-    own row), for logging and debugging."""
+    """``"builtin"``, ``"user"`` (deployment YAML), ``"plugin"`` (a plugin's
+    ``agents/`` file) or ``"custom"`` (a user's own row)."""

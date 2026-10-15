@@ -229,7 +229,7 @@ def _orphan_view(row: Mapping[str, Any]) -> dict[str, Any]:
             **_provenance(row),
         },
         {"base_key": row.get("base_key"), "orphan": dict(fields)},
-    )
+    ) | {"file": None}
 
 
 async def _model_unavailable(
@@ -238,12 +238,16 @@ async def _model_unavailable(
     """The per-turn availability passes, asked ahead of the turn.
 
     Name and plan as the merge's first pass checks them (a deployment's own
-    pin is never plan-gated), then the key a custom model needs, which the
-    turn finds only once it builds clients.
+    pin is never plan-gated, a plugin's is), then the key a custom model
+    needs, which the turn finds only once it builds clients.
     """
     if not ctx.model_known(defn.model):
         return True
-    user_set = base is None or base.definition.model != defn.model
+    user_set = (
+        base is None
+        or base.definition.source == "plugin"
+        or base.definition.model != defn.model
+    )
     if user_set and not await ctx.model_on_plan(defn.model):
         return True
     return not await ctx.model_has_key(defn.model)
@@ -305,8 +309,12 @@ def _views(
             pairs.append((view, defn, base))
         views.append(view)
     for name in resolved.orphaned:
-        if name not in resolved.definitions:
-            views.append(_orphan_view(by_name[name]))
+        row = by_name[name]
+        # A base still defined but not offered (left out by the operator, or
+        # its plugin off) keeps the user's changes for when it is back.
+        dormant = name in bases and bases[name].key == row.get("base_key")
+        if name not in resolved.definitions and not dormant:
+            views.append(_orphan_view(row))
     return views, pairs, on
 
 
