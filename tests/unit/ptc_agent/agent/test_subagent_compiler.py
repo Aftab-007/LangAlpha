@@ -186,3 +186,33 @@ class TestSubagentPromptFeatureGating:
 
         assert "Financial Tools (Direct)" in prompt
         assert "get_quote" in prompt
+
+
+class TestSubagentPreloadedSkills:
+    """A preferred skill is a preload and the pane offers it on every
+    subagent, so its SKILL.md closes whichever prompt the subagent has."""
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            {"role_prompt": "Do ops."},
+            {"custom_prompt": "You are ops."},
+            {"custom_prompt_template": "subagents/roles/general.md.j2"},
+        ],
+        ids=["composed", "custom_prompt", "custom_prompt_template"],
+    )
+    def test_a_preloaded_skill_closes_the_prompt(self, monkeypatch, prompt):
+        monkeypatch.setattr(
+            "ptc_agent.agent.subagents.compiler.load_skill_content",
+            lambda name, dirs=None, registry=None: f"{name} body",
+        )
+        defn = SubagentDefinition(name="ops", description="d", preload_skills=["dcf"], **prompt)
+
+        assert _compiler().compile(defn)["system_prompt"].endswith(
+            "\n\n<preloaded_skills>\n## Skill: dcf\n\ndcf body\n</preloaded_skills>\n"
+        )
+
+    def test_a_custom_prompt_without_preloads_is_kept_as_written(self):
+        defn = SubagentDefinition(name="ops", description="d", custom_prompt="You are ops.  ")
+
+        assert _compiler().compile(defn)["system_prompt"] == "You are ops.  "

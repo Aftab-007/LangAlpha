@@ -1056,6 +1056,24 @@ def tar_with_links(
     return buf.getvalue()
 
 
+class TestSingleRootPrefix:
+    @pytest.mark.parametrize(
+        ("paths", "prefix"),
+        [
+            (["agents/a.md", "agents/b.md"], ""),
+            (["agents/a.md", "agents/plugin.json"], "agents/"),
+            (["agents/a.md", "agents/.claude-plugin/plugin.json"], "agents/"),
+            (["agents/a.md", "agents/sub/x.md"], ""),
+            (["agents/x.md", "agents/README.txt"], ""),
+            (["agents/README.md", "agents/agents/x.md"], "agents/"),
+            (["repo-main/agents/a.md", "repo-main/plugin.json"], "repo-main/"),
+            (["repo-main/a.md"], "repo-main/"),
+        ],
+    )
+    def test_only_a_wrapper_is_stripped_not_a_lone_agents_folder(self, paths, prefix):
+        assert archive._single_root_prefix(paths) == prefix
+
+
 class TestArchiveLinks:
     """Links inside a package resolve to content; only escapes are dropped.
 
@@ -1887,6 +1905,19 @@ class TestBareSkillRepos:
         assert package.name == "alpha"
         fresh = await validate_source(source)
         assert fresh.name == "repo"
+
+    @pytest.mark.asyncio
+    async def test_an_uploaded_zip_update_names_a_manifestless_package_after_the_plugin(self):
+        raw = zip_package({"agents/x.md": b"---\ndescription: Does x.\n---\nBody.\n"})
+        source = PackageSource(
+            raw=raw, subdir=None, name_hint="download", source_type="zip", source_ref=None
+        )
+        package = await validate_source(source, expected_name="screen-kit")
+        assert package.name == "screen-kit"
+        assert package.manifest["description"] == "Subagents from screen-kit"
+        assert "screen-kit" in package.diagnostics[0].message
+        assert package.diagnostics[0].code == "synthesized_manifest"
+        assert (await validate_source(source)).name == "download"
 
     @pytest.mark.parametrize(
         ("hint", "name"),

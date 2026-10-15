@@ -323,3 +323,62 @@ async def test_the_panel_never_deletes_a_data_file(workspace, monkeypatch):
         "deleted": [],
         "errors": [{"path": path, "detail": route.undeletable} for path, route in CATALOG.items()],
     }
+
+
+SUBAGENT_FILES = [".agents/user/agents/main.md", ".agents/user/agents/data-prep.md"]
+
+
+def _sandbox_to_change(monkeypatch, probe) -> MagicMock:
+    sandbox = MagicMock()
+    sandbox.validate_path.return_value = True
+    sandbox.execute_bash_command = AsyncMock(return_value={"success": True})
+
+    @asynccontextmanager
+    async def _lock(_path):
+        yield
+
+    sandbox.path_write_lock = _lock
+
+    @asynccontextmanager
+    async def _acquire(*_):
+        yield sandbox, WORKSPACE
+
+    monkeypatch.setattr(crud, "_acquire_sandbox_to_change", _acquire)
+    monkeypatch.setattr(crud, "contained_sandbox_paths", probe)
+    return sandbox
+
+
+@pytest.mark.asyncio
+async def test_a_server_held_file_is_refused_as_such_when_the_mount_is_down(workspace, monkeypatch):
+    """With the file mount down the probe resolves its link to nothing."""
+    probe = AsyncMock(side_effect=lambda _sb, paths, work_dir: [None] * len(paths))
+    _sandbox_to_change(monkeypatch, probe)
+
+    result = await crud.delete_workspace_files(
+        workspace_id=WORKSPACE_ID, x_user_id=USER, body=crud.DeleteFilesRequest(paths=SUBAGENT_FILES)
+    )
+
+    assert result["deleted"] == []
+    assert [e["path"] for e in result["errors"]] == SUBAGENT_FILES
+    assert all(e["detail"] != "File not found" for e in result["errors"])
+    assert [e["detail"] for e in result["errors"]] == [_virtual_file(p).undeletable for p in SUBAGENT_FILES]
+
+
+@pytest.mark.asyncio
+async def test_a_server_held_file_is_not_probed_and_the_files_after_it_keep_their_slot(workspace, monkeypatch):
+    probe = AsyncMock(side_effect=lambda _sb, paths, work_dir: list(paths))
+    sandbox = _sandbox_to_change(monkeypatch, probe)
+
+    result = await crud.delete_workspace_files(
+        workspace_id=WORKSPACE_ID,
+        x_user_id=USER,
+        body=crud.DeleteFilesRequest(paths=[SUBAGENT_FILES[0], "notes.md", PORTFOLIO, "report.md"]),
+    )
+
+    assert probe.await_args.args[1] == [f"{ROOT}/notes.md", f"{ROOT}/report.md"]
+    assert result["deleted"] == ["notes.md", "report.md"]
+    assert result["errors"] == [
+        {"path": SUBAGENT_FILES[0], "detail": _virtual_file(SUBAGENT_FILES[0]).undeletable},
+        {"path": PORTFOLIO, "detail": UserDataBackend.undeletable},
+    ]
+    sandbox.execute_bash_command.assert_awaited_once_with(f"rm -f {ROOT}/notes.md {ROOT}/report.md")
