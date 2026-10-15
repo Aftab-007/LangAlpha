@@ -337,7 +337,12 @@ class SubagentCompiler:
 
     def _identity_line(self, defn: SubagentDefinition) -> str:
         """Build the first-line identity for a subagent."""
-        return f"You are the {defn.name} subagent."
+        return (
+            f"You are the {defn.name} subagent. The parent agent spawned you "
+            "from its thread to do one task, and its brief, with any update it "
+            "sends, is all you see of that thread. Only your final message goes "
+            "back to it; it does not see the steps in between."
+        )
 
     def _compute_sections(self, defn: SubagentDefinition) -> dict[str, bool]:
         """Merge mode defaults with definition overrides."""
