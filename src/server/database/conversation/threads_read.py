@@ -742,10 +742,9 @@ async def get_thread_auth_meta(thread_id: str, *, conn=None) -> Optional[Dict[st
     """Owner ``user_id`` + ``is_shared`` + ``msg_type`` + ``workspace_id`` +
     ``llm_model`` in one query.
 
-    Lets ``/status`` authorize the caller, read share state, and pick the
-    report-back read model (flash watch set vs PTC task outbox) from a
-    single round-trip, and lets a send authorize, find its workspace and read
-    the thread's model from the same one. Returns ``None`` if the thread
+    Lets ``/status`` authorize the caller and read share state from a single
+    round-trip, and lets a send authorize, find its workspace and read the
+    thread's model from the same one. Returns ``None`` if the thread
     doesn't exist.
     """
     # Same UUID normalization as get_thread_owner_id: a non-UUID id can't match

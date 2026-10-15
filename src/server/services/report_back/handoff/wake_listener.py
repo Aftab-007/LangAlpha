@@ -24,7 +24,7 @@ import uuid
 from typing import Optional
 
 from src.utils.concurrency import cancel_and_join
-from src.server.services.report_back.flash.keys import (
+from src.server.services.report_back.handoff.keys import (
     parse_thread_wake_key,
     thread_wake_pattern,
 )

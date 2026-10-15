@@ -97,9 +97,7 @@ async def create_thread_endpoint(
     still gets the title persisted, and the durable truth is always readable
     via GET /threads/{id}.
     """
-    workspace = await requested_workspace(
-        x_user_id, request.agent_mode, request.workspace_id
-    )
+    workspace = await requested_workspace(x_user_id, request.workspace_id)
 
     # Same credit gate the follow-up /messages call enforces — a quota-blocked
     # client must not mint durable rows + platform title calls through this

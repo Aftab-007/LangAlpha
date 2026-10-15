@@ -115,7 +115,7 @@ _REDIS_BACKGROUND_SINGLETONS: tuple[tuple[str, str], ...] = (
     ("StreamRetentionSweeper", "src.server.services.stream_retention_sweep"),
     # One PSUBSCRIBE per worker feeds every open /watch, instead of one pinned
     # Redis connection per viewer.
-    ("ThreadWakeListener", "src.server.services.report_back.flash.wake_listener"),
+    ("ThreadWakeListener", "src.server.services.report_back.handoff.wake_listener"),
     # Tells apart "Redis is slow" from "this worker's loop was blocked", which
     # read identically at the redis-py boundary.
     ("EventLoopLagMonitor", "src.observability.loop_lag"),
@@ -496,11 +496,11 @@ async def lifespan(app: FastAPI):
     # permanently off behind one WARN line (report-backs undelivered, burst
     # slots leaking).
     from src.server.services.report_back import steer_executor, subagent
-    from src.server.services.report_back.flash import core as flash_core
+    from src.server.services.report_back.handoff import core as handoff_core
     from src.server.services import automation_settlement, thread_lifecycle_feed
     from src.server.services.hook_outbox import HookOutboxDrainer
 
-    flash_core.register_outbox_executors()
+    handoff_core.register_outbox_executors()
     subagent.register_outbox_executors()
     steer_executor.register_outbox_executors()
     thread_lifecycle_feed.register_outbox_executors()

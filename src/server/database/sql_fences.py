@@ -16,16 +16,16 @@ FENCE_BINDABLE = "status NOT IN ('deleted', 'stopping', 'stopped')"
 # Tombstones retain provider_ref; prevent a racing reaper from reviving a billed machine.
 FENCE_NOT_DELETED = "status <> 'deleted'"
 
-# A flash workspace has no computer until it is bound as the user's Home, and
-# then takes its computer's status like any workspace on it. Until then a
-# machine-scoped write must not reach it and overwrite the 'flash' marker.
-FENCE_LIVE_WORKSPACE = "status NOT IN ('deleted', 'flash')"
+# A user's Home has no computer until its first start or turn, and then takes
+# its computer's status like any workspace on it. Until then a machine-scoped
+# write must not reach it and overwrite the 'unbound' marker.
+FENCE_LIVE_WORKSPACE = "status NOT IN ('deleted', 'unbound')"
 
-# A listing of the user's workspaces leaves Home out by its id, since bound as
-# Home it reads its computer's status, and leaves out by status a flash row at
-# another id, which an account merge leaves until the fold. The caller binds
+# A listing of the user's workspaces leaves Home out by its id, since bound it
+# reads its computer's status, and leaves out by status an unbound former Home
+# at another id, which an account merge leaves until the fold. The caller binds
 # ``home_id``.
-EXCLUDE_HOME = "status <> 'flash' AND workspace_id <> %(home_id)s"
+EXCLUDE_HOME = "status <> 'unbound' AND workspace_id <> %(home_id)s"
 
 # The worker running a spec change stamps heartbeat_at on its record every
 # SPEC_CHANGE_HEARTBEAT_SECONDS. A record still in progress with no stamp for

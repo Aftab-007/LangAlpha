@@ -93,7 +93,7 @@ def steer_allowed(
 ) -> bool:
     """Whether a running turn on the thread may take this request as a steer.
 
-    Foreground turns steer, and so does a Chief of Staff or Flash hand-off
+    Foreground turns steer, and so does a Chief of Staff hand-off
     (``agent_steer_of``). Any other dispatched flow, a retry (a /retry that
     finds another live run is a conflict, not an empty steering message into
     it), a fork (an edit or a regenerate replaces a turn, which a message
@@ -108,14 +108,14 @@ def steer_allowed(
 
 
 def _is_agent_hand_off(request: ChatRequest) -> bool:
-    """A dispatched message from the Chief of Staff or Flash, and nothing
-    else: a report-back summary, a retry, a fork, an answer to a pause, or a
+    """A dispatched message from the Chief of Staff, and nothing else: a
+    report-back summary, a retry, a fork, an answer to a pause, or a
     turn the server posts for a parked steer is a turn of its own."""
     origin = request.origin
     return bool(
         origin is not None
         and origin.type == "agent"
-        and origin.agent in ("chief_of_staff", "flash")
+        and origin.agent == "chief_of_staff"
         and not request.report_back_ptc_thread_id
         and request.report_source is None
         and request.steer_job_id is None
@@ -127,7 +127,7 @@ def _is_agent_hand_off(request: ChatRequest) -> bool:
 
 @dataclass(frozen=True)
 class AgentSteer:
-    """How a Chief of Staff or Flash hand-off enters a running turn."""
+    """How a Chief of Staff hand-off enters a running turn."""
 
     sender: str
     origin: dict
@@ -209,11 +209,11 @@ async def wait_or_steer(
     ``can_steer=False`` (whatever ``steer_allowed`` refuses) forbids
     steering entirely: any in-flight run is a hard conflict, never a steer.
     ``steer_job_id`` is the parked steer a server-posted turn carries, whose
-    own row is not a copy of it. ``agent`` is a Chief of Staff or Flash
-    hand-off: accepted, it stamps the run with its report-back origin and
-    answers with ``DISPATCH_STEERED_MARKER`` and the run's id for the
-    dispatch primer, which has no SSE reader; a run that reports to another
-    Home thread is a 409.
+    own row is not a copy of it. ``agent`` is a Chief of Staff hand-off:
+    accepted, it stamps the run with its report-back origin and answers with
+    ``DISPATCH_STEERED_MARKER`` and the run's id for the dispatch primer,
+    which has no SSE reader; a run that reports to another Home thread is a
+    409.
 
     Admission states (see ``LocalRunExecutor.wait_for_admission``):
     - ``"fresh"``     → start a new turn ``(True, None)``; with ``steer_only``,

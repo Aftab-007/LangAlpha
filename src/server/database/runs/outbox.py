@@ -1176,8 +1176,8 @@ async def merge_job_payload(
 
 
 # ---------------------------------------------------------------------------
-# Steers: a message for a thread's (or a task's) live agent, from the user, the
-# Chief of Staff or Flash. One ``steer`` row per message, parked at insert
+# Steers: a message for a thread's (or a task's) live agent, from the user or
+# the Chief of Staff. One ``steer`` row per message, parked at insert
 # (``next_retry_at='infinity'``). The next model call on the thread holds it
 # (``steered_run_id``) and the step that reads it confirms it; a row no turn
 # takes becomes due (``due_at``, see ``_STEER_DUE_SQL``) and its executor
@@ -1739,8 +1739,8 @@ async def hold_jobs(job_ids: List[str], *, owner: Tuple[str, str]) -> List[str]:
     while it is in progress and, for a steer, not stopped: its ending and its
     cancel stamp both settle the rows it holds, so a hold that commits first
     is settled with them, and one that waits behind them takes nothing. A run
-    taking a Chief of Staff or Flash hand-off is stamped with its report-back
-    origin in the same transaction, as ``admit_steer`` stamps the run it was
+    taking a Chief of Staff hand-off is stamped with its report-back origin
+    in the same transaction, as ``admit_steer`` stamps the run it was
     sent into, so the run that reads it is the one that reports back. A
     report-back is held as ``hold_steered_report_jobs`` holds it."""
     if not job_ids:

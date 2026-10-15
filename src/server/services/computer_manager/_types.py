@@ -45,7 +45,7 @@ as you work. The system prompt has full guidelines on what to maintain.
 class WorkspaceNotOnComputer(ValueError):
     """Nothing below the edge resolve has a second addressing mode to fall back to.
 
-    Reachable for a flash row that was never bound as Home, and for a row that
+    Reachable for a Home that was never bound, and for a row that
     disappeared between two reads."""
 
     def __init__(self, workspace_id: str):

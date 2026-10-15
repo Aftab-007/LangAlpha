@@ -7,34 +7,51 @@ import from any layer without cycles.
 
 from __future__ import annotations
 
+# Wire names that outlive a deploy: Redis records and run metadata written by
+# the previous build are still read after one, so these keep their spelling.
+# The ORIGIN_* names are the ``ptc_origin`` record's kind and the fields naming
+# the thread that handed the work off and its workspace; ORIGIN_THREAD_META is
+# the run metadata key (and chat request field) naming the thread a dispatched
+# run reports back to.
+WATCH_PREFIX = "flash_watch:"
+RB_RUN_PREFIX = "flash_rb_run:"
+RB_DONE_PREFIX = "flash_rb_done:"
+USER_PENDING_PREFIX = "flash_user_pending:"
+LEGACY_QUEUE_PATTERN = "flash_rb_queue:*"
+LEGACY_QUEUED_PREFIX = "flash_rb_queued:"
+ORIGIN_KIND = "flash"
+ORIGIN_THREAD_FIELD = "flash_thread_id"
+ORIGIN_WORKSPACE_FIELD = "flash_workspace_id"
+ORIGIN_THREAD_META = "origin_flash_thread_id"
+
 
 def decode(value) -> str:
     """Normalize a Redis reply that may arrive as bytes."""
     return value.decode() if isinstance(value, (bytes, bytearray)) else value
 
 
-def flash_watch_key(flash_thread_id: str) -> str:
-    """Redis SET of PTC thread ids dispatched from this flash thread, pending report-back."""
-    return f"flash_watch:{flash_thread_id}"
+def watch_key(dispatcher_thread_id: str) -> str:
+    """Redis SET of PTC thread ids dispatched from this thread, pending report-back."""
+    return f"{WATCH_PREFIX}{dispatcher_thread_id}"
 
 
-def flash_rb_run_key(flash_thread_id: str, ptc_thread_id: str) -> str:
-    """Redis key holding the report-back flash run_id for one (flash, ptc) pair."""
-    return f"flash_rb_run:{flash_thread_id}:{ptc_thread_id}"
+def rb_run_key(dispatcher_thread_id: str, ptc_thread_id: str) -> str:
+    """Redis key holding the report-back run_id for one (dispatcher, ptc) pair."""
+    return f"{RB_RUN_PREFIX}{dispatcher_thread_id}:{ptc_thread_id}"
 
 
-def flash_rb_done_key(flash_thread_id: str) -> str:
+def rb_done_key(dispatcher_thread_id: str) -> str:
     """Redis LIST of recently drained report-back run ids, newest first (bounded + TTL'd)."""
-    return f"flash_rb_done:{flash_thread_id}"
+    return f"{RB_DONE_PREFIX}{dispatcher_thread_id}"
 
 
-def flash_user_pending_key(user_id: str) -> str:
+def user_pending_key(user_id: str) -> str:
     """Per-user SET of pending dispatched PTC thread ids, gating the per-user cap."""
-    return f"flash_user_pending:{user_id}"
+    return f"{USER_PENDING_PREFIX}{user_id}"
 
 
 def ptc_origin_key(ptc_thread_id: str) -> str:
-    """Dispatch origin metadata (flash thread, user, workspaces, report_back flag) for a PTC thread."""
+    """Dispatch origin metadata (dispatching thread, user, workspaces, report_back flag) for a PTC thread."""
     return f"ptc_origin:{ptc_thread_id}"
 
 
@@ -55,9 +72,9 @@ def ptc_rb_resolved_key(ptc_thread_id: str) -> str:
 THREAD_WAKE_PREFIX = "thread:wake:"
 
 
-def thread_wake_key(flash_thread_id: str) -> str:
+def thread_wake_key(thread_id: str) -> str:
     """Pub/sub channel an in-session client subscribes to for report-back wake nudges."""
-    return f"{THREAD_WAKE_PREFIX}{flash_thread_id}"
+    return f"{THREAD_WAKE_PREFIX}{thread_id}"
 
 
 def thread_wake_pattern() -> str:
@@ -81,15 +98,15 @@ def parse_thread_wake_key(channel: str) -> str | None:
 
 
 # TTL for report-back Redis state (run pointers, watch SET, queue); 24h.
-FLASH_RB_RUN_TTL = 86400
+RB_RUN_TTL = 86400
 
-# TTL for the recently-drained run-id list (flash_rb_done); 15 min.
-FLASH_RB_DONE_TTL = 900
+# TTL for the recently-drained run-id list (``rb_done_key``); 15 min.
+RB_DONE_TTL = 900
 
-# Max recently-drained run ids kept per flash thread (LTRIM bound).
-FLASH_RB_DONE_MAX = 10
+# Max recently-drained run ids kept per dispatching thread (LTRIM bound).
+RB_DONE_MAX = 10
 
-# TTL for ptc_origin and flash_watch / flash_user_pending Redis keys (24 hours).
+# TTL for ptc_origin and the watch / user-pending Redis keys (24 hours).
 PTC_ORIGIN_TTL = 86400
 
 # TTL for a teardown tombstone (a clear fenced out by a provisional dispatch

@@ -506,7 +506,6 @@ async def execute_task_steer(job: dict) -> None:
         thread_id=thread_id,
         body={
             "messages": [{"role": "user", "content": _resume_notice(task_id)}],
-            "agent_mode": "ptc",
             "workspace_id": workspace_id,
             "query_type": "system",
             # Per lap: a reclaim after a crash adopts the turn it posted,

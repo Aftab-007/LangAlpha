@@ -1,4 +1,4 @@
-"""Flash-thread report-back pipeline, split by concern.
+"""Report-back pipeline for the Chief of Staff's hand-offs, split by concern.
 
 ``keys`` (key builders + TTLs) · ``leases`` (retry/lease timing) ·
 ``wake`` (wake wire-protocol) · ``pointer`` (run-pointer lifecycle) ·

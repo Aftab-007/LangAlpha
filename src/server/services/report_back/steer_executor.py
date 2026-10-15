@@ -35,7 +35,7 @@ def steer_request_key(job_id: str) -> str:
 async def _agent_steer_body(
     payload: dict, job_id: str, workspace_id: str | None, thread_id: str
 ) -> dict | None:
-    """The turn a Chief of Staff or Flash hand-off no turn read starts: the
+    """The turn a Chief of Staff hand-off no turn read starts: the
     dispatch it would have been, carrying the generation so the dispatch gate
     admits it and the turn reports back. None when the orphan resolver
     already receipted that generation: the gate would refuse the turn on
@@ -44,7 +44,7 @@ async def _agent_steer_body(
     home = origin.get("origin_flash_thread_id")
     gen = origin.get("origin_dispatch_gen")
     if home and gen:
-        from src.server.services.report_back.flash.keys import ptc_rb_resolved_key
+        from src.server.services.report_back.handoff.keys import ptc_rb_resolved_key
         from src.utils.cache.redis_cache import get_cache_client
 
         client = get_cache_client().client
@@ -55,7 +55,6 @@ async def _agent_steer_body(
             return None
     return {
         "messages": [{"role": "user", "content": payload.get("content") or ""}],
-        "agent_mode": "ptc",
         "workspace_id": workspace_id,
         "origin": {
             "type": "agent",
@@ -133,7 +132,6 @@ async def execute_steer(job: dict) -> None:
     if sender == "user":
         body = {
             "messages": [{"role": "user", "content": payload.get("content") or ""}],
-            "agent_mode": "ptc",
             "workspace_id": workspace_id,
             # The surface it was sent from (web, a MarketView panel), so the
             # turn answers under that surface's rules.

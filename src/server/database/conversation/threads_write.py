@@ -93,7 +93,7 @@ async def create_thread(
     Create a thread entry (thread_index auto-calculated if not provided).
 
     `msg_type` names the agent the thread runs on: 'ptc', the full agent, for
-    every new thread. Only threads the retired Flash agent started carry 'flash'.
+    every new thread.
     `platform` records the user surface the chat originated from. Conventions:
       - "web"                   — main ChatAgent page
       - "market_view:<SYMBOL>"  — MarketView side panel, symbol uppercased
@@ -104,8 +104,7 @@ async def create_thread(
         — who initiated the thread ('agent' id = the dispatching thread,
         'automation' id = automation). Absent origin key = user-initiated.
         Display-only extras: "name" (the automation's) and "agent" (which
-        agent dispatched: "chief_of_staff", or "flash" on threads the retired
-        Flash agent dispatched).
+        agent dispatched: "chief_of_staff").
     `external_id` is only set by channel integrations and combined with platform
     is unique-indexed for dedup. Web-originated threads have external_id NULL.
     `subagents_allowed` None, or the side the owner's default is on, stores
@@ -322,28 +321,6 @@ async def update_thread_status(
     except Exception as e:
         logger.error(f"Error updating thread status: {e}")
         return False
-
-
-async def promote_flash_thread(conversation_thread_id: str) -> bool:
-    """Mark a thread Flash started as the full agent's, once.
-
-    Guarded on the old type, so of two turns only the first promotes, and a
-    thread that was never Flash's is left alone. Raises, so a caller that has
-    to retry next turn knows it failed. Forgets the thread's model, which was
-    picked for Flash's slot, so the thread follows the account default for
-    the full agent until someone picks one for it.
-    """
-    async with pool.get_db_connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                UPDATE conversation_threads
-                SET msg_type = 'ptc', llm_model = NULL
-                WHERE conversation_thread_id = %s AND msg_type = 'flash'
-                """,
-                (conversation_thread_id,),
-            )
-            return cur.rowcount > 0
 
 
 async def advance_thread_checkpoint_id(
@@ -755,43 +732,27 @@ async def clear_thread_llm_model(conversation_thread_id: str, llm_model: str) ->
 
 
 async def reassign_thread_llm_models(
-    user_id: str, moves: Dict[str, tuple[str, Optional[str]]], *, conn=None
+    user_id: str, old: str, new: Optional[str], *, conn=None
 ) -> int:
-    """Move the user's threads still on a mode's old default to its new one.
+    """Move the user's threads still on the old default model to the new one.
 
-    ``moves`` maps a mode (``ptc`` / ``flash``) to ``(old, new)``. A thread is
-    a flash thread when its ``msg_type`` is ``flash``; every other value runs
-    PTC turns, as the send route defaults to. Only threads on exactly the old
-    name move, so one the user pointed elsewhere keeps its model; a mode absent
-    from ``moves`` compares against NULL, which matches nothing. Returns the
-    number of threads moved; ``updated_at`` is left alone.
+    Only threads on exactly ``old`` move, so one the user pointed elsewhere
+    keeps its model. Returns the number of threads moved; ``updated_at`` is
+    left alone.
     """
-    if not moves:
-        return 0
-    ptc_old, ptc_new = moves.get("ptc", (None, None))
-    flash_old, flash_new = moves.get("flash", (None, None))
     async with pool.get_db_connection(conn) as conn, conn.transaction():
         async with conn.cursor() as cur:
             await cur.execute(
                 """
                 UPDATE conversation_threads t
-                SET llm_model = CASE WHEN t.msg_type = 'flash'
-                                     THEN %(flash_new)s ELSE %(ptc_new)s END
+                SET llm_model = %(new)s
                 FROM workspaces w
                 WHERE w.workspace_id = t.workspace_id
                   AND w.user_id = %(user_id)s
                   AND w.status != 'deleted'
-                  AND CASE WHEN t.msg_type = 'flash'
-                           THEN t.llm_model = %(flash_old)s
-                           ELSE t.llm_model = %(ptc_old)s END
+                  AND t.llm_model = %(old)s
                 """,
-                {
-                    "user_id": user_id,
-                    "ptc_old": ptc_old,
-                    "ptc_new": ptc_new,
-                    "flash_old": flash_old,
-                    "flash_new": flash_new,
-                },
+                {"user_id": user_id, "old": old, "new": new},
             )
             return cur.rowcount
 

@@ -2,7 +2,7 @@
 Steering Middleware.
 
 Before each LLM call, takes in what reached the thread while the agent works:
-messages steered into it (by the user, the Chief of Staff or Flash) and the
+messages steered into it (by the user or the Chief of Staff) and the
 reports owed to the thread by background work that finished meanwhile. All
 of it waits in the server's outbox, which hands it to the next model call
 rather than to a turn of its own. Messages sent to a background task whose

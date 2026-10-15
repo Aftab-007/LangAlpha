@@ -147,7 +147,7 @@ def status_channel(computer_id: str) -> str:
 def workspace_status_channel(workspace_id: str) -> str:
     """The fallback channel for a workspace that has no machine of its own.
 
-    A flash workspace has no computer until it becomes the user's Home, and a
+    An unbound Home has no computer until its first start or turn, and a
     workspace the 046 backfill skipped has not been given one yet; both still
     have an /events subscriber and a start waiter, so they keep a channel
     rather than losing the publish. Home binding wakes this channel's

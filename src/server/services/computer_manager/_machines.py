@@ -34,7 +34,7 @@ from src.server.database.computer import (
     update_computer_activity,
     update_computer_status,
 )
-from src.server.database.home_workspace import get_flash_workspace_id, is_flash_row
+from src.server.database.home_workspace import get_home_workspace_id, is_home_row
 from src.server.database.workspace_folders import folder_allocation, takes_name_folders
 from src.server.database.workspace_names import HOME_FOLDER, candidate_dir_names
 from src.server.database.workspace import (
@@ -142,7 +142,7 @@ class MachineLifecycleMixin:
         return winner
 
     async def ensure_home_bound(self, user_id: str) -> Dict[str, Any]:
-        """Put the user's flash row on their primary computer as Home, and return that computer.
+        """Put the user's Home on their primary computer, and return that computer.
 
         Lazy and idempotent: every turn routed to Home lands here, and a Home
         already on a live computer costs one read. No sandbox is built; the
@@ -151,7 +151,7 @@ class MachineLifecycleMixin:
         folder, and from then on Home takes its computer's lifecycle like any
         workspace on it.
         """
-        home_id = get_flash_workspace_id(user_id)
+        home_id = get_home_workspace_id(user_id)
         computer = await get_computer_for_workspace(home_id)
         if computer is not None:
             return computer
@@ -231,9 +231,9 @@ class MachineLifecycleMixin:
         if not workspace:
             return None
         status = workspace.get("status")
-        if status == "deleted" or is_flash_row(workspace):
-            # The flash row reaches a computer only as Home, through
-            # ensure_home_bound, never as a machine of its own.
+        if status == "deleted" or is_home_row(workspace):
+            # Home reaches a computer only through ensure_home_bound, never
+            # as a machine of its own.
             return None
 
         user_id = workspace.get("user_id")

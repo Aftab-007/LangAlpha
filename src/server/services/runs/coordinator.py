@@ -164,16 +164,6 @@ def _with_detached_failure_kind(outcome: RunOutcome) -> RunOutcome:
     return outcome
 
 
-def _ran_on_computer(run: Optional[Dict[str, Any]]) -> bool:
-    """Whether the run's START stamp names the full agent, the one with a computer.
-
-    Read from the row, which a detached finalize has without the run's
-    process. A run the retired Flash agent started ('flash') had no computer,
-    and a row without the stamp is not taken to have one.
-    """
-    return ((run or {}).get("metadata") or {}).get("msg_type") == "ptc"
-
-
 class RunCoordinator:
     """Stateless singleton — all run state lives in Postgres rows and RunHandles."""
 
@@ -757,7 +747,7 @@ class RunCoordinator:
         transcript."""
         self._schedule_replay_refresh(thread_id)
         self._schedule_transcript_export(thread_id, run)
-        self._schedule_archive_prune(thread_id, run)
+        self._schedule_archive_prune(thread_id)
         self._nudge_hook_drainer()
 
     def _nudge_hook_drainer(self) -> None:
@@ -784,14 +774,10 @@ class RunCoordinator:
                 exc_info=True,
             )
 
-    def _schedule_archive_prune(
-        self, thread_id: str, run: Optional[Dict[str, Any]]
-    ) -> None:
+    def _schedule_archive_prune(self, thread_id: str) -> None:
         # An archived thread keeps its scratchpad while a run writes to it,
         # and nothing else asks for the prune once that run ends.
         try:
-            if not _ran_on_computer(run):
-                return
             from src.server.services.workspace_manager import prune_if_archived_soon
 
             prune_if_archived_soon(thread_id)
@@ -804,13 +790,13 @@ class RunCoordinator:
     def _schedule_transcript_export(
         self, thread_id: str, run: Optional[Dict[str, Any]]
     ) -> None:
-        # The run's computer serves its transcript, through the file mount.
+        # The workspace comes from the row's START stamp, which a detached
+        # finalize has without the run's process.
         try:
-            if not _ran_on_computer(run):
-                return
+            meta = (run or {}).get("metadata") or {}
             from src.server.services.transcripts import schedule_thread_export
 
-            schedule_thread_export(thread_id, run["metadata"].get("workspace_id"))
+            schedule_thread_export(thread_id, meta.get("workspace_id"))
         except Exception:
             logger.warning(
                 f"[RunCoordinator] transcript export scheduling failed for "

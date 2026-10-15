@@ -1,9 +1,9 @@
-"""Flash report-back execution: the outbox job that delivers one summary turn.
+"""Hand-off report-back execution: the outbox job that delivers one summary turn.
 
 ``execute_report_back`` is the sole entry — run under the hook-outbox
 drainer's lease, it POSTs the synthetic summary turn (job-deterministic
 ``request_key``), persists the dispatched run id for crash-resume, and holds
-the job open until the summary run's row reaches terminal so the per-flash
+the job open until the summary run's row reaches terminal so the per-thread
 ordering chain can't advance early.
 """
 
@@ -15,14 +15,16 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.server.database.home_workspace import get_flash_workspace_id
 from src.server.services import automation_delivery
-from src.server.services.report_back.flash import leases, pointer, requested_from, wake
-from src.server.services.report_back.flash.keys import (
+from src.server.services.report_back.handoff import leases, pointer, requested_from, wake
+from src.server.services.report_back.handoff.keys import (
+    ORIGIN_KIND,
+    ORIGIN_THREAD_FIELD,
+    ORIGIN_WORKSPACE_FIELD,
     decode,
-    flash_rb_run_key,
-    flash_watch_key,
     ptc_origin_key,
+    rb_run_key,
+    watch_key,
 )
 from src.server.services.report_back.notify_turn import NotOwed
 
@@ -50,7 +52,7 @@ class OwedAnalystReport:
     thread it reports to."""
 
     origin: dict
-    flash_thread_id: str
+    dispatcher_thread_id: str
     ptc_thread_id: str
     final_status: str
 
@@ -59,7 +61,7 @@ class OwedAnalystReport:
         steer carries no automation run's delivery stamp, and an outcome the
         report has no words for is its executor's to fail."""
         return (
-            str(self.flash_thread_id) == str(thread_id)
+            str(self.dispatcher_thread_id) == str(thread_id)
             and self.final_status in _OUTCOME_INSTRUCTIONS
             and not requested_from.deliveries(self.origin)
         )
@@ -80,20 +82,20 @@ async def analyst_report_verdict(cache, job: dict) -> OwedAnalystReport | NotOwe
     origin = await cache.get_strict(ptc_origin_key(ptc_thread_id))
     if (
         not isinstance(origin, dict)
-        or origin.get("origin") != "flash"
+        or origin.get("origin") != ORIGIN_KIND
         or not origin.get("report_back")
     ):
         return NotOwed("its analyst reports to no thread", wake=False)
-    flash_thread_id = origin.get("flash_thread_id")
-    if not flash_thread_id or not origin.get("user_id"):
+    dispatcher_thread_id = origin.get(ORIGIN_THREAD_FIELD)
+    if not dispatcher_thread_id or not origin.get("user_id"):
         return NotOwed("its origin names no thread or owner", wake=False)
     # Already terminal-cleared (duplicate completion event, or a reclaimed job
     # whose summary turn already finished and watch-cleared): nothing to do.
-    if not await cache.client.sismember(flash_watch_key(flash_thread_id), ptc_thread_id):
+    if not await cache.client.sismember(watch_key(dispatcher_thread_id), ptc_thread_id):
         return NotOwed("its pair was already cleared", wake=False)
     return OwedAnalystReport(
         origin=origin,
-        flash_thread_id=flash_thread_id,
+        dispatcher_thread_id=dispatcher_thread_id,
         ptc_thread_id=ptc_thread_id,
         # Rows enqueued before the field existed carry none, and only
         # completed runs were enqueued then.
@@ -105,10 +107,10 @@ async def execute_report_back(job: dict) -> None:
     """Execute one ``report_back`` outbox job: POST the summary turn, await terminal.
 
     Sole caller is the hook-outbox drainer — raising nacks the job (retry with
-    backoff), returning acks it. Per-flash ordering is the outbox's ordering-key
+    backoff), returning acks it. Per-thread ordering is the outbox's ordering-key
     FIFO: this job stays open (lease-heartbeated, including through the POST's
     defer loop) until the summary run reaches terminal, so the next report-back
-    on the same flash thread can't POST early. Crash-safe resume: the dispatched
+    on the same Chief of Staff thread can't POST early. Crash-safe resume: the dispatched
     run id is merged into the job payload right after the POST, and the POST
     itself carries a job-deterministic ``request_key`` so a re-POST before that
     merge lands adopts the original run via 409 duplicate_request. Every
@@ -138,7 +140,7 @@ async def execute_report_back(job: dict) -> None:
     owed = await analyst_report_verdict(cache, job)
     if isinstance(owed, NotOwed):
         return
-    origin, flash_thread_id = owed.origin, owed.flash_thread_id
+    origin, dispatcher_thread_id = owed.origin, owed.dispatcher_thread_id
     final_status = owed.final_status
     # A run that took in more than one hand-off from this Home carries one
     # generation on its row but owns them all; the pair's origin holds the
@@ -154,23 +156,23 @@ async def execute_report_back(job: dict) -> None:
         dispatch_gen = origin_gen
     user_id = origin.get("user_id")
     # Claimed under a stale ordering key (pre-deploy row that finalized
-    # unstamped, keyed on its own PTC thread): requeue onto the real flash
-    # chain instead of executing here — N such jobs would busy-wait their
-    # individual caps CONCURRENTLY against one flash thread's admission gate
+    # unstamped, keyed on its own PTC thread): requeue onto the dispatching
+    # thread's chain instead of executing here — N such jobs would busy-wait their
+    # individual caps CONCURRENTLY against that one thread's admission gate
     # and can drop summaries permanently, where correctly-keyed rows just
     # wait their turn at the chain head. The fenced ack no-ops afterwards.
-    if job.get("ordering_key") != flash_thread_id:
+    if job.get("ordering_key") != dispatcher_thread_id:
         from src.server.services.hook_outbox import MAX_ATTEMPTS
 
         requeued = await outbox_db.requeue_job_with_key(
             job_id,
             attempts=attempts,
-            ordering_key=flash_thread_id,
+            ordering_key=dispatcher_thread_id,
             max_attempts=MAX_ATTEMPTS,
         )
         logger.info(
-            f"[FLASH_REPORT_BACK] Requeued job {job_id} for {ptc_thread_id} "
-            f"onto flash chain {flash_thread_id} "
+            f"[HANDOFF_REPORT_BACK] Requeued job {job_id} for {ptc_thread_id} "
+            f"onto the chain of {dispatcher_thread_id} "
             f"(stale key {job.get('ordering_key')!r}, status={requeued})"
         )
         return
@@ -178,8 +180,8 @@ async def execute_report_back(job: dict) -> None:
     rb_run_id = payload.get("dispatched_run_id")
     if rb_run_id:
         logger.info(
-            f"[FLASH_REPORT_BACK] Resuming in-flight report-back run {rb_run_id} "
-            f"for {ptc_thread_id} on flash thread {flash_thread_id} (no re-dispatch)"
+            f"[HANDOFF_REPORT_BACK] Resuming in-flight report-back run {rb_run_id} "
+            f"for {ptc_thread_id} on thread {dispatcher_thread_id} (no re-dispatch)"
         )
     else:
         # A live turn on the thread takes the report in as a steer before its
@@ -192,26 +194,26 @@ async def execute_report_back(job: dict) -> None:
         if await park_while_thread_busy(
             job_id,
             attempts,
-            flash_thread_id,
-            log_prefix="[FLASH_REPORT_BACK]",
+            dispatcher_thread_id,
+            log_prefix="[HANDOFF_REPORT_BACK]",
             subject=f"PTC thread {ptc_thread_id}",
         ):
             return
 
         async def _still_due() -> bool:
             return not await _superseded(
-                cache, job.get("run_id"), ptc_thread_id, flash_thread_id,
+                cache, job.get("run_id"), ptc_thread_id, dispatcher_thread_id,
                 job_request_key,
             )
 
         if not await _wait_for_hand_off(
-            ptc_thread_id, flash_thread_id, _fence, _still_due
+            ptc_thread_id, dispatcher_thread_id, _fence, _still_due
         ):
             return  # lease lost: the reclaiming owner carries on
 
         outcome, rb_run_id = await _post_report_back(
             cache,
-            flash_thread_id,
+            dispatcher_thread_id,
             ptc_thread_id,
             origin,
             request_key=job_request_key,
@@ -242,13 +244,13 @@ async def execute_report_back(job: dict) -> None:
                 if not owned:
                     return  # reclaimed: the live owner decides the teardown
                 if outcome == "deleted":
-                    # Flash thread is gone (404). Nothing will consume these
-                    # report-backs; clear every watch member.
-                    await _discard_flash_thread(cache, flash_thread_id)
+                    # The Chief of Staff thread is gone (404). Nothing will
+                    # consume these report-backs; clear every watch member.
+                    await _discard_dispatcher_thread(cache, dispatcher_thread_id)
                 else:
                     # Terminal rejection or exhausted defer-wait. Clear this
                     # member so the chain advances; otherwise the next
-                    # report-back on this flash thread would wait behind a
+                    # report-back on this thread would wait behind a
                     # summary turn that never starts. Pointer-gated: a POST's
                     # server route can outlive the client's socket timeout and
                     # still sit pre-START inside a lawful admission hold — the
@@ -259,14 +261,14 @@ async def execute_report_back(job: dict) -> None:
                     # clear lands); on refusal we nack, and the retry adopts
                     # the claim's run row, takes over its corpse, or finds
                     # the claim released.
-                    cleared = await pointer.clear_flash_report_back(
-                        cache, ptc_thread_id, flash_thread_id, user_id=user_id,
+                    cleared = await pointer.clear_handoff_report_back(
+                        cache, ptc_thread_id, dispatcher_thread_id, user_id=user_id,
                         expected_gen=dispatch_gen, refuse_if_pointer=True,
                     )
                     if not cleared and cleared.fencer_gen is None:
                         raise RuntimeError(
                             f"report-back drop for {ptc_thread_id} refused: a "
-                            f"live run pointer on flash thread {flash_thread_id} "
+                            f"live run pointer on thread {dispatcher_thread_id} "
                             f"may still be mid-admission; nacking to retry"
                         )
                     if cleared and final_status != "completed":
@@ -274,13 +276,13 @@ async def execute_report_back(job: dict) -> None:
                         # failure, so the card has to: the wake a failed
                         # dispatch always sent before it got a summary.
                         await wake.publish_wake(
-                            cache, flash_thread_id,
+                            cache, dispatcher_thread_id,
                             error="background_workflow_failed",
                         )
                     elif cleared:
                         # Watchers still read this member as owed; without a
                         # wake they hold that until their watch recycles.
-                        await wake.publish_wake(cache, flash_thread_id, cleared=True)
+                        await wake.publish_wake(cache, dispatcher_thread_id, cleared=True)
             return
 
         # outcome == "dispatched"
@@ -303,7 +305,7 @@ async def execute_report_back(job: dict) -> None:
             await outbox_db.merge_job_payload(job_id, {"dispatched_run_id": rb_run_id})
         except Exception:
             logger.warning(
-                f"[FLASH_REPORT_BACK] Failed persisting dispatched_run_id "
+                f"[HANDOFF_REPORT_BACK] Failed persisting dispatched_run_id "
                 f"{rb_run_id} on job {job_id}; request_key dedup covers a re-POST",
                 exc_info=True,
             )
@@ -323,7 +325,7 @@ async def execute_report_back(job: dict) -> None:
         try:
             pointer_ok = await pointer.reassert_run_pointer(
                 cache,
-                flash_thread_id,
+                dispatcher_thread_id,
                 ptc_thread_id,
                 rb_run_id,
                 dispatch_gen=dispatch_gen,
@@ -332,15 +334,15 @@ async def execute_report_back(job: dict) -> None:
         except Exception:
             pass  # transient Redis failure: the wake is best-effort anyway
         if pointer_ok:
-            await wake.publish_wake(cache, flash_thread_id, run_id=rb_run_id)
+            await wake.publish_wake(cache, dispatcher_thread_id, run_id=rb_run_id)
         else:
             logger.warning(
-                f"[FLASH_REPORT_BACK] Pointer for {ptc_thread_id} on flash "
-                f"thread {flash_thread_id} refused run {rb_run_id}; not waking"
+                f"[HANDOFF_REPORT_BACK] Pointer for {ptc_thread_id} on "
+                f"thread {dispatcher_thread_id} refused run {rb_run_id}; not waking"
             )
 
     await _await_run_terminal(
-        job_id, attempts, rb_run_id, flash_thread_id, ptc_thread_id, user_id,
+        job_id, attempts, rb_run_id, dispatcher_thread_id, ptc_thread_id, user_id,
         dispatch_gen,
     )
 
@@ -349,7 +351,7 @@ async def _await_run_terminal(
     job_id: str,
     attempts: int,
     rb_run_id: str,
-    flash_thread_id: str,
+    dispatcher_thread_id: str,
     ptc_thread_id: str,
     user_id: str | None,
     dispatch_gen: str | None = None,
@@ -373,26 +375,26 @@ async def _await_run_terminal(
         attempts,
         rb_run_id,
         wait_cap=leases.RB_TERMINAL_WAIT_CAP,
-        log_prefix="[FLASH_REPORT_BACK]",
+        log_prefix="[HANDOFF_REPORT_BACK]",
     )
     if outcome != "timeout":
         return
     # Row-lock fence held across the clear (see fenced_job_guard) — a
     # heartbeat alone can't cover a pause between check and mutation.
     logger.warning(
-        f"[FLASH_REPORT_BACK] Terminal wait cap hit for {ptc_thread_id} "
-        f"on flash thread {flash_thread_id}; clearing"
+        f"[HANDOFF_REPORT_BACK] Terminal wait cap hit for {ptc_thread_id} "
+        f"on thread {dispatcher_thread_id}; clearing"
     )
     cache = get_cache_client()
     async with outbox_db.fenced_job_guard(job_id, attempts) as owned:
         if not owned:
             return
-        cleared = await pointer.clear_flash_report_back(
-            cache, ptc_thread_id, flash_thread_id, user_id=user_id,
+        cleared = await pointer.clear_handoff_report_back(
+            cache, ptc_thread_id, dispatcher_thread_id, user_id=user_id,
             expected_gen=dispatch_gen,
         )
         if cleared:
-            await wake.publish_wake(cache, flash_thread_id, cleared=True)
+            await wake.publish_wake(cache, dispatcher_thread_id, cleared=True)
 
 
 async def _workspace_name(workspace_id: str | None) -> str | None:
@@ -409,7 +411,7 @@ async def _workspace_name(workspace_id: str | None) -> str | None:
             row = await get_workspace_name_and_description(workspace_id)
         except Exception:
             logger.debug(
-                f"[FLASH_REPORT_BACK] Could not read the name of workspace "
+                f"[HANDOFF_REPORT_BACK] Could not read the name of workspace "
                 f"{workspace_id}",
                 exc_info=True,
             )
@@ -468,7 +470,7 @@ async def report_message(
 
 async def _post_report_back(
     cache,
-    flash_thread_id: str,
+    dispatcher_thread_id: str,
     ptc_thread_id: str,
     origin: dict,
     *,
@@ -478,9 +480,9 @@ async def _post_report_back(
     final_status: str,
     still_due=None,
 ) -> tuple[str, str | None]:
-    """POST the synthetic report-back message to the flash thread.
+    """POST the synthetic report-back message to the Chief of Staff thread.
 
-    Builds the flash-specific body (summary prompt, watch-member identity,
+    Builds the hand-off body (summary prompt, watch-member identity,
     dispatch generation, where the work was asked for) and delegates the
     admission-aware defer loop to the shared ``post_notification_turn``.
     Returns its ``(outcome, run_id)``:
@@ -493,12 +495,10 @@ async def _post_report_back(
     message, report_source = await report_message(ptc_thread_id, origin, final_status)
     body = {
         "messages": [{"role": "user", "content": message}],
-        # The dispatching thread's workspace, which is Home; a record that
-        # names none still reports back there.
-        "workspace_id": origin.get("flash_workspace_id")
-        or get_flash_workspace_id(origin.get("user_id")),
+        # The dispatching thread's workspace, which is Home.
+        "workspace_id": origin.get(ORIGIN_WORKSPACE_FIELD),
         "query_type": "system",
-        # Lets the report-back flash run identify which watch member to clear
+        # Lets the report-back run identify which watch member to clear
         # on its own completion.
         "report_back_ptc_thread_id": ptc_thread_id,
         # The pair's dispatch generation rides into the summary run's START
@@ -523,12 +523,12 @@ async def _post_report_back(
     if request_key:
         body["request_key"] = request_key
     return await post_notification_turn(
-        thread_id=flash_thread_id,
+        thread_id=dispatcher_thread_id,
         body=body,
         user_id=origin.get("user_id"),
         wait_cap=leases.RB_BUSY_WAIT_CAP,
         heartbeat=heartbeat,
-        log_prefix="[FLASH_REPORT_BACK]",
+        log_prefix="[HANDOFF_REPORT_BACK]",
         subject=f"PTC thread {ptc_thread_id}",
         still_due=still_due,
     )
@@ -539,7 +539,7 @@ _HAND_OFF_POLL_S = 2.0
 
 
 async def _wait_for_hand_off(
-    ptc_thread_id: str, flash_thread_id: str, fence, still_due
+    ptc_thread_id: str, dispatcher_thread_id: str, fence, still_due
 ) -> bool:
     """Hold the report while a hand-off from the same Home thread waits on the
     analyst's thread: the run that reads it reports back, and ``_superseded``
@@ -552,13 +552,13 @@ async def _wait_for_hand_off(
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + leases.RB_BUSY_WAIT_CAP
-    while await outbox_db.has_live_hand_off(ptc_thread_id, flash_thread_id):
+    while await outbox_db.has_live_hand_off(ptc_thread_id, dispatcher_thread_id):
         if not await still_due():
             return True
         if loop.time() >= deadline:
             logger.warning(
-                f"[FLASH_REPORT_BACK] Hand-off into {ptc_thread_id} from "
-                f"{flash_thread_id} still pending past the cap; reporting anyway"
+                f"[HANDOFF_REPORT_BACK] Hand-off into {ptc_thread_id} from "
+                f"{dispatcher_thread_id} still pending past the cap; reporting anyway"
             )
             return True
         if not await fence():
@@ -568,7 +568,7 @@ async def _wait_for_hand_off(
 
 
 async def summary_started(
-    cache, flash_thread_id: str, ptc_thread_id: str, request_key: str
+    cache, dispatcher_thread_id: str, ptc_thread_id: str, request_key: str
 ) -> bool:
     """Whether this job's summary run already started: a run row under its
     request key, or the run pointer its executor claims before posting. A
@@ -578,7 +578,7 @@ async def summary_started(
 
     if await tl_db.find_run_by_request_key(request_key):
         return True
-    claim = await cache.get_strict(flash_rb_run_key(flash_thread_id, ptc_thread_id))
+    claim = await cache.get_strict(rb_run_key(dispatcher_thread_id, ptc_thread_id))
     return isinstance(claim, dict) and claim.get("request_key") == request_key
 
 
@@ -602,25 +602,25 @@ async def _superseded(
     cache,
     run_id,
     ptc_thread_id: str,
-    flash_thread_id: str,
+    dispatcher_thread_id: str,
     request_key: str,
 ) -> bool:
     """Whether a newer run on the thread has taken over this run's report-back
     and this job's own summary never started."""
     newer = await overtaking_run(run_id, ptc_thread_id)
     if newer is None or await summary_started(
-        cache, flash_thread_id, ptc_thread_id, request_key
+        cache, dispatcher_thread_id, ptc_thread_id, request_key
     ):
         return False
     logger.info(
-        f"[FLASH_REPORT_BACK] Run {run_id} on {ptc_thread_id} is superseded by "
+        f"[HANDOFF_REPORT_BACK] Run {run_id} on {ptc_thread_id} is superseded by "
         f"run {newer}; its report-back is owed there"
     )
     return True
 
 
-async def _discard_flash_thread(cache, flash_thread_id: str) -> None:
-    """Flash thread deleted (404): disposition every snapshotted watch member.
+async def _discard_dispatcher_thread(cache, dispatcher_thread_id: str) -> None:
+    """Chief of Staff thread deleted (404): disposition every snapshotted watch member.
 
     Raises on any failure so the drainer nacks and retries — a swallowed
     member clear here would strand that member's origin/pointer/cap state
@@ -628,53 +628,53 @@ async def _discard_flash_thread(cache, flash_thread_id: str) -> None:
     read degrading to a gen-less clear would refuse a generated origin.
     Each member is cleared against the generation its origin holds RIGHT
     NOW (observed-gen CAS); a member whose origin moved to a different
-    flash thread loses only OUR stale watch reference — its live dispatch
+    thread loses only OUR stale watch reference — its live dispatch
     owns the rest. There is deliberately NO final DEL of the watch set: a
     member SADDed by a concurrent reserve after our snapshot must survive
     (its completion would otherwise ack as a non-member and drop the
     summary). Every snapshotted member is removed individually — the
-    clear's teardown Lua SREMs it, the cross-flash branches SREM it, and
+    clear's teardown Lua SREMs it, the cross-thread branches SREM it, and
     an origin that vanished mid-walk means a rival teardown already did —
     and Redis drops an empty set automatically; any residue is an orphan
     the reapers collect.
     """
-    watch_key = flash_watch_key(flash_thread_id)
-    members = await cache.client.smembers(watch_key)
+    watch_set = watch_key(dispatcher_thread_id)
+    members = await cache.client.smembers(watch_set)
     for member in members or []:
         ptc_tid = decode(member)
         origin = await cache.get_strict(ptc_origin_key(ptc_tid))
-        if isinstance(origin, dict) and origin.get("flash_thread_id") not in (
+        if isinstance(origin, dict) and origin.get(ORIGIN_THREAD_FIELD) not in (
             None,
-            flash_thread_id,
+            dispatcher_thread_id,
         ):
-            await cache.client.srem(watch_key, ptc_tid)
+            await cache.client.srem(watch_set, ptc_tid)
             continue
         observed_gen = (
             origin.get("dispatch_gen") if isinstance(origin, dict) else None
         )
-        # No drained-run record: the flash thread is gone, so nothing can
+        # No drained-run record: the thread is gone, so nothing can
         # ever render these turns.
-        cleared = await pointer.clear_flash_report_back(
+        cleared = await pointer.clear_handoff_report_back(
             cache,
             ptc_tid,
-            flash_thread_id,
+            dispatcher_thread_id,
             record_drained=False,
             expected_gen=observed_gen,
         )
         if not cleared:
             # The origin's generation moved between our read and the CAS.
-            # Re-read: moved cross-flash -> drop only our reference; gone ->
+            # Re-read: moved cross-thread -> drop only our reference; gone ->
             # already torn down; still ours -> retry the whole job rather
             # than delete the watch set out from under live state.
             fresh = await cache.get_strict(ptc_origin_key(ptc_tid))
-            if isinstance(fresh, dict) and fresh.get("flash_thread_id") not in (
+            if isinstance(fresh, dict) and fresh.get(ORIGIN_THREAD_FIELD) not in (
                 None,
-                flash_thread_id,
+                dispatcher_thread_id,
             ):
-                await cache.client.srem(watch_key, ptc_tid)
+                await cache.client.srem(watch_set, ptc_tid)
                 continue
             if fresh is not None:
                 raise RuntimeError(
-                    f"discard of flash thread {flash_thread_id}: clear of "
+                    f"discard of thread {dispatcher_thread_id}: clear of "
                     f"member {ptc_tid} refused (generation moved); nacking"
                 )

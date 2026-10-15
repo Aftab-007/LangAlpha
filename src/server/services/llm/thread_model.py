@@ -150,34 +150,17 @@ async def require_selectable_model(user_id: str, name: str) -> None:
         raise_model_unavailable(name)
 
 
-def effective_default_models(model_pref: dict) -> dict[str, str | None]:
-    """The model a thread following the account default runs, per mode.
+def effective_default_model(model_pref: dict) -> str | None:
+    """The model a thread following the account default runs.
 
     The composer's rule and the one a turn runs on (``select_model``), so
     "threads still on the old default" means what the user saw on them.
     """
-    system = system_default_models()
-    return {
-        "ptc": saved_default_model(model_pref, "ptc") or system.get("default_model") or None,
-        "flash": (
-            saved_default_model(model_pref, "flash")
-            or system.get("flash_model")
-            or system.get("default_model")
-            or None
-        ),
-    }
-
-
-def default_moves(
-    before: dict[str, str | None], after: dict[str, str | None]
-) -> dict[str, tuple[str, str | None]]:
-    """``{mode: (old, new)}`` for each mode whose default changed. A mode with
-    no old default has no threads on it to move."""
-    return {
-        mode: (old, after.get(mode))
-        for mode, old in before.items()
-        if old and old != after.get(mode)
-    }
+    return (
+        saved_default_model(model_pref, "ptc")
+        or system_default_models().get("default_model")
+        or None
+    )
 
 
 async def carry_default_change(
@@ -197,11 +180,13 @@ async def carry_default_change(
     scope = apply_to or after.get("default_model_scope")
     if scope != "existing_threads":
         return 0
-    moves = default_moves(effective_default_models(before), effective_default_models(after))
-    if not moves:
+    old, new = effective_default_model(before), effective_default_model(after)
+    # With no old default no thread can be on it.
+    if not old or old == new:
         return 0
-    moved = await threads_write.reassign_thread_llm_models(user_id, moves, conn=conn)
+    moved = await threads_write.reassign_thread_llm_models(user_id, old, new, conn=conn)
     logger.info(
-        f"[PREFS] Moved {moved} thread(s) to the new default for user={user_id}: {moves}"
+        f"[PREFS] Moved {moved} thread(s) to the new default for user={user_id}: "
+        f"{old} -> {new}"
     )
     return moved

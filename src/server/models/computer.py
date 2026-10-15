@@ -16,7 +16,7 @@ from src.server.services.persistence.sync_result import UnsavedReason
 
 
 class ComputerStatus(StrEnum):
-    """Computer lifecycle states: the workspace set minus ``flash``.
+    """Computer lifecycle states: the workspace set minus ``unbound``.
 
     StrEnum, not ``(str, Enum)``: a member of the latter renders as
     ``ComputerStatus.RUNNING`` in an f-string while comparing equal to

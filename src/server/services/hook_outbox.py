@@ -35,7 +35,7 @@ MAX_ATTEMPTS = 5
 MAX_CONCURRENT_JOBS = 10
 # task_report_back jobs hold their slot through an entire PTC notification
 # turn (sandbox bringup + a full agent run — tens of minutes); cap their
-# share so a burst of tail completions can't starve flash report-backs and
+# share so a burst of tail completions can't starve hand-off report-backs and
 # cheap wakes. Excluded types stay unclaimed but still head their chains.
 TASK_RB_INFLIGHT_QUOTA = 3
 # How long shutdown waits for the loop, and then for its in-flight jobs.

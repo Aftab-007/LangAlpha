@@ -555,7 +555,7 @@ async def _apply_toggle_now(
 ) -> None:
     """Retire the toggled-off grants now, and warm the change in if there is a sandbox.
 
-    A flash row (Home before its first turn, or a former one) is on no
+    An unbound row (Home before its first turn, or a former one) is on no
     computer, so there is no sandbox to warm, and the acquire would only fail;
     the turn that binds Home applies the config then. Its grants are still
     synced: they are scoped to the row while it has no computer, and the order

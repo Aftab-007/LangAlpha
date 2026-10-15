@@ -174,10 +174,10 @@ def _main_values(model_pref: dict, search_provider: str, search_depth: str) -> d
         reasoning_block,
     )
     from src.llms.preferences import resolve_tuning
-    from src.server.services.llm.thread_model import effective_default_models
+    from src.server.services.llm.thread_model import effective_default_model
     from src.server.services.llm.user_models import model_entry
 
-    model = effective_default_models(model_pref).get("ptc")
+    model = effective_default_model(model_pref)
     effort = None
     if model:
         block = reasoning_block(model_entry(model_pref, model) or {})

@@ -164,7 +164,7 @@ async def dispatch(
         )
         return error_command("internal_service_token_missing", tool_call_id)
 
-    from src.server.database.home_workspace import is_flash_row
+    from src.server.database.home_workspace import is_home_row
     from src.server.utils.pg_sanitize import normalize_uuid
 
     is_continuation = thread_id is not None
@@ -197,11 +197,11 @@ async def dispatch(
     workspace = await _owned_workspace(workspace_id, user_id)
     workspace_name = workspace.get("name") if workspace else None
 
-    # Any flash row, not only the dispatcher's: a turn there is never a
+    # Any Home row, not only the dispatcher's: a turn there is never a
     # workspace's analyst.
     if (
         workspace_id == normalize_uuid(configurable.get("workspace_id"))
-        or is_flash_row(workspace)
+        or is_home_row(workspace)
     ):
         return error_command(
             "That is the workspace you are working in: do it here, or "
@@ -241,15 +241,16 @@ async def dispatch(
         thread_id = str(uuid.uuid4())
 
     # reserve() takes a cap slot + records the PTC origin, rolling back on any
-    # non-committed exit; a no-op when flash_thread_id is None (report_back off).
+    # non-committed exit; a no-op when dispatcher_thread_id is None (report_back off).
     # ``slot.wired`` (not the request flag) is echoed as report_back so we never
     # promise a report-back the completion gate would drop. The origin also
     # records where this turn came from, which the report-back turn is told.
-    from src.server.services.report_back.flash import requested_from
-    from src.server.services.report_back.flash.reserve import reserve
+    from src.server.services.report_back.handoff import requested_from
+    from src.server.services.report_back.handoff.keys import ORIGIN_THREAD_META
+    from src.server.services.report_back.handoff.reserve import reserve
 
-    flash_thread_id = configurable.get("thread_id") if report_back else None
-    flash_workspace_id = configurable.get("workspace_id")
+    dispatcher_thread_id = configurable.get("thread_id") if report_back else None
+    dispatcher_workspace_id = configurable.get("workspace_id")
 
     # Dispatch via internal HTTP call.
     # X-Dispatch: background tells the endpoint to run the PTC workflow in a
@@ -259,10 +260,10 @@ async def dispatch(
     service_token = os.environ.get("INTERNAL_SERVICE_TOKEN", "")
 
     async with reserve(
-        flash_thread_id,
+        dispatcher_thread_id,
         thread_id,
         workspace_id,
-        flash_workspace_id,
+        dispatcher_workspace_id,
         user_id,
         requested_from=requested_from.of_turn(configurable, question),
     ) as slot:
@@ -311,7 +312,7 @@ async def dispatch(
                         "messages": [{"role": "user", "content": question}],
                         "workspace_id": workspace_id,
                         # Durable provenance on the thread row. Unconditional —
-                        # unlike origin_flash_thread_id below, which is a
+                        # unlike ORIGIN_THREAD_META below, which is a
                         # report-back wiring token, not an initiator record.
                         "origin": {
                             "type": "agent",
@@ -321,8 +322,8 @@ async def dispatch(
                         # Ordering hint for finalize hooks: only a WIRED
                         # report-back binds the run to this thread's
                         # serialization chain.
-                        "origin_flash_thread_id": (
-                            flash_thread_id if slot.wired else None
+                        ORIGIN_THREAD_META: (
+                            dispatcher_thread_id if slot.wired else None
                         ),
                         # Incarnation token minted by reserve(): fences this
                         # dispatch's terminal teardowns to its own generation.

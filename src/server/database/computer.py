@@ -5,8 +5,8 @@ shadows; comp must lock first and shadow must depend on its output, using
 (SELECT count(*) FROM comp) even when no rows are needed, to avoid deadlocks.
 Enforce fences in UPDATE so PostgreSQL rechecks under lock: computer entry uses
 provider_ref, workspace entry uses sandbox_id.
-NULL computer_id rows, including flash and backfill tie-break losers, retain
-the single-table path.
+NULL computer_id rows, including an unbound Home and backfill tie-break
+losers, retain the single-table path.
 """
 
 import logging
@@ -51,7 +51,7 @@ def default_computer_name(kind: str) -> str:
 
 DEFAULT_ROOT_DIR = "/home/workspace"
 
-# Match migration 046's CHECK; flash has no computer.
+# Match migration 046's CHECK; 'unbound' is a workspace's, never a computer's.
 COMPUTER_STATUSES = (
     "creating",
     "starting",
@@ -171,7 +171,7 @@ def bind_provider_ref_statement(
             authority="workspace",
             computer_returning="c.computer_id",
             workspace_returning=f"{returning}, m.mirrored AS computers_bound",
-            # A flash workspace and a backfill tie-break loser have no machine to
+            # An unbound Home and a backfill tie-break loser have no machine to
             # fence, so the mirror count only has to hold for a bound row.
             workspace_guard=(
                 "\n                  AND w.sandbox_id IS NOT DISTINCT FROM"
@@ -194,7 +194,7 @@ async def get_computer_for_workspace(
     The join already has the project's row, so ``dir_name`` rides along: the
     binding needs the folder as often as it needs the machine, and a second
     query for it is a second answer that can disagree with this one. None is
-    normal for flash workspaces and backfill shared-sandbox tie-break losers.
+    normal for an unbound Home and backfill shared-sandbox tie-break losers.
     """
     workspace_id = normalize_uuid(workspace_id)
     if workspace_id is None:
@@ -503,7 +503,7 @@ async def update_computer_status(
 ) -> Optional[Dict[str, Any]]:
     """Only try_bind_computer_provider_ref may change the durable machine binding.
 
-    Skip deleted and flash workspaces so a machine transition cannot revive a
+    Skip deleted and unbound workspaces so a machine transition cannot revive a
     project or attach a machine-less workspace. A tombstone also surrenders the
     primary flag: every probe fences on the tombstone, so a deleted row holding
     it would wedge ensure_primary_computer against the partial unique index.

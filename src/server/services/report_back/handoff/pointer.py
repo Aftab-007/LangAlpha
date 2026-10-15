@@ -2,7 +2,7 @@
 
 Every pointer write is membership-gated Lua — the scripts, their outcome
 types, and the claim context manager live together here so no caller can
-race the (flash, ptc) pair state with hand-rolled Redis.
+race the (dispatcher, ptc) pair state with hand-rolled Redis.
 """
 
 from __future__ import annotations
@@ -13,19 +13,19 @@ import logging
 import time
 from typing import NamedTuple
 
-from src.server.services.report_back.flash import leases
-from src.server.services.report_back.flash.keys import (
-    FLASH_RB_DONE_MAX,
-    FLASH_RB_DONE_TTL,
-    FLASH_RB_RUN_TTL,
+from src.server.services.report_back.handoff import leases
+from src.server.services.report_back.handoff.keys import (
+    RB_DONE_MAX,
+    RB_DONE_TTL,
+    RB_RUN_TTL,
     TEARDOWN_TOMBSTONE_TTL,
     decode,
-    flash_rb_done_key,
-    flash_rb_run_key,
-    flash_user_pending_key,
-    flash_watch_key,
     ptc_origin_key,
     ptc_teardown_tombstone_key,
+    rb_done_key,
+    rb_run_key,
+    user_pending_key,
+    watch_key,
 )
 
 # Same hard-coded logger name request_prep uses — existing log routing keys off it.
@@ -42,7 +42,7 @@ logger = logging.getLogger("src.server.handlers.chat_handler")
 # state, pointer included) must be replaced, or this job's clients would
 # adopt the dead run. Identity is the POST's deterministic request_key;
 # an old-format pointer without one falls back to generation scoping.
-# KEYS: 1=flash_watch 2=flash_rb_run
+# KEYS: 1=watch set 2=run pointer
 # ARGV: 1=ptc_id 2=run_id 3=json_value 4=ttl 5=request_key ('' = unknown)
 #       6=dispatch_gen ('' = legacy)
 GATED_POINTER_SET_LUA = """
@@ -89,7 +89,7 @@ return 1
 # An incumbent match returns the RAW pointer value (not just run_id): the
 # caller needs claimed_at to judge whether a rowless incumbent is still
 # mid-priming, and the exact bytes as the CAS token for a stale takeover.
-# KEYS: 1=flash_watch 2=flash_rb_run
+# KEYS: 1=watch set 2=run pointer
 # ARGV: 1=ptc_id 2=json_value 3=ttl 4=request_key ('' = unknown)
 #       5=dispatch_gen ('' = legacy)
 CLAIM_POINTER_LUA = """
@@ -120,7 +120,7 @@ return {1, ''}
 # them → lost), membership-gated like every pointer write. Closes review F1:
 # a provisional pointer whose worker died pre-START would otherwise be
 # adopted forever and its summary silently dropped at the terminal-wait cap.
-# KEYS: 1=flash_watch 2=flash_rb_run
+# KEYS: 1=watch set 2=run pointer
 # ARGV: 1=ptc_id 2=expected_current_value 3=new_json_value 4=ttl
 POINTER_TAKEOVER_LUA = """
 local v = redis.call('get', KEYS[2])
@@ -133,13 +133,13 @@ return 1
 # Whole-pair teardown gated on the dispatch generation, as ONE script: a
 # clear enqueued by an OLD incarnation's terminal (or its dead-letter
 # compensation) must not destroy origin/membership/pointer/cap state a newer
-# dispatch of the same (flash, ptc) pair has since re-established. A separate
+# dispatch of the same (dispatcher, ptc) pair has since re-established. A separate
 # compare-then-pipeline would race the newer reserve() between the two.
 # A GENERATED origin is only ever cleared by a caller presenting ITS gen —
 # a gen-less caller (legacy job, unresolvable crash context) clears only
 # legacy (gen-less) or absent origins; "I don't know which incarnation"
 # must degrade to a bounded TTL leak, never to destroying a live one.
-# Empty-string KEYS are absent-state placeholders (no flash / no user).
+# Empty-string KEYS are absent-state placeholders (no dispatcher / no user).
 # A caller whose clear is fenced out records itself in a TOMBSTONE SET
 # (its gen; '__legacy__' for a gen-less caller; short TTL): if the fencing
 # generation was a PROVISIONAL reserve that later rolls back and restores
@@ -147,7 +147,7 @@ return 1
 # consults the set and completes the clear instead of resurrecting state
 # whose only teardown already ran and acked. A SET, not a scalar — two
 # stale clears fenced in the same window must not overwrite each other.
-# KEYS: 1=ptc_origin 2=flash_rb_run 3=flash_watch 4=flash_user_pending
+# KEYS: 1=ptc_origin 2=run pointer 3=watch set 4=user pending set
 #       5=tombstone set
 # ARGV: 1=expected_gen ('' = legacy-only) 2=ptc_thread_id 3=tombstone_ttl
 #       4=refuse_if_pointer ('1' = an OFF-CHAIN caller: a live run pointer
@@ -195,7 +195,7 @@ class ClearOutcome(NamedTuple):
 
 # Compare-and-delete for the run pointer: a separate GET-compare-DEL races a
 # concurrent claim writing a NEW run id and would delete the newer claim.
-# KEYS: 1=flash_rb_run  ARGV: 1=run_id
+# KEYS: 1=run pointer  ARGV: 1=run_id
 POINTER_COMPARE_DELETE_LUA = """
 local v = redis.call('get', KEYS[1])
 if not v then return 0 end
@@ -224,7 +224,7 @@ def pointer_value(
 
 async def reassert_run_pointer(
     cache,
-    flash_thread_id: str,
+    dispatcher_thread_id: str,
     ptc_thread_id: str,
     run_id: str,
     *,
@@ -242,12 +242,12 @@ async def reassert_run_pointer(
         await cache.client.eval(
             GATED_POINTER_SET_LUA,
             2,
-            flash_watch_key(flash_thread_id),
-            flash_rb_run_key(flash_thread_id, ptc_thread_id),
+            watch_key(dispatcher_thread_id),
+            rb_run_key(dispatcher_thread_id, ptc_thread_id),
             ptc_thread_id,
             run_id,
             pointer_value(run_id, dispatch_gen, request_key),
-            FLASH_RB_RUN_TTL,
+            RB_RUN_TTL,
             request_key,
             dispatch_gen or "",
         )
@@ -271,13 +271,13 @@ class PointerClaim(NamedTuple):
 
 async def claim_report_back_run(
     cache,
-    flash_thread_id: str,
+    dispatcher_thread_id: str,
     ptc_thread_id: str,
     run_id: str,
     dispatch_gen: str | None = None,
     request_key: str | None = None,
 ) -> PointerClaim:
-    """Atomically claim the report-back run pointer for one (flash, ptc) pair.
+    """Atomically claim the report-back run pointer for one (dispatcher, ptc) pair.
 
     ``(run_id, True)`` if we won; ``(incumbent_run_id, False)`` if a prior
     admission of the SAME POST (identified by its deterministic
@@ -302,17 +302,17 @@ async def claim_report_back_run(
         state, incumbent = await cache.client.eval(
             CLAIM_POINTER_LUA,
             2,
-            flash_watch_key(flash_thread_id),
-            flash_rb_run_key(flash_thread_id, ptc_thread_id),
+            watch_key(dispatcher_thread_id),
+            rb_run_key(dispatcher_thread_id, ptc_thread_id),
             ptc_thread_id,
             pointer_value(run_id, dispatch_gen, request_key),
-            FLASH_RB_RUN_TTL,
+            RB_RUN_TTL,
             request_key or "",
             dispatch_gen or "",
         )
     except Exception:
         logger.warning(
-            f"[FLASH_REPORT_BACK] Run-claim failed for {flash_thread_id}/"
+            f"[HANDOFF_REPORT_BACK] Run-claim failed for {dispatcher_thread_id}/"
             f"{ptc_thread_id}; failing closed (retriable)",
             exc_info=True,
         )
@@ -342,7 +342,7 @@ async def claim_report_back_run(
 
 async def takeover_report_back_run(
     cache,
-    flash_thread_id: str,
+    dispatcher_thread_id: str,
     ptc_thread_id: str,
     expected_raw: str,
     run_id: str,
@@ -360,17 +360,17 @@ async def takeover_report_back_run(
         state = await cache.client.eval(
             POINTER_TAKEOVER_LUA,
             2,
-            flash_watch_key(flash_thread_id),
-            flash_rb_run_key(flash_thread_id, ptc_thread_id),
+            watch_key(dispatcher_thread_id),
+            rb_run_key(dispatcher_thread_id, ptc_thread_id),
             ptc_thread_id,
             expected_raw,
             pointer_value(run_id, dispatch_gen, request_key),
-            FLASH_RB_RUN_TTL,
+            RB_RUN_TTL,
         )
     except Exception:
         logger.warning(
-            f"[FLASH_REPORT_BACK] Pointer takeover failed for "
-            f"{flash_thread_id}/{ptc_thread_id}; surfacing retriable",
+            f"[HANDOFF_REPORT_BACK] Pointer takeover failed for "
+            f"{dispatcher_thread_id}/{ptc_thread_id}; surfacing retriable",
             exc_info=True,
         )
         return "lost"
@@ -383,7 +383,7 @@ async def takeover_report_back_run(
 
 
 async def release_report_back_run(
-    cache, flash_thread_id: str, ptc_thread_id: str, run_id: str
+    cache, dispatcher_thread_id: str, ptc_thread_id: str, run_id: str
 ) -> None:
     """Delete a just-claimed run pointer iff it still points at ``run_id``.
 
@@ -398,7 +398,7 @@ async def release_report_back_run(
         await cache.client.eval(
             POINTER_COMPARE_DELETE_LUA,
             1,
-            flash_rb_run_key(flash_thread_id, ptc_thread_id),
+            rb_run_key(dispatcher_thread_id, ptc_thread_id),
             run_id,
         )
     except Exception:
@@ -406,7 +406,7 @@ async def release_report_back_run(
 
 
 class _ReportBackClaim:
-    """Handle for the dispatched-flash report-back run claim (see ``claim``).
+    """Handle for the dispatched report-back run claim (see ``claim``).
 
     ``incumbent`` is a prior admission's run_id (caller short-circuits to it,
     starting no new run) or None (caller proceeds). ``pair_gone`` means the
@@ -432,13 +432,13 @@ class _ReportBackClaim:
 @contextlib.asynccontextmanager
 async def claim(
     cache,
-    flash_thread_id: str,
+    dispatcher_thread_id: str,
     ptc_thread_id: str | None,
     run_id: str,
     dispatch_gen: str | None = None,
     request_key: str | None = None,
 ):
-    """Claim the per-(flash, ptc) report-back run pointer at dispatched admission.
+    """Claim the per-(dispatcher, ptc) report-back run pointer at dispatched admission.
 
     Closes the report-back double-deliver: a lost-response retry (or a crash
     re-drain) must NOT start a second summary run. On enter, claim the pointer
@@ -446,14 +446,14 @@ async def claim(
     the SAME POST surfaces as ``handle.incumbent`` (caller returns that run,
     no new one). Releases the just-made claim on any non-consummated exit so
     a later retry isn't short-circuited to a run that never started. No-op
-    when ``ptc_thread_id`` is falsy (ordinary flash dispatch — zero Redis).
+    when ``ptc_thread_id`` is falsy (an ordinary turn, zero Redis).
     """
     handle = _ReportBackClaim()
     if not ptc_thread_id or cache is None:
         yield handle
         return
     result = await claim_report_back_run(
-        cache, flash_thread_id, ptc_thread_id, run_id, dispatch_gen, request_key
+        cache, dispatcher_thread_id, ptc_thread_id, run_id, dispatch_gen, request_key
     )
     if result.pair_gone:
         handle.pair_gone = True
@@ -475,7 +475,7 @@ async def claim(
                 row_known = True
             except Exception:
                 logger.warning(
-                    f"[FLASH_REPORT_BACK] Ledger probe for incumbent "
+                    f"[HANDOFF_REPORT_BACK] Ledger probe for incumbent "
                     f"{result.winning_run_id} failed; deferring adoption",
                     exc_info=True,
                 )
@@ -503,7 +503,7 @@ async def claim(
         # Take the pointer over and run the summary ourselves.
         outcome = await takeover_report_back_run(
             cache,
-            flash_thread_id,
+            dispatcher_thread_id,
             ptc_thread_id,
             result.incumbent_raw,
             run_id,
@@ -519,8 +519,8 @@ async def claim(
             yield handle
             return
         logger.info(
-            f"[FLASH_REPORT_BACK] Took over stale provisional pointer for "
-            f"ptc={ptc_thread_id} on flash thread {flash_thread_id} "
+            f"[HANDOFF_REPORT_BACK] Took over stale provisional pointer for "
+            f"ptc={ptc_thread_id} on thread {dispatcher_thread_id} "
             f"(rowless incumbent {result.winning_run_id}, age {age:.0f}s)"
         )
         # Fall through: we own the pointer now, same as a won claim.
@@ -528,13 +528,13 @@ async def claim(
         yield handle
     finally:
         if not handle._consummated:
-            await release_report_back_run(cache, flash_thread_id, ptc_thread_id, run_id)
+            await release_report_back_run(cache, dispatcher_thread_id, ptc_thread_id, run_id)
 
 
-async def clear_flash_report_back(
+async def clear_handoff_report_back(
     cache,
     ptc_thread_id: str,
-    flash_thread_id: str | None,
+    dispatcher_thread_id: str | None,
     user_id: str | None = None,
     *,
     record_drained: bool = True,
@@ -552,16 +552,17 @@ async def clear_flash_report_back(
     only legacy (gen-less) or absent origins: a caller that cannot name the
     incarnation it means to destroy must degrade to a TTL-bounded leak, never
     to clearing a generated one. ``refuse_if_pointer=True`` is for callers
-    OUTSIDE the flash ordering chain (crash teardown): a live run pointer
+    OUTSIDE the report-back ordering chain (crash teardown): a live run pointer
     means a report-back admission consummated (or is mid-flight) for this
     pair, and only its serialized lifecycle may drain it — the whole
     teardown is refused atomically (falsy outcome, no fencer gen).
     ``user_id`` (else read from ``ptc_origin``)
     releases the cap slot — if unresolvable we WARN rather than silently leak
     it. Does not swallow Redis errors — callers wrap it. The drained run id
-    is recorded on ``flash_rb_done`` so a client that missed the wake can
-    still find the finished turn; ``record_drained=False`` skips that
-    (deleted flash thread — nothing can render those turns).
+    is recorded on the drained-run list (``rb_done_key``) so a client that
+    missed the wake can still find the finished turn; ``record_drained=False``
+    skips that (a deleted Chief of Staff thread, where nothing can render
+    those turns).
     """
     origin = await cache.get(ptc_origin_key(ptc_thread_id))
     if user_id is None and isinstance(origin, dict):
@@ -569,9 +570,9 @@ async def clear_flash_report_back(
 
     # Read the run pointer BEFORE the teardown deletes it; best-effort.
     drained_run_id = None
-    if record_drained and flash_thread_id:
+    if record_drained and dispatcher_thread_id:
         try:
-            ptr = await cache.get(flash_rb_run_key(flash_thread_id, ptc_thread_id))
+            ptr = await cache.get(rb_run_key(dispatcher_thread_id, ptc_thread_id))
             if isinstance(ptr, dict):
                 drained_run_id = ptr.get("run_id")
         except Exception:
@@ -582,11 +583,11 @@ async def clear_flash_report_back(
             GATED_TEARDOWN_LUA,
             5,
             ptc_origin_key(ptc_thread_id),
-            flash_rb_run_key(flash_thread_id, ptc_thread_id)
-            if flash_thread_id
+            rb_run_key(dispatcher_thread_id, ptc_thread_id)
+            if dispatcher_thread_id
             else "",
-            flash_watch_key(flash_thread_id) if flash_thread_id else "",
-            flash_user_pending_key(user_id) if user_id else "",
+            watch_key(dispatcher_thread_id) if dispatcher_thread_id else "",
+            user_pending_key(user_id) if user_id else "",
             ptc_teardown_tombstone_key(ptc_thread_id),
             expected_gen or "",
             ptc_thread_id,
@@ -599,47 +600,47 @@ async def clear_flash_report_back(
             fencer_gen = decode(res[1]) if len(res) > 1 and res[1] else None
             if fencer_gen is None:
                 logger.info(
-                    f"[FLASH_REPORT_BACK] Teardown for {ptc_thread_id} refused: "
-                    f"a report-back run pointer is live on flash thread "
-                    f"{flash_thread_id}"
+                    f"[HANDOFF_REPORT_BACK] Teardown for {ptc_thread_id} refused: "
+                    f"a report-back run pointer is live on thread "
+                    f"{dispatcher_thread_id}"
                 )
             else:
                 logger.info(
-                    f"[FLASH_REPORT_BACK] Teardown for {ptc_thread_id} skipped: a "
-                    f"newer dispatch generation owns the pair on flash thread "
-                    f"{flash_thread_id}"
+                    f"[HANDOFF_REPORT_BACK] Teardown for {ptc_thread_id} skipped: a "
+                    f"newer dispatch generation owns the pair on thread "
+                    f"{dispatcher_thread_id}"
                 )
             return ClearOutcome(False, fencer_gen)
-        if not user_id and flash_thread_id:
+        if not user_id and dispatcher_thread_id:
             # The only path that leaks a per-user cap slot: it won't self-heal
-            # (later dispatches refresh flash_user_pending's TTL) and can lock
+            # (later dispatches refresh the user-pending set's TTL) and can lock
             # the user out at MAX_DISPATCH_PER_USER.
             logger.warning(
-                f"[FLASH_REPORT_BACK] Cannot release per-user cap slot for "
-                f"{ptc_thread_id} (flash thread {flash_thread_id}): user id "
+                f"[HANDOFF_REPORT_BACK] Cannot release per-user cap slot for "
+                f"{ptc_thread_id} (thread {dispatcher_thread_id}): user id "
                 f"unresolved (ptc_origin expired/missing); slot may leak"
             )
 
         if drained_run_id:
-            await record_drained_run(cache, flash_thread_id, drained_run_id)
+            await record_drained_run(cache, dispatcher_thread_id, drained_run_id)
     return ClearOutcome(True)
 
 
-async def record_drained_run(cache, flash_thread_id: str, run_id: str) -> None:
-    """Append a drained report-back run id to the flash thread's discovery
+async def record_drained_run(cache, dispatcher_thread_id: str, run_id: str) -> None:
+    """Append a drained report-back run id to the dispatching thread's discovery
     list. LREM-first dedups a retry; newest first, bounded, TTL'd.
     Best-effort — never breaks the caller's teardown."""
     try:
-        done_key = flash_rb_done_key(flash_thread_id)
+        done_key = rb_done_key(dispatcher_thread_id)
         pipe = cache.client.pipeline(transaction=True)
         pipe.lrem(done_key, 0, run_id)
         pipe.lpush(done_key, run_id)
-        pipe.ltrim(done_key, 0, FLASH_RB_DONE_MAX - 1)
-        pipe.expire(done_key, FLASH_RB_DONE_TTL)
+        pipe.ltrim(done_key, 0, RB_DONE_MAX - 1)
+        pipe.expire(done_key, RB_DONE_TTL)
         await pipe.execute()
     except Exception:
         logger.warning(
-            f"[FLASH_REPORT_BACK] Failed recording drained run "
-            f"{run_id} for flash thread {flash_thread_id}",
+            f"[HANDOFF_REPORT_BACK] Failed recording drained run "
+            f"{run_id} for thread {dispatcher_thread_id}",
             exc_info=True,
         )

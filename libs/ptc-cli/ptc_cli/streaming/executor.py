@@ -342,7 +342,7 @@ async def execute_task(
             thread_id=session_state.thread_id,
             hitl_response=hitl_response,
             llm_model=getattr(session_state, "llm_model", None),
-            agent_mode="flash" if flash_mode else None,
+            in_home=flash_mode,
             **stream_kwargs,
         ):
             # Track thread_id from events

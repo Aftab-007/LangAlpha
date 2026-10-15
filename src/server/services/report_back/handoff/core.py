@@ -1,4 +1,4 @@
-"""Flash report-back composition points: watch stream + outbox executors.
+"""Hand-off report-back composition points: watch stream + outbox executors.
 
 ``watch_wakes`` binds the status read-model to the wake wire-protocol; the
 outbox executors (registered at startup, so the outbox service never imports
@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import logging
 
-from src.server.services.report_back.flash import executor, pointer, reserve, status, wake
-from src.server.services.report_back.flash.keys import (
+from src.server.services.report_back.handoff import executor, pointer, reserve, status, wake
+from src.server.services.report_back.handoff.keys import (
+    LEGACY_QUEUE_PATTERN,
+    LEGACY_QUEUED_PREFIX,
+    ORIGIN_THREAD_FIELD,
     ptc_origin_key,
 )
 
@@ -21,11 +24,11 @@ logger = logging.getLogger("src.server.handlers.chat_handler")
 
 
 # ---------------------------------------------------------------------------
-# WAKE — wire-protocol in flash/wake.py; core binds the snapshot reader
+# WAKE — wire-protocol in handoff/wake.py; core binds the snapshot reader
 # ---------------------------------------------------------------------------
 
 
-def watch_wakes(cache, flash_thread_id: str):
+def watch_wakes(cache, thread_id: str):
     """Watch report-back wakes with the status slice bound as the snapshot.
 
     The binding lives here, not in ``wake``: the wire-protocol module stays
@@ -36,7 +39,7 @@ def watch_wakes(cache, flash_thread_id: str):
     cleanup to the async-gen finalizer at some later tick.
     """
     return wake.watch_wakes(
-        cache, flash_thread_id, snapshot_reader=status.read_report_back_slice
+        cache, thread_id, snapshot_reader=status.read_report_back_slice
     )
 
 
@@ -60,7 +63,7 @@ def _require_ptc_thread_id(job: dict) -> str:
     return ptc_thread_id
 
 
-async def _exec_flash_report_back(job: dict) -> None:
+async def _exec_handoff_report_back(job: dict) -> None:
     _require_ptc_thread_id(job)
     await executor.execute_report_back(job)
 
@@ -76,10 +79,10 @@ async def _exec_needs_input_wake(job: dict) -> None:
     # carve-out: without Redis the chat preflight 503s every turn, so no
     # legitimate deployment produces these jobs Redis-less.
     origin = await cache.get_strict(ptc_origin_key(ptc_thread_id))
-    if not isinstance(origin, dict) or not origin.get("flash_thread_id"):
+    if not isinstance(origin, dict) or not origin.get(ORIGIN_THREAD_FIELD):
         return  # ordinary run — nobody is watching
     await wake.publish_wake(
-        cache, origin["flash_thread_id"], needs_input=ptc_thread_id
+        cache, origin[ORIGIN_THREAD_FIELD], needs_input=ptc_thread_id
     )
 
 
@@ -96,26 +99,26 @@ async def _exec_watch_clear(job: dict) -> None:
     origin = await cache.get_strict(ptc_origin_key(ptc_thread_id))
     if not origin:
         return  # ordinary run, or already cleared — idempotent
-    flash_tid = origin.get("flash_thread_id")
+    dispatcher_tid = origin.get(ORIGIN_THREAD_FIELD)
     # Claimed under a stale ordering key (pre-deploy row that finalized
-    # unstamped, keyed on its own PTC thread): requeue onto the real flash
-    # chain instead of executing here. Off-chain, this teardown — and the
+    # unstamped, keyed on its own PTC thread): requeue onto the dispatching
+    # thread's chain instead of executing here. Off-chain, this teardown — and the
     # orphan resolver it can escalate to — runs CONCURRENTLY with the
     # chain's report_back admission; a resolver settling the pair between
     # the admission's atomic pointer claim and the route consummating it
     # schedules an orphan summary behind a settled pair. On the chain, the
     # open report_back lease serializes the clear past the whole admission
     # window. The fenced ack no-ops after the requeue.
-    if flash_tid and job.get("ordering_key") != flash_tid:
+    if dispatcher_tid and job.get("ordering_key") != dispatcher_tid:
         requeued = await outbox_db.requeue_job_with_key(
             str(job["hook_outbox_id"]),
             attempts=job["attempts"],
-            ordering_key=flash_tid,
+            ordering_key=dispatcher_tid,
             max_attempts=MAX_ATTEMPTS,
         )
         logger.info(
             f"[HookOutbox] requeued watch_clear {job['hook_outbox_id']} for "
-            f"{ptc_thread_id} onto flash chain {flash_tid} "
+            f"{ptc_thread_id} onto the chain of {dispatcher_tid} "
             f"(stale key {job.get('ordering_key')!r}, status={requeued})"
         )
         return
@@ -128,10 +131,10 @@ async def _exec_watch_clear(job: dict) -> None:
     ) as owned:
         if not owned:
             return  # reclaimed: the live owner performs the clear
-        result = await pointer.clear_flash_report_back(
+        result = await pointer.clear_handoff_report_back(
             cache,
             ptc_thread_id,
-            flash_tid,
+            dispatcher_tid,
             user_id=payload.get("user_id") or origin.get("user_id"),
             expected_gen=payload.get("dispatch_gen"),
             # Dead-report_back compensations set this: their source may have
@@ -140,7 +143,7 @@ async def _exec_watch_clear(job: dict) -> None:
             # teardowns past the admission window.
             refuse_if_pointer=bool(payload.get("refuse_if_pointer")),
         )
-        if not flash_tid:
+        if not dispatcher_tid:
             return
         settled = result.cleared
         if not settled and result.fencer_gen:
@@ -155,7 +158,7 @@ async def _exec_watch_clear(job: dict) -> None:
             settled, _ = await reserve.resolve_orphaned_watch(
                 cache,
                 ptc_thread_id,
-                flash_tid,
+                dispatcher_tid,
                 payload.get("user_id") or origin.get("user_id"),
                 fencer_gen=result.fencer_gen,
                 job_gen=payload.get("dispatch_gen"),
@@ -167,24 +170,24 @@ async def _exec_watch_clear(job: dict) -> None:
             # A cancelled or failed dispatch: wake watching clients so its
             # card reconciles instead of spinning until TTL.
             await wake.publish_wake(
-                cache, flash_tid, error="background_workflow_failed"
+                cache, dispatcher_tid, error="background_workflow_failed"
             )
         else:
             # Consumption clear (summary consumed, pair drained): push the
             # pending to idle transition so watchers re-read now. Without it
             # a watcher holds its last read until its watch recycles.
-            await wake.publish_wake(cache, flash_tid, cleared=True)
+            await wake.publish_wake(cache, dispatcher_tid, cleared=True)
 
 
 async def _migrate_legacy_fifo_queues() -> None:
     """One-shot upgrade sweep folding pre-drainer report-back state into the outbox.
 
     Two legacy shapes can exist at upgrade time: (a) Redis FIFO queues
-    (``flash_rb_queue:*``) holding completions the old in-process consumer
-    never delivered — re-enqueued as outbox report_back rows keyed on their
-    flash thread (queue keys deleted only after every entry lands); (b)
-    outbox report_back / watch_clear rows enqueued before origin stamping,
-    keyed on their own PTC thread — rekeyed onto the flash chain their
+    (``LEGACY_QUEUE_PATTERN``) holding completions the old in-process consumer
+    never delivered — re-enqueued as outbox report_back rows keyed on the
+    thread they report to (queue keys deleted only after every entry lands);
+    (b) outbox report_back / watch_clear rows enqueued before origin stamping,
+    keyed on their own PTC thread — rekeyed onto the chain of the thread their
     execution actually serializes with. Idempotent throughout (stable
     idempotency keys, pending-only rekey), so a failed sweep simply reruns.
     """
@@ -208,9 +211,9 @@ async def _migrate_legacy_fifo_queues() -> None:
     # per-index millisecond stagger.
     LEGACY_BACKDATE_SECONDS = 30 * 86400.0
 
-    async for raw_key in client.scan_iter(match="flash_rb_queue:*"):
+    async for raw_key in client.scan_iter(match=LEGACY_QUEUE_PATTERN):
         queue_key = _s(raw_key)
-        flash_tid = queue_key.split(":", 1)[1]
+        dispatcher_tid = queue_key.split(":", 1)[1]
         entries = [_s(e) for e in await client.lrange(queue_key, 0, -1) or []]
         for i, ptc_tid in enumerate(entries):
             latest = await tl_db.get_latest_attempt(ptc_tid)
@@ -227,10 +230,10 @@ async def _migrate_legacy_fifo_queues() -> None:
                 # the teardown refuses while a run pointer is live — only
                 # that admission's serialized lifecycle may drain the pair.
                 origin = await cache.get_strict(ptc_origin_key(ptc_tid))
-                await pointer.clear_flash_report_back(
+                await pointer.clear_handoff_report_back(
                     cache,
                     ptc_tid,
-                    flash_tid,
+                    dispatcher_tid,
                     user_id=(origin or {}).get("user_id")
                     if isinstance(origin, dict)
                     else None,
@@ -243,21 +246,21 @@ async def _migrate_legacy_fifo_queues() -> None:
                     thread_id=ptc_tid,
                     hook_type="report_back",
                     payload={"ptc_thread_id": ptc_tid},
-                    ordering_key=flash_tid,
-                    idempotency_key=f"legacy_fifo:{flash_tid}:{ptc_tid}",
+                    ordering_key=dispatcher_tid,
+                    idempotency_key=f"legacy_fifo:{dispatcher_tid}:{ptc_tid}",
                     backdate_seconds=LEGACY_BACKDATE_SECONDS - i * 0.001,
                 )
             # Remove only THIS entry (not the whole key): an entry appended
             # after the LRANGE snapshot survives for the next process
             # start's sweep instead of being deleted unread.
             await client.lrem(queue_key, 1, ptc_tid)
-            await client.srem(f"flash_rb_queued:{flash_tid}", ptc_tid)
+            await client.srem(f"{LEGACY_QUEUED_PREFIX}{dispatcher_tid}", ptc_tid)
         if not await client.llen(queue_key):
-            await client.delete(queue_key, f"flash_rb_queued:{flash_tid}")
+            await client.delete(queue_key, f"{LEGACY_QUEUED_PREFIX}{dispatcher_tid}")
         if entries:
             logger.info(
                 f"[HookOutbox] migrated {len(entries)} legacy FIFO report-backs "
-                f"for flash thread {flash_tid}"
+                f"for thread {dispatcher_tid}"
             )
 
     for hook_type in ("report_back", "watch_clear"):
@@ -266,16 +269,16 @@ async def _migrate_legacy_fifo_queues() -> None:
             if not ptc_tid:
                 continue
             origin = await cache.get_strict(ptc_origin_key(ptc_tid))
-            flash_tid = (
-                origin.get("flash_thread_id") if isinstance(origin, dict) else None
+            dispatcher_tid = (
+                origin.get(ORIGIN_THREAD_FIELD) if isinstance(origin, dict) else None
             )
-            if flash_tid and row.get("ordering_key") != flash_tid:
+            if dispatcher_tid and row.get("ordering_key") != dispatcher_tid:
                 if await outbox_db.set_job_ordering_key(
-                    str(row["hook_outbox_id"]), flash_tid
+                    str(row["hook_outbox_id"]), dispatcher_tid
                 ):
                     logger.info(
                         f"[HookOutbox] rekeyed legacy {hook_type} job="
-                        f"{row['hook_outbox_id']} onto flash chain {flash_tid}"
+                        f"{row['hook_outbox_id']} onto the chain of {dispatcher_tid}"
                     )
 
 
@@ -290,7 +293,7 @@ def register_outbox_executors() -> None:
         register_startup_sweep,
     )
 
-    register_hook_executor("report_back", _exec_flash_report_back)
+    register_hook_executor("report_back", _exec_handoff_report_back)
     register_hook_executor("needs_input_wake", _exec_needs_input_wake)
     register_hook_executor("watch_clear", _exec_watch_clear)
     register_startup_sweep(_migrate_legacy_fifo_queues)

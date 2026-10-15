@@ -25,7 +25,7 @@ class TurnContext:
     last_turn_at: datetime | None = None
     platform: str | None = None
     origin: str | None = None
-    # The agent that sent an agent-origin turn (``chief_of_staff``, ``flash``),
+    # The agent that sent an agent-origin turn (``chief_of_staff``),
     # which the turn row names as acting for the user.
     origin_agent: str | None = None
     surface_rules: str | None = None

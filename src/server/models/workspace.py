@@ -25,7 +25,8 @@ class WorkspaceStatus(str, Enum):
     STOPPED = "stopped"
     ERROR = "error"
     DELETED = "deleted"
-    FLASH = "flash"
+    # A user's Home before its first computer.
+    UNBOUND = "unbound"
 
 
 #: While the sandbox is not serving, file routes answer from the mirror rows.
@@ -129,8 +130,8 @@ class WorkspaceResponse(BaseModel):
     computer_id: Optional[str] = Field(
         None,
         description=(
-            "The computer this workspace runs on (null for a flash workspace, "
-            "or one not bound to a computer)"
+            "The computer this workspace runs on (null for a Home before its "
+            "first computer, or one not bound to a computer)"
         ),
     )
     dir_name: Optional[str] = Field(
@@ -150,11 +151,10 @@ class WorkspaceResponse(BaseModel):
     status: str = Field(
         description=(
             "Workspace status: creating, starting, running, stopping, stopped, "
-            "error, deleted; 'flash' for the user's Home"
+            "error, deleted; 'unbound' for the user's Home before its first computer"
         )
     )
     is_home: bool = Field(
-        False,
         description=(
             "Whether this is the user's Home, where work in no particular "
             "workspace runs; tell Home by this, not by status"

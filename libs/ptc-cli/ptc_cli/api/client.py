@@ -411,7 +411,8 @@ class SSEStreamClient:
         thread_id: Optional[str] = None,
         hitl_response: Optional[Dict[str, Any]] = None,
         llm_model: Optional[str] = None,
-        agent_mode: Optional[str] = None,
+        *,
+        in_home: bool = False,
         **kwargs,
     ) -> AsyncGenerator[tuple[str, Dict[str, Any]], None]:
         """
@@ -422,7 +423,7 @@ class SSEStreamClient:
             thread_id: Thread identifier for conversation continuity
             hitl_response: HITL interrupt response (for resume)
             llm_model: LLM model name from models.json (e.g., 'minimax-m3')
-            agent_mode: 'flash' runs the turn in the user's Home, None in the
+            in_home: Run the turn in the user's Home rather than the
                 client's workspace
             **kwargs: Additional request parameters
 
@@ -439,7 +440,7 @@ class SSEStreamClient:
         else:
             url = urljoin(self.base_url, f"/api/v1/threads/{effective_thread_id}/messages")
 
-        if agent_mode == "flash":
+        if in_home:
             workspace_id = await self.home_workspace_id()
         else:
             workspace_id = self._require_workspace()
