@@ -28,7 +28,6 @@ import asyncio
 import json
 import re
 import time
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, Optional
 
@@ -388,34 +387,23 @@ async def _seed_channels(
 async def _settled_runs_of_open_turn(
     thread_id: str, root_id: Optional[str], within_s: float
 ) -> Optional[list[dict]]:
-    """Terminal task runs the thread's executing turn launched.
+    """Terminal task runs of every turn the client's history may lack.
 
     The history projection a client attaches with stops before the open turn,
     and the turn can outlive its runs by any margin, so these are settled yet
     unseen however old: the horizon-bounded catch-up would miss them and leave
-    their cards running until the turn ends. Drained from 0; a client that
+    their cards running until the turn ends. A turn that finalized after the
+    snapshot (inside ``within_s``, the catch-up window) is unseen the same
+    way, even once a newer one holds the thread; ``root_id``, the root the
+    attach seed saw open, is named outright. Drained from 0; a client that
     already holds one drops the backlog by its own settled check. None on a
-    failed read, so the caller withholds ``attached`` and the client asks
-    again on its next socket. ``root_id`` is the root the attach seed saw
-    open: a turn that finalizes between the two reads still has its runs
-    drained, since the client's snapshot left that turn out. With none open,
-    the latest turn stands in when it settled inside ``within_s`` (the
-    catch-up window): the client's snapshot can predate its finalize."""
+    failed read, so the caller withholds ``attached``."""
     try:
-        from src.server.database.runs import lifecycle as tl_db
         from src.server.database.runs import subagent_runs as sr_db
 
-        if root_id is None:
-            root = await tl_db.get_active_run(thread_id)
-            if root is None:
-                root = await tl_db.get_latest_attempt(thread_id)
-                settled_at = root.get("usage_settled_at") if root else None
-                if settled_at is None or (
-                    datetime.now(timezone.utc) - settled_at
-                ).total_seconds() > within_s:
-                    return []
-            root_id = str(root["conversation_response_id"])
-        return await sr_db.list_settled_runs_for_parent(thread_id, root_id)
+        return await sr_db.list_settled_runs_of_unseen_turns(
+            thread_id, root_id, within_s
+        )
     except Exception:
         logger.warning(
             "[mux2] open-turn settled seed failed for %s", thread_id, exc_info=True
@@ -732,31 +720,32 @@ async def stream_thread_mux_v2(
         *,
         settled: bool = False,
         started_ms: Optional[float] = None,
-    ) -> None:
+    ) -> bool:
+        """False only when the run is neither open nor durably deferred."""
         if run_id in channels:
             pending_admissions.pop(run_id, None)
             pending_cursors.pop(run_id, None)
-            return
+            return True
         if _open_count() >= _MAX_CHANNELS:
             pending_admissions[run_id] = lane
-            await _store_pending(cache, thread_id, run_id, lane)
+            stored = await _store_pending(cache, thread_id, run_id, lane)
             logger.warning(
                 "[mux2] channel cap reached for %s; deferring %s",
                 thread_id,
                 run_id,
             )
-            return
+            return stored
         meta = await _admission_meta(run_id, lane, settled, started_ms)
         if meta is None:
             pending_admissions[run_id] = lane
-            await _store_pending(cache, thread_id, run_id, lane)
+            stored = await _store_pending(cache, thread_id, run_id, lane)
             logger.warning(
                 "[mux2] deferring %s (%s) for %s: start order unavailable",
                 run_id,
                 lane,
                 thread_id,
             )
-            return
+            return stored
         settled, started_ms = meta
         # Local retirement only — the durable field expires by TTL. Deleting
         # it here would erase a debt other sockets' clients still owe.
@@ -776,22 +765,23 @@ async def stream_thread_mux_v2(
             try:
                 head = await cache.client.xrange(chan.stream_key, count=1)
             except Exception:
-                return  # transient probe failure — the pump reads onward
+                return True  # transient probe failure — the pump reads onward
             if not head:
                 outcome = await _run_row_outcome(run_id, lane)
                 if outcome is not None:
                     await _close(chan, "terminal", outcome=outcome)
-                return
+                return True
             if _entry_after(head[0][0], cursor):
                 await out_q.put(
                     ("frame", _control("resync_required", {"chan": chan.name}))
                 )
                 await _close(chan, "resync_required")
-            return
+            return True
         chan = _open(run_id, lane, b"0", started_ms)
         await out_q.put(
             ("frame", _chan_open_frame(chan, "drain" if settled else "replay"))
         )
+        return True
 
     async def _close(chan: _RunChan, reason: str, **extra) -> None:
         if chan.closed:
@@ -959,8 +949,8 @@ async def stream_thread_mux_v2(
                 for run_id, lane, started_ms in await _seed_channels(thread_id):
                     await _admit(run_id, lane, started_ms=started_ms)
                 # An open-turn ask attach could not serve: the client waits on
-                # this socket for the ack, so the retry is the rescan's.
-                # Admission defers durably on its own past the cap.
+                # this socket for the ack, so the retry is the rescan's, and it
+                # acks only once every run is open or durably deferred.
                 if open_turn and not open_turn_served:
                     runs = await _settled_runs_of_open_turn(
                         thread_id,
@@ -970,15 +960,18 @@ async def stream_thread_mux_v2(
                         + _ATTACH_GRACE_S,
                     )
                     if runs is not None:
-                        for run in runs:
+                        admitted = [
                             await _admit(
                                 str(run["task_run_id"]),
                                 f"task:{run['task_id']}",
                                 settled=True,
                                 started_ms=_row_started_ms(run),
                             )
-                        open_turn_served = True
-                        await out_q.put(("frame", _control("attached", {})))
+                            for run in runs
+                        ]
+                        if all(admitted):
+                            open_turn_served = True
+                            await out_q.put(("frame", _control("attached", {})))
                 # Recent-terminal reconciliation, bounded to runs that could
                 # only have settled AFTER the client's knowledge horizon
                 # (its snapshot lag plus this socket's age) — anything older

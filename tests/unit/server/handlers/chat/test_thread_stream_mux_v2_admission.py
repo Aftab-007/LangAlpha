@@ -118,41 +118,17 @@ async def test_open_turn_failures_read_as_unserved():
     # a failed discovery or deferral must be distinguishable from "nothing to
     # drain" for attach to withhold the ack.
     with patch(
-        "src.server.database.runs.lifecycle.get_active_run",
+        f"{SR_DB}.list_settled_runs_of_unseen_turns",
         new=AsyncMock(side_effect=RuntimeError("db down")),
     ):
         assert await _settled_runs_of_open_turn("t-1", None, 10) is None
-    # No turn open: the latest stands in only when it settled inside the
-    # window, after a snapshot that could have left it out.
-    now = datetime.datetime.now(datetime.timezone.utc)
-    for settled_ago, expected in ((5, ["drained"]), (60, [])):
-        latest = {
-            "conversation_response_id": "root-0",
-            "usage_settled_at": now - datetime.timedelta(seconds=settled_ago),
-        }
-        with patch(
-            "src.server.database.runs.lifecycle.get_active_run",
-            new=AsyncMock(return_value=None),
-        ), patch(
-            "src.server.database.runs.lifecycle.get_latest_attempt",
-            new=AsyncMock(return_value=latest),
-        ), patch(
-            f"{SR_DB}.list_settled_runs_for_parent",
-            new=AsyncMock(return_value=["drained"]),
-        ):
-            assert await _settled_runs_of_open_turn("t-1", None, 10) == expected
-
-    # The root the seed saw open is read, not a second lookup that a turn
-    # finalizing in between would answer with "nothing open".
     settled = [{"task_run_id": "run-1", "task_id": "abc"}]
     with patch(
-        "src.server.database.runs.lifecycle.get_active_run",
-        new=AsyncMock(return_value=None),
-    ), patch(
-        f"{SR_DB}.list_settled_runs_for_parent", new=AsyncMock(return_value=settled)
+        f"{SR_DB}.list_settled_runs_of_unseen_turns",
+        new=AsyncMock(return_value=settled),
     ) as listed:
         assert await _settled_runs_of_open_turn("t-1", "root-1", 10) == settled
-    listed.assert_awaited_once_with("t-1", "root-1")
+    listed.assert_awaited_once_with("t-1", "root-1", 10)
 
     cache = MagicMock()
     cache.client.hset = AsyncMock(side_effect=RuntimeError("redis down"))

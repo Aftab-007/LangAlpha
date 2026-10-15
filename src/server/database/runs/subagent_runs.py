@@ -600,25 +600,33 @@ async def list_recently_finalized_runs_for_thread(
             return [dict(r) for r in rows]
 
 
-async def list_settled_runs_for_parent(
-    thread_id: str, parent_run_id: str
+async def list_settled_runs_of_unseen_turns(
+    thread_id: str, root_id: Optional[str], within_s: float
 ) -> List[Dict[str, Any]]:
-    """Terminal runs launched by one root run, oldest first.
-
-    Launched by a turn that is still executing, a settled run is in no
-    history projection (replay excludes the open turn), so the mux has to
-    deliver it however long ago it finalized."""
+    """Terminal runs launched by any turn a client's history may have left
+    out, oldest first: the one still executing (replay excludes it), the
+    ``root_id`` it saw open, and any that finalized inside ``within_s``,
+    after a snapshot that could have read it as open. Such a run reaches
+    the client only through the mux, however long ago it finalized."""
     async with pool.get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
-                SELECT task_run_id, task_id, started_at FROM subagent_runs
-                WHERE thread_id = %s
-                  AND parent_run_id = %s
-                  AND status != 'in_progress'
-                ORDER BY started_at
+                SELECT r.task_run_id, r.task_id, r.started_at
+                FROM subagent_runs r
+                JOIN conversation_responses c
+                  ON c.conversation_response_id = r.parent_run_id
+                WHERE r.thread_id = %s
+                  AND r.status != 'in_progress'
+                  AND c.conversation_thread_id = %s
+                  AND (
+                    c.status = 'in_progress'
+                    OR c.conversation_response_id = %s::uuid
+                    OR c.usage_settled_at >= NOW() - make_interval(secs => %s)
+                  )
+                ORDER BY r.started_at
                 """,
-                (thread_id, parent_run_id),
+                (thread_id, thread_id, root_id, within_s),
             )
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
