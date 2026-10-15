@@ -47,6 +47,7 @@ EDITABLE_KEYS = (
     "search_depth",
     "connectors",
     "brokerages",
+    "memory",
     "preferred_connectors",
     "preferred_skills",
 )
@@ -98,12 +99,20 @@ class _Bad(ValueError):
         self.options = options
 
 
-def _switch(value: Any) -> bool:
+# Each switch's words as the README and the rendered file spell them. A
+# quoted on or off still reads for any of them, as it always has.
+_SWITCH_WORDS = {"enabled": ("true", "false"), "connectors": ("on", "off"), "memory": ("on", "off")}
+
+
+def _switch(key: str, value: Any) -> bool:
     if isinstance(value, bool):
         return value
-    if value in ("on", "off"):
-        return value == "on"
-    raise _Bad("Must be on or off.", ["on", "off"])
+    on, off = _SWITCH_WORDS[key]
+    if value in (on, "on"):
+        return True
+    if value in (off, "off"):
+        return False
+    raise _Bad(f"Must be {on} or {off}.", [on, off])
 
 
 def _names(value: Any, what: str) -> list[str]:
@@ -125,10 +134,8 @@ def normalize_value(key: str, value: Any) -> Any:
             raise _Bad("Must be a name, or inherit.")
         value = value.strip()
         return INHERIT if value.lower() == INHERIT else value
-    if key == "enabled":
-        return _switch(value)
-    if key == "connectors":
-        return _switch(value)
+    if key in _SWITCH_WORDS:
+        return _switch(key, value)
     if key == "brokerages":
         # YAML reads a bare on/off as a boolean.
         if isinstance(value, bool):

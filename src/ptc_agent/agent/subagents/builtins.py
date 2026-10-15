@@ -39,6 +39,7 @@ BUILTIN_SUBAGENTS: dict[str, SubagentDefinition] = {
         mode="ptc",
         role_prompt_template="roles/general.md.j2",
         tools=["execute_code", "filesystem", "bash", "finance", "web_search"],
+        memory=True,
         stateful=True,
         sections={
             "workspace_paths": True,
@@ -84,6 +85,7 @@ BUILTIN_SUBAGENTS: dict[str, SubagentDefinition] = {
         # that workspace's analyst, so the workspace keeps the work and its
         # history.
         roles=frozenset({"analyst"}),
+        memory=True,
         stateful=True,
         sections={
             "workspace_paths": True,

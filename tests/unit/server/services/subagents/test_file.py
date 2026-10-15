@@ -134,6 +134,10 @@ async def test_a_file_the_frontmatter_rules_refuse(world, content, error_type, f
         ("alpha", "description", "Mine now.", {"description"}, 0),
         ("research", "model", "model-flat", {"model"}, 0),
         ("research", "brokerages", "off", {"brokerages"}, 0),
+        # Memory is editable on a base, as on one of the user's own.
+        ("research", "memory", "on", {"memory"}, 0),
+        ("alpha", "memory", "off", {"memory"}, 0),
+        ("research", "memory", "off", set(), 0),
     ],
 )
 async def test_what_a_save_sends_on(world, name, key, value, changed, notes):
@@ -166,6 +170,30 @@ async def test_only_a_custom_subagent_takes_a_new_body(world, name, edit, refuse
         assert exc.value.error_type == "constraint_error"
     else:
         assert set((await _plan(name, content)).fields) == changed
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "stored"),
+    [
+        # A base keeps only the difference, and writing its own value back is a reset.
+        ("research", "on", {"memory": True}),
+        ("research", "off", None),
+        ("alpha", "off", {"memory": False}),
+        ("alpha", "true", {"memory": True}),
+    ],
+)
+async def test_memory_saves_from_the_file_and_reads_back_as_on_or_off(world, backend, name, value, stored):
+    world.custom("alpha", memory=True)
+    world.override("research", memory=True)
+    content, version = await backend.aread_versioned(_path(name))
+    assert "\nmemory: on\n" in content
+
+    await backend.awrite_versioned(_path(name), _set(content, "memory", value), version)
+
+    row = world.rows.get(name)
+    assert ({"memory": row["fields"]["memory"]} if row and "memory" in row["fields"] else None) == stored
+    shown = "on" if value in ("on", "true") else "off"
+    assert f"\nmemory: {shown}\n" in (await backend.aread_versioned(_path(name)))[0]
 
 
 @pytest.mark.parametrize(

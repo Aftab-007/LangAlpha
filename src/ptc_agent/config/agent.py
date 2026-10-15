@@ -173,6 +173,9 @@ class SubagentConfig(BaseModel):
     connectors: bool = True
     brokerages: Literal["off", "on"] = "on"
     preferred_connectors: list[str] = Field(default_factory=list)
+    # Unset keeps a built-in's own default when this overrides one, and is
+    # on for a subagent of the deployment's own.
+    memory: bool | None = None
 
     @field_validator("reasoning_effort")
     @classmethod

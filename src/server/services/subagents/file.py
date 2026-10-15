@@ -76,6 +76,7 @@ FILE_KEYS = (
     "search_depth",
     "connectors",
     "brokerages",
+    "memory",
     "preferred_connectors",
     "preferred_skills",
     "available_to",
@@ -168,7 +169,7 @@ def _item(value: str) -> str:
 def _value(key: str, value: Any) -> str:
     if key in INHERITABLE_KEYS:
         return INHERIT if value is None else _scalar(str(value))
-    if key == "connectors":
+    if key in ("connectors", "memory"):
         return "on" if value else "off"
     if key == "enabled":
         return "true" if value else "false"
@@ -637,6 +638,7 @@ model, and change only what they asked for.
 | `search_depth` | One of the provider's levels: {pairs}. With the provider on `inherit`, any of {levels}. Or `inherit`. |
 | `connectors` | `on` or `off`. |
 | `brokerages` | `off` or `on`. |
+| `memory` | `on` or `off`. |
 | `preferred_connectors` | Connectors to reach for first: {connectors}. |
 | `preferred_skills` | Skills whose SKILL.md is put into its prompt, by skill name. |
 | `available_to` | `analyst` (the agent in a workspace), `chief_of_staff` (the agent in Home), or both. |
@@ -651,6 +653,9 @@ matters only with `code`. `brokerages: off` keeps it from every brokerage
 connection; `on` lets it use each within the permissions the user set for that
 connection in Brokerages. Order tools stay with the main agent at either
 setting.
+
+`memory: on` gives the subagent the memory indices and the rules for reading
+them. It never writes memory; anything worth saving comes back in its result.
 
 The preferred lists change what a subagent reaches for first, never what it
 can use.

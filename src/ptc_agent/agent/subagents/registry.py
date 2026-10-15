@@ -58,6 +58,11 @@ class SubagentRegistry:
                 connectors=cfg.connectors,
                 brokerages=cfg.brokerages,
                 preferred_connectors=cfg.preferred_connectors,
+                memory=(
+                    cfg.memory if cfg.memory is not None
+                    else builtin.memory if builtin is not None
+                    else True
+                ),
                 sections=cfg.sections,
                 stateful=(cfg.mode == "ptc"),
                 # The YAML has no say over roles, so an override keeps the

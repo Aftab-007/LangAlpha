@@ -383,6 +383,52 @@ def test_a_role_the_subagent_is_not_available_to_leaves_it_out_of_that_roster():
 
 
 # ---------------------------------------------------------------------------
+# Memory
+# ---------------------------------------------------------------------------
+
+
+def test_memory_is_on_for_the_builtins_that_take_open_ended_work():
+    assert {name: defn.memory for name, defn in BUILTIN_SUBAGENTS.items()} == {
+        "research": False,
+        "general-purpose": True,
+        "data-prep": False,
+        "equity-analyst": True,
+        "report-builder": False,
+    }
+
+
+def test_a_subagent_of_the_users_own_or_a_plugins_reads_memory_until_switched_off():
+    assert custom_definition(_custom("macro-desk")).memory is True
+    assert custom_definition(_custom("macro-desk", memory=False)).memory is False
+    assert _plugin_base("toolkit", "filings-reader").definition.memory is True
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [(True, True), ("on", True), (False, False), ("off", False)]
+)
+def test_memory_switch(value, expected):
+    assert apply_override(BUILTIN_SUBAGENTS["general-purpose"], {"memory": value}).memory is expected
+
+
+@pytest.mark.parametrize(
+    ("name", "memory", "expected"),
+    [
+        # Unset, a YAML override keeps the built-in's own default...
+        ("research", None, False),
+        ("general-purpose", None, True),
+        # ...and a subagent of the deployment's own reads memory.
+        ("desk", None, True),
+        ("general-purpose", False, False),
+        ("desk", False, False),
+    ],
+)
+def test_a_yaml_definition_without_memory_keeps_the_default_its_name_has(name, memory, expected):
+    bases = _bases(**{name: SubagentConfig(description="Desk", memory=memory)})
+
+    assert bases[name].definition.memory is expected
+
+
+# ---------------------------------------------------------------------------
 # The roster
 # ---------------------------------------------------------------------------
 

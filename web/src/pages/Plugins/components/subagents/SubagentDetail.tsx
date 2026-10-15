@@ -34,6 +34,7 @@ import {
   AvailableBlock,
   BrokeragesBlock,
   EffortBlock,
+  MemoryBlock,
   ModelBlock,
   PreferredBlock,
   ToolsBlock,
@@ -159,6 +160,7 @@ export function SubagentDetail({
             <EffortBlock {...aside} />
             <ToolsBlock {...aside} />
             {(data.brokerages.connected || view.brokerages !== 'off') && <BrokeragesBlock {...aside} />}
+            <MemoryBlock view={view} write={write} />
             <PreferredBlock {...aside} />
             {offersAudience(view, allWorkspaces) && <AvailableBlock view={view} write={write} />}
             <InfoBlock view={view} allWorkspaces={allWorkspaces} />

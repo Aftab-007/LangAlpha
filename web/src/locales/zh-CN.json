@@ -5131,6 +5131,7 @@
         "searchDepth": "搜索深度",
         "connectors": "连接器权限",
         "brokerages": "券商权限",
+        "memory": "记忆权限",
         "preferredConnectors": "优先连接器",
         "preferredSkills": "优先技能"
       },
@@ -5229,6 +5230,8 @@
       "access": "访问",
       "accessDesc": "使用你已连接的券商，范围以各连接在<brokerages>券商</brokerages>中允许的为准",
       "needsCode": "需要开启代码执行",
+      "memory": "记忆",
+      "memoryDesc": "可读取你的记忆。保存记忆仍由主 Agent 负责。",
       "preferred": "优先使用",
       "preferredConnectors": "连接器",
       "preferredSkills": "技能",

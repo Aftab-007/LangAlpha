@@ -12,6 +12,9 @@ from typing import Any
 
 from ptc_agent.agent.subagents.merge import BaseSubagent, plugin_definition
 
+# No ``memory``: other agent formats spend that key on something else
+# (Claude Code's memory scopes), so a package's subagent takes the default a
+# custom one has, on.
 _FIELDS = (
     "description", "tools", "model", "effort", "search_provider", "search_depth",
     "connectors", "brokerages", "preferred_connectors", "preferred_skills",

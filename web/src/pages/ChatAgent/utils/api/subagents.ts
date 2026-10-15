@@ -48,6 +48,7 @@ export interface SubagentBaseValues {
   search_depth: string | null;
   connectors: boolean;
   brokerages: SubagentBrokerages;
+  memory: boolean;
   preferred_connectors: string[];
   preferred_skills: string[];
   enabled: boolean;
@@ -76,6 +77,8 @@ export interface SubagentView {
   search_depth: string | null;
   connectors: boolean;
   brokerages: SubagentBrokerages;
+  /** Reads the user's memory; it never writes it. */
+  memory: boolean;
   preferred_connectors: string[];
   preferred_skills: string[];
   available_to: SubagentAudience[];
@@ -130,6 +133,7 @@ export type SubagentFields = Partial<{
   search_depth: string | null;
   connectors: boolean | null;
   brokerages: SubagentBrokerages | null;
+  memory: boolean | null;
   preferred_connectors: string[] | null;
   preferred_skills: string[] | null;
   description: string;

@@ -28,7 +28,7 @@ ROLES = ["analyst", "chief_of_staff"]
 CURRENT: dict[str, Any] = {
     "enabled": True, "model": "model-a", "effort": None, "tools": ["web"],
     "search_provider": None, "search_depth": None, "connectors": True, "brokerages": "on",
-    "preferred_connectors": [], "preferred_skills": [], "description": "Handles work.",
+    "memory": True, "preferred_connectors": [], "preferred_skills": [], "description": "Handles work.",
     "instructions": "", "available_to": ROLES,
 }
 # A base pinning a model the user's plan doesn't carry, with two levels.
@@ -59,7 +59,9 @@ async def _validate(fields: dict[str, Any], *, kind: str = "custom", base: dict[
         ({"search_provider": "serper", "search_depth": "deep"}, "custom", "search_depth", ["standard"]),
         ({"search_depth": "bottomless"}, "custom", "search_depth", ANY),
         ({"connectors": "maybe"}, "custom", "connectors", ["on", "off"]),
-        ({"enabled": "yes"}, "custom", "enabled", ["on", "off"]),
+        ({"enabled": "yes"}, "custom", "enabled", ["true", "false"]),
+        ({"connectors": "true"}, "custom", "connectors", ["on", "off"]),
+        ({"memory": "sometimes"}, "custom", "memory", ["on", "off"]),
         ({"brokerages": "all"}, "custom", "brokerages", ["off", "on"]),
         ({"preferred_connectors": ["ghost"]}, "custom", "preferred_connectors", ["fundamentals", "my-broker"]),
         ({"preferred_skills": ["ghost"]}, "custom", "preferred_skills", ["dcf", "sec-filings"]),
@@ -104,6 +106,10 @@ async def test_every_refused_field_is_reported_at_once():
     ("fields", "saved"),
     [
         ({"enabled": "off", "connectors": "on"}, {"enabled": False, "connectors": True}),
+        ({"memory": "off"}, {"memory": False}),
+        ({"enabled": "true", "memory": "on"}, {"enabled": True, "memory": True}),
+        ({"enabled": "false"}, {"enabled": False}),
+        ({"memory": True}, {"memory": True}),
         # YAML reads a bare on/off as a boolean.
         ({"brokerages": True}, {"brokerages": "on"}),
         ({"brokerages": False}, {"brokerages": "off"}),

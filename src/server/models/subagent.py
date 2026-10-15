@@ -39,6 +39,8 @@ class SubagentValues(BaseModel):
     search_depth: str | None
     connectors: bool
     brokerages: BrokerageAccess
+    #: Reads the user's memory; never writes it.
+    memory: bool
     preferred_connectors: list[str]
     preferred_skills: list[str]
     enabled: bool

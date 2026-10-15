@@ -32,6 +32,7 @@ import {
   countCustom,
   isCustom,
   isOrphan,
+  memoryText,
   modelMeta,
   modelName,
   reachesNoAgent,
@@ -398,6 +399,8 @@ function CopyFacts({
             t('plugins.subagents.brokerages'),
             !source || source.brokerages !== 'off' ? brokerageText(t, 'on') : null,
           ],
+          // A blank one reads memory, as every subagent of the user's own starts.
+          [t('plugins.subagents.memory'), memoryText(t, source ? source.memory : true)],
           [t('plugins.subagents.availableTo'), allWorkspaces ? audienceFacts(t, audiences) : null],
         ]}
       />

@@ -42,6 +42,7 @@ import {
   brokerageText,
   fieldWrite,
   hasProblem,
+  memoryText,
   modelName,
   orderedTools,
   preferredSkillOptions,
@@ -490,6 +491,31 @@ export function BrokeragesBlock({ view, write }: Pick<AsideProps, 'view' | 'writ
           disabled={!codeOn}
           locked={!codeOn}
           onToggle={() => write({ brokerages: fieldWrite(view, 'brokerages', access ? 'off' : 'on') })}
+        />
+      </ul>
+    </DetailAsideBlock>
+  );
+}
+
+/**
+ * Whether it reads the user's memory. Only the main agent saves to it, so a
+ * subagent hands back anything worth keeping in its result.
+ */
+export function MemoryBlock({ view, write }: Pick<AsideProps, 'view' | 'write'>) {
+  const { t } = useTranslation();
+  const base = view.base;
+  return (
+    <DetailAsideBlock
+      title={t('plugins.subagents.memory')}
+      side={base ? baseSide(t, view, memoryText(t, base.memory)) : undefined}
+    >
+      <ul className="sa-switches">
+        <SwitchRow
+          label={t('plugins.subagents.memory')}
+          desc={t('plugins.subagents.memoryDesc')}
+          enabled={view.memory}
+          disabled={false}
+          onToggle={() => write({ memory: fieldWrite(view, 'memory', !view.memory) })}
         />
       </ul>
     </DetailAsideBlock>

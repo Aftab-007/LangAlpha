@@ -114,6 +114,7 @@ const FIELD_KEYS: Record<string, string> = {
   search_depth: 'plugins.subagents.field.searchDepth',
   connectors: 'plugins.subagents.field.connectors',
   brokerages: 'plugins.subagents.field.brokerages',
+  memory: 'plugins.subagents.field.memory',
   preferred_connectors: 'plugins.subagents.field.preferredConnectors',
   preferred_skills: 'plugins.subagents.field.preferredSkills',
 };
@@ -136,6 +137,11 @@ const BROKERAGE_KEYS: Record<SubagentBrokerages, string> = {
 
 export function brokerageText(t: TFunction, value: SubagentBrokerages): string {
   return t(BROKERAGE_KEYS[value] ?? BROKERAGE_KEYS.off);
+}
+
+/** "On" or "Off", as the subagent's own switch reads. */
+export function memoryText(t: TFunction, on: boolean): string {
+  return t(on ? 'plugins.surface.on' : 'plugins.surface.off');
 }
 
 export const AUDIENCES: readonly SubagentAudience[] = ['analyst', 'chief_of_staff'];

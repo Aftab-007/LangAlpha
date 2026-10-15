@@ -82,7 +82,7 @@ def _stored_effective(key: str, value: Any) -> Any:
     """What a stored field value means, for comparing it with the base's."""
     if key in INHERITABLE_KEYS:
         return None if value in (None, INHERIT) else value
-    if key == "connectors":
+    if key in ("connectors", "memory"):
         return value is True or value == "on"
     return value
 

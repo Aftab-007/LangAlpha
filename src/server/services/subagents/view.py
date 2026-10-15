@@ -88,6 +88,7 @@ def definition_values(defn: SubagentDefinition, *, enabled: bool) -> dict[str, A
         "search_depth": defn.search_depth,
         "connectors": defn.connectors,
         "brokerages": defn.brokerages,
+        "memory": defn.memory,
         "preferred_connectors": list(defn.preferred_connectors),
         "preferred_skills": list(defn.preload_skills),
     }

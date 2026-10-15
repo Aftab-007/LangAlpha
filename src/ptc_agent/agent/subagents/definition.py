@@ -91,6 +91,10 @@ class SubagentDefinition:
     brokerages: BrokerageAccess = "on"
     """Brokerage connections: none, or general access."""
 
+    memory: bool = False
+    """Whether it gets the user's memory indices and the rules for reading them.
+    Read only: anything worth saving comes back in its result."""
+
     preferred_connectors: list[str] = field(default_factory=list)
     """Servers its tool guide lists first. They never limit what it can call."""
 

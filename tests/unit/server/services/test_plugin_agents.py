@@ -151,6 +151,18 @@ class TestHeldBack:
         assert "enabled" not in plan.values
         assert _codes(plan) == {"enabled_ignored"}
 
+    @pytest.mark.parametrize("written", ["user", "off"])
+    def test_a_memory_key_is_not_read_so_it_arrives_reading_memory(self, written):
+        """Claude Code spends ``memory`` on a scope (user, project, local), so
+        the key says nothing here, whatever it holds."""
+        from src.server.services.subagents.plugin_bases import _base
+
+        plan = read_agent("desk", _agent(f"description: Does a thing.\nmemory: {written}"))
+
+        assert "memory" not in plan.values
+        assert _codes(plan) == {"keys_ignored"}
+        assert _base("demo", plan.name, plan.values).definition.memory is True
+
 
 class TestOneFileOnly:
     """A bad file drops that subagent; the package and its other files install."""

@@ -152,6 +152,8 @@ def _common_changes(fields: Mapping[str, Any], defn: SubagentDefinition) -> dict
         changes["connectors"] = _switch(fields["connectors"])
     if "brokerages" in fields:
         changes["brokerages"] = _brokerages(fields["brokerages"], defn.brokerages)
+    if "memory" in fields:
+        changes["memory"] = _switch(fields["memory"])
     if isinstance(fields.get("preferred_connectors"), list):
         changes["preferred_connectors"] = [str(c) for c in fields["preferred_connectors"]]
     # Preloading is what a preferred skill means: every subagent already sees
@@ -208,6 +210,8 @@ def custom_definition(row: Mapping[str, Any]) -> SubagentDefinition:
         tools_narrowed=bool(set(tools_for_words(DEFAULT_CUSTOM_TOOLS)) - set(tools)),
         sections={section: has_code for section in CODE_SECTIONS},
         roles=roles or ALL_ROLES,
+        # A subagent the user writes reads memory unless they switch it off.
+        memory=True,
         stateful=True,
         source="custom",
     )

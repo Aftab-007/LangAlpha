@@ -70,6 +70,8 @@ async def test_a_version_read_before_a_change_is_a_conflict(world, op, name, mov
         ("research", {"model": "model-a"}, {"model": None}, None),
         ("research", None, {"tools": ["web"], "brokerages": "on"}, None),
         ("research", {"enabled": False}, {"enabled": True}, None),
+        ("research", None, {"memory": True}, {"memory": True}),
+        ("research", {"memory": True}, {"memory": "off"}, None),
         # An explicit inherit is the thread's model whatever the base pins, so it stays;
         # null clears back to the pin.
         ("data-prep", None, {"model": "inherit"}, {"model": None}),
@@ -154,6 +156,13 @@ async def test_a_stale_value_the_save_leaves_alone_shows_as_a_problem(world):
         ("connector_missing", "ghost"),
         ("search_unavailable", "retired"),
     }
+
+
+@pytest.mark.parametrize(("start_from", "memory"), [(None, True), ("research", False)])
+async def test_a_new_subagent_reads_memory_unless_it_copies_one_that_does_not(world, start_from, memory):
+    result = await save_subagent(USER, "neo", {"description": "Desk work."}, version=None, start_from=start_from)
+
+    assert result.view["memory"] is memory
 
 
 async def test_a_reset_clears_an_override_whose_base_was_replaced(world):
