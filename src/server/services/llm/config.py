@@ -8,8 +8,12 @@ is ``user_models``.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
+
+from ptc_agent.agent.roles import AgentRole
+from ptc_agent.agent.subagents.merge import turn_roster
 
 from src.llms.preferences import (
     Tuning,
@@ -17,6 +21,7 @@ from src.llms.preferences import (
     resolve_tuning,
 )
 from src.server.services.features import effective_flags_for_user
+from src.utils.concurrency import cancel_and_join
 
 from .availability import (
     _MODEL_PREF_KEYS,
@@ -30,7 +35,12 @@ from . import logger
 
 from .capabilities import gate_capabilities
 from .clients import resolve_clients
-from .subagents import TurnSubagents, demote_clientless, resolve_user_subagents
+from .subagents import (
+    demote_clientless,
+    read_user_subagents,
+    resolve_user_subagents,
+    subagent_roles,
+)
 from . import user_models
 
 # ---------------------------------------------------------------------------
@@ -298,68 +308,74 @@ async def resolve_llm_config(
     enabled_subagents: list[str] | None = None,
     workspace_id: str | None = None,
     user_facing: bool = True,
-    turn_subagents: TurnSubagents | None = None,
+    role: AgentRole = "analyst",
 ):
     """Resolve the final LLM config for one turn: which model runs, how it is
     tuned, what it is allowed to reach, and every client it can call.
 
     ``is_byok=None`` self-resolves via ``is_byok_active`` (guards future entry
     points; all current callers pass it explicitly). ``enabled_subagents``
-    threads the request's active subagent list so per-subagent model roles get
-    their own credential resolution; ``None`` falls back to the config default.
-    ``user_facing=False`` is a call no user is waiting on (a title, memo
+    narrows the user's subagents to the request's list; ``None`` is all of
+    them, and ``role`` is the agent the turn builds, whose subagents alone get
+    clients. ``user_facing=False`` is a call no user is waiting on (a title, memo
     metadata): nobody would see the ``model_removed`` CTA, so its own saved
-    model is read like a role and nothing is scrubbed. ``turn_subagents``
-    carries one request's merged subagents across its resolves.
+    model is read like a role and nothing is scrubbed.
     """
-    if is_byok is None:
-        from src.server.database.api_keys import is_byok_active
+    # The user's own subagents, for a build that compiles any. Their reads
+    # depend on nothing below, so they start now and the merge waits for them.
+    reads = (
+        asyncio.create_task(read_user_subagents(user_id, base_config.subagents))
+        if mode == "ptc" and user_facing
+        else None
+    )
+    try:
+        if is_byok is None:
+            from src.server.database.api_keys import is_byok_active
 
-        is_byok = await is_byok_active(user_id)
+            is_byok = await is_byok_active(user_id)
 
-    # One copy up front. Everything below mutates the request's own config, so
-    # nothing has to reason about whether it is still aliased to the caller's.
-    config = base_config.model_copy(deep=True)
-    saved_pref = await user_models.get_model_preference(user_id)
+        # One copy up front. Everything below mutates the request's own config, so
+        # nothing has to reason about whether it is still aliased to the caller's.
+        config = base_config.model_copy(deep=True)
+        saved_pref = await user_models.get_model_preference(user_id)
 
-    # A role or fallback saved as a model this manifest lacks resolves as if
-    # never set: without this a platform user's role reaches the name-based
-    # factory and every turn fails at graph build. The view is read-only.
-    # "Absent here" is not "retired" (a rollback or an older worker knows fewer
-    # models), so nothing is deleted on the strength of it. The turn's own key
-    # is not a role; a dead one there is refused below with a CTA instead.
-    role_keys = _ROLE_PREF_KEYS[mode] if user_facing else _MODEL_PREF_KEYS
-    model_pref, dropped = drop_dead_models(saved_pref, role_keys)
-    if dropped:
-        logger.info(f"[CHAT] Ignoring saved models not in the manifest for user={user_id}: {dropped}")
+        # A role or fallback saved as a model this manifest lacks resolves as if
+        # never set: without this a platform user's role reaches the name-based
+        # factory and every turn fails at graph build. The view is read-only.
+        # "Absent here" is not "retired" (a rollback or an older worker knows fewer
+        # models), so nothing is deleted on the strength of it. The turn's own key
+        # is not a role; a dead one there is refused below with a CTA instead.
+        role_keys = _ROLE_PREF_KEYS[mode] if user_facing else _MODEL_PREF_KEYS
+        model_pref, dropped = drop_dead_models(saved_pref, role_keys)
+        if dropped:
+            logger.info(f"[CHAT] Ignoring saved models not in the manifest for user={user_id}: {dropped}")
 
-    await load_user_context(config, user_id, workspace_id, model_pref)
-    selection = select_model(config, model_pref, mode, request_model)
+        await load_user_context(config, user_id, workspace_id, model_pref)
+        selection = select_model(config, model_pref, mode, request_model)
 
-    # The model running this turn is settled here — everything below tunes it
-    # rather than choosing it. Tuning reads go through the per-model resolver so
-    # a profile beats the account-wide value; reading the account-wide value
-    # directly is what applied one compaction threshold to both a 200k-context
-    # model and a 1M one.
-    tuning = resolve_tuning(model_pref, selection.effective_model)
-    config.prompt_guidance = user_models.guidance_for(model_pref, selection.effective_model)
-    apply_compaction(config, tuning, user_models.model_entry(model_pref, selection.effective_model))
-    permits = await gate_capabilities(config, user_id, model_pref)
+        # The model running this turn is settled here: everything below tunes it
+        # rather than choosing it. Tuning reads go through the per-model resolver so
+        # a profile beats the account-wide value; reading the account-wide value
+        # directly is what applied one compaction threshold to both a 200k-context
+        # model and a 1M one.
+        tuning = resolve_tuning(model_pref, selection.effective_model)
+        config.prompt_guidance = user_models.guidance_for(model_pref, selection.effective_model)
+        apply_compaction(config, tuning, user_models.model_entry(model_pref, selection.effective_model))
+        permits = await gate_capabilities(config, user_id, model_pref)
 
-    # The user's own subagents, for a build that compiles any: after the gate,
-    # whose tier check the merge reuses, and before the clients, which read the
-    # merged definitions for their roles.
-    if mode == "ptc" and user_facing:
-        resolved = turn_subagents.result if turn_subagents is not None else None
-        if resolved is None:
-            resolved = await resolve_user_subagents(
-                user_id, config.subagents, model_pref=model_pref, permits=permits,
+        # After the gate, whose tier check the merge reuses, and before the
+        # clients, which read the merged definitions for their roles.
+        if reads is not None:
+            config.subagents.resolved = await resolve_user_subagents(
+                user_id, await reads, model_pref=model_pref, permits=permits,
                 is_byok=is_byok, search_api=config.search_api,
                 search_depth=config.search_depth, requested=enabled_subagents,
             )
-            if turn_subagents is not None:
-                turn_subagents.result = resolved
-        config.subagents.resolved = resolved
+    finally:
+        # A stage above that raises must not leave the reads running, or let
+        # their own failure go unretrieved.
+        if reads is not None:
+            await cancel_and_join(reads)
 
     # The saved prefs, not the view: attribution asks whether the refused name
     # is one the user saved, and a dropped role may be that name.
@@ -368,18 +384,25 @@ async def resolve_llm_config(
         request_model, is_byok=is_byok, scrub=user_facing,
     )
 
+    # Only a PTC build compiles subagents, so only it builds their clients.
+    roles = (
+        subagent_roles(turn_roster(config.subagents), model_pref, selection.effective_model, role=role)
+        if mode == "ptc"
+        else []
+    )
+
     # The request's overrides go down whole. Per-request > per-model profile >
     # account-wide is applied per client by ``resolve_clients``, because each
     # one runs a different model and a level only means something against the
     # ladder of the model that will honor it. An unsupported level degrades in
     # ``LLM.__init__``, the one place that sees both the request and the ladder.
-    on_main = await resolve_clients(
-        config, user_id, selection.effective_model, model_pref, enabled_subagents,
+    await resolve_clients(
+        config, user_id, selection.effective_model, model_pref, roles,
         is_byok=is_byok, thread_id=thread_id,
         reasoning_effort=reasoning_effort,
         fast_mode=fast_mode,
         user_defined=user_defined,
     )
-    demote_clientless(config, on_main)
+    demote_clientless(config)
 
     return config

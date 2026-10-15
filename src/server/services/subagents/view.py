@@ -53,27 +53,31 @@ def agent_file(name: str) -> str | None:
 def render_base_body(defn: SubagentDefinition) -> str:
     """A base's role section, the read-only body of its file.
 
-    The role templates read only ``guidance``, so at a fixed level the body
-    changes only when the template or the definition does.
+    Its template gets every variable a turn passes, at the compiler's stand-in
+    values and a fixed guidance level, so one that reads the thread renders
+    here as in a turn rather than leaving the file and any copy without a
+    body, and the body changes only when the template or the definition does.
     """
-    from ptc_agent.agent.prompts import get_loader, guidance_template_vars
+    from ptc_agent.agent.prompts import get_loader
+    from ptc_agent.agent.subagents.compiler import subagent_template_vars
 
     if defn.custom_prompt is not None:
         return defn.custom_prompt.strip()
-    if defn.role_prompt:
-        return defn.role_prompt.strip()
+    variables = subagent_template_vars(defn, guidance=BODY_GUIDANCE)
+    # In the compiler's order, so a definition setting several shows the one a turn runs.
     if defn.custom_prompt_template:
         template = defn.custom_prompt_template
+    elif defn.role_prompt:
+        return defn.role_prompt.strip()
     elif defn.role_prompt_template:
         template = f"subagents/{defn.role_prompt_template}"
+        # The base prompt hands its role template this one as well.
+        variables["tools_narrowed"] = defn.tools_narrowed
     else:
         return ""
     try:
-        return get_loader().render(
-            template,
-            **guidance_template_vars(BODY_GUIDANCE),
-        ).strip()
-    except Exception as exc:  # a deployment template that needs a turn's variables
+        return get_loader().render(template, **variables).strip()
+    except Exception as exc:  # a missing file or a syntax error, which fail a turn too
         logger.warning(f"Could not render subagent body for {defn.name!r}: {exc}")
         return ""
 

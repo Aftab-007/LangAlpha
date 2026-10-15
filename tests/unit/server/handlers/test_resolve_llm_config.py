@@ -13,12 +13,11 @@ Covers:
 """
 
 from collections import Counter
-from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ptc_agent.config.agent import AgentConfig, LLMConfig
+from ptc_agent.config.agent import AgentConfig, LLMConfig, SubagentConfig
 from ptc_agent.config.core import SandboxConfig
 from ptc_agent.config.core import (
     DaytonaConfig,
@@ -444,7 +443,7 @@ class TestReasoningEffort:
             patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
             patch("src.llms.llm.create_llm", return_value=mock_llm) as mock_create,
         ):
-            config = await resolve_llm_config(
+            await resolve_llm_config(
                 base_config, "user-1", None, False, reasoning_effort="high"
             )
         # Should use per-request "high", not pref "low"
@@ -471,7 +470,7 @@ class TestReasoningEffort:
             patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
             patch("src.llms.llm.create_llm", return_value=mock_llm) as mock_create,
         ):
-            config = await resolve_llm_config(
+            await resolve_llm_config(
                 base_config, "user-1", None, False, reasoning_effort=None
             )
         # The fetch role builds its own client for the flash model; only the
@@ -524,7 +523,7 @@ class TestBYOKResolution:
             ) as mock_resolve,
             patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
         ):
-            config = await resolve_llm_config(
+            await resolve_llm_config(
                 base_config, "user-1", None, False
             )
         mock_resolve.assert_not_awaited()
@@ -1058,10 +1057,11 @@ class TestTuningReachesEveryClient:
         mock_mc = _mock_model_config(
             system_models={"system-default-model", "system-flash-model", "sub-model"}
         )
-        sub = MagicMock()
-        sub.model = "sub-model"
-        sub.reasoning_effort = None  # sets no level of its own
-        base_config.subagents.enabled = ["research"]
+        # Pinned to its own model, with no level of its own.
+        base_config.subagents.definitions = {
+            "desk": SubagentConfig(description="Desk", model="sub-model"),
+        }
+        base_config.subagents.enabled = ["desk"]
 
         with (
             patch(
@@ -1074,10 +1074,6 @@ class TestTuningReachesEveryClient:
                 new_callable=AsyncMock,
                 return_value=None,
             ) as mock_oauth,
-            patch(
-                "ptc_agent.agent.subagents.registry.SubagentRegistry.get",
-                return_value=sub,
-            ),
             patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
             # An effort opens the platform-fallback path; what is under test is
             # what each model was offered, not what the factory builds from it.

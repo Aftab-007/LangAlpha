@@ -138,7 +138,7 @@ async def test_a_completed_spawn_carries_no_refusal_message(
 
 
 class _TypedMiddleware(_RefusingMiddleware):
-    def __init__(self, subagent_types: frozenset[str] | None) -> None:
+    def __init__(self, subagent_types: frozenset[str]) -> None:
         super().__init__()
         self.subagent_types = subagent_types
 
@@ -187,17 +187,13 @@ async def test_an_init_of_a_type_with_no_graph_runs_in_place_and_registers_nothi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("subagent_types", "subagent_type"),
-    [(frozenset({"research"}), "research"), (None, "research"), (frozenset({"general-purpose"}), None)],
-    ids=["a-type-with-a-graph", "no-set-to-check", "an-omitted-type-with-general-purpose"],
-)
-async def test_an_init_otherwise_takes_the_background_path(routed, subagent_types, subagent_type):
+@pytest.mark.parametrize(("roster", "subagent_type"), [({"research"}, "research"), ({"general-purpose"}, None)])
+async def test_an_init_otherwise_takes_the_background_path(routed, roster, subagent_type):
     async def handler(_request: Any) -> str:
         raise AssertionError("ran in place")
 
     result = await task_actions.handle_task_action(
-        _TypedMiddleware(subagent_types), _task_request(subagent_type=subagent_type), handler
+        _TypedMiddleware(frozenset(roster)), _task_request(subagent_type=subagent_type), handler
     )
 
     assert (result, routed["init"]) == ("init", [subagent_type])

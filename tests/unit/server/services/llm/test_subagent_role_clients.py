@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
 from ptc_agent.agent.subagents.definition import SubagentDefinition
-from ptc_agent.config.agent import AgentConfig, CredentialSource, LLMConfig
+from ptc_agent.agent.subagents.merge import ResolvedSubagents
+from ptc_agent.config.agent import CredentialSource
 from src.server.services.llm import clients
-from src.server.services.llm.clients import LLMRole, ResolvedClient, role_registry
+from src.server.services.llm.clients import LLMRole, ResolvedClient
+from src.server.services.llm.subagents import subagent_roles
 from src.server.services.llm.user_models import ModelSource
 
 MAIN = "main-model"
@@ -23,12 +24,6 @@ NO_OWN_KEY = (CredentialSource.PLATFORM, CredentialSource.NONE)
 # ---------------------------------------------------------------------------
 
 
-def _config() -> AgentConfig:
-    cfg = AgentConfig.create(llm=MagicMock(name="placeholder-llm"))
-    cfg.llm = LLMConfig(name=MAIN)
-    return cfg
-
-
 # Both models carry a saved level of their own, which a set effort must beat
 # and an unset one must not reach past.
 _PREF = {"profiles": {"sub-model": {"reasoning_effort": "low"}, MAIN: {"reasoning_effort": "max"}}}
@@ -38,11 +33,11 @@ _PREF = {"profiles": {"sub-model": {"reasoning_effort": "low"}, MAIN: {"reasonin
     ("model", "effort", "turn_model", "expected"),
     [
         # A set effort is the subagent's, and beats the model's saved one.
-        ("sub-model", "high", MAIN, ("sub-model", "high", "high")),
+        ("sub-model", "high", MAIN, ("sub-model", "high", True)),
         # Unset: the pinned model at its own saved level.
-        ("sub-model", None, MAIN, ("sub-model", "low", None)),
+        ("sub-model", None, MAIN, ("sub-model", "low", False)),
         # Inherit model + set effort: the turn's model at the set effort.
-        (None, "high", MAIN, (MAIN, "high", "high")),
+        (None, "high", MAIN, (MAIN, "high", True)),
         # Inherit both: no role of its own, so the subagent shares the turn's client.
         (None, None, MAIN, None),
         (None, "high", None, None),
@@ -51,13 +46,32 @@ _PREF = {"profiles": {"sub-model": {"reasoning_effort": "low"}, MAIN: {"reasonin
 def test_a_subagent_gets_a_role_for_its_model_or_its_effort(model, effort, turn_model, expected):
     defn = SubagentDefinition(name="desk", description="", model=model, reasoning_effort=effort)
 
+    roster = ResolvedSubagents(definitions={"desk": defn}, enabled=("desk",))
+
     roles = [
-        (r.model, r.reasoning_effort, r.set_effort)
-        for r in role_registry(_config(), ["desk"], {"desk": defn}, _PREF, turn_model)
-        if r.key == "subagent:desk"
+        (r.key, r.model, r.reasoning_effort, r.effort_follows, r.own_client)
+        for r in subagent_roles(roster, _PREF, turn_model)
     ]
 
-    assert roles == ([expected] if expected else [])
+    assert roles == ([("subagent:desk", *expected, True)] if expected else [])
+
+
+@pytest.mark.parametrize(("role", "expected"), [("analyst", ["both", "desk"]), ("chief_of_staff", ["both", "home"])])
+def test_only_the_turns_agent_gets_roles_for_its_subagents(role, expected):
+    """A subagent the turn's agent never compiles gets no client built for it."""
+    defns = {
+        name: SubagentDefinition(name=name, description="", model="sub-model", roles=frozenset(roles))
+        for name, roles in {
+            "both": {"analyst", "chief_of_staff"},
+            "desk": {"analyst"},
+            "home": {"chief_of_staff"},
+        }.items()
+    }
+    roster = ResolvedSubagents(definitions=defns, enabled=tuple(defns))
+
+    keys = [r.key for r in subagent_roles(roster, _PREF, MAIN, role=role)]
+
+    assert keys == [f"subagent:{name}" for name in expected]
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +124,8 @@ def _turn(credential: CredentialSource) -> SimpleNamespace:
     )
 
 
-async def _resolve_roles(config, *roles: LLMRole) -> set[str]:
-    return await clients._resolve_role_clients(
+async def _resolve_roles(config, *roles: LLMRole) -> None:
+    await clients._resolve_role_clients(
         config, "user-1", list(roles), {}, {}, is_byok=True, cache_key="t-1", main_model=MAIN,
     )
 
@@ -131,14 +145,13 @@ async def test_an_own_key_turn_runs_a_keyless_subagent_on_the_main_model_never_t
     ladder.own = {MAIN: credential}
     config = _turn(credential)
     role = LLMRole("subagent:desk", "sub-model", reasoning_effort=set_effort or "low",
-                   set_effort=set_effort)
+                   effort_follows=set_effort is not None, own_client=True)
 
-    on_main = await _resolve_roles(config, role)
+    await _resolve_roles(config, role)
 
     client = config.subsidiary_llm_clients["subagent:desk"]
     assert (client.model, client.effort, client.credential) == (MAIN, expected_effort, credential)
     assert (client.copied_from is config.llm_client) is (set_effort is None)
-    assert on_main == {"subagent:desk"}
     assert not any(platform for _, _, platform in ladder.calls)
     assert config.role_prompt_guidance["subagent:desk"] == f"guidance:{MAIN}"
 
@@ -149,15 +162,15 @@ async def test_inherit_with_a_set_effort_is_the_turns_model_at_that_effort(ladde
     ladder.own = {MAIN: credential}
     config = _turn(credential)
 
-    on_main = await _resolve_roles(
-        config, LLMRole("subagent:desk", MAIN, reasoning_effort="high", set_effort="high"),
+    await _resolve_roles(
+        config,
+        LLMRole("subagent:desk", MAIN, reasoning_effort="high", effort_follows=True,
+                own_client=True),
     )
 
     client = config.subsidiary_llm_clients["subagent:desk"]
     assert (client.model, client.effort, client.credential) == (MAIN, "high", credential)
     assert client.copied_from is None
-    # Its own model is the main one, so nothing fell back.
-    assert on_main == set()
 
 
 @pytest.mark.asyncio
@@ -170,11 +183,12 @@ async def test_every_subagent_role_gets_its_own_client_for_platform_and_keyless_
     cheap name path."""
     config = _turn(credential)
 
-    on_main = await _resolve_roles(
+    await _resolve_roles(
         config,
         LLMRole("fetch", "fetch-model"),
-        LLMRole("subagent:plain", "sub-model"),
-        LLMRole("subagent:tuned", "sub-model", reasoning_effort="high", set_effort="high"),
+        LLMRole("subagent:plain", "sub-model", own_client=True),
+        LLMRole("subagent:tuned", "sub-model", reasoning_effort="high", effort_follows=True,
+                own_client=True),
     )
 
     assert set(config.subsidiary_llm_clients) == {"subagent:plain", "subagent:tuned"}
@@ -186,7 +200,6 @@ async def test_every_subagent_role_gets_its_own_client_for_platform_and_keyless_
         "subagent:tuned": ("sub-model", "high", CredentialSource.PLATFORM),
     }
     assert ("fetch-model", None, False) in ladder.calls
-    assert on_main == set()
 
 
 @pytest.mark.asyncio
@@ -197,14 +210,14 @@ async def test_a_set_effort_follows_the_subagent_onto_the_main_model(ladder, cre
     ladder.no_platform = {"sub-model"}
     config = _turn(credential)
 
-    on_main = await _resolve_roles(
+    await _resolve_roles(
         config,
-        LLMRole("subagent:desk", "sub-model", reasoning_effort="high", set_effort="high"),
-        LLMRole("subagent:untuned", "sub-model"),
+        LLMRole("subagent:desk", "sub-model", reasoning_effort="high", effort_follows=True,
+                own_client=True),
+        LLMRole("subagent:untuned", "sub-model", own_client=True),
     )
 
     client = config.subsidiary_llm_clients["subagent:desk"]
     assert (client.model, client.effort) == (MAIN, "high")
     # No set effort and no own key: no copy of a main client to hand it.
     assert "subagent:untuned" not in config.subsidiary_llm_clients
-    assert on_main == {"subagent:desk"}

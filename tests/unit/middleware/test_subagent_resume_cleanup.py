@@ -47,7 +47,7 @@ async def test_reset_for_resume_deletes_stream_and_meta_keys():
     the new run's seq=1 XADD lands after the prior run's seq=N entries and the
     meta hash counter starts at N+1 instead of 1."""
     registry = BackgroundTaskRegistry(thread_id="thread-x")
-    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True)
+    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True, subagent_types={"general-purpose"})
     task = _make_completed_task("abc123")
 
     cache = MagicMock()
@@ -80,7 +80,7 @@ async def test_reset_for_resume_resets_seq_counters_after_redis_clear():
     """After Redis cleanup, in-memory seq counters are reset to 0 so the
     next append starts at seq=1 on a fresh Redis list."""
     registry = BackgroundTaskRegistry(thread_id="thread-x")
-    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True)
+    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True, subagent_types={"general-purpose"})
     task = _make_completed_task()
 
     cache = MagicMock()
@@ -113,7 +113,7 @@ async def test_reset_for_resume_unseals_cancelled_task():
     ``cancelled`` is set) must not survive resume — the resumed round is a
     fresh writer whose capture would otherwise be silently muted."""
     registry = BackgroundTaskRegistry(thread_id="thread-x")
-    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True)
+    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True, subagent_types={"general-purpose"})
     task = _make_completed_task()
     task.terminal_status = "cancelled"
 
@@ -140,7 +140,7 @@ async def test_reset_for_resume_nulls_writer_handles():
     task as a settling writer and would skip the task, reopening the
     handle-less cancel gap with a stale-handle variant."""
     registry = BackgroundTaskRegistry(thread_id="thread-x")
-    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True)
+    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True, subagent_types={"general-purpose"})
     task = _make_completed_task()
     stale = MagicMock()
     stale.done.return_value = True
@@ -169,7 +169,7 @@ async def test_reset_for_resume_redis_failure_does_not_raise():
     """Cache failure during cleanup must not crash the resume path — the new
     run still proceeds."""
     registry = BackgroundTaskRegistry(thread_id="thread-x")
-    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True)
+    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True, subagent_types={"general-purpose"})
     task = _make_completed_task()
 
     cache = MagicMock()
@@ -200,7 +200,7 @@ async def test_unconfirmed_stream_delete_keeps_the_current_epoch():
     by a carried-over count.
     """
     registry = BackgroundTaskRegistry(thread_id="thread-x")
-    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True)
+    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True, subagent_types={"general-purpose"})
     task = _make_completed_task()
 
     cache = MagicMock()
@@ -239,7 +239,7 @@ async def test_reset_for_resume_skips_redis_when_no_thread_id():
     """Tests that construct a bare registry without a thread_id should
     not attempt Redis operations."""
     registry = BackgroundTaskRegistry(thread_id="")
-    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True)
+    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True, subagent_types={"general-purpose"})
     task = _make_completed_task()
 
     cache = MagicMock()

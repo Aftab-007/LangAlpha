@@ -507,21 +507,17 @@ def read_registry_tools(mcp_registry: Any) -> RegistryTools | None:
         return None
 
 
-def build_tool_summary_from_registry(
-    mcp_registry: Any,
+def format_registry_tools(
+    tools: RegistryTools,
     *,
     mode: str = "full",
     servers: Collection[str] | None = None,
     preferred: Sequence[str] = (),
 ) -> str:
-    """Build a formatted MCP tool summary from a registry instance.
-
-    Shared by PTCAgent and SubagentCompiler to avoid duplicating
-    the registry-to-string conversion logic.
+    """Format one read of a registry as an MCP tool summary.
 
     Args:
-        mcp_registry: MCP registry instance (or None/falsy), or one already
-            read with ``read_registry_tools``.
+        tools: The registry as ``read_registry_tools`` read it.
         mode: Tool exposure mode ("summary", "detailed", or "full").
         servers: Only these servers are listed; None lists every one.
         preferred: Servers listed first, under a line saying to reach for
@@ -530,15 +526,8 @@ def build_tool_summary_from_registry(
     Returns:
         Formatted tool summary string, or "" on failure.
     """
-    registry = (
-        mcp_registry
-        if isinstance(mcp_registry, RegistryTools)
-        else read_registry_tools(mcp_registry)
-    )
-    if registry is None:
-        return ""
     try:
-        tools_dict = registry.tools_by_server
+        tools_dict = tools.tools_by_server
         if servers is not None:
             tools_dict = {n: t for n, t in tools_dict.items() if n in servers}
         lead = [n for n in dict.fromkeys(preferred) if n in tools_dict]
@@ -548,7 +537,7 @@ def build_tool_summary_from_registry(
                 **{n: t for n, t in tools_dict.items() if n not in lead},
             }
         summary = format_tool_summary(
-            tools_dict, mode=mode, server_configs=registry.server_configs
+            tools_dict, mode=mode, server_configs=tools.server_configs
         )
         if lead:
             summary = (
@@ -559,6 +548,20 @@ def build_tool_summary_from_registry(
     except Exception:
         logger.warning("failed to build MCP tool summary", exc_info=True)
         return ""
+
+
+def build_tool_summary_from_registry(mcp_registry: Any, *, mode: str = "full") -> str:
+    """Build a formatted MCP tool summary from a registry instance.
+
+    Args:
+        mcp_registry: MCP registry instance (or None/falsy).
+        mode: Tool exposure mode ("summary", "detailed", or "full").
+
+    Returns:
+        Formatted tool summary string, or "" on failure.
+    """
+    tools = read_registry_tools(mcp_registry)
+    return format_registry_tools(tools, mode=mode) if tools is not None else ""
 
 
 def format_subagent_summary(subagents: list[dict]) -> str:

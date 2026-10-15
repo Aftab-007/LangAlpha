@@ -8,7 +8,7 @@ import pytest
 
 from ptc_agent.agent.roles import ALL_ROLES
 from ptc_agent.agent.middleware.skills.registry import build_effective_skill_registry
-from ptc_agent.agent.subagents import BUILTIN_SUBAGENTS, SubagentRegistry
+from ptc_agent.agent.subagents import BUILTIN_SUBAGENTS, create_subagents
 from ptc_agent.agent.subagents.compiler import SubagentCompiler
 from ptc_agent.agent.subagents.definition import SubagentDefinition
 from ptc_agent.agent.subagents.merge import (
@@ -24,8 +24,9 @@ from ptc_agent.agent.subagents.merge import (
     merge_subagents,
     narrow_to_request,
     plugin_definition,
+    turn_roster,
 )
-from ptc_agent.agent.subagents.registry import registry_for
+from ptc_agent.agent.subagents.registry import SubagentRegistry
 from ptc_agent.config.agent import SubagentConfig, SubagentsConfig
 from src.tools.automation import AUTOMATION_TOOLS
 
@@ -373,10 +374,10 @@ def test_available_to_becomes_the_definitions_roles(roles, expected):
 
 def test_a_role_the_subagent_is_not_available_to_leaves_it_out_of_that_roster():
     resolved = merge_subagents(_bases(), ("research",), [_custom("macro-desk", roles=["analyst"])])
-    registry = SubagentRegistry.from_definitions(resolved.definitions)
+    compiler = SimpleNamespace(compile=lambda defn: defn.name)
 
     def roster(role):
-        return [d.name for d in registry.get_enabled(list(resolved.enabled), role=role)]
+        return create_subagents(resolved, compiler, role)
 
     assert roster("analyst") == ["research", "macro-desk"]
     assert roster("chief_of_staff") == ["research"]
@@ -500,21 +501,13 @@ def test_a_request_narrows_the_roster_to_the_names_it_shares(requested, enabled,
 
 
 # ---------------------------------------------------------------------------
-# The registry a build reads
+# The roster a build reads
 # ---------------------------------------------------------------------------
 
 
-def test_a_registry_over_finished_definitions_layers_nothing_again():
-    """The merge already applied the built-ins and the YAML; adding them back
-    would resurrect a base the operator never offered."""
-    mine = custom_definition(_custom("macro-desk"))
-
-    registry = SubagentRegistry.from_definitions({"macro-desk": mine})
-
-    assert registry.list_all() == {"macro-desk": mine}
-
-
-def test_a_resolved_roster_supersedes_the_deployments_layering():
+def test_a_resolved_roster_supersedes_the_deployments():
+    """The merge already applied the built-ins and the YAML; layering them
+    again would resurrect a base the operator never offered."""
     deployment = SubagentsConfig(
         enabled=["research"],
         definitions={"research": SubagentConfig(description="desk", tools=["web_search"])},
@@ -524,13 +517,10 @@ def test_a_resolved_roster_supersedes_the_deployments_layering():
     )
     per_turn = deployment.model_copy(update={"resolved": resolved})
 
-    assert registry_for(deployment).get("research").source == "user"
-    assert set(registry_for(per_turn).list_all()) == {"macro-desk"}
-    # A user who turned everything off compiles nothing, not the deployment's list,
-    # and a request cannot widen a roster that already folded it in.
-    assert per_turn.roster() == []
-    assert per_turn.roster(["research"]) == []
-    assert deployment.roster() == ["research"]
+    assert turn_roster(deployment).enabled == ("research",)
+    assert turn_roster(deployment).definitions["research"].source == "user"
+    # A user who turned everything off compiles nothing, not the deployment's list.
+    assert turn_roster(per_turn) is resolved
 
 
 def _bound(defn: SubagentDefinition) -> set[str]:

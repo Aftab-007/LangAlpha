@@ -487,7 +487,6 @@ async def _handle_send_message(
         # Resolve LLM config eagerly — credit check must happen before SSE stream starts
         from src.server.services.llm import thread_model
         from src.server.services.llm.config import resolve_llm_config
-        from src.server.services.llm.subagents import TurnSubagents
         from src.server.dependencies.usage_limits import enforce_credit_limit
         from ptc_agent.config.agent import CredentialSource
 
@@ -508,10 +507,6 @@ async def _handle_send_message(
             else None
         )
 
-        # Both resolves below (the thread's model, then the default) merge the
-        # same subagents, so the second reuses the first's.
-        turn_subagents = TurnSubagents()
-
         async def resolve(model: str | None):
             return await resolve_llm_config(
                 setup.agent_config,
@@ -524,7 +519,7 @@ async def _handle_send_message(
                 thread_id=thread_id,
                 enabled_subagents=request.subagents_enabled,
                 workspace_id=workspace_id,
-                turn_subagents=turn_subagents,
+                role=route.role,
             )
 
         # A report-back or a channel message has nobody at a client to

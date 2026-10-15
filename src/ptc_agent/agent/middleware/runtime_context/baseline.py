@@ -368,9 +368,12 @@ class BaselineContextMiddleware(AgentMiddleware):
     ) -> dict[str, Any] | None:
         # A turn that resumes an interrupt re-enters the graph at the
         # interrupted node, never at the entry node, so ``abefore_agent`` does
-        # not run for it. The instance is built per request, so a first model
-        # call on one that never opened a turn is that resume: the boundary
-        # read runs here instead, after the tool result the resume produced.
+        # not run for it. A main agent's instance is built per request, so a
+        # first model call on one that never opened a turn is that resume: the
+        # boundary read runs here instead, after the tool result the resume
+        # produced. A subagent's instance serves every run of its definition in
+        # the parent's turn, and each of those runs enters through
+        # ``abefore_agent``.
         if self._opened:
             return None
         return await self.abefore_agent(state, runtime)
@@ -663,7 +666,7 @@ class BaselineContextMiddleware(AgentMiddleware):
                 user_data_counts=snapshot.user_data_counts or None,
                 sandbox_enabled=steering,
                 profile_files=steering,
-                channels_enabled=bool(channels) and not self._subagent,
+                channels_enabled=bool(channels),
             )
         except Exception:  # noqa: BLE001 - one component is not the whole block
             logger.warning("[Baseline] user_profile render failed", exc_info=True)

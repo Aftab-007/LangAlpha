@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ptc_agent.agent.subagents import create_subagents
 from ptc_agent.agent.subagents.definition import SubagentDefinition
-from ptc_agent.agent.subagents.merge import ResolvedSubagents
-from ptc_agent.agent.subagents.registry import registry_for
+from ptc_agent.agent.subagents.merge import ResolvedSubagents, narrow_to_request, turn_roster
 from ptc_agent.config.agent import AgentConfig, LLMConfig, SubagentConfig, SubagentsConfig
 from src.server.services.llm import subagents as turn_subagents
 from src.server.services.llm.subagents import (
-    TurnSubagents,
     model_on_plan,
     demote_clientless,
+    read_user_subagents,
     resolve_user_subagents,
 )
 from src.server.services.llm.user_models import ModelSource
@@ -110,8 +110,9 @@ def on_plan(monkeypatch) -> AsyncMock:
 
 
 async def _resolve(deployment: SubagentsConfig | None = None, *, requested=None) -> ResolvedSubagents:
+    reads = await read_user_subagents(USER, deployment or _deployment())
     return await resolve_user_subagents(
-        USER, deployment or _deployment(), model_pref={}, permits=_deny, is_byok=False,
+        USER, reads, model_pref={}, permits=_deny, is_byok=False,
         search_api="tavily", search_depth="standard", requested=requested,
     )
 
@@ -134,11 +135,13 @@ async def test_a_user_with_no_rows_compiles_what_the_deployment_alone_would(
     resolved = await _resolve(deployment, requested=requested)
 
     per_turn = deployment.model_copy(update={"resolved": resolved})
+    as_built = SimpleNamespace(compile=lambda defn: defn)
     for role in ("analyst", "chief_of_staff"):
-        before = registry_for(deployment).get_enabled(deployment.roster(requested or None), role=role)
-        after = registry_for(per_turn).get_enabled(per_turn.roster(), role=role)
+        alone, _ = narrow_to_request(turn_roster(deployment), requested)
+        before = create_subagents(alone, as_built, role)
+        after = create_subagents(turn_roster(per_turn), as_built, role)
         assert after == before
-    assert (resolved.orphaned, resolved.shadowed, dict(resolved.unavailable)) == ((), (), {})
+    assert (resolved.orphaned, resolved.shadowed) == ((), ())
     on_plan.assert_not_awaited()
 
 
@@ -172,7 +175,7 @@ async def test_a_user_who_turns_every_subagent_off_gets_none(rows, plugin_rows):
     resolved = await _resolve(deployment)
 
     assert resolved.enabled == ()
-    assert deployment.model_copy(update={"resolved": resolved}).roster() == []
+    assert turn_roster(deployment.model_copy(update={"resolved": resolved})).enabled == ()
 
 
 @pytest.mark.asyncio
@@ -230,26 +233,6 @@ def _agent_config() -> AgentConfig:
 
 
 @pytest.mark.asyncio
-async def test_one_requests_resolves_share_one_read_of_the_rows(monkeypatch, plugin_rows):
-    """A turn that falls back to the default model resolves twice; the second
-    must not read the rows again, nor see a roster the first did not."""
-    from src.server.database import user_subagents
-    from src.server.services.llm.config import resolve_llm_config
-
-    reads = AsyncMock(return_value=[_custom("macro-desk")])
-    monkeypatch.setattr(user_subagents, "list_user_subagents", reads)
-    shared = TurnSubagents()
-
-    with _offline_turn():
-        first = await resolve_llm_config(_agent_config(), USER, None, False, turn_subagents=shared)
-        second = await resolve_llm_config(_agent_config(), USER, None, False, turn_subagents=shared)
-
-    assert reads.await_count == 1
-    assert second.subagents.resolved is first.subagents.resolved is shared.result
-    assert "macro-desk" in shared.result.enabled
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(("mode", "user_facing"), [("flash", True), ("ptc", False)])
 async def test_a_build_that_compiles_no_subagents_never_reads_them(
     monkeypatch, plugin_rows, mode, user_facing
@@ -298,7 +281,6 @@ async def test_a_model_the_user_chose_runs_only_if_their_plan_reaches_it(
     # Only the user's choice is checked; the deployment's own m-deploy never is.
     assert [c.args[1] for c in on_plan.await_args_list] == [model]
     assert resolved.definitions[name].model == (model if permitted else None)
-    assert dict(resolved.unavailable) == ({} if permitted else {name: model})
 
 
 @pytest.mark.asyncio
@@ -314,7 +296,6 @@ async def test_a_pin_the_manifest_lacks_runs_as_inherit_whoever_set_it(
 
     assert resolved.definitions["macro"].model is None
     assert resolved.definitions["macro-desk"].model is None
-    assert dict(resolved.unavailable) == {"macro": "m-deploy", "macro-desk": "m-gone"}
     on_plan.assert_not_awaited()
 
 
@@ -379,38 +360,55 @@ def _defn(name: str, model: str | None) -> SubagentDefinition:
     return SubagentDefinition(name=name, description="", model=model, source="custom")
 
 
-def test_a_pin_that_got_no_client_or_fell_back_to_main_runs_as_inherit():
-    """Guidance stamped from the pinned model goes only when the role had no
-    client: one that fell back was already handed the main model's."""
+def test_a_pin_that_got_no_client_runs_as_inherit():
+    """Guidance stamped from the pinned model goes with it, since the
+    subagent now runs the turn's."""
     resolved = ResolvedSubagents(
         definitions={
             "own": _defn("own", "m-own"),
             "keyless": _defn("keyless", "m-keyless"),
-            "fell-back": _defn("fell-back", "m-fell"),
             "inherit": _defn("inherit", None),
             "off": _defn("off", "m-off"),
         },
-        enabled=("own", "keyless", "fell-back", "inherit"),
+        enabled=("own", "keyless", "inherit"),
     )
     config = SimpleNamespace(
         subagents=SubagentsConfig(resolved=resolved),
-        subsidiary_llm_clients={
-            "subagent:own": object(),
-            "subagent:fell-back": object(),
-            "subagent:inherit": object(),
-        },
-        role_prompt_guidance={
-            f"subagent:{n}": "g" for n in ("own", "keyless", "fell-back", "inherit", "off")
-        },
+        subsidiary_llm_clients={"subagent:own": object(), "subagent:inherit": object()},
+        role_prompt_guidance={f"subagent:{n}": "g" for n in ("own", "keyless", "inherit", "off")},
     )
 
-    demote_clientless(config, on_main={"subagent:fell-back", "subagent:inherit"})
+    demote_clientless(config)
 
     after = config.subagents.resolved
     assert {n: d.model for n, d in after.definitions.items()} == {
-        "own": "m-own", "keyless": None, "fell-back": None, "inherit": None, "off": "m-off",
+        "own": "m-own", "keyless": None, "inherit": None, "off": "m-off",
     }
-    assert dict(after.unavailable) == {"keyless": "m-keyless", "fell-back": "m-fell"}
-    assert set(config.role_prompt_guidance) == {
-        "subagent:own", "subagent:fell-back", "subagent:inherit", "subagent:off",
-    }
+    assert set(config.role_prompt_guidance) == {"subagent:own", "subagent:inherit", "subagent:off"}
+
+
+@pytest.mark.asyncio
+async def test_a_turn_reads_its_rows_and_its_plugin_bases_from_one_snapshot(monkeypatch):
+    # Uninstall drops a plugin's subagents and the user's overrides of them in
+    # one transaction; reads on two connections could straddle it and run a
+    # subagent the user switched off.
+    from src.server.database import plugin_subagents, user_subagents
+
+    snapshot = object()
+    seen: dict[str, object] = {}
+
+    @contextlib.asynccontextmanager
+    async def one_snapshot():
+        yield snapshot
+
+    def reader(table: str):
+        async def _list(user_id, *, conn=None):
+            seen[table] = conn
+            return []
+        return _list
+
+    monkeypatch.setattr(plugin_subagents, "subagents_snapshot", one_snapshot)
+    monkeypatch.setattr(user_subagents, "list_user_subagents", reader("user_subagents"))
+    monkeypatch.setattr(plugin_subagents, "list_user_plugin_subagents", reader("plugin_subagents"))
+    await read_user_subagents(USER, _deployment())
+    assert seen == {"user_subagents": snapshot, "plugin_subagents": snapshot}

@@ -108,7 +108,7 @@ async def _round_one(stream: _FakeStream):
     """Spawn a task, capture five events under ``RUN_ONE``."""
     registry = _SpoolingRegistry(THREAD_ID, stream)
     registry.current_run_id = RUN_ONE
-    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True)
+    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True, subagent_types={"general-purpose"})
     task = await registry.register(
         tool_call_id="tc-1",
         description="d",

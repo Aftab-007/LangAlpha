@@ -18,7 +18,6 @@ from langchain.agents import create_agent
 from ptc_agent.agent.backends import SandboxBackend
 from ptc_agent.core.paths import SandboxLayout, WorkspaceLayout
 from ptc_agent.core.project_context import ProjectContext
-from ptc_agent.agent.middleware import SubAgentMiddleware
 from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.agent.main_state import MainAgentState
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
@@ -73,7 +72,7 @@ from ptc_agent.agent.middleware.subagent_switch import (
     SubagentSwitchReader,
     subagents_window_carry,
 )
-from ptc_agent.agent.context_stack import SubagentContext, build_context_middleware
+from ptc_agent.agent.context_stack import build_context_middleware
 from ptc_agent.agent.roles import AgentRole
 from ptc_agent.agent.filesystem_routes import (
     build_filesystem_backend,
@@ -108,11 +107,7 @@ from ptc_agent.agent.prompts import (
     guidance_template_vars,
     workspace_path_vars,
 )
-from ptc_agent.agent.subagents import (
-    SubagentCompiler,
-    create_subagents,
-)
-from ptc_agent.agent.subagents.registry import registry_for
+from ptc_agent.agent.subagents.assembly import compile_subagents, task_middleware
 from ptc_agent.agent.tools import (
     create_bash_output_tool,
     create_execute_bash_tool,
@@ -235,7 +230,6 @@ class PTCAgent:
         self,
         sandbox: PTCSandbox,
         mcp_registry: MCPRegistry,
-        subagent_names: list[str] | None = None,
         additional_subagents: list[dict[str, Any]] | None = None,
         background_timeout: float = 300.0,
         checkpointer: Any | None = None,
@@ -477,9 +471,6 @@ class PTCAgent:
             finance_tools.append(watch_market)  # Market watch start/stop (live price injection)
         tools.extend(finance_tools)
 
-        if subagent_names is None:
-            subagent_names = self.config.subagents.roster()
-
         # --- Build shared middleware (for both main agent and subagents) ---
         shared_middleware: list[Any] = []
 
@@ -611,8 +602,42 @@ class PTCAgent:
         direct_tools = list(direct_mcp.tools) if direct_mcp is not None else []
         main_only_middleware.extend(direct_tool_middleware(direct_mcp, order_ledger))
 
+        # Recursion gate: no subagents compiled, none advertised in the
+        # prompt ("No sub-agents configured."), no Task tool below.
+        subagents: list[dict[str, Any]] = []
+        if not disable_subagents:
+            subagents = compile_subagents(
+                self.config,
+                role,
+                sandbox=sandbox,
+                mcp_registry=mcp_registry,
+                execute_code=execute_code_tool,
+                bash=bash_tool,
+                filesystem=subagent_filesystem_tools,
+                web=[web_search_tool, web_fetch_tool],
+                finance=finance_tools,
+                todo=todo_tools,
+                search_tool=search_tool,
+                sandbox_tools=lambda allowed: [
+                    code_tool(allowed_servers=allowed),
+                    shell_tool(allowed_servers=allowed),
+                ],
+                turn_context=turn_context,
+                user_profile=user_profile,
+                user_data_counts=user_data_counts,
+                current_time=current_time,
+                thread_id=short_thread_id,
+                project=project,
+                sources=baseline_store_sources,
+                skills=lambda state: subagent_skill_middleware.build_manifest(state)
+                or "",
+                scratchpad=scratchpad.folder if scratchpad is not None else None,
+            )
+            subagents.extend(additional_subagents or [])
+
         background_middleware = BackgroundSubagentMiddleware(
             timeout=background_timeout,
+            subagent_types=frozenset(spec["name"] for spec in subagents),
             enabled=not disable_subagents,
             registry=_bg_registry,
             checkpointer=checkpointer,
@@ -630,75 +655,6 @@ class PTCAgent:
             from src.tools.secretary.approvals import StandingApprovalMiddleware
 
             main_only_middleware.append(StandingApprovalMiddleware(user_id))
-
-        from ptc_agent.agent.tools import think_tool
-
-        subagent_registry = registry_for(self.config.subagents)
-        subagent_tool_sets: dict[str, list[Any]] = {
-            "execute_code": [execute_code_tool],
-            "bash": [bash_tool],
-            "filesystem": subagent_filesystem_tools,
-            "web_search": [web_search_tool, web_fetch_tool],
-            "finance": finance_tools,
-            "think": [think_tool],
-            "todo": todo_tools,
-        }
-        # The compiler gets its own registry: same per-user gates, but
-        # mode-unfiltered — subagent definitions may be flash-mode and preload
-        # flash-only skills the ptc-filtered registry above excludes. It drops
-        # the chart guide for the same reason the subagent manifest does.
-        compiler_skill_registry = build_effective_skill_registry(
-            None,
-            feature_resolver=self.config.feature_enabled,
-            disabled_skills=self.config.disabled_skills,
-            user_skills=self.config.user_skills,
-            user_skill_dir=self.config.user_skill_dir,
-            workspace_skill_dir=self.config.workspace_skill_dir,
-        )
-        for name in SUBAGENT_WITHHELD_SKILLS:
-            compiler_skill_registry.pop(name, None)
-        subagent_compiler = SubagentCompiler(
-            sandbox=sandbox,
-            mcp_registry=mcp_registry,
-            tool_sets=subagent_tool_sets,
-            default_model=turn.client,
-            user_profile=user_profile,
-            current_time=current_time,
-            thread_id=short_thread_id,
-            config=self.config,
-            skill_registry=compiler_skill_registry,
-            skill_dirs=[
-                d for d, _ in self.config.skills.local_skill_dirs_with_sandbox()
-            ],
-            project=project,
-            search_tool=search_tool,
-            sandbox_tools=lambda allowed: [
-                code_tool(allowed_servers=allowed),
-                shell_tool(allowed_servers=allowed),
-            ],
-            context=SubagentContext.build(
-                turn_context=turn_context,
-                user_profile=user_profile,
-                user_data_counts=user_data_counts,
-                sources=baseline_store_sources,
-                skills=lambda state: subagent_skill_middleware.build_manifest(state)
-                or "",
-                scratchpad=scratchpad.folder if scratchpad is not None else None,
-            ),
-        )
-        if disable_subagents:
-            # Recursion gate: no subagents compiled, none advertised in the
-            # prompt ("No sub-agents configured."), no Task tool below.
-            subagents = []
-        else:
-            subagents = create_subagents(
-                registry=subagent_registry,
-                enabled_names=subagent_names,
-                compiler=subagent_compiler,
-                role=role,
-            )
-            if additional_subagents:
-                subagents.extend(additional_subagents)
 
         # The roster the baseline freezes into <mcp-servers>. Prefer the
         # session-cached summary (precomputed once per session in the
@@ -898,32 +854,24 @@ class PTCAgent:
 
         # Compiled subagent graphs live on this middleware; the RunWorkflow
         # dispatcher below shares the same instances so direct dispatches get
-        # identical model resolution and middleware wiring. default_tools is
-        # snapshotted so appending RunWorkflow to the main tools afterwards
-        # can never leak it into subagents. Absent entirely under the
-        # recursion gate: this middleware is the sole provider of the Task
-        # tool, so skipping it (plus the TaskOutput extend above) makes a
-        # notification turn structurally unable to spawn subagents —
-        # RunWorkflow drops with it below.
+        # identical model resolution and middleware wiring. Its tools are a
+        # snapshot of the main agent's (see ``task_middleware``). Absent
+        # entirely under the recursion gate: this middleware is the sole
+        # provider of the Task tool, so skipping it (plus the TaskOutput extend
+        # above) makes a notification turn structurally unable to spawn
+        # subagents, and RunWorkflow drops with it below.
         subagent_task_middleware = (
-            SubAgentMiddleware(
-                default_model=turn.client,
-                default_tools=list(tools),
-                subagents=subagents if subagents else [],
-                default_middleware=subagent_middleware,
-                # The roster is the whole list: an implicit general-purpose
-                # agent would outlive the user turning theirs off.
-                general_purpose_agent=False,
+            task_middleware(
+                subagents,
+                model=turn.client,
+                tools=tools,
+                middleware=subagent_middleware,
                 registry=background_middleware.registry,
                 checkpointer=checkpointer,
             )
             if not disable_subagents
             else None
         )
-        if subagent_task_middleware is not None:
-            background_middleware.subagent_types = frozenset(
-                subagent_task_middleware.subagent_graphs
-            )
 
         # RunWorkflow: programmatic subagent orchestration (main agent only —
         # deliberately absent from subagent tool sets, so children can't nest

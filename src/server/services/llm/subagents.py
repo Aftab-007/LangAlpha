@@ -9,40 +9,51 @@ absent here may be back on the next deploy.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any
 
 from ptc_agent.agent.subagents.merge import (
     BaseSubagent,
     ResolvedSubagents,
-    add_plugin_bases,
-    base_subagents,
     merge_subagents,
     narrow_to_request,
+    plan_gated,
 )
+from ptc_agent.agent.roles import AgentRole
 from ptc_agent.config.agent import SubagentsConfig
+from src.llms.preferences import resolve_tuning
 
 from . import logger, user_models
 from .availability import model_resolves
 from .capabilities import TierPermits, gate_search
+from .clients import LLMRole
+
+#: The user's rows, their bases and the base names offered to them.
+SubagentReads = tuple[list[dict[str, Any]], dict[str, BaseSubagent], tuple[str, ...]]
 
 
-@dataclass
-class TurnSubagents:
-    """One request's merged roster, kept for every resolve in that request.
+async def read_user_subagents(user_id: str, subagents: SubagentsConfig) -> SubagentReads:
+    """What the merge reads, from one snapshot.
 
-    ``resolve_turn_config`` resolves a turn a second time, on the default
-    model, when the thread's own cannot run. Nothing the merge reads depends
-    on the model, so the second resolve reuses the first answer instead of
-    reading the rows again. Created per request and never shared.
+    An uninstall or update changes a plugin's subagents and the user's
+    overrides of them in one transaction. Reads on two connections could land
+    either side of it and pair a base with its override gone, running a
+    subagent the user switched off. Nothing here depends on the turn's model
+    or plan, so a turn starts it before those are settled.
     """
+    from src.server.database.plugin_subagents import subagents_snapshot
+    from src.server.database.user_subagents import list_user_subagents
+    from src.server.services.subagents.context import roster
 
-    result: ResolvedSubagents | None = None
+    async with subagents_snapshot() as conn:
+        rows = await list_user_subagents(user_id, conn=conn)
+        bases, offered = await roster(user_id, subagents, conn=conn)
+    return rows, bases, offered
 
 
 async def resolve_user_subagents(
     user_id: str,
-    subagents: SubagentsConfig,
+    reads: SubagentReads,
     *,
     model_pref: dict,
     permits: TierPermits,
@@ -50,7 +61,6 @@ async def resolve_user_subagents(
     search_api: str,
     search_depth: str,
     requested: list[str] | None = None,
-    conn=None,
 ) -> ResolvedSubagents:
     """The roster this user's turn compiles, before any client is built.
 
@@ -61,13 +71,7 @@ async def resolve_user_subagents(
     user's off-switch is a restriction, and a turn that silently drops it
     would run a subagent they turned off.
     """
-    from src.server.database.user_subagents import list_user_subagents
-    from src.server.services.subagents.plugin_bases import plugin_bases
-
-    rows = await list_user_subagents(user_id, conn=conn)
-    bases, offered = add_plugin_bases(
-        base_subagents(subagents), subagents.enabled, await plugin_bases(user_id, conn=conn)
-    )
+    rows, bases, offered = reads
     resolved = merge_subagents(bases, offered, rows)
     if resolved.orphaned:
         logger.info(
@@ -157,21 +161,14 @@ async def _demote_unservable(
     subagents.
     """
     definitions = dict(resolved.definitions)
-    unavailable = dict(resolved.unavailable)
     byok_cache: dict[str, dict | None] = {}
     changed = False
     for name in resolved.enabled:
         defn = definitions[name]
         if not defn.model:
             continue
-        base = bases.get(name)
-        user_set = (
-            defn.source in ("custom", "plugin")
-            or base is None
-            or base.definition.model != defn.model
-        )
         if model_resolves(model_pref, defn.model) and (
-            not user_set
+            not plan_gated(defn, bases.get(name))
             or await model_on_plan(
                 user_id, defn.model, model_pref=model_pref, permits=permits,
                 is_byok=is_byok, byok_cache=byok_cache,
@@ -182,12 +179,11 @@ async def _demote_unservable(
             f"[CHAT] Subagent {name!r} runs on the turn's model: {defn.model!r} "
             f"is not available to user={user_id}"
         )
-        unavailable[name] = defn.model
         definitions[name] = replace(defn, model=None)
         changed = True
     if not changed:
         return resolved
-    return replace(resolved, definitions=definitions, unavailable=unavailable)
+    return replace(resolved, definitions=definitions)
 
 
 async def model_on_plan(
@@ -237,34 +233,51 @@ async def model_on_plan(
     return found is not None
 
 
-def demote_clientless(config: Any, on_main: set[str]) -> None:
-    """After the clients are built, a pinned model the turn did not run is Inherit.
+def subagent_roles(
+    roster: ResolvedSubagents, model_pref: dict, turn_model: str | None,
+    *, role: AgentRole = "analyst",
+) -> list[LLMRole]:
+    """A client role for each subagent ``role`` compiles that pins a model or an effort.
 
-    That is a role that got no client (a custom model whose last key was
-    removed, a provider with no key on this deployment) or one that fell back
-    to the main model. The first pass checks names and plans, not keys, so it
-    cannot see either. A clientless role also loses the prompt guidance
+    A pinned model runs at the effort the subagent sets, else at its own
+    saved level. A set effort with no model is the turn's model at that
+    effort: a copy of the main client cannot carry it, because a level is
+    turned into request parameters when a client is built.
+    """
+    roles: list[LLMRole] = []
+    for defn in roster.for_role(role):
+        effort = defn.reasoning_effort
+        runs = defn.model or (turn_model if effort else None)
+        if runs:
+            roles.append(LLMRole(
+                f"subagent:{defn.name}", runs,
+                reasoning_effort=effort or resolve_tuning(model_pref, runs).reasoning_effort,
+                effort_follows=bool(effort), own_client=True,
+            ))
+    return roles
+
+
+def demote_clientless(config: Any) -> None:
+    """After the clients are built, a pinned model that got no client is Inherit.
+
+    That is a custom model whose last key was removed, or a provider with no
+    key on this deployment: the first pass checks names and plans, not keys,
+    so it cannot see either. The role also loses the prompt guidance
     ``resolve_clients`` stamped from its pinned model, since the subagent now
-    runs the turn's; a fallen-back one was already given the main model's.
+    runs the turn's.
     """
     resolved = config.subagents.resolved
     if resolved is None:
         return
     definitions = dict(resolved.definitions)
-    unavailable = dict(resolved.unavailable)
     changed = False
     for name in resolved.enabled:
         defn = definitions[name]
         key = f"subagent:{name}"
-        has_client = key in config.subsidiary_llm_clients
-        if not defn.model or (has_client and key not in on_main):
+        if not defn.model or key in config.subsidiary_llm_clients:
             continue
-        if not has_client:
-            config.role_prompt_guidance.pop(key, None)
-        unavailable[name] = defn.model
+        config.role_prompt_guidance.pop(key, None)
         definitions[name] = replace(defn, model=None)
         changed = True
     if changed:
-        config.subagents.resolved = replace(
-            resolved, definitions=definitions, unavailable=unavailable
-        )
+        config.subagents.resolved = replace(resolved, definitions=definitions)

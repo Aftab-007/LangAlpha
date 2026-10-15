@@ -10,6 +10,7 @@ The compiler handles:
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -19,7 +20,7 @@ from ptc_agent.agent.middleware.skills.content import load_skill_content
 from ptc_agent.agent.middleware.skills.registry import SKILL_REGISTRY, SkillDefinition
 from ptc_agent.agent.prompts import (
     RegistryTools,
-    build_tool_summary_from_registry,
+    format_registry_tools,
     get_loader,
     guidance_template_vars,
     read_registry_tools,
@@ -34,8 +35,6 @@ if TYPE_CHECKING:
     from ptc_agent.core.project_context import ProjectContext
 
 logger = structlog.get_logger(__name__)
-
-_UNREAD = object()
 
 # ── Section toggle defaults per mode ──────────────────────────────────
 # True = section included, False = excluded.
@@ -74,6 +73,65 @@ def _with_preloaded(prompt: str, preloaded: str) -> str:
     return f"{prompt.rstrip()}\n\n<preloaded_skills>\n{preloaded}\n</preloaded_skills>\n"
 
 
+class _StandIn(str):
+    """A turn's value where none exists: set, as a turn's always is, but empty."""
+
+    def __bool__(self) -> bool:
+        return True
+
+
+_STAND_IN = _StandIn()
+
+
+def subagent_template_vars(
+    defn: SubagentDefinition,
+    *,
+    guidance: str,
+    current_time: str | None = _STAND_IN,
+    thread_id: str = _STAND_IN,
+    files_mounted: bool = True,
+    market_watch: bool = True,
+    todo: bool = True,
+) -> dict[str, Any]:
+    """What a subagent's templates read beside the loader's path table.
+
+    A turn passes its own values. The settings pane renders a base's body
+    with the defaults, which stand in for them at the same types and
+    truthiness, so an operator's template that reads one (``thread_id[:8]``)
+    or branches on it renders there as it does in a turn, less the thread's
+    own text, which a copy could not use, and the two cannot come to pass
+    different names.
+    """
+    return {
+        "current_time": current_time,
+        "thread_id": thread_id,
+        **_tool_gates(defn, market_watch=market_watch, todo=todo),
+        **guidance_template_vars(guidance),
+        "files_mounted": files_mounted,
+    }
+
+
+def _tool_gates(defn: SubagentDefinition, *, market_watch: bool, todo: bool) -> dict[str, bool]:
+    """Which tool tiers this subagent's prompt is allowed to advertise.
+
+    The tool guide is shared, the tool sets are not: report-builder binds
+    neither finance nor web, no subagent binds show_widget, and the yaml
+    default for market_watch (true) would advertise a tool ``agent.py`` has
+    already gated out of this user's finance set. The chart annotation
+    tools are off unconditionally: ``agent.py`` binds them on the main
+    agent only, so no tool set can carry them here.
+    """
+    bound = set(defn.tools)
+    return {
+        "market_watch_enabled": market_watch and "finance" in bound,
+        "todo_enabled": "todo" in bound and todo,
+        "show_widget_enabled": "show_widget" in bound,
+        "chart_annotation_enabled": False,
+        "finance_enabled": "finance" in bound,
+        "web_enabled": "web_search" in bound,
+    }
+
+
 class SubagentCompiler:
     """Compile :class:`SubagentDefinition` instances into ``SubAgent`` TypedDicts.
 
@@ -93,7 +151,6 @@ class SubagentCompiler:
         config: AgentConfig | None = None,
         skill_registry: dict[str, SkillDefinition] | None = None,
         skill_dirs: list[str] | None = None,
-        default_model: Any | None = None,
         project: ProjectContext | None = None,
         search_tool: Callable[..., Any] | None = None,
         sandbox_tools: Callable[[frozenset[str]], list[Any]] | None = None,
@@ -107,10 +164,6 @@ class SubagentCompiler:
         # A subagent runs in the parent turn's workspace folder, so its copy of
         # the path table has to name the same one.
         self._project = project
-        # The model a definition with no model of its own runs on (the
-        # parent's client, which SubAgentMiddleware supplies at run time).
-        # Read here only for the shape its turn stamp takes.
-        self._default_model = default_model
         self._mcp_registry = mcp_registry
         self._tool_sets: dict[str, list[Any]] = tool_sets or {}
         # A subagent is bound no order tools, so the main agent's trading
@@ -141,15 +194,17 @@ class SubagentCompiler:
         self._make_sandbox_tools = sandbox_tools
         self._search_tools: dict[tuple[str, str], Any] = {}
         self._sandbox_tools: dict[frozenset[str], dict[str, Any]] = {}
-        self._registry_tools: Any = _UNREAD
+
+    @property
+    def _files_mounted(self) -> bool:
+        return self._sandbox is not None and self._sandbox.livefs is not None
 
     # ── Public API ────────────────────────────────────────────────────
 
     def compile(self, definition: SubagentDefinition) -> dict[str, Any]:
         """Compile a single definition into a ``SubAgent`` TypedDict."""
         # A credentialed user's resolved client outranks the definition's
-        # string model name. Resolved first: the prompt names the shape the
-        # turn stamp takes, which is this model's.
+        # string model name.
         resolved = (
             self._config.client_for_role(
                 f"subagent:{definition.name}", fallback_to_main=False
@@ -158,7 +213,6 @@ class SubagentCompiler:
             else None
         )
         model = resolved if resolved is not None else definition.model
-        runs_on = model if model is not None else self._default_model
         sections = self._compute_sections(definition)
         roster = (
             self._build_tool_summary(definition)
@@ -169,11 +223,28 @@ class SubagentCompiler:
             # Nothing left to guide it to: the guide would point at an
             # <mcp-servers> element its baseline does not have.
             sections["tool_guide"] = False
-        sections.update(self._context_sections(definition))
+        # The sections that follow from what the subagent can do and what its
+        # baseline holds, rather than from a switch of their own.
+        bound = set(definition.tools)
+        runs_code = bool(bound & {"execute_code", "bash"})
+        held = {"memory_system": False, "thread_scratchpad": False}
+        baseline = None
+        if self._context is not None:
+            held, baseline = self._context.baseline(
+                user_profile=self._user_profile,
+                memory=definition.memory,
+                mcp_servers=roster,
+                # File tools reach the memory files whether or not the file
+                # mount serves; code and shell reach them only through it.
+                files="filesystem" in bound or (runs_code and self._files_mounted),
+                writes_files=runs_code or "filesystem" in bound,
+                guidance=self._guidance(definition),
+            )
+        sections.update(held, security_policy=runs_code)
         result: dict[str, Any] = {
             "name": definition.name,
             "description": definition.description,
-            "system_prompt": self._resolve_prompt(definition, runs_on, sections),
+            "system_prompt": self._resolve_prompt(definition, sections),
             "tools": self._resolve_tools(definition),
         }
         if model is not None:
@@ -181,61 +252,15 @@ class SubagentCompiler:
         # Appended after the default subagent middleware, so the baseline
         # follows the caching middlewares, as the main agent's does, and its
         # block lands after their system breakpoint.
-        baseline = self._baseline(definition, roster, sections)
         if baseline is not None:
             result["middleware"] = [baseline]
 
         return result
 
-    def _context_sections(self, defn: SubagentDefinition) -> dict[str, bool]:
-        """The sections that follow from what the subagent can do and what
-        its baseline holds, rather than from a switch of their own."""
-        bound = set(defn.tools)
-        runs_code = bool(bound & {"execute_code", "bash"})
-        context = self._context
-        return {
-            "memory_system": bool(
-                context is not None and context.memory_available and defn.memory
-            ),
-            "thread_scratchpad": bool(
-                context is not None
-                and context.scratchpad is not None
-                and (runs_code or "filesystem" in bound)
-            ),
-            "security_policy": runs_code,
-        }
-
-    def _baseline(
-        self,
-        defn: SubagentDefinition,
-        roster: str | None,
-        sections: dict[str, bool],
-    ) -> Any | None:
-        """This subagent's runtime-context baseline, or None without a context."""
-        if self._context is None:
-            return None
-        return self._context.baseline(
-            user_profile=self._user_profile,
-            memory=sections.get("memory_system", False),
-            mcp_servers=roster,
-            files="filesystem" in defn.tools,
-            scratchpad=sections.get("thread_scratchpad", False),
-            guidance=self._guidance(defn),
-        )
-
-    def compile_many(
-        self, definitions: list[SubagentDefinition]
-    ) -> list[dict[str, Any]]:
-        """Compile multiple definitions."""
-        return [self.compile(d) for d in definitions]
-
     # ── Prompt resolution ─────────────────────────────────────────────
 
     def _resolve_prompt(
-        self,
-        defn: SubagentDefinition,
-        model: Any = None,
-        sections: dict[str, bool] | None = None,
+        self, defn: SubagentDefinition, sections: dict[str, bool]
     ) -> str:
         """Resolve the system prompt based on priority.
 
@@ -257,13 +282,17 @@ class SubagentCompiler:
             return _with_preloaded(defn.custom_prompt, preloaded)
 
         # Shared template variables
-        template_kwargs: dict[str, Any] = {
-            "current_time": self._current_time,
-            "thread_id": self._thread_id,
-            **self._tool_gates(defn),
-            **guidance_template_vars(self._guidance(defn)),
-            "files_mounted": self._sandbox is not None and self._sandbox.livefs is not None,
-        }
+        template_kwargs = subagent_template_vars(
+            defn,
+            guidance=self._guidance(defn),
+            current_time=self._current_time,
+            thread_id=self._thread_id,
+            files_mounted=self._files_mounted,
+            market_watch=(
+                self._config is not None and self._config.feature_enabled("market_watch")
+            ),
+            todo=bool(self._tool_sets.get("todo")),
+        )
         # Resolve the turn's own folder so workspace_paths renders it
         if self._sandbox is not None and hasattr(self._sandbox, "config"):
             template_kwargs.update(
@@ -280,9 +309,6 @@ class SubagentCompiler:
             )
 
         # 3. Base template + role prompt (default path)
-        if sections is None:
-            sections = self._compute_sections(defn)
-
         return loader.get_subagent_base_prompt(
             identity_line=self._identity_line(defn),
             role_prompt_template=defn.role_prompt_template,
@@ -292,31 +318,6 @@ class SubagentCompiler:
             tools_narrowed=defn.tools_narrowed,
             **template_kwargs,
         )
-
-    def _tool_gates(self, defn: SubagentDefinition) -> dict[str, bool]:
-        """Which tool tiers this subagent's prompt is allowed to advertise.
-
-        The tool guide is shared, the tool sets are not: report-builder binds
-        neither finance nor web, no subagent binds show_widget, and the yaml
-        default for market_watch (true) would advertise a tool ``agent.py`` has
-        already gated out of this user's finance set. The chart annotation
-        tools are off unconditionally: ``agent.py`` binds them on the main
-        agent only, so no tool set can carry them here.
-        """
-        bound = set(defn.tools)
-        market_watch = (
-            self._config is not None
-            and self._config.feature_enabled("market_watch")
-            and "finance" in bound
-        )
-        return {
-            "market_watch_enabled": market_watch,
-            "todo_enabled": "todo" in bound and bool(self._tool_sets.get("todo")),
-            "show_widget_enabled": "show_widget" in bound,
-            "chart_annotation_enabled": False,
-            "finance_enabled": "finance" in bound,
-            "web_enabled": "web_search" in bound,
-        }
 
     def _guidance(self, defn: SubagentDefinition) -> str:
         """Scaffolding level for the model this subagent runs.
@@ -353,11 +354,10 @@ class SubagentCompiler:
         base.update(defn.sections)
         return base
 
+    @cached_property
     def _registry(self) -> RegistryTools | None:
         """This build's registry, read on first use and shared by every subagent."""
-        if self._registry_tools is _UNREAD:
-            self._registry_tools = read_registry_tools(self._mcp_registry)
-        return self._registry_tools
+        return read_registry_tools(self._mcp_registry)
 
     def _allowed_servers(self, defn: SubagentDefinition) -> frozenset[str] | None:
         """The servers this subagent's code may call, or None for all of them.
@@ -368,7 +368,7 @@ class SubagentCompiler:
         """
         if defn.connectors and defn.brokerages != "off":
             return None
-        registry = self._registry()
+        registry = self._registry
         if registry is None:
             return frozenset()
         from src.server.services.brokerage_capabilities import vendor_for_url
@@ -389,7 +389,7 @@ class SubagentCompiler:
         shell's limit is empty, and the direct tools stay with the main agent."""
         if "execute_code" not in defn.tools:
             return None
-        registry = self._registry()
+        registry = self._registry
         allowed = self._allowed_servers(defn)
         if allowed is not None and (
             registry is None or not allowed & registry.tools_by_server.keys()
@@ -397,7 +397,7 @@ class SubagentCompiler:
             return None
         if registry is None:
             return ""
-        return build_tool_summary_from_registry(
+        return format_registry_tools(
             registry, mode="full", servers=allowed, preferred=defn.preferred_connectors
         )
 

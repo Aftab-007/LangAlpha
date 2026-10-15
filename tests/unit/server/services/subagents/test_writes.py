@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import copy
 
+import jinja2
 import pytest
 
+from ptc_agent.agent.prompts import get_loader
 from ptc_agent.agent.subagents.definition import SubagentDefinition
 from ptc_agent.agent.subagents.merge import BaseSubagent
 from src.server.services.subagents.rules import EDITABLE_KEYS
@@ -127,6 +129,34 @@ async def test_start_from_copies_the_effective_values(world, source):
     assert {k: copied[k] for k in EDITABLE_KEYS} == {k: original[k] for k in EDITABLE_KEYS}
     keys = ("description", "instructions", "available_to")
     assert {k: copied[k] for k in keys} == {k: original[k] for k in keys}
+
+
+async def test_a_base_template_that_reads_a_turn_variable_shows_and_copies_its_body(world, monkeypatch):
+    """A deployment template may read what a turn passes it, or branch on it.
+    Rendered without those, the pane and the file showed no body, and a copy
+    ran without its role text; rendered with empty ones, a copy lost the
+    branch every turn takes."""
+    loader = get_loader()
+    template = "deploy/desk.md.j2"
+    monkeypatch.setattr(loader.env, "loader", jinja2.ChoiceLoader([
+        jinja2.DictLoader({template: (
+            "Keep notes under notes/{{ thread_id[:8] }}"
+            "{% if thread_id and current_time %} and cite every filing{% endif %}.\n"
+        )}),
+        loader.env.loader,
+    ]))
+    world.bases["desk"] = BaseSubagent("deployment:desk", SubagentDefinition(
+        name="desk", description="Covers the desk.", custom_prompt_template=template,
+        tools=["web_search"], source="user",
+    ))
+    world.offered += ("desk",)
+    body = "Keep notes under notes/ and cite every filing."
+
+    assert (await views(world))["desk"]["instructions"] == body
+
+    await save_subagent(USER, "my-desk", {}, version=None, start_from="desk")
+
+    assert world.rows["my-desk"]["instructions"] == body
 
 
 async def test_a_copy_leaves_out_a_base_pin_its_plan_lacks(world):

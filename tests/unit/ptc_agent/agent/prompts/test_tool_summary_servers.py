@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from ptc_agent.agent.prompts import RegistryTools, build_tool_summary_from_registry
+from ptc_agent.agent.prompts import RegistryTools, format_registry_tools
 
 ORDER = ("srv_a", "srv_b", "srv_c", "srv_d")
 REGISTRY = RegistryTools(
@@ -22,20 +22,20 @@ def _split(summary: str) -> tuple[str, list[str]]:
 
 
 def test_servers_none_lists_every_server_in_registry_order():
-    lead, listed = _split(build_tool_summary_from_registry(REGISTRY))
+    lead, listed = _split(format_registry_tools(REGISTRY))
     assert listed == list(ORDER)
     assert lead.strip() == ""
 
 
 def test_only_the_given_servers_are_listed():
-    _, listed = _split(build_tool_summary_from_registry(REGISTRY, servers={"srv_d", "srv_b"}))
+    _, listed = _split(format_registry_tools(REGISTRY, servers={"srv_d", "srv_b"}))
     assert listed == ["srv_b", "srv_d"]
 
 
 def test_preferred_lead_under_a_line_naming_them_and_the_rest_follow():
     """Unreachable and repeated names are dropped from the lead, never added
     to the listing: a preference orders the guide, it grants nothing."""
-    summary = build_tool_summary_from_registry(
+    summary = format_registry_tools(
         REGISTRY,
         servers={"srv_a", "srv_c", "srv_d"},
         preferred=["srv_d", "srv_b", "srv_d", "srv_a"],
@@ -47,6 +47,6 @@ def test_preferred_lead_under_a_line_naming_them_and_the_rest_follow():
 
 def test_a_preference_with_nothing_reachable_changes_nothing():
     allowed = {"srv_a", "srv_c"}
-    assert build_tool_summary_from_registry(
+    assert format_registry_tools(
         REGISTRY, servers=allowed, preferred=["srv_b"]
-    ) == build_tool_summary_from_registry(REGISTRY, servers=allowed)
+    ) == format_registry_tools(REGISTRY, servers=allowed)

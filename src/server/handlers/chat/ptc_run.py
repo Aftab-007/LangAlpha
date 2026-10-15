@@ -359,6 +359,7 @@ async def astream_ptc_workflow(
                 thread_id=thread_id,
                 enabled_subagents=request.subagents_enabled,
                 workspace_id=workspace_id,
+                role=role,
             )
 
         # Persist query start
@@ -504,7 +505,6 @@ async def astream_ptc_workflow(
 
         _mark_phase("pre_session")
 
-        subagents = config.subagents.roster(request.subagents_enabled or None)
         sandbox_id = None
 
         # The turn's skill state, folded to one value so the acquire can tell
@@ -677,7 +677,6 @@ async def astream_ptc_workflow(
         ptc_graph = await build_ptc_graph_with_session(
             session=session,
             config=config,
-            subagent_names=subagents,
             # Optional structural gate: builds the agent without
             # Task/TaskOutput. Task report-back turns don't set it (they
             # need TaskOutput to fetch the result); their re-announce

@@ -8,7 +8,7 @@ import asyncio
 import json
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -66,6 +66,7 @@ class BackgroundSubagentMiddleware(AgentMiddleware):
         self,
         timeout: float = 60.0,
         *,
+        subagent_types: Collection[str],
         enabled: bool = True,
         registry: BackgroundTaskRegistry | None = None,
         checkpointer: Any | None = None,
@@ -73,6 +74,8 @@ class BackgroundSubagentMiddleware(AgentMiddleware):
     ) -> None:
         """
         Args:
+            subagent_types: The Task tool's roster. A launch of any other
+                type runs in place, where the Task tool refuses it.
             checkpointer: LangGraph checkpointer used to hydrate tasks from stored
                 state when the in-memory registry loses them (e.g. server restart).
             namespace_owner: optional writer fence for task checkpoint namespaces
@@ -86,9 +89,7 @@ class BackgroundSubagentMiddleware(AgentMiddleware):
         self.enabled = enabled
         self.checkpointer = checkpointer
         self.namespace_owner = namespace_owner
-        # The Task tool's roster, set once its graphs are compiled. None
-        # checks nothing, and every launch goes to the background.
-        self.subagent_types: frozenset[str] | None = None
+        self.subagent_types = frozenset(subagent_types)
         # Task ids with a resume mid-flight: the liveness check and the
         # writer spawn are separated by awaits, so two parallel resume calls
         # in one model step could otherwise both pass and double-spawn (the

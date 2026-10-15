@@ -179,6 +179,16 @@ async def overrides_locked(user_id: str) -> AsyncIterator[Any]:
             yield db
 
 
+@asynccontextmanager
+async def subagents_snapshot() -> AsyncIterator[Any]:
+    """A read-only connection whose reads all see one committed state, so a
+    turn's rows and bases come from the same side of ``overrides_locked``."""
+    async with get_db_connection() as db:
+        async with db.transaction():
+            await db.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            yield db
+
+
 async def clear_plugin_overrides(user_id: str, plugin_name: str, *, conn) -> int:
     """Delete the user's overrides of ``plugin_name``'s subagents; inside
     ``overrides_locked``. Returns how many went."""

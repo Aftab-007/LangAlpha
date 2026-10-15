@@ -54,13 +54,15 @@ def _context(*, memory_index: str | None = None, scratchpad: str | None = FOLDER
     )
 
 
-def _compile(context=None, profile=PROFILE, **fields):
+def _compile(context=None, profile=PROFILE, sandbox=None, **fields):
     fields.setdefault("tools", ["execute_code", "filesystem", "bash"])
     defn = SubagentDefinition(
         name="helper", description="d", role_prompt="Do the task.", **fields
     )
     tool_sets = {name: [SimpleNamespace(name=name)] for name in ("execute_code", "filesystem", "bash", "web_search")}
-    return SubagentCompiler(tool_sets=tool_sets, user_profile=profile, context=context).compile(defn)
+    return SubagentCompiler(
+        sandbox=sandbox, tool_sets=tool_sets, user_profile=profile, context=context
+    ).compile(defn)
 
 
 def _in_task(task_id: str = "k7Xm2p"):
@@ -140,6 +142,27 @@ class TestBaseline:
         assert "No .agents/user/memory/memory.md exists yet." in empty
         assert "create a typed detail file" not in empty
         assert "- [Style](style.md) terse" in kept
+
+    @pytest.mark.parametrize(
+        ("tools", "mounted", "opens"),
+        [
+            (["execute_code", "bash"], True, True),
+            (["execute_code", "bash"], False, False),
+            (["filesystem"], False, True),
+        ],
+        ids=["code-mounted", "code-unmounted", "file-tools"],
+    )
+    def test_memory_pointers_open_wherever_the_subagent_reaches_the_files(self, tools, mounted, opens):
+        # File tools reach the memory files in process; code and shell only
+        # through the file mount, so without it the index is read as text.
+        sandbox = SimpleNamespace(livefs=object() if mounted else None)
+        with _in_task():
+            text = baseline_text(_compile(
+                _context(memory_index="- [Style](style.md) terse"), sandbox=sandbox,
+                tools=tools, memory=True,
+            ))
+        assert "- [Style](style.md) terse" in text
+        assert ("cannot be opened" not in text) is opens
 
     def test_memory_switched_off_reads_no_index(self):
         with _in_task():

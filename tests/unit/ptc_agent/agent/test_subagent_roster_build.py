@@ -7,7 +7,7 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 
 from ptc_agent.agent.agent import PTCAgent
 from ptc_agent.agent.middleware import SubAgentMiddleware
-from ptc_agent.config.agent import AgentConfig, LLMConfig
+from ptc_agent.config.agent import AgentConfig, LLMConfig, SubagentsConfig
 from ptc_agent.config.core import (
     DaytonaConfig,
     FilesystemConfig,
@@ -27,6 +27,7 @@ def _task_graphs(roster: list[str]) -> dict:
         sandbox=SandboxConfig(daytona=DaytonaConfig(api_key="test-key")),
         mcp=MCPConfig(),
         filesystem=FilesystemConfig(),
+        subagents=SubagentsConfig(enabled=roster),
     )
     llm = GenericFakeChatModel(messages=iter([]))
     captured: list[dict] = []
@@ -43,7 +44,7 @@ def _task_graphs(roster: list[str]) -> dict:
         patch("ptc_agent.agent.agent.create_agent", side_effect=fake_create_agent),
     ):
         PTCAgent(config).create_agent(
-            llm=llm, thread_id="t-1", subagent_names=roster,
+            llm=llm, thread_id="t-1",
             sandbox=MagicMock(), mcp_registry=MagicMock(),
         )
     (task,) = [m for m in captured[0]["middleware"] if isinstance(m, SubAgentMiddleware)]

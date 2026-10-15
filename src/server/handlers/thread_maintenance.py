@@ -280,7 +280,6 @@ async def trigger_compaction(
                     from src.server.database.conversation import get_thread_auth_meta
                     from src.server.services.llm import thread_model
                     from src.server.services.llm.config import resolve_llm_config
-                    from src.server.services.llm.subagents import TurnSubagents
 
                     is_byok = await is_byok_active(user_id)
                     meta = await get_thread_auth_meta(thread_id)
@@ -288,7 +287,6 @@ async def trigger_compaction(
                     # the flash slot, and the summary runs on the thread's
                     # model, so PTC mode would summarize on the PTC default.
                     mode = "flash" if meta and meta.get("msg_type") == "flash" else "ptc"
-                    turn_subagents = TurnSubagents()
 
                     async def resolve(model: str | None):
                         return await resolve_llm_config(
@@ -298,7 +296,6 @@ async def trigger_compaction(
                             is_byok=is_byok,
                             mode=mode,
                             thread_id=thread_id,
-                            turn_subagents=turn_subagents,
                         )
 
                     agent_cfg = await thread_model.resolve_turn_config(

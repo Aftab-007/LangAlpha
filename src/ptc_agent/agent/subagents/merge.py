@@ -11,10 +11,10 @@ here reads storage or the turn.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any
 
-from ptc_agent.agent.roles import ALL_ROLES
+from ptc_agent.agent.roles import ALL_ROLES, AgentRole
 from ptc_agent.agent.subagents.definition import SubagentDefinition
 from ptc_agent.agent.subagents.registry import SubagentRegistry
 from ptc_agent.config.agent import SubagentsConfig
@@ -64,16 +64,22 @@ class ResolvedSubagents:
     ``definitions`` covers every offered base and every custom subagent,
     including ones switched off, so a reader can show them; ``enabled`` is the
     roster in order. ``orphaned`` names overrides the turn could not apply,
-    their base gone or not offered, ``shadowed`` bases a custom subagent of the same name hides, and
-    ``unavailable`` maps a subagent to the saved model the turn could not
-    serve, which it ran without.
+    their base gone or not offered, and ``shadowed`` bases a custom subagent of
+    the same name hides.
     """
 
     definitions: Mapping[str, SubagentDefinition]
     enabled: tuple[str, ...]
     orphaned: tuple[str, ...] = ()
     shadowed: tuple[str, ...] = ()
-    unavailable: Mapping[str, str] = field(default_factory=dict)
+
+    def for_role(self, role: AgentRole) -> list[SubagentDefinition]:
+        """The enabled definitions ``role`` compiles, in order.
+
+        ``enabled`` is one list for every role, so a subagent ``role`` is not
+        listed for is left out rather than refused.
+        """
+        return [d for name in self.enabled if role in (d := self.definitions[name]).roles]
 
 
 def base_key(definition: SubagentDefinition) -> str:
@@ -328,6 +334,17 @@ def merge_subagents(
         orphaned=tuple(name for name in overrides if name not in applied),
         shadowed=tuple(shadowed),
     )
+
+
+def deployment_roster(subagents: SubagentsConfig) -> ResolvedSubagents:
+    """The roster with no user rows: what a build no user resolved compiles."""
+    return merge_subagents(base_subagents(subagents), subagents.enabled, ())
+
+
+def turn_roster(subagents: SubagentsConfig) -> ResolvedSubagents:
+    """The roster a build compiles: the turn's merge, else the deployment's."""
+    resolved = subagents.resolved
+    return resolved if resolved is not None else deployment_roster(subagents)
 
 
 def narrow_to_request(

@@ -27,6 +27,7 @@ Usage:
 from .formatter import (
     RegistryTools,
     build_tool_summary_from_registry,
+    format_registry_tools,
     format_subagent_summary,
     format_tool_summary,
     read_registry_tools,
@@ -53,6 +54,7 @@ __all__ = [
     "RegistryTools",
     "build_tool_summary_from_registry",
     "format_current_time",
+    "format_registry_tools",
     "format_subagent_summary",
     "format_tool_summary",
     "get_loader",

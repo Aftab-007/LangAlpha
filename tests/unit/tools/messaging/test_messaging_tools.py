@@ -197,7 +197,7 @@ class TestBothRolesBindThem:
             patch.object(agent_module, "resolve_identity_gates", side_effect=_gates),
             patch("ptc_agent.agent.agent.create_agent", side_effect=_capture),
             patch("ptc_agent.agent.agent.CompactionMiddleware"),
-            patch("ptc_agent.agent.agent.SubAgentMiddleware") as subagents,
+            patch("ptc_agent.agent.subagents.assembly.SubAgentMiddleware") as subagents,
         ):
             PTCAgent(config).create_agent(
                 sandbox=MagicMock(),

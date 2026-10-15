@@ -223,7 +223,8 @@ async def roster(
     """The user's bases and the names offered to them: all a view of values needs.
 
     The deployment's, then the ones the user's plugins ship. ``conn`` reads
-    the plugins' under a writer's lock, which uninstall takes too.
+    the plugins' under a writer's lock, which uninstall takes too, or in a
+    turn's snapshot.
     """
     from .plugin_bases import plugin_bases
 

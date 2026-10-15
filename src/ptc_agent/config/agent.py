@@ -200,19 +200,9 @@ class SubagentsConfig(BaseModel):
     definitions: dict[str, SubagentConfig] = Field(default_factory=dict)
     #: This user's merged roster (a ``ResolvedSubagents``), written on the
     #: per-turn copy by ``resolve_llm_config`` for a PTC build. None on the
-    #: shared config and on builds that never resolved a user, which read
-    #: ``enabled`` and ``definitions`` as the deployment wrote them.
+    #: shared config and on builds that never resolved a user, which compile
+    #: the deployment's own roster (``merge.turn_roster``).
     resolved: Any | None = Field(default=None, exclude=True)
-
-    def roster(self, requested: list[str] | None = None) -> list[str]:
-        """The names this build compiles.
-
-        A resolved roster already folded the request in, so ``requested``
-        only applies to a build that never resolved a user.
-        """
-        if self.resolved is not None:
-            return list(self.resolved.enabled)
-        return list(requested if requested is not None else self.enabled)
 
 
 class LLMDefinition(BaseModel):

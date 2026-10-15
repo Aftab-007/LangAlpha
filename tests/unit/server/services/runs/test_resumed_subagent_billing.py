@@ -89,7 +89,7 @@ class _Thread:
         self.store = BackgroundRegistryStore()
         self.store._registries[THREAD] = self.registry
         self.middleware = BackgroundSubagentMiddleware(
-            registry=self.registry, enabled=True
+            registry=self.registry, enabled=True, subagent_types={"general-purpose"}
         )
         self.release_slow = asyncio.Event()
         self.collectors: list[asyncio.Task] = []
@@ -489,7 +489,7 @@ async def test_a_stop_landing_mid_bill_still_bills_the_earlier_round():
     stop that cancels the resuming turn during that bill must not take the
     bill down with it: nothing else holds that usage."""
     registry = BackgroundTaskRegistry(thread_id=THREAD)
-    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True)
+    middleware = BackgroundSubagentMiddleware(registry=registry, enabled=True, subagent_types={"general-purpose"})
     billing, release = asyncio.Event(), asyncio.Event()
     billed: list = []
 

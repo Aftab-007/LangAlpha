@@ -178,10 +178,6 @@ class SubagentContext:
             scratchpad=scratchpad,
         )
 
-    @property
-    def memory_available(self) -> bool:
-        return self.sources is not None
-
     def baseline(
         self,
         *,
@@ -189,24 +185,31 @@ class SubagentContext:
         memory: bool,
         mcp_servers: str | None,
         files: bool,
-        scratchpad: bool,
+        writes_files: bool,
         guidance: str | None,
-    ) -> BaselineContextMiddleware:
-        """One definition's baseline.
+    ) -> tuple[dict[str, bool], BaselineContextMiddleware]:
+        """One definition's baseline, and the prompt sections that point at it.
 
-        ``files`` is whether it can open what the memory index points to, and
-        ``scratchpad`` whether it writes files at all.
+        Decided together, so a section never names a block the baseline lacks.
+        ``memory`` is the definition's switch, ``files`` whether it can open
+        what the memory index points to, and ``writes_files`` whether it
+        writes files at all.
         """
+        sources = self.sources if memory else None
         blocks: dict[str, BlockReader] = {}
         if mcp_servers is not None:
             blocks["mcp_servers"] = lambda _state: mcp_servers
         if self.skills is not None:
             blocks["skills"] = self.skills
-        if scratchpad and self.scratchpad is not None:
+        if writes_files and self.scratchpad is not None:
             folder = self.scratchpad
             blocks["scratchpad"] = lambda _state: _task_folder(folder)
-        return BaselineContextMiddleware(
-            sources=self.sources if memory else None,
+        sections = {
+            "memory_system": sources is not None,
+            "thread_scratchpad": "scratchpad" in blocks,
+        }
+        return sections, BaselineContextMiddleware(
+            sources=sources,
             blocks=blocks,
             user_profile=user_profile,
             # The counts stay with the main agent; empty rather than None, so
