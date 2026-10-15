@@ -28,6 +28,7 @@ import asyncio
 import json
 import re
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, Optional
 
@@ -385,7 +386,7 @@ async def _seed_channels(
 
 
 async def _settled_runs_of_open_turn(
-    thread_id: str, root_id: Optional[str]
+    thread_id: str, root_id: Optional[str], within_s: float
 ) -> Optional[list[dict]]:
     """Terminal task runs the thread's executing turn launched.
 
@@ -397,7 +398,9 @@ async def _settled_runs_of_open_turn(
     failed read, so the caller withholds ``attached`` and the client asks
     again on its next socket. ``root_id`` is the root the attach seed saw
     open: a turn that finalizes between the two reads still has its runs
-    drained, since the client's snapshot left that turn out."""
+    drained, since the client's snapshot left that turn out. With none open,
+    the latest turn stands in when it settled inside ``within_s`` (the
+    catch-up window): the client's snapshot can predate its finalize."""
     try:
         from src.server.database.runs import lifecycle as tl_db
         from src.server.database.runs import subagent_runs as sr_db
@@ -405,7 +408,12 @@ async def _settled_runs_of_open_turn(
         if root_id is None:
             root = await tl_db.get_active_run(thread_id)
             if root is None:
-                return []
+                root = await tl_db.get_latest_attempt(thread_id)
+                settled_at = root.get("usage_settled_at") if root else None
+                if settled_at is None or (
+                    datetime.now(timezone.utc) - settled_at
+                ).total_seconds() > within_s:
+                    return []
             root_id = str(root["conversation_response_id"])
         return await sr_db.list_settled_runs_for_parent(thread_id, root_id)
     except Exception:
@@ -617,7 +625,13 @@ async def stream_thread_mux_v2(
         attach_frames.append(_chan_open_frame(chan, "drain"))
 
     open_turn_runs = (
-        await _settled_runs_of_open_turn(thread_id, seeded_root) if open_turn else []
+        await _settled_runs_of_open_turn(
+            thread_id,
+            seeded_root,
+            snapshot_lag + (time.monotonic() - started_at) + _ATTACH_GRACE_S,
+        )
+        if open_turn
+        else []
     )
     # Acknowledged only when every run is open or durably deferred: the client
     # stops asking once it hears ``attached``, so a failed read or store must
@@ -786,7 +800,7 @@ async def stream_thread_mux_v2(
         await out_q.put(("frame", _chan_close_frame(chan, reason, **extra)))
 
     async def _read_pump() -> None:
-        nonlocal control_cursor, pending_synced
+        nonlocal control_cursor, pending_synced, open_turn_served
         last_scan = time.monotonic()
         xread_failures = 0
         while True:
@@ -944,6 +958,27 @@ async def stream_thread_mux_v2(
                     await _admit(run_id, lane)
                 for run_id, lane, started_ms in await _seed_channels(thread_id):
                     await _admit(run_id, lane, started_ms=started_ms)
+                # An open-turn ask attach could not serve: the client waits on
+                # this socket for the ack, so the retry is the rescan's.
+                # Admission defers durably on its own past the cap.
+                if open_turn and not open_turn_served:
+                    runs = await _settled_runs_of_open_turn(
+                        thread_id,
+                        seeded_root,
+                        snapshot_lag
+                        + (time.monotonic() - started_at)
+                        + _ATTACH_GRACE_S,
+                    )
+                    if runs is not None:
+                        for run in runs:
+                            await _admit(
+                                str(run["task_run_id"]),
+                                f"task:{run['task_id']}",
+                                settled=True,
+                                started_ms=_row_started_ms(run),
+                            )
+                        open_turn_served = True
+                        await out_q.put(("frame", _control("attached", {})))
                 # Recent-terminal reconciliation, bounded to runs that could
                 # only have settled AFTER the client's knowledge horizon
                 # (its snapshot lag plus this socket's age) — anything older
