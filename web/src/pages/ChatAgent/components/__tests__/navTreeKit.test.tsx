@@ -37,16 +37,16 @@ function Providers({ children }: { children: React.ReactNode }) {
 }
 
 // One of each row shape: the current workspace with a running thread, a pinned
-// one, the current thread's agents and a page left to show; a flash workspace
-// (no options menu) with no threads; a pinned one, collapsed, still loading.
+// one, the current thread's agents and a page left to show; Home (no options
+// menu) with no threads; a pinned one, collapsed, still loading.
 const WORKSPACES: NavWorkspace[] = [
-  { workspace_id: 'ws-flash', name: 'Flash', status: 'flash' },
+  { workspace_id: 'ws-home', name: 'Home', status: 'running', is_home: true },
   { workspace_id: 'ws-pinned', name: 'Pinned', is_pinned: true },
   { workspace_id: 'ws-main', name: 'Main' },
 ];
 
 const THREADS: Record<string, ThreadsData> = {
-  'ws-flash': { threads: [], loading: false },
+  'ws-home': { threads: [], loading: false },
   'ws-pinned': { threads: [], loading: true },
   'ws-main': {
     threads: [
@@ -132,8 +132,8 @@ const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex]';
 beforeEach(() => {
   resetNavPanelExpansion();
   resetThreadLifecycle();
-  // The flash folder open too, so its empty state renders.
-  expandedWorkspaces.add('ws-flash');
+  // Home's folder open too, so its empty state renders.
+  expandedWorkspaces.add('ws-home');
   notifyNavExpansion();
   publishLocalRunning('t-other');
 });

@@ -57,9 +57,9 @@ const AUTOMATION: Automation = {
   trigger_config: null,
   next_run_at: '2026-09-26T13:00:00Z',
   last_run_at: NEWEST.completed_at,
-  agent_mode: 'flash',
+  agent_mode: 'ptc',
   instruction: 'Summarize the market.',
-  workspace_id: null,
+  workspace_id: 'ws-1',
   llm_model: null,
   thread_strategy: 'new',
   conversation_thread_id: null,
@@ -75,9 +75,9 @@ const AUTOMATION: Automation = {
 const asFeed = (e: AutomationExecution): AutomationRun => ({
   ...e,
   automation_name: AUTOMATION.name,
-  agent_mode: 'flash',
+  agent_mode: 'ptc',
   trigger_type: 'cron',
-  workspace_id: null,
+  workspace_id: 'ws-1',
 });
 
 function serve(newest = NEWEST) {

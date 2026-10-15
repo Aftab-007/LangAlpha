@@ -15,7 +15,7 @@ import type { WidgetRenderProps } from '../../widgets/types';
 
 const mocks = vi.hoisted(() => ({
   workspaces: [{ workspace_id: 'ws-1', name: 'Workspace 1', status: 'active' }],
-  getFlashWorkspace: vi.fn(),
+  getHomeWorkspace: vi.fn(),
 }));
 
 vi.mock('@/hooks/useIsMobile', () => ({
@@ -31,7 +31,7 @@ vi.mock('@/pages/ChatAgent/utils/api', async (importActual) => ({
   getSkills: vi.fn().mockResolvedValue([]),
   getModelMetadata: vi.fn().mockResolvedValue({}),
   getWorkspaceThreads: vi.fn().mockResolvedValue({ threads: [], total: 0 }),
-  getFlashWorkspace: mocks.getFlashWorkspace,
+  getHomeWorkspace: mocks.getHomeWorkspace,
 }));
 
 // Read from the cache, so a test sets the user's default the way a
@@ -94,8 +94,8 @@ describe.each([
     ContextBus.__resetForTests();
     ChatInputRegistry.__resetForTests();
     Element.prototype.scrollIntoView = vi.fn();
-    mocks.getFlashWorkspace.mockReset();
-    mocks.getFlashWorkspace.mockResolvedValue({ workspace_id: 'flash-ws' });
+    mocks.getHomeWorkspace.mockReset();
+    mocks.getHomeWorkspace.mockResolvedValue({ workspace_id: 'home-ws', status: 'running', is_home: true });
   });
   afterEach(() => {
     ContextBus.__resetForTests();

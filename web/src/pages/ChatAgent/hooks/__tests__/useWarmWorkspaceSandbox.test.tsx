@@ -190,10 +190,11 @@ describe('useWarmWorkspaceSandbox', () => {
   });
 
   it('warms Home once, as Home, on a cold entry', async () => {
-    // The flash row is Home, which starts by binding to the user's computer.
-    // Nothing is known on arrival, so the hook waits for the row rather than
-    // warming it first as a plain workspace and then again as Home.
-    detail = { workspace_id: 'ws-1', status: 'flash' };
+    // Home starts by binding to the user's computer, whatever its row's status
+    // ('unbound' here, which a plain warm skips). Nothing is known on arrival,
+    // so the hook waits for the row rather than warming it first as a plain
+    // workspace and then again as Home.
+    detail = { workspace_id: 'ws-1', is_home: true, status: 'unbound' };
     const qc = makeClient();
     const { fetchMock } = makeMockSSEStream();
     global.fetch = fetchMock as unknown as typeof fetch;
@@ -340,6 +341,39 @@ describe('useWarmWorkspaceSandbox', () => {
 
     await waitFor(() => expect(result.current).toBe(false));
     expect(detailGets()).toHaveLength(2);
+  });
+
+  it("reconciles Home's status from the server when its stream drops, like any workspace", async () => {
+    detail = { workspace_id: 'ws-1', is_home: true, computer_id: 'comp-1', status: 'stopped' };
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: Infinity, staleTime: 2 * 60_000, refetchOnMount: false },
+      },
+    });
+    const { fetchMock, next } = makeMockSSEStream();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useWarmWorkspaceSandbox('ws-1'), {
+      wrapper: wrapper(qc),
+    });
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    const handle = await next();
+    await act(async () => {
+      await handle.push(
+        'event: status\ndata: {"workspace_id":"ws-1","status":"starting"}\n\n',
+      );
+    });
+    await waitFor(() => expect(result.current).toBe('starting'));
+    detail = { ...detail, status: 'running' };
+
+    await act(async () => {
+      await handle.close();
+    });
+
+    await waitFor(() => expect(result.current).toBe(false));
+    expect(detailGets()).toHaveLength(2);
+    expect(qc.getQueryData<{ status?: string }>(queryKeys.workspaces.detail('ws-1'))?.status)
+      .toBe('running');
   });
 
   it('aborts the stream on unmount', async () => {

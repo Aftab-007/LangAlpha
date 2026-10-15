@@ -93,10 +93,10 @@ test.describe('Workspace Gallery', () => {
   });
 
   test('empty state shows create prompt', async ({ page }) => {
-    // Override flash workspace POST to fail so no workspaces exist at all
+    // Fail the Home POST too, so no workspace exists at all
     await mockAPI(page, {
       'GET /workspaces': { workspaces: [], total: 0, limit: 20, offset: 0 },
-      'POST /workspaces/flash': (route) =>
+      'POST /workspaces/home': (route) =>
         route.fulfill({ status: 500, contentType: 'application/json', body: '{"detail":"error"}' }),
     });
     await page.goto('/chat');

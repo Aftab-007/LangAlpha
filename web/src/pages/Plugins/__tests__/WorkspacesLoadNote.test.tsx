@@ -10,7 +10,7 @@ const query = vi.hoisted(() => ({
 }));
 
 vi.mock('@/hooks/useAllWorkspaces', () => ({ useAllWorkspaces: () => query }));
-vi.mock('@/hooks/useFlashWorkspace', () => ({ useFlashWorkspace: () => undefined }));
+vi.mock('@/hooks/useHomeWorkspace', () => ({ useHomeWorkspaceId: () => undefined }));
 
 import { WorkspacesLoadNote } from '../components/WorkspacesLoadNote';
 

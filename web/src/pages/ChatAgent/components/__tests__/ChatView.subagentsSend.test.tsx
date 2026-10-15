@@ -17,7 +17,6 @@ import { MemoryRouter, useLocation, useNavigate, type NavigateFunction } from 'r
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createTestQueryClient } from '@/test/utils';
 import { queryKeys } from '@/lib/queryKeys';
-import { FLASH_ROUTE_STATE } from '@/hooks/useFlashWorkspace';
 
 const mocks = vi.hoisted(() => ({
   getThread: vi.fn(),
@@ -114,7 +113,7 @@ describe('ChatView: the subagents setting on a send', () => {
   });
 
   it("shows Home's toggle from its thread row and leaves it off a send", async () => {
-    mocks.getWorkspace.mockResolvedValue({ workspace_id: WORKSPACE_ID, name: 'Harness WS', status: 'flash' });
+    mocks.getWorkspace.mockResolvedValue({ workspace_id: WORKSPACE_ID, name: 'Home', status: 'running', is_home: true });
     mocks.getThread.mockResolvedValue({ thread_id: THREAD_ID, subagents_allowed: false });
     mountChatView(ChatView);
 
@@ -260,7 +259,7 @@ describe('ChatView: a new chat view taken up by a later landing send', () => {
 
 describe("ChatView: a draft from Subagents' Create with the agent", () => {
   it('lands in the composer unsent, once, and leaves the navigation state', async () => {
-    mocks.getWorkspace.mockResolvedValue({ workspace_id: WORKSPACE_ID, name: 'Harness WS', status: 'flash' });
+    mocks.getWorkspace.mockResolvedValue({ workspace_id: WORKSPACE_ID, name: 'Home', status: 'running', is_home: true });
     chatState.threadId = '__default__';
     let state = null as Record<string, unknown> | null;
     const Probe = () => {
@@ -269,7 +268,7 @@ describe("ChatView: a draft from Subagents' Create with the agent", () => {
     };
     const entry = {
       pathname: '/chat/t/__default__',
-      state: { workspaceId: WORKSPACE_ID, ...FLASH_ROUTE_STATE, draftMessage: 'Set up a subagent that ' },
+      state: { workspaceId: WORKSPACE_ID, draftMessage: 'Set up a subagent that ' },
     };
     render(
       <QueryClientProvider client={createTestQueryClient()}>

@@ -1,10 +1,9 @@
 /**
  * What a card says about the machine underneath it.
  *
- * The rows are the live wt3 ones: three projects on computer 5319ad0e, each
- * with its own `dir_name`, plus the flash workspace that belongs to no
- * machine. The card's state has to come from the computer, because that is
- * what starts and stops.
+ * The rows are the live wt3 ones: two workspaces on computer 5319ad0e, each
+ * with its own `dir_name`. The card's state has to come from the computer,
+ * because that is what starts and stops.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
@@ -46,7 +45,7 @@ vi.mock('@/hooks/useWorkspaces', () => ({
 
 vi.mock('../../utils/api', () => ({
   createWorkspace: vi.fn(),
-  getFlashWorkspace: vi.fn(async () => null),
+  getHomeWorkspace: vi.fn(async () => null),
   reorderWorkspaces: vi.fn(),
   renameWorkspace: vi.fn(),
   getComputers: vi.fn(),
@@ -112,12 +111,12 @@ beforeEach(() => {
 });
 
 describe('WorkspaceCard, machine line', () => {
-  it('asks the paginated server list to preserve Flash custom ordering', async () => {
+  it('asks the paginated server list to include Home in its custom ordering', async () => {
     renderWithProviders(<WorkspaceGallery onWorkspaceSelect={vi.fn()} />);
 
     await screen.findAllByTestId('workspace-card');
     expect(mockUseWorkspaces).toHaveBeenCalledWith(expect.objectContaining({
-      includeFlash: true,
+      includeHome: true,
       offset: 0,
     }));
   });

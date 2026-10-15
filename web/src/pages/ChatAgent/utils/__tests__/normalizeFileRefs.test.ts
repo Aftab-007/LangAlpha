@@ -253,7 +253,7 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs(input)).toBe(expected);
   });
 
-  it('handles flash agent relayed output with backtick + __wsref__', () => {
+  it('handles Chief of Staff relayed output with backtick + __wsref__', () => {
     const input = 'Deliverables:\n`[results/nvda_analysis.md](__wsref__/20cc68e8-d057-41f4-9bb1-57aa8d310704/results/nvda_analysis.md)`';
     const expected = 'Deliverables:\n[results/nvda_analysis.md](__wsref__/20cc68e8-d057-41f4-9bb1-57aa8d310704/results/nvda_analysis.md)';
     expect(normalizeFileRefs(input)).toBe(expected);

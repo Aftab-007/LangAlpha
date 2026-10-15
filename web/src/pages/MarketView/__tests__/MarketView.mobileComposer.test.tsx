@@ -93,7 +93,7 @@ vi.mock('@/pages/ChatAgent/utils/api', async (importActual) => ({
   ...(await importActual<Record<string, unknown>>()),
   getSkills: vi.fn().mockResolvedValue([]),
   getModelMetadata: vi.fn().mockResolvedValue({}),
-  getFlashWorkspace: vi.fn().mockResolvedValue({ workspace_id: 'flash-ws', status: 'flash' }),
+  getHomeWorkspace: vi.fn().mockResolvedValue({ workspace_id: 'home-ws', status: 'running', is_home: true }),
   updateThread: mocks.updateThread,
 }));
 
@@ -157,7 +157,6 @@ function prefs(defaultModel = 'model-p0', background = 'model-d') {
 
 interface ChatState {
   workspaceId?: string;
-  workspaceStatus?: string;
   model?: string;
   subagentsAllowed?: boolean;
 }
@@ -168,7 +167,6 @@ function ChatPage() {
     <div
       data-testid="chat-page"
       data-workspace={state?.workspaceId}
-      data-workspace-status={state?.workspaceStatus ?? ''}
       data-subagents={String(state?.subagentsAllowed)}
     >
       {state?.model ?? ''}
@@ -242,8 +240,7 @@ describe('the mobile market composer', () => {
     send('What is AAPL doing?');
     const chat = await screen.findByTestId('chat-page');
     expect(chat).toHaveTextContent('model-x');
-    expect(chat).toHaveAttribute('data-workspace', 'flash-ws');
-    expect(chat).toHaveAttribute('data-workspace-status', 'flash');
+    expect(chat).toHaveAttribute('data-workspace', 'home-ws');
     // A pick rides the send; there is no thread yet to store it on.
     expect(mocks.updateThread).not.toHaveBeenCalled();
   });
@@ -258,7 +255,6 @@ describe('the mobile market composer', () => {
     send('Build me a DCF');
     const chat = await screen.findByTestId('chat-page');
     expect(chat).toHaveAttribute('data-workspace', 'ws-1');
-    expect(chat).toHaveAttribute('data-workspace-status', '');
     // Both scopes run the Default model.
     expect(chat).toHaveTextContent('model-p0');
   });

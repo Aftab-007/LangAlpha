@@ -115,6 +115,7 @@ vi.mock('@/hooks/useMcpServers', async (importOriginal) => {
 
 vi.mock('../hooks/useWorkspaceOptions', () => ({
   useWorkspaceOptions: () => ({ workspaces: [], nameById: new Map() }),
+  useHomeOption: () => undefined,
 }));
 
 // The connect lifecycle runs for real: the question a vendor's terms raise is

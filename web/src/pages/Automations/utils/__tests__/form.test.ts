@@ -8,6 +8,7 @@ import {
   isFormChanged,
   validateForm,
   withZone,
+  ALL_WORKSPACES,
   INITIAL_FORM,
   type FormState,
 } from '../form';
@@ -16,6 +17,7 @@ import { timeIn } from '../moments';
 import type { Automation } from '@/types/automation';
 
 const en = i18n.getFixedT('en-US');
+const HOME = 'home-1';
 
 function makeAutomation(overrides: Partial<Automation> = {}): Automation {
   return {
@@ -29,9 +31,8 @@ function makeAutomation(overrides: Partial<Automation> = {}): Automation {
     trigger_config: null,
     next_run_at: null,
     last_run_at: null,
-    agent_mode: 'flash',
     instruction: 'Summarize the market.',
-    workspace_id: null,
+    workspace_id: HOME,
     llm_model: null,
     thread_strategy: 'new',
     conversation_thread_id: null,
@@ -46,8 +47,12 @@ function makeAutomation(overrides: Partial<Automation> = {}): Automation {
   };
 }
 
+/** A blank form placed in All workspaces, so only what a test changes can
+ *  fail it. Its saves name HOME, the id All workspaces resolves to. */
+const PLACED: FormState = { ...INITIAL_FORM, place: ALL_WORKSPACES };
+
 const priceForm = (overrides: Partial<FormState>): FormState => ({
-  ...INITIAL_FORM,
+  ...PLACED,
   trigger_type: 'price',
   price_condition_type: 'price_above',
   price_retrigger_mode: 'one_shot',
@@ -56,7 +61,7 @@ const priceForm = (overrides: Partial<FormState>): FormState => ({
 
 describe('formStateToPayload', () => {
   it('builds trigger_config for price trigger (stock, default)', () => {
-    const payload = formStateToPayload(priceForm({ price_symbol: ' aapl ', price_value: '250' }));
+    const payload = formStateToPayload(priceForm({ price_symbol: ' aapl ', price_value: '250' }), HOME);
     expect(payload.trigger_config).toEqual({
       symbol: 'AAPL',
       conditions: [{ type: 'price_above', value: 250 }],
@@ -68,19 +73,20 @@ describe('formStateToPayload', () => {
   });
 
   it('auto-detects market=index for index symbols', () => {
-    const tc = formStateToPayload(priceForm({ price_symbol: 'SPX', price_value: '5000' })).trigger_config;
+    const tc = formStateToPayload(priceForm({ price_symbol: 'SPX', price_value: '5000' }), HOME).trigger_config;
     expect(tc?.symbol).toBe('SPX');
     expect(tc?.market).toBe('index');
   });
 
   it('omits market field for stock symbols', () => {
-    const tc = formStateToPayload(priceForm({ price_symbol: 'AAPL', price_value: '250' })).trigger_config;
+    const tc = formStateToPayload(priceForm({ price_symbol: 'AAPL', price_value: '250' }), HOME).trigger_config;
     expect(tc).not.toHaveProperty('market');
   });
 
   it('includes reference for pct_change condition', () => {
     const tc = formStateToPayload(
       priceForm({ price_symbol: 'TSLA', price_condition_type: 'pct_change_above', price_value: '5', price_reference: 'day_open' }),
+      HOME,
     ).trigger_config;
     expect(tc?.conditions[0].reference).toBe('day_open');
   });
@@ -94,50 +100,48 @@ describe('formStateToPayload', () => {
         price_retrigger_mode: 'recurring',
         price_cooldown_minutes: '480',
       }),
+      HOME,
     ).trigger_config;
     expect(tc?.retrigger).toEqual({ mode: 'recurring', cooldown_seconds: 28800 });
   });
 
   it('drops next_run_at for cron trigger', () => {
-    const payload = formStateToPayload({
-      ...INITIAL_FORM,
-      trigger_type: 'cron',
-      cron_expression: '0 9 * * *',
-      next_run_at: '2026-01-01T09:00:00Z',
-    });
+    const payload = formStateToPayload(
+      { ...INITIAL_FORM, trigger_type: 'cron', cron_expression: '0 9 * * *', next_run_at: '2026-01-01T09:00:00Z' },
+      HOME,
+    );
     expect(payload.cron_expression).toBe('0 9 * * *');
     expect(payload).not.toHaveProperty('next_run_at');
   });
 
   it('converts next_run_at to ISO for once trigger', () => {
-    const payload = formStateToPayload({ ...INITIAL_FORM, trigger_type: 'once', next_run_at: '2026-03-20T14:30:00-04:00' });
+    const payload = formStateToPayload({ ...INITIAL_FORM, trigger_type: 'once', next_run_at: '2026-03-20T14:30:00-04:00' }, HOME);
     expect(payload.next_run_at).toBe('2026-03-20T18:30:00.000Z');
     expect(payload).not.toHaveProperty('cron_expression');
   });
 
-  it('strips workspace_id when agent_mode is not ptc', () => {
-    const payload = formStateToPayload({ ...INITIAL_FORM, agent_mode: 'flash', workspace_id: 'ws-123' });
-    expect(payload).not.toHaveProperty('workspace_id');
-  });
-
-  it('keeps workspace_id when agent_mode is ptc', () => {
-    const payload = formStateToPayload({ ...INITIAL_FORM, agent_mode: 'ptc', workspace_id: 'ws-123' });
-    expect(payload.workspace_id).toBe('ws-123');
+  // 'ptc' on every save: a backend before is_home reads a create without a
+  // mode as 'flash', which runs in Home whatever workspace it names.
+  it("names the workspace the place resolved to, as 'ptc'", () => {
+    const payload = formStateToPayload(PLACED, HOME);
+    expect(payload.workspace_id).toBe(HOME);
+    expect(payload.agent_mode).toBe('ptc');
+    expect(formStateToPayload({ ...INITIAL_FORM, place: 'ws-123' }, 'ws-123').workspace_id).toBe('ws-123');
   });
 
   it('packs delivery_methods into delivery_config', () => {
-    const payload = formStateToPayload({ ...INITIAL_FORM, delivery_methods: ['slack'] });
+    const payload = formStateToPayload({ ...INITIAL_FORM, delivery_methods: ['slack'] }, HOME);
     expect(payload.delivery_config).toEqual({ methods: ['slack'] });
     expect(payload).not.toHaveProperty('delivery_methods');
-    expect(formStateToPayload(INITIAL_FORM).delivery_config).toEqual({ methods: [] });
+    expect(formStateToPayload(INITIAL_FORM, HOME).delivery_config).toEqual({ methods: [] });
   });
 
   it('strips empty description', () => {
-    expect(formStateToPayload({ ...INITIAL_FORM, description: '' })).not.toHaveProperty('description');
+    expect(formStateToPayload({ ...INITIAL_FORM, description: '' }, HOME)).not.toHaveProperty('description');
   });
 
   it('carries only the fields the server reads', () => {
-    expect(Object.keys(formStateToPayload(INITIAL_FORM)).sort()).toEqual([
+    expect(Object.keys(formStateToPayload(PLACED, HOME)).sort()).toEqual([
       'agent_mode',
       'cron_expression',
       'delivery_config',
@@ -147,12 +151,14 @@ describe('formStateToPayload', () => {
       'thread_strategy',
       'timezone',
       'trigger_type',
+      'workspace_id',
     ]);
   });
 
   it('replaces {symbol} placeholder in instruction with price_symbol', () => {
     const payload = formStateToPayload(
       priceForm({ price_symbol: ' nvda ', price_value: '180', instruction: 'Analyze {symbol} price movement and {symbol} outlook.' }),
+      HOME,
     );
     expect(payload.instruction).toBe('Analyze NVDA price movement and NVDA outlook.');
   });
@@ -184,9 +190,21 @@ describe('automationToFormState', () => {
     expect(form.max_failures).toBe(5);
   });
 
+  it('opens a workspace automation on its workspace, and one naming Home as All workspaces', () => {
+    expect(automationToFormState(makeAutomation({ workspace_id: 'ws-1' }), 'UTC', HOME).place).toBe('ws-1');
+    expect(automationToFormState(makeAutomation({ agent_mode: 'ptc', workspace_id: HOME }), 'UTC', HOME).place).toBe(ALL_WORKSPACES);
+  });
+
+  it('opens a legacy flash row as All workspaces, whatever workspace it names, with Home unknown too', () => {
+    const legacy = makeAutomation({ agent_mode: 'flash', workspace_id: 'ws-old' });
+    expect(automationToFormState(legacy, 'UTC', HOME).place).toBe(ALL_WORKSPACES);
+    expect(automationToFormState(makeAutomation({ agent_mode: 'flash', workspace_id: null }), 'UTC', HOME).place).toBe(ALL_WORKSPACES);
+    expect(automationToFormState(legacy, 'UTC').place).toBe(ALL_WORKSPACES);
+  });
+
   it('keeps a channel the form does not offer through an edit', () => {
     const form = automationToFormState(makeAutomation({ delivery_config: { methods: ['telegram', 'slack'] } }));
-    expect(formStateToPayload(form).delivery_config).toEqual({ methods: ['telegram', 'slack'] });
+    expect(formStateToPayload(form, HOME).delivery_config).toEqual({ methods: ['telegram', 'slack'] });
   });
 
   it('loads index automation symbol correctly', () => {
@@ -235,7 +253,7 @@ describe('automationToFormState', () => {
       makeAutomation({ trigger_type: 'once', timezone: 'America/New_York', next_run_at: '2026-10-28T18:15:00+00:00' }),
     );
     expect(timeIn(new Date(form.next_run_at), 'America/New_York')).toEqual({ hour: 14, minute: 15 });
-    expect(formStateToPayload(form).next_run_at).toBe('2026-10-28T18:15:00.000Z');
+    expect(formStateToPayload(form, HOME).next_run_at).toBe('2026-10-28T18:15:00.000Z');
   });
 });
 
@@ -262,7 +280,7 @@ describe('validateForm', () => {
   const now = Date.parse('2026-10-28T12:00:00Z');
 
   it('asks for a moment, then for one still ahead', () => {
-    const once: FormState = { ...INITIAL_FORM, trigger_type: 'once' };
+    const once: FormState = { ...PLACED, trigger_type: 'once' };
     expect(validateForm(once, now)).toEqual({ messageKey: 'automation.onceHint', section: 'when' });
     expect(validateForm({ ...once, next_run_at: '2026-10-28T11:00:00Z' }, now)).toEqual({
       messageKey: 'automation.oncePassed',
@@ -271,16 +289,14 @@ describe('validateForm', () => {
     expect(validateForm({ ...once, next_run_at: '2026-10-28T13:00:00Z' }, now)).toBeNull();
   });
 
-  it('points a sandbox run without a workspace at the folded options', () => {
-    // The picker offers places, not modes.
-    expect(validateForm({ ...INITIAL_FORM, agent_mode: 'ptc' }, now)).toEqual({
-      messageKey: 'agents.workspaceRequired',
-      section: 'more',
-    });
+  it('points a form with no place yet at the folded options', () => {
+    expect(validateForm(INITIAL_FORM, now)).toEqual({ messageKey: 'agents.workspaceRequired', section: 'more' });
+    expect(validateForm(PLACED, now)).toBeNull();
+    expect(validateForm({ ...INITIAL_FORM, place: 'ws-1' }, now)).toBeNull();
   });
 
   it("leaves an edit's untouched one-time moment alone, even a past one", () => {
-    const ran: FormState = { ...INITIAL_FORM, trigger_type: 'once', next_run_at: '' };
+    const ran: FormState = { ...PLACED, trigger_type: 'once', next_run_at: '' };
     expect(validateForm({ ...ran, name: 'Renamed' }, now, ran)).toBeNull();
     expect(validateForm({ ...ran, next_run_at: '2026-10-28T11:00:00Z' }, now, ran)?.messageKey).toBe('automation.oncePassed');
   });
@@ -299,11 +315,11 @@ describe('validateForm', () => {
   it('refuses an instruction whose {symbol} nothing fills', () => {
     const unfilled = { messageKey: 'automation.instructionSymbolUnfilled', section: 'instruction' };
     // The earnings template runs once, and a one-time trigger has no symbol.
-    const earnings = { ...applyTemplate('earnings_watch', en), workspace_id: 'ws-1', next_run_at: '2026-10-28T13:00:00Z' };
+    const earnings = { ...applyTemplate('earnings_watch', en), place: 'ws-1', next_run_at: '2026-10-28T13:00:00Z' };
     expect(validateForm(earnings, now)).toEqual(unfilled);
     expect(validateForm({ ...earnings, instruction: earnings.instruction.replace('{symbol}', 'NVDA') }, now)).toBeNull();
     // A price template moved onto a schedule keeps the placeholder too.
-    expect(validateForm({ ...applyTemplate('price_alert', en), trigger_type: 'cron' }, now)).toEqual(unfilled);
+    expect(validateForm({ ...applyTemplate('price_alert', en, 'UTC'), trigger_type: 'cron' }, now)).toEqual(unfilled);
     // A price trigger's symbol fills it.
     expect(validateForm(priceForm({ price_symbol: 'AAPL', price_value: '150', instruction: 'Why did {symbol} move?' }), now)).toBeNull();
   });
@@ -323,7 +339,7 @@ describe('validateForm', () => {
     // and then saved as parseInt read it, 1 minute, so the cooldown was dropped.
     const recurring = priceForm({ price_symbol: 'AAPL', price_value: '150', price_retrigger_mode: 'recurring' });
     const withCooldown = (text: string) => ({ ...recurring, price_cooldown_minutes: text });
-    const saved = (text: string) => formStateToPayload(withCooldown(text)).trigger_config?.retrigger;
+    const saved = (text: string) => formStateToPayload(withCooldown(text), HOME).trigger_config?.retrigger;
     expect(validateForm(withCooldown('1e3'), now)).toBeNull();
     expect(saved('1e3')).toEqual({ mode: 'recurring', cooldown_seconds: 60_000 });
     expect(validateForm(withCooldown(' 300 '), now)).toBeNull();
@@ -349,8 +365,8 @@ describe('isFormChanged', () => {
 
 describe('formStateToUpdatePayload', () => {
   const edit = (automation: Automation, change: (f: FormState) => FormState) => {
-    const initial = automationToFormState(automation, 'UTC');
-    return formStateToUpdatePayload(change(initial), initial, automation);
+    const initial = automationToFormState(automation, 'UTC', HOME);
+    return formStateToUpdatePayload(change(initial), initial, automation, HOME);
   };
 
   const priceAutomation = makeAutomation({
@@ -365,6 +381,21 @@ describe('formStateToUpdatePayload', () => {
       ],
       retrigger: { mode: 'recurring', cooldown_seconds: 15_000 },
     },
+  });
+
+  it("saves a legacy flash row where All workspaces resolved to, as 'ptc'", () => {
+    const legacy = makeAutomation({ agent_mode: 'flash', workspace_id: 'ws-old' });
+    const initial = automationToFormState(legacy, 'UTC', HOME);
+    const payload = formStateToUpdatePayload({ ...initial, name: 'Renamed' }, initial, legacy, HOME);
+    expect(payload.workspace_id).toBe(HOME);
+    expect(payload.agent_mode).toBe('ptc');
+  });
+
+  it("moves a legacy flash row to a workspace as 'ptc', which a backend before is_home would keep as 'flash'", () => {
+    const legacy = makeAutomation({ agent_mode: 'flash', workspace_id: null });
+    const initial = automationToFormState(legacy, 'UTC', HOME);
+    const payload = formStateToUpdatePayload({ ...initial, place: 'ws-1' }, initial, legacy, 'ws-1');
+    expect(payload).toMatchObject({ agent_mode: 'ptc', workspace_id: 'ws-1' });
   });
 
   it('never sends the kind of trigger, and always sends the description', () => {
@@ -428,20 +459,19 @@ describe('an edit of each template', () => {
   // Each template filled in the way a reader would, saved, and reopened.
   const filled = (id: TemplateId): FormState => ({
     ...applyTemplate(id, en, 'UTC'),
-    workspace_id: 'ws-1',
+    place: 'ws-1',
     price_symbol: 'NVDA',
     price_value: '180',
     next_run_at: '2026-10-28T18:15:00.000Z',
   });
   const reopened = (form: FormState) => {
-    const p = formStateToPayload(form);
+    const p = formStateToPayload(form, form.place);
     const automation = makeAutomation({
       ...p,
       description: p.description ?? null,
       cron_expression: p.cron_expression ?? null,
       next_run_at: p.next_run_at ?? null,
       trigger_config: p.trigger_config ?? null,
-      workspace_id: p.workspace_id ?? null,
     });
     return { automation, initial: automationToFormState(automation, 'UTC') };
   };
@@ -458,16 +488,16 @@ describe('an edit of each template', () => {
 
   it.each(cases)('%s restates the settings a create states, and its trigger only once changed', (id, change, triggerKeys) => {
     const { automation, initial } = reopened(filled(id));
-    const settings = pick(formStateToPayload(initial), [
-      'name', 'agent_mode', 'instruction', 'thread_strategy', 'max_failures', 'delivery_config', 'workspace_id',
+    const settings = pick(formStateToPayload(initial, initial.place), [
+      'name', 'agent_mode', 'workspace_id', 'instruction', 'thread_strategy', 'max_failures', 'delivery_config',
     ]);
-    const untouched = formStateToUpdatePayload(initial, initial, automation);
+    const untouched = formStateToUpdatePayload(initial, initial, automation, initial.place);
     expect(untouched).toEqual({ ...settings, description: initial.description });
 
     const changed = change(initial);
-    expect(formStateToUpdatePayload(changed, initial, automation)).toEqual({
+    expect(formStateToUpdatePayload(changed, initial, automation, changed.place)).toEqual({
       ...untouched,
-      ...pick(formStateToPayload(changed), triggerKeys),
+      ...pick(formStateToPayload(changed, changed.place), triggerKeys),
     });
   });
 });

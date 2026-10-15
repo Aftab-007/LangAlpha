@@ -22,8 +22,8 @@ import { buildRuntime, makeDeps, replayOf } from './replayHarness';
 
 const CHUNK = { thread_id: 'thread-1', turn_index: 0, role: 'assistant', id: 'lc_run--x', agent: 'model:abc' };
 
-/** A reloaded Flash turn, stopped mid-answer, ending on the close given. */
-function stoppedFlashTurn(finishReason: string) {
+/** A reloaded turn, stopped mid-answer, ending on the close given. */
+function stoppedTurn(finishReason: string) {
   return [
     { event: 'user_message', data: { thread_id: 'thread-1', turn_index: 0, content: 'Summarise the filing' } },
     { event: 'message_chunk', data: { ...CHUNK, content_type: 'reasoning_signal', content: 'start' } },
@@ -45,7 +45,7 @@ beforeEach(() => vi.clearAllMocks());
 
 describe('history replay: a stopped turn', () => {
   it('keeps the partial answer and stamps the message stopped', async () => {
-    const assistant = await assistantAfter(stoppedFlashTurn('stopped'));
+    const assistant = await assistantAfter(stoppedTurn('stopped'));
 
     expect(assistant.content).toBe('The filing flags three');
     expect(assistant.stopped).toBe(true);
@@ -53,7 +53,7 @@ describe('history replay: a stopped turn', () => {
   });
 
   it('does not stamp a turn that finished normally', async () => {
-    const assistant = await assistantAfter(stoppedFlashTurn('stop'));
+    const assistant = await assistantAfter(stoppedTurn('stop'));
 
     expect(assistant.content).toBe('The filing flags three');
     expect(assistant.stopped).toBeUndefined();

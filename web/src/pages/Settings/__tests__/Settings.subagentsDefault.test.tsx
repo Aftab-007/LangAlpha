@@ -89,7 +89,7 @@ vi.mock('@/pages/Dashboard/utils/api', () => ({
 }));
 
 vi.mock('@/pages/ChatAgent/utils/api', () => ({
-  getFlashWorkspace: vi.fn(async () => ({ workspace_id: 'ws-flash' })),
+  getHomeWorkspace: vi.fn(async () => ({ workspace_id: 'ws-home' })),
 }));
 
 // Settings renders the onboarding replay/reset buttons; no provider here.

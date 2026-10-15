@@ -17,7 +17,7 @@ import { getSkills } from '@/pages/ChatAgent/utils/api';
 vi.mock('@/pages/ChatAgent/utils/api', () => ({
   getSkills: vi.fn().mockResolvedValue([]),
   getModelMetadata: vi.fn().mockResolvedValue({}),
-  getFlashWorkspace: vi.fn().mockResolvedValue({ workspace_id: 'home-1', name: 'Flash', status: 'flash' }),
+  getHomeWorkspace: vi.fn().mockResolvedValue({ workspace_id: 'home-1', name: 'Home', status: 'running', is_home: true }),
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -121,7 +121,7 @@ describe('ChatInput scope picker', () => {
     expect(mocks.mutateAsync).not.toHaveBeenCalled();
   });
 
-  it('offers a scope picker beside the Subagents switch, and no Flash/PTC toggle', () => {
+  it('offers a scope picker beside the Subagents switch, and no agent mode toggle', () => {
     renderInput();
     expect(screen.queryByText('Flash')).not.toBeInTheDocument();
     expect(screen.queryByText('PTC')).not.toBeInTheDocument();

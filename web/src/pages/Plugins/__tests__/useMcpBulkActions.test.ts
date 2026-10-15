@@ -17,7 +17,7 @@ vi.mock('@/pages/ChatAgent/utils/api', async (importOriginal) => ({
 }));
 vi.mock('@/pages/ChatAgent/utils/api/workspaces', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getFlashWorkspace: vi.fn(async () => ({ workspace_id: 'flash-1' })),
+  getHomeWorkspace: vi.fn(async () => ({ workspace_id: 'home-1' })),
 }));
 
 import { queryKeys } from '@/lib/queryKeys';
@@ -177,9 +177,9 @@ describe('useMcpBulkActions: All workspaces and Home', () => {
       description: '',
       transport: 'stdio',
       enabled: true,
-      disabled_workspace_ids: ['flash-1'],
+      disabled_workspace_ids: ['home-1'],
     };
-    const catalog = [catalogServer({ name: 'user_srv', disabled_workspace_ids: ['flash-1'] })];
+    const catalog = [catalogServer({ name: 'user_srv', disabled_workspace_ids: ['home-1'] })];
     const run = vi.fn<(targets: BulkTarget[]) => void>();
     const surface = {
       selection: { selected: new Set(['builtin:builtin_srv', 'catalog:user_srv']) },
@@ -195,7 +195,7 @@ describe('useMcpBulkActions: All workspaces and Home', () => {
     const targets = run.mock.calls[0][0];
     expect(targets.map((target) => target.key)).toEqual(['catalog:user_srv']);
     for (const target of targets) await target.run();
-    expect(api.setWorkspaceMcpServerEnabled.mock.calls).toEqual([['flash-1', 'user_srv', true]]);
+    expect(api.setWorkspaceMcpServerEnabled.mock.calls).toEqual([['home-1', 'user_srv', true]]);
   });
 });
 
@@ -229,7 +229,7 @@ describe('useMcpBulkActions: Only in and Home', () => {
     );
     // Home resolves through React Query; the row can only name it after that.
     await waitFor(() =>
-      expect(queryClient.getQueryData(queryKeys.workspaces.flash())).toBeDefined(),
+      expect(queryClient.getQueryData(queryKeys.workspaces.home())).toBeDefined(),
     );
 
     result.current.scope.onOnlyIn(['ws-a']);
@@ -238,7 +238,7 @@ describe('useMcpBulkActions: Only in and Home', () => {
     expect(api.setWorkspaceMcpServerEnabled.mock.calls).toEqual([
       ['ws-b', 'builtin_srv', false],
       ['ws-b', 'user_srv', false],
-      ['flash-1', 'user_srv', false],
+      ['home-1', 'user_srv', false],
     ]);
   });
 });

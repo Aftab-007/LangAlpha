@@ -1,7 +1,7 @@
 /**
- * Report-back watch (PTC dispatch → flash report-back turns).
+ * Report-back watch (PTC dispatch → report-back turns).
  *
- * After a PTC dispatch the backend fires a follow-up flash "report-back"
+ * After a PTC dispatch the backend fires a follow-up "report-back"
  * workflow per completed analysis, named via a pub/sub wake (run_id payload)
  * and durably via `/status.report_back_run_id` / `recent_report_back_run_ids`.
  * These tests drive the REAL hook internals (mirroring the sibling stop suite)
@@ -120,7 +120,7 @@ const IDLE_MS = 4000;
 // through it under fake timers.
 const IDLE_CONFIRM_MS = 15_000;
 
-describe('useChatMessages — report-back watch (PTC → flash report-back)', () => {
+describe('useChatMessages: report-back watch (PTC → report-back)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // The cheap report-back slice is a strict subset of the full status, so
@@ -197,7 +197,7 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
   });
 
   it('does NOT duplicate the transcript when a staleness reload follows a live-streamed report-back', async () => {
-    // The flash-thread round-trip repro: report-back turns stream in LIVE,
+    // The dispatching-thread round-trip repro: report-back turns stream in LIVE,
     // then the user jumps to the PTC thread and back. The live turns never
     // advanced the rendered-turn watermark, so reconnectIfStaleRun requests a
     // corrective reload whose replay covers those same turns. The attach's
@@ -521,7 +521,7 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
   });
 
   it('does NOT attach a stale wake after the user navigated to another thread', async () => {
-    // A flash wake firing LATE, after the user jumped into the PTC thread, must
+    // A wake firing LATE, after the user jumped into the PTC thread, must
     // not attach the report-back onto the PTC thread — that would race the PTC
     // reconnect for the stream.
     mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true }));
@@ -548,7 +548,7 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     expect(mockReconnect).not.toHaveBeenCalled();
   });
 
-  it('arms the report-back watch on refresh even when the flash thread reconnects to an active run', async () => {
+  it('arms the report-back watch on refresh even when the dispatching thread reconnects to an active run', async () => {
     // Refresh right as the report-back becomes due: /status reports the thread
     // ACTIVE and a report-back pending. The load takes the reconnect branch —
     // but must ALSO arm the watch, so if that one reconnect misses the
@@ -563,13 +563,13 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     mockReconnect.mockResolvedValue({ disconnected: false, aborted: false });
     captureWatch();
 
-    renderHookWithProviders(() => useChatMessages('ws-rb', 'th-flash'));
+    renderHookWithProviders(() => useChatMessages('ws-rb', 'th-home'));
 
     // The active run is reconnected to...
-    await waitFor(() => expect(mockReconnect.mock.calls.some((c) => c[0] === 'th-flash')).toBe(true));
+    await waitFor(() => expect(mockReconnect.mock.calls.some((c) => c[0] === 'th-home')).toBe(true));
     // ...AND the report-back watch is armed as the reliable catch.
     await waitFor(() =>
-      expect(mockWatch).toHaveBeenCalledWith('th-flash', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function)),
+      expect(mockWatch).toHaveBeenCalledWith('th-home', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function)),
     );
   });
 
@@ -596,28 +596,28 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
   });
 
   it('supersedes a streaming report-back when the user jumps into the live PTC thread', async () => {
-    // A report-back is STILL streaming on the flash thread when the user clicks
-    // the dispatch card. The flash reader owns isStreamingRef; navigation must
+    // A report-back is STILL streaming on the dispatching thread when the user clicks
+    // the dispatch card. The dispatching thread's reader owns isStreamingRef; navigation must
     // SUPERSEDE it so the PTC thread loads and reconnects to its own live run.
     mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true }));
     const watchCalls = captureWatch();
 
-    // Flash reconnect HOLDS the stream open; PTC reconnect resolves normally.
+    // The dispatching thread's reconnect HOLDS the stream open; PTC reconnect resolves normally.
     mockReconnect.mockImplementation((threadId: string) => {
-      if (threadId === 'th-flash') return new Promise(() => {});
+      if (threadId === 'th-home') return new Promise(() => {});
       return Promise.resolve({ disconnected: false, aborted: false });
     });
 
-    let tid = 'th-flash';
+    let tid = 'th-home';
     const { rerender } = renderHookWithProviders(() => useChatMessages('ws-rb', tid));
     await waitFor(() => expect(mockWatch).toHaveBeenCalledTimes(1));
 
-    // Wake attaches on the flash thread; don't await the never-resolving reader.
+    // Wake attaches on the dispatching thread; don't await the never-resolving reader.
     await act(async () => {
       void watchCalls[0].cb({ run_id: 'rb-run' });
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(mockReconnect.mock.calls.some((c) => c[0] === 'th-flash')).toBe(true);
+    expect(mockReconnect.mock.calls.some((c) => c[0] === 'th-home')).toBe(true);
 
     // PTC thread is live; user jumps into it.
     mockStatus.mockResolvedValue(threadStatus({ can_reconnect: true, status: 'running', run_id: 'ptc-run' }));
@@ -633,14 +633,14 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     expect(ptcCall![1]).toBe('ptc-run');
   });
 
-  it('supersedes the in-flight flash dispatch SEND when the user jumps into the live PTC thread', async () => {
-    // Same jump, but the flash DISPATCH TURN itself is still streaming (a send,
+  it('supersedes the in-flight dispatch SEND when the user jumps into the live PTC thread', async () => {
+    // Same jump, but the DISPATCH TURN itself is still streaming (a send,
     // not a reconnect). The send must claim stream ownership, or supersede can't
     // fire and the isStreamingRef guard blocks the PTC thread from ever loading.
     mockStatus.mockResolvedValue(threadStatus());
     captureWatch();
 
-    // The flash send HOLDS across the navigation; the PTC reconnect resolves.
+    // The send HOLDS across the navigation; the PTC reconnect resolves.
     mockSend.mockImplementation(() => new Promise(() => {}));
     mockReconnect.mockImplementation((threadId: string) =>
       threadId === 'th-ptc'
@@ -648,8 +648,8 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
         : new Promise(() => {}),
     );
 
-    let tid = 'th-flash';
-    const { result, rerender } = renderHookWithProviders(() => useChatMessages('ws-flash', tid));
+    let tid = 'th-home';
+    const { result, rerender } = renderHookWithProviders(() => useChatMessages('ws-home', tid));
     await settleMountEffect();
 
     await act(async () => {
@@ -669,19 +669,19 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     expect(ptcCall![1]).toBe('ptc-run');
   });
 
-  it('keeps the pending flash report-back alive across a jump into the live PTC thread, then streams it on return', async () => {
+  it('keeps the pending report-back alive across a jump into the live PTC thread, then streams it on return', async () => {
     // THE simultaneity contract: PTC streams live on the jumped-into thread AND
-    // the keyed flash watch survives the navigation (holding wakes captured
+    // the keyed watch survives the navigation (holding wakes captured
     // while away) so the report-back still streams on return.
     mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true }));
     mockReconnect.mockResolvedValue({ disconnected: false, aborted: false });
     const watchCalls = captureWatch();
 
-    let tid = 'th-flash';
+    let tid = 'th-home';
     const { rerender } = renderHookWithProviders(() => useChatMessages('ws-rb', tid));
 
     await waitFor(() => expect(mockWatch).toHaveBeenCalledTimes(1));
-    expect(watchCalls[0].tid).toBe('th-flash');
+    expect(watchCalls[0].tid).toBe('th-home');
     expect(mockReconnect).not.toHaveBeenCalled();
 
     // Jump into the live PTC thread.
@@ -696,7 +696,7 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     const ptcCall = mockReconnect.mock.calls.find((c) => c[0] === 'th-ptc');
     expect(ptcCall).toBeTruthy();
     expect(ptcCall![1]).toBe('ptc-run');
-    // ...AND the flash watch SURVIVED the jump: not re-armed, not aborted.
+    // ...AND the watch SURVIVED the jump: not re-armed, not aborted.
     expect(mockWatch).toHaveBeenCalledTimes(1);
     expect(watchCalls[0].controller.signal.aborted).toBe(false);
 
@@ -705,11 +705,11 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     await act(async () => {
       await watchCalls[0].cb({ run_id: 'rb-run' });
     });
-    expect(mockReconnect.mock.calls.some((c) => c[0] === 'th-flash')).toBe(false);
+    expect(mockReconnect.mock.calls.some((c) => c[0] === 'th-home')).toBe(false);
 
-    // Return to the flash thread (idempotent re-arm keeps the same watch).
+    // Return to the dispatching thread (idempotent re-arm keeps the same watch).
     mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true, report_back_run_id: 'rb-run' }));
-    tid = 'th-flash';
+    tid = 'th-home';
     await act(async () => {
       rerender();
       await new Promise((r) => setTimeout(r, 0));
@@ -720,7 +720,7 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
       await watchCalls[0].cb();
     });
 
-    const rbCall = mockReconnect.mock.calls.find((c) => c[0] === 'th-flash');
+    const rbCall = mockReconnect.mock.calls.find((c) => c[0] === 'th-home');
     expect(rbCall).toBeTruthy();
     expect(rbCall![1]).toBe('rb-run');
     expect(rbCall![2]).toBeNull();
@@ -974,12 +974,12 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     mockReconnect.mockResolvedValue({ disconnected: false, aborted: false });
     captureWatch();
 
-    renderHookWithProviders(() => useChatMessages('ws-flash', 'th-flash'));
+    renderHookWithProviders(() => useChatMessages('ws-home', 'th-home'));
 
     await waitFor(() => expect(mockReconnect).toHaveBeenCalled());
     await settleMountEffect();
     // Armed as the reliable catch...
-    expect(mockWatch).toHaveBeenCalledWith('th-flash', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function));
+    expect(mockWatch).toHaveBeenCalledWith('th-home', expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function));
     // ...and ordering is the invariant: the live run attaches before the held
     // report-back ever could.
     expect(mockReconnect.mock.calls[0][1]).toBe('active-run');
@@ -1033,7 +1033,7 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     expect(mockReconnect.mock.calls.some((c) => c[1] === 'rb-gap')).toBe(true);
   });
 
-  it('activation: re-entering a cached flash thread with a pending report-back arms + attaches', async () => {
+  it('activation: re-entering a cached dispatching thread with a pending report-back arms + attaches', async () => {
     // The become-active transition of a cached view routes through
     // reconnectIfStaleRun, NOT loadAndMaybeReconnect: a report-back that became
     // due while the view was hidden must arm the watch and attach.
@@ -1459,7 +1459,7 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     // The rendered recent was never attached by the load-time poke.
     expect(mockReconnect).not.toHaveBeenCalled();
 
-    // The remaining dispatch was cancelled server-side: flash_watch drains with
+    // The remaining dispatch was cancelled server-side: the watch drains with
     // no new run — recents still name only the already-rendered turn.
     mockStatus.mockResolvedValue(threadStatus({
       report_back_run_id: null,

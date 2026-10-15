@@ -6,11 +6,11 @@ import { queryKeys } from '@/lib/queryKeys';
 import { renderWithProviders } from '@/test/utils';
 
 const api = vi.hoisted(() => ({
-  getFlashWorkspace: vi.fn(async () => ({ workspace_id: 'home-1' })),
+  getHomeWorkspace: vi.fn(async () => ({ workspace_id: 'home-1' })),
 }));
 vi.mock('@/pages/ChatAgent/utils/api/workspaces', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getFlashWorkspace: api.getFlashWorkspace,
+  getHomeWorkspace: api.getHomeWorkspace,
 }));
 
 const warm = vi.hoisted(() => ({ warmWorkspace: vi.fn(async () => {}) }));
@@ -30,7 +30,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  api.getFlashWorkspace.mockClear();
+  api.getHomeWorkspace.mockClear();
   warm.warmWorkspace.mockClear();
   document.body.replaceChildren();
 });
@@ -38,7 +38,7 @@ afterEach(() => {
 /** A client that already knows Home's id, so the listeners attach on mount. */
 function clientWithHome(): QueryClient {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  queryClient.setQueryData(queryKeys.workspaces.flash(), { workspace_id: 'home-1' });
+  queryClient.setQueryData(queryKeys.workspaces.home(), { workspace_id: 'home-1' });
   return queryClient;
 }
 
@@ -64,41 +64,41 @@ describe('WarmHome', () => {
 
     await tap();
     expect(warm.warmWorkspace).toHaveBeenCalledTimes(1);
-    expect(warm.warmWorkspace).toHaveBeenCalledWith('home-1', queryClient, { home: true });
+    expect(warm.warmWorkspace).toHaveBeenCalledWith('home-1', queryClient);
   });
 
   it('looks Home up on the first click, not before', async () => {
     let resolveHome: (home: { workspace_id: string }) => void = () => {};
-    api.getFlashWorkspace.mockImplementationOnce(
+    api.getHomeWorkspace.mockImplementationOnce(
       () => new Promise((resolve) => { resolveHome = resolve; }),
     );
     renderWithProviders(<WarmHome />);
     await act(async () => {});
-    expect(api.getFlashWorkspace).not.toHaveBeenCalled();
+    expect(api.getHomeWorkspace).not.toHaveBeenCalled();
 
     await tap();
-    expect(api.getFlashWorkspace).toHaveBeenCalledTimes(1);
+    expect(api.getHomeWorkspace).toHaveBeenCalledTimes(1);
     expect(warm.warmWorkspace).not.toHaveBeenCalled();
 
     await act(async () => resolveHome({ workspace_id: 'home-1' }));
-    expect(warm.warmWorkspace).toHaveBeenCalledWith('home-1', expect.anything(), { home: true });
+    expect(warm.warmWorkspace).toHaveBeenCalledWith('home-1', expect.anything());
   });
 
   it('retries a failed lookup on the next interaction', async () => {
-    api.getFlashWorkspace.mockRejectedValueOnce(new Error('offline'));
+    api.getHomeWorkspace.mockRejectedValueOnce(new Error('offline'));
     renderWithProviders(<WarmHome />);
 
     await tap();
     expect(warm.warmWorkspace).not.toHaveBeenCalled();
 
     await tap();
-    expect(api.getFlashWorkspace).toHaveBeenCalledTimes(2);
-    expect(warm.warmWorkspace).toHaveBeenCalledWith('home-1', expect.anything(), { home: true });
+    expect(api.getHomeWorkspace).toHaveBeenCalledTimes(2);
+    expect(warm.warmWorkspace).toHaveBeenCalledWith('home-1', expect.anything());
   });
 
   it('does not warm Home found after unmount', async () => {
     let resolveHome: (home: { workspace_id: string }) => void = () => {};
-    api.getFlashWorkspace.mockImplementationOnce(
+    api.getHomeWorkspace.mockImplementationOnce(
       () => new Promise((resolve) => { resolveHome = resolve; }),
     );
     const { unmount } = renderWithProviders(<WarmHome />);
@@ -172,7 +172,7 @@ describe('WarmHome', () => {
 
   it('drops a pending warm once a power control is used', async () => {
     let resolveHome: (home: { workspace_id: string }) => void = () => {};
-    api.getFlashWorkspace.mockImplementationOnce(
+    api.getHomeWorkspace.mockImplementationOnce(
       () => new Promise((resolve) => { resolveHome = resolve; }),
     );
     renderWithProviders(<WarmHome />);
@@ -187,7 +187,7 @@ describe('WarmHome', () => {
 
   it('keeps the wait a power control began when an older lookup fails', async () => {
     let failHome: (error: Error) => void = () => {};
-    api.getFlashWorkspace.mockImplementationOnce(
+    api.getHomeWorkspace.mockImplementationOnce(
       () => new Promise((_resolve, reject) => { failHome = reject; }),
     );
     renderWithProviders(<WarmHome />);

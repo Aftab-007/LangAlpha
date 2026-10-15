@@ -521,7 +521,7 @@ describe('useNavigationData — drag-reorder workspaces', () => {
     mockGetWorkspaces.mockResolvedValue({
       workspaces: [
         { workspace_id: 'ws-pin', is_pinned: true },
-        { workspace_id: 'ws-flash', status: 'flash' },
+        { workspace_id: 'ws-home', is_home: true, status: 'running' },
         { workspace_id: 'ws-1' },
         { workspace_id: 'ws-2' },
         { workspace_id: 'ws-3' },
@@ -540,7 +540,7 @@ describe('useNavigationData — drag-reorder workspaces', () => {
     return { ...rendered, wsIds };
   }
 
-  it('moves the dragged workspace and persists sequential sort_order including flash', async () => {
+  it('moves the dragged workspace and persists sequential sort_order including Home', async () => {
     const { wsIds, result } = setup();
     await waitFor(() => expect(wsIds().length).toBe(5));
 
@@ -548,12 +548,12 @@ describe('useNavigationData — drag-reorder workspaces', () => {
       await result.current.reorderWorkspace('ws-3', 'ws-1');
     });
 
-    expect(wsIds()).toEqual(['ws-pin', 'ws-flash', 'ws-3', 'ws-1', 'ws-2']);
-    // Flash's slot is written too — leaving it out ties its sort_order with
+    expect(wsIds()).toEqual(['ws-pin', 'ws-home', 'ws-3', 'ws-1', 'ws-2']);
+    // Home's slot is written too: leaving it out ties its sort_order with
     // a neighbor's and the pinned block reshuffles on every updated_at bump.
     expect(mockReorderWorkspaces).toHaveBeenCalledWith([
       { workspace_id: 'ws-pin', sort_order: 0 },
-      { workspace_id: 'ws-flash', sort_order: 1 },
+      { workspace_id: 'ws-home', sort_order: 1 },
       { workspace_id: 'ws-3', sort_order: 2 },
       { workspace_id: 'ws-1', sort_order: 3 },
       { workspace_id: 'ws-2', sort_order: 4 },
@@ -568,34 +568,34 @@ describe('useNavigationData — drag-reorder workspaces', () => {
       await result.current.reorderWorkspace('ws-1', 'ws-pin');
     });
 
-    expect(wsIds()).toEqual(['ws-pin', 'ws-flash', 'ws-1', 'ws-2', 'ws-3']);
+    expect(wsIds()).toEqual(['ws-pin', 'ws-home', 'ws-1', 'ws-2', 'ws-3']);
     expect(mockReorderWorkspaces).not.toHaveBeenCalled();
   });
 
-  it('refuses flash drags across the pin boundary, in both directions', async () => {
+  it('refuses Home drags across the pin boundary, in both directions', async () => {
     const { wsIds, result } = setup();
     await waitFor(() => expect(wsIds().length).toBe(5));
 
     await act(async () => {
-      await result.current.reorderWorkspace('ws-flash', 'ws-2');
-      await result.current.reorderWorkspace('ws-2', 'ws-flash');
+      await result.current.reorderWorkspace('ws-home', 'ws-2');
+      await result.current.reorderWorkspace('ws-2', 'ws-home');
     });
 
-    expect(wsIds()).toEqual(['ws-pin', 'ws-flash', 'ws-1', 'ws-2', 'ws-3']);
+    expect(wsIds()).toEqual(['ws-pin', 'ws-home', 'ws-1', 'ws-2', 'ws-3']);
     expect(mockReorderWorkspaces).not.toHaveBeenCalled();
   });
 
-  it('lets flash reorder within the pinned block and persists it', async () => {
+  it('lets Home reorder within the pinned block and persists it', async () => {
     const { wsIds, result } = setup();
     await waitFor(() => expect(wsIds().length).toBe(5));
 
     await act(async () => {
-      await result.current.reorderWorkspace('ws-flash', 'ws-pin');
+      await result.current.reorderWorkspace('ws-home', 'ws-pin');
     });
 
-    expect(wsIds()).toEqual(['ws-flash', 'ws-pin', 'ws-1', 'ws-2', 'ws-3']);
+    expect(wsIds()).toEqual(['ws-home', 'ws-pin', 'ws-1', 'ws-2', 'ws-3']);
     expect(mockReorderWorkspaces).toHaveBeenCalledWith([
-      { workspace_id: 'ws-flash', sort_order: 0 },
+      { workspace_id: 'ws-home', sort_order: 0 },
       { workspace_id: 'ws-pin', sort_order: 1 },
       { workspace_id: 'ws-1', sort_order: 2 },
       { workspace_id: 'ws-2', sort_order: 3 },
@@ -603,17 +603,17 @@ describe('useNavigationData — drag-reorder workspaces', () => {
     ]);
   });
 
-  it('lets a pinned workspace take the flash slot and persists it', async () => {
+  it("lets a pinned workspace take Home's slot and persists it", async () => {
     const { wsIds, result } = setup();
     await waitFor(() => expect(wsIds().length).toBe(5));
 
     await act(async () => {
-      await result.current.reorderWorkspace('ws-pin', 'ws-flash');
+      await result.current.reorderWorkspace('ws-pin', 'ws-home');
     });
 
-    expect(wsIds()).toEqual(['ws-flash', 'ws-pin', 'ws-1', 'ws-2', 'ws-3']);
+    expect(wsIds()).toEqual(['ws-home', 'ws-pin', 'ws-1', 'ws-2', 'ws-3']);
     expect(mockReorderWorkspaces).toHaveBeenCalledWith([
-      { workspace_id: 'ws-flash', sort_order: 0 },
+      { workspace_id: 'ws-home', sort_order: 0 },
       { workspace_id: 'ws-pin', sort_order: 1 },
       { workspace_id: 'ws-1', sort_order: 2 },
       { workspace_id: 'ws-2', sort_order: 3 },
@@ -630,13 +630,13 @@ describe('useNavigationData — drag-reorder workspaces', () => {
       await result.current.reorderWorkspace('ws-3', 'ws-1');
     });
 
-    expect(wsIds()).toEqual(['ws-pin', 'ws-flash', 'ws-1', 'ws-2', 'ws-3']);
+    expect(wsIds()).toEqual(['ws-pin', 'ws-home', 'ws-1', 'ws-2', 'ws-3']);
   });
 });
 
 describe('useNavigationData — pinned-block partition & pin freeze reset', () => {
   // The server's custom sort: is_pinned DESC, sort_order ASC, updated_at DESC.
-  // It has NO flash ranking — flash competes on those fields like any row.
+  // It has NO Home ranking: Home competes on those fields like any row.
   const serverSort = (rows: Record<string, unknown>[]) =>
     [...rows].sort((a, b) => {
       if (Boolean(a.is_pinned) !== Boolean(b.is_pinned)) return a.is_pinned ? -1 : 1;
@@ -653,7 +653,7 @@ describe('useNavigationData — pinned-block partition & pin freeze reset', () =
     resetNavPrefs();
     mockGetWorkspaceThreads.mockResolvedValue({ threads: [] });
     server = [
-      { workspace_id: 'ws-flash', status: 'flash', is_pinned: true, sort_order: 0, updated_at: '2026-01-01' },
+      { workspace_id: 'ws-home', is_home: true, status: 'stopped', is_pinned: true, sort_order: 0, updated_at: '2026-01-01' },
       { workspace_id: 'ws-a', is_pinned: false, sort_order: 0, updated_at: '2026-01-03' },
       { workspace_id: 'ws-b', is_pinned: false, sort_order: 1, updated_at: '2026-01-02' },
     ];
@@ -677,34 +677,34 @@ describe('useNavigationData — pinned-block partition & pin freeze reset', () =
     return { ...rendered, queryClient, wsIds };
   }
 
-  it('never renders an unpinned workspace above flash, even when the server ranks it higher', async () => {
-    // A flash row without is_pinned falls into the server's unpinned block,
-    // where newer recency puts ws-a above it — the partition must still treat
-    // flash as pinned and keep every unpinned row below it.
+  it('never renders an unpinned workspace above Home, even when the server ranks it higher', async () => {
+    // Home without is_pinned falls into the server's unpinned block, where
+    // newer recency puts ws-a above it, so the partition must still treat
+    // Home as pinned and keep every unpinned row below it.
     server[0] = { ...server[0], is_pinned: false };
     const { wsIds } = setup();
     await waitFor(() => expect(wsIds().length).toBe(3));
-    expect(wsIds()).toEqual(['ws-flash', 'ws-a', 'ws-b']);
+    expect(wsIds()).toEqual(['ws-home', 'ws-a', 'ws-b']);
   });
 
-  it('lets a pinned workspace outrank flash inside the pinned block', async () => {
-    // Flash is always-pinned, not always-first: a pinned row that beats it on
+  it('lets a pinned workspace outrank Home inside the pinned block', async () => {
+    // Home is always-pinned, not always-first: a pinned row that beats it on
     // the server sort (sort_order tie, newer updated_at) legitimately renders
     // above it, while the unpinned rows stay below both.
     server.push({ workspace_id: 'ws-pin', is_pinned: true, sort_order: 0, updated_at: '2026-01-05' });
     const { wsIds } = setup();
     await waitFor(() => expect(wsIds().length).toBe(4));
-    expect(wsIds()).toEqual(['ws-pin', 'ws-flash', 'ws-a', 'ws-b']);
+    expect(wsIds()).toEqual(['ws-pin', 'ws-home', 'ws-a', 'ws-b']);
   });
 
   it('opens the unpinned block with a workspace created this session, as a reload shows it', async () => {
     const { wsIds, queryClient } = setup();
-    await waitFor(() => expect(wsIds()).toEqual(['ws-flash', 'ws-a', 'ws-b']));
+    await waitFor(() => expect(wsIds()).toEqual(['ws-home', 'ws-a', 'ws-b']));
     server.push({ workspace_id: 'ws-new', is_pinned: false, sort_order: 0, updated_at: '2026-01-09' });
     await act(async () => {
       await queryClient.invalidateQueries();
     });
-    await waitFor(() => expect(wsIds()).toEqual(['ws-flash', 'ws-new', 'ws-a', 'ws-b']));
+    await waitFor(() => expect(wsIds()).toEqual(['ws-home', 'ws-new', 'ws-a', 'ws-b']));
   });
 
   it('returns an unpinned workspace to its custom slot instead of freezing the pinned-era order', async () => {
@@ -736,19 +736,19 @@ describe('useNavigationData — pinned-block partition & pin freeze reset', () =
     };
 
     const { wsIds, result } = setup();
-    await waitFor(() => expect(wsIds()).toEqual(['ws-flash', 'ws-a', 'ws-b']));
+    await waitFor(() => expect(wsIds()).toEqual(['ws-home', 'ws-a', 'ws-b']));
 
     // Pin ws-b: the server re-sorts it into the pinned block; the frozen
     // order must follow the refetch, not keep the optimistic-era snapshot.
     await togglePin(true);
-    await waitFor(() => expect(wsIds()).toEqual(['ws-flash', 'ws-b', 'ws-a']));
+    await waitFor(() => expect(wsIds()).toEqual(['ws-home', 'ws-b', 'ws-a']));
 
     // Unpin: ws-b must fall back to its sort_order slot BELOW ws-a. The
     // regression froze the pinned-era order (ws-b first) because the
     // optimistic patch pre-consumed the arrangement change, so the server's
     // re-sorted refetch never re-snapshotted.
     await togglePin(false);
-    await waitFor(() => expect(wsIds()).toEqual(['ws-flash', 'ws-a', 'ws-b']));
+    await waitFor(() => expect(wsIds()).toEqual(['ws-home', 'ws-a', 'ws-b']));
   });
 });
 

@@ -153,7 +153,7 @@ import { userLocalStorage } from '@/lib/userStorage';
 type PanelProps = React.ComponentProps<typeof MarketChatPanel>;
 
 /** All workspaces, which runs in Home's row. */
-const ALL: Partial<PanelProps> = { scope: 'all', activeWorkspaceId: 'flash-ws' };
+const ALL: Partial<PanelProps> = { scope: 'all', activeWorkspaceId: 'home-ws' };
 
 const baseProps: PanelProps = {
   symbol: 'AAPL',
@@ -581,7 +581,7 @@ describe('MarketChatPanel', () => {
     (a.onRetry as () => void)();
     expect(h.handleRetry).toHaveBeenCalled();
     // In a workspace → no hand-off context.
-    expect(ml.props!.flashContext).toBeNull();
+    expect(ml.props!.dispatcherContext).toBeNull();
   });
 
   it('wires the stop button to the hook hard-cancel (stopWorkflow)', async () => {
@@ -760,24 +760,24 @@ describe('MarketChatPanel', () => {
   });
 
   describe('All workspaces', () => {
-    it('runs on the flash row', async () => {
+    it("runs on Home's row", async () => {
       renderPanel(ALL);
       await screen.findByTestId('chat-input');
-      expect(vi.mocked(useChatMessages).mock.lastCall![0]).toBe('flash-ws');
+      expect(vi.mocked(useChatMessages).mock.lastCall![0]).toBe('home-ws');
     });
 
     it("reads Home's folder from the workspace detail, which a turn re-reads once Home is bound", async () => {
-      // The flash row (mocked above) was read before Home had a folder.
-      api.getWorkspace.mockResolvedValueOnce({ workspace_id: 'flash-ws', dir_name: 'Home', previous_dir_names: [] });
+      // Home's cached row can predate its folder, so the folder comes from the detail.
+      api.getWorkspace.mockResolvedValueOnce({ workspace_id: 'home-ws', is_home: true, dir_name: 'Home', previous_dir_names: [] });
       renderPanel(ALL);
       await vi.waitFor(() => expect(ml.folders?.dirName).toBe('Home'));
-      expect(api.getWorkspace).toHaveBeenCalledWith('flash-ws');
+      expect(api.getWorkspace).toHaveBeenCalledWith('home-ws');
     });
 
     it('carries the thread into the work it hands off', async () => {
       renderPanel(ALL);
       await screen.findByTestId('chat-input');
-      expect(ml.props!.flashContext).toEqual({ threadId: 'thread-xyz', workspaceId: 'flash-ws' });
+      expect(ml.props!.dispatcherContext).toEqual({ threadId: 'thread-xyz', workspaceId: 'home-ws' });
     });
 
     it('explains an empty workspace list without naming PTC', async () => {

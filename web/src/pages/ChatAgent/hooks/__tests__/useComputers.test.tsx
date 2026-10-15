@@ -39,7 +39,7 @@ const WORKSPACES: Workspace[] = [
   { workspace_id: 'ws-gamma', name: 'Gamma Live Join', status: 'running', computer_id: COMPUTER_ID, dir_name: 'gamma-live-join-514c' },
   { workspace_id: 'ws-alpha', name: 'Alpha Research', status: 'running', computer_id: COMPUTER_ID, dir_name: 'alpha-research-b8ad' },
   { workspace_id: 'ws-beta', name: 'Beta Models', status: 'running', computer_id: COMPUTER_ID, dir_name: 'beta-models-2ddd' },
-  { workspace_id: 'ws-flash', name: 'Flash', status: 'flash' },
+  { workspace_id: 'ws-home', name: 'Home', is_home: true, status: 'unbound' },
 ];
 
 function computer(status: string) {
@@ -104,7 +104,7 @@ describe('useComputerStatusFanout', () => {
     const list = queryClient.getQueryData<{ workspaces: Workspace[] }>(LIST_KEY);
     expect(list?.workspaces.map((w) => w.status)).toEqual([
       'stopped', 'stopped', 'stopped',
-      'flash', // no computer_id, so the machine does not speak for it
+      'unbound', // Home names no computer_id, so the machine does not speak for it
     ]);
     // And the machine's own cache entry moved with it.
     const computers = queryClient.getQueryData<{ computers: Array<{ status: string }> }>(
@@ -131,7 +131,7 @@ describe('useComputerStatusFanout', () => {
     mockGetComputers.mockResolvedValue({ computers: [], total: 0 });
     mount([
       { workspace_id: 'ws-legacy', name: 'Legacy', status: 'starting' },
-      { workspace_id: 'ws-flash', name: 'Flash', status: 'flash' },
+      { workspace_id: 'ws-home', name: 'Home', is_home: true, status: 'unbound' },
     ]);
 
     await waitFor(() => expect(mockStreamWorkspace).toHaveBeenCalledTimes(1));

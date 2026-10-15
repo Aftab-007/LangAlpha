@@ -406,7 +406,7 @@ describe('OnboardingProvider', () => {
     expect(listWatchlists).not.toHaveBeenCalled();
   });
 
-  it('getting-started: createWorkspace stamps when a non-flash workspace exists', () => {
+  it('getting-started: createWorkspace stamps when a workspace other than Home exists', () => {
     mockWorkspaces = [{ workspace_id: 'ws1' }];
     renderAt('/settings');
     expect(markTaskDone).toHaveBeenCalledWith('createWorkspace');

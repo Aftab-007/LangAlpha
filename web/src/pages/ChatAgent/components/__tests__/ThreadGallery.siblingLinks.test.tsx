@@ -10,7 +10,7 @@ import { fireEvent, screen } from '@testing-library/react';
 
 import { renderWithProviders } from '@/test/utils';
 
-// Home is the flash row, bound to the same computer as the NVDA workspace.
+// Home, bound to the same computer as the NVDA workspace.
 const { HOME, NVDA, ROWS, FILES, CONTENT } = vi.hoisted(() => {
   const HOME = '11111111-1111-4111-8111-111111111111';
   const NVDA = '22222222-2222-4222-8222-222222222222';
@@ -18,7 +18,7 @@ const { HOME, NVDA, ROWS, FILES, CONTENT } = vi.hoisted(() => {
     HOME,
     NVDA,
     ROWS: {
-      [HOME]: { workspace_id: HOME, name: 'Flash', status: 'flash', computer_id: 'c-1', dir_name: 'Home' },
+      [HOME]: { workspace_id: HOME, name: 'Home', status: 'running', is_home: true, computer_id: 'c-1', dir_name: 'Home' },
       [NVDA]: { workspace_id: NVDA, name: 'NVDA', status: 'running', computer_id: 'c-1', dir_name: 'NVDA' },
     } as Record<string, Record<string, unknown>>,
     FILES: { [HOME]: ['notes/brief.md'], [NVDA]: ['dcf/report.md'] } as Record<string, string[]>,

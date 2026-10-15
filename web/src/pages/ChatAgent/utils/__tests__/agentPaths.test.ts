@@ -725,7 +725,7 @@ describe('computerFolders', () => {
   const rows = [
     { workspace_id: 'ws-aapl', computer_id: 'c1', dir_name: 'AAPL', previous_dir_names: ['apple-old'] },
     { workspace_id: 'ws-nvda', computer_id: 'c1', dir_name: 'NVDA', previous_dir_names: ['nvidia-ab12'] },
-    { workspace_id: 'ws-home', computer_id: 'c1', dir_name: 'Home', status: 'flash' },
+    { workspace_id: 'ws-home', computer_id: 'c1', dir_name: 'Home', is_home: true, status: 'running' },
     { workspace_id: 'ws-gone', computer_id: 'c1', dir_name: 'Gone', status: 'deleted' },
     { workspace_id: 'ws-new', computer_id: 'c1', dir_name: null },
     { workspace_id: 'ws-msft', computer_id: 'c2', dir_name: 'MSFT' },

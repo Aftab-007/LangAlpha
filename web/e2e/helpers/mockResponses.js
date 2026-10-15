@@ -40,12 +40,13 @@ export const defaultResponses = {
     },
   },
   'GET /workspaces': (route) => {
-    const includeFlash = new URL(route.request().url()).searchParams.get('include_flash') === 'true';
-    const workspaces = includeFlash
+    const includeHome = new URL(route.request().url()).searchParams.get('include_home') === 'true';
+    const workspaces = includeHome
       ? [{
-          workspace_id: 'ws-flash',
-          name: 'Flash',
-          status: 'flash',
+          workspace_id: 'ws-home',
+          name: 'Home',
+          status: 'unbound',
+          is_home: true,
           config: {},
           created_at: '2025-01-01T00:00:00Z',
           updated_at: '2025-01-01T00:00:00Z',
@@ -61,7 +62,7 @@ export const defaultResponses = {
   // 404, and ThreadGallery's not-found effect navigates back to /chat -- so a
   // test that names /chat/<id> silently measures the workspace gallery above it
   // and passes. The id is fixed rather than echoed from the URL because nothing
-  // downstream compares the two; `status` is what decides the flash path.
+  // downstream compares the two; `is_home` is what decides the Home path.
   'GET /workspaces/*': {
     workspace_id: 'a0000001-0000-4000-8000-000000000001',
     name: 'Research',
@@ -72,10 +73,11 @@ export const defaultResponses = {
     updated_at: '2025-01-01T00:00:00Z',
   },
   'GET /threads': { threads: [], total: 0, limit: 20, offset: 0 },
-  'POST /workspaces/flash': {
-    workspace_id: 'ws-flash',
-    name: 'Flash',
-    status: 'flash',
+  'POST /workspaces/home': {
+    workspace_id: 'ws-home',
+    name: 'Home',
+    status: 'unbound',
+    is_home: true,
     config: {},
   },
   'GET /models': {

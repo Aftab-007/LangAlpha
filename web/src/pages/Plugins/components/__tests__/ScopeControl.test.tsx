@@ -67,7 +67,7 @@ const workspaces = [
   { id: 'ws-a', name: 'Alpha' },
   { id: 'ws-b', name: 'Beta' },
 ];
-const flashWorkspace = { id: 'flash', name: 'Home' };
+const homeWorkspace = { id: 'home', name: 'Home' };
 
 type Props = React.ComponentProps<typeof ScopeControl>;
 
@@ -160,7 +160,7 @@ describe('ScopeControl: the badge on a row new workspaces start without', () => 
     renderControl({
       newWorkspacesOn: false,
       disabledWorkspaceIds: ['ws-a', 'ws-b'],
-      flashWorkspace,
+      homeWorkspace,
     });
     expect(trigger('Only in Home')).toBeInTheDocument();
   });
