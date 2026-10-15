@@ -66,7 +66,8 @@ import './subagents.css';
 /**
  * Subagents → Yours, in the Skills list's grammar: what the user wrote (and
  * any override whose base is gone, which only removing clears), one group per
- * plugin that ships subagents, then the built-ins, folded.
+ * plugin that ships subagents, then the built-ins. Those stay unfolded: there
+ * are only a handful, and each is a role the user may want to change.
  *
  * On/off lives in the cell's menu, the bulk bar and the page header, never on
  * the cell. A base is never removed, only reset: its menu offers that once the
@@ -186,7 +187,6 @@ export function SubagentsList() {
   });
 
   const providerName = (name: string) => models.searchProviders?.[name]?.display_name ?? name;
-  const fold = (group: SubagentView[]) => list.fold(1, group.map((s) => s.name));
 
   function confirmPending() {
     if (!pending) return;
@@ -279,7 +279,7 @@ export function SubagentsList() {
         {pluginGroups.map(pluginSection)}
         {builtIn.length > 0 && (
           <SurfaceSection title={t('plugins.subagents.builtIn')} count={builtIn.length}>
-            <SurfaceGrid {...fold(builtIn)}>{builtIn.map(renderCell)}</SurfaceGrid>
+            <SurfaceGrid>{builtIn.map(renderCell)}</SurfaceGrid>
           </SurfaceSection>
         )}
       </PluginListFrame>
