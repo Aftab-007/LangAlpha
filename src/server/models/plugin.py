@@ -139,6 +139,9 @@ class PluginComponentRef(BaseModel):
     kind: Literal["mcp", "skill", "subagent"]
     name: str
     key: str
+    # Subagents only: the user changed it. Uninstall takes those changes, and
+    # a switched-off plugin's subagents are not in the Subagents list to say so.
+    edited: bool = False
 
 
 class PluginInfo(BaseModel):
@@ -197,7 +200,7 @@ class UninstalledComponents(BaseModel):
 
     servers: list[str]
     skills: list[str]
-    subagents: list[str] = Field(default_factory=list)
+    subagents: list[str]
 
 
 class UninstallResponse(BaseModel):

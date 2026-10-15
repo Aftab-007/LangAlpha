@@ -39,10 +39,8 @@ from src.server.database.plugins import (
     stamp_plugin_content_hash,
 )
 from src.server.database.plugin_subagents import (
-    clear_plugin_overrides,
     delete_plugin_subagents,
-    list_user_plugin_subagents,
-    overrides_locked,
+    list_user_plugin_subagent_names,
 )
 from src.server.database.pool import get_db_connection
 from src.server.database.user_skills import delete_user_skill, list_user_skills
@@ -88,7 +86,7 @@ from src.server.services.plugins.skill_fanout import (
     fan_out_skills,
     installs_under_dir,
 )
-from src.server.services.plugins.subagent_fanout import fan_out_subagents
+from src.server.services.plugins.subagent_fanout import install_subagents
 from src.server.services.plugins.supplied_secrets import (
     bind_placeholders,
     drop_secrets,
@@ -125,7 +123,7 @@ async def _refuse_owned_names(
 
     agents = {p.name for p in package.agent_plans if p.skip_code is None}
     if agents:
-        for row in await list_user_plugin_subagents(user_id):
+        for row in await list_user_plugin_subagent_names(user_id):
             if row["name"] in agents:
                 raise ValueError(
                     f"Subagent {row['name']!r} is owned by plugin "
@@ -428,16 +426,9 @@ async def install_plugin_package(
             user_id, plugin_id, plan.plans, report, checked=checked
         )
         await fan_out_skills(user_id, plugin_id, package.skill_plans, report)
-        async with overrides_locked(user_id) as conn:
-            # The plugin row is new, so overrides under its name are from an
-            # earlier install whose uninstall left them (an older build's
-            # dropped only the rows); kept, they would apply to this package.
-            # None is the user's since: no base existed to override, pending
-            # sign-in included, until this fan-out commits.
-            await clear_plugin_overrides(user_id, package.name, conn=conn)
-            await fan_out_subagents(
-                user_id, plugin_id, package.agent_plans, report, conn=conn
-            )
+        await install_subagents(
+            user_id, plugin_id, package.name, package.agent_plans, report
+        )
 
         # Under the lock for the reason update writes its row there: an update
         # landing in between would otherwise have its tree stamped as this one.
@@ -500,7 +491,7 @@ async def uninstall_plugin(
             async with get_db_connection() as conn:
                 async with conn.transaction():
                     if await lock_plugin_row(user_id, plugin_id, conn=conn) is None:
-                        return UninstalledComponents(servers=[], skills=[])
+                        return UninstalledComponents(servers=[], skills=[], subagents=[])
                     servers = await list_plugin_server_names(
                         user_id, plugin_id, conn=conn
                     )

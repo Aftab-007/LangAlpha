@@ -1,5 +1,5 @@
-"""071's DDL, pinned as SQL: a plugin's subagents go with its row, a name is
-one user's once, and brokerages is off or on."""
+"""071's DDL, pinned as SQL: a plugin's subagents go with its row, and a name
+is one user's once."""
 
 from __future__ import annotations
 
@@ -47,9 +47,7 @@ def test_the_rows_cascade_with_their_plugin(migration):
     )
 
 
-def test_a_name_is_one_users_once_and_brokerages_is_off_or_on(migration):
+def test_a_name_is_one_users_once(migration):
     module, op = migration
     module.upgrade()
-    sql = _flat(op)
-    assert "CONSTRAINT uq_plugin_subagents_user_name UNIQUE (user_id, name)" in sql
-    assert "CHECK (brokerages IN ('off', 'on'))" in sql
+    assert "CONSTRAINT uq_plugin_subagents_user_name UNIQUE (user_id, name)" in _flat(op)

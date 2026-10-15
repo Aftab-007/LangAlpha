@@ -14,6 +14,7 @@ does not carry.
 
 from __future__ import annotations
 
+import functools
 import logging
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -136,21 +137,23 @@ def _agent_plans(bundle: Bundle) -> list[AgentPlan]:
     return plans
 
 
-def bundled_agent_plans() -> list[tuple[str, AgentPlan]]:
+@functools.lru_cache(maxsize=1)
+def bundled_agent_plans() -> tuple[tuple[str, AgentPlan], ...]:
     """Every bundle's subagents that read, as (bundle name, plan), in bundle order.
 
-    Read from disk on each call, as ``bundles()`` is, so the roster and the
-    Plugins page agree with the files without a cache to keep in step.
+    Read once per process, unlike ``bundles()``: every turn asks, and
+    ``plugins/`` is an image layer nothing writes while the server runs, which
+    is why the server set the bundles ship is composed once at startup too.
     """
     if not any(BUNDLES_DIR.glob(f"*/{AGENTS_DIR}")):
-        return []  # every turn asks; no manifest needs reading without the folder
+        return ()  # no manifest needs reading without the folder
     out: list[tuple[str, AgentPlan]] = []
     for bundle in bundles():
         name = _name(bundle)
         if name is None:
             continue
         out += [(name, plan) for plan in _agent_plans(bundle) if plan.skip_code is None]
-    return out
+    return tuple(out)
 
 
 class BundleOwnershipUnavailable(RuntimeError):

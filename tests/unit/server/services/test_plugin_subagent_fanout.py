@@ -62,7 +62,7 @@ def _plans(*names: str, broken: tuple[str, ...] = ()):
 @contextmanager
 def _account(*, reserved=frozenset(), mine=(), held=0, insert=None):
     """Patch what the fan-out reads; ``mine`` are the user's subagent rows."""
-    insert = insert or AsyncMock(side_effect=lambda u, p, name, v, t, **_kw: {"name": name})
+    insert = insert or AsyncMock(side_effect=lambda u, p, row, t, **_kw: {"name": row["name"]})
     with (
         patch(M + "reserved_subagent_names", return_value=frozenset(reserved)),
         patch(M + "list_user_subagents", new=AsyncMock(return_value=list(mine))),
@@ -81,7 +81,7 @@ class TestFanOut:
     async def test_each_plan_lands_or_is_reported_in_plan_order(self):
         plans = _plans("good", "research", "mine", "raced", broken=("broken",))
         insert = AsyncMock(
-            side_effect=lambda u, p, name, v, t, **_kw: None if name == "raced" else {"name": name}
+            side_effect=lambda u, p, row, t, **_kw: None if row["name"] == "raced" else row
         )
         report = InstallReport()
         with _account(
@@ -107,8 +107,8 @@ class TestFanOut:
         }
         good = plans[0]
         assert [c.args for c in insert.await_args_list] == [
-            (USER, PLUGIN_ID, "good", good.values, good.text),
-            (USER, PLUGIN_ID, "raced", plans[3].values, plans[3].text),
+            (USER, PLUGIN_ID, good.row, good.text),
+            (USER, PLUGIN_ID, plans[3].row, plans[3].text),
         ]
         # Every write in the caller's locked transaction, never a connection
         # of its own a pane save could interleave with.
@@ -176,7 +176,7 @@ async def test_a_name_another_plugin_holds_refuses_the_whole_install(plans, refu
         ),
         patch(L + "list_catalog_servers", new=AsyncMock(return_value=[])),
         patch(L + "list_user_skills", new=AsyncMock(return_value=[])),
-        patch(L + "list_user_plugin_subagents", new=AsyncMock(return_value=held)),
+        patch(L + "list_user_plugin_subagent_names", new=AsyncMock(return_value=held)),
         patch(L + "get_user_secret_names", new=AsyncMock(return_value=[])),
         patch(L + "create_plugin", new=create),
     ):
@@ -207,7 +207,7 @@ def test_reserved_names_are_every_deployment_subagent_and_every_bundles():
 def _row(plugin: str, name: str, *, on: bool = True) -> dict:
     """A plugin_subagents row as the roster reads it, joined to its plugin."""
     plan = read_agent(name, _md(f"The {name} subagent of {plugin}."))
-    return {**plan.values, "name": name, "plugin_name": plugin, "plugin_enabled": on}
+    return {**plan.row, "plugin_name": plugin, "plugin_enabled": on}
 
 
 @contextmanager
@@ -322,7 +322,7 @@ async def test_an_override_reaches_the_subagent_its_key_names():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("off", "on"), [((), True), (("house-bundle",), False)])
 async def test_a_bundles_subagents_reach_every_user_unless_their_account_switched_it_off(
-    monkeypatch, tmp_path: Path, off, on
+    monkeypatch, request, tmp_path: Path, off, on
 ):
     root = tmp_path / "plugins"
     agents = root / "house" / "agents"
@@ -337,6 +337,9 @@ async def test_a_bundles_subagents_reach_every_user_unless_their_account_switche
     (agents / "notes.txt").write_text("not a subagent")
     monkeypatch.setattr(bundle_reader, "BUNDLES_DIR", root)
     monkeypatch.setattr(bundled, "BUNDLES_DIR", root)
+    # Read once per process, so this tree is read fresh and forgotten after.
+    bundled.bundled_agent_plans.cache_clear()
+    request.addfinalizer(bundled.bundled_agent_plans.cache_clear)
 
     # Named by the manifest, which is the name the API answers to; the
     # directory is only where the files sit.

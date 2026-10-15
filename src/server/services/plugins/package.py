@@ -21,7 +21,6 @@ from src.server.services.plugins.agents import (
     AgentPlan,
     collect_agents,
     is_agent_file,
-    link_connectors,
 )
 from src.server.services.plugins.archive import extract_plugin_archive
 from src.server.services.plugins.bare_skills import wrap_skill_tree
@@ -529,11 +528,6 @@ def validate_package(
     diagnostics.extend(skill_diags)
     agent_plans, agent_diags = collect_agents(files)
     diagnostics.extend(agent_diags)
-    link_connectors(
-        agent_plans,
-        {p.key: p.name for p in entry_plans if p.name},
-        str(plugin.manifest.get("name") or ""),
-    )
 
     dropped = sorted(
         {

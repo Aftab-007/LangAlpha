@@ -10,9 +10,15 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ptc_agent.agent.subagents.merge import DEFAULT_CUSTOM_TOOLS
+from ptc_agent.agent.roles import ALL_ROLES
+from ptc_agent.agent.subagents.merge import plugin_definition
 from src.server.services.plugins import ValidatedPackage, validate_package
-from src.server.services.plugins.agents import collect_agents, read_agent
+from src.server.services.plugins.agents import (
+    AGENT_FILE_MAX_BYTES,
+    collect_agents,
+    link_connectors,
+    read_agent,
+)
 from src.server.services.plugins.export import export_plugin_zip
 from src.server.services.subagents.rules import (
     DESCRIPTION_MAX,
@@ -68,17 +74,19 @@ class TestClaudeCodeImport:
         [plan] = package.agent_plans
         # The file name is the subagent's name, whatever the frontmatter says.
         assert (plan.name, plan.skip_code) == ("reviewer", None)
-        values = plan.values
         # File tools need no word; Bash is code and shell; an MCP tool is code
-        # plus its server as a preferred connector.
-        assert values["tools"] == ["web", "code", "shell"]
-        assert values["preferred_connectors"] == ["tracker"]
-        # A family alias names no model, so the thread's model runs it.
-        assert values["model"] is None
-        assert values["preferred_skills"] == ["lint-rules"]
-        assert values["instructions"] == "You review code."
-        assert (values["brokerages"], values["connectors"]) == ("on", True)
-        assert values["roles"] == ["analyst", "chief_of_staff"]
+        # plus its server as a preferred connector. A family alias names no
+        # model, so none is stored and the thread's model runs it.
+        assert plan.fields == {
+            "description": "Reviews a change. Use after edits.",
+            "tools": ["web", "code", "shell"],
+            "preferred_connectors": ["tracker"],
+            "preferred_skills": ["lint-rules"],
+        }
+        assert plan.instructions == "You review code."
+        definition = plugin_definition(plan.row)
+        assert (definition.model, definition.brokerages, definition.connectors) == (None, "on", True)
+        assert definition.roles == ALL_ROLES
         assert _codes(plan) == {"name_ignored", "model_alias", "keys_ignored"}
 
     def test_a_tool_of_the_plugins_own_server_prefers_that_server(self):
@@ -93,13 +101,19 @@ class TestClaudeCodeImport:
             ),
         }))
         [plan] = package.agent_plans
-        assert plan.values["tools"] == ["code"]
-        assert plan.values["preferred_connectors"] == ["tracker"]
+        assert plan.fields["tools"] == ["code"]
+        # Linked only to a row the plugin holds, which install knows and
+        # validation does not; until then it names the plugin's server.
+        assert plan.fields["preferred_connectors"] == ["plugin_reviewers_tracker"]
+        [linked] = link_connectors([plan], {"tracker": "tracker"}, "reviewers")
+        assert linked.fields["preferred_connectors"] == ["tracker"]
+        assert plan.fields["preferred_connectors"] == ["plugin_reviewers_tracker"]
 
     @pytest.mark.parametrize(
         ("tools", "words", "codes"),
         [
-            pytest.param(None, list(DEFAULT_CUSTOM_TOOLS), set(), id="omitted-is-analyst"),
+            # None stores no tools, which a custom subagent reads as the Analyst's.
+            pytest.param(None, None, set(), id="omitted-is-analyst"),
             pytest.param(
                 "Read, Edit, MultiEdit, Grep, LS, NotebookEdit", [], set(), id="file-tools-only",
             ),
@@ -114,7 +128,7 @@ class TestClaudeCodeImport:
             pytest.param(
                 "WebSearch, TodoWrite", ["web"], {"tools_ignored"}, id="unmatched-dropped",
             ),
-            pytest.param(5, list(DEFAULT_CUSTOM_TOOLS), {"tools_ignored"}, id="not-a-list"),
+            pytest.param(5, None, {"tools_ignored"}, id="not-a-list"),
         ],
     )
     def test_tools_map_onto_tool_words(self, tools, words, codes):
@@ -123,7 +137,7 @@ class TestClaudeCodeImport:
             front += f"\ntools: {json.dumps(tools)}"
         plan = read_agent("worker", _agent(front))
         assert plan.skip_code is None
-        assert plan.values["tools"] == words
+        assert plan.fields.get("tools") == words
         assert _codes(plan) == codes
 
     @pytest.mark.parametrize(
@@ -137,7 +151,7 @@ class TestClaudeCodeImport:
     )
     def test_model(self, model, expected, codes):
         plan = read_agent("worker", _agent(f"description: Does a thing.\nmodel: {model}"))
-        assert plan.values["model"] == expected
+        assert plan.fields.get("model") == expected
         assert _codes(plan) == codes
 
 
@@ -148,7 +162,7 @@ class TestHeldBack:
         plan = read_agent("quiet", _agent("description: Does a thing.\nenabled: false"))
         assert plan.skip_code is None
         # No switch rides the row: on or off is the user's override alone.
-        assert "enabled" not in plan.values
+        assert "enabled" not in plan.fields
         assert _codes(plan) == {"enabled_ignored"}
 
     @pytest.mark.parametrize("written", ["user", "off"])
@@ -159,9 +173,9 @@ class TestHeldBack:
 
         plan = read_agent("desk", _agent(f"description: Does a thing.\nmemory: {written}"))
 
-        assert "memory" not in plan.values
+        assert "memory" not in plan.fields
         assert _codes(plan) == {"keys_ignored"}
-        assert _base("demo", plan.name, plan.values).definition.memory is True
+        assert _base("demo", plan.row).definition.memory is True
 
 
 class TestOneFileOnly:
@@ -248,6 +262,21 @@ class TestOneFileOnly:
                 "agents/lone-key.md", b'---\ndescription: Fine.\n"A\\ud800B": 1\n---\nBody.\n',
                 "unreadable", id="surrogate-escape-in-key",
             ),
+            pytest.param(
+                "agents/dated.md", b"---\ndescription: 2026-13-45\n---\nBody.\n", "parse_error",
+                id="a-date-yaml-cant-build",
+            ),
+            pytest.param(
+                "agents/deep.md", b"---\nextra: " + b"[" * 3000 + b"]" * 3000 + b"\n---\nBody.\n",
+                "parse_error", id="nested-past-recursion",
+            ),
+            # The instructions have a cap of their own; this one bounds the
+            # frontmatter, which would otherwise be read and stored whole.
+            pytest.param(
+                "agents/huge.md",
+                b"---\ndescription: Fine.\nextra: " + b"x" * AGENT_FILE_MAX_BYTES + b"\n---\nBody.\n",
+                "file_too_large", id="over-the-file-cap",
+            ),
         ],
     )
     def test_a_bad_file_skips_only_itself(self, path, raw, code):
@@ -285,8 +314,8 @@ def test_a_preferred_connector_follows_its_server_to_the_installed_name():
             "preferred_connectors: [elsewhere]"
         ),
     })
-    [plan] = package.agent_plans
-    assert plan.values["preferred_connectors"] == ["elsewhere", "class_server"]
+    [plan] = link_connectors(package.agent_plans, {"class": "class_server"}, "demo")
+    assert plan.fields["preferred_connectors"] == ["elsewhere", "class_server"]
 
 
 class TestPackage:
@@ -415,8 +444,8 @@ async def test_export_ships_each_file_as_installed_and_reads_back_the_same():
     with zipfile.ZipFile(io.BytesIO(exported)) as zf:
         assert {n: zf.read(n) for n in zf.namelist() if n.startswith("agents/")} == shipped
     again = validate_package(exported)
-    assert {p.name: (p.text, p.values) for p in again.agent_plans} == {
-        p.name: (p.text, p.values) for p in package.agent_plans
+    assert {p.name: (p.text, p.row) for p in again.agent_plans} == {
+        p.name: (p.text, p.row) for p in package.agent_plans
     }
 
 
@@ -427,3 +456,13 @@ def test_a_lone_surrogate_skips_the_agent_with_its_own_reason():
     assert plan.skip_reason == (
         "the file holds an unpaired surrogate (\\ud800 to \\udfff), which can't be saved"
     )
+
+
+def test_nested_aliases_read_in_one_pass():
+    # Nine levels of nine aliases: 9**9 strings walked as a tree.
+    levels = ['l0: &l0 ["x","x","x","x","x","x","x","x","x"]'] + [
+        f"l{i}: &l{i} [" + ",".join([f"*l{i - 1}"] * 9) + "]" for i in range(1, 9)
+    ]
+    plan = read_agent("bomb", _agent("description: Does a thing.\n" + "\n".join(levels)))
+
+    assert plan.skip_code is None

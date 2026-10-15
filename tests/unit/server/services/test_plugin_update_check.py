@@ -170,6 +170,7 @@ async def test_an_upgrade_reports_the_entries_that_failed_and_lands_the_rest():
         },
     }
     fan_out = AsyncMock()
+    relink = AsyncMock()
     with (
         patch.object(post_install, "list_catalog_servers", AsyncMock(return_value=[])),
         patch.object(post_install, "get_user_secret_names", AsyncMock(return_value=[])),
@@ -180,6 +181,7 @@ async def test_an_upgrade_reports_the_entries_that_failed_and_lands_the_rest():
         patch.object(post_install, "plugin_fan_out_lock", lambda _: nullcontext()),
         patch.object(gate, "get_plugin", AsyncMock(return_value=plugin)),
         patch.object(post_install, "fan_out_servers", fan_out),
+        patch.object(post_install, "relink_subagents", relink),
         patch.object(post_install, "after_secrets_changed", AsyncMock()),
         patch(
             "src.server.services.plugins.checks.reserved_catalog_names",
@@ -194,6 +196,8 @@ async def test_an_upgrade_reports_the_entries_that_failed_and_lands_the_rest():
     assert fan_out.await_args.kwargs["checked"].approves(
         McpServerInput(name="good", transport="http", url="https://good.example.com/sse")
     )
+    # The plugin's subagents that prefer a server that just landed link to it.
+    relink.assert_awaited_once_with(USER, PLUGIN_ID, "demo")
 
 
 # --- every server that reads a supplied value is checked -------------------
@@ -458,7 +462,7 @@ async def _update_with_secrets(
         patch.object(update, "claim_plugin_secrets", AsyncMock()),
         patch.object(update, "_update_servers", AsyncMock()),
         patch.object(update, "_update_skills", AsyncMock()),
-        patch.object(update, "_update_subagents", AsyncMock()),
+        patch.object(update, "reconcile_subagents", AsyncMock()),
         patch.object(update, "update_plugin_row", AsyncMock(return_value=plugin)),
         patch.object(update, "after_secrets_changed", AsyncMock()),
         patch.object(update, "pending_secret_declarations", AsyncMock(return_value=[])),

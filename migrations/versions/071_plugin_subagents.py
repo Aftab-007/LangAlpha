@@ -1,10 +1,13 @@
 """Migration 071: the subagents a user's installed plugins ship.
 
 One row per ``agents/<name>.md`` an installed plugin carries, read into the
-values a base subagent has. The user's changes to one are ordinary override
-rows in ``user_subagents``, keyed ``plugin:<plugin name>/<agent>``, which
-uninstall deletes with the plugin's rows in its own transaction. ``file_text`` is the file
-as shipped, which export writes back and update compares against.
+shape a custom subagent's row has in ``user_subagents``: ``fields`` holds only
+the keys the file sets, and ``roles`` is NULL when it names none, so the merge
+reads the row as it reads a custom one. The user's changes to one are ordinary
+override rows in ``user_subagents``, keyed ``plugin:<plugin name>/<agent>``,
+which uninstall deletes with the plugin's rows in its own transaction.
+``file_text`` is the file as shipped, which export writes back and update
+compares against.
 
 ``(user_id, plugin_id)`` references ``user_plugins`` as the component tables
 do, but ON DELETE CASCADE where they RESTRICT: a row here has no side effect
@@ -33,22 +36,12 @@ def upgrade() -> None:
             user_id VARCHAR(255) NOT NULL,
             plugin_id UUID NOT NULL,
             name VARCHAR(128) NOT NULL,
-            description TEXT NOT NULL,
+            fields JSONB NOT NULL DEFAULT '{}',
             instructions TEXT NOT NULL DEFAULT '',
-            tools TEXT[] NOT NULL DEFAULT '{}',
-            model TEXT NULL,
-            effort TEXT NULL,
-            search_provider TEXT NULL,
-            search_depth TEXT NULL,
-            connectors BOOLEAN NOT NULL DEFAULT TRUE,
-            brokerages VARCHAR(8) NOT NULL DEFAULT 'on',
-            preferred_connectors TEXT[] NOT NULL DEFAULT '{}',
-            preferred_skills TEXT[] NOT NULL DEFAULT '{}',
-            roles TEXT[] NOT NULL DEFAULT '{}',
+            roles TEXT[] NULL,
             file_text TEXT NOT NULL DEFAULT '',
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            CONSTRAINT plugin_subagents_brokerages CHECK (brokerages IN ('off', 'on')),
             CONSTRAINT plugin_subagents_plugin_fk
                 FOREIGN KEY (user_id, plugin_id)
                 REFERENCES user_plugins(user_id, user_plugin_id)

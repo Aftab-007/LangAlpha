@@ -44,15 +44,12 @@ def _custom(name: str, **fields) -> dict:
             "roles": None, "workspace_id": None}
 
 
-def _plugin_row(name: str, *, plugin: str = "acme", on: bool = True, **values) -> dict:
+def _plugin_row(name: str, *, plugin: str = "acme", on: bool = True, **fields) -> dict:
     """A ``plugin_subagents`` row joined to its plugin, as the reader returns it."""
     return {
         "plugin_name": plugin, "name": name, "plugin_enabled": on,
-        "description": "Package desk", "instructions": "Package text.", "tools": ["web"],
-        "model": None, "effort": None, "search_provider": None, "search_depth": None,
-        "connectors": True, "brokerages": "on", "preferred_connectors": [],
-        "preferred_skills": [], "roles": ["analyst", "chief_of_staff"],
-        **values,
+        "fields": {"description": "Package desk", "tools": ["web"], **fields},
+        "instructions": "Package text.", "roles": None,
     }
 
 

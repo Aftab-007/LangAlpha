@@ -21,6 +21,7 @@ from typing import Any
 from ptc_agent.agent.middleware.skills.discovery import validate_skill_name
 from src.server.models.plugin import Diagnostic
 from src.server.services.os_litter import is_os_litter
+from src.server.services.plugins.agents import AGENTS_DIR, is_agent_file
 from src.server.services.plugins.errors import PluginFatal
 from src.server.services.plugins.schemas import PLUGIN_SCHEMA
 from src.server.services.user_skills.validate import peek_frontmatter
@@ -133,7 +134,7 @@ def _top_agents(
     out: dict[str, bytes] = {}
     for path, content in files.items():
         segments = tuple(path.split("/"))
-        if len(segments) < 2 or segments[0] != "agents" or _junk(segments):
+        if not path.startswith(AGENTS_DIR) or _junk(segments):
             continue
         # A SKILL.md at the top makes the whole tree one skill, its agents/ too.
         if any(segments[:depth] in directories for depth in range(len(segments))):
@@ -176,17 +177,14 @@ def wrap_skill_tree(
     """
     directories = _skill_dirs(files)
     agents = _top_agents(files, directories)
-    agent_files = sum(1 for path in agents if path.count("/") == 1 and path.endswith(".md"))
+    agent_files = sum(map(is_agent_file, agents))
     if not agent_files:
         agents = {}
     if not directories and not agents:
         return None
     hinted = plugin_name_from_hint(name_hint)
     diagnostics: list[Diagnostic] = []
-    if () in directories and any(
-        path.startswith("agents/") and path.count("/") == 1 and path.endswith(".md")
-        for path in files
-    ):
+    if () in directories and any(map(is_agent_file, files)):
         # The files still install, inside the skill, so the subagents they
         # define would otherwise go missing without a word.
         diagnostics.append(
