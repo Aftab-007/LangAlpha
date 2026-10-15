@@ -188,7 +188,14 @@ async def project_task_transcript(
 
     reader = CheckpointHistoryReader.get_instance()
     history = await reader.aget_task_history(thread_id, task_id)
-    task = await sr_db.get_task(thread_id, task_id)
+    try:
+        task = await sr_db.get_task(thread_id, task_id)
+    except Exception:
+        logger.warning(
+            "[REPLAY] task row read failed for %s/%s", thread_id, task_id,
+            exc_info=True,
+        )
+        task = None
     if task is not None and task.get("subagent_type") == WORKFLOW_SUBAGENT_TYPE:
         return projector.workflow_run_items(
             history,

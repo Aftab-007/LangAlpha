@@ -201,7 +201,9 @@ export class ThreadStreamMux {
           ? 0
           : Math.max(0, (Date.now() - this.knownAt) / 1000);
       // Asked again while a drain is cut off before its close: one opened
-      // without a frame has no cursor to resume from.
+      // without a frame has no cursor to resume from. The server then drains
+      // every settled run of the turn again, which the settled and watermark
+      // guards drop; rare enough that resent bytes beat a per-run ask.
       const openTurn =
         !this.openTurnServed ||
         [...this.runs.values()].some((chan) => chan.drain && !chan.closed && !chan.cursor);
