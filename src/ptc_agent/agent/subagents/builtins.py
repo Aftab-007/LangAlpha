@@ -19,7 +19,6 @@ BUILTIN_SUBAGENTS: dict[str, SubagentDefinition] = {
         mode="ptc",
         role_prompt_template="roles/researcher.md.j2",
         tools=["web_search", "filesystem"],
-        max_iterations=5,
         stateful=False,
         sections={
             "workspace_paths": False,
@@ -40,7 +39,6 @@ BUILTIN_SUBAGENTS: dict[str, SubagentDefinition] = {
         mode="ptc",
         role_prompt_template="roles/general.md.j2",
         tools=["execute_code", "filesystem", "bash", "finance", "web_search"],
-        max_iterations=10,
         stateful=True,
         sections={
             "workspace_paths": True,
@@ -62,7 +60,6 @@ BUILTIN_SUBAGENTS: dict[str, SubagentDefinition] = {
         mode="ptc",
         role_prompt_template="roles/data_prep.md.j2",
         tools=["execute_code", "filesystem", "bash", "finance"],
-        max_iterations=10,
         stateful=True,
         sections={
             "workspace_paths": True,
@@ -83,7 +80,6 @@ BUILTIN_SUBAGENTS: dict[str, SubagentDefinition] = {
         mode="ptc",
         role_prompt_template="roles/equity_analyst.md.j2",
         tools=["execute_code", "filesystem", "bash", "finance", "web_search"],
-        max_iterations=15,
         # New analysis is the workspace's own: the Chief of Staff hands it to
         # that workspace's analyst, so the workspace keeps the work and its
         # history.
@@ -108,7 +104,6 @@ BUILTIN_SUBAGENTS: dict[str, SubagentDefinition] = {
         mode="ptc",
         role_prompt_template="roles/report_builder.md.j2",
         tools=["execute_code", "filesystem", "bash"],
-        max_iterations=20,
         stateful=True,
         sections={
             "workspace_paths": True,

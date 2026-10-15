@@ -94,10 +94,6 @@ class SubagentDefinition:
     preferred_connectors: list[str] = field(default_factory=list)
     """Servers its tool guide lists first. They never limit what it can call."""
 
-    # ── Execution limits ──────────────────────────────────────────────
-    max_iterations: int = 15
-    """Maximum tool-call iterations before the subagent stops."""
-
     # ── Template section toggles ──────────────────────────────────────
     sections: dict[str, bool] = field(default_factory=dict)
     """Override per-section defaults for the base template.

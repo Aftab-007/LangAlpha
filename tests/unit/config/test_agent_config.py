@@ -322,7 +322,6 @@ class TestSubagentConfig:
         assert cfg.mode == "ptc"
         assert cfg.model is None
         assert cfg.tools == ["execute_code", "filesystem"]
-        assert cfg.max_iterations == 15
 
     def test_custom_fields(self):
         cfg = SubagentConfig(
@@ -330,7 +329,6 @@ class TestSubagentConfig:
             mode="flash",
             model="claude-haiku-4-5",
             tools=["web_search"],
-            max_iterations=5,
         )
         assert cfg.mode == "flash"
         assert cfg.model == "claude-haiku-4-5"

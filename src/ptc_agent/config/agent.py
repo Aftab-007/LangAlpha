@@ -166,7 +166,6 @@ class SubagentConfig(BaseModel):
     tools: list[str] = Field(default_factory=lambda: ["execute_code", "filesystem"])
     skills: list[str] = Field(default_factory=list)
     preload_skills: list[str] = Field(default_factory=list)
-    max_iterations: int = 15
     sections: dict[str, bool] = Field(default_factory=dict)
     reasoning_effort: str | None = None
     search_provider: str | None = None

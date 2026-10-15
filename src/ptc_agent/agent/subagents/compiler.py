@@ -192,7 +192,6 @@ class SubagentCompiler:
         template_kwargs: dict[str, Any] = {
             "current_time": self._current_time,
             "thread_id": self._thread_id,
-            "max_iterations": defn.max_iterations,
             "user_profile": self._user_profile,
             **self._tool_gates(defn),
             **guidance_template_vars(self._guidance(defn)),
@@ -278,7 +277,7 @@ class SubagentCompiler:
 
     def _identity_line(self, defn: SubagentDefinition) -> str:
         """Build the first-line identity for a subagent."""
-        return f"You are a {defn.name} task execution sub-agent."
+        return f"You are the {defn.name} subagent."
 
     def _compute_sections(self, defn: SubagentDefinition) -> dict[str, bool]:
         """Merge mode defaults with definition overrides."""

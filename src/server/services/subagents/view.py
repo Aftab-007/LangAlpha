@@ -52,8 +52,8 @@ def agent_file(name: str) -> str | None:
 def render_base_body(defn: SubagentDefinition) -> str:
     """A base's role section, the read-only body of its file.
 
-    The role templates read only ``max_iterations`` and ``guidance``, so at a
-    fixed level the body changes only when the template or the definition does.
+    The role templates read only ``guidance``, so at a fixed level the body
+    changes only when the template or the definition does.
     """
     from ptc_agent.agent.prompts import get_loader, guidance_template_vars
 
@@ -70,7 +70,6 @@ def render_base_body(defn: SubagentDefinition) -> str:
     try:
         return get_loader().render(
             template,
-            max_iterations=defn.max_iterations,
             **guidance_template_vars(BODY_GUIDANCE),
         ).strip()
     except Exception as exc:  # a deployment template that needs a turn's variables

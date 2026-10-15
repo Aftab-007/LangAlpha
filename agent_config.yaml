@@ -170,7 +170,6 @@ subagents:
   #     tools: [execute_code, filesystem, finance, web_search]
   #     skills: [automation]                   # Runtime-loaded via SkillsMiddleware
   #     preload_skills: [creating-financial-models, xlsx]  # Injected into prompt
-  #     max_iterations: 15
   #     sections:
   #       workspace_paths: true
   #       tool_guide: true
