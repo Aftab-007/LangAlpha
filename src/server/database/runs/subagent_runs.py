@@ -612,7 +612,7 @@ async def list_settled_runs_for_parent(
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
-                SELECT * FROM subagent_runs
+                SELECT task_run_id, task_id, started_at FROM subagent_runs
                 WHERE thread_id = %s
                   AND parent_run_id = %s
                   AND status != 'in_progress'
