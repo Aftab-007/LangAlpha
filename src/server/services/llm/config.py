@@ -94,9 +94,12 @@ def system_default_models() -> dict[str, str]:
     from src.server.app import setup
 
     llm = setup.agent_config.llm if setup.agent_config and setup.agent_config.llm else None
+    background = (llm.flash or "") if llm else ""
     return {
         "default_model": llm.name if llm else "",
-        "flash_model": (llm.flash or "") if llm else "",
+        "background_model": background,
+        # The same model under its old name, for clients that still read it.
+        "flash_model": background,
     }
 
 
