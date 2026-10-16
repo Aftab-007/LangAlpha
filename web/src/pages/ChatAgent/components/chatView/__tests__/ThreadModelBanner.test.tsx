@@ -22,7 +22,7 @@ vi.mock('@/hooks/usePreferences', () => ({
 
 vi.mock('@/hooks/useAllModels', () => ({
   useAllModels: () => ({
-    systemDefaults: { default_model: 'deploy-default', flash_model: 'deploy-flash' },
+    systemDefaults: { default_model: 'deploy-default', background_model: 'deploy-background' },
     metadata: {
       'model-a': { display_name: 'Model A' },
       'model-b': { display_name: 'Model B' },

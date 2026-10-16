@@ -9,7 +9,7 @@ describe('computeSlotCleanup', () => {
     const out = computeSlotCleanup({
       otherPref: {
         preferred_model: 'gpt-5.4',
-        preferred_flash_model: 'gpt-4o',
+        preferred_background_model: 'gpt-4o',
       },
       allModels,
       mergedConfigured: ['gpt-5.4', 'gpt-4o'],
@@ -43,7 +43,7 @@ describe('computeSlotCleanup', () => {
     const out = computeSlotCleanup({
       otherPref: {
         preferred_model: 'gpt-5.4',
-        preferred_flash_model: 'gpt-4o',
+        preferred_background_model: 'gpt-4o',
         compaction_model: 'gpt-3.5',
         fetch_model: 'gpt-3.5',
       },
@@ -53,7 +53,7 @@ describe('computeSlotCleanup', () => {
 
     expect(out.nulls).toEqual({
       preferred_model: null,
-      preferred_flash_model: null,
+      preferred_background_model: null,
       compaction_model: null,
       fetch_model: null,
     });

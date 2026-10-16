@@ -23,7 +23,7 @@ const h = vi.hoisted(() => ({
     anthropic: { models: ['claude-big', 'claude-small'] },
     deepseek: { models: ['deepseek-flash'] },
   } as Record<string, { models?: string[] }>,
-  systemDefaults: { default_model: 'deepseek-flash', flash_model: 'deepseek-flash', fallback_models: [] },
+  systemDefaults: { default_model: 'deepseek-flash', background_model: 'deepseek-flash', fallback_models: [] },
   validModelNames: new Set(['gpt-sol', 'gpt-terra', 'gpt-luna', 'claude-big', 'claude-small', 'deepseek-flash']),
   rawModels: {} as Record<string, { models?: string[] }>,
   rawApiResponse: null as Record<string, unknown> | null,
@@ -179,13 +179,13 @@ function renderModelTab() {
 }
 
 const primary = () => screen.getByRole('combobox', { name: 'Default model' }) as HTMLSelectElement;
-const flash = () => screen.getByRole('combobox', { name: 'Background model' }) as HTMLSelectElement;
+const background = () => screen.getByRole('combobox', { name: 'Background model' }) as HTMLSelectElement;
 
 /** Whether any preferences write so far named a default model. */
 function wroteADefault(): boolean {
   return [...h.mutate.mock.calls, ...h.mutateAsync.mock.calls].some(([payload]) => {
     const prefs = (payload as { model_preference?: Record<string, unknown> } | undefined)?.model_preference ?? {};
-    return 'preferred_model' in prefs || 'preferred_flash_model' in prefs;
+    return 'preferred_model' in prefs || 'preferred_background_model' in prefs;
   });
 }
 
@@ -199,20 +199,20 @@ beforeEach(() => {
 });
 
 /**
- * A primary pick never touches the flash slot: an empty one follows the
- * primary and says so. Both defaults change under one question, and a flash
+ * A primary pick never touches the Background slot: an empty one follows the
+ * primary and says so. Both defaults change under one question, and a Background
  * pick made while it is open joins it instead of dropping the primary.
  */
 describe('Settings: default model question', () => {
-  it('leaves an empty flash slot following the primary, whichever provider it is from', async () => {
+  it('leaves an empty Background slot following the primary, whichever provider it is from', async () => {
     renderModelTab();
     fireEvent.change(await screen.findByRole('combobox', { name: 'Default model' }), { target: { value: 'gpt-sol' } });
-    expect(flash().value).toBe('');
-    expect(flash().selectedOptions[0].textContent).toBe('Same as Default model');
+    expect(background().value).toBe('');
+    expect(background().selectedOptions[0].textContent).toBe('Same as Default model');
     expect(screen.getByText(/your default model\?/)).toBeInTheDocument();
 
     fireEvent.change(primary(), { target: { value: 'claude-big' } });
-    expect(flash().value).toBe('');
+    expect(background().value).toBe('');
     expect(wroteADefault()).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -223,18 +223,18 @@ describe('Settings: default model question', () => {
   it('keeps both picks under one question and writes them together', async () => {
     renderModelTab();
     fireEvent.change(await screen.findByRole('combobox', { name: 'Default model' }), { target: { value: 'gpt-sol' } });
-    fireEvent.change(flash(), { target: { value: 'gpt-luna' } });
+    fireEvent.change(background(), { target: { value: 'gpt-luna' } });
     fireEvent.change(primary(), { target: { value: 'claude-big' } });
 
     expect(primary().value).toBe('claude-big');
-    expect(flash().value).toBe('gpt-luna');
+    expect(background().value).toBe('gpt-luna');
     expect(screen.getByText(/your default models\?/)).toBeInTheDocument();
     expect(wroteADefault()).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'Make default' }));
     await waitFor(() => expect(h.mutateAsync).toHaveBeenCalledTimes(1));
     expect(h.mutateAsync).toHaveBeenCalledWith({
-      model_preference: { preferred_model: 'claude-big', preferred_flash_model: 'gpt-luna', flash_follows: null },
+      model_preference: { preferred_model: 'claude-big', preferred_background_model: 'gpt-luna', background_follows: null },
       apply_default_to: 'new_threads',
     });
     expect(h.mutate).not.toHaveBeenCalled();
@@ -243,14 +243,14 @@ describe('Settings: default model question', () => {
   it('takes a cleared default out of the open question, and closes it once nothing is left', async () => {
     renderModelTab();
     fireEvent.change(await screen.findByRole('combobox', { name: 'Default model' }), { target: { value: 'gpt-sol' } });
-    fireEvent.change(flash(), { target: { value: 'gpt-luna' } });
+    fireEvent.change(background(), { target: { value: 'gpt-luna' } });
     expect(screen.getByText(/your default models\?/)).toBeInTheDocument();
 
-    fireEvent.change(flash(), { target: { value: '' } });
-    expect(flash().value).toBe('');
+    fireEvent.change(background(), { target: { value: '' } });
+    expect(background().value).toBe('');
     expect(primary().value).toBe('gpt-sol');
     expect(screen.getByText(/your default model\?/)).toBeInTheDocument();
-    expect(h.mutate).toHaveBeenLastCalledWith({ model_preference: { preferred_flash_model: null, flash_follows: null } });
+    expect(h.mutate).toHaveBeenLastCalledWith({ model_preference: { preferred_background_model: null, background_follows: null } });
 
     fireEvent.change(primary(), { target: { value: '' } });
     expect(primary().value).toBe('');
@@ -269,15 +269,15 @@ describe('Settings: Auto defaults', () => {
   const options = (select: HTMLSelectElement) => [...select.options].map((o) => o.textContent);
 
   it('shows both unset defaults as Auto with the model each runs', async () => {
-    h.systemDefaults = { default_model: 'claude-big', flash_model: 'deepseek-flash', fallback_models: [] };
+    h.systemDefaults = { default_model: 'claude-big', background_model: 'deepseek-flash', fallback_models: [] };
     try {
       renderModelTab();
       await screen.findByRole('combobox', { name: 'Default model' });
       expect(primary().selectedOptions[0].textContent).toBe('Auto (claude-big)');
-      expect(flash().selectedOptions[0].textContent).toBe('Auto (deepseek-flash)');
-      expect(options(flash())).not.toContain('Same as Default model');
+      expect(background().selectedOptions[0].textContent).toBe('Auto (deepseek-flash)');
+      expect(options(background())).not.toContain('Same as Default model');
     } finally {
-      h.systemDefaults = { default_model: 'deepseek-flash', flash_model: 'deepseek-flash', fallback_models: [] };
+      h.systemDefaults = { default_model: 'deepseek-flash', background_model: 'deepseek-flash', fallback_models: [] };
     }
   });
 
@@ -285,22 +285,22 @@ describe('Settings: Auto defaults', () => {
     h.preferences = { model_preference: { preferred_model: 'gpt-sol' }, other_preference: {} };
     renderModelTab();
     await screen.findByRole('combobox', { name: 'Background model' });
-    expect(flash().selectedOptions[0].textContent).toBe('Same as Default model');
+    expect(background().selectedOptions[0].textContent).toBe('Same as Default model');
 
-    fireEvent.change(flash(), { target: { value: '__auto__' } });
+    fireEvent.change(background(), { target: { value: '__auto__' } });
     expect(h.mutate).toHaveBeenLastCalledWith({
-      model_preference: { preferred_flash_model: null, flash_follows: 'deployment' },
+      model_preference: { preferred_background_model: null, background_follows: 'deployment' },
     });
     expect(screen.queryByText(/your default models?\?/)).toBeNull();
   });
 
-  it('shows a saved Auto for flash as Auto', async () => {
+  it('shows a saved Auto for the Background model as Auto', async () => {
     h.preferences = {
-      model_preference: { preferred_model: 'gpt-sol', flash_follows: 'deployment' },
+      model_preference: { preferred_model: 'gpt-sol', background_follows: 'deployment' },
       other_preference: {},
     };
     renderModelTab();
     await screen.findByRole('combobox', { name: 'Background model' });
-    expect(flash().selectedOptions[0].textContent).toBe('Auto (deepseek-flash)');
+    expect(background().selectedOptions[0].textContent).toBe('Auto (deepseek-flash)');
   });
 });

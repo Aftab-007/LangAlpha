@@ -52,7 +52,7 @@ vi.mock('@/hooks/useAllModels', () => ({
     catalogModelNames: new Set<string>(),
     metadata: {},
     isLoading: false,
-    systemDefaults: { default_model: 'model-default', flash_model: '' },
+    systemDefaults: { default_model: 'model-default', background_model: '' },
   }),
 }));
 

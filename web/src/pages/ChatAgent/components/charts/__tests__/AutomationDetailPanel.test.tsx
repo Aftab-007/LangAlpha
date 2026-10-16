@@ -19,8 +19,8 @@ function renderList(...automations: Record<string, unknown>[]) {
 }
 
 describe('where an automation card says it ran', () => {
-  it('reads a flash card as All workspaces and a ptc card as a workspace', () => {
-    renderList(card({ agent_mode: 'flash' }), card({ agent_mode: 'ptc' }));
+  it('reads a card that ran outside a workspace as All workspaces and a ptc card as a workspace', () => {
+    renderList(card({ agent_mode: 'home' }), card({ agent_mode: 'ptc' }));
     expect(screen.getByText('All workspaces')).toBeInTheDocument();
     expect(screen.getByText('Workspace')).toBeInTheDocument();
   });
@@ -34,7 +34,7 @@ describe('where an automation card says it ran', () => {
   it('names the place in the detail view under the Agent row', () => {
     renderWithProviders(
       <AutomationDetailPanel
-        data={{ type: 'automations', mode: 'detail', automation: card({ agent_mode: 'flash' }), executions: [] }}
+        data={{ type: 'automations', mode: 'detail', automation: card({ agent_mode: 'home' }), executions: [] }}
       />,
     );
     expect(screen.getByText('Agent').nextElementSibling).toHaveTextContent('All workspaces');

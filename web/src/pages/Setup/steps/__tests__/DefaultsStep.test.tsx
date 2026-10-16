@@ -1,10 +1,10 @@
 /**
- * A first run fills both defaults: an empty flash slot takes a model to go
+ * A first run fills both defaults: an empty Background slot takes a model to go
  * with the primary. The fill is a local pick like any other, so it stays put
  * when the primary changes and nothing is saved before Continue.
  *
  * Compaction and fetch left on their default save unset, not pinned to that
- * day's flash pick, so the server keeps resolving them from the current model
+ * day's Background pick, so the server keeps resolving them from the current model
  * per turn (`compaction_name`/`fetch_name` in `src/ptc_agent/config/agent.py`).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -54,41 +54,41 @@ vi.mock('@/components/model/FallbackModelsPicker', () => ({
 import DefaultsStep from '../DefaultsStep';
 
 const primary = () => screen.getByRole('combobox', { name: 'Default model' }) as HTMLSelectElement;
-const flash = () => screen.getByRole('combobox', { name: 'Background model' }) as HTMLSelectElement;
+const background = () => screen.getByRole('combobox', { name: 'Background model' }) as HTMLSelectElement;
 
 beforeEach(() => {
   h.mutateAsync.mockClear();
   h.preferences = null;
 });
 
-describe('DefaultsStep flash fill', () => {
-  it('fills an empty flash slot beside a saved primary without saving it', async () => {
+describe('DefaultsStep background fill', () => {
+  it('fills an empty Background slot beside a saved primary without saving it', async () => {
     h.preferences = { model_preference: { preferred_model: 'claude-big' } };
     renderWithProviders(<DefaultsStep />);
 
-    await waitFor(() => expect(flash().value).toBe('claude-small'));
+    await waitFor(() => expect(background().value).toBe('claude-small'));
     expect(h.mutateAsync).not.toHaveBeenCalled();
   });
 
   it('keeps the fill when the primary changes, and fills again only once the slot is cleared', async () => {
     renderWithProviders(<DefaultsStep />);
-    expect(flash().value).toBe('');
+    expect(background().value).toBe('');
 
     fireEvent.change(primary(), { target: { value: 'claude-big' } });
-    await waitFor(() => expect(flash().value).toBe('claude-small'));
+    await waitFor(() => expect(background().value).toBe('claude-small'));
 
     fireEvent.change(primary(), { target: { value: 'gpt-sol' } });
-    expect(flash().value).toBe('claude-small');
+    expect(background().value).toBe('claude-small');
 
-    fireEvent.change(flash(), { target: { value: '' } });
-    await waitFor(() => expect(flash().value).toBe('gpt-terra'));
+    fireEvent.change(background(), { target: { value: '' } });
+    await waitFor(() => expect(background().value).toBe('gpt-terra'));
     expect(h.mutateAsync).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(h.mutateAsync).toHaveBeenCalledWith({
       model_preference: {
         preferred_model: 'gpt-sol',
-        preferred_flash_model: 'gpt-terra',
+        preferred_background_model: 'gpt-terra',
         compaction_model: null,
         fetch_model: null,
         fallback_models: [],
@@ -98,10 +98,10 @@ describe('DefaultsStep flash fill', () => {
 });
 
 describe('DefaultsStep compaction and fetch', () => {
-  it('saves an explicit advanced pick as-is, not folded into the flash pick', async () => {
+  it('saves an explicit advanced pick as-is, not folded into the Background pick', async () => {
     renderWithProviders(<DefaultsStep />);
     fireEvent.change(primary(), { target: { value: 'gpt-sol' } });
-    await waitFor(() => expect(flash().value).toBe('gpt-terra'));
+    await waitFor(() => expect(background().value).toBe('gpt-terra'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Web fetch model' }), {

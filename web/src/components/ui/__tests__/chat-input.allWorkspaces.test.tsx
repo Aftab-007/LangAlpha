@@ -35,7 +35,7 @@ vi.mock('@/hooks/useAllModels', () => ({
     validModelNames: new Set(),
     metadata: {},
     isLoading: false,
-    systemDefaults: { default_model: 'model-default', flash_model: 'model-flash-default' },
+    systemDefaults: { default_model: 'model-default', background_model: 'model-background-default' },
   }),
 }));
 
@@ -101,7 +101,7 @@ describe('ChatInput scope picker', () => {
     Element.prototype.scrollIntoView = vi.fn();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     mocks.preferences = {
-      model_preference: { preferred_model: 'model-alpha', preferred_flash_model: 'model-bg' },
+      model_preference: { preferred_model: 'model-alpha', preferred_background_model: 'model-bg' },
     };
     mocks.mutateAsync.mockReset().mockResolvedValue(undefined);
     vi.mocked(getSkills).mockClear();
@@ -123,7 +123,6 @@ describe('ChatInput scope picker', () => {
 
   it('offers a scope picker beside the Subagents switch, and no agent mode toggle', () => {
     renderInput();
-    expect(screen.queryByText('Flash')).not.toBeInTheDocument();
     expect(screen.queryByText('PTC')).not.toBeInTheDocument();
     expect(pill('All workspaces')).toHaveAttribute('aria-haspopup', 'dialog');
     expect(pill('Subagents')).toBeInTheDocument();

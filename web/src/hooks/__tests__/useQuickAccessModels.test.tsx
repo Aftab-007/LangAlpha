@@ -30,7 +30,7 @@ const ACCESS: Record<string, ModelAccess> = {
   'model-oauth': 'oauth',
   'model-key': 'byok',
   'model-starred': 'platform',
-  'model-flash': 'platform',
+  'model-background': 'platform',
 };
 
 vi.mock('../useAllModels', () => ({
@@ -76,7 +76,7 @@ describe('useQuickAccessModels', () => {
 
   it('lists the deployment\'s default the user left unset, but not the background model, which no conversation runs', () => {
     // A pick on a thread saves no preference, so this is the way back to it.
-    mocks.systemDefaults = { default_model: 'model-platform', flash_model: 'model-flash' };
+    mocks.systemDefaults = { default_model: 'model-platform', background_model: 'model-background' };
     const { result } = renderHookWithProviders(() => useQuickAccessModels());
     expect(result.current.models).toEqual(['model-platform', 'model-oauth', 'model-key']);
   });
@@ -84,7 +84,7 @@ describe('useQuickAccessModels', () => {
   it('lists the deployment\'s default for an account with no preferences row', () => {
     // The read answered 404 (a reset deletes the row): known, with nothing saved.
     mocks.preferences = null;
-    mocks.systemDefaults = { default_model: 'model-platform', flash_model: 'model-flash' };
+    mocks.systemDefaults = { default_model: 'model-platform', background_model: 'model-background' };
     const { result } = renderHookWithProviders(() => useQuickAccessModels());
     expect(result.current.models).toEqual(['model-platform', 'model-oauth', 'model-key']);
   });
@@ -92,7 +92,7 @@ describe('useQuickAccessModels', () => {
   it('lists no default before preferences are read', () => {
     mocks.preferences = null;
     mocks.isLoaded = false;
-    mocks.systemDefaults = { default_model: 'model-platform', flash_model: 'model-flash' };
+    mocks.systemDefaults = { default_model: 'model-platform', background_model: 'model-background' };
     const { result } = renderHookWithProviders(() => useQuickAccessModels());
     expect(result.current.models).toEqual(['model-oauth', 'model-key']);
   });
