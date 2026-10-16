@@ -50,6 +50,7 @@ from src.server.models.user import (
     UserResponse,
     UserUpdate,
     UserWithPreferencesResponse,
+    to_stored_model_keys,
 )
 from src.server.utils.api import CurrentUserId, handle_api_exceptions, raise_not_found
 
@@ -580,10 +581,12 @@ def _clear_unhonored_efforts(
 
 
 def _validate_default_model_choices(model_pref: dict) -> None:
-    """Refuse a ``default_model_scope`` or ``flash_follows`` no reader acts on.
-    None = key deletion."""
+    """Refuse a ``default_model_scope`` or ``background_follows`` no reader
+    acts on. None = key deletion. Run on the patch as sent, so the 400 names
+    the spelling the client wrote."""
     for key, allowed in (
         ("default_model_scope", DEFAULT_MODEL_SCOPES),
+        ("background_follows", FLASH_FOLLOWS),
         ("flash_follows", FLASH_FOLLOWS),
     ):
         value = model_pref.get(key)
@@ -650,6 +653,9 @@ async def update_preferences(
             model_pref = {**legacy, **(model_pref or {})}
 
     if model_pref:
+        _validate_default_model_choices(model_pref)
+        model_pref = to_stored_model_keys(model_pref)
+
         stored = await db_get_user_preferences(user_id)
         stored_model_pref = (stored or {}).get("model_preference") or {}
         effective = _effective_model_preference(stored_model_pref, model_pref)
@@ -669,7 +675,6 @@ async def update_preferences(
             )
 
         _validate_model_tuning(model_pref, effective)
-        _validate_default_model_choices(model_pref)
 
         # After validation, so a bad level in the patch still gets its 400 and
         # only levels already in the row are cleared.
