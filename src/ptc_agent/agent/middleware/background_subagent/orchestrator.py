@@ -19,7 +19,7 @@ from ptc_agent.agent.middleware.background_subagent.middleware import (
 # utils.build_message_checker governs every caller.
 from ptc_agent.agent.middleware.background_subagent import utils
 from ptc_agent.agent.middleware.background_subagent.utils import config_own_run_id
-from ptc_agent.agent.transcript.classify import ORCHESTRATOR_SOURCE, STEERING_TRIGGER
+from ptc_agent.agent.transcript.classify import ORCHESTRATOR_SOURCE, steering_trigger
 
 logger = structlog.get_logger(__name__)
 
@@ -392,19 +392,19 @@ class BackgroundSubagentOrchestrator:
         """Check if there are any pending background tasks."""
         return self.middleware.registry.has_pending_tasks()
 
-    async def _has_pending_steering(self, config: dict[str, Any]) -> bool:
-        """Check if there are pending steering messages this run would consume."""
+    async def _pending_steer_senders(self, config: dict[str, Any]) -> list[str]:
+        """Who sent the steers waiting that this run would take in."""
         thread_id = (config.get("configurable") or {}).get("thread_id")
         checker = await utils.build_message_checker(
             thread_id, own_run_id=config_own_run_id(config)
         )
         if checker is None:
-            return False
+            return []
         try:
             return await checker()
         except Exception as e:
             logger.warning("Steering check failed, skipping re-invocation", error=str(e))
-            return False
+            return []
 
     async def _reinvoke_for_steering(
         self, config: dict[str, Any], iteration: int
@@ -414,7 +414,12 @@ class BackgroundSubagentOrchestrator:
         Returns True if re-invocation was set up (caller should ``continue``),
         False otherwise (caller should proceed to return).
         """
-        if not await self._has_pending_steering(config):
+        # On the last pass there is no re-run to read it, and a trigger left in
+        # the checkpoint would sit ahead of the turn the steer becomes.
+        if iteration >= self.max_iterations:
+            return False
+        senders = await self._pending_steer_senders(config)
+        if not senders:
             return False
 
         logger.info(
@@ -424,7 +429,7 @@ class BackgroundSubagentOrchestrator:
 
         # Inject a minimal trigger so the graph routes to the agent node.
         # SteeringMiddleware.abefore_model() will consume the actual content.
-        await self._inject(config, STEERING_TRIGGER)
+        await self._inject(config, steering_trigger(senders))
         return True
 
     async def check_and_get_notification(self) -> str | None:

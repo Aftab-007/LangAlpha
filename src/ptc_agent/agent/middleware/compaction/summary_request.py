@@ -30,9 +30,9 @@ from ptc_agent.agent.middleware.runtime_context.durable import (
 )
 from ptc_agent.agent.middleware.runtime_context.turn import NON_CHANGE_ROW_KINDS
 from ptc_agent.agent.transcript.classify import (
-    STEERING_TRIGGER,
     human_kind,
     is_run_boundary_message,
+    is_steering_trigger,
     is_summary_message,
 )
 from ptc_agent.agent.transcript.pointer import TranscriptTurns
@@ -318,14 +318,14 @@ def _summarizable(messages: list[AnyMessage]) -> list[AnyMessage]:
     are relabelled as ``System:`` so what they say survives without being
     attributed to anyone. An orchestrator's notice of a
     background task is relabelled the same way. Its steering trigger is
-    dropped: it says only that the user wrote more, which the steering
+    dropped: it says only that someone wrote more, which the steering
     message after it shows, and the summarizer took it, under either label,
     for a request still to be answered.
     """
     out: list[AnyMessage] = []
     for message in messages:
         if isinstance(message, HumanMessage) and human_kind(message) == "orchestrator":
-            if message.content != STEERING_TRIGGER:
+            if not is_steering_trigger(message.content):
                 out.append(SystemMessage(content=message.content))
             continue
         update = runtime_update_from_message(message)

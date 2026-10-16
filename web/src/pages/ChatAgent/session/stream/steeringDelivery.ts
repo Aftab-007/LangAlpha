@@ -17,10 +17,10 @@ export function steeringDeliveredEntries(event: { messages?: readonly unknown[] 
 export type DeliveredRowKind = 'report' | 'user';
 
 /**
- * The row an entry is drawn as: a report's caption, or the user's words
- * labelled with the chat app they came from. Delivered steering, so it opens
- * no turn and offers no edit. Null for an entry with neither, which is what a
- * share leaves of a report.
+ * The row an entry is drawn as: a report's caption, or the steer's words
+ * labelled with the agent that sent them or the chat app they came from.
+ * Delivered steering, so it opens no turn and offers no edit. Null for an
+ * entry with neither, which is what a share leaves of a report.
  */
 export function deliveredEntryRow(
   entry: SteeringDeliveredEntry,
@@ -37,7 +37,7 @@ export function deliveredEntryRow(
     });
   }
   if (!entry.content) return null;
-  const provenance = senderProvenance({ platform: entry.platform });
+  const provenance = senderProvenance({ origin: entry.origin, platform: entry.platform });
   return {
     id: rowId('user'),
     role: 'user',
@@ -48,46 +48,83 @@ export function deliveredEntryRow(
     steeringDelivered: true,
     turnIndex,
     ...(provenance ? { provenance } : {}),
+    ...(entry.request_key ? { requestKey: entry.request_key } : {}),
   };
 }
 
 /**
- * Marks delivered the steers of the steered turn that a delivery names. The
- * server delivers a steer only to the run it was sent to, and hands back at
- * that run's end any it did not deliver, so a steer another turn holds, or one
- * the server has yet to queue, is not this delivery's. Each text claims the
- * oldest steer still waiting with it, then the oldest failed with no refusal:
- * the server may have taken that one and lost only the POST's answer, so the
- * run delivering it is that answer. A refused steer was never queued, so no
- * delivery is its. Returns the entries no steer claimed too: one batch can
- * carry steers sent from another tab or a channel beside this view's own.
+ * Marks delivered the steers a delivery names. An entry that carries its
+ * request key names the one send made under it, wherever it waits: in the
+ * turn it was sent to, or under an earlier turn whose run ended before
+ * reading it, which a later turn takes in. A steer shown failed and sent
+ * again with its text reuses its key, so the key can stand on two bubbles of
+ * one send: the delivery claims the one still waiting, else one failed with
+ * no refusal, and the others go. The claimed bubble joins the delivering
+ * turn, where replay draws it. An entry with no key (an older checkpoint)
+ * is matched by its text within the steered turn: it claims the oldest
+ * steer still waiting with it, then the oldest failed with no refusal, since
+ * the server may have taken that one and lost only the POST's answer. A
+ * refused steer was never queued, so no keyless delivery is its. Returns the
+ * entries no steer claimed too: one batch can carry steers sent from another
+ * tab or a channel beside this view's own.
  */
 function claimDeliveredSteers(
   messages: ChatMessage[],
   delivered: readonly DeliveredSteer[],
   turn: number | undefined,
-): { messages: ChatMessage[]; claimedAt: number[]; unclaimed: DeliveredSteer[] } {
-  const unclaimed = [...delivered];
-  const texts = unclaimed.map((q) => q.content.trim());
+): { messages: ChatMessage[]; claimed: { prior: ChatMessage; at: number }[]; dropped: ChatMessage[]; unclaimed: DeliveredSteer[] } {
   const claimedAt: number[] = [];
+  const claimedEntries = new Set<DeliveredSteer>();
+  const dropped = new Set<number>();
   let next = messages;
+  const claim = (i: number, entry: DeliveredSteer, joinTurn: boolean) => {
+    const m = next[i] as UserMessage & { queueError?: unknown };
+    const claimed: typeof m = { ...m, steering: false, steeringDelivered: true };
+    delete claimed.queueError;
+    if (joinTurn && turn !== undefined) claimed.turnIndex = turn;
+    if (next === messages) next = [...messages];
+    next[i] = claimed;
+    claimedAt.push(i);
+    claimedEntries.add(entry);
+  };
+  const keyless: DeliveredSteer[] = [];
+  for (const entry of delivered) {
+    if (!entry.request_key) {
+      keyless.push(entry);
+      continue;
+    }
+    const copies: number[] = [];
+    next.forEach((m, i) => {
+      if (m.role === 'user' && !m.steeringDelivered && !dropped.has(i)
+        && (m as { requestKey?: string }).requestKey === entry.request_key) copies.push(i);
+    });
+    if (copies.length === 0) continue;
+    const copy = (i: number) => next[i] as UserMessage & { queueError?: unknown };
+    const at = copies.find((i) => !!copy(i).steering)
+      ?? copies.find((i) => !!copy(i).queueError && !copy(i).queueRefused)
+      ?? copies[0];
+    for (const i of copies) if (i !== at) dropped.add(i);
+    claim(at, entry, true);
+  }
+  const texts = keyless.map((q) => q.content.trim());
   for (const waiting of [true, false]) {
     for (let i = 0; i < next.length && texts.length > 0; i++) {
       const m = next[i] as ChatMessage & { queueError?: unknown };
-      if (m.role !== 'user' || (turn !== undefined && m.turnIndex !== turn)) continue;
+      if (m.role !== 'user' || dropped.has(i) || (turn !== undefined && m.turnIndex !== turn)) continue;
       if (waiting ? !m.steering : (m.isHistory || !m.queueError || m.queueRefused || m.steeringDelivered)) continue;
       const at = texts.indexOf(String(m.content ?? '').trim());
       if (at === -1) continue;
       texts.splice(at, 1);
-      unclaimed.splice(at, 1);
-      const claimed: typeof m = { ...m, steering: false, steeringDelivered: true };
-      delete claimed.queueError;
-      if (next === messages) next = [...messages];
-      next[i] = claimed;
-      claimedAt.push(i);
+      claim(i, keyless.splice(at, 1)[0], false);
     }
   }
-  return { messages: next, claimedAt, unclaimed };
+  const below = (i: number) => [...dropped].filter((d) => d < i).length;
+  return {
+    messages: dropped.size > 0 ? next.filter((_, i) => !dropped.has(i)) : next,
+    claimed: claimedAt.map((i) => ({ prior: messages[i], at: i - below(i) })),
+    dropped: [...dropped].map((i) => messages[i]),
+    unclaimed: delivered.filter((e) => !claimedEntries.has(e)),
+  };
 }
 
 /** The first steer still waiting in the turn, or -1. */
@@ -135,11 +172,11 @@ export function foldSteeringDelivery(
   rowId: (kind: DeliveredRowKind) => string,
 ): SteeringDelivery {
   const steers = entries.filter((e): e is DeliveredSteer => !isDeliveredReport(e));
-  const { messages, claimedAt, unclaimed } = claimDeliveredSteers(prev, steers, turnIndex);
+  const { messages, claimed, dropped, unclaimed } = claimDeliveredSteers(prev, steers, turnIndex);
   const errorOf = (m: ChatMessage) => (m as { queueError?: unknown }).queueError;
-  const clearedErrors = claimedAt.map((i) => errorOf(prev[i]))
+  const clearedErrors = [...claimed.map((c) => c.prior), ...dropped].map(errorOf)
     .filter((e) => e !== undefined && !messages.some((m) => errorOf(m) === e));
-  const settledKeys = claimedAt.map((i) => (prev[i] as { requestKey?: string }).requestKey)
+  const settledKeys = claimed.map((c) => (c.prior as { requestKey?: string }).requestKey)
     .filter((key): key is string => !!key);
   const rows = (list: readonly SteeringDeliveredEntry[]) => list
     .map((e) => deliveredEntryRow(e, rowId, turnIndex))
@@ -148,7 +185,12 @@ export function foldSteeringDelivery(
   const added = rows(unclaimed);
   if (reports.length === 0 && added.length === 0) return { messages, clearedErrors, settledKeys };
   const waiting = firstWaitingSteer(messages, turnIndex);
-  const at = claimedAt.length > 0 ? Math.min(...claimedAt) : waiting === -1 ? messages.length : waiting;
+  // A steer claimed from under an earlier turn stays where it was drawn, so
+  // it places nothing.
+  const inTurn = claimed
+    .filter((c) => turnIndex === undefined || (c.prior as UserMessage).turnIndex === turnIndex)
+    .map((c) => c.at);
+  const at = inTurn.length > 0 ? Math.min(...inTurn) : waiting === -1 ? messages.length : waiting;
   const end = waiting === -1 ? messages.length : Math.max(waiting, at);
   return {
     messages: [...messages.slice(0, at), ...reports, ...messages.slice(at, end), ...added, ...messages.slice(end)],

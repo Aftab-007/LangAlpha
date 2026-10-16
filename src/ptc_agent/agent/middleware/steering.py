@@ -2,185 +2,222 @@
 Steering Middleware.
 
 Before each LLM call, takes in what reached the thread while the agent works:
-the user's steering messages from Redis, and the reports owed to the thread
-by background work that finished meanwhile. Both are picked up before the
-next model invocation instead of waiting for the turn to end.
+messages steered into it (by the user, the Chief of Staff or Flash) and the
+reports owed to the thread by background work that finished meanwhile. All
+of it waits in the server's outbox, which hands it to the next model call
+rather than to a turn of its own. Messages sent to a background task whose
+run ended before reading them resume that task instead.
 """
 
-import hashlib
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
+from langgraph.types import Command
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     AgentState,
     ModelRequest,
     ModelResponse,
+    hook_config,
 )
-from ptc_agent.agent.middleware.background_subagent.utils import (
-    config_own_run_id,
-    decode_steer,
-    is_foreign_steer,
-    steering_queue_key,
+from langchain.tools.tool_node import ToolCallRequest
+from ptc_agent.agent.middleware.background_subagent.context import (
+    current_steer_resume,
 )
+from ptc_agent.agent.middleware.background_subagent.utils import config_own_run_id
+from ptc_agent.agent.transcript.steer_text import STEERS_AT, sender_runs, steer_text
 
 logger = logging.getLogger(__name__)
 
-_STEERING_ID_PREFIX = "steering-"
+# The steering message's record of the outbox rows its run holds, which the
+# model call that reads them confirms. Messages checkpointed before steers
+# moved to the outbox carry the older name.
+_HELD_JOBS = "held_jobs"
+_LEGACY_HELD = "held_reports"
 
-# How long a take's answer stays readable, for a retry after it was lost.
-_TAKE_TTL_S = 600
+# The resume call's record of the task steers its run holds, keyed by tool
+# call id, which the call hands to the run it resumes or gives back.
+_STEER_RESUMES = "steer_resumes"
 
-# Removes each entry a turn chose (ARGV[2..]) by exact value, count 1, so an
-# entry read twice is removed twice, and answers '1' per entry this take
-# removed. The answer is kept under the take's own key (KEYS[2], braced into
-# the queue's cluster slot), so a retry after a lost answer reads it back
-# rather than removing a second, identical entry queued since.
-_TAKE_LUA = """
-local taken = redis.call('GET', KEYS[2])
-if taken then
-  return taken
-end
-local removed = {}
-for i = 2, #ARGV do
-  removed[#removed + 1] = redis.call('LREM', KEYS[1], 1, ARGV[i])
-end
-taken = table.concat(removed)
-redis.call('SET', KEYS[2], taken, 'EX', ARGV[1])
-return taken
-"""
-
-
-def _key_tag(request_key: str) -> str:
-    return hashlib.sha256(request_key.encode()).hexdigest()[:16]
-
-
-def steering_message_id(request_keys: Iterable[Any]) -> str | None:
-    """The injected message's id, named after the keyed sends it carries.
-
-    Taking a send out of the queue does not prove the model saw it: the run
-    can die before the step that injected it is saved, or lose the answers to
-    the removal and its retry and never inject it. The server answers a
-    resend from the run's checkpoint, by the tags in this id. The random part
-    keeps each injection a message of its own: the reducer replaces a message
-    whose id it already holds, so a send accepted again once its record
-    expired would otherwise overwrite the earlier one where it stands. None
-    when no send has a key, so the message gets an ordinary one.
-    """
-    tags = [_key_tag(k) for k in request_keys if isinstance(k, str) and k]
-    if not tags:
-        return None
-    return _STEERING_ID_PREFIX + "-".join([*tags, uuid.uuid4().hex])
-
-
-def carries_steer_key(message: Any, request_key: str) -> bool:
-    """Whether ``message`` is an injected steer carrying ``request_key``'s send."""
-    message_id = getattr(message, "id", None)
-    if not isinstance(message_id, str) or not message_id.startswith(
-        _STEERING_ID_PREFIX
-    ):
-        return False
-    # The random part is 32 hex digits, so it never reads as a 16-digit tag.
-    tags = message_id[len(_STEERING_ID_PREFIX) :].split("-")
-    return _key_tag(request_key) in tags
-
-
-async def _take(client: Any, queue_key: str, values: list[Any]) -> list[bool]:
-    """Remove ``values`` from the queue in one step, retried once.
-
-    Redis can apply the removal and lose its answer. The retry runs under the
-    same take key, so it reads back what the first try removed instead of
-    finding the entries gone and the steer dropped. True per value this take
-    removed; another reader may have taken the rest since they were read.
-    """
-    keys = (queue_key, f"{{{queue_key}}}:take:{uuid.uuid4().hex}")
-    try:
-        taken = await client.eval(_TAKE_LUA, 2, *keys, _TAKE_TTL_S, *values)
-    except Exception as e:
-        logger.warning(f"[Steering] Retrying the take of {queue_key}: {e}")
-        taken = await client.eval(_TAKE_LUA, 2, *keys, _TAKE_TTL_S, *values)
-    flags = taken.decode() if isinstance(taken, bytes) else str(taken)
-    return [flag == "1" for flag in flags]
-
-
-# The steering message's record of the reports its run holds, which the
-# model call that reads them confirms.
-_HELD_REPORTS = "held_reports"
-
+ALL_KINDS: tuple[str, ...] = ("report", "steer")
 
 @dataclass(frozen=True)
 class SteeredReport:
+    """One outbox row a live turn takes in: a report owed to the thread, or
+    a steer (``kind="steer"``) sent into it."""
+
     job_id: str
     content: str                    # what the model reads
-    report_source: dict[str, Any]   # what the reader is shown
+    report_source: dict[str, Any] = field(default_factory=dict)  # reader's view
+    kind: str = "report"
+    sender: str | None = None
+    platform: str | None = None
+    request_key: str | None = None
+    origin: dict[str, Any] | None = None
+    timestamp: float | None = None
+    created_at: Any = None
+    user_id: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskResume:
+    """Messages for a background task whose run ended before reading them,
+    which this turn resumes the task with."""
+
+    task_id: str
+    job_ids: list[str]
+    entries: list[dict[str, Any]]   # [{input_id, content, sender?}]
+    description: str = ""
+
+    @property
+    def prompt(self) -> str:
+        """What the resumed run reads: each sender's messages in the blocks a
+        running task reads them in, so who sent each one is not lost."""
+        return steer_text(
+            sender_runs((e.get("sender") or "user", e.get("content") or "") for e in self.entries)
+        )
+
+    @property
+    def words(self) -> str:
+        """The messages as sent, for replay to show."""
+        return "\n".join(e.get("content") or "" for e in self.entries)
 
 
 class ReportInbox(Protocol):
-    async def take(self, thread_id: str, run_id: str) -> list[SteeredReport]: ...
+    async def take(
+        self, thread_id: str, run_id: str, *, kinds: Sequence[str] = ALL_KINDS
+    ) -> list[SteeredReport]: ...
     async def confirm(self, run_id: str, job_ids: list[str]) -> None: ...
+    async def take_resumes(self, thread_id: str, run_id: str) -> list[TaskResume]: ...
+    async def hand_off_resumes(
+        self,
+        thread_id: str,
+        run_id: str,
+        task_id: str,
+        task_run_id: str,
+        job_ids: list[str],
+    ) -> list[str]: ...
+    async def confirm_resumes(self, run_id: str, job_ids: list[str]) -> None: ...
+    async def release_resumes(
+        self, thread_id: str, run_id: str, task_id: str, job_ids: list[str]
+    ) -> None: ...
 
 
-class _HeldReports(TypedDict):
+class _HeldJobs(TypedDict):
     run_id: str
     job_ids: list[str]
+
+
+def checkpointed_holds(messages: Sequence[Any], owner_id: str) -> set[str]:
+    """The outbox rows ``owner_id`` (a run, or a task run) holds that a
+    steering message in ``messages`` carries. Read from a run's checkpoint at
+    its ending: a row there is in the thread's history, so it was delivered
+    even if no model call got to confirm it. Every message counts, not only
+    those since the last model response, so a confirm that failed earlier
+    still closes once."""
+    found: set[str] = set()
+    for message in messages or []:
+        kwargs = getattr(message, "additional_kwargs", None) or {}
+        held = kwargs.get(_HELD_JOBS) or kwargs.get(_LEGACY_HELD)
+        if not isinstance(held, dict):
+            continue
+        if owner_id in (held.get("run_id"), held.get("task_run_id")):
+            found.update(str(j) for j in held.get("job_ids") or [])
+    return found
 
 
 class SteeringMiddleware(AgentMiddleware):
     """Takes in what reached the thread while the agent works, before each LLM call.
 
-    Two kinds of input arrive mid-turn. When a user sends a message while
-    the agent is already processing, the server queues it in Redis. When
-    background work the thread is owed a report on finishes (a subagent
-    task, an analyst's hand-off), the report waits in the server's outbox
-    until the turn ends, unless this turn takes it in first through the
-    server's ``report_inbox``: ``take`` holds each report it hands over, and
-    the model call that reads them closes them (``confirm``), since the graph
-    checkpoints the injected message before that step starts. A report the
-    turn never takes, or never confirms, is posted as its own turn when this
-    one ends. Both reach the model as one HumanMessage, reports first so the
-    user's words come last.
+    ``report_inbox.take`` holds each row it hands over for this run, and the
+    model call that reads them closes them (``confirm``), since the graph
+    checkpoints the injected message before that step starts. A row the run
+    never takes, or never confirms, settles when the run ends: a steer
+    becomes the next turn's input, a report its own turn. Everything reaches
+    the model as one HumanMessage, reports first so the senders' words come
+    last. Steers sent before a fresh turn started are not taken here: the
+    server opens the turn with them ahead of its input
+    (``steers_ahead_message``), so the turn's input checkpoint, where an edit
+    or a regenerate starts over, holds them; its first call shows them.
+
+    With ``"resume"`` in ``kinds``, messages for a task whose run ended
+    unread resume it: a ``Task(action="resume")`` call is appended as if the
+    model made it and the step jumps to the tool node, so the resume runs
+    through the one Task interceptor and shows as any resume does. The
+    resume hands the rows to the task run it admits, whose first model call
+    confirms them as it confirms any steer it takes; a refused resume gives
+    them back.
 
     Placement: main_only_middleware (subagents don't consume steering messages).
     """
 
-    def __init__(self, report_inbox: ReportInbox | None = None) -> None:
+    def __init__(
+        self,
+        report_inbox: ReportInbox | None = None,
+        kinds: Sequence[str] = ALL_KINDS,
+    ) -> None:
         super().__init__()
         self.report_inbox = report_inbox
+        self.kinds = tuple(kinds)
 
+    @hook_config(can_jump_to=["tools"])
     async def abefore_model(
         self, state: AgentState, runtime: Runtime, *, config: RunnableConfig
     ) -> dict[str, Any] | None:
-        """Inject queued steering messages and owed reports before the model call."""
-        thread_id = (config.get("configurable") or {}).get("thread_id")
+        """Inject held steers and owed reports before the model call."""
+        configurable = config.get("configurable") or {}
+        thread_id = configurable.get("thread_id")
         if not thread_id:
             logger.debug("[Steering] No thread_id in config, skipping")
             return None
         run_id = config_own_run_id(config)
 
-        reports = await self._take_reports(thread_id, run_id)
-        steers = await self._take_user_steering(thread_id, run_id)
-        if not reports and not steers:
+        for delivered in _opened_with(
+            state, configurable.get("steer_input_message_id"), run_id
+        ):
+            _announce(runtime, thread_id, delivered)
+        taken = await self._take(thread_id, run_id)
+        resumes = await self._take_resumes(thread_id, run_id)
+        if not taken and not resumes:
             return None
-
-        message, delivered = _steering_message(reports, steers, run_id, time.time())
-        logger.info(
-            f"[Steering] Injecting {len(steers)} steering message(s) and "
-            f"{len(reports)} report(s) for thread_id={thread_id}"
-        )
-        try:
-            runtime.stream_writer(
-                {"type": "steering_delivered", "thread_id": thread_id, **delivered}
+        update = self._inject(runtime, thread_id, run_id, taken)
+        if resumes:
+            update["messages"].append(_resume_call(resumes, run_id))
+            update["jump_to"] = "tools"
+            logger.info(
+                f"[Steering] Resuming {len(resumes)} task(s) with messages their "
+                f"runs never read, for thread_id={thread_id}"
             )
-        except Exception:
-            logger.debug("[Steering] stream_writer unavailable, skipping SSE event")
+        return update
+
+    def _inject(
+        self,
+        runtime: Runtime,
+        thread_id: str,
+        run_id: str | None,
+        taken: list[SteeredReport],
+    ) -> dict[str, Any]:
+        if not taken:
+            return {"messages": []}
+        message, delivered = _steering_message(taken, run_id, time.time())
+        logger.info(
+            f"[Steering] Injecting {sum(t.kind == 'steer' for t in taken)} "
+            f"steer(s) and {sum(t.kind == 'report' for t in taken)} report(s) "
+            f"for thread_id={thread_id}"
+        )
+        _announce(runtime, thread_id, delivered)
         return {"messages": [message]}
 
     async def awrap_model_call(
@@ -188,11 +225,98 @@ class SteeringMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        await self._confirm_reports(request.state)
+        await self._confirm(request.state)
         return await handler(request)
 
-    async def _confirm_reports(self, state: Any) -> None:
-        """Close the reports injected since the last model response.
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
+    ) -> ToolMessage | Command:
+        """Settle a resume this middleware called once its result is in.
+
+        The rows ride the tool call into the resumed run's opener (the
+        context variable), so the task's stream shows them as delivered, and
+        the resume hands them to that run (``hand_off``) before its writer
+        starts. Confirming them here, before the run checkpoints its opener,
+        would lose them with a worker that died in between."""
+        held = _held_resume(request)
+        if held is None or self.report_inbox is None:
+            return await handler(request)
+        inbox = self.report_inbox
+        resume: dict[str, Any] = {
+            "task_id": held["task_id"],
+            "delivered": held["delivered"],
+        }
+
+        async def _hand_off(task_run_id: str) -> bool:
+            moved = await inbox.hand_off_resumes(
+                held["thread_id"],
+                held["run_id"],
+                held["task_id"],
+                task_run_id,
+                list(held["job_ids"]),
+            )
+            if moved:
+                resume["held_jobs"] = {"task_run_id": task_run_id, "job_ids": moved}
+            return bool(moved)
+
+        resume["hand_off"] = _hand_off
+        token = current_steer_resume.set(resume)
+        result: Any = None
+        try:
+            result = await handler(request)
+        finally:
+            current_steer_resume.reset(token)
+            if "held_jobs" not in resume:
+                await self._settle_resume(held, result)
+        return result
+
+    async def _settle_resume(self, held: dict[str, Any], result: Any) -> None:
+        """Give the rows back on a refused resume (one that raised too: the
+        run did not start). A resume that started without handing them to a
+        run of its own (no run ledger) confirms them here instead."""
+        artifact = (
+            (getattr(result, "additional_kwargs", None) or {}).get("task_artifact")
+            if isinstance(result, ToolMessage)
+            else None
+        ) or {}
+        resumed = (
+            isinstance(result, ToolMessage)
+            and result.status != "error"
+            and artifact.get("action") == "resume"
+        )
+        try:
+            if resumed:
+                await self.report_inbox.confirm_resumes(
+                    held["run_id"], list(held["job_ids"])
+                )
+            else:
+                await self.report_inbox.release_resumes(
+                    held["thread_id"],
+                    held["run_id"],
+                    held["task_id"],
+                    list(held["job_ids"]),
+                )
+        except Exception as e:
+            logger.warning(f"[Steering] Settling resume of {held['task_id']} failed: {e}")
+
+    async def _take_resumes(
+        self, thread_id: str, run_id: str | None
+    ) -> list[TaskResume]:
+        if "resume" not in self.kinds or self.report_inbox is None or not run_id:
+            return []
+        take = getattr(self.report_inbox, "take_resumes", None)
+        if take is None:
+            return []
+        try:
+            return await take(thread_id, run_id)
+        except Exception as e:
+            logger.warning(f"[Steering] Taking task resumes failed: {e}")
+            return []
+
+    async def _confirm(self, state: Any) -> None:
+        """Close the rows injected since the last model response.
 
         The step that injected them is checkpointed before this one starts,
         so they can no longer be lost with the turn. Retries of the same
@@ -200,85 +324,170 @@ class SteeringMiddleware(AgentMiddleware):
         if self.report_inbox is None:
             return
         for message in reversed((state or {}).get("messages") or []):
+            kwargs = getattr(message, "additional_kwargs", None) or {}
             if isinstance(message, AIMessage):
+                # A resume this middleware called is not a model response:
+                # what was injected before it is still unconfirmed.
+                if kwargs.get("lc_source") == "steering":
+                    continue
                 return
-            held: _HeldReports | None = (
-                getattr(message, "additional_kwargs", None) or {}
-            ).get(_HELD_REPORTS)
+            held: _HeldJobs | None = kwargs.get(_HELD_JOBS) or kwargs.get(_LEGACY_HELD)
             if held and held.get("run_id") and held.get("job_ids"):
                 try:
                     await self.report_inbox.confirm(
                         held["run_id"], list(held["job_ids"])
                     )
                 except Exception as e:
-                    logger.warning(f"[Steering] Report confirm failed: {e}")
+                    logger.warning(f"[Steering] Confirm failed: {e}")
 
-    async def _take_reports(
-        self, thread_id: str, run_id: str | None
-    ) -> list[SteeredReport]:
-        """The reports the server hands this run, held until the model call
-        that reads them confirms them. Holding needs a run to hold them for."""
+    async def _take(self, thread_id: str, run_id: str | None) -> list[SteeredReport]:
+        """The rows the server hands this run, held until the model call that
+        reads them confirms them. Holding needs a run to hold them for."""
         if self.report_inbox is None or not run_id:
             return []
         try:
-            return await self.report_inbox.take(thread_id, run_id)
+            return await self.report_inbox.take(thread_id, run_id, kinds=self.kinds)
         except Exception as e:
-            logger.warning(f"[Steering] Report inbox failed: {e}")
+            logger.warning(f"[Steering] Inbox take failed: {e}")
             return []
 
-    async def _take_user_steering(
-        self, thread_id: str, run_id: str | None
-    ) -> list[dict]:
-        """Take this run's messages off the thread's steering queue.
 
-        Peek, partition, then take exactly what we consume (v4 2.4c review
-        F3). Foreign-stamped payloads (a run that died without draining) are
-        never touched: this run's end-of-run drain returns them to the user.
-        A pop-and-requeue cycle would open a crash window per model call in
-        which the only copy of an accepted user message vanishes. A failed
-        read leaves the queue where it was.
-        """
-        # Import here to avoid circular imports
-        from src.utils.cache.redis_cache import get_cache_client
+def _resume_call(resumes: list[TaskResume], run_id: str | None) -> AIMessage:
+    """The ``Task(action="resume")`` calls that hand each task its messages,
+    as an AIMessage the tool node runs. It records the rows each call holds,
+    for that call's result to settle."""
+    calls: list[dict[str, Any]] = []
+    held: dict[str, dict[str, Any]] = {}
+    for resume in resumes:
+        call_id = f"call_{uuid.uuid4().hex}"
+        args: dict[str, Any] = {
+            "action": "resume",
+            "task_id": resume.task_id,
+            "prompt": resume.prompt,
+        }
+        if resume.description:
+            args["description"] = resume.description
+        calls.append({"name": "Task", "args": args, "id": call_id, "type": "tool_call"})
+        held[call_id] = {
+            "run_id": run_id,
+            "task_id": resume.task_id,
+            "job_ids": list(resume.job_ids),
+            "delivered": _resume_delivered(resume),
+        }
+    return AIMessage(
+        content="",
+        id=f"steering-resume-{uuid.uuid4().hex}",
+        tool_calls=calls,
+        additional_kwargs={"lc_source": "steering", _STEER_RESUMES: held},
+    )
 
-        try:
-            cache = get_cache_client()
-            if not cache.enabled or not cache.client:
-                return []
-            key = steering_queue_key(thread_id)
-            # Garbage is taken out of the queue with a None in its place.
-            consumed: list[tuple[Any, dict | None]] = []
-            for raw in await cache.client.lrange(key, 0, -1):
-                try:
-                    data = decode_steer(raw)
-                except ValueError as e:
-                    logger.warning(f"[Steering] Failed to parse steering message: {e}")
-                    consumed.append((raw, None))
-                    continue
-                if is_foreign_steer(data, run_id):
-                    continue
-                consumed.append(
-                    (raw, data if isinstance(data, dict) else {"content": str(data)})
-                )
 
-            if not consumed:
-                return []
-            taken = await _take(cache.client, key, [raw for raw, _ in consumed])
-            return [
-                steer
-                for (_, steer), took in zip(consumed, taken)
-                if took and steer is not None
-            ]
-        except Exception as e:
-            logger.error(f"[Steering] Error checking steering queue: {e}")
+def _resume_delivered(resume: TaskResume) -> dict[str, Any]:
+    """The task-side ``steering_delivered`` payload, as the task's own
+    steering middleware would have written it."""
+    return {
+        "content": resume.words,
+        "count": len(resume.entries),
+        "input_ids": [e["input_id"] for e in resume.entries if e.get("input_id")],
+        "entries": list(resume.entries),
+    }
+
+
+def _held_resume(request: ToolCallRequest) -> dict[str, Any] | None:
+    """The rows a resume call this middleware made holds, read off the
+    AIMessage that carries the call."""
+    call_id = (request.tool_call or {}).get("id")
+    if not call_id or request.tool_call.get("name") != "Task":
+        return None
+    for message in reversed((request.state or {}).get("messages") or []):
+        if not isinstance(message, AIMessage):
+            continue
+        kwargs = message.additional_kwargs or {}
+        held = (kwargs.get(_STEER_RESUMES) or {}).get(call_id)
+        if held is None:
+            return None
+        thread_id = (
+            (request.runtime.config.get("configurable") or {}).get("thread_id")
+            if request.runtime
+            else None
+        )
+        return {**held, "thread_id": thread_id}
+    return None
+
+
+def _opened_with(
+    state: Any, input_id: str | None, run_id: str | None
+) -> list[dict[str, Any]]:
+    """The ``steering_delivered`` payloads of the steers this run's turn
+    opened with ahead of its input, while the model has not answered it."""
+    if not input_id or not run_id:
+        return []
+    messages = list((state or {}).get("messages") or [])
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], AIMessage):
             return []
+        if getattr(messages[i], "id", None) == input_id:
+            break
+    else:
+        return []
+    opened: list[dict[str, Any]] = []
+    for message in reversed(messages[:i]):
+        if isinstance(message, AIMessage):
+            break
+        kwargs = getattr(message, "additional_kwargs", None) or {}
+        held = kwargs.get(_HELD_JOBS) or {}
+        delivered = kwargs.get("steering_delivered")
+        if held.get("run_id") == run_id and isinstance(delivered, dict):
+            opened.insert(0, delivered)
+    return opened
+
+
+def _announce(runtime: Runtime, thread_id: str, delivered: dict[str, Any]) -> None:
+    try:
+        runtime.stream_writer(
+            {"type": "steering_delivered", "thread_id": thread_id, **delivered}
+        )
+    except Exception:
+        logger.debug("[Steering] stream_writer unavailable, skipping SSE event")
+
+
+def steers_ahead_message(steers: list[SteeredReport], run_id: str) -> HumanMessage:
+    """The message a fresh turn opens with ahead of its input: the steers
+    sent before it started, held by ``run_id`` until its first model call
+    reads them."""
+    message, _ = _steering_message(steers, run_id, time.time())
+    return message
+
+
+def _delivered_origin(origin: dict[str, Any] | None) -> dict[str, Any] | None:
+    """What a reader is shown of who sent a steer: the sender, never the Home
+    thread or dispatch it came from, which a shared thread must not carry."""
+    if not origin:
+        return None
+    shown = {k: origin[k] for k in ("type", "agent") if origin.get(k)}
+    return shown or None
+
+
+def _steer_entry(steer: SteeredReport) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "content": steer.content,
+        "user_id": steer.user_id,
+        "timestamp": steer.timestamp,
+    }
+    if steer.platform:
+        entry["platform"] = steer.platform
+    if steer.sender and steer.sender != "user":
+        entry["sender"] = steer.sender
+    if steer.request_key:
+        entry["request_key"] = steer.request_key
+    origin = _delivered_origin(steer.origin)
+    if origin:
+        entry["origin"] = origin
+    return entry
 
 
 def _steering_message(
-    reports: list[SteeredReport],
-    steers: list[dict],
-    run_id: str | None,
-    now: float,
+    taken: list[SteeredReport], run_id: str | None, now: float
 ) -> tuple[HumanMessage, dict[str, Any]]:
     """The message the model takes everything in through, and its
     ``steering_delivered`` payload.
@@ -289,47 +498,39 @@ def _steering_message(
     model-facing: the reader is shown what it reports on, as a report turn's
     hidden message is.
     """
-    parts = [report.content for report in reports]
-    if steers:
-        if len(steers) == 1:
-            content = steers[0].get("content", str(steers[0]))
-        else:
-            content = "\n".join(
-                f"{i + 1}. {steer.get('content', str(steer))}"
-                for i, steer in enumerate(steers)
-            )
-        parts.append(f"[Steering from User]\n{content}")
+    reports = [t for t in taken if t.kind != "steer"]
+    steers = [t for t in taken if t.kind == "steer"]
+    said = "\n\n".join(report.content for report in reports)
+    sent = (
+        steer_text(sender_runs((s.sender or "user", s.content) for s in steers))
+        if steers
+        else ""
+    )
+    content = "\n\n".join(part for part in (said, sent) if part)
 
     delivered = {
         # The user's messages only: a chat gateway retires this many of the
-        # messages it queued, oldest first, and it never queued a report.
-        "count": len(steers),
+        # messages it queued, oldest first, and it never queued another
+        # sender's.
+        "count": sum((s.sender or "user") == "user" for s in steers),
         "messages": [
             {"content": "", "report_source": report.report_source, "timestamp": now}
             for report in reports
         ]
-        + [
-            {
-                "content": steer.get("content", ""),
-                "user_id": steer.get("user_id"),
-                "timestamp": steer.get("timestamp"),
-                **({"platform": steer["platform"]} if steer.get("platform") else {}),
-            }
-            for steer in steers
-        ],
+        + [_steer_entry(steer) for steer in steers],
         "timestamp": now,
     }
     additional_kwargs: dict[str, Any] = {
         "lc_source": "steering",
         "steering_delivered": delivered,
+        STEERS_AT: len(content) - len(sent),
+        _HELD_JOBS: _HeldJobs(run_id=run_id, job_ids=[t.job_id for t in taken]),
     }
-    if reports:
-        additional_kwargs[_HELD_REPORTS] = _HeldReports(
-            run_id=run_id, job_ids=[report.job_id for report in reports]
-        )
+    # A fresh id per injection: the reducer replaces a message whose id it
+    # already holds.
     message = HumanMessage(
-        content="\n\n".join(parts),
-        id=steering_message_id(steer.get("request_key") for steer in steers),
+        content=content,
+        id=f"steering-{uuid.uuid4().hex}",
         additional_kwargs=additional_kwargs,
     )
     return message, delivered

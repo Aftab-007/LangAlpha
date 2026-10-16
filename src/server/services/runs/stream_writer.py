@@ -8,7 +8,7 @@ the cross-worker consumer counter. Process-local run state stays in
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from src.utils.cache.redis_cache import get_cache_client
 from src.utils.cache.stream_append import (
@@ -141,6 +141,35 @@ async def buffer_event(
     logger.debug(f"[EventBuffer] Buffered event to Redis: {key} (id={event_id})")
 
 
+async def steering_returned_frame(thread_id: str, run_id: str) -> str | None:
+    """The ``steering_returned`` SSE event for the chat-app steers ``run_id``
+    returned, or None. Read once its finalize has committed, which settled
+    them.
+
+    Only chat-app steers come back this way: the gateway resubmits them as
+    the next turn and relays the reply, which it does not do for a turn the
+    server starts. Every other steer a run missed stays on the thread for
+    the next one.
+    """
+    from src.server.database.runs import outbox as outbox_db
+
+    try:
+        returned = await outbox_db.list_returned_platform_steers(run_id)
+    except Exception:
+        logger.exception(f"Failed to read returned steers for run {run_id}")
+        return None
+    if not returned:
+        return None
+    event_data = json.dumps({
+        "thread_id": thread_id,
+        "messages": [
+            {"content": m["content"], "user_id": m.get("user_id")}
+            for m in returned
+        ],
+    })
+    return f"event: steering_returned\ndata: {event_data}\n\n"
+
+
 async def append_run_end_event(
     thread_id: str,
     run_id: str,
@@ -148,6 +177,7 @@ async def append_run_end_event(
     *,
     error_frame: Optional[Dict[str, Any]] = None,
     token_totals: Optional[Dict[str, int]] = None,
+    closing_frames: Sequence[str] = (),
     redis_event_ttl: int,
     max_stored_messages: int,
 ) -> None:
@@ -158,6 +188,7 @@ async def append_run_end_event(
     durable row exists with that outcome. The SETNX gate picks ONE
     emitter among the owner, the recovery scanner, and the dispatch
     reconcile; the winner writes the whole closing story — the caller's
+    ``closing_frames`` (SSE text the settled run owes its readers), the
     ``error_frame`` payload (a failure the dead owner never told), then
     ``run_end``. Raw auto-ID XADD, not ``buffer_event``: it has no seq
     slot, and the auto ID (ms timestamp) always sorts after the
@@ -238,6 +269,8 @@ async def append_run_end_event(
         # best-effort by contract, and the consumer's two-empty-round
         # terminal handshake covers a missing frame.
         async with cache.client.pipeline(transaction=False) as pipe:
+            for frame in closing_frames:
+                pipe.xadd(stream_k, {b"event": frame.encode("utf-8")})
             if error_frame is not None:
                 err_wire = (
                     f"event: error\n"

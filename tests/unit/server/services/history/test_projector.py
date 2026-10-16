@@ -598,6 +598,82 @@ def test_unstamped_subagent_followup_falls_back_to_content():
     assert items[0]["data"]["count"] == 1
 
 
+def test_delivered_entries_keep_their_request_key_and_origin():
+    """The client settles its optimistic steer by ``request_key`` and labels
+    an agent's by ``origin``, so a replayed entry carries both as the live
+    one did."""
+    delivered = {
+        "count": 1,
+        "messages": [
+            {
+                "content": "do x",
+                "user_id": "u-1",
+                "timestamp": 1.0,
+                "origin": {"type": "agent", "agent": "chief_of_staff"},
+            },
+            {
+                "content": "stop that",
+                "user_id": "u-1",
+                "timestamp": 1.5,
+                "platform": "telegram",
+                "request_key": "rk-1",
+            },
+        ],
+        "timestamp": 2.0,
+    }
+    items = _sse(
+        [
+            HumanMessage(
+                content="[Steering from Chief of Staff]\ndo x",
+                id="h-s",
+                additional_kwargs={
+                    "lc_source": "steering",
+                    "steering_delivered": delivered,
+                },
+            )
+        ]
+    )
+
+    (item,) = items
+    assert item["event"] == "steering_delivered"
+    cos, user = item["data"]["messages"]
+    assert cos["origin"] == {"type": "agent", "agent": "chief_of_staff"}
+    assert user["request_key"] == "rk-1"
+    assert user["platform"] == "telegram"
+
+
+def test_a_resumed_task_run_opens_with_its_delivered_steers():
+    """A task resumed with steers its last run never read opens with them as
+    an unmarked input (it still opens a run); replay shows them delivered,
+    as the live stream did, not as a typed user message."""
+    delivered = {
+        "content": "add sources",
+        "count": 1,
+        "input_ids": ["in-1"],
+        "entries": [{"input_id": "in-1", "content": "add sources"}],
+    }
+    items = _sse(
+        [
+            HumanMessage(
+                content="add sources",
+                id="h-r",
+                additional_kwargs={"steering_delivered": delivered},
+            )
+        ],
+        agent="task:abc",
+    )
+
+    assert [i["event"] for i in items] == ["steering_delivered"]
+    assert items[0]["data"]["agent"] == "task:abc"
+    assert items[0]["data"]["input_ids"] == ["in-1"]
+
+
+def test_a_plain_task_input_still_projects_as_a_user_message():
+    items = _sse([HumanMessage(content="research X", id="h-t")], agent="task:abc")
+
+    assert [i["event"] for i in items] == ["user_message"]
+
+
 def test_summary_message_projects_summarize_complete():
     from ptc_agent.agent.middleware.compaction.utils import build_summary_message
     from ptc_agent.agent.transcript import TranscriptTarget

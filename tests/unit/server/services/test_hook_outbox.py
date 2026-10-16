@@ -877,6 +877,33 @@ class TestDrainerExecute:
         nack.assert_awaited_once()
         ack.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_a_steer_out_of_attempts_is_settled_not_dead_lettered(self):
+        """The nack settles a steer at the ceiling per sender; the drainer
+        runs its exhaust followup, never the dead-letter close."""
+        from src.server.database.runs import outbox as outbox_db
+
+        drainer = HookOutboxDrainer()
+        job = _job(hook_type="steer", payload={"target": "task", "sender": "user"})
+        closed, exhausted = AsyncMock(), AsyncMock()
+        with patch.dict(
+            hook_outbox._EXECUTORS, {"steer": AsyncMock(side_effect=RuntimeError("boom"))}
+        ), patch.dict(hook_outbox._CLOSE_FOLLOWUPS, {"steer": closed}), patch.dict(
+            hook_outbox._EXHAUST_FOLLOWUPS, {"steer": exhausted}
+        ), patch.object(
+            outbox_db, "nack_outbox_job", AsyncMock(return_value="exhausted")
+        ), patch.object(hook_outbox.logger, "error") as error:
+            await drainer._execute(job)
+        exhausted.assert_awaited_once_with(job)
+        closed.assert_not_awaited()
+        error.assert_not_called()
+
+    def test_the_steer_executor_registers_its_exhaust_followup(self):
+        from src.server.services.report_back import steer_executor
+
+        steer_executor.register_outbox_executors()
+        assert hook_outbox._EXHAUST_FOLLOWUPS["steer"] is steer_executor._on_exhausted
+
     # Dead-letter compensation is inserted ATOMICALLY inside
     # nack_outbox_job / park_exhausted_jobs (data-modifying CTE) — there is
     # deliberately no drainer-level compensation step to test; the SQL-level

@@ -20,6 +20,7 @@ from typing import Any, Iterable
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 
 from ptc_agent.agent.transcript.classify import human_kind, is_run_boundary_message
+from ptc_agent.agent.transcript.steer_text import report_text, sent_steers
 from src.llms.attachment_payload import FILE_BLOCK_TYPES, IMAGE_BLOCK_TYPES
 
 SCHEMA_VERSION = 2
@@ -78,6 +79,21 @@ def _turn_opened_at(message: HumanMessage) -> str | None:
         created = meta.get("created_at")
         return created if isinstance(created, str) else None
     return None
+
+
+def _emit_steering(message: HumanMessage, emit: Any) -> None:
+    """What reached the thread mid-turn: the reports a steering message carries,
+    then each steer in its sender's own words. The lines around them asked the
+    run that read them to answer, and would read here as an instruction to
+    whoever reads the transcript."""
+    reports = report_text(message)
+    if reports:
+        emit({"type": "user", "id": message.id, "text": reports, "steering": True}, message)
+    for steer in sent_steers(message):
+        event = {"type": "user", "id": message.id, "text": steer.text, "steering": True}
+        if steer.sender != "user":
+            event["from"] = steer.sender
+        emit(event, message)
 
 
 def visible_text(content: Any, *, attachments: bool = True) -> str:
@@ -149,10 +165,10 @@ def render_segment(
             kind = human_kind(message)
             if kind not in ("plain", "steering"):
                 continue
-            event = {"type": "user", "id": message.id, "text": visible_text(message.content)}
             if kind == "steering":
-                event["steering"] = True
-            emit(event, message)
+                _emit_steering(message, emit)
+                continue
+            emit({"type": "user", "id": message.id, "text": visible_text(message.content)}, message)
         elif isinstance(message, AIMessage):
             text = visible_text(message.content, attachments=False)
             if text.strip():

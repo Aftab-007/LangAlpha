@@ -9,6 +9,7 @@ ordering chain can't advance early.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -113,6 +114,7 @@ async def execute_report_back(job: dict) -> None:
     destructive exit re-verifies the lease fence first — a stale owner must
     not tear down state the reclaiming owner is executing against.
     """
+    from src.server.database.runs import lifecycle as tl_db
     from src.server.database.runs import outbox as outbox_db
     from src.server.services.hook_outbox import LEASE_SECONDS
     from src.utils.cache.redis_cache import get_cache_client
@@ -137,6 +139,18 @@ async def execute_report_back(job: dict) -> None:
         return
     origin, flash_thread_id = owed.origin, owed.flash_thread_id
     final_status = owed.final_status
+    # A run that took in more than one hand-off from this Home carries one
+    # generation on its row but owns them all; the pair's origin holds the
+    # newest one reserved, and a report under any other is fenced out of the
+    # teardown that frees Home's watch.
+    origin_gen = origin.get("dispatch_gen")
+    if (
+        origin_gen
+        and origin_gen != dispatch_gen
+        and job.get("run_id")
+        and await tl_db.run_has_dispatch_gen(str(job["run_id"]), origin_gen)
+    ):
+        dispatch_gen = origin_gen
     user_id = origin.get("user_id")
     # Claimed under a stale ordering key (pre-deploy row that finalized
     # unstamped, keyed on its own PTC thread): requeue onto the real flash
@@ -188,6 +202,11 @@ async def execute_report_back(job: dict) -> None:
                 cache, job.get("run_id"), ptc_thread_id, flash_thread_id,
                 job_request_key,
             )
+
+        if not await _wait_for_hand_off(
+            ptc_thread_id, flash_thread_id, _fence, _still_due
+        ):
+            return  # lease lost: the reclaiming owner carries on
 
         outcome, rb_run_id = await _post_report_back(
             cache,
@@ -510,6 +529,39 @@ async def _post_report_back(
         subject=f"PTC thread {ptc_thread_id}",
         still_due=still_due,
     )
+
+
+# How often a report waiting on a hand-off re-reads it.
+_HAND_OFF_POLL_S = 2.0
+
+
+async def _wait_for_hand_off(
+    ptc_thread_id: str, flash_thread_id: str, fence, still_due
+) -> bool:
+    """Hold the report while a hand-off from the same Home thread waits on the
+    analyst's thread: the run that reads it reports back, and ``_superseded``
+    then acks this one, so the Home thread hears once. A hand-off dropped
+    unread leaves this report to go. The wait ends as soon as a newer run has
+    taken this report over, as nothing is left to wait for, and past the cap
+    it goes anyway: the later run's report then finds the pair cleared. False
+    when the lease is lost."""
+    from src.server.database.runs import outbox as outbox_db
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + leases.RB_BUSY_WAIT_CAP
+    while await outbox_db.has_live_hand_off(ptc_thread_id, flash_thread_id):
+        if not await still_due():
+            return True
+        if loop.time() >= deadline:
+            logger.warning(
+                f"[FLASH_REPORT_BACK] Hand-off into {ptc_thread_id} from "
+                f"{flash_thread_id} still pending past the cap; reporting anyway"
+            )
+            return True
+        if not await fence():
+            return False
+        await asyncio.sleep(_HAND_OFF_POLL_S)
+    return True
 
 
 async def summary_started(

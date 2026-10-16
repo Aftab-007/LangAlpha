@@ -12,7 +12,6 @@ external tools (web search, market data, SEC filings).
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from datetime import datetime
 
@@ -69,7 +68,6 @@ from .request_prep import (
     process_hitl_response,
     provenance_metadata,
     serialize_context_metadata,
-    setup_steering_tracking,
     turn_skill_names,
     user_skill_commands,
 )
@@ -81,7 +79,12 @@ from src.server.services.runs.admission import (
     dedup_retransmit_or_raise,
 )
 
-from .admission_gate import admission_conflict_detail, steer_allowed, wait_or_steer
+from .admission_gate import (
+    admission_conflict_detail,
+    agent_steer_of,
+    steer_allowed,
+    wait_or_steer,
+)
 from .attachments import attach_flash_request_files
 from .error_handling import handle_workflow_error
 from .flash_handover import cancel_tool_calls_it_lacks
@@ -89,10 +92,7 @@ from src.server.services.llm.clients import is_own_key_turn
 from src.server.services.llm.config import resolve_llm_config
 from src.server.services.llm.thread_model import NamedModel
 from src.tools.messaging import messaging_enabled
-from .steering import (
-    drain_steering_return_event,
-    steer_thread,
-)
+from .steering import open_with_steers_ahead
 from .run_stream_reader import stream_from_log
 
 
@@ -173,13 +173,15 @@ async def astream_flash_workflow(
         # request_key resolves to its existing run HERE, before the steering
         # or fork paths below can act on the duplicate (raises
         # DuplicateRequestError → structured duplicate_request SSE).
-        await dedup_retransmit_or_raise(thread_id, request.request_key)
+        await dedup_retransmit_or_raise(
+            thread_id, request.request_key, except_job_id=request.steer_job_id
+        )
 
         # =================================================================
         # Early steering routing
         # =================================================================
         # If a workflow is already running for this thread, route this POST
-        # through the steering queue *before* any DB write — a steering
+        # into it as a steer *before* any turn row is written — a steering
         # message is neither a run nor a turn (v4 identity model); its
         # content is archived on the owning response's metadata at finalize.
         # Admit a fresh turn, steer the running one, or 409 —
@@ -193,6 +195,12 @@ async def astream_flash_workflow(
             steer_only=request.steer_only,
             platform=request.platform,
             request_key=request.request_key,
+            workspace_id=workspace_id,
+            steer_job_id=request.steer_job_id,
+            # A hand-off into a running turn answers the dispatch primer
+            # with DISPATCH_STEERED_MARKER and that run's id.
+            agent=agent_steer_of(request, dispatched=dispatched, run_id=run_id),
+            agent_mode=request.agent_mode,
             can_steer=can_steer,
         )
         if not ready:
@@ -521,6 +529,11 @@ async def astream_flash_workflow(
             ),
         )
         graph_config["run_id"] = run_id
+        steer_input_id = await open_with_steers_ahead(
+            thread_id, run_id, request, input_state
+        )
+        if steer_input_id:
+            graph_config["configurable"]["steer_input_message_id"] = steer_input_id
 
         handler = RunSSEProducer(
             thread_id=thread_id,
@@ -531,9 +544,6 @@ async def astream_flash_workflow(
             report_source=query_metadata.get("report_source"),
             turn_index=run_handle.turn_index,
         )
-
-        # Track steering messages injected mid-workflow for post-completion backfill
-        setup_steering_tracking(handler)
 
         # =================================================================
         # Background Execution (same pattern as PTC for reconnection
@@ -579,16 +589,10 @@ async def astream_flash_workflow(
                 on_registered=scope.transfer_to_executor,
             )
         except RuntimeError:
-            # Race condition: another request registered first -- queue the
-            # message. The admission lock should normally prevent reaching
-            # this branch, but it's kept as a belt-and-braces fallback.
-            # A request ``steer_allowed`` refuses must not steer here either:
-            # leave result None so it falls through to the 409, same as the
-            # primary wait_or_steer path.
-            #
-            # v4: START already created this run's in_progress row; whichever
-            # way this branch exits (steer away or 409), no executor will ever
-            # own it — release the durable slot first.
+            # Another request registered first. The admission lock should
+            # prevent this; it is kept as a belt-and-braces fallback.
+            # START already created this run's in_progress row and no
+            # executor will ever own it, so release the durable slot first.
             # Marked, so the run's terminal hooks can tell a turn that never
             # ran from one a stop or a shutdown cancelled.
             await RunCoordinator.get_instance().fail_open_run(
@@ -597,26 +601,6 @@ async def astream_flash_workflow(
                 status="cancelled",
                 metadata={"superseded": True},
             )
-            result = (
-                await steer_thread(
-                    thread_id, user_input, user_id, platform=request.platform
-                )
-                if can_steer
-                else None
-            )
-            if result:
-                await scope.release_slot()
-                scope.release_admission()
-                event_data = json.dumps(
-                    {
-                        "thread_id": thread_id,
-                        "content": user_input,
-                        "position": result["position"],
-                    }
-                )
-                yield f"event: steering_accepted\ndata: {event_data}\n\n"
-                return
-
             raise HTTPException(
                 status_code=409, detail=admission_conflict_detail("running")
             )
@@ -627,17 +611,6 @@ async def astream_flash_workflow(
 
         async for event in stream_from_log(thread_id, run_id, last_event_id=None):
             yield event
-
-        # After the workflow ends, return any unconsumed steering messages so
-        # the client can re-render them as locally-queued context for the next
-        # turn instead of losing them silently.
-        steering_event = await drain_steering_return_event(thread_id)
-        if steering_event:
-            logger.info(
-                f"[FLASH_CHAT] Returning unconsumed steering message(s) "
-                f"to client: thread_id={thread_id}"
-            )
-            yield steering_event
 
     except (asyncio.CancelledError, GeneratorExit):
         if scope.slot_owned:

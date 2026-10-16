@@ -55,9 +55,15 @@ async def test_status_full_path_threads_is_shared(threads_client):
     read_thread_runtime_status, so it never reads the thread again."""
     meta = AsyncMock(return_value={"user_id": CALLER, "is_shared": True})
     full = AsyncMock(return_value={"thread_id": TID, "is_shared": True})
+    pending = AsyncMock(return_value=[])
     with (
         patch("src.server.database.conversation.get_thread_auth_meta", meta),
         patch("src.server.services.thread_status.read_thread_runtime_status", full),
+        patch(
+            "src.server.database.runs.outbox.list_pending_steers",
+            pending,
+            create=True,
+        ),
     ):
         resp = await threads_client.get(f"/api/v1/threads/{TID}/status")
 

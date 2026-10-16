@@ -54,10 +54,10 @@ const retryAfterOf = (err: unknown): number | null => {
 };
 
 /** A steer a reload left on screen, still queued or failed: the replay has no
- *  copy of either. */
+ *  copy of either. One still queued may be the status's, drawn as history. */
 const isKeptSteer = (m: { role: string; isHistory?: boolean }): boolean => {
   const steer = m as { steering?: boolean; queueError?: unknown };
-  return m.role === 'user' && !m.isHistory && (!!steer.steering || !!steer.queueError);
+  return m.role === 'user' && (!!steer.steering || (!m.isHistory && !!steer.queueError));
 };
 
 export interface ReconnectOptions {
@@ -695,7 +695,7 @@ export const reconnectToStream = async (
     // Clear the spinner only if THIS reconnect still owns it. A newer reconnect
     // (cross-thread nav) took ownership and manages its own spinner — clobbering
     // it would hide the new thread's reconnect. Any other teardown that swapped
-    // the stream out from under us (user stop, steering demoted to a new turn)
+    // the stream out from under us (a user stop)
     // leaves ownership with us, so we still clear and never strand the spinner.
     if (rt.isReconnectingOwnerRef.current === abortController) {
       rt.setIsReconnecting(false);

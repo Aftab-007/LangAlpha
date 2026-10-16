@@ -84,6 +84,7 @@ def build_context_middleware(
             last_turn_at=turn.last_turn_at,
             platform=turn.platform,
             origin=turn.origin,
+            origin_agent=turn.origin_agent,
             surface_rules=turn.surface_rules,
             inherits_rules=turn.inherits_rules,
             disk_free_mb=turn.disk_free_mb,

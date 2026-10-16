@@ -885,16 +885,23 @@ class LocalRunExecutor:
         if self.event_storage_backend != "redis":
             return
         token_totals = None
+        closing_frames: list[str] = []
         if outcome is not None:
             from src.server.database.conversation.usage import (
                 get_thread_token_totals,
             )
 
             token_totals = await get_thread_token_totals(thread_id)
+            # Ahead of ``run_end``: a gateway stops reading there, and every
+            # reader of the stream, a reconnect included, then sees it once.
+            returned = await stream_writer.steering_returned_frame(thread_id, run_id)
+            if returned:
+                closing_frames.append(returned)
         await stream_writer.append_run_end_event(
             thread_id, run_id, outcome,
             error_frame=error_frame,
             token_totals=token_totals,
+            closing_frames=closing_frames,
             redis_event_ttl=self.redis_event_ttl,
             max_stored_messages=self.max_stored_messages,
         )

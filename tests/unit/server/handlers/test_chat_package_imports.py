@@ -63,7 +63,6 @@ class TestSubmoduleImports:
         assert hasattr(mod, "prepare_skill_contexts")
         assert hasattr(mod, "build_graph_config")
         assert hasattr(mod, "serialize_context_metadata")
-        assert hasattr(mod, "setup_steering_tracking")
 
     def test_import_admission(self):
         import src.server.handlers.chat.admission_gate as mod
@@ -81,9 +80,8 @@ class TestSubmoduleImports:
     def test_import_steering(self):
         import src.server.handlers.chat.steering as mod
 
-        assert hasattr(mod, "steer_thread")
+        assert hasattr(mod, "steer_payload")
         assert hasattr(mod, "steer_subagent")
-        assert hasattr(mod, "drain_pending_steerings")
 
     def test_import_flash_workflow(self):
         import src.server.handlers.chat.flash_run as mod

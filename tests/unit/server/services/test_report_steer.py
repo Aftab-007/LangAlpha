@@ -25,6 +25,15 @@ def _no_admitted_turn():
         yield by_key
 
 
+@pytest.fixture(autouse=True)
+def _no_live_hand_off():
+    with patch(
+        "src.server.database.runs.outbox.has_live_hand_off",
+        new=AsyncMock(return_value=False),
+    ) as live:
+        yield live
+
+
 def _job(n: int, hook_type: str = "task_report_back") -> dict:
     return {"hook_outbox_id": f"job-{n}", "hook_type": hook_type, "payload": {}}
 
@@ -51,7 +60,9 @@ async def _take(jobs, decisions, held, *, closed=(), hold=None, close=None):
         patch.object(steer, "_analyst_offer", new=AsyncMock(side_effect=decisions)),
         patch(_WAKE, new=wake),
     ):
-        reports = await steer.SteeredReportInbox().take("t-1", "run-A")
+        reports = await steer.SteeredReportInbox().take(
+            "t-1", "run-A", kinds=("report",)
+        )
     return reports, hold, close, wake
 
 
@@ -113,7 +124,7 @@ async def test_jobs_are_decided_concurrently():
         patch.object(steer, "_task_offer", new=_offer),
         patch(_WAKE, new=AsyncMock()),
     ):
-        reports = await steer.SteeredReportInbox().take("t-1", "run-A")
+        reports = await steer.SteeredReportInbox().take("t-1", "run-A", kinds=("report",))
 
     assert [r.job_id for r in reports] == ["job-1", "job-2"]
 
@@ -135,7 +146,7 @@ async def test_listing_failure_takes_nothing():
         f"{_OUTBOX}.list_steerable_report_jobs",
         new=AsyncMock(side_effect=RuntimeError("db down")),
     ):
-        assert await steer.SteeredReportInbox().take("t-1", "run-A") == []
+        assert await steer.SteeredReportInbox().take("t-1", "run-A", kinds=("report",)) == []
 
 
 @pytest.mark.asyncio
@@ -222,12 +233,12 @@ async def test_a_held_report_whose_thread_cannot_be_read_again_is_given_back():
 @pytest.mark.asyncio
 async def test_confirm_closes_the_runs_held_reports_and_never_raises():
     confirm = AsyncMock(return_value=["job-1"])
-    with patch(f"{_OUTBOX}.confirm_steered_report_jobs", new=confirm):
+    with patch(f"{_OUTBOX}.confirm_jobs", new=confirm):
         await steer.SteeredReportInbox().confirm("run-A", ["job-1"])
-    confirm.assert_awaited_once_with(["job-1"], run_id="run-A")
+    confirm.assert_awaited_once_with(["job-1"], owner=("run", "run-A"))
 
     with patch(
-        f"{_OUTBOX}.confirm_steered_report_jobs",
+        f"{_OUTBOX}.confirm_jobs",
         new=AsyncMock(side_effect=RuntimeError("db down")),
     ):
         await steer.SteeredReportInbox().confirm("run-A", ["job-1"])

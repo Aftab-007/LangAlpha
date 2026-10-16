@@ -536,7 +536,9 @@ async def threads_stop(
     from src.server.services.cancel_dispatch import cancel_workflow
 
     try:
-        outcome = await cancel_workflow(thread_id, run_id=run_id or None)
+        outcome = await cancel_workflow(
+            thread_id, run_id=run_id or None, by_user=False
+        )
     except Exception:
         # cancel_workflow logs the cause and raises it as a bare 500.
         return error_command("stop_failed", tool_call_id)
@@ -551,7 +553,7 @@ async def threads_stop(
     # The model named the thread to stop; echoing its id back invites it into
     # the reply.
     return success_command(
-        {"success": True, **without_keys(outcome, {"thread_id"})}, tool_call_id
+        {"success": True, **without_keys(outcome, {"thread_id", "returned_steers"})}, tool_call_id
     )
 
 

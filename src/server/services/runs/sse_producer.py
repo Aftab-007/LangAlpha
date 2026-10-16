@@ -281,10 +281,6 @@ class RunSSEProducer:
         # Event sequence numbering for reconnection support
         self.event_sequence: int = 0
 
-        # Track steering messages injected mid-workflow (for query backfill)
-        self.injected_steerings: list[dict] = []
-        self.on_steering_delivered: Optional[Any] = None
-
         self.event_counter: Optional[Any] = None
 
         # Track message IDs that have already emitted content via AIMessageChunk streaming.
@@ -620,14 +616,6 @@ class RunSSEProducer:
                                 "messages": event_data.get("messages", []),
                                 "timestamp": event_data.get("timestamp"),
                             })
-                            # Track injected messages for later query backfill
-                            if self.on_steering_delivered:
-                                try:
-                                    await self.on_steering_delivered(
-                                        event_data.get("messages", [])
-                                    )
-                                except Exception:
-                                    pass
                             continue
 
                         # ``model_fallback`` arrives as a langgraph ui record

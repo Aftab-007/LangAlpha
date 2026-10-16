@@ -4,7 +4,7 @@
  */
 import { api } from '@/api/client';
 import type { WorkflowRunStatus } from '@/types/api';
-import type { CancelOutcome } from '../cancelOutcome';
+import type { CancelOutcome, HeldSteer } from '../cancelOutcome';
 import { bearerTokenOf, refreshAccessToken } from '@/lib/authToken';
 import { baseURL, getAuthHeaders, streamFetch, postSSEStream } from './transport';
 
@@ -74,9 +74,32 @@ export interface SendChatMessageOptions extends StreamTurnOptions {
   expectedLatestRunId?: string | null;
   platform?: string | null;
   threadSettings?: SendThreadSettings;
+  /** Only steer a running turn: with none running the server refuses the
+   *  send as `not_running` instead of starting one. */
+  steerOnly?: boolean;
 }
 
 export type SendHitlResponseOptions = StreamTurnOptions;
+
+// A steer's POST answers once admission decides: at once while a turn runs,
+// but held while a compaction finishes (the server's
+// `admission_compaction_wait_timeout`, 260s by default) or a stopping turn
+// tears down. The bound sits past those so a held steer is not taken for a
+// failed one, and a link that never answers fails it, through the failed
+// path, rather than holding the refused steers queued behind it forever.
+const STEER_ANSWER_TIMEOUT_MS = 300_000;
+
+/** `signal` with a deadline. Rejects as a `TimeoutError`, which no caller reads as a stop. */
+function withDeadline(signal: AbortSignal | null, ms: number): AbortSignal {
+  const deadline = AbortSignal.timeout(ms);
+  if (!signal) return deadline;
+  const either = new AbortController();
+  for (const s of [signal, deadline]) {
+    if (s.aborted) either.abort(s.reason);
+    else s.addEventListener('abort', () => either.abort(s.reason), { once: true });
+  }
+  return either.signal;
+}
 
 export async function sendChatMessageStream(
   message: string,
@@ -99,6 +122,7 @@ export async function sendChatMessageStream(
     signal = null,
     requestKey = null,
     threadSettings = {},
+    steerOnly = false,
   }: SendChatMessageOptions = {},
 ) {
   // For checkpoint replay (regenerate/retry), send empty messages
@@ -111,6 +135,7 @@ export async function sendChatMessageStream(
     timezone,
   };
   if (requestKey) body.request_key = requestKey;
+  if (steerOnly) body.steer_only = true;
   if (additionalContext) {
     body.additional_context = additionalContext;
   }
@@ -131,7 +156,11 @@ export async function sendChatMessageStream(
   const url = isNewThread
     ? '/api/v1/threads/messages'
     : `/api/v1/threads/${threadId}/messages`;
-  return await postSSEStream(url, body, { onEvent, onRunIdResolved, signal });
+  return await postSSEStream(url, body, {
+    onEvent,
+    onRunIdResolved,
+    signal: steerOnly ? withDeadline(signal, STEER_ANSWER_TIMEOUT_MS) : signal,
+  });
 }
 
 /**
@@ -167,7 +196,7 @@ export async function sendRetryStream(
 }
 
 export { isNoOpCancellation } from '../cancelOutcome';
-export type { CancelNoOpState, CancelOutcome } from '../cancelOutcome';
+export type { CancelNoOpState, CancelOutcome, HeldSteer } from '../cancelOutcome';
 
 /**
  * Hard-cancel the workflow for a thread (stops the main agent AND kills all
@@ -264,6 +293,9 @@ export type WorkflowStatusResponse = Partial<ThreadReportBackStatus> & {
   // live one, whose calls the reconnect replays from its stream. null when the
   // backend's read failed.
   token_totals?: ThreadTokenTotals | null;
+  // The user's steers an errored turn left queued, oldest first: the next
+  // turn on the thread reads them. Absent on older backends.
+  pending_steers?: HeldSteer[];
   [key: string]: unknown;
 };
 

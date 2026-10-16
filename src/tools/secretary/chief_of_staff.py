@@ -92,7 +92,7 @@ async def delegate_to_analyst(
     Args:
         question: The task, written for the analyst, who does not see this conversation.
         workspace_id: The workspace whose analyst starts a new thread. Ignored with thread_id.
-        thread_id: An analyst's thread to continue.
+        thread_id: An analyst's thread to continue. While it is mid-turn, the analyst takes the task in before its next step, or as its next turn if that one ends first.
         report_back: Leave True to be told when the analyst finishes, is stopped or fails.
             False only when the user asks for no report, or will follow the work in that
             workspace themselves.

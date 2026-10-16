@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
+from ptc_agent.agent.transcript.classify import is_run_boundary_message
 from src.server.database.conversation.replay_rows import ThreadRows
 from src.server.services.history import projector
 from src.server.services.history import task_status
@@ -98,6 +99,7 @@ def project_turn(
             messages_to_history_events(messages), thread_id=thread_id
         ),
     )
+    ahead = _steers_ahead_of_input(thread_id, turn, turn_items)
     # Compaction signals the turn's messages do not carry live in private
     # state keys: offload counts, which fire as the turn starts, and a
     # summary saved before its response was stamped with it, whose place in
@@ -153,10 +155,34 @@ def project_turn(
     # After the legacy facts so the artifacts they place are covered too:
     # the watermark is a fact about which runs this turn's lines contain.
     task_status.stamp_projected_watermarks(turn_items, watermarks)
-    for item in turn_items:
+    for item in [*ahead, *turn_items]:
         items._enrich(item, thread_id, turn_index, response_id)
-    segment.extend(turn_items)
-    return segment, sealed
+    return [*ahead, *segment, *turn_items], sealed
+
+
+def _steers_ahead_of_input(
+    thread_id: str, turn: TurnSlice, turn_items: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Pull out of ``turn_items`` the steers the turn read ahead of its own
+    input (sent before it started, so the model read them first), to replay
+    them above the table-sourced input as the live view drew them."""
+    boundary = next(
+        (i for i, m in enumerate(turn.messages) if is_run_boundary_message(m)), 0
+    )
+    count = sum(
+        item["event"] == "steering_delivered"
+        for item in history_events_to_sse(
+            messages_to_history_events(turn.messages[:boundary]), thread_id=thread_id
+        )
+    )
+    ahead: list[dict[str, Any]] = []
+    for item in list(turn_items):
+        if len(ahead) == count:
+            break
+        if item.get("event") == "steering_delivered":
+            ahead.append(item)
+            turn_items.remove(item)
+    return ahead
 
 
 def settled_at(response: dict[str, Any] | None) -> datetime | None:

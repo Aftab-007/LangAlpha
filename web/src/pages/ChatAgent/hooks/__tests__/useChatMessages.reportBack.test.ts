@@ -2185,3 +2185,92 @@ describe('useChatMessages — report-back watch (PTC → flash report-back)', ()
     }
   });
 });
+
+describe('useChatMessages: a run announced to an armed report-back watch', () => {
+  // On a Home thread waiting on a hand-off, a report-back run is the watch's
+  // to attach and no reload races it. Any other run announced meanwhile (a
+  // steer the run missed, which the server made a turn of its own) the watch
+  // never attaches, so the check reloads for it.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReportBackStatus.mockImplementation((...args: unknown[]) => mockStatus(...args));
+  });
+
+  /** A Home thread that rendered turn 0 and waits on a report-back. */
+  async function mountArmed() {
+    mockReplay.mockImplementation(async (_tid: string, onEvent: (e: Record<string, unknown>) => void) => {
+      onEvent({ event: 'user_message', turn_index: 0, content: 'hand it off', run_id: 'run-0' });
+      onEvent({ event: 'message_chunk', turn_index: 0, role: 'assistant', agent: 'main', content_type: 'text', content: 'handed off' });
+      onEvent({ event: 'replay_done', thread_id: 'th-home' });
+    });
+    mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true, latest_turn_index: 0 }));
+    mockReconnect.mockImplementation(streamedReconnect());
+    captureWatch();
+    const view = renderHookWithProviders(() => useChatMessages('ws-rb', 'th-home'));
+    await waitFor(() => expect(mockWatch).toHaveBeenCalledTimes(1));
+    await settleMountEffect();
+    await waitFor(() => expect(view.result.current.awaitingReportBack).toBe(true));
+    expect(mockReplay).toHaveBeenCalledTimes(1);
+    return view;
+  }
+
+  it('reloads for a live run that is not a report-back', async () => {
+    const { result } = await mountArmed();
+    mockStatus.mockResolvedValue(threadStatus({
+      can_reconnect: true,
+      status: 'running',
+      run_id: 'run-steer',
+      pending_report_back: true,
+      report_back_run_id: null,
+      latest_turn_index: 1,
+    }));
+    let read: boolean | undefined;
+    await act(async () => {
+      read = await result.current.reconnectIfStaleRun(['run-steer']);
+    });
+    expect(read).toBe(false);
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+  });
+
+  it('reloads for one that ended, which the turn counter shows', async () => {
+    const { result } = await mountArmed();
+    mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true, report_back_run_id: null, latest_turn_index: 1 }));
+    await act(async () => {
+      await result.current.reconnectIfStaleRun(['run-steer']);
+    });
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+  });
+
+  it.each([
+    ['the live pointer', { report_back_run_id: 'rb-1' }],
+    ['the recent report-backs', { report_back_run_id: null, recent_report_back_run_ids: ['rb-1'] }],
+  ])('leaves a report-back run %s names to the watch, even past the turn counter', async (_case, names) => {
+    const { result } = await mountArmed();
+    mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true, latest_turn_index: 1, ...names }));
+    let read: boolean | undefined;
+    await act(async () => {
+      read = await result.current.reconnectIfStaleRun(['rb-1']);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(read).toBe(true);
+    expect(mockReplay).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs in full when no run is named, as on the view being shown again', async () => {
+    const { result } = await mountArmed();
+    mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true, report_back_run_id: 'rb-1', latest_turn_index: 1 }));
+    await act(async () => {
+      await result.current.reconnectIfStaleRun(null);
+    });
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+  });
+
+  it('reloads when a report-back and another run were both announced', async () => {
+    const { result } = await mountArmed();
+    mockStatus.mockResolvedValue(threadStatus({ pending_report_back: true, report_back_run_id: 'rb-1', latest_turn_index: 2 }));
+    await act(async () => {
+      await result.current.reconnectIfStaleRun(['rb-1', 'run-steer']);
+    });
+    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+  });
+});

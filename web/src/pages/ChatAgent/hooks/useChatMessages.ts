@@ -18,7 +18,7 @@ import { sendChatMessageStream, sendRetryStream, getWorkflowStatus, sendHitlResp
 import { useLocalRunPublisher } from '@/lib/threadLifecycle/useLocalRunPublisher';
 import { peekThreadMux } from '../session/stream/threadStreamMux';
 import type { WorkflowStatusResponse } from '../utils/api';
-import type { CancelOutcome } from '../utils/cancelOutcome';
+import type { CancelOutcome, HeldSteer } from '../utils/cancelOutcome';
 // Imported from the dependency-free signal module (not `../utils/api`) so this
 // keeps decoding wire status even in the hook tests that fully mock `../utils/api`.
 import { shouldArmForStatus } from '../utils/reportBackSignal';
@@ -210,8 +210,34 @@ export function useChatMessages(
     messageId: string;
   } | null>(null);
   const [messageError, setMessageError] = useState<string | StructuredError | null>(null);
-  // Steering returned by the server (agent finished before consuming it)
+  // Steer text for the composer: the user's steers a stop took back from the
+  // run, and any the stop overtook on their way to it.
   const [returnedSteering, setReturnedSteering] = useState<string | null>(null);
+  const giveBackSteering = (text: string) => setReturnedSteering((prev) => (prev ? `${prev}\n${text}` : text));
+  // Steers the server refused as `not_running`, oldest first: each goes out
+  // as a send once the view lets the ended turn go (the flush effect below).
+  const notRunningSendsRef = useRef<{
+    /** The queue's generation when it was sent, from `notRunningGenRef`. */
+    gen: number;
+    message: string;
+    additionalContext: Record<string, unknown>[] | null;
+    attachmentMeta: Record<string, unknown>[] | null;
+    modelOptions: ModelOptions;
+    requestKey: string;
+    /** The steer's bubble, which waits on screen until its send replaces it. */
+    steerId: string;
+    /** When it was sent, from `steerSeqRef`. */
+    seq: number;
+  }[]>([]);
+  // Orders the queue above by when each message was sent: refusals come back
+  // on separate POSTs, in whatever order those answer.
+  const steerSeqRef = useRef(0);
+  // Ends the queue above, and any refusal still on its way to it. The queue
+  // lives with its own thread's view, so only an in-place thread switch ends
+  // it: the '__default__' → real id move of a new chat's first send keeps it,
+  // and a steer sent before the thread existed goes out on the created one.
+  const notRunningGenRef = useRef(0);
+  const [notRunningTick, setNotRunningTick] = useState(0);
   // Edit text whose message is gone, for the composer.
   const [returnedEdit, setReturnedEdit] = useState<string | null>(null);
   const clearReturnedEdit = useCallback(() => setReturnedEdit(null), []);
@@ -330,10 +356,12 @@ export function useChatMessages(
   // trigger while streaming runs the load effect's cleanup (detaching the mux)
   // and then bails on the streaming guard — losing the reload.
   const pendingMuxResyncRef = useRef(false);
-  // Steers whose POST has not answered. One sent as the run ended comes back
+  // Steers whose POST has not answered, by send order, with the refused-steer
+  // queue's generation each was sent in. One sent as the run ended comes back
   // as a new turn that streams its own run, so a load waits for it as for a
-  // stream: attaching to that run first would read it twice.
-  const steersInFlightRef = useRef(0);
+  // stream: attaching to that run first would read it twice. The refused-steer flush waits for those sent
+  // before its next, whose refusal may still land.
+  const steersInFlightRef = useRef(new Map<number, number>());
   // A refused steer's banner, for a load to show again once it has cleared
   // it: the first load to succeed after the refusal shows it, unless a turn
   // sent or a thread opened since has moved the session on.
@@ -649,7 +677,6 @@ export function useChatMessages(
     setReloadTrigger,
     setHasActiveSubagents,
     setPendingInterrupt,
-    setReturnedSteering,
     setThreadId,
     setWorkspaceStarting,
     // ref containers (stable identity, ref-current reads)
@@ -793,6 +820,11 @@ export function useChatMessages(
         // stale compacting indicator).
         setQueuedSend(false);
         queuedSendRef.current = null;
+        // So do refused steers waiting to open its next turn, and those still
+        // waiting on their answers. Their bubbles go with the messages above,
+        // so nothing would ever send them: their keys are released here.
+        notRunningGenRef.current += 1;
+        for (const q of notRunningSendsRef.current.splice(0)) requestKeyRef.current.settle(q.requestKey);
         setIsCompacting(false);
         // Reset refs
         contentOrderCounterRef.current = 0;
@@ -1071,7 +1103,11 @@ export function useChatMessages(
     if (e?.status !== 409 || e?.errorInfo?.code !== 'duplicate_request' || !e.errorInfo.run_id) return false;
     requestKeyRef.current.settle(requestKey);
     if (e.errorInfo.steered !== true) {
-      settleStartedCopy(e.errorInfo.run_id, steerId, message, requestKey);
+      // A copy of this send started the turn the answer names, as its
+      // question, and only that copy's answer was lost, so the steer is no
+      // second message. A turn this view is not following shows on a reload.
+      setMessages((prev) => prev.filter((m) => m.id !== steerId));
+      if (e.errorInfo.run_id !== currentRunIdRef.current) pendingMuxResyncRef.current = true;
       return true;
     }
     type Steer = UserMessage & { queueError?: unknown };
@@ -1115,28 +1151,6 @@ export function useChatMessages(
       pendingMuxResyncRef.current = true;
     }
     return true;
-  };
-
-  /**
-   * A steer the server answered `duplicate_request` without `steered`: a copy
-   * of this send started the turn the answer names, as that turn's question,
-   * and only that copy's answer was lost. The steer is not a second message,
-   * so it goes. The question shows when this view follows that turn and has
-   * drawn it; otherwise a reload shows the turn. A bubble under another key
-   * is another send, never that question.
-   */
-  const settleStartedCopy = (runId: unknown, steerId: string, message: string, requestKey: string): void => {
-    const text = message.trim();
-    const users = (liveMessages.get() as ChatMessage[]).filter((m): m is UserMessage => m.role === 'user');
-    const turn = users.find((m) => m.id === steerId)?.turnIndex;
-    const asked = runId === currentRunIdRef.current && users.some((m) => {
-      if (m.id === steerId || m.turnIndex !== turn) return false;
-      if (m.requestKey && m.requestKey !== requestKey) return false;
-      const q = m as UserMessage & { queueError?: unknown };
-      return !q.steering && !q.steeringDelivered && !q.unadmitted && !q.queueError && String(q.content ?? '').trim() === text;
-    });
-    setMessages((prev) => prev.filter((m) => m.id !== steerId));
-    if (!asked) pendingMuxResyncRef.current = true;
   };
 
   /**
@@ -1220,7 +1234,7 @@ export function useChatMessages(
     // during streaming). A reload asked for meanwhile runs when the stream
     // releases, since the stream shows only its own run, and one asked for
     // while a steer waits on its answer runs once that answer settles.
-    if (isStreamingRef.current || (reloadAsked && steersInFlightRef.current > 0)) {
+    if (isStreamingRef.current || (reloadAsked && steersInFlightRef.current.size > 0)) {
       if (reloadAsked) pendingMuxResyncRef.current = true;
       return;
     }
@@ -1287,17 +1301,60 @@ export function useChatMessages(
       // blanket completion of inline subagent cards: each is born with its real
       // status from the replayed task-artifact stamp, and one would clobber a
       // legitimately 'cancelled' card.
+      const pendingSteers = (status.pending_steers ?? []).filter((p) => p.content);
+      const pendingKeys = new Set(pendingSteers.map((p) => p.request_key).filter((key): key is string => !!key));
       const settleEndedRun = (ok: boolean) => {
         if (cancelled || sessionEpochRef.current !== sessionEpochAtStart) return;
         // A steer a give-up kept queued, in a run that ended without the
-        // replay delivering it, is queued no more. No stream of this view was
-        // there for the run's hand-back, and the server hands such a steer
-        // back at the end of the thread's next run.
+        // replay delivering it, is queued no more unless the status still
+        // lists it: the server made it a turn of its own, which shows when it
+        // runs, or a stop handed it back to the tab that stopped.
         if (ok && !status.can_reconnect && status.status !== 'error') {
           const queued = new Set(liveMessages.get()
-            .filter((m) => m.role === 'user' && !m.isHistory && (m as { steering?: boolean }).steering)
+            .filter((m) => m.role === 'user' && !m.isHistory && (m as { steering?: boolean }).steering
+              && !pendingKeys.has((m as { requestKey?: string }).requestKey ?? ''))
             .map((m) => m.id));
           if (queued.size > 0) setMessages((prev) => prev.filter((m) => !queued.has(m.id)));
+        }
+        // A steer the status lists waits on the server, which delivers it by
+        // its key or starts a turn of its own with it, whose replay is then its
+        // only copy. So this view's copy becomes the status's, which a reload
+        // clears and draws again while the steer still waits.
+        if (ok && pendingKeys.size > 0) {
+          const listed = (m: ChatMessage) => m.role === 'user' && !m.isHistory && !!(m as { steering?: boolean }).steering
+            && pendingKeys.has((m as { requestKey?: string }).requestKey ?? '');
+          setMessages((prev) => (prev.some(listed) ? prev.map((m) => (listed(m) ? { ...m, isHistory: true } : m)) : prev));
+        }
+        // The steers an errored turn left on the server wait under it for the
+        // next turn, which reads them and delivers them by their keys, and so
+        // do those queued in a live run it has yet to read. The status is
+        // their only record until then, so each load draws them again; a
+        // bubble of this view's under the same key already does.
+        if (ok && pendingSteers.length > 0) {
+          const turn = typeof status.latest_turn_index === 'number' ? status.latest_turn_index : lastRenderedTurnIndexRef.current;
+          setMessages((prev) => {
+            const shown = new Set(prev.map((m) => (m as { requestKey?: string }).requestKey).filter(Boolean));
+            const rows = pendingSteers
+              .filter((p) => !p.request_key || !shown.has(p.request_key))
+              .map((p, i): UserMessage => ({
+                id: `pending-steer-${p.request_key ?? i}`,
+                role: 'user',
+                content: p.content,
+                contentType: 'text',
+                timestamp: p.timestamp ? new Date(p.timestamp * 1000) : new Date(),
+                isStreaming: false,
+                isHistory: true,
+                steering: true,
+                ...(turn !== null && turn >= 0 ? { turnIndex: turn } : {}),
+                ...(p.request_key ? { requestKey: p.request_key } : {}),
+              }));
+            if (rows.length === 0) return prev;
+            // A live run's go below the reply it is writing, which the
+            // reconnect puts above them, as the run reads them after it.
+            const at = status.can_reconnect ? prev.length : Math.min(newMessagesStartIndexRef.current, prev.length);
+            if (newMessagesStartIndexRef.current >= at) newMessagesStartIndexRef.current = at + rows.length;
+            return [...prev.slice(0, at), ...rows, ...prev.slice(at)];
+          });
         }
         if (onlineRetryEpochRef.current !== onlineEpochAtStart && (!ok || status.status === 'error')) return;
         if (status.can_reconnect || historyHasUnresolvedInterruptRef.current) return;
@@ -1668,6 +1725,9 @@ export function useChatMessages(
     // the retry pinned to the stopped run instead of cancelling the new one.
     const stoppedRunId = currentRunIdRef.current;
     if (wasStoppedRef.current) return; // double-click stop is idempotent
+    // Steers waiting to open the next turn were never sent anywhere: they go
+    // back to the composer with the ones the stop takes back from the run.
+    const unsent = notRunningSendsRef.current.splice(0);
 
     // (a) Abort the main reader NOW so the stop feels instant. The aborted
     // stream resolves with { aborted: true } and the send finally skips
@@ -1753,7 +1813,53 @@ export function useChatMessages(
       if (!outcome || outcome.state === 'another_run_active') {
         toast({ description: t('chat.stopFailed'), variant: 'destructive' });
       }
+      giveBackStoppedSteers(outcome?.returned_steers ?? [], unsent);
+    } else {
+      giveBackStoppedSteers([], unsent);
     }
+  };
+
+  /**
+   * Puts the user's steers a stop took back into the composer, oldest first,
+   * and removes the bubbles that showed them waiting: those the run handed
+   * back, then those that never reached it. A returned steer is matched to
+   * its bubbles by request key, else by its text, and given back once. One a
+   * delivered row on screen carries was read after all, so it stays there.
+   */
+  const giveBackStoppedSteers = (
+    returned: readonly HeldSteer[],
+    unsent: readonly { message: string; steerId: string; requestKey: string }[],
+  ) => {
+    const transcript = liveMessages.get();
+    const keyOf = (m: ChatMessage) => (m as { requestKey?: string }).requestKey;
+    const drop = new Set<string>(unsent.map((u) => u.steerId));
+    const texts: string[] = [];
+    const seen = new Set<string>();
+    for (const steer of returned) {
+      const key = steer.request_key;
+      if (key) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // The server keeps a returned steer's key spent, so the text sent
+        // again from the composer is a new send under a new key.
+        requestKeyRef.current.settle(key);
+        const copies = transcript.filter((m): m is UserMessage => m.role === 'user' && keyOf(m) === key);
+        if (copies.some((m) => m.steeringDelivered)) continue;
+        for (const m of copies) drop.add(m.id as string);
+      } else {
+        const text = steer.content.trim();
+        const copy = transcript.find((m) => m.role === 'user' && !drop.has(m.id as string)
+          && !m.steeringDelivered && !!m.steering && String(m.content ?? '').trim() === text);
+        if (copy) drop.add(copy.id as string);
+      }
+      if (steer.content) texts.push(steer.content);
+    }
+    for (const u of unsent) {
+      requestKeyRef.current.settle(u.requestKey);
+      texts.push(u.message);
+    }
+    if (drop.size > 0) setMessages((prev) => prev.filter((m) => !drop.has(m.id as string)));
+    if (texts.length > 0) giveBackSteering(texts.join('\n'));
   };
 
   /**
@@ -1841,30 +1947,34 @@ export function useChatMessages(
   };
 
   /**
-   * Handles sending a message while the agent is already streaming (steering).
-   * The backend will accept it for injection before the next LLM call.
-   *
-   * Demotion path: the frontend's ``isLoading`` lags the backend's task status by
-   * the SSE-drain window. If the user sends after the workflow has flipped to a
-   * terminal status but before the terminal SSE event reaches us, ``wait_or_steer``
-   * routes this POST as a new turn instead of steering. The backend emits an
-   * authoritative ``metadata`` event (with a fresh ``run_id``) as the first event
-   * of the new turn's stream — receipt of any ``metadata`` event on the steering
-   * POST means we got routed as a new turn. We demote the user bubble (strip the
-   * badge) and switch subsequent events to the standard stream processor so the
-   * new turn renders normally.
+   * Sends a message into the turn this view shows running, as a steer. The
+   * POST may only steer (`steer_only`): the view's loading state lags the
+   * server's by the stream's tail, so the turn may already be over, and then
+   * the server refuses it as `not_running` instead of starting a turn on a
+   * connection that reads only the acceptance. That steer goes out again as
+   * a send under the same request key once the view lets the ended turn go,
+   * or back to the composer when the user stopped meanwhile.
    */
-  const handleSendSteering = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { widgetSnapshots, chartSelections }: ModelOptions = {}) => {
+  const handleSendSteering = async (
+    message: string,
+    additionalContext: Record<string, unknown>[] | null = null,
+    attachmentMeta: Record<string, unknown>[] | null = null,
+    modelOptions: ModelOptions = {},
+    resendKey: string | null = null,
+  ) => {
+    const { widgetSnapshots, chartSelections } = modelOptions;
+    // The refused-steer queue the steer belongs to, for a refusal to rejoin
+    // it only if no thread switch has ended it since.
+    const gen = notRunningGenRef.current;
     // Show user message in chat with steering indicator. Preserve any inline
     // context cards (widget snapshots / chart selections) so a message queued
     // during compaction keeps them when the flush routes through steering.
     const steeredTurn = newestTurn(liveMessages.get()) ?? undefined;
-    // Same fingerprint form as handleSendMessage: if this POST is demoted to
-    // a new turn and its response is lost, the user's re-send (which will
-    // route through handleSendMessage once loading clears) reuses the key and
-    // dedups against the accepted run. Other steers can be waiting on their
-    // answers too, and each keeps its own key for its own re-send.
-    const requestKey = requestKeyRef.current.take(sendFingerprint(threadId, message), { alongside: true });
+    // Same fingerprint form as handleSendMessage: a re-send of a steer whose
+    // answer was lost reuses the key and dedups against the accepted copy.
+    // Other steers can be waiting on their answers too, and each keeps its own
+    // key for its own re-send.
+    const requestKey = resendKey ?? requestKeyRef.current.take(sendFingerprint(threadId, message), { alongside: true });
     const userMessage: ChatMessage = {
       ...createUserMessage(message, steeredTurn, attachmentMeta as AttachmentMeta[] | null, widgetSnapshots ?? null, chartSelections ?? null),
       steering: true,
@@ -1873,79 +1983,16 @@ export function useChatMessages(
     };
     recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
     setMessages((prev) => appendMessage(prev,userMessage));
+    const seq = ++steerSeqRef.current;
 
-    let demotedToNewTurn = false;
-    let demotedProcessor: ((event: SSEEvent) => void) | null = null;
-    let demotedAssistantId: string | null = null;
-    const demotedInterruptedRef = { current: false };
-    const demotedRefs: { current: StreamProcessorRefs | null } = { current: null };
-    const demotedAdmission: { current: ReturnType<typeof trackPlainSend> | null } = { current: null };
-    // Controller for the steering POST. If this POST is demoted to a fresh
-    // turn it becomes the active main stream, so we register it on
-    // mainStreamAbortRef in demoteToNewTurn — stopWorkflow can then abort it.
-    const steeringAbort = new AbortController();
-    // Stash the Content-Location run_id but DO NOT commit it to
-    // currentRunIdRef until we've seen evidence that this POST actually
-    // started a new workflow (i.e., demoteToNewTurn fires). Committing
-    // eagerly on Content-Location alone would overwrite the active
-    // workflow's run_id when the backend routes this as steering-only.
-    let pendingRunIdFromHeader: string | null = null;
-
-    const demoteToNewTurn = (): void => {
-      // If the user already hit stop, do NOT promote this in-flight steering
-      // POST into a fresh turn: clearing wasStoppedRef + re-enabling the
-      // spinner here would make the stop look undone (the backend tore the
-      // prior turn down and routed this POST as new). Drop it instead — the
-      // finally below honors wasStoppedRef and returns.
-      if (wasStoppedRef.current) return;
-      demotedToNewTurn = true;
-      // The bubble no longer steers the running turn: it opens the next one.
-      const demotedTurn = newestKnownTurn() + 1;
-      setMessages((prev) =>
-        updateMessage(prev, userMessage.id as string, (msg) => {
-          if (msg.role !== 'user') return msg;
-          const next: UserMessage & { queuePosition?: unknown; queueError?: unknown } = { ...msg, turnIndex: demotedTurn };
-          delete next.steering;
-          delete next.steeredRunId;
-          delete next.queuePosition;
-          delete next.queueError;
-          return next;
-        })
-      );
-      const newAssistantId = `assistant-${Date.now()}`;
-      demotedAssistantId = newAssistantId;
-      // From here it is a send, and the server may yet fail to start it.
-      demotedAdmission.current = trackPlainSend({
-        userId: userMessage.id as string,
-        assistantId: newAssistantId,
-        turnIndex: demotedTurn,
-        request: { ...sendRequest(message, additionalContext), requestKey },
-        watermarkBefore: lastRenderedTurnIndexRef.current,
-      });
-      beginRun(agentMode, pendingRunIdFromHeader);
-      const assistantMessage = createAssistantMessage(newAssistantId, demotedTurn);
-      setMessages((prev) => appendMessage(prev, assistantMessage));
-      currentMessageRef.current = newAssistantId;
-      acquireStreamOwnership(threadId);
-      setIsLoading(true);
-      // This demoted POST is now the active main turn; clear the stopped guard
-      // and register its controller so stopWorkflow can abort it.
-      wasStoppedRef.current = false;
-      sessionEpochRef.current += 1;
-      backgroundReconnectRef.current = false;
-      mainStreamAbortRef.current = steeringAbort;
-      const refs = buildStreamRefs();
-      demotedRefs.current = refs;
-      demotedProcessor = createStreamEventProcessor(runtime, streamRouterDeps, newAssistantId, refs, getTaskIdFromEvent, demotedInterruptedRef);
-    };
-
-    steersInFlightRef.current += 1;
+    // The refusal the stream answered with, once it started: the same answer
+    // the route gives as a 409 before it does.
+    const answered: { refusal: Record<string, unknown> | null } = { refusal: null };
+    steersInFlightRef.current.set(seq, gen);
     try {
-      // Send to same endpoint — backend will auto-accept steering and return steering_accepted SSE
-      const result = await sendChatMessageStream(message, workspaceId, threadId, {
+      await sendChatMessageStream(message, workspaceId, threadId, {
         onEvent: (event) => {
-          const eventType = event.event || 'message_chunk';
-          if (eventType === 'steering_accepted') {
+          if (event.event === 'steering_accepted') {
             // Snapshot the boundary so the primary stream's steering_delivered
             // handler can roll back leaked content. The event's own `_eventId`
             // is the natural boundary in the Redis stream; fall back to the
@@ -1961,121 +2008,51 @@ export function useChatMessages(
             );
             return;
           }
-          // First non-steering event = backend routed as a new turn (race: status
-          // flipped to terminal before our POST landed). The first frame in that
-          // case is the authoritative ``metadata`` event (carrying a fresh
-          // run_id) per the backend SSE protocol; we also accept any other
-          // non-steering event here as defense-in-depth (e.g. an early error
-          // before workflow start). The demoted processor handles ``metadata``
-          // itself — it stores ``run_id`` into ``currentRunIdRef``.
-          if (!demotedToNewTurn) {
-            demoteToNewTurn();
-          }
-          if (demotedProcessor) {
-            demotedAdmission.current?.observe(event);
-            demotedProcessor(event);
-          }
+          // A steer-only POST carries no turn of its own: its one other
+          // answer is a refusal.
+          if (event.event === 'error' && !answered.refusal) answered.refusal = event;
         },
         additionalContext,
         agentMode,
         locale: userLocale,
         timezone: userTimezone,
         platform,
-        // Stash the Content-Location run_id but defer the commit until
-        // demoteToNewTurn fires. Backend emits Content-Location on every
-        // POST including pure-steering responses; committing eagerly would
-        // overwrite the active workflow's run_id with a stream key that
-        // never gets written to.
-        onRunIdResolved: (runId) => {
-          requestKeyRef.current.settle(requestKey);
-          pendingRunIdFromHeader = runId;
-        },
-        signal: steeringAbort.signal,
+        onRunIdResolved: () => requestKeyRef.current.settle(requestKey),
         requestKey,
+        steerOnly: true,
       });
-      if (mainStreamAbortRef.current === steeringAbort) {
-        mainStreamAbortRef.current = null;
-      }
-      // A background abort (foreground handler on tab resume) or a transport
-      // drop returns a result flag instead of throwing. This is the one steering
-      // sub-case the foreground handler can hit: once we demote to a real new
-      // turn, steeringAbort owns mainStreamAbortRef, so an abort here lands on a
-      // live backend turn. Re-kick the existing reconnect instead of finalizing
-      // it as truncated-complete. A user stop is owned by stopWorkflow.
-      if (result?.aborted || wasStoppedRef.current) {
-        const reconnectId = currentMessageRef.current || demotedAssistantId;
-        if (
-          demotedToNewTurn &&
-          backgroundReconnectRef.current &&
-          !wasStoppedRef.current &&
-          reconnectId
-        ) {
-          backgroundReconnectRef.current = false;
-          attemptReconnectAfterDisconnect(reconnectId);
-        }
-        return;
-      }
-      // The demoted turn is a new run, so it can end on a retry notice like a
-      // send, ahead of the drop the server follows it with, and its resends
-      // carry its message as a send's do.
-      const demotedRetry = demotedRefs.current?.retryNotice;
-      const demotedId = currentMessageRef.current || demotedAssistantId;
-      if (demotedToNewTurn && demotedRetry && demotedId && settleRetry(demotedRetry, demotedId, 0, {}, sendRequest(message, additionalContext), null, demotedAdmission.current?.unstarted() ?? null)) {
-        return;
-      }
-      // Natural transport drop on the demoted turn: reconnect rather than
-      // finalizing — the turn may still be running on the backend.
-      if (result?.disconnected && demotedToNewTurn && !demotedRetry) {
-        const reconnectId = currentMessageRef.current || demotedAssistantId;
-        if (reconnectId) {
-          attemptReconnectAfterDisconnect(reconnectId);
-        }
-        return;
-      }
-      if (demotedToNewTurn) {
-        const finalId = currentMessageRef.current || demotedAssistantId;
-        if (finalId) {
-          setMessages((prev) =>
-            updateMessage(prev, finalId, (msg) => finalizeAssistantMessage(msg, demotedInterruptedRef.current ? 'paused' : 'completed'))
-          );
-          // The run it became ended like a send's, and replay holds it now,
-          // unless the server never started it.
-          if (demotedAdmission.current?.refused() || demotedRetry?.recovery === 'resend') demotedAdmission.current?.unadmit();
-          else markTranscriptPersisted();
-          if (!demotedInterruptedRef.current) {
-            cleanupAfterStreamEnd(finalId);
-          }
-        }
+      const frame = answered.refusal;
+      if (frame) {
+        const text = typeof frame.error === 'string' ? frame.error : '';
+        throw Object.assign(new Error(text || 'Failed to send message'), {
+          status: 409,
+          errorInfo: { code: frame.code, message: text },
+        });
       }
     } catch (err: unknown) {
-      if (mainStreamAbortRef.current === steeringAbort) {
-        mainStreamAbortRef.current = null;
-      }
-      if ((err as Error)?.name === 'AbortError' || wasStoppedRef.current) {
+      if ((err as Error)?.name === 'AbortError') return;
+      const code = (err as { errorInfo?: { code?: unknown } })?.errorInfo?.code;
+      if ((err as { status?: number })?.status === 409 && code === 'not_running') {
+        settleNotRunningSteer(userMessage.id as string, gen, message, additionalContext, attachmentMeta, modelOptions, requestKey, seq);
         return;
       }
+      // A steer the user's stop overtook: the stop hands the turn's steers
+      // back to the composer, and this one joins them.
+      if (wasStoppedRef.current && code === 'stopping') {
+        requestKeyRef.current.settle(requestKey);
+        setMessages((prev) => prev.filter((m) => m.id !== userMessage.id));
+        giveBackSteering(message);
+        return;
+      }
+      if (wasStoppedRef.current) return;
       console.error('Error sending steering:', err);
-      if (demotedToNewTurn && demotedAssistantId) {
-        // Demoted path: the failure belongs to the new turn's assistant, not the steering badge.
-        const finalAssistantId = demotedAssistantId;
-        setMessages((prev) =>
-          updateMessage(prev, finalAssistantId, (msg) =>
-            failAssistantMessage(msg, { message: 'Failed to send message. Please try again.' }))
-        );
-        demotedAdmission.current?.unadmit();
-        const { banner } = refusalBanner(err);
-        if (banner !== null) setMessageError(banner);
-        releaseStreamOwnership();
-        setIsLoading(false);
-        return;
-      }
       if (settleDuplicateSteer(err, userMessage.id as string, message, requestKey)) return;
       // The server sends a refusal (a 4xx) before it queues a steer. It holds
       // the status line of a steer it takes until the stream's first frame,
       // so a failure in between reads as a 5xx or as no answer, and a
       // delivery the run already made was the answer this POST lost. A
-      // delivery marks the steers whose text it names, so one that marked a
-      // refused steer was another with its text.
+      // delivery marks the steers it names, so one that marked a refused
+      // steer was another with its text.
       const refused = isClientError(err);
       if (!refused && liveMessages.get().some((m) => m.id === userMessage.id && (m as { steeringDelivered?: boolean }).steeringDelivered)) return;
       // Shown as a refused send's is. A steer has no reply to fail in its
@@ -2102,14 +2079,91 @@ export function useChatMessages(
       );
       setMessageError(banner);
     } finally {
-      steersInFlightRef.current -= 1;
+      steersInFlightRef.current.delete(seq);
+      if (notRunningSendsRef.current.length > 0) setNotRunningTick((n) => n + 1);
       // A load deferred to this answer runs now, unless a stream it started
       // holds it until that stream lets go.
-      if (steersInFlightRef.current === 0 && pendingMuxResyncRef.current && !isStreamingRef.current) {
+      if (steersInFlightRef.current.size === 0 && pendingMuxResyncRef.current && !isStreamingRef.current) {
         pendingMuxResyncRef.current = false;
         setReloadTrigger((n) => n + 1);
       }
     }
+  };
+
+  /**
+   * A steer the server refused as `not_running`: the turn it was sent to had
+   * ended. After a stop the message goes back to the composer with the
+   * turn's other steers. Otherwise its bubble keeps waiting until the view
+   * lets the ended turn go, and then it goes out as a send under the same
+   * request key (the flush below), behind any sent before it.
+   */
+  const settleNotRunningSteer = (
+    steerId: string,
+    gen: number,
+    message: string,
+    additionalContext: Record<string, unknown>[] | null,
+    attachmentMeta: Record<string, unknown>[] | null,
+    modelOptions: ModelOptions,
+    requestKey: string,
+    seq: number,
+  ): void => {
+    // A thread switch while it was out took its bubble with the old thread.
+    if (gen !== notRunningGenRef.current) {
+      requestKeyRef.current.settle(requestKey);
+      return;
+    }
+    if (wasStoppedRef.current) {
+      requestKeyRef.current.settle(requestKey);
+      setMessages((prev) => prev.filter((m) => m.id !== steerId));
+      giveBackSteering(message);
+      return;
+    }
+    enqueueNotRunningSend({ gen, message, additionalContext, attachmentMeta, modelOptions, requestKey, steerId, seq });
+  };
+
+  // In send order, so a steer whose refusal lands late still goes out ahead
+  // of those sent after it.
+  const enqueueNotRunningSend = (entry: (typeof notRunningSendsRef.current)[number]): void => {
+    const queue = notRunningSendsRef.current;
+    const at = queue.findIndex((q) => q.seq > entry.seq);
+    queue.splice(at === -1 ? queue.length : at, 0, entry);
+    setNotRunningTick((n) => n + 1);
+  };
+
+  /**
+   * A message sent while refused steers wait to go out joins them, behind the
+   * last: the first of them opens the next turn, and steered into that turn
+   * this one would reach the model ahead of the others, typed before it.
+   */
+  const queueBehindRefused = (
+    message: string,
+    additionalContext: Record<string, unknown>[] | null,
+    attachmentMeta: Record<string, unknown>[] | null,
+    modelOptions: ModelOptions,
+  ): void => {
+    const requestKey = requestKeyRef.current.take(sendFingerprint(threadId, message), { alongside: true });
+    const waiting: ChatMessage = {
+      ...createUserMessage(
+        message,
+        newestTurn(liveMessages.get()) ?? undefined,
+        attachmentMeta as AttachmentMeta[] | null,
+        modelOptions.widgetSnapshots ?? null,
+        modelOptions.chartSelections ?? null,
+      ),
+      steering: true,
+      requestKey,
+    };
+    setMessages((prev) => appendMessage(prev, waiting));
+    enqueueNotRunningSend({
+      gen: notRunningGenRef.current,
+      message,
+      additionalContext,
+      attachmentMeta,
+      modelOptions,
+      requestKey,
+      steerId: waiting.id as string,
+      seq: ++steerSeqRef.current,
+    });
   };
 
   /**
@@ -2161,7 +2215,7 @@ export function useChatMessages(
     };
   };
 
-  const handleSendMessage = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed }: ModelOptions = {}) => {
+  const handleSendMessage = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed }: ModelOptions = {}, resendKey: string | null = null) => {
     const hasContent = message.trim() || (additionalContext && additionalContext.length > 0);
     if (!workspaceId || !hasContent) {
       return;
@@ -2211,9 +2265,15 @@ export function useChatMessages(
       return;
     }
 
+    // The resend of a refused steer is the queue's own; anything else waits behind it.
+    if (resendKey === null && notRunningSendsRef.current.length > 0) {
+      queueBehindRefused(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed });
+      return;
+    }
+
     // If agent is already streaming, send as steering message
     if (isLoading) {
-      return handleSendSteering(message, additionalContext, attachmentMeta, { widgetSnapshots, chartSelections });
+      return handleSendSteering(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed }, resendKey);
     }
 
     // Store model options so HITL resume can forward them
@@ -2318,8 +2378,9 @@ export function useChatMessages(
 
     // One request_key per logical send, reused if this exact send is
     // retransmitted after a lost response (fingerprint match) — see
-    // createRequestKeyTracker.
-    const requestKey = requestKeyRef.current.take(sendFingerprint(effectiveThreadId, message));
+    // createRequestKeyTracker. A steer that found no turn running goes out
+    // under the key it was sent with.
+    const requestKey = resendKey ?? requestKeyRef.current.take(sendFingerprint(effectiveThreadId, message));
     let wasDisconnected = false;
     const wasInterruptedRef = { current: false };
     const admission = trackPlainSend({
@@ -2471,11 +2532,11 @@ export function useChatMessages(
         }
       };
 
-  // Flush a message queued during compaction once it finishes. If a turn is
-  // still running (auto Tier-2 summarize), steer into it; otherwise start a
-  // fresh turn — the exact branch handleSendMessage would have taken had the
-  // message arrived now. queuedSendRef is cleared in stopWorkflow, so a queued
-  // message is never replayed into a turn the user just cancelled.
+  // Flush a message queued during compaction once it finishes, through the
+  // branch handleSendMessage takes for a message arriving now: behind refused
+  // steers still waiting, else steered into a turn still running (auto Tier-2
+  // summarize), else a fresh turn. queuedSendRef is cleared in stopWorkflow,
+  // so a queued message is never replayed into a turn the user just cancelled.
   useEffect(() => {
     if (isCompacting) return;
     const queued = queuedSendRef.current;
@@ -2488,18 +2549,39 @@ export function useChatMessages(
     if (messageId) {
       setMessages((prev) => prev.filter((m) => m.id !== messageId));
     }
-    if (isLoading) {
-      handleSendSteering(message, additionalContext, attachmentMeta, modelOptions);
-    } else {
-      handleSendMessage(message, additionalContext, attachmentMeta, modelOptions);
-    }
-    // Fires on isCompacting transitions. isLoading and the send handlers are
-    // captured from the render where isCompacting went false — that render is
-    // the correct moment to decide steer-vs-fresh. Handlers are omitted from
+    void handleSendMessage(message, additionalContext, attachmentMeta, modelOptions);
+    // Fires on isCompacting transitions. The send handler is captured from
+    // the render where isCompacting went false — that render is the correct
+    // moment to decide steer-vs-fresh. Handlers are omitted from
     // deps because the values they actually close over (workspaceId/threadId)
     // don't change mid-compaction, so a stale closure here isn't possible.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCompacting]);
+
+  // Send a steer the server refused as `not_running` once the view has let
+  // the ended turn go: it opens the next turn, under the key it was sent
+  // with. One at a time, oldest first, so a second waits for the turn the
+  // first opens to end. A steer sent before it whose POST has not answered
+  // holds it too: the turn ending refuses both, and the older refusal can
+  // land after the view goes idle. That POST is bounded, so the hold is.
+  // Nothing is taken off the queue until the send can go out: one that
+  // returned early would leave no turn whose end wakes the rest.
+  useEffect(() => {
+    if (isLoading || isCompacting || !workspaceId) return;
+    const queue = notRunningSendsRef.current;
+    const next = queue[0];
+    if (!next) return;
+    for (const [seq, gen] of steersInFlightRef.current) {
+      if (seq < next.seq && gen === next.gen) return;
+    }
+    queue.shift();
+    setMessages((prev) => prev.filter((m) => m.id !== next.steerId));
+    void handleSendMessage(next.message, next.additionalContext, next.attachmentMeta, next.modelOptions, next.requestKey);
+    // Fires when the view goes idle, a steer is answered or the workspace
+    // arrives. The send handler is captured from that render, which is the
+    // one that saw the view idle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, isCompacting, workspaceId, notRunningTick]);
 
   /**
    * Resumes an interrupted turn with an HITL response (approve or reject).

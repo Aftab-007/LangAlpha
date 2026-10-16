@@ -336,6 +336,13 @@ def _refused(body):
     """A request the route refuses on the branch: an edit from a view that
     missed the newest run, or an answer to a pause a fork replaced."""
     stack = ExitStack()
+    # No copy of the send went in as a steer.
+    stack.enter_context(
+        patch(
+            "src.server.database.runs.outbox.get_steer_job",
+            AsyncMock(return_value=None),
+        )
+    )
     if "hitl_response" in body:
         stack.enter_context(
             patch(_BRANCH_READ, AsyncMock(return_value=_branch_read(7)))

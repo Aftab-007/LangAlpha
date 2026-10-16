@@ -686,44 +686,56 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     expect(typeof bubbleShowing(hook, 'the end').completionObservedAt).toBe('number');
   });
 
-  it('a steer that starts the next turn while a retry waits settles what the retry was keeping, then reloads it whole', async () => {
+  it('a steer the ended run refused while a retry waits goes out once the retry lets the turn go, then reloads it whole', async () => {
     const hook = await mount();
     // The reconnect drops after more text; the retry waits a second to reopen.
     await dropThenReconnect(hook, failsAfter([{ ...chunk(' and then'), _eventId: 3 }], 'drops'));
     await waitFor(() => expect(bubbleShowing(hook, 'and then')).toBeTruthy());
-    // The run ended in the gap, so the server opens a turn with the steer.
-    mockStatus.mockImplementation(async () => threadStatus({ can_reconnect: false, status: 'completed', latest_turn_index: 2 }));
-    mockSendStream.mockImplementation(async (_msg: string, _ws: string, _tid: string | null, { onEvent }: { onEvent: Emit }) => {
-      onEvent({ event: 'metadata', thread_id: 'th-1', run_id: 'run-2', turn_index: 2, _eventId: 1 });
-      onEvent({ ...chunk('the next answer'), _eventId: 2 });
-      onEvent({ ...chunk('', { finish_reason: 'stop' }), _eventId: 3 });
+    // The run ended in the gap, so the server refuses the steer.
+    mockStatus.mockImplementation(async () => threadStatus({ can_reconnect: false, status: 'completed', latest_turn_index: 1 }));
+    mockSendStream.mockImplementation(async (_msg: string, _ws: string, _tid: string | null, opts: { onEvent: Emit; steerOnly?: boolean }) => {
+      if (opts.steerOnly) {
+        throw Object.assign(new Error('The turn has ended.'), {
+          status: 409,
+          errorInfo: { code: 'not_running', message: 'The turn has ended.' },
+        });
+      }
+      mockStatus.mockImplementation(async () => threadStatus({ can_reconnect: false, status: 'completed', latest_turn_index: 2 }));
+      opts.onEvent({ event: 'metadata', thread_id: 'th-1', run_id: 'run-2', turn_index: 2, _eventId: 1 });
+      opts.onEvent({ ...chunk('the next answer'), _eventId: 2 });
+      opts.onEvent({ ...chunk('', { finish_reason: 'stop' }), _eventId: 3 });
       return { disconnected: false };
     });
-    let atReload: MessageRecord[] | null = null;
     mockReplay.mockImplementation(async (tid: string, onEvent: Emit) => {
-      atReload ??= [...(hook.result.current.liveMessages.get() as MessageRecord[])];
-      await bothTurnsWhole(tid, onEvent);
+      if (mockSendStream.mock.calls.length >= 3) return bothTurnsWhole(tid, onEvent);
+      onEvent({ event: 'user_message', turn_index: 0, content: 'question 0', run_id: 'run-0' });
+      onEvent({ ...chunk('answer 0'), turn_index: 0 });
+      onEvent({ event: 'user_message', turn_index: 1, content: 'go on', run_id: 'run-1' });
+      onEvent({ ...chunk('the first half and then the rest'), turn_index: 1 });
+      onEvent({ event: 'replay_done', thread_id: 'th-1' });
     });
     await act(async () => {
       await hook.result.current.handleSendMessage('also this');
       await flush();
     });
-    await waitFor(() => expect(bubbleShowing(hook, 'the next answer').isStreaming).toBe(false));
-    expect(mockReplay).toHaveBeenCalledTimes(1);
-    // Past the retry's wait, when it finds the turn moved on.
+    // Refused, it waits on screen for the retry.
+    expect(mockSendStream).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.isLoading).toBe(true);
+    // Past the retry's wait, when it finds the run ended.
     await act(async () => {
       await new Promise((r) => setTimeout(r, 1200));
     });
-    await waitFor(() => expect(mockReplay).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockSendStream).toHaveBeenCalledTimes(3));
+    const [, steer, resend] = mockSendStream.mock.calls.map((call) => call[3] as { requestKey: string; steerOnly?: boolean });
+    expect(steer.steerOnly).toBe(true);
+    expect(resend.steerOnly).toBeFalsy();
+    expect(resend.requestKey).toBe(steer.requestKey);
+    await waitFor(() => expect(bubbleShowing(hook, 'the next answer').isStreaming).toBe(false));
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
     await waitFor(() => expect(hook.result.current.isLoadingHistory).toBe(false));
 
     expect(mockReconnect).toHaveBeenCalledTimes(1);
-    expect(atReload!.filter((m) => m.isStreaming)).toEqual([]);
-    // Settled without a turn end: nothing saw the run it belonged to end.
-    const kept = atReload!.find((m) => m.role === 'assistant' && String(m.content ?? '').includes('and then'));
-    expect(kept?.completionObservedAt).toBeUndefined();
     expect(hook.result.current.isReconnecting).toBe(false);
-    // It stopped where the link dropped; the reload has the rest.
     showsEachTurnOnce(hook);
   });
 
@@ -1495,42 +1507,33 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     return attach;
   }
 
-  it.each(['delivers it', 'hands it back'] as const)(
-    'a steer still queued when the retry gives up on a live run stays through the reload until the run %s',
-    async (outcome) => {
-      const hook = await mount();
-      // The running turn replays as its stub: the question, with no run id yet.
-      mockReplay.mockImplementation(async (_tid: string, onEvent: Emit) => {
-        onEvent({ event: 'user_message', turn_index: 0, content: 'question 0', run_id: 'run-0' });
-        onEvent({ ...chunk('answer 0'), turn_index: 0 });
-        onEvent({ event: 'user_message', turn_index: 1, content: 'go on' });
-        onEvent({ event: 'replay_done', thread_id: 'th-1' });
-      });
-      const attach = await queuedSteerThenGiveUp(hook, running);
-      await waitFor(() => expect(mockReconnect).toHaveBeenCalled());
+  it('a steer still queued when the retry gives up on a live run stays through the reload until the run delivers it', async () => {
+    const hook = await mount();
+    // The running turn replays as its stub: the question, with no run id yet.
+    mockReplay.mockImplementation(async (_tid: string, onEvent: Emit) => {
+      onEvent({ event: 'user_message', turn_index: 0, content: 'question 0', run_id: 'run-0' });
+      onEvent({ ...chunk('answer 0'), turn_index: 0 });
+      onEvent({ event: 'user_message', turn_index: 1, content: 'go on' });
+      onEvent({ event: 'replay_done', thread_id: 'th-1' });
+    });
+    const attach = await queuedSteerThenGiveUp(hook, running);
+    await waitFor(() => expect(mockReconnect).toHaveBeenCalled());
 
-      const [queued, ...extra] = steerCopies(hook);
-      expect(extra).toEqual([]);
-      expect(queued).toMatchObject({ steering: true });
-      expect(queued.isHistory).toBeFalsy();
-      // The attach took the replay's bubble for the turn over, which keeps
-      // what the run wrote before the steer above it.
-      const shown = hook.result.current.liveMessages.get() as MessageRecord[];
-      expect(shown.indexOf(bubbleShowing(hook, 'the answer'))).toBe(shown.indexOf(queued) - 1);
+    const [queued, ...extra] = steerCopies(hook);
+    expect(extra).toEqual([]);
+    expect(queued).toMatchObject({ steering: true });
+    expect(queued.isHistory).toBeFalsy();
+    // The attach took the replay's bubble for the turn over, which keeps
+    // what the run wrote before the steer above it.
+    const shown = hook.result.current.liveMessages.get() as MessageRecord[];
+    expect(shown.indexOf(bubbleShowing(hook, 'the answer'))).toBe(shown.indexOf(queued) - 1);
 
-      if (outcome === 'delivers it') {
-        await step(() => attach.send({ ...steered, _eventId: 3 }));
-        const [steer, ...more] = steerCopies(hook);
-        expect(more).toEqual([]);
-        expect(steer.steeringDelivered).toBe(true);
-      } else {
-        await step(() => attach.send({ event: 'steering_returned', messages: [{ content: 'also this' }], _eventId: 3 }));
-        expect(steerCopies(hook)).toEqual([]);
-        expect(hook.result.current.returnedSteering).toBe('also this');
-      }
-      await step(() => attach.end());
-    },
-  );
+    await step(() => attach.send({ ...steered, _eventId: 3 }));
+    const [steer, ...more] = steerCopies(hook);
+    expect(more).toEqual([]);
+    expect(steer.steeringDelivered).toBe(true);
+    await step(() => attach.end());
+  });
 
   it('a steer still queued when the retry gives up leaves with the run the reload finds ended without it', async () => {
     const hook = await mount();
@@ -1549,7 +1552,7 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     expect(mockReconnect).not.toHaveBeenCalled();
   });
 
-  it('a later turn\'s delivery leaves a steer an earlier run kept queued, which that turn hands back', async () => {
+  it('a later turn\'s delivery leaves a steer an earlier run kept queued, until a turn delivers it by its key', async () => {
     const hook = await mount();
     // The reload cannot read the status, so it neither attaches nor learns that the run ended.
     mockReplay.mockImplementation(async (_tid: string, onEvent: Emit) => {
@@ -1564,8 +1567,8 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     expect(mockReconnect).not.toHaveBeenCalled();
     expect(steerCopies(hook)).toMatchObject([{ steering: true, turnIndex: 1 }]);
 
-    // The run ended without taking the steer. The next turn delivers a steer of its own, and at
-    // its end the server hands back the one it holds for the run before.
+    // The run ended without taking the steer. The next turn delivers a steer of its own, then
+    // the one the server still holds, by the key it went out under.
     const nextRun: { send: Emit; end: () => void } = { send: () => {}, end: () => {} };
     mockSendStream.mockImplementationOnce((_msg: string, _ws: string, _tid: string | null, { onEvent }: { onEvent: Emit }) =>
       new Promise((resolve) => {
@@ -1587,14 +1590,19 @@ describe('useChatMessages: a reconnect settles the bubble it continues', () => {
     expect(steerCopies(hook)).toMatchObject([{ steering: true, turnIndex: 1 }]);
     expect(steerCopies(hook)[0].steeringDelivered).toBeFalsy();
 
+    const heldKey = (mockSendStream.mock.calls[1][3] as { requestKey: string }).requestKey;
     await step(() => {
-      nextRun.send({ ...chunk('', { finish_reason: 'stop' }), _eventId: 4 });
-      nextRun.send({ event: 'steering_returned', messages: [{ content: 'also this' }] });
+      nextRun.send({
+        event: 'steering_delivered',
+        messages: [{ content: 'also this', timestamp: 1_700_000_200, request_key: heldKey }],
+        _eventId: 4,
+      });
+      nextRun.send({ ...chunk('', { finish_reason: 'stop' }), _eventId: 5 });
       nextRun.end();
     });
     await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
-    expect(steerCopies(hook)).toEqual([]);
-    expect(hook.result.current.returnedSteering).toBe('also this');
+    expect(steerCopies(hook)).toMatchObject([{ steeringDelivered: true, turnIndex: 2 }]);
+    expect(hook.result.current.returnedSteering).toBeNull();
   });
 
   it('a delivery leaves a steer the server has not yet answered for the delivery that names it', async () => {

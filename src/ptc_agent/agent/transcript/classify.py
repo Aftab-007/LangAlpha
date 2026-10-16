@@ -56,9 +56,25 @@ _RUNTIME_CONTEXT_SOURCES = frozenset({"runtime_context", "runtime_update"})
 # re-invokes the agent for pending steering, and background-task notices.
 # Checkpoints from before the stamp carry only the message name.
 ORCHESTRATOR_SOURCE = "orchestrator"
-#: The steering trigger's whole text. It only routes the graph back to the
-#: agent; the steering message that follows it carries the user's words.
+#: The steering trigger's whole text for the user's steers, and every
+#: trigger's text before it named the sender. It only routes the graph back to
+#: the agent; the steering message that follows it carries the words.
 STEERING_TRIGGER = "User sent additional instructions."
+_TRIGGER_TAIL = " sent additional instructions."
+_TRIGGER_NAMES = {"user": "User", "chief_of_staff": "Chief of Staff", "flash": "Flash"}
+
+
+def steering_trigger(senders: list[str]) -> str:
+    """The trigger naming who sent the steers waiting, in the order given."""
+    names = [
+        _TRIGGER_NAMES.get(sender) or sender.replace("_", " ").title()
+        for sender in dict.fromkeys(senders or ["user"])
+    ]
+    return " and ".join(names) + _TRIGGER_TAIL
+
+
+def is_steering_trigger(content: object) -> bool:
+    return isinstance(content, str) and content.endswith(_TRIGGER_TAIL)
 
 
 def human_kind(message: HumanMessage) -> HumanKind:

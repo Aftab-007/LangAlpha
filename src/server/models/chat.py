@@ -270,9 +270,9 @@ class ThreadOrigin(BaseModel):
     set aside for platform-initiated threads. The label is advisory —
     client-supplied, not authenticated, and nothing branches on it.
     User-initiated threads carry no origin at all rather than an explicit
-    'user' entry. ``name`` and ``agent`` are display only (the history label
-    above a message) and never reach the model's context, which reads
-    ``type`` alone.
+    'user' entry. ``name`` is display only (the history label above a
+    message). ``agent`` labels it too, and the turn's run line names it as
+    acting for the user; the rest of the model's context reads ``type`` alone.
     """
 
     type: Literal["agent", "automation", "system"]
@@ -537,6 +537,14 @@ class ChatRequest(BaseModel):
         default=None,
         description="Build this turn's agent without subagent tools. "
         "Internal use only.",
+    )
+
+    # Internal: the parked steer this turn is posted for. START claims the
+    # job in its own transaction, so a steer some running turn already read
+    # never also becomes a turn of its own.
+    steer_job_id: Optional[str] = Field(
+        default=None,
+        description="The steer job this turn carries. Internal use only.",
     )
 
     # Server-stamped: the burst-guard ZSET member held by this request's

@@ -1,7 +1,7 @@
 """A resend of a send that went into a running turn as a steer.
 
 No run row holds its key, so the route's duplicate probe finds the steer
-record instead and answers with the turn that took the message, the same
+job instead and answers with the turn that took the message, the same
 answer a resend of a send that ran as its own turn gets.
 """
 
@@ -20,29 +20,35 @@ from tests.unit.server.app.test_threads_authz import (
     _empty_async_gen,
     _stub_downstream,
 )
-from tests.unit.server.handlers.chat.redis_fakes import FakeCache
 
 KEY = "8c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5"
 TURN = "2e4f6a8b-0c1d-4e2f-8a3b-5c6d7e8f9a0b"
 
 
 async def _resend(thread_owner, steered=True):
-    from src.server.handlers.chat.steering import steer_thread
-
     turn = {
         "conversation_response_id": uuid.UUID(TURN),
         "conversation_thread_id": "tid-mine",
         "status": "in_progress",
     }
-    cache = FakeCache()
+    job = {
+        "id": "job-1",
+        "status": "pending",
+        "run_id": TURN,
+        "payload": {"target": "thread", "request_key": KEY, "steered_run_id": TURN},
+    }
     workflow = MagicMock(return_value=_empty_async_gen())
     with (
-        patch("src.utils.cache.redis_cache.get_cache_client", lambda: cache),
         _stub_downstream(owner_id=CALLER),
         patch("src.server.handlers.chat.astream_ptc_workflow", workflow),
         patch(
             "src.server.database.runs.lifecycle.find_run_by_request_key",
             AsyncMock(return_value=None if steered else turn),
+        ),
+        patch(
+            "src.server.database.runs.outbox.get_steer_job",
+            AsyncMock(return_value=job if steered else None),
+            create=True,
         ),
         patch(
             "src.server.database.runs.lifecycle.get_run",
@@ -53,8 +59,6 @@ async def _resend(thread_owner, steered=True):
             AsyncMock(return_value=thread_owner),
         ),
     ):
-        if steered:
-            await steer_thread("tid-mine", "hello", CALLER, run_id=TURN, request_key=KEY)
         async with AsyncClient(
             transport=ASGITransport(app=_app_for(CALLER)), base_url="http://test"
         ) as client:

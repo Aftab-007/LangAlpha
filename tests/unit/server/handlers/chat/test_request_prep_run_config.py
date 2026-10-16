@@ -6,7 +6,6 @@ Covers:
 - init_tracking: returns (TokenTrackingManager, ToolUsageTracker)
 - apply_fetch_override: sets the fetch context vars, mocked and real
 - build_graph_config: mode parameterization, optional fields
-- setup_steering_tracking: wires callback on handler
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -469,44 +468,3 @@ class TestBuildGraphConfig:
         config = self._build(skill_contexts=None, skill_dirs=["/skills"])
         assert "skill_contexts" not in config["configurable"]
         assert "skill_dirs" not in config["configurable"]
-
-
-# ---------------------------------------------------------------------------
-# setup_steering_tracking
-# ---------------------------------------------------------------------------
-
-
-class TestSetupSteeringTracking:
-    @pytest.mark.asyncio
-    async def test_wires_callback(self):
-        from src.server.handlers.chat.request_prep import setup_steering_tracking
-
-        handler = MagicMock()
-        handler.injected_steerings = []
-        handler.on_steering_delivered = None
-
-        setup_steering_tracking(handler)
-
-        assert handler.on_steering_delivered is not None
-
-    @pytest.mark.asyncio
-    async def test_callback_filters_empty_content(self):
-        from src.server.handlers.chat.request_prep import setup_steering_tracking
-
-        handler = MagicMock()
-        handler.injected_steerings = []
-
-        setup_steering_tracking(handler)
-
-        # Call the wired callback
-        callback = handler.on_steering_delivered
-        await callback([
-            {"content": "hello", "role": "user"},
-            {"content": "", "role": "user"},
-            {"role": "user"},  # no content key
-            {"content": "world", "role": "user"},
-        ])
-
-        assert len(handler.injected_steerings) == 2
-        assert handler.injected_steerings[0]["content"] == "hello"
-        assert handler.injected_steerings[1]["content"] == "world"

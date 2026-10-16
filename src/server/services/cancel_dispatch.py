@@ -21,6 +21,7 @@ def _cancel_outcome(
     state: Optional[str] = None,
     thread_id: Optional[str] = None,
     task_id: Optional[str] = None,
+    returned_steers: Optional[list] = None,
 ) -> dict:
     """The one shape a cancel answers in — one user-facing action, one envelope.
 
@@ -28,7 +29,9 @@ def _cancel_outcome(
     absent exactly when one was dispatched. ``thread_id`` and ``task_id`` stay
     separate keys rather than one generic subject id because the two endpoints
     cancel different objects, and a client reading the answer has to know which
-    of them it got back.
+    of them it got back. ``returned_steers`` are the user's steers a stop
+    gave back, for the composer; present on every answer of an endpoint that
+    returns them, so a lost response is recovered by asking again.
     """
     outcome: dict = {"cancelled": cancelled}
     if thread_id is not None:
@@ -38,10 +41,14 @@ def _cancel_outcome(
     if state is not None:
         outcome["state"] = state
     outcome["message"] = message
+    if returned_steers is not None:
+        outcome["returned_steers"] = returned_steers
     return outcome
 
 
-async def cancel_workflow(thread_id: str, run_id: Optional[str] = None) -> dict:
+async def cancel_workflow(
+    thread_id: str, run_id: Optional[str] = None, *, by_user: bool = True
+) -> dict:
     """
     Explicitly cancel a workflow execution (user stop) — v4 honest cancel.
 
@@ -61,6 +68,11 @@ async def cancel_workflow(thread_id: str, run_id: Optional[str] = None) -> dict:
     ``run_id`` targets a specific run so a slow/retried stop can't cancel a
     *newer* turn the user started after the stopped one finished. Omitted =
     the thread's active run.
+
+    ``by_user=False`` is an agent's stop (the Chief of Staff's): the user's
+    steers stay queued rather than coming back to a caller who never sent
+    them, and a hand-off steered into a run that has since ended is stopped
+    where it went.
     """
     try:
         from src.server.services.runs.executor import (
@@ -94,6 +106,7 @@ async def cancel_workflow(thread_id: str, run_id: Optional[str] = None) -> dict:
                 return _cancel_outcome(
                     cancelled=True,
                     thread_id=thread_id,
+                    returned_steers=[],
                     message=(
                         "Compaction stopped."
                         if stopped == "cancelled"
@@ -117,13 +130,26 @@ async def cancel_workflow(thread_id: str, run_id: Optional[str] = None) -> dict:
                 target_run_id = str(active["conversation_response_id"])
 
         intent_state = None
+        returned: list = []
+        held = 0
         if target_run_id:
-            intent = await tl_db.request_run_cancel(target_run_id, thread_id=thread_id)
+            intent = await tl_db.request_run_cancel(
+                target_run_id, thread_id=thread_id, by_user=by_user
+            )
             intent_state = intent["state"]
             logger.info(
                 f"[cancel] durable intent for run={target_run_id} "
                 f"thread={thread_id}: {intent_state}"
             )
+            held = intent.get("held_steers") or 0
+            if by_user and intent_state == "requested":
+                returned = intent.get("returned_steers") or []
+            elif by_user and intent_state in ("already_requested", "already_terminal"):
+                # The stamp that returned them may be an earlier call's whose
+                # answer was lost.
+                from src.server.database.runs import outbox as outbox_db
+
+                returned = await outbox_db.list_returned_steers(target_run_id)
 
         # Local execution signal. Signal the SAME run the intent was stamped
         # on: if the resolved run finalizes and a newer one starts between
@@ -168,10 +194,45 @@ async def cancel_workflow(thread_id: str, run_id: Optional[str] = None) -> dict:
                     thread_id, target_run_id, force=True
                 )
 
+        if by_user and held and intent_state in ("requested", "already_requested"):
+            # The stamp left the steers the run holds to its ending: the
+            # model call reading them may be confirming them right now. The
+            # ending gives back the ones its checkpoint never read.
+            from src.server.database.runs import outbox as outbox_db
+            from src.server.services.report_back.steer import (
+                RUN_SETTLE_WAIT_S,
+                wait_run_settled,
+            )
+
+            if not await wait_run_settled(target_run_id):
+                logger.warning(
+                    f"[cancel] run={target_run_id} still holds {held} steer(s) "
+                    f"after {RUN_SETTLE_WAIT_S}s; keeping them for the "
+                    f"user's next move"
+                )
+                await outbox_db.keep_unanswered_steers(thread_id, target_run_id)
+            returned = await outbox_db.list_returned_steers(target_run_id)
+
+        if intent_state == "already_terminal" and not by_user:
+            from src.server.database.runs import outbox as outbox_db
+
+            taken = await outbox_db.stop_hand_off_steers(thread_id, target_run_id)
+            stopped = [
+                await cancel_workflow(thread_id, later, by_user=False)
+                for later in taken
+            ]
+            if any(o.get("cancelled") for o in stopped):
+                return _cancel_outcome(
+                    cancelled=True,
+                    thread_id=thread_id,
+                    returned_steers=[],
+                    message="Cancellation requested for the turn that took the work in.",
+                )
         if intent_state == "already_terminal":
             return _cancel_outcome(
                 cancelled=False,
                 thread_id=thread_id,
+                returned_steers=returned,
                 state="already_finished",
                 message="Run already finished; nothing to cancel.",
             )
@@ -187,12 +248,14 @@ async def cancel_workflow(thread_id: str, run_id: Optional[str] = None) -> dict:
                 return _cancel_outcome(
                     cancelled=False,
                     thread_id=thread_id,
+                    returned_steers=returned,
                     state="no_active_run",
                     message="No active run to cancel.",
                 )
             return _cancel_outcome(
                 cancelled=False,
                 thread_id=thread_id,
+                returned_steers=returned,
                 state="another_run_active",
                 message=(
                     "A run is active on this thread but the one to stop is "
@@ -208,6 +271,7 @@ async def cancel_workflow(thread_id: str, run_id: Optional[str] = None) -> dict:
         return _cancel_outcome(
             cancelled=True,
             thread_id=thread_id,
+            returned_steers=returned,
             message="Cancellation signal sent. The turn will stop shortly.",
         )
 
@@ -222,6 +286,48 @@ async def cancel_workflow(thread_id: str, run_id: Optional[str] = None) -> dict:
         ) from e
 
 
+async def _task_returned_steers(thread_id: str, task_id: str) -> list:
+    """The user's messages the task's latest run gave back, which its cancel
+    stamp settles: ``[{content, input_id, timestamp}]``."""
+    from src.server.database.runs import outbox as outbox_db
+    from src.server.database.runs import subagent_runs as sr_db
+
+    task = await sr_db.get_task(thread_id, task_id)
+    latest = (task or {}).get("latest_run_id")
+    if not latest:
+        return []
+    return await outbox_db.list_returned_task_steers(thread_id, task_id, str(latest))
+
+
+async def _await_task_holds(thread_id: str, task_id: str) -> None:
+    """Wait for the stopped task run to end when it still holds the user's
+    messages: its stamp left them to the model call reading them, or to its
+    ending, which gives back the ones its checkpoint never read."""
+    from src.server.database.pool import get_db_connection
+    from src.server.database.runs import outbox as outbox_db
+    from src.server.database.runs import subagent_runs as sr_db
+    from src.server.services.report_back.steer import (
+        RUN_SETTLE_WAIT_S,
+        wait_run_settled,
+    )
+
+    task = await sr_db.get_task(thread_id, task_id)
+    latest = (task or {}).get("latest_run_id")
+    if not latest:
+        return
+    async with get_db_connection() as conn:
+        held = await outbox_db.count_held_user_steers(
+            conn,
+            ordering_key=outbox_db.steer_ordering_key(thread_id, task_id),
+            owner_id=str(latest),
+        )
+    if held and not await wait_run_settled(str(latest), task=True):
+        logger.warning(
+            f"[cancel-task] task run={latest} still holds {held} message(s) "
+            f"after {RUN_SETTLE_WAIT_S}s; answering without them"
+        )
+
+
 async def cancel_subagent_task(thread_id: str, task_id: str) -> dict:
     """Targeted stop for one background task (e.g. a workflow run).
 
@@ -229,8 +335,24 @@ async def cancel_subagent_task(thread_id: str, task_id: str) -> dict:
     stamps durable intent and interrupts immediately. Otherwise stamp intent
     on the task's active ledger run and nudge the owning worker over the
     shared cancel channel. A lost nudge degrades to the task finishing on
-    its own — never a stuck state.
+    its own — never a stuck state. Every answer carries the messages the
+    stop gave back, so asking again recovers a lost response.
     """
+    outcome = await _cancel_subagent_task(thread_id, task_id)
+    try:
+        if outcome.get("cancelled"):
+            await _await_task_holds(thread_id, task_id)
+        outcome["returned_steers"] = await _task_returned_steers(thread_id, task_id)
+    except Exception:
+        logger.exception(
+            f"[cancel-task] reading returned steers failed thread={thread_id} "
+            f"task={task_id}"
+        )
+        outcome["returned_steers"] = []
+    return outcome
+
+
+async def _cancel_subagent_task(thread_id: str, task_id: str) -> dict:
     try:
         from src.server.services.background_registry_store import (
             BackgroundRegistryStore,

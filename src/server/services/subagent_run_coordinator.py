@@ -241,6 +241,16 @@ class SubagentRunCoordinator:
         final_checkpoint_id = (
             await self._read_task_checkpoint_tip(task_id) if task_id else None
         )
+        if task_id:
+            # Ahead of the settle in the CAS, which would take a row this
+            # run held, and whose message it checkpointed, as unread.
+            from src.server.services.report_back.steer import (
+                confirm_checkpointed_task_holds,
+            )
+
+            await confirm_checkpointed_task_holds(
+                self.thread_id, task_id, task_run_id
+            )
         result = await sr_db.finalize_task_run_idempotent(
             task_run_id=task_run_id,
             status=status,
@@ -290,35 +300,12 @@ class SubagentRunCoordinator:
                     pass
         return result
 
-    async def record_replay_facts(
-        self, task_run_id: str, *, steering_returned: list
-    ) -> bool:
-        """Keep the steering a settled run handed back for its replay, then
-        re-project the turn that launched it. Best effort: False when the
-        returns did not land, which only leaves replay without them.
-        """
-        try:
-            row = await facts_db.append_returned_steering(
-                task_run_id, steering_returned
-            )
-        except Exception:
-            logger.warning(
-                f"[subagent_coordinator] returned steering not recorded for "
-                f"run {task_run_id}",
-                exc_info=True,
-            )
-            return False
-        if row is None:
-            return False
-        _refresh_launching_turn(row["thread_id"], row.get("parent_run_id"))
-        return True
-
     async def append_run_end(
         self, task_run_id: str, *, task_id: str, outcome: str
     ) -> None:
         """Cursor-bearing terminal frame for the wrapper's deferred path —
-        appended after the steering sweep so steering_returned frames
-        precede it and nothing follows it. Idempotent by last-frame
+        appended after the run's steering_returned frames so they precede it
+        and nothing follows it. Idempotent by last-frame
         inspection, so it is safe to race a recovery finalizer."""
         try:
             from src.utils.cache.redis_cache import get_cache_client

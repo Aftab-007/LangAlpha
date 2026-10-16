@@ -96,8 +96,9 @@ async def post_notification_turn(
     set), ``"drop"`` (terminal 4xx), ``"cap"`` (exhausted defer-wait — the
     target may simply be busy; the caller picks drop vs park), ``"deleted"``
     (target thread 404), ``"lost"`` (the ``heartbeat`` fence failed —
-    caller must stop with no teardown), or ``"superseded"`` (``still_due``
-    said no; no turn was started). Defers with backoff on 409, >=500,
+    caller must stop with no teardown), ``"superseded"`` (``still_due``
+    said no; no turn was started), or ``"taken"`` (START refused the steer
+    the body carries: a live turn took it, or it already ended). Defers with backoff on 409, >=500,
     and ``DEFER_STATUSES``, bounded by ``wait_cap`` — except a 409 whose
     detail is ``duplicate_request``: that's a prior POST of this same
     ``request_key`` that already started a run, adopted as ``"dispatched"``.
@@ -192,6 +193,15 @@ async def post_notification_turn(
                                 f"thread {thread_id} (request_key dedup)"
                             )
                             return "dispatched", detail["run_id"]
+                        if (
+                            isinstance(detail, dict)
+                            and detail.get("code") == "steer_taken"
+                        ):
+                            logger.info(
+                                f"{log_prefix} {subject or 'Steer'} on thread "
+                                f"{thread_id} was taken in elsewhere; not posting"
+                            )
+                            return "taken", None
                     if (
                         resp.status == 409
                         or resp.status >= 500

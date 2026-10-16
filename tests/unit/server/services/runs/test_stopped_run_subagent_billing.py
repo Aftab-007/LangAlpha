@@ -689,6 +689,10 @@ class TestTheStopBillsWhateverTheTeardownMeets:
                  AsyncMock(return_value={"state": "already_terminal"}),
              ), \
              patch(
+                 "src.server.database.runs.outbox.list_returned_steers",
+                 AsyncMock(return_value=[]),
+             ), \
+             patch(
                  "src.server.services.thread_mutation.ThreadMutationRunner.get_instance",
                  return_value=mutations,
              ):

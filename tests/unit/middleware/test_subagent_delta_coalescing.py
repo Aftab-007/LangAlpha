@@ -300,7 +300,7 @@ async def test_the_astream_loop_sends_a_due_delta_on_a_heartbeat(
     seen: list[list[str]] = []
     beat = {"type": HEARTBEAT_EVENT_TYPE}
 
-    async def astream(state, config, stream_mode=None):
+    async def astream(state, config, stream_mode=None, durability=None):
         yield ("messages", (AIMessageChunk(content="Hel", id="m1"), {}))
         yield ("messages", (AIMessageChunk(content="lo", id="m1"), {}))
         yield ("custom", beat)

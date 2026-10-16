@@ -2206,6 +2206,54 @@ class TestAppendRunEndEvent:
         ) as read:
             yield read
 
+    @pytest.fixture(autouse=True)
+    def returned(self):
+        with patch(
+            "src.server.services.runs.stream_writer.steering_returned_frame",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as read:
+            yield read
+
+    @pytest.mark.asyncio
+    async def test_returned_chat_app_steers_close_the_stream_ahead_of_run_end(
+        self, returned
+    ):
+        """A gateway stops reading at ``run_end``, so the steers it must
+        resubmit come before it, once, for every reader of the stream."""
+        btm = _make_btm()
+        btm.event_storage_backend = "redis"
+        returned.return_value = "event: steering_returned\ndata: {}\n\n"
+        calls: list = []
+
+        with patch(
+            "src.server.services.runs.stream_writer.get_cache_client",
+            return_value=_sentinel_cache(calls),
+        ):
+            await btm.append_run_end_event("t-1", "r-1", "completed")
+
+        returned.assert_awaited_once_with("t-1", "r-1")
+        frames = [c[2][b"event"].decode("utf-8") for c in calls if c[0] == "xadd"]
+        assert [f.split("\n", 1)[0] for f in frames] == [
+            "event: steering_returned",
+            "event: run_end",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_lost_gate_writes_no_returned_steers(self, returned):
+        btm = _make_btm()
+        btm.event_storage_backend = "redis"
+        returned.return_value = "event: steering_returned\ndata: {}\n\n"
+        calls: list = []
+
+        with patch(
+            "src.server.services.runs.stream_writer.get_cache_client",
+            return_value=_sentinel_cache(calls, gate_acquired=False),
+        ):
+            await btm.append_run_end_event("t-1", "r-1", "completed")
+
+        assert not [c for c in calls if c[0] == "xadd"]
+
     @pytest.mark.asyncio
     async def test_terminal_frame_carries_the_threads_token_totals(self, totals):
         """Read after the finalize committed the run's usage row, so the
