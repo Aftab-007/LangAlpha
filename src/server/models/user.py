@@ -118,34 +118,6 @@ class ModelPreference(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-#: The API's name for a model key -> the key a row stores it under. Clients
-#: speak the Background model's new names before the rows are renamed, so a
-#: write is translated on the way in and a read carries both names out.
-MODEL_KEY_RENAMES: dict[str, str] = {
-    "preferred_background_model": "preferred_flash_model",
-    "background_follows": "flash_follows",
-}
-
-
-def to_stored_model_keys(patch: dict[str, Any]) -> dict[str, Any]:
-    """``patch`` under the stored names. A new name beats the old one sent
-    beside it, and its ``None`` still deletes the stored key."""
-    stored = dict(patch)
-    for new, old in MODEL_KEY_RENAMES.items():
-        if new in stored:
-            stored[old] = stored.pop(new)
-    return stored
-
-
-def with_api_model_keys(bag: dict[str, Any]) -> dict[str, Any]:
-    """A stored bag that also answers to each renamed key's new name."""
-    out = dict(bag)
-    for new, old in MODEL_KEY_RENAMES.items():
-        if old in bag:
-            out[new] = bag[old]
-    return out
-
-
 class AlertSettings(BaseModel):
     """Alert settings for watchlist items."""
 
@@ -286,13 +258,6 @@ class UserPreferencesResponse(UserPreferencesBase):
     updated_at: datetime = Field(description="Last update timestamp")
 
     model_config = ConfigDict(from_attributes=True)
-
-    @field_validator("model_preference", mode="before")
-    @classmethod
-    def _answer_to_new_model_keys(cls, value: Any) -> Any:
-        # On the response model, so every read of the row (this endpoint, the
-        # PUT echo, /users/me, /auth/sync) carries the new names alike.
-        return with_api_model_keys(value) if isinstance(value, dict) else value
 
 
 class UserPreferencesUpdateResponse(UserPreferencesResponse):

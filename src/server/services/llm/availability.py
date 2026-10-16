@@ -4,8 +4,8 @@ When a selected model can't be served — a custom model with no usable key, or 
 saved preference whose model has vanished from the manifest — the chat handler
 needs to fail loudly with a CTA banner rather than silently downgrade. This
 module owns those user-facing 400s and the pref-scrub that backs the
-``model_removed`` case. A missing model saved for a role (flash under PTC,
-compaction, fetch, a fallback) is not a refusal: the turn reads the prefs as if
+``model_removed`` case. A missing model saved for a role (the Background
+model on a primary turn, compaction, fetch, a fallback) is not a refusal: the turn reads the prefs as if
 the slot were unset, and nothing is deleted. ``resolve_llm_config`` invokes
 them; they are not part of the resolution engine itself.
 """
@@ -50,7 +50,7 @@ def raise_byok_key_required(model_name: str) -> None:
 # scrubber when a saved model vanishes from the manifest.
 _MODEL_PREF_KEYS = (
     "preferred_model",
-    "preferred_flash_model",
+    "preferred_background_model",
     "fetch_model",
     "compaction_model",
     "summarization_model",

@@ -31,11 +31,11 @@ def turn_model(
     llm_override: Any | None,
     default_client: Any,
     *,
-    flash: bool,
+    background: bool,
 ) -> TurnModel:
     """Settle the model for this turn and stamp what the factory cannot see.
 
-    ``flash`` is for a graph that runs on the Background model rather than the
+    ``background`` is for a graph that runs on the Background model rather than the
     main one; ``default_client`` is what the caller resolved at construction.
     ``resolve_llm_config`` stamps every client it builds, so the stamp
     here is for the two it never sees: one the caller passed in, and one the
@@ -46,7 +46,7 @@ def turn_model(
     client = llm_override if llm_override is not None else default_client
     name = ""
     if config.llm is not None:
-        name = (config.llm.flash_name if flash else config.llm.name) or ""
+        name = (config.llm.background_name if background else config.llm.name) or ""
 
     guidance = turn_guidance(config, name)
     stamp_call_metadata(

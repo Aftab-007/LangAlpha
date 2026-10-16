@@ -10,7 +10,8 @@ from dataclasses import dataclass, fields, replace
 from typing import Any
 
 #: Keys that moved out of ``other_preference`` into their own column, and so
-#: may still be found there on a row written before the move.
+#: may still be found there on a row written before the move. The Background
+#: model's is there under its new name, which migration 072 gave it in place.
 #:
 #: Migration 034 carries its own copy on purpose, and the two are no longer
 #: identical: it also names ``prompt_guidance``, which never lived in the old
@@ -19,7 +20,7 @@ from typing import Any
 #: history it does not have.
 MOVED_MODEL_KEYS: tuple[str, ...] = (
     "preferred_model",
-    "preferred_flash_model",
+    "preferred_background_model",
     "compaction_model",
     "summarization_model",
     "fetch_model",

@@ -48,43 +48,45 @@ from . import user_models
 # Constants
 # ---------------------------------------------------------------------------
 
-_MODE_MODEL_MAP = {
-    "ptc": ("name", "preferred_model"),
-    "flash": ("flash", "preferred_flash_model"),
+_SLOT_MODEL_MAP = {
+    "primary": ("name", "preferred_model"),
+    "background": ("background", "preferred_background_model"),
 }
 
 
-def slot_model(llm: Any, mode: str) -> str:
-    """The model ``mode`` runs on ``llm``; an unset slot falls back to the main model."""
-    return getattr(llm, _MODE_MODEL_MAP[mode][0], None) or llm.name
+def slot_model(llm: Any, slot: str) -> str:
+    """The model ``slot`` runs on ``llm``; an unset slot falls back to the main model."""
+    return getattr(llm, _SLOT_MODEL_MAP[slot][0], None) or llm.name
 
 
-# Saved models a turn reaches besides its own. The flash key is one only on a
-# PTC turn, whose fetch inherits it. With no flash default saved,
-# the flash slot is the PTC key on either turn (``saved_default_model``), and
-# that is the turn's own model either way, so never a role.
+# Saved models a turn reaches besides its own. The Background key is one only
+# on a primary turn, whose fetch inherits it. With no Background default saved,
+# the Background slot is the primary key on either turn (``saved_default_model``),
+# and that is the turn's own model either way, so never a role.
 _ROLE_PREF_KEYS = {
-    "ptc": tuple(k for k in _MODEL_PREF_KEYS if k != "preferred_model"),
-    "flash": tuple(
-        k for k in _MODEL_PREF_KEYS if k not in ("preferred_model", "preferred_flash_model")
+    "primary": tuple(k for k in _MODEL_PREF_KEYS if k != "preferred_model"),
+    "background": tuple(
+        k
+        for k in _MODEL_PREF_KEYS
+        if k not in ("preferred_model", "preferred_background_model")
     ),
 }
 
 
-#: Values of ``model_preference.flash_follows``: what an unset flash default
-#: runs. Absent is ``primary``.
-FLASH_FOLLOWS = frozenset({"primary", "deployment"})
+#: Values of ``model_preference.background_follows``: what an unset Background
+#: default runs. Absent is ``primary``.
+BACKGROUND_FOLLOWS = frozenset({"primary", "deployment"})
 
 
-def saved_default_model(model_pref: dict, mode: str) -> str | None:
-    """The default the user saved for ``mode``; None runs the deployment's.
+def saved_default_model(model_pref: dict, slot: str) -> str | None:
+    """The default the user saved for ``slot``; None runs the deployment's.
 
-    An unset flash default is the primary one, as Settings says ("Same as
-    Primary model"), unless the user chose Auto for flash, which keeps the
-    deployment's flash model even beside a saved primary.
+    An unset Background default is the primary one, as Settings says ("Same as
+    Primary model"), unless the user chose Auto for it, which keeps the
+    deployment's Background model even beside a saved primary.
     """
-    saved = model_pref.get(_MODE_MODEL_MAP[mode][1])
-    if saved or mode != "flash" or model_pref.get("flash_follows") == "deployment":
+    saved = model_pref.get(_SLOT_MODEL_MAP[slot][1])
+    if saved or slot != "background" or model_pref.get("background_follows") == "deployment":
         return saved or None
     return model_pref.get("preferred_model") or None
 
@@ -94,12 +96,9 @@ def system_default_models() -> dict[str, str]:
     from src.server.app import setup
 
     llm = setup.agent_config.llm if setup.agent_config and setup.agent_config.llm else None
-    background = (llm.flash or "") if llm else ""
     return {
         "default_model": llm.name if llm else "",
-        "background_model": background,
-        # The same model under its old name, for clients that still read it.
-        "flash_model": background,
+        "background_model": (llm.background or "") if llm else "",
     }
 
 
@@ -118,17 +117,17 @@ class ModelSelection:
 
 
 def select_model(
-    config, model_pref: dict, mode: str, request_model: str | None
+    config, model_pref: dict, slot: str, request_model: str | None
 ) -> ModelSelection:
     """Settle this turn's model and the other slots that follow from it.
 
-    Priority is per-request > user preference > deployment default; mode picks
-    which config field and preference key that means (see ``_MODE_MODEL_MAP``).
+    Priority is per-request > user preference > deployment default; slot picks
+    which config field and preference key that means (see ``_SLOT_MODEL_MAP``).
     """
     from ptc_agent.config import LLMConfig
 
-    model_field, pref_key = _MODE_MODEL_MAP[mode]
-    saved = saved_default_model(model_pref, mode)
+    model_field, pref_key = _SLOT_MODEL_MAP[slot]
+    saved = saved_default_model(model_pref, slot)
 
     if config.llm is None:
         # Bootstrap when agent_config.yaml has llm: null. The user must have
@@ -139,8 +138,12 @@ def select_model(
                 "No model configured. Set llm in agent_config.yaml or select a model in Settings."
             )
         config.llm = LLMConfig(
-            name=resolved_name if mode == "ptc" else "placeholder",
-            flash=resolved_name if mode == "flash" else model_pref.get("preferred_flash_model"),
+            name=resolved_name if slot == "primary" else "placeholder",
+            background=(
+                resolved_name
+                if slot == "background"
+                else model_pref.get("preferred_background_model")
+            ),
             compaction=(
                 model_pref.get("compaction_model") or model_pref.get("summarization_model")
             ),
@@ -156,17 +159,19 @@ def select_model(
     elif saved:
         setattr(config.llm, model_field, saved)
         config.llm_client = None
-        logger.debug(f"[CHAT] Using the saved {mode} default: {saved}")
+        logger.debug(f"[CHAT] Using the saved {slot} default: {saved}")
     else:
         logger.debug(
-            f"[CHAT] No {pref_key} set, using system default: {slot_model(config.llm, mode)}"
+            f"[CHAT] No {pref_key} set, using system default: {slot_model(config.llm, slot)}"
         )
 
-    # A PTC turn never runs the flash model, but fetch defaults to it, so the
-    # user's flash default reaches ``llm.flash`` here too, by the rule a flash
-    # turn runs on: an unset one is the saved primary.
-    if mode != "flash" and (flash_default := saved_default_model(model_pref, "flash")):
-        config.llm.flash = flash_default
+    # A primary turn never runs the Background model, but fetch defaults to it,
+    # so the user's Background default reaches ``llm.background`` here too, by
+    # the rule a Background turn runs on: an unset one is the saved primary.
+    if slot != "background" and (
+        background_default := saved_default_model(model_pref, "background")
+    ):
+        config.llm.background = background_default
 
     # Both "compaction_model" (new) and "summarization_model" (legacy) map to
     # the renamed ``compaction`` field; legacy is read so existing rows keep
@@ -181,17 +186,17 @@ def select_model(
             setattr(config.llm, config_field, user_val)
 
     # With no model picked for it, a summary runs on the model the turn runs.
-    # Written in, because ``compaction_name`` alone cannot tell a flash turn's
-    # model from the PTC one.
+    # Written in, because ``compaction_name`` alone cannot tell a Background
+    # turn's model from the primary one.
     if not config.llm.compaction:
-        config.llm.compaction = slot_model(config.llm, mode)
+        config.llm.compaction = slot_model(config.llm, slot)
 
     user_fallback = model_pref.get("fallback_models")
     if user_fallback is not None:
         config.llm.fallback = user_fallback
 
     return ModelSelection(
-        effective_model=slot_model(config.llm, mode),
+        effective_model=slot_model(config.llm, slot),
         model_field=model_field,
     )
 
@@ -249,9 +254,10 @@ def apply_compaction(config, tuning: Tuning, entry: dict[str, Any] | None) -> No
 def apply_fetch_override(config) -> None:
     """Propagate fetch model / client overrides from *config* into context vars.
 
-    A blank fetch means the turn's flash model, the same default ``role_registry``
-    resolves a client for. Without the name override, web_fetch would fall back
-    to re-reading agent_config.yaml and miss the user's own flash choice.
+    A blank fetch means the turn's Background model, the same default
+    ``role_registry`` resolves a client for. Without the name override,
+    web_fetch would fall back to re-reading agent_config.yaml and miss the
+    user's own Background model.
     """
     fetch_client = config.subsidiary_llm_clients.get("fetch")
     if fetch_client:
@@ -319,7 +325,7 @@ async def resolve_llm_config(
     user_id: str,
     request_model: str | None,
     is_byok: bool | None = None,
-    mode: str = "ptc",
+    slot: str = "primary",
     reasoning_effort: str | None = None,
     fast_mode: bool | None = None,
     thread_id: str | None = None,
@@ -344,7 +350,7 @@ async def resolve_llm_config(
     # depend on nothing below, so they start now and the merge waits for them.
     reads = (
         asyncio.create_task(read_user_subagents(user_id, base_config.subagents))
-        if mode == "ptc" and user_facing
+        if slot == "primary" and user_facing
         else None
     )
     try:
@@ -364,13 +370,13 @@ async def resolve_llm_config(
         # "Absent here" is not "retired" (a rollback or an older worker knows fewer
         # models), so nothing is deleted on the strength of it. The turn's own key
         # is not a role; a dead one there is refused below with a CTA instead.
-        role_keys = _ROLE_PREF_KEYS[mode] if user_facing else _MODEL_PREF_KEYS
+        role_keys = _ROLE_PREF_KEYS[slot] if user_facing else _MODEL_PREF_KEYS
         model_pref, dropped = drop_dead_models(saved_pref, role_keys)
         if dropped:
             logger.info(f"[CHAT] Ignoring saved models not in the manifest for user={user_id}: {dropped}")
 
         await load_user_context(config, user_id, workspace_id, model_pref)
-        selection = select_model(config, model_pref, mode, request_model)
+        selection = select_model(config, model_pref, slot, request_model)
 
         # The model running this turn is settled here: everything below tunes it
         # rather than choosing it. Tuning reads go through the per-model resolver so
@@ -406,7 +412,7 @@ async def resolve_llm_config(
     # Only a PTC build compiles subagents, so only it builds their clients.
     roles = (
         subagent_roles(turn_roster(config.subagents), model_pref, selection.effective_model, role=role)
-        if mode == "ptc"
+        if slot == "primary"
         else []
     )
 

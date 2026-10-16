@@ -11,7 +11,7 @@ regardless of what the user has configured.
 Two code paths:
 
 - ``user_id=None`` — system/scheduled task, no per-user resolution. Uses
-  the deployment's model for ``mode`` (or ``request_model``) with platform
+  the deployment's model for ``slot`` (or ``request_model``) with platform
   credentials. No DB hit.
 - ``user_id="..."`` — full user-aware resolution through
   ``resolve_llm_config``. A ``platform_key_fallback`` log is emitted
@@ -58,7 +58,7 @@ class LLMService:
         user_prompt: str,
         system_prompt: str | None = None,
         response_schema: Type[T] | None = None,
-        mode: Literal["flash", "ptc"] = "flash",
+        slot: Literal["background", "primary"] = "background",
         request_model: str | None = None,
         is_byok: bool = True,
         reasoning_effort: str | None = None,
@@ -77,7 +77,7 @@ class LLMService:
             # platform default. ``resolve_llm_config`` is typed ``user_id: str``
             # and makes a DB lookup via ``get_model_preference``; skipping it
             # keeps system callers DB-free.
-            model_name = request_model or slot_model(self._agent_config.llm, mode)
+            model_name = request_model or slot_model(self._agent_config.llm, slot)
             llm = create_llm(model_name, reasoning_effort=reasoning_effort)
         else:
             resolved_config = await resolve_llm_config(
@@ -85,13 +85,13 @@ class LLMService:
                 user_id=user_id,
                 request_model=request_model,
                 is_byok=is_byok,
-                mode=mode,
+                slot=slot,
                 reasoning_effort=reasoning_effort,
                 fast_mode=None,
                 user_facing=False,
             )
             llm = resolved_config.llm_client
-            effective_model = slot_model(resolved_config.llm, mode)
+            effective_model = slot_model(resolved_config.llm, slot)
             if llm is None:
                 # No BYOK / OAuth configured and no reasoning override — fall
                 # back to a platform-keyed client on the resolved model name.
@@ -105,7 +105,7 @@ class LLMService:
                     extra={
                         "user_id": user_id,
                         "model": effective_model,
-                        "mode": mode,
+                        "slot": slot,
                         "credential_source": str(resolved_config.credential_source),
                     },
                 )

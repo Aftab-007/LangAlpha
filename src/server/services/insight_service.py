@@ -195,7 +195,7 @@ async def _llm_extract_fallback(raw_text: str, user_id: str | None) -> dict:
         ),
         user_prompt=raw_text,
         response_schema=InsightOutputSchema,
-        mode="flash",
+        slot="background",
     )
     return result.model_dump() if hasattr(result, "model_dump") else dict(result)
 
@@ -223,7 +223,7 @@ async def _research(prompt: str, user_id: str | None = None) -> str:
             from src.server.services.llm.config import resolve_llm_config
 
             config = await resolve_llm_config(
-                config, user_id, request_model=None, is_byok=True, mode="flash",
+                config, user_id, request_model=None, is_byok=True, slot="background",
                 user_facing=False,
             )
         except Exception as exc:

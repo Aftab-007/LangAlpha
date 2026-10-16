@@ -302,7 +302,7 @@ class PTCAgent:
         Returns:
             Configured BackgroundSubagentOrchestrator wrapping the deepagent.
         """
-        turn = turn_model(self.config, llm, self.llm, flash=False)
+        turn = turn_model(self.config, llm, self.llm, background=False)
 
         # Freeze current time for this request (refreshes on each new query)
         request_time = datetime.now(tz=UTC)

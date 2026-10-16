@@ -20,7 +20,7 @@ from src.server.database.conversation import threads_read, threads_write
 
 from . import logger, user_models
 from .availability import model_resolves, raise_model_unavailable
-from .config import _MODE_MODEL_MAP, saved_default_model, system_default_models
+from .config import _SLOT_MODEL_MAP, saved_default_model, system_default_models
 
 #: Values of ``model_preference.default_model_scope``: what a change of the
 #: account default does to existing threads.
@@ -28,8 +28,8 @@ DEFAULT_MODEL_SCOPES = frozenset({"ask", "new_threads", "existing_threads"})
 
 #: The preference keys an account default is read from.
 DEFAULT_MODEL_KEYS = (
-    *(pref_key for _field, pref_key in _MODE_MODEL_MAP.values()),
-    "flash_follows",
+    *(pref_key for _field, pref_key in _SLOT_MODEL_MAP.values()),
+    "background_follows",
 )
 
 
@@ -157,7 +157,7 @@ def effective_default_model(model_pref: dict) -> str | None:
     "threads still on the old default" means what the user saw on them.
     """
     return (
-        saved_default_model(model_pref, "ptc")
+        saved_default_model(model_pref, "primary")
         or system_default_models().get("default_model")
         or None
     )

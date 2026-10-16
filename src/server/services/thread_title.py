@@ -1,4 +1,4 @@
-"""Thread title generation: one-shot flash LLM call on the first user query.
+"""Thread title generation: one-shot Background model call on the first user query.
 
 Companion to ``POST /api/v1/threads`` (thread pre-creation). Runs detached
 from the request that spawned it, never raises, and persists through a
@@ -116,7 +116,7 @@ async def generate_thread_title(
                 system_prompt=_build_system_prompt(timezone),
                 user_prompt=_build_user_prompt(first_query),
                 response_schema=ThreadTitleSchema,
-                mode="flash",
+                slot="background",
             ),
             timeout=_LLM_TIMEOUT_S,
         )

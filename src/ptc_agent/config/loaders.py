@@ -269,7 +269,7 @@ def load_from_dict(
         # (LLMConfig.compaction_name / fetch_name), not to this file's models.
         llm_config = LLMConfig(
             name=llm_name,
-            flash=llm_data.get("background"),
+            background=llm_data.get("background"),
             compaction=llm_data.get("compaction") or None,
             fetch=llm_data.get("fetch") or None,
             fallback=llm_data.get("fallback"),

@@ -2,7 +2,7 @@
 
 Decouples thread creation from the message stream. The client gets the real
 thread id immediately in a plain 201, then the generated title arrives on the
-user lifecycle feed when the background flash call lands. The first message
+user lifecycle feed when the Background model's call lands. The first message
 then targets POST /threads/{id}/messages, where ensure_thread_exists finds the
 row and no-ops — identical to any follow-up turn. The legacy new-thread door
 (POST /threads/messages) stays for channels and older clients; rows from either
