@@ -13,11 +13,11 @@ import { usePreferences } from '@/hooks/usePreferences';
 import { useUpdatePreferences } from '@/hooks/useUpdatePreferences';
 import { useTranslation } from 'react-i18next';
 import { modelPrefs, splitPreferenceWrite } from '@/lib/modelPreferences';
-import { suggestFlashModel } from './suggestFlashModel';
+import { suggestBackgroundModel } from './suggestBackgroundModel';
 import { useModelSlotCopy } from '@/components/model/useModelSlotCopy';
 
 // ---------------------------------------------------------------------------
-// DefaultsStep — Step 5: Set default primary + flash models
+// DefaultsStep — Step 5: Set default primary + Background models
 // ---------------------------------------------------------------------------
 
 export default function DefaultsStep() {
@@ -37,8 +37,8 @@ export default function DefaultsStep() {
   const [primaryModel, setPrimaryModel] = useState<string>(
     () => modelPref.preferred_model ?? '',
   );
-  const [flashModel, setFlashModel] = useState<string>(
-    () => modelPref.preferred_flash_model ?? '',
+  const [backgroundModel, setBackgroundModel] = useState<string>(
+    () => modelPref.preferred_background_model ?? '',
   );
   const [advancedModels, setAdvancedModels] = useState<{
     compactionModel: string;
@@ -53,14 +53,14 @@ export default function DefaultsStep() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // A first run fills both defaults, so an empty flash slot takes a model to
+  // A first run fills both defaults, so an empty Background slot takes a model to
   // go with the primary, set during render so the slot never paints empty.
   // The fill is a pick like any other: it stays when the primary changes, and
   // nothing is saved before Continue.
-  const flashFill = !flashModel && primaryModel ? suggestFlashModel(models, primaryModel) : undefined;
-  if (flashFill) setFlashModel(flashFill);
+  const backgroundFill = !backgroundModel && primaryModel ? suggestBackgroundModel(models, primaryModel) : undefined;
+  if (backgroundFill) setBackgroundModel(backgroundFill);
 
-  const canContinue = Boolean(primaryModel && flashModel);
+  const canContinue = Boolean(primaryModel && backgroundModel);
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -78,14 +78,14 @@ export default function DefaultsStep() {
   );
 
   const handleNext = useCallback(async () => {
-    if (!primaryModel || !flashModel) return;
+    if (!primaryModel || !backgroundModel) return;
 
     setSaving(true);
     setError(null);
 
     try {
-      // Leave unset rather than pinning to today's flash pick: the server
-      // resolves a blank fetch model from the flash/background model, and a
+      // Leave unset rather than pinning to today's Background pick: the server
+      // resolves a blank fetch model from the Background model, and a
       // blank compaction model from the conversation's own, at turn time, so a
       // later change in Settings keeps following it.
       const compaction = advancedModels.compactionModel || null;
@@ -93,7 +93,7 @@ export default function DefaultsStep() {
 
       await updatePreferences.mutateAsync(splitPreferenceWrite({
         preferred_model: primaryModel,
-        preferred_flash_model: flashModel,
+        preferred_background_model: backgroundModel,
         compaction_model: compaction,
         fetch_model: fetchModel,
         fallback_models: advancedModels.fallbackModels,
@@ -107,7 +107,7 @@ export default function DefaultsStep() {
     } finally {
       setSaving(false);
     }
-  }, [primaryModel, flashModel, advancedModels, updatePreferences, navigate, t]);
+  }, [primaryModel, backgroundModel, advancedModels, updatePreferences, navigate, t]);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -168,8 +168,8 @@ export default function DefaultsStep() {
         models={models}
         primaryModel={primaryModel}
         onPrimaryModelChange={setPrimaryModel}
-        flashModel={flashModel}
-        onFlashModelChange={setFlashModel}
+        backgroundModel={backgroundModel}
+        onBackgroundModelChange={setBackgroundModel}
         showExplainer
         modelAccess={modelAccessMap}
         metadata={metadata}

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { motion, AnimatePresence } from "@/lib/framer"
 import { ChevronRight, Lightbulb } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { FLASH_AUTO } from "@/lib/modelPreferences"
+import { BACKGROUND_AUTO } from "@/lib/modelPreferences"
 import { ModelSelector } from "./ModelSelector"
 import { useModelSlotCopy } from "./useModelSlotCopy"
 import type { ProviderModelsData } from "./types"
@@ -18,9 +18,9 @@ export interface ModelTierConfigProps {
   /** Current primary model selection */
   primaryModel: string
   onPrimaryModelChange: (model: string) => void
-  /** Current flash model selection */
-  flashModel: string
-  onFlashModelChange: (model: string) => void
+  /** Current Background model selection */
+  backgroundModel: string
+  onBackgroundModelChange: (model: string) => void
   /** Whether to show the "Two ways to research" explainer */
   showExplainer?: boolean
   /** Optional access map: model name → access type for badge display */
@@ -28,12 +28,12 @@ export interface ModelTierConfigProps {
   /** Optional model metadata, for display names */
   metadata?: Record<string, ModelMetadataEntry>
   /** Settings, where both slots are account defaults and may stay unset: the
-   *  models Auto runs, the deployment's primary and flash, each as printed and
+   *  models Auto runs, the deployment's primary and Background, each as printed and
    *  absent when the deployment names none. An unset primary is Auto; an unset
-   *  flash follows the primary once one is saved, with Auto (`FLASH_AUTO`)
+   *  Background follows the primary once one is saved, with Auto (`BACKGROUND_AUTO`)
    *  beside it, and is Auto before. Setup leaves this off: a first run fills
    *  both. */
-  auto?: { primary?: string; flash?: string }
+  auto?: { primary?: string; background?: string }
 }
 
 // ---------------------------------------------------------------------------
@@ -45,8 +45,8 @@ export function ModelTierConfig({
   filterProviders,
   primaryModel,
   onPrimaryModelChange,
-  flashModel,
-  onFlashModelChange,
+  backgroundModel,
+  onBackgroundModelChange,
   showExplainer = false,
   modelAccess,
   metadata,
@@ -58,7 +58,7 @@ export function ModelTierConfig({
   const autoLabel = (model: string | undefined) =>
     model ? t("settings.autoModel", { model }) : undefined
   const primaryAuto = autoLabel(auto?.primary)
-  const flashAuto = autoLabel(auto?.flash)
+  const backgroundAuto = autoLabel(auto?.background)
 
   return (
     <div className="flex flex-col" style={{ gap: "24px" }}>
@@ -156,19 +156,19 @@ export function ModelTierConfig({
         metadata={metadata}
       />
 
-      {/* Flash Model selector */}
+      {/* Background model selector */}
       <ModelSelector
         label={copy.background.label}
         description={copy.background.description}
-        value={flashModel}
-        onChange={onFlashModelChange}
+        value={backgroundModel}
+        onChange={onBackgroundModelChange}
         models={models}
         filterProviders={filterProviders}
         placeholder={auto && primaryModel
           ? copy.backgroundSameAsDefault
-          : (auto && flashAuto) || copy.background.placeholder}
-        autoOption={auto && primaryModel && flashAuto
-          ? { value: FLASH_AUTO, label: flashAuto }
+          : (auto && backgroundAuto) || copy.background.placeholder}
+        autoOption={auto && primaryModel && backgroundAuto
+          ? { value: BACKGROUND_AUTO, label: backgroundAuto }
           : undefined}
         required={!auto}
         modelAccess={modelAccess}

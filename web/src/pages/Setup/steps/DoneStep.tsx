@@ -41,7 +41,7 @@ export default function DoneStep() {
 
   const modelPref = modelPrefs(preferences);
   const primaryModel = modelPref.preferred_model ?? t('setup.notSet');
-  const flashModel = modelPref.preferred_flash_model ?? t('setup.notSet');
+  const backgroundModel = modelPref.preferred_background_model ?? t('setup.notSet');
   const providerLabel = configuredProviderNames.length > 0
     ? configuredProviderNames.join(', ')
     : t('setup.notConfigured');
@@ -83,7 +83,7 @@ export default function DoneStep() {
         <div className="flex flex-col divide-y" style={{ borderColor: 'var(--color-border-default)' }}>
           <SummaryRow label={t('setup.providerLabel')} value={providerLabel} />
           <SummaryRow label={copy.default.summary} value={primaryModel} />
-          <SummaryRow label={copy.background.summary} value={flashModel} />
+          <SummaryRow label={copy.background.summary} value={backgroundModel} />
         </div>
       </div>
 

@@ -11,7 +11,7 @@ import { modelPrefs } from '@/lib/modelPreferences';
 
 interface SystemDefaults {
   default_model?: string;
-  flash_model?: string;
+  background_model?: string;
   compaction_model?: string;
   fetch_model?: string;
   fallback_models?: string[];
