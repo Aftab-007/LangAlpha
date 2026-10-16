@@ -191,15 +191,15 @@ def reset_fetch_service() -> None:
 
 def _get_extraction_model() -> str:
     """Get the configured extraction model.
-    Priority: context override (user pref) > agent_config.yaml llm.fetch > llm.flash > llm.name.
+    Priority: context override (user pref) > agent_config.yaml llm.fetch > llm.background > llm.name.
     """
     override = fetch_model_override.get()
     if override:
         return override
     from src.config.tool_settings import _get_agent_config_dict
 
-    llm = _get_agent_config_dict().get("llm", {})
-    return llm.get("fetch") or llm.get("flash") or llm.get("name", "")
+    llm = _get_agent_config_dict().get("llm") or {}
+    return llm.get("fetch") or llm.get("background") or llm.get("name", "")
 
 
 def _with_sitemap_suggestions(message: str, sitemap_summary: str) -> str:
@@ -310,7 +310,7 @@ async def web_fetch(
     Args:
         url: The URL to fetch content from
         prompt: The prompt to run on the fetched content
-        model: LLM model to use for extraction (default: from agent_config.yaml llm.flash)
+        model: LLM model to use for extraction (default: from agent_config.yaml llm.fetch, else llm.background)
         use_cache: Whether to use Redis cache (default: True)
         include_sitemap: Include site structure for URL suggestions (default: True)
 

@@ -62,17 +62,34 @@ set_llm_null() {
     ' "$CONFIG" > "${CONFIG}.tmp.$$" && mv "${CONFIG}.tmp.$$" "$CONFIG"
 }
 
+# Rename a field under the top-level llm: block in place, unless the new name
+# is already there. set_llm_field only rewrites a line that exists, so a file
+# still on the old name would otherwise never get the new one.
+rename_llm_field() {
+    local old="$1" new="$2"
+    awk -v o="$old" -v n="$new" '
+        FNR == 1 { in_llm=0 }
+        /^llm:/ { in_llm=1 }
+        /^[a-z]/ && !/^llm:/ { in_llm=0 }
+        NR == FNR { if (in_llm && $0 ~ "^  "n":") has_new=1; next }
+        in_llm && !has_new && $0 ~ "^  "o":" { sub("^  "o":", "  "n":") }
+        { print }
+    ' "$CONFIG" "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+}
+
 ensure_llm_block() {
     # If llm is currently "llm: null", expand to a full block so set_llm_field works.
     if grep -q '^llm: null' "$CONFIG" 2>/dev/null; then
         local tmp="${CONFIG}.tmp.$$"
         sed 's/^llm: null$/llm:\
   name: ""\
-  flash: ""\
+  background: ""\
   compaction: ""\
   fetch: ""\
   fallback: []/' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
     fi
+    # llm.flash is the Background model's old name.
+    rename_llm_field "flash" "background"
 }
 
 set_search_api() {
@@ -220,16 +237,16 @@ case $llm in
         case $sub in
             b)
                 set_llm_field "name" "gpt-6.1-sol-oauth"
-                set_llm_field "flash" "gpt-5.6-terra-oauth"
-                # compaction/fetch left blank → inherit the flash model
+                set_llm_field "background" "gpt-5.6-terra-oauth"
+                # compaction blank → the turn's model; fetch blank → the background model
                 set_llm_field "compaction" ""
                 set_llm_field "fetch" ""
                 success "ChatGPT OAuth — connect your subscription in the UI after starting"
                 ;;
             *)
                 set_llm_field "name" "claude-opus-5-5-oauth"
-                set_llm_field "flash" "claude-sonnet-5-5-oauth"
-                # compaction/fetch left blank → inherit the flash model
+                set_llm_field "background" "claude-sonnet-5-5-oauth"
+                # compaction blank → the turn's model; fetch blank → the background model
                 set_llm_field "compaction" ""
                 set_llm_field "fetch" ""
                 success "Claude OAuth — connect your subscription in the UI after starting"
@@ -270,8 +287,8 @@ case $llm in
             info "No models found for $_sel_display — edit agent_config.yaml manually."
         elif [ ${#_models[@]} -eq 1 ]; then
             set_llm_field "name" "${_models[0]}"
-            set_llm_field "flash" "${_models[0]}"
-            # compaction/fetch left blank → inherit the flash model
+            set_llm_field "background" "${_models[0]}"
+            # compaction blank → the turn's model; fetch blank → the background model
             set_llm_field "compaction" ""
             set_llm_field "fetch" ""
             success "$_sel_display — ${_models[0]}"
@@ -283,16 +300,16 @@ case $llm in
             printf "\n"
 
             main_idx=$(prompt_choice "Main model" "1")
-            flash_idx=$(prompt_choice "Flash/light model" "${#_models[@]}")
+            background_idx=$(prompt_choice "Background model" "${#_models[@]}")
             main_model="${_models[$((main_idx-1))]}"
-            flash_model="${_models[$((flash_idx-1))]}"
+            background_model="${_models[$((background_idx-1))]}"
 
             set_llm_field "name" "$main_model"
-            set_llm_field "flash" "$flash_model"
-            # compaction/fetch left blank → inherit the flash model
+            set_llm_field "background" "$background_model"
+            # compaction blank → the turn's model; fetch blank → the background model
             set_llm_field "compaction" ""
             set_llm_field "fetch" ""
-            success "$_sel_display — $main_model (main), $flash_model (flash)"
+            success "$_sel_display — $main_model (main), $background_model (background)"
         fi
         printf "\n"
         info "Tip: edit agent_config.yaml to add fallback models, or switch models in the web UI."

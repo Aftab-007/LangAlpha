@@ -54,6 +54,7 @@ from ptc_agent.config.file_utils import (
     get_config_search_paths,
     get_default_config_dir,
     load_yaml_config,
+    rename_llm_flash,
 )
 
 
@@ -246,9 +247,11 @@ def load_from_dict(
             "Please add these sections to your agent_config.yaml file."
         )
 
-    # Load LLM configuration - extract name and flash LLM
+    # Load LLM configuration - extract name and the Background model
     # llm: null (or omitted) is allowed — users configure models via the UI instead.
-    llm_data = config_data.get("llm")
+    # A dict passed in directly never went through load_yaml_config, which
+    # reads the old llm.flash spelling for a file.
+    llm_data = rename_llm_flash(config_data, "the agent config").get("llm")
 
     llm_config: LLMConfig | None = None
     if isinstance(llm_data, str):
@@ -262,7 +265,7 @@ def load_from_dict(
         # (LLMConfig.compaction_name / fetch_name), not to this file's models.
         llm_config = LLMConfig(
             name=llm_name,
-            flash=llm_data.get("flash"),
+            flash=llm_data.get("background"),
             compaction=llm_data.get("compaction") or None,
             fetch=llm_data.get("fetch") or None,
             fallback=llm_data.get("fallback"),
@@ -373,7 +376,7 @@ cli:
 # Model name from src/llms/manifest/models.json
 llm:
   name: "your-model-name"       # Required: primary model from models.json
-  # flash: "your-flash-model"   # Optional: model for background work
+  # background: "your-model"    # Optional: model for background work
   # compaction: "your-model"    # Optional: model for context compaction
   # fetch: "your-model"         # Optional: model for web content extraction
   # fallback:                   # Optional: fallback models when primary fails
