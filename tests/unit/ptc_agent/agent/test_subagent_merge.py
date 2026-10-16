@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,7 @@ from ptc_agent.agent.subagents.merge import (
     merge_subagents,
     narrow_to_request,
     plugin_definition,
+    tool_words,
     turn_roster,
 )
 from ptc_agent.agent.subagents.registry import SubagentRegistry
@@ -61,23 +63,85 @@ def _base_with(tools: list[str], **kwargs) -> SubagentDefinition:
 # ---------------------------------------------------------------------------
 
 
-def test_each_base_is_keyed_by_the_layer_that_defined_it():
-    """The key is how an override names its base, so a YAML definition that
-    takes a built-in's name must change the key, or the user's changes to the
-    built-in would silently reshape the operator's replacement."""
+def test_a_yaml_definition_patches_a_builtin_and_keeps_its_key():
+    """A YAML definition with a built-in's name sets only the fields it lists,
+    as an overlay does: ``sections`` merges, lists replace. It stays that
+    built-in, so a user's changes to it keep applying; a new name is the
+    deployment's own."""
     bases = _bases(
-        research=SubagentConfig(description="desk", tools=["web_search"]),
+        research=SubagentConfig(
+            model="m-deploy", reasoning_effort="low", sections={"tool_guide": True}
+        ),
         macro=SubagentConfig(description="macro"),
     )
 
     expected = {name: f"builtin:{name}" for name in BUILTIN_SUBAGENTS}
-    expected |= {"research": "deployment:research", "macro": "deployment:macro"}
+    expected |= {"macro": "deployment:macro"}
     assert {name: base.key for name, base in bases.items()} == expected
-    # The YAML still replaces the built-in wholesale, template included.
-    research = bases["research"].definition
-    assert (research.tools, research.role_prompt_template, research.source) == (
-        ["web_search"], None, "user",
+    stock = BUILTIN_SUBAGENTS["research"]
+    assert bases["research"].definition == replace(
+        stock, model="m-deploy", reasoning_effort="low",
+        sections={**stock.sections, "tool_guide": True},
     )
+
+
+@pytest.mark.parametrize(
+    ("patch", "narrowed"),
+    [
+        ({"tools": ["filesystem"]}, True),
+        ({"tools": ["web_search", "filesystem", "finance"]}, False),
+        # A deployment that writes the prompt wrote it for the tools it gives.
+        ({"tools": ["filesystem"], "role_prompt": "Read the files."}, False),
+        # An empty inline prompt still renders the built-in's role template.
+        ({"tools": ["filesystem"], "role_prompt": ""}, True),
+    ],
+)
+def test_a_patch_that_narrows_a_builtins_tools_says_so_in_its_prompt(patch, narrowed):
+    base = _bases(research=SubagentConfig(**patch))["research"]
+    assert base.definition.tools_narrowed is narrowed
+    # A user's save of the same tools leaves the note as it is.
+    same = {"tools": tool_words(base.definition.tools)}
+    assert apply_override(base.definition, same).tools_narrowed is narrowed
+
+
+@pytest.mark.parametrize(
+    ("name", "patch", "expected"),
+    [
+        # The code sections follow execute_code, as a user's tool edit does.
+        ("research", {"tools": ["web_search", "filesystem", "execute_code"]},
+         dict.fromkeys(CODE_SECTIONS, True)),
+        ("general-purpose", {"tools": ["filesystem", "web_search"]},
+         dict.fromkeys(CODE_SECTIONS, False)),
+        # Sections the YAML sets win over that.
+        ("research", {"tools": ["web_search", "execute_code"], "sections": {"visualizations": False}},
+         {**dict.fromkeys(CODE_SECTIONS, True), "visualizations": False}),
+    ],
+)
+def test_a_patch_that_switches_code_switches_the_code_sections(name, patch, expected):
+    sections = _bases(**{name: SubagentConfig(**patch)})[name].definition.sections
+    assert {s: sections[s] for s in CODE_SECTIONS} == expected
+
+
+@pytest.mark.parametrize("description", [None, ""])
+def test_a_patch_with_no_description_keeps_the_builtins(description):
+    # The parent delegates by it, so a blank one would leave it guessing.
+    patched = _bases(research=SubagentConfig(description=description, model="m"))["research"]
+    assert patched.definition.description == BUILTIN_SUBAGENTS["research"].description
+
+
+def test_a_users_change_to_a_builtin_applies_over_the_deployments_patch():
+    """The user's field wins over the deployment's; one they left alone
+    follows the deployment."""
+    bases = _bases(research=SubagentConfig(model="m-deploy", reasoning_effort="low"))
+
+    resolved = merge_subagents(
+        bases, OFFERED, [_override("research", "builtin:research", effort="medium", memory=True)]
+    )
+
+    defn = resolved.definitions["research"]
+    assert resolved.orphaned == ()
+    assert (defn.model, defn.reasoning_effort, defn.memory) == ("m-deploy", "medium", True)
+    assert defn.role_prompt_template == BUILTIN_SUBAGENTS["research"].role_prompt_template
 
 
 def test_plugin_bases_join_after_the_deployments_without_taking_its_names():
@@ -113,25 +177,18 @@ def test_a_users_override_lands_on_a_plugin_base_by_its_plugin_key():
     assert resolved.orphaned == ()
 
 
-@pytest.mark.parametrize(
-    "written_against",
-    [
-        # The operator later replaced the built-in with a YAML definition.
-        "builtin:research",
-        # Another plugin now owns the name.
-        "plugin:acme/research",
-    ],
-)
-def test_an_override_whose_base_changed_hands_is_orphaned_not_applied(written_against):
-    bases = _bases(research=SubagentConfig(description="desk", tools=["web_search"]))
+def test_an_override_whose_base_changed_hands_is_orphaned_not_applied():
+    # Written against a plugin's subagent whose name the deployment now defines.
+    bases = _bases(desk=SubagentConfig(description="desk", tools=["web_search"]))
 
     resolved = merge_subagents(
-        bases, OFFERED, [_override("research", written_against, enabled=False, model="m-user")]
+        bases, (*OFFERED, "desk"),
+        [_override("desk", "plugin:acme/desk", enabled=False, model="m-user")],
     )
 
-    assert resolved.orphaned == ("research",)
-    assert resolved.definitions["research"] == bases["research"].definition
-    assert "research" in resolved.enabled
+    assert resolved.orphaned == ("desk",)
+    assert resolved.definitions["desk"] == bases["desk"].definition
+    assert "desk" in resolved.enabled
 
 
 def test_an_override_whose_base_is_gone_is_orphaned():
@@ -171,7 +228,7 @@ _PINNED = SubagentConfig(
 def test_an_absent_key_keeps_the_base_and_null_or_inherit_unsets_it(fields, expected):
     bases = _bases(research=_PINNED)
 
-    resolved = merge_subagents(bases, OFFERED, [_override("research", "deployment:research", **fields)])
+    resolved = merge_subagents(bases, OFFERED, [_override("research", "builtin:research", **fields)])
 
     defn = resolved.definitions["research"]
     assert (defn.model, defn.reasoning_effort, defn.search_provider, defn.search_depth) == expected
@@ -518,7 +575,7 @@ def test_a_resolved_roster_supersedes_the_deployments():
     per_turn = deployment.model_copy(update={"resolved": resolved})
 
     assert turn_roster(deployment).enabled == ("research",)
-    assert turn_roster(deployment).definitions["research"].source == "user"
+    assert turn_roster(deployment).definitions["research"].tools == ["web_search"]
     # A user who turned everything off compiles nothing, not the deployment's list.
     assert turn_roster(per_turn) is resolved
 

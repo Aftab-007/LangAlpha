@@ -292,16 +292,17 @@ def load_from_dict(
     # Load Subagent configuration (optional section)
     subagents_data = config_data.get("subagents") or {}
     subagents_enabled = subagents_data.get("enabled", ["general-purpose"])
+    from ptc_agent.agent.subagents.builtins import BUILTIN_SUBAGENTS
+
     subagent_definitions: dict[str, SubagentConfig] = {}
     for name, defn_data in (subagents_data.get("definitions") or {}).items():
         try:
-            subagent_definitions[name] = SubagentConfig(**defn_data)
+            # A bare key is an empty patch; any other value that is not a map fails here.
+            subagent_definitions[name] = SubagentConfig(**({} if defn_data is None else defn_data))
         except Exception as e:
             raise ValueError(f"Invalid subagent definition '{name}': {e}") from e
 
     # Validate enabled subagent names exist in builtins or user definitions
-    from ptc_agent.agent.subagents.builtins import BUILTIN_SUBAGENTS
-
     known_names = set(BUILTIN_SUBAGENTS) | set(subagent_definitions)
     for name in subagents_enabled:
         if name not in known_names:

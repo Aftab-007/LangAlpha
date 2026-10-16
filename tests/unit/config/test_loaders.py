@@ -230,6 +230,30 @@ class TestLoadFromDictSubagents:
         assert "my-agent" in config.subagents.enabled
         assert config.subagents.definitions["my-agent"].mode == "flash"
 
+    @pytest.mark.parametrize(("name", "loads"), [("research", True), ("my-agent", False)])
+    def test_only_a_new_subagent_needs_a_description(self, name, loads):
+        """A built-in's name changes only the fields given; a new subagent has
+        no description to keep."""
+        data = _full_config_dict(subagents={
+            "enabled": ["general-purpose"],
+            "definitions": {name: {"model": "m-deploy", "reasoning_effort": "low"}},
+        })
+        if loads:
+            assert load_from_dict(data).subagents.definitions[name].model == "m-deploy"
+        else:
+            with pytest.raises(ValueError, match="needs a description"):
+                load_from_dict(data)
+
+    @pytest.mark.parametrize("value", [[], 0, ""])
+    def test_a_definition_that_is_not_a_map_is_refused(self, value):
+        data = _full_config_dict(subagents={"definitions": {"research": value}})
+        with pytest.raises(ValueError, match="Invalid subagent definition 'research'"):
+            load_from_dict(data)
+
+    def test_a_bare_builtin_key_is_an_empty_patch(self):
+        data = _full_config_dict(subagents={"definitions": {"research": None}})
+        assert load_from_dict(data).subagents.definitions["research"].model_fields_set == set()
+
 
 # ---------------------------------------------------------------------------
 # load_from_dict — MCP servers

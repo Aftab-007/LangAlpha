@@ -185,7 +185,7 @@ def _base_view(
     """A base with the user's override, if one applies.
 
     ``stale`` is a row written against a base this name no longer has (a
-    deployment definition now replaces the built-in); it is shown as base
+    deployment definition now takes a plugin subagent's name); it is shown as base
     removed on this view, and a save starts over from the current base.
     """
     body = render_base_body(base.definition)

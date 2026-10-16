@@ -35,7 +35,7 @@ def test_a_yaml_override_keeps_the_builtins_roles():
     registry = SubagentRegistry(
         user_definitions={"equity-analyst": SubagentConfig(description="mine")}
     )
-    assert registry.get("equity-analyst").source == "user"
+    assert registry.get("equity-analyst").description == "mine"
     assert "equity-analyst" not in _roster(registry, "chief_of_staff")
 
 

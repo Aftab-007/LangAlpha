@@ -154,9 +154,14 @@ class SkillsConfig(BaseModel):
 
 
 class SubagentConfig(BaseModel):
-    """Configuration for a single subagent definition (built-in override or user-defined)."""
+    """One subagent definition in the deployment's YAML.
 
-    description: str
+    Named after a built-in, it changes only the fields it sets, as an overlay
+    does, so the defaults below apply only to a subagent of the deployment's
+    own, which also needs a ``description``.
+    """
+
+    description: str | None = None
     mode: Literal["ptc", "flash"] = "ptc"
     model: str | None = None
     role_prompt: str = ""
@@ -173,8 +178,7 @@ class SubagentConfig(BaseModel):
     connectors: bool = True
     brokerages: Literal["off", "on"] = "on"
     preferred_connectors: list[str] = Field(default_factory=list)
-    # Unset keeps a built-in's own default when this overrides one, and is
-    # on for a subagent of the deployment's own.
+    # Unset is on for a subagent of the deployment's own.
     memory: bool | None = None
 
     @field_validator("reasoning_effort")
@@ -203,6 +207,22 @@ class SubagentsConfig(BaseModel):
     #: shared config and on builds that never resolved a user, which compile
     #: the deployment's own roster (``merge.turn_roster``).
     resolved: Any | None = Field(default=None, exclude=True)
+
+    @field_validator("definitions")
+    @classmethod
+    def _new_subagents_have_descriptions(
+        cls, value: dict[str, SubagentConfig]
+    ) -> dict[str, SubagentConfig]:
+        # The parent delegates by the description, and a built-in brings its own.
+        from ptc_agent.agent.subagents.builtins import BUILTIN_SUBAGENTS
+
+        for name, defn in value.items():
+            if name not in BUILTIN_SUBAGENTS and not defn.description:
+                raise ValueError(
+                    f"Invalid subagent definition '{name}': a subagent that is "
+                    "not built in needs a description"
+                )
+        return value
 
 
 class LLMDefinition(BaseModel):

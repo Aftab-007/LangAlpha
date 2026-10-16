@@ -346,6 +346,13 @@ class TestSubagentsConfig:
         assert cfg.enabled == ["general-purpose"]
         assert cfg.definitions == {}
 
+    def test_a_new_subagent_needs_a_description_on_every_path(self):
+        # A built-in brings its own; a new name built in code, not just from
+        # YAML, is refused without one, since the parent delegates by it.
+        assert SubagentsConfig(definitions={"research": SubagentConfig(model="m")})
+        with pytest.raises(ValueError, match="'macro'.*needs a description"):
+            SubagentsConfig(definitions={"macro": SubagentConfig(model="m")})
+
 
 # ---------------------------------------------------------------------------
 # SkillsConfig
