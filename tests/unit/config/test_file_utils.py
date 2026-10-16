@@ -167,7 +167,7 @@ class TestLoadYamlConfig:
 
 
 class TestAppEnvOverlay:
-    BASE = "llm:\n  name: base\n  flash: base-flash\n  fallback: [one, two]\nsearch_api: tavily\n"
+    BASE = "llm:\n  name: base\n  background: base-bg\n  fallback: [one, two]\nsearch_api: tavily\n"
 
     def _write(self, tmp_path, overlay=None):
         clear_config_cache()
@@ -183,7 +183,7 @@ class TestAppEnvOverlay:
             result = load_yaml_config(base)
 
         assert result["search_api"] == "serper"
-        assert result["llm"] == {"name": "overlaid", "flash": "base-flash", "fallback": ["one", "two"]}
+        assert result["llm"] == {"name": "overlaid", "background": "base-bg", "fallback": ["one", "two"]}
 
     def test_overlay_lists_replace_rather_than_concatenate(self, tmp_path):
         base = self._write(tmp_path, "llm:\n  fallback: [three]\n")
@@ -225,6 +225,94 @@ class TestAppEnvOverlay:
 
         with patch.dict(os.environ, {"APP_ENV": "production"}), pytest.raises(ValueError, match="mapping"):
             load_yaml_config(base)
+
+
+# ---------------------------------------------------------------------------
+# llm.flash, the Background model's old name
+# ---------------------------------------------------------------------------
+
+
+class TestRenamedLlmFlash:
+    LOGGER = "ptc_agent.config.file_utils"
+
+    def _write(self, tmp_path, base, overlay=None):
+        clear_config_cache()
+        (tmp_path / AGENT_CONFIG_FILE).write_text(base)
+        if overlay is not None:
+            (tmp_path / "agent_config.production.yaml").write_text(overlay)
+        return str(tmp_path / AGENT_CONFIG_FILE)
+
+    def _warnings(self, caplog):
+        return [r.getMessage() for r in caplog.records if r.name == self.LOGGER and "llm.flash" in r.getMessage()]
+
+    def test_a_file_on_the_old_name_reads_as_background(self, tmp_path, caplog):
+        base = self._write(tmp_path, "llm:\n  name: base\n  flash: old-bg\n")
+
+        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING", logger=self.LOGGER):
+            result = load_yaml_config(base)
+
+        assert result["llm"] == {"name": "base", "background": "old-bg"}
+        [warning] = self._warnings(caplog)
+        assert base in warning and "rename it to llm.background" in warning
+
+    def test_an_overlay_on_the_old_name_overrides_a_base_on_the_new(self, tmp_path, caplog):
+        """Per file: merged first, the two names would sit side by side and
+        the base's new name would win over the overlay that meant to change it."""
+        base = self._write(
+            tmp_path,
+            "llm:\n  name: base\n  background: base-bg\n",
+            "llm:\n  flash: overlay-bg\n",
+        )
+
+        with patch.dict(os.environ, {"APP_ENV": "production"}), caplog.at_level("WARNING", logger=self.LOGGER):
+            result = load_yaml_config(base)
+
+        assert result["llm"] == {"name": "base", "background": "overlay-bg"}
+        [warning] = self._warnings(caplog)
+        assert "agent_config.production.yaml" in warning
+
+    def test_an_overlay_on_the_new_name_overrides_a_base_on_the_old(self, tmp_path):
+        base = self._write(
+            tmp_path,
+            "llm:\n  name: base\n  flash: base-bg\n",
+            "llm:\n  background: overlay-bg\n",
+        )
+
+        with patch.dict(os.environ, {"APP_ENV": "production"}):
+            result = load_yaml_config(base)
+
+        assert result["llm"] == {"name": "base", "background": "overlay-bg"}
+
+    def test_a_file_naming_both_keeps_background_and_says_flash_is_ignored(self, tmp_path, caplog):
+        base = self._write(tmp_path, "llm:\n  name: base\n  flash: old-bg\n  background: new-bg\n")
+
+        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING", logger=self.LOGGER):
+            result = load_yaml_config(base)
+
+        assert result["llm"] == {"name": "base", "background": "new-bg"}
+        [warning] = self._warnings(caplog)
+        assert "ignored" in warning and base in warning
+
+    def test_a_file_warns_once_however_often_it_is_read(self, tmp_path, caplog):
+        base = self._write(tmp_path, "llm:\n  name: base\n  flash: old-bg\n")
+
+        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING", logger=self.LOGGER):
+            load_yaml_config(base)
+            load_yaml_config(base)
+
+        assert len(self._warnings(caplog)) == 1
+
+    @pytest.mark.parametrize(
+        "body",
+        ["llm: some-model\n", "llm:\n  name: base\n  background: bg\n", "search_api: tavily\n"],
+    )
+    def test_a_file_without_the_old_name_is_left_alone(self, tmp_path, caplog, body):
+        base = self._write(tmp_path, body)
+
+        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING", logger=self.LOGGER):
+            load_yaml_config(base)
+
+        assert self._warnings(caplog) == []
 
 
 # ---------------------------------------------------------------------------

@@ -1123,6 +1123,147 @@ async def test_an_unknown_apply_default_to_is_422(client):
 
 
 # ---------------------------------------------------------------------------
+# /users/me/preferences: the Background model's new key names
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "sent, stored",
+    [
+        ({"preferred_background_model": "m-bg"}, {"preferred_flash_model": "m-bg"}),
+        # null is a deletion, and it has to reach the stored key to be one.
+        ({"preferred_background_model": None}, {"preferred_flash_model": None}),
+        ({"background_follows": "deployment"}, {"flash_follows": "deployment"}),
+        ({"background_follows": None}, {"flash_follows": None}),
+        # A client sending both spellings means the new one.
+        (
+            {"preferred_flash_model": "m-old", "preferred_background_model": "m-new"},
+            {"preferred_flash_model": "m-new"},
+        ),
+        (
+            {"preferred_background_model": None, "preferred_flash_model": "m-old"},
+            {"preferred_flash_model": None},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_new_model_key_is_stored_under_the_key_this_build_reads(client, sent, stored):
+    async with _default_change() as (upsert, _carry):
+        resp = await client.put(
+            "/api/v1/users/me/preferences", json={"model_preference": sent}
+        )
+
+    assert resp.status_code == 200
+    assert upsert.await_args.kwargs["model_preference"] == stored
+
+
+@pytest.mark.asyncio
+async def test_a_new_background_model_key_sent_under_other_preference_still_wins(client):
+    """A stale tab's legacy key is re-routed first, so the new name still beats it."""
+    async with _default_change() as (upsert, _carry):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={
+                "other_preference": {"preferred_flash_model": "m-old"},
+                "model_preference": {"preferred_background_model": "m-new"},
+            },
+        )
+
+    assert resp.status_code == 200
+    assert upsert.await_args.kwargs["model_preference"] == {"preferred_flash_model": "m-new"}
+    assert upsert.await_args.kwargs["other_preference"] == {}
+
+
+@pytest.mark.parametrize("follows", ["auto", 1, ["deployment"]])
+@pytest.mark.asyncio
+async def test_an_unknown_background_follows_is_rejected_by_its_own_name(client, follows):
+    async with _default_change() as (upsert, _carry):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={"model_preference": {"background_follows": follows}},
+        )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail.startswith("background_follows must be one of")
+    assert "flash_follows" not in detail
+    upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_choosing_auto_under_the_new_name_is_a_default_change(client):
+    async with _default_change(moved=1) as (_upsert, carry):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={
+                "model_preference": {"background_follows": "deployment"},
+                "apply_default_to": "existing_threads",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["threads_reassigned"] == 1
+    carry.assert_awaited_once()
+
+
+_STORED_BACKGROUND = {
+    "preferred_model": "m-a",
+    "preferred_flash_model": "m-bg",
+    "flash_follows": "deployment",
+}
+
+
+@pytest.mark.asyncio
+async def test_get_preferences_answers_to_both_names(client):
+    with (
+        patch(f"{DB}.db_get_user", new_callable=AsyncMock, return_value=_user()),
+        patch(
+            f"{DB}.db_get_user_preferences",
+            new_callable=AsyncMock,
+            return_value={**_prefs(), "model_preference": dict(_STORED_BACKGROUND)},
+        ),
+    ):
+        resp = await client.get("/api/v1/users/me/preferences")
+
+    assert resp.status_code == 200
+    assert resp.json()["model_preference"] == {
+        **_STORED_BACKGROUND,
+        "preferred_background_model": "m-bg",
+        "background_follows": "deployment",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_row_without_the_renamed_keys_gains_no_new_ones(client):
+    with (
+        patch(f"{DB}.db_get_user", new_callable=AsyncMock, return_value=_user()),
+        patch(
+            f"{DB}.db_get_user_preferences",
+            new_callable=AsyncMock,
+            return_value={**_prefs(), "model_preference": {"preferred_model": "m-a"}},
+        ),
+    ):
+        resp = await client.get("/api/v1/users/me/preferences")
+
+    assert resp.json()["model_preference"] == {"preferred_model": "m-a"}
+
+
+@pytest.mark.asyncio
+async def test_the_put_response_answers_to_both_names(client):
+    async with _prefs_endpoint() as upsert:
+        upsert.return_value = {**_prefs(), "model_preference": dict(_STORED_BACKGROUND)}
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={"model_preference": {"preferred_background_model": "m-bg"}},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()["model_preference"]
+    assert body["preferred_background_model"] == body["preferred_flash_model"] == "m-bg"
+    assert body["background_follows"] == body["flash_follows"] == "deployment"
+
+
+# ---------------------------------------------------------------------------
 # PUT /users/me/preferences: other_preference.subagents_default
 # ---------------------------------------------------------------------------
 

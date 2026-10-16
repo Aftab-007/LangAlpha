@@ -35,7 +35,7 @@ def _shipped_default_models() -> list[tuple[str, str]]:
     """``(where, key)`` for every model a fresh install runs without choosing one."""
     found: list[tuple[str, str]] = []
     llm = yaml.safe_load((_REPO / "agent_config.yaml").read_text()).get("llm") or {}
-    for field in ("name", "flash", "compaction", "fetch"):
+    for field in ("name", "background", "compaction", "fetch"):
         if llm.get(field):
             found.append((f"agent_config.yaml llm.{field}", llm[field]))
     found.extend(("agent_config.yaml llm.fallback", m) for m in llm.get("fallback") or [])
@@ -45,7 +45,7 @@ def _shipped_default_models() -> list[tuple[str, str]]:
     found.extend(
         (f"configure.sh {field}", key)
         for field, key in re.findall(
-            r'set_llm_field "(name|flash|compaction|fetch)" "([^"$]+)"', configure
+            r'set_llm_field "(name|background|compaction|fetch)" "([^"$]+)"', configure
         )
     )
     return found
