@@ -144,7 +144,7 @@ async def _resolve_origin_meta(request, thread_id: str) -> dict:
     would fall out of the Chief of Staff thread's serialization chain (and their
     gen-fenced teardowns out of their dispatch incarnation).
     """
-    supplied = getattr(request, "origin_flash_thread_id", None)
+    supplied = getattr(request, "origin_home_thread_id", None)
     if supplied:
         return {
             ORIGIN_THREAD_META: supplied,
@@ -161,7 +161,8 @@ async def _resolve_origin_meta(request, thread_id: str) -> dict:
     if not meta.get(ORIGIN_THREAD_META):
         # Only a thread a dispatch started has an origin. A generation without
         # one is a report-back's, stamped by the summary turn that answered it
-        # (in Home, or on Flash before it), and is that pair's, not the thread's.
+        # (in Home, or by the retired Flash agent before it), and is that
+        # pair's, not the thread's.
         meta = {}
     return {
         ORIGIN_THREAD_META: meta.get(ORIGIN_THREAD_META),

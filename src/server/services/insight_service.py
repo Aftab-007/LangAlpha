@@ -402,7 +402,7 @@ class InsightService:
 
         # Atomic idempotency: try to insert, handle conflict from partial unique index
         row = await insight_db.create_market_insight_if_not_generating(
-            model="flash",
+            model="background",
             type="personalized",
             user_id=user_id,
             metadata={"schema_version": 3, "has_context": bool(symbols_context)},
@@ -727,7 +727,7 @@ class InsightService:
         system_user_id = None if HOST_MODE == "platform" else LOCAL_DEV_USER_ID
 
         row = await insight_db.create_market_insight(
-            model="flash",
+            model="background",
             type=job_type,
             metadata={"instruction": instruction, "schema_version": 3},
         )

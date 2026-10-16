@@ -478,13 +478,12 @@ class ChatRequest(BaseModel):
         "Internal use only.",
     )
 
-    # Internal: the thread watching this dispatched PTC run, in Home (named
-    # for Flash, which dispatched before the Chief of Staff did). Stamped
+    # Internal: the thread watching this dispatched PTC run, in Home. Stamped
     # into the run's START metadata so finalize can build report-back hook
     # ordering keys (all completions reporting into one Chief of Staff thread
     # serialize) without I/O. An ordering hint only — executors re-resolve
     # the authoritative origin from Redis at execution time.
-    origin_flash_thread_id: Optional[str] = Field(
+    origin_home_thread_id: Optional[str] = Field(
         default=None,
         description="Thread watching this dispatched PTC run. "
         "Internal use only.",

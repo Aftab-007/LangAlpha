@@ -41,7 +41,7 @@ async def _agent_steer_body(
     already receipted that generation: the gate would refuse the turn on
     every try, and the Home thread was told the hand-off is gone."""
     origin = payload.get("origin") or {}
-    home = origin.get("origin_flash_thread_id")
+    home = origin.get("origin_home_thread_id")
     gen = origin.get("origin_dispatch_gen")
     if home and gen:
         from src.server.services.report_back.handoff.keys import ptc_rb_resolved_key
@@ -61,7 +61,7 @@ async def _agent_steer_body(
             "id": origin.get("id"),
             "agent": origin.get("agent") or payload.get("sender"),
         },
-        "origin_flash_thread_id": home if gen else None,
+        "origin_home_thread_id": home if gen else None,
         "origin_dispatch_gen": gen if home else None,
         "request_key": steer_request_key(job_id),
         "steer_job_id": job_id,

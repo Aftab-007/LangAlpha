@@ -148,11 +148,11 @@ def agent_steer_of(
     """
     if not dispatched or not _is_agent_hand_off(request):
         return None
-    flash_thread_id = request.origin_flash_thread_id
+    home_thread_id = request.origin_home_thread_id
     gen = request.origin_dispatch_gen
     stamp = (
-        {"origin_flash_thread_id": flash_thread_id, "origin_dispatch_gen": gen}
-        if flash_thread_id and gen
+        {"origin_home_thread_id": home_thread_id, "origin_dispatch_gen": gen}
+        if home_thread_id and gen
         else None
     )
     origin = {"type": "agent", "agent": request.origin.agent, "id": request.origin.id}

@@ -1171,8 +1171,8 @@ _TAKEABLE_STEER_SQL = (
     " OR {a}.run_id = %(run_id)s::uuid)"
     " AND NOT EXISTS (SELECT 1 FROM conversation_responses fr"
     " WHERE fr.conversation_response_id = %(run_id)s::uuid"
-    " AND fr.metadata->>'origin_flash_thread_id'"
-    " <> {a}.payload->'origin'->>'origin_flash_thread_id'))"
+    " AND fr.metadata->>'origin_home_thread_id'"
+    " <> {a}.payload->'origin'->>'origin_home_thread_id'))"
 )
 
 
@@ -1284,7 +1284,7 @@ async def admit_steer(
     "job"}`` for a key already accepted, ``{"state": "owned_elsewhere"}`` when
     ``origin_stamp`` names a Home thread other than the one the run reports
     to, else ``{"state": "not_running"}`` (the run ended or was stopped).
-    ``origin_stamp`` (``origin_flash_thread_id``, ``origin_dispatch_gen``)
+    ``origin_stamp`` (``origin_home_thread_id``, ``origin_dispatch_gen``)
     stamps the run so its report-back goes to the steer's sender. Both the
     new generation and the one it displaces go into ``dispatch_gens``, so the
     orphan resolver finds each admitted.
@@ -1304,14 +1304,14 @@ async def admit_steer(
                     existing = await get_steer_job(idempotency_key, conn=conn)
                     if existing is not None:
                         return {"state": "duplicate", "job": existing}
-                    owner_flash = str(origin_stamp["origin_flash_thread_id"])
+                    owner_home = str(origin_stamp["origin_home_thread_id"])
                     gen = str(origin_stamp["origin_dispatch_gen"])
                     await cur.execute(
                         """
                         UPDATE conversation_responses
                         SET metadata = COALESCE(metadata, '{}'::jsonb)
                             || jsonb_build_object(
-                                'origin_flash_thread_id', %(flash)s::text,
+                                'origin_home_thread_id', %(home)s::text,
                                 'origin_dispatch_gen', %(gen)s::text,
                                 'dispatch_gens',
                                 (COALESCE(metadata->'dispatch_gens', '[]'::jsonb)
@@ -1330,12 +1330,12 @@ async def admit_steer(
                           AND conversation_thread_id = %(thread_id)s::uuid
                           AND status = 'in_progress'
                           AND cancel_requested_at IS NULL
-                          AND (metadata->>'origin_flash_thread_id' IS NULL
-                               OR metadata->>'origin_flash_thread_id' = %(flash)s)
+                          AND (metadata->>'origin_home_thread_id' IS NULL
+                               OR metadata->>'origin_home_thread_id' = %(home)s)
                         RETURNING conversation_response_id
                         """,
                         {
-                            "flash": owner_flash,
+                            "home": owner_home,
                             "gen": gen,
                             "run_id": run_id,
                             "thread_id": thread_id,
@@ -1716,7 +1716,7 @@ async def hold_jobs(job_ids: List[str], *, owner: Tuple[str, str]) -> List[str]:
                     WHERE o.hook_outbox_id = ANY(%(ids)s::uuid[])
                       AND {_steer_sql(_TAKEABLE_STEER_SQL)}
                       AND (%(home)s::text IS NULL OR COALESCE(
-                          o.payload->'origin'->>'origin_flash_thread_id',
+                          o.payload->'origin'->>'origin_home_thread_id',
                           %(home)s::text
                       ) = %(home)s::text)
                       AND EXISTS (SELECT 1 FROM owner)
@@ -1748,7 +1748,7 @@ async def _hand_off_home(cur, job_ids: List[str], run_id: str) -> Optional[str]:
     Home's hand-offs, since it reports back to one thread."""
     await cur.execute(
         """
-        SELECT metadata->>'origin_flash_thread_id' AS home
+        SELECT metadata->>'origin_home_thread_id' AS home
         FROM conversation_responses
         WHERE conversation_response_id = %s::uuid
           AND status = 'in_progress'
@@ -1764,11 +1764,11 @@ async def _hand_off_home(cur, job_ids: List[str], run_id: str) -> Optional[str]:
         return row["home"]
     await cur.execute(
         f"""
-        SELECT o.payload->'origin'->>'origin_flash_thread_id' AS home
+        SELECT o.payload->'origin'->>'origin_home_thread_id' AS home
         FROM hook_outbox o
         WHERE o.hook_outbox_id = ANY(%(ids)s::uuid[])
           AND {_steer_sql(_TAKEABLE_STEER_SQL)}
-          AND o.payload->'origin'->>'origin_flash_thread_id' IS NOT NULL
+          AND o.payload->'origin'->>'origin_home_thread_id' IS NOT NULL
           AND o.payload->'origin'->>'origin_dispatch_gen' IS NOT NULL
         ORDER BY o.created_at, o.hook_outbox_id
         LIMIT 1
@@ -1791,7 +1791,7 @@ async def _stamp_hand_off_origin(
         UPDATE conversation_responses
         SET metadata = COALESCE(metadata, '{}'::jsonb)
             || jsonb_build_object(
-                'origin_flash_thread_id', %(home)s::text,
+                'origin_home_thread_id', %(home)s::text,
                 'origin_dispatch_gen',
                 COALESCE(metadata->>'origin_dispatch_gen', %(latest)s::text),
                 'dispatch_gens',
@@ -1905,7 +1905,7 @@ async def has_live_hand_off(ptc_thread_id: str, home_thread_id: str) -> bool:
                     WHERE o.ordering_key = %s
                       AND {_steer_sql(_LIVE_STEER_SQL)}
                       AND {_steer_sql(_TARGET_SQL)} = 'thread'
-                      AND o.payload->'origin'->>'origin_flash_thread_id' = %s
+                      AND o.payload->'origin'->>'origin_home_thread_id' = %s
                 )
                 """,
                 (steer_ordering_key(ptc_thread_id), home_thread_id),
