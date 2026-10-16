@@ -12,7 +12,7 @@ def show_help() -> None:
 
 [bold]Usage:[/bold]
   ptc-agent                     Start interactive session
-  ptc-agent --flash             Flash mode (no sandbox, external tools only)
+  ptc-agent --home              Chat in your Home, outside any workspace
   ptc-agent --agent NAME        Use named agent with separate memory
   ptc-agent --model NAME        Use specific LLM model
   ptc-agent --reconnect         Reconnect to latest workflow
