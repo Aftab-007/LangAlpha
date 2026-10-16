@@ -12,7 +12,12 @@ Cells 1–17 cover the turn/run tier. Cell 18 opened the **workspace/sandbox**
 tier: v4 put runs under a durable-truth contract and left
 `WorkspaceManager._sessions` on process memory, which is how a worker can go on
 calling a sandbox Postgres has already replaced, serving "File not found" for
-files that exist.
+files that exist. Cells 19–23 cover **steering on the outbox**: a steer
+is a `hook_outbox` row (`hook_type='steer'`) owned by the thread, and each
+cell checks that every accepted steer ends `done` exactly once with an
+`outcome`, none stays pending/claimed/dead (polled up to 150s for the drainer
+and scanner), and the model reads it at most once, counted by a per-steer
+token in the checkpoint (read in the container through the history reader).
 
 ## Topology
 
@@ -65,6 +70,11 @@ the run and which worker attacks it.
 | 16 | `--workers 2` boot / split-DB / pool exhaustion | manual | 16b: split unreachable by construction in the server path; 16c: `POSTGRES_WRITER_POOL_MAX=1` → bounded 503 |
 | 17 | Graceful SIGTERM with open run | ✅ | owner-finalized `cancelled` (`cancelled_by_user=false`, no `recovery`) before exit |
 | 18 | Sandbox replaced behind a worker → re-attach | ✅ | first **workspace/sandbox**-tier cell (1–17 are all turn/run tier). `/spec` on A recreates the sandbox while B is probed concurrently; requires `sandbox_id` changed, B converged to 200 with the exact sentinel bytes, zero 404s, and a `is stale` detection in B's log. A 503 inside the window is fine; a 503 at the end is not |
+| 19 | Steer vs finalize | ✅ | 3 turns on A, steers on B at 0.6–1.1× a calibrated turn length. Accepted → `delivered` or `turn` (that turn exists and completes), read once; refused → `not_running` with no row written |
+| 20 | Steer vs cancel | ✅ | steer on B, `/cancel?run_id` on A or B at 0–1s gaps. `returned` and listed in that `/cancel`'s `returned_steers` (or the re-asked one), never in the checkpoint; or `delivered`, never returned; nothing else |
+| 21 | Chief of Staff hand-off steered into a live turn | ✅ | the `dispatch.py` POST (dispatched, `origin` agent + `origin_flash_thread_id`/`origin_dispatch_gen`) on B into A's analyst turn → 200 `steered` naming the live run, row `steer:dispatch:{gen}` `delivered`/`turn`, gen in the run's `dispatch_gens` (and on the turn's `origin_dispatch_gen`). Home is a fresh gate thread. A hand-off that finds the turn over is a plain `dispatched` run carrying the gen |
+| 22 | Task steer vs task finish | ✅ | PTC turn with one background Task (real sandbox, 2 reps). `delivered`, `resumed` (a `cause='resume'` run, read once in `task:{id}`) or `returned` (one `replay_facts.steering_returned` entry, unread), exactly one of them |
+| 23 | Missed steer vs new send | ✅ | steer on B mid-generation, new send on B or A the moment the run ends → steer `turn`/`delivered`, each read once, steer before the new message in the checkpoint |
 
 Manual procedures and full evidence for every cell live in the original
 fault-injection report (kept out of the repo — summarized in the PR that
