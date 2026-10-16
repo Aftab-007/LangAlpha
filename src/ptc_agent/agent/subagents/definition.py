@@ -1,6 +1,6 @@
 """Declarative subagent definition.
 
-A SubagentDefinition describes *what* a subagent is — its mode, tools, skills,
+A SubagentDefinition describes *what* a subagent is — its tools, skills,
 prompt strategy, and section toggles.  It gets compiled into a SubAgent TypedDict
 at runtime by SubagentCompiler.
 """
@@ -12,7 +12,6 @@ from typing import Any, Literal
 
 from ptc_agent.agent.roles import ALL_ROLES, AgentRole
 
-SubagentMode = Literal["ptc", "flash"]
 BrokerageAccess = Literal["off", "on"]
 
 #: The sections about writing and running code, which follow ``execute_code``.
@@ -36,10 +35,6 @@ class SubagentDefinition:
 
     description: str
     """Shown to the main agent for delegation decisions."""
-
-    # ── Mode ──────────────────────────────────────────────────────────
-    mode: SubagentMode = "ptc"
-    """Determines base prompt template and default section toggles."""
 
     # ── Prompt configuration ──────────────────────────────────────────
     role_prompt: str = ""
@@ -113,10 +108,6 @@ class SubagentDefinition:
     Narrowed for a subagent whose work one role hands to another instead, so
     the roster the prompt advertises is the one the build compiles.
     """
-
-    # ── Runtime requirements ──────────────────────────────────────────
-    stateful: bool = False
-    """Whether this subagent needs ``sandbox`` + ``mcp_registry`` at compile time."""
 
     # ── Source tracking ───────────────────────────────────────────────
     source: str = "builtin"

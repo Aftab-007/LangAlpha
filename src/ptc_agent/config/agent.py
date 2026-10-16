@@ -153,7 +153,6 @@ class SubagentConfig(BaseModel):
     """
 
     description: str | None = None
-    mode: Literal["ptc", "flash"] = "ptc"
     model: str | None = None
     role_prompt: str = ""
     role_prompt_template: str | None = None
