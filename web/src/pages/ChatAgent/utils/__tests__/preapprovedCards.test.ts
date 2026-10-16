@@ -93,6 +93,14 @@ describe('preapprovedReportBack', () => {
     expect(preapprovedReportBack(ptcResult({ status: 'dispatched', report_back: true }))).toBe(true);
   });
 
+  it('is true for a preapproved hand-off steered into a running analyst turn', () => {
+    expect(preapprovedReportBack(ptcResult({ status: 'steered', report_back: true }))).toBe(true);
+  });
+
+  it('is false for a steered hand-off that does not report back', () => {
+    expect(preapprovedReportBack(ptcResult({ status: 'steered', report_back: false }))).toBe(false);
+  });
+
   it('is false when report_back is not true', () => {
     expect(preapprovedReportBack(ptcResult({ status: 'dispatched', report_back: false }))).toBe(false);
   });

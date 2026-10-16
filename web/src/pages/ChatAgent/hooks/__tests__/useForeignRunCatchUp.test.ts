@@ -19,19 +19,23 @@ interface Props {
   isActive: boolean;
   busy: boolean;
   threadId?: string;
+  /** The report-back watch is armed (a Home thread waiting on a hand-off). */
+  awaiting?: boolean;
 }
 
-function mount(catchUp: () => Promise<boolean>, initial: Props = { isActive: true, busy: false }) {
+type CatchUp = (watched: readonly string[] | null) => Promise<boolean>;
+
+function mount(catchUp: CatchUp, initial: Props = { isActive: true, busy: false }) {
   const isOwnRun = (runId: string) => runId === 'own-run';
   return renderHook(
-    ({ isActive, busy, threadId = 't-1' }: Props) =>
-      useForeignRunCatchUp({ threadId, isActive, busy, awaitingReportBack: false, isOwnRun, catchUp }),
+    ({ isActive, busy, threadId = 't-1', awaiting = false }: Props) =>
+      useForeignRunCatchUp({ threadId, isActive, busy, awaitingReportBack: awaiting, isOwnRun, catchUp }),
     { initialProps: initial },
   );
 }
 
 /** Mounts hidden, then shows the view, which owes one check. */
-async function mountShown(catchUp: () => Promise<boolean>) {
+async function mountShown(catchUp: CatchUp) {
   const view = mount(catchUp, { isActive: false, busy: false });
   view.rerender({ isActive: true, busy: false });
   await flush();
@@ -42,7 +46,7 @@ async function mountShown(catchUp: () => Promise<boolean>) {
 function heldFirstCheck() {
   let settle!: (read: boolean) => void;
   const catchUp = vi
-    .fn<() => Promise<boolean>>()
+    .fn<CatchUp>()
     .mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }))
     .mockResolvedValue(true);
   return { catchUp, settle: (read: boolean) => act(async () => { settle(read); }) };
@@ -289,5 +293,120 @@ describe('useForeignRunCatchUp', () => {
     expect(catchUp).toHaveBeenCalledTimes(2);
     expect(logged).toHaveBeenCalled();
     logged.mockRestore();
+  });
+});
+
+describe('useForeignRunCatchUp: a run announced while the report-back watch is armed', () => {
+  // The watch attaches the thread's report-back runs itself, so the check
+  // leaves those be; any other run (a steer its run missed, started as a turn
+  // of its own) the watch never attaches, and only the check's read can tell
+  // the two apart. So the run is checked, named as the watch's to judge.
+  const armed = { isActive: true, busy: false, awaiting: true };
+
+  it('checks it, naming the runs the watch may own', async () => {
+    const catchUp = vi.fn<CatchUp>().mockResolvedValue(true);
+    const view = mount(catchUp, armed);
+
+    feedRunId = 'run-from-elsewhere';
+    view.rerender(armed);
+    await flush();
+    expect(catchUp).toHaveBeenCalledTimes(1);
+    expect(catchUp).toHaveBeenLastCalledWith(['run-from-elsewhere']);
+  });
+
+  it('passes over the view\'s own run', async () => {
+    const catchUp = vi.fn<CatchUp>().mockResolvedValue(true);
+    const view = mount(catchUp, armed);
+
+    feedRunId = 'own-run';
+    view.rerender(armed);
+    await flush();
+    await advance(60_000);
+    expect(catchUp).not.toHaveBeenCalled();
+  });
+
+  it('holds a run announced while busy for one check once the view settles', async () => {
+    const catchUp = vi.fn<CatchUp>().mockResolvedValue(true);
+    const view = mount(catchUp, armed);
+
+    feedRunId = 'run-from-elsewhere';
+    view.rerender({ ...armed, busy: true });
+    await flush();
+    expect(catchUp).not.toHaveBeenCalled();
+    view.rerender(armed);
+    await flush();
+    expect(catchUp).toHaveBeenCalledTimes(1);
+    expect(catchUp).toHaveBeenLastCalledWith(['run-from-elsewhere']);
+  });
+
+  it('names every run announced while busy, in order, passing over the view\'s own', async () => {
+    // A turn started for a missed steer, then a report-back: naming only the
+    // last would leave the first, which the watch never attaches, off screen.
+    const catchUp = vi.fn<CatchUp>().mockResolvedValue(true);
+    const view = mount(catchUp, armed);
+
+    for (const runId of ['run-a', 'own-run', 'run-b', 'run-a']) {
+      feedRunId = runId;
+      view.rerender({ ...armed, busy: true });
+      await flush();
+    }
+    expect(catchUp).not.toHaveBeenCalled();
+    view.rerender(armed);
+    await flush();
+    expect(catchUp).toHaveBeenCalledTimes(1);
+    expect(catchUp).toHaveBeenLastCalledWith(['run-a', 'run-b']);
+  });
+
+  it('checks a run announced while a watched check was in flight once that check settles', async () => {
+    const { catchUp, settle } = heldFirstCheck();
+    const view = mount(catchUp, armed);
+
+    feedRunId = 'run-a';
+    view.rerender(armed);
+    await flush();
+    expect(catchUp).toHaveBeenCalledTimes(1);
+    feedRunId = 'run-b';
+    view.rerender(armed);
+    await flush();
+    await settle(true);
+    await advance(0);
+    expect(catchUp).toHaveBeenCalledTimes(2);
+    expect(catchUp).toHaveBeenLastCalledWith(['run-b']);
+  });
+
+  it('runs a full check when the view is owed one anyway', async () => {
+    const catchUp = vi.fn<CatchUp>().mockResolvedValue(true);
+    const view = mount(catchUp, { ...armed, isActive: false });
+
+    feedRunId = 'run-from-elsewhere';
+    view.rerender(armed);
+    await flush();
+    expect(catchUp).toHaveBeenCalledTimes(1);
+    expect(catchUp).toHaveBeenLastCalledWith(null);
+  });
+
+  it('checks a run announced with the watch disarmed in full', async () => {
+    const catchUp = vi.fn<CatchUp>().mockResolvedValue(true);
+    const view = mount(catchUp);
+
+    feedRunId = 'run-from-elsewhere';
+    view.rerender({ isActive: true, busy: false });
+    await flush();
+    expect(catchUp).toHaveBeenLastCalledWith(null);
+  });
+
+  it('keeps the runs owed after a failed read, and checks them again after the backoff', async () => {
+    const catchUp = vi.fn<CatchUp>().mockResolvedValueOnce(false).mockResolvedValue(true);
+    const view = mount(catchUp, armed);
+
+    feedRunId = 'run-from-elsewhere';
+    view.rerender(armed);
+    await flush();
+    expect(catchUp).toHaveBeenCalledTimes(1);
+    await advance(2_000);
+    expect(catchUp).toHaveBeenCalledTimes(2);
+    expect(catchUp).toHaveBeenLastCalledWith(['run-from-elsewhere']);
+    await advance(60_000);
+    expect(catchUp).toHaveBeenCalledTimes(2);
   });
 });

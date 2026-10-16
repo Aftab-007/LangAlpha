@@ -459,3 +459,139 @@ describe('useChatMessages — stopWorkflow (hard stop)', () => {
     expect(result.current.messageError).toBeNull();
   });
 });
+
+describe('useChatMessages — stopWorkflow gives the user\'s steers back', () => {
+  // The stop takes the user's unread steers back from the run and the cancel
+  // answer lists them (`returned_steers`), each once under its request key.
+  // They go back to the composer, and the bubbles that showed them waiting go.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  interface SendOpts { onEvent: OnEvent; requestKey: string; steerOnly?: boolean; signal?: AbortSignal | null }
+
+  /** A running turn the test can feed, and steers it accepts. */
+  async function runningTurnWithSteers(texts: string[]) {
+    let main: OnEvent = () => {};
+    mockSendStream.mockImplementation(async (_msg: string, _ws: string, _tid: string | null, opts: SendOpts) => {
+      if (opts.steerOnly) {
+        opts.onEvent({ event: 'steering_accepted', position: 1 });
+        return { disconnected: false };
+      }
+      main = opts.onEvent;
+      opts.onEvent({ event: 'metadata', thread_id: 'th-stop', run_id: 'run-1' });
+      return new Promise((resolve) => {
+        opts.signal?.addEventListener('abort', () => resolve({ disconnected: false, aborted: true }), { once: true });
+      });
+    });
+    const view = await mountSettled();
+    await act(async () => {
+      void view.result.current.handleSendMessage('analyze AAPL');
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.result.current.isLoading).toBe(true));
+    for (const text of texts) {
+      await act(async () => {
+        await view.result.current.handleSendMessage(text);
+      });
+    }
+    const keys = mockSendStream.mock.calls.slice(1).map((c) => (c[3] as SendOpts).requestKey);
+    return { ...view, keys, feed: (e: Record<string, unknown>) => act(async () => { main(e); }) };
+  }
+
+  const userTexts = (result: { current: ReturnType<typeof useChatMessages> }) =>
+    result.current.messages.filter((m) => m.role === 'user').map((m) => m.content);
+
+  it('puts each returned steer in the composer once, by its key, and removes its bubble', async () => {
+    const { result, keys } = await runningTurnWithSteers(['steer one', 'steer two']);
+    expect(userTexts(result)).toEqual(['analyze AAPL', 'steer one', 'steer two']);
+    mockCancel.mockResolvedValue({
+      cancelled: true,
+      message: 'ok',
+      returned_steers: [
+        { content: 'steer one', request_key: keys[0], timestamp: 1 },
+        { content: 'steer one', request_key: keys[0], timestamp: 1 },
+        { content: 'steer two', request_key: keys[1], timestamp: 2 },
+      ],
+    });
+
+    await act(async () => {
+      await result.current.stopWorkflow();
+    });
+
+    expect(result.current.returnedSteering).toBe('steer one\nsteer two');
+    expect(userTexts(result)).toEqual(['analyze AAPL']);
+  });
+
+  it('gives back a steer from elsewhere it has no bubble for, and one with no key by its words', async () => {
+    const { result } = await runningTurnWithSteers(['steer one']);
+    mockCancel.mockResolvedValue({
+      cancelled: true,
+      message: 'ok',
+      returned_steers: [
+        { content: 'from another tab', request_key: 'rk-other' },
+        { content: 'steer one', request_key: null },
+      ],
+    });
+
+    await act(async () => {
+      await result.current.stopWorkflow();
+    });
+
+    expect(result.current.returnedSteering).toBe('from another tab\nsteer one');
+    expect(userTexts(result)).toEqual(['analyze AAPL']);
+  });
+
+  it('keeps a steer the run delivered after all, and does not give it back', async () => {
+    const { result, keys, feed } = await runningTurnWithSteers(['steer one', 'steer two']);
+    await feed({ event: 'steering_delivered', messages: [{ content: 'steer one', request_key: keys[0] }] });
+    mockCancel.mockResolvedValue({
+      cancelled: true,
+      message: 'ok',
+      returned_steers: [
+        { content: 'steer one', request_key: keys[0] },
+        { content: 'steer two', request_key: keys[1] },
+      ],
+    });
+
+    await act(async () => {
+      await result.current.stopWorkflow();
+    });
+
+    expect(result.current.returnedSteering).toBe('steer two');
+    expect(userTexts(result)).toEqual(['analyze AAPL', 'steer one']);
+    expect(result.current.messages.find((m) => m.content === 'steer one')).toMatchObject({ steeringDelivered: true });
+  });
+
+  it('sends a returned steer again under a new key, the server keeping its old one spent', async () => {
+    const { result, keys } = await runningTurnWithSteers(['steer one']);
+    mockCancel.mockResolvedValue({
+      cancelled: true,
+      message: 'ok',
+      returned_steers: [{ content: 'steer one', request_key: keys[0] }],
+    });
+    await act(async () => {
+      await result.current.stopWorkflow();
+    });
+    expect(result.current.isLoading).toBe(false);
+
+    mockSendStream.mockClear();
+    mockSendStream.mockResolvedValue({ disconnected: false });
+    await act(async () => {
+      await result.current.handleSendMessage('steer one');
+    });
+    expect(mockSendStream).toHaveBeenCalledTimes(1);
+    const resend = mockSendStream.mock.calls[0][3] as SendOpts;
+    expect(resend.steerOnly).toBeFalsy();
+    expect(resend.requestKey).not.toBe(keys[0]);
+  });
+
+  it('leaves the composer alone when the stop returns no steers', async () => {
+    const { result } = await runningTurnWithSteers([]);
+    mockCancel.mockResolvedValue({ cancelled: true, message: 'ok' });
+    await act(async () => {
+      await result.current.stopWorkflow();
+    });
+    expect(result.current.returnedSteering).toBeNull();
+  });
+});

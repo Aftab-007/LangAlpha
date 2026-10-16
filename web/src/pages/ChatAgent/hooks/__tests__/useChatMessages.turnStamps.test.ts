@@ -187,7 +187,7 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
     expect(turnOfText(live(hook), 'assistant', 'next answer')).toBe(44);
   });
 
-  it('a steering message the server opened a new turn for takes the turn after', async () => {
+  it('a steer the server refused as not_running takes the turn its resend opens', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
 
@@ -198,27 +198,36 @@ describe('useChatMessages: live bubbles land on their backend turn', () => {
       streams[0].emit(chunk('working'));
       await flush();
     });
-    let steer!: Promise<unknown>;
     await act(async () => {
-      steer = hook.result.current.handleSendMessage('and then this');
+      const steer = hook.result.current.handleSendMessage('and then this');
       await flush();
-      // The running turn ended before the POST landed: it opens turn 44.
-      streams[1].emit({ event: 'metadata', thread_id: 'th-1', run_id: 'run-44' });
-      streams[1].emit(chunk('demoted answer'));
+      // The running turn ended before the POST landed: the steer is refused.
+      streams[1].emit({ event: 'error', error_type: 'admission_conflict', code: 'not_running', error: 'The turn has ended.' });
+      streams[1].end();
+      await steer;
+      streams[0].end();
+      await send;
+      await flush();
+    });
+    // Once the view lets turn 43 go, the steer goes out as a send: turn 44.
+    await waitFor(() => expect(streams).toHaveLength(3));
+    await act(async () => {
+      streams[2].emit({ event: 'metadata', thread_id: 'th-1', run_id: 'run-44' });
+      streams[2].emit(chunk('resent answer'));
       await flush();
     });
 
-    await waitFor(() => expect(turnOfText(live(hook), 'assistant', 'demoted answer')).toBe(44));
+    await waitFor(() => expect(turnOfText(live(hook), 'assistant', 'resent answer')).toBe(44));
     expect(turnOfText(live(hook), 'assistant', 'working')).toBe(43);
     expect(turnOfText(live(hook), 'user', 'and then this')).toBe(44);
 
     await act(async () => {
-      streams[1].end();
-      streams[0].end();
-      await Promise.all([send, steer]);
+      streams[2].end();
+      await flush();
     });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
     expect(turnOfText(live(hook), 'user', 'and then this')).toBe(44);
-    expect(turnOfText(live(hook), 'assistant', 'demoted answer')).toBe(44);
+    expect(turnOfText(live(hook), 'assistant', 'resent answer')).toBe(44);
   });
 
   it('a resumed interrupt is a turn of its own, and the next send opens the one after', async () => {
@@ -785,12 +794,12 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
     await showsMissedTurns(hook, server);
   });
 
-  it('a steering message the server opened a new turn for takes the admitted turn', async () => {
+  it('a steer the server refused as not_running takes the turn its resend was admitted to', async () => {
     const hook = await mountOnPage();
     const streams = captureStreams(mockSendStream);
     const server = serverHolds(
       missedTurn(43), missedTurn(44), turnRows(45, 'go on', 'working'),
-      missedTurn(46), turnRows(47, 'and then this', 'demoted answer'),
+      missedTurn(46), turnRows(47, 'and then this', 'resent answer'),
     );
     let send!: Promise<unknown>;
     await act(async () => {
@@ -800,23 +809,30 @@ describe('useChatMessages: a view that missed turns stamps the turn the server a
       streams[0].emit(chunk('working'));
       await flush();
     });
-    let steer!: Promise<unknown>;
     await act(async () => {
-      steer = hook.result.current.handleSendMessage('and then this');
+      const steer = hook.result.current.handleSendMessage('and then this');
       await flush();
-      // Another tab's turn 46 ran between the two: this POST opens turn 47.
-      streams[1].emit(admitted(47));
-      streams[1].emit(chunk('demoted answer'));
-      server.runEnds();
+      streams[1].emit({ event: 'error', error_type: 'admission_conflict', code: 'not_running', error: 'The turn has ended.' });
       streams[1].end();
+      await steer;
       streams[0].end();
-      await Promise.all([send, steer]);
+      await send;
+      await flush();
+    });
+    // Another tab's turn 46 ran between the two: the resend opens turn 47.
+    await waitFor(() => expect(streams).toHaveLength(3));
+    await act(async () => {
+      streams[2].emit(admitted(47));
+      streams[2].emit(chunk('resent answer'));
+      server.runEnds();
+      streams[2].end();
+      await flush();
     });
     await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
 
     expect(turnOfText(live(hook), 'assistant', 'working')).toBe(45);
     expect(turnOfText(live(hook), 'user', 'and then this')).toBe(47);
-    expect(turnOfText(live(hook), 'assistant', 'demoted answer')).toBe(47);
+    expect(turnOfText(live(hook), 'assistant', 'resent answer')).toBe(47);
     await showsMissedTurns(hook, server, [43, 44, 46]);
   });
 

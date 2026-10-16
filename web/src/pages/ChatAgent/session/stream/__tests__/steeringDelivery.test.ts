@@ -71,6 +71,27 @@ describe('deliveredEntryRow', () => {
     });
   });
 
+  it('labels a steer the Chief of Staff sent into the turn, and keeps its request key', () => {
+    const row = deliveredEntryRow(
+      steer('add the margin bridge', { origin: { type: 'agent', agent: 'chief_of_staff' }, request_key: 'rk-cos' }),
+      id,
+      2,
+    );
+    // The delivered origin names the agent only, never its Home thread.
+    expect(row).toMatchObject({
+      content: 'add the margin bridge',
+      steeringDelivered: true,
+      requestKey: 'rk-cos',
+      provenance: { kind: 'agent', agent: 'chief_of_staff', threadId: null },
+    });
+  });
+
+  it('draws the user\'s own steer unlabelled', () => {
+    const row = deliveredEntryRow(steer('margins', { platform: 'web', request_key: 'rk-1' }), id, 2);
+    expect(row).not.toHaveProperty('provenance');
+    expect(row).toMatchObject({ requestKey: 'rk-1' });
+  });
+
   it('draws nothing for what a share leaves of a report', () => {
     expect(deliveredEntryRow(steer(''), id, 2)).toBeNull();
   });
@@ -120,6 +141,70 @@ describe('foldSteeringDelivery: claiming', () => {
   it('returns the transcript itself when it draws and claims nothing', () => {
     const prev = [...transcript(), waiting('s1', 'margins')];
     expect(fold(prev, [steer('')]).messages).toBe(prev);
+  });
+});
+
+describe('foldSteeringDelivery: claiming by request key', () => {
+  const keyed = (content: string, key: string) => steer(content, { request_key: key });
+
+  it('claims the bubble sent under the key, not one with the same words', () => {
+    const prev = [...transcript(), waiting('s1', 'margins', { requestKey: 'rk-other' }), waiting('s2', 'margins', { requestKey: 'rk-2' })];
+    const { messages, settledKeys } = fold(prev, [keyed('margins', 'rk-2')]);
+    expect(byId(messages, 's2')).toMatchObject({ steering: false, steeringDelivered: true });
+    expect(byId(messages, 's1')).toBe(prev[2]);
+    expect(messages).toHaveLength(prev.length);
+    expect(settledKeys).toEqual(['rk-2']);
+  });
+
+  it('claims the bubble under the key whatever its words say', () => {
+    // The entry's text is the model's copy; the key is what names the send.
+    const prev = [...transcript(), waiting('s1', 'margins pls', { requestKey: 'rk-1' })];
+    const { messages } = fold(prev, [keyed('margins', 'rk-1')]);
+    expect(messages.map((m) => m.id)).toEqual(['u0', 'a1', 's1']);
+    expect(byId(messages, 's1')).toMatchObject({ steeringDelivered: true, content: 'margins pls' });
+  });
+
+  it('claims a steer waiting under an earlier turn, which joins the delivering turn where it is drawn', () => {
+    const prev = [...transcript(), waiting('s1', 'margins', { requestKey: 'rk-1', turnIndex: 0 }), user('u1', { content: 'next', turnIndex: 1 }), createAssistantMessage('a2', 1)];
+    const { messages } = fold(prev, [report, keyed('margins', 'rk-1')], 1);
+    expect(byId(messages, 's1')).toMatchObject({ steeringDelivered: true, turnIndex: 1 });
+    // It places nothing: the report goes at the end of the delivering turn.
+    expect(messages.map((m) => m.id)).toEqual(['u0', 'a1', 's1', 'u1', 'a2', 'report-0']);
+  });
+
+  it('of copies under one key claims the one still waiting and removes the rest', () => {
+    const prev = [
+      ...transcript(),
+      failed('f1', 'margins', { requestKey: 'rk-1' }),
+      failed('f2', 'margins', { requestKey: 'rk-1', queueRefused: true }),
+      waiting('s1', 'margins', { requestKey: 'rk-1' }),
+    ];
+    const { messages, clearedErrors, settledKeys } = fold(prev, [keyed('margins', 'rk-1')]);
+    expect(messages.map((m) => m.id)).toEqual(['u0', 'a1', 's1']);
+    expect(byId(messages, 's1')).toMatchObject({ steeringDelivered: true });
+    // The removed copies' banner goes with them (the view clears the one it names).
+    expect([...new Set(clearedErrors)]).toEqual([BANNER]);
+    expect(settledKeys).toEqual(['rk-1']);
+  });
+
+  it('with none waiting claims a failed copy the server may have taken over a refused one', () => {
+    const prev = [
+      ...transcript(),
+      failed('f1', 'margins', { requestKey: 'rk-1', queueRefused: true }),
+      failed('f2', 'margins', { requestKey: 'rk-1' }),
+    ];
+    const { messages } = fold(prev, [keyed('margins', 'rk-1')]);
+    expect(messages.map((m) => m.id)).toEqual(['u0', 'a1', 'f2']);
+    expect(byId(messages, 'f2')).toMatchObject({ steeringDelivered: true });
+    expect(byId(messages, 'f2')).not.toHaveProperty('queueError');
+  });
+
+  it('leaves a copy already delivered alone and draws an entry no bubble carries as its own row', () => {
+    const prev = [...transcript(), user('d1', { content: 'margins', requestKey: 'rk-1', steeringDelivered: true }), waiting('s1', 'margins', { requestKey: 'rk-2' })];
+    const { messages } = fold(prev, [keyed('margins', 'rk-1')]);
+    expect(byId(messages, 'd1')).toBe(prev[2]);
+    expect(byId(messages, 's1')).toBe(prev[3]);
+    expect(byId(messages, 'user-0')).toMatchObject({ content: 'margins', requestKey: 'rk-1', steeringDelivered: true });
   });
 });
 

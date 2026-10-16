@@ -23,7 +23,7 @@ export function stampRunTurn(messages: ChatMessage[], assistantId: string, turnI
   if (!bubble || bubble.role !== 'assistant') return messages;
   const counted = bubble.turnIndex;
 
-  // A send, an edit or a demoted steer put its own message before the bubble,
+  // A send or an edit put its own message before the bubble,
   // under the same count. A reconnect the frame reached first sits after the
   // bubbles it continues, and any steer sent meanwhile, delivered or failed,
   // all under that count too. A resume or an attach has no message, and the

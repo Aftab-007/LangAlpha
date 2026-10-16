@@ -428,21 +428,11 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       return;
     }
 
-    // Handle steering_returned for the MAIN agent — it finished before
-    // consuming the steering message. Remove the steering user message from
-    // chat and restore text to input box. Task-lane steering_returned is
+    // A main-thread steering_returned hands a chat app's missed steers back
+    // to the gateway that resubmits them; a steer this view sent stays on the
+    // server and its next turn reads it. Task-lane steering_returned is
     // handled in the isSubagent block (it must not mutate main-chat state).
-    if (eventType === 'steering_returned' && !isSubagent) {
-      const returnedMessages = event.messages || [];
-      if (returnedMessages.length > 0) {
-        // Remove steering user messages from the chat
-        rt.setMessages((prev) => prev.filter((msg) => !('steering' in msg && msg.steering)));
-        // Restore the text to the input box via state
-        const combinedText = returnedMessages.map((m) => m.content).join('\n');
-        rt.setReturnedSteering(combinedText);
-      }
-      return;
-    }
+    if (eventType === 'steering_returned' && !isSubagent) return;
 
     // Handle unified context_window events (token_usage, summarize, offload)
     if (eventType === 'context_window') {

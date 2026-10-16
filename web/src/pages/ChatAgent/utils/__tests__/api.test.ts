@@ -1080,6 +1080,49 @@ describe('sendChatMessageStream: the subagents setting', () => {
   });
 });
 
+// A send into a turn the view shows running may only steer it: with none
+// running the server refuses it as `not_running` rather than opening a turn
+// on a connection that reads only the acceptance.
+describe('sendChatMessageStream: steer_only', () => {
+  let originalFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: {
+        getReader: () => ({
+          read: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+        }),
+      },
+    });
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const send = async (steerOnly?: boolean) => {
+    await sendChatMessageStream(
+      'hi', 'ws-1', 't-1', { onEvent: () => {}, requestKey: 'rk-1', ...(steerOnly === undefined ? {} : { steerOnly }) },
+    );
+    const [, opts] = (global.fetch as Mock).mock.calls[0];
+    return JSON.parse(opts.body) as Record<string, unknown>;
+  };
+
+  it('sends steer_only with the request key on a steer', async () => {
+    expect(await send(true)).toMatchObject({ steer_only: true, request_key: 'rk-1' });
+  });
+
+  it('omits it on a plain send', async () => {
+    expect('steer_only' in (await send())).toBe(false);
+    (global.fetch as Mock).mockClear();
+    expect('steer_only' in (await send(false))).toBe(false);
+  });
+});
+
 // A paged replay names its page in the query string, and an unpaged one sends
 // none, which the backend reads as the whole thread. The signal is what lets a
 // reload or thread switch drop an older page still on its way.

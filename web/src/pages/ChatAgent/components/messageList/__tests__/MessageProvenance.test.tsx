@@ -10,6 +10,7 @@ import { MessageProvenanceLabel } from '../MessageProvenance';
 import { MessageActionsProvider, type MessageActions } from '../MessageActionsContext';
 import MessageList from '../../MessageList';
 import type { MessageProvenance } from '@/types/chat';
+import { deliveredEntryRow } from '../../../session/stream/steeringDelivery';
 import type { MessageRecord } from '../types';
 
 let allWorkspaces = false;
@@ -69,6 +70,17 @@ describe('MessageProvenanceLabel', () => {
     renderLabel({ kind: 'agent', agent: 'chief_of_staff', threadId: 'th-home' }, { actions: { onOpenDispatcher } });
     fireEvent.click(screen.getByRole('button', { name: 'From Chief of Staff' }));
     expect(onOpenDispatcher).toHaveBeenCalledWith('th-home');
+  });
+
+  it('labels a steer the Chief of Staff sent into a running turn, without a link to its Home thread', () => {
+    const row = deliveredEntryRow(
+      { content: 'add the margin bridge', origin: { type: 'agent', agent: 'chief_of_staff' }, request_key: 'rk-cos' },
+      () => 'row',
+      2,
+    );
+    renderLabel(row!.provenance!, { actions: { onOpenDispatcher: vi.fn() } });
+    expect(screen.getByText('From Chief of Staff')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('reads an unrecorded dispatcher off the current flag', () => {

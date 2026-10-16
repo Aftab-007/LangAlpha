@@ -7,7 +7,7 @@ import type {
   OrderStatus,
   OrderSummary,
 } from './orders';
-import type { ReportSource } from './api';
+import type { ReportSource, ThreadOrigin } from './api';
 
 /**
  * `error_type` on a task's terminal frame when the credit gate stopped it,
@@ -47,8 +47,8 @@ export interface BaseSSEEvent {
 
 /**
  * First event of every workflow stream. Announces the authoritative
- * ``run_id`` for this turn so the client can latch reconnect/demotion
- * logic onto it. Mirrors the langgraph_sdk SSE ``metadata`` payload.
+ * ``run_id`` for this turn so the client can latch reconnect logic onto
+ * it. Mirrors the langgraph_sdk SSE ``metadata`` payload.
  */
 export interface MetadataEvent extends BaseSSEEvent {
   event: 'metadata';
@@ -247,13 +247,17 @@ export interface ModelFallbackEvent extends BaseSSEEvent {
   attempts_on_from?: number;
 }
 
-/** A steer of the user's that the run took in. */
+/** A steer the run took in: the user's, or an agent's sent into the turn. */
 export interface DeliveredSteer {
   content: string;
   /** Epoch seconds. */
   timestamp?: number;
   /** The surface it was sent from, as on a turn's query. */
   platform?: string;
+  /** The key its send went out under; absent on older checkpoints. */
+  request_key?: string;
+  /** The agent that sent it (the Chief of Staff, Flash); absent when the user did. */
+  origin?: ThreadOrigin;
   report_source?: never;
 }
 

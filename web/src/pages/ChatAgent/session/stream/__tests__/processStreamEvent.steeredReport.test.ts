@@ -47,7 +47,7 @@ function setup(initial: ChatMessage[]) {
   );
   const deliver = (entries: SteeringDeliveredEntry[]) =>
     process({ event: 'steering_delivered', messages: entries } as unknown as SSEEvent);
-  return { deliver, steeringAtOrderRef, messages: () => messages };
+  return { deliver, process, steeringAtOrderRef, messages: () => messages };
 }
 
 const user = (id: string, extra: Partial<UserMessage> = {}): UserMessage => ({
@@ -117,5 +117,20 @@ describe('live: a report the turn took in as a steer', () => {
     expect(rows[3].id).toMatch(/^steering-user-/);
     expect(rows[3]).toMatchObject({ content: 'and margins', steeringDelivered: true, turnIndex: 0 });
     expect(rows[4]).toMatchObject({ role: 'assistant', isSteering: true });
+  });
+});
+
+describe('live: a main-thread steering_returned', () => {
+  // It hands a chat app's missed steers back to the gateway. A steer this
+  // view sent stays on the server, whose next turn reads it, so the frame
+  // leaves the view's steers waiting and the composer alone.
+  it('leaves the view\'s waiting steer where it is', () => {
+    const initial = [...transcript(), user('s1', { content: 'also check margins', steering: true, turnIndex: 0, requestKey: 'rk-1' })];
+    const { process, messages, steeringAtOrderRef } = setup(initial);
+
+    process({ event: 'steering_returned', messages: [{ content: 'also check margins' }] } as unknown as SSEEvent);
+
+    expect(messages()).toBe(initial);
+    expect(steeringAtOrderRef.current).toBe(7);
   });
 });

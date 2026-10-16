@@ -196,9 +196,11 @@ export interface ReportBackWatch {
    * pass (network, timeout, 5xx, an expired session, a rate limit), it asked
    * for a reload that a later check has yet to find settled, the turn count of
    * a thread that has run came back unread, or a report-back left to the watch
-   * may hide another missed turn.
+   * may hide another missed turn. `watched` names runs announced while the
+   * watch was armed: when each is a report-back run the check is the watch's
+   * and does nothing more, and otherwise it runs in full.
    */
-  reconnectIfStaleRun: () => Promise<boolean>;
+  reconnectIfStaleRun: (watched?: readonly string[] | null) => Promise<boolean>;
 }
 
 /**
@@ -686,7 +688,7 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
   // cannot be read. /status only carries a reconnectable run_id while a run is
   // live, so the first branch is purely the live-run path; a run that already
   // FINISHED while hidden is caught by the turn-watermark branch below it.
-  const reconnectIfStaleRun = async (): Promise<boolean> => {
+  const reconnectIfStaleRun = async (watched?: readonly string[] | null): Promise<boolean> => {
     if (!workspaceId || !threadId || threadId === '__default__') return true;
     // Never mid-stream or -load: a load reads the thread itself, and a reload
     // requested before it settles would restart it. The caller's busy flag is
@@ -713,6 +715,17 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
     // race this reconnect for the message state.
     if (disposedRef.current || threadIdRef.current !== threadId) return true;
     if (isStreamingRef.current || threadLoadingRef.current || isLoadingRef.current) return false;
+    // A report-back run announced to an armed watch is the watch's, live or
+    // ended: its attach does not move the turn watermark, so the full check
+    // would reload over it. Each other run is announced too, so one that is
+    // none of these (a steer the run missed, made a turn of its own) brings
+    // the full check, which reloads for it.
+    if (watched?.length && awaitingReportBackRef.current) {
+      const recents = status.recent_report_back_run_ids ?? [];
+      const reportBack = (rid: string) => rid === status.report_back_run_id || recents.includes(rid)
+        || attachedRunIdsRef.current.has(rid) || reportBackRunQueueRef.current.includes(rid);
+      if (watched.every(reportBack)) return true;
+    }
     // A live report-back run is the armed watch's to attach, often at the very
     // stream end that released this check; a reload would race it and stream
     // the run twice. Seed and poke the watch instead, unless the watch already
@@ -823,7 +836,10 @@ export function useReportBackWatch(params: UseReportBackWatchParams): ReportBack
     [],
   );
   const onStreamEndStable = useCallback(() => implRef.current.onStreamEnd(), []);
-  const reconnectIfStaleRunStable = useCallback(() => implRef.current.reconnectIfStaleRun(), []);
+  const reconnectIfStaleRunStable = useCallback(
+    (watched?: readonly string[] | null) => implRef.current.reconnectIfStaleRun(watched),
+    [],
+  );
 
   // The names show only under the tip, which also moves without a read that
   // names anyone: an attach drops it, a failed read raises it.

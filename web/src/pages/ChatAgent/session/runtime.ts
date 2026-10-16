@@ -149,7 +149,6 @@ export interface StreamRuntime {
   setIsCompacting: (value: string | false) => void;
   setCompactionTokens: (tokens: number | null) => void;
   setFallbackSuggestion: React.Dispatch<React.SetStateAction<FallbackSuggestion | null>>;
-  setReturnedSteering: React.Dispatch<React.SetStateAction<string | null>>;
   setThreadId: React.Dispatch<React.SetStateAction<string>>;
   setWorkspaceStarting: React.Dispatch<React.SetStateAction<false | 'starting' | 'archived'>>;
   // stable containers, ref-current reads — owned by this lane (per-turn cursors)

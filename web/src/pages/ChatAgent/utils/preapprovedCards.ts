@@ -58,7 +58,9 @@ export function preapprovedCard(
 /** Whether a tool result is a hand-off, made without asking, that reports back. */
 export function preapprovedReportBack(content: unknown): boolean {
   const result = resultOf(content);
-  return result?.preapproved === true && result.status === 'dispatched' && result.report_back === true;
+  // A hand-off steered into a running analyst turn reports back as one dispatched.
+  const handedOff = result?.status === 'dispatched' || result?.status === 'steered';
+  return result?.preapproved === true && handedOff && result.report_back === true;
 }
 
 // By result record, which the stream replaces rather than edits: the

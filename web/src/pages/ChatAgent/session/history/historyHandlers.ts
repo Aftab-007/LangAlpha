@@ -11,7 +11,7 @@ import { deriveTaskSegment, applyTaskSegment, applyLaunchReply } from '../subage
 import { reportRow, senderProvenance, type SenderMetadata } from '../provenance';
 import { deliveredEntryRow, steeringDeliveredEntries } from '../stream/steeringDelivery';
 import type { ReportSource } from '@/types/api';
-import { isDeliveredReport } from '@/types/sse';
+import { isDeliveredReport, type DeliveredSteer } from '@/types/sse';
 import type { SubagentTaskRecord, TextSegment } from '@/types/chat';
 import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from '../../hooks/utils/types';
 import type { PairState } from '../types';
@@ -640,19 +640,28 @@ export function handleHistoryToolCallResult({ assistantMessageId, toolCallId, re
 }
 
 /**
- * The copy on screen of a steer a replayed delivery names, or -1: one still
+ * The copies on screen of a steer a replayed delivery names: one still
  * pending when its stream died, else one shown as failed because its POST
- * lost its answer after the server took it, as on the live stream. The run's
- * queue delivers steers in the order it took them, so of two copies this is
- * the older. A refused copy never counts: the server refuses a steer before
- * it queues it.
+ * lost its answer after the server took it, as on the live stream. An entry
+ * with its request key names every copy sent under it, in whatever turn it
+ * waits: a failed steer sent again with its text reuses its key, and the
+ * replay's row stands for that one send. One without (an older checkpoint)
+ * is matched by its text within the turn: the run's queue delivers steers in
+ * the order it took them, so of two copies this is the older, and a refused
+ * copy never counts, the server refusing a steer before it queues it.
  */
-function lostSteerCopy(prev: MessageRecord[], content: string, pairIndex: number): number {
-  const text = content.trim();
+function lostSteerCopies(prev: MessageRecord[], entry: DeliveredSteer, pairIndex: number): number[] {
+  const key = entry.request_key;
+  if (key) {
+    return prev.flatMap((m, i) => (m.role === 'user' && !m.isHistory && !m.steeringDelivered
+      && (m as { requestKey?: string }).requestKey === key ? [i] : []));
+  }
+  const text = entry.content.trim();
   const copy = (m: MessageRecord) => m.role === 'user' && !m.isHistory
     && m.turnIndex === pairIndex && String(m.content ?? '').trim() === text;
   const pending = prev.findIndex((m) => copy(m) && !!m.steering);
-  return pending !== -1 ? pending : prev.findIndex((m) => copy(m) && !!m.queueError && !m.queueRefused);
+  const at = pending !== -1 ? pending : prev.findIndex((m) => copy(m) && !!m.queueError && !m.queueRefused);
+  return at === -1 ? [] : [at];
 }
 
 /**
@@ -677,8 +686,7 @@ export function handleHistorySteeringDelivered({
   refs: HistorySteeringRefs;
   setMessages: SetMessages;
   /** Told the request key of each copy of this view's that the replay
-   *  delivers. Replay carries no keys, so only a copy still on screen names
-   *  one. */
+   *  delivers, read off the copy still on screen. */
   onCopyDelivered?: (requestKey: string) => void;
 }): void {
   const { newMessagesStartIndexRef } = refs;
@@ -696,10 +704,10 @@ export function handleHistorySteeringDelivered({
     const userMessage: MessageRecord = { ...row, isHistory: true };
     let delivered: string | null = null;
     setMessages((prev: MessageRecord[]) => {
-      const lost = isDeliveredReport(entry) ? -1 : lostSteerCopy(prev, entry.content, pairIndex);
-      if (lost !== -1) delivered = (prev[lost] as { requestKey?: string }).requestKey ?? null;
-      const rest = lost === -1 ? prev : prev.filter((_, i) => i !== lost);
-      const idx = newMessagesStartIndexRef.current - (lost !== -1 && lost < newMessagesStartIndexRef.current ? 1 : 0);
+      const lost = isDeliveredReport(entry) ? [] : lostSteerCopies(prev, entry, pairIndex);
+      if (lost.length > 0) delivered = (prev[lost[0]] as { requestKey?: string }).requestKey ?? null;
+      const rest = lost.length === 0 ? prev : prev.filter((_, i) => !lost.includes(i));
+      const idx = newMessagesStartIndexRef.current - lost.filter((i) => i < newMessagesStartIndexRef.current).length;
       const next = [...rest.slice(0, idx), userMessage, ...rest.slice(idx)];
       newMessagesStartIndexRef.current = idx + 1;
       return next;

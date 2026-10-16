@@ -267,3 +267,84 @@ describe('handleHistorySteeringDelivered — reply time', () => {
     expect((reply.timestamp as Date).getTime()).toBe(1_700_000_050_000);
   });
 });
+
+describe('handleHistorySteeringDelivered — the copies a dead stream left of a delivered steer', () => {
+  const steerCopy = (id: string, extra: Partial<MessageRecord>): MessageRecord => ({
+    id, role: 'user', content: 'margins', contentType: 'text', timestamp: new Date(0), isStreaming: false, turnIndex: 2, ...extra,
+  });
+
+  function replayDelivery(initial: MessageRecord[], entry: Record<string, unknown>, startIndex = 0) {
+    const { state, setMessages } = makeStore(initial);
+    const delivered: string[] = [];
+    const refs = { newMessagesStartIndexRef: { current: startIndex } };
+    handleHistorySteeringDelivered({
+      event: { event: 'steering_delivered', turn_index: 3, messages: [entry] },
+      pairIndex: 3,
+      assistantMessagesByPair: new Map(),
+      pairStateByPair: new Map(),
+      refs,
+      setMessages,
+      onCopyDelivered: (key) => delivered.push(key),
+    });
+    return { state, delivered, refs };
+  }
+
+  it('removes every copy sent under the entry\'s key, in whatever turn it waits, and draws the replay\'s row', () => {
+    const { state, delivered, refs } = replayDelivery(
+      [
+        steerCopy('s1', { steering: true, requestKey: 'rk-1' }),
+        steerCopy('f1', { queueError: { message: 'x' }, queueRefused: true, requestKey: 'rk-1' }),
+      ],
+      { content: 'margins', request_key: 'rk-1' },
+    );
+    expect(state.map((m) => m.id)).toEqual(['history-steering-user-3-1-0', 'history-assistant-steering-3-1']);
+    expect(state[0]).toMatchObject({ isHistory: true, steeringDelivered: true, requestKey: 'rk-1', turnIndex: 3 });
+    expect(delivered).toEqual(['rk-1']);
+    // The replay's rows go where the replay writes; the copies it replaced move nothing past them.
+    expect(refs.newMessagesStartIndexRef.current).toBe(2);
+  });
+
+  it('draws the row where the replay writes, net of the copies removed ahead of it', () => {
+    const { state, refs } = replayDelivery(
+      [
+        steerCopy('h0', { isHistory: true, content: 'question', turnIndex: 2 }),
+        steerCopy('s1', { steering: true, requestKey: 'rk-1' }),
+      ],
+      { content: 'margins', request_key: 'rk-1' },
+      2,
+    );
+    expect(state.map((m) => m.id)).toEqual(['h0', 'history-steering-user-3-1-0', 'history-assistant-steering-3-1']);
+    expect(refs.newMessagesStartIndexRef.current).toBe(3);
+  });
+
+  it('leaves a copy with the same words under another key', () => {
+    const other = steerCopy('s2', { steering: true, requestKey: 'rk-2', turnIndex: 3 });
+    const { state, delivered } = replayDelivery([other], { content: 'margins', request_key: 'rk-1' });
+    expect(state.find((m) => m.id === 's2')).toMatchObject({ steering: true, requestKey: 'rk-2' });
+    expect(delivered).toEqual([]);
+  });
+
+  it('leaves a copy the replay already drew, and one already delivered', () => {
+    const { state } = replayDelivery(
+      [
+        steerCopy('h1', { isHistory: true, steering: true, requestKey: 'rk-1' }),
+        steerCopy('d1', { steeringDelivered: true, requestKey: 'rk-1' }),
+      ],
+      { content: 'margins', request_key: 'rk-1' },
+    );
+    expect(state.map((m) => m.id)).toEqual(['history-steering-user-3-1-0', 'history-assistant-steering-3-1', 'h1', 'd1']);
+  });
+
+  it('matches an entry with no key (an older checkpoint) by its words within the turn, the waiting copy first', () => {
+    const { state, delivered } = replayDelivery(
+      [
+        steerCopy('f1', { queueError: { message: 'x' }, requestKey: 'rk-f', turnIndex: 3 }),
+        steerCopy('s1', { steering: true, requestKey: 'rk-s', turnIndex: 3 }),
+        steerCopy('s0', { steering: true, requestKey: 'rk-0', turnIndex: 2 }),
+      ],
+      { content: 'margins' },
+    );
+    expect(state.map((m) => m.id)).toEqual(['history-steering-user-3-1-0', 'history-assistant-steering-3-1', 'f1', 's0']);
+    expect(delivered).toEqual(['rk-s']);
+  });
+});
