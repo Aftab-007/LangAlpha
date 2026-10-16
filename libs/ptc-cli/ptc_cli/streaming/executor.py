@@ -327,8 +327,8 @@ async def execute_task(
     )
     esc_watcher.start()
 
-    # Check if we're in flash mode
-    flash_mode = getattr(session_state, "flash_mode", False)
+    # Check if we're in Home
+    in_home = getattr(session_state, "in_home", False)
 
     try:
         # Build optional kwargs for stream_chat
@@ -342,7 +342,7 @@ async def execute_task(
             thread_id=session_state.thread_id,
             hitl_response=hitl_response,
             llm_model=getattr(session_state, "llm_model", None),
-            in_home=flash_mode,
+            in_home=in_home,
             **stream_kwargs,
         ):
             # Track thread_id from events
@@ -465,8 +465,8 @@ async def execute_task(
         state.flush_text(final=True)
 
         # Refresh file cache for autocomplete (stream ended).
-        # Skip in flash mode (no sandbox).
-        if not flash_mode:
+        # Skip in Home (no workspace).
+        if not in_home:
             try:
                 files = await client.list_workspace_files(include_system=False)
                 session_state.sandbox_files = files
@@ -488,7 +488,7 @@ async def execute_task(
                 {"query": user_input[:100], "workspace_id": client.workspace_id},
             )
 
-        if not flash_mode:
+        if not in_home:
             _maybe_start_task_watchers(client, session_state)
 
     except asyncio.CancelledError:

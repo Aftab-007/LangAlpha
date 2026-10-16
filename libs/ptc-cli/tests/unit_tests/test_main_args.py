@@ -19,11 +19,11 @@ def test_no_flag_runs_in_a_workspace(monkeypatch):
     assert _parse(monkeypatch).home is False
 
 
-def test_the_old_flash_flag_still_runs_in_home_and_says_so(monkeypatch, capsys):
-    assert _parse(monkeypatch, "--flash").home is True
-    err = capsys.readouterr().err
-    assert err.count("\n") == 1
-    assert "--home" in err
+def test_the_old_flash_flag_is_refused_naming_home(monkeypatch, capsys):
+    with pytest.raises(SystemExit) as exited:
+        _parse(monkeypatch, "--flash")
+    assert exited.value.code == 2
+    assert "--flash was renamed to --home" in capsys.readouterr().err
 
 
 def test_flash_is_left_out_of_the_usage(monkeypatch, capsys):
