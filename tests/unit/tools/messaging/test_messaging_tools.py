@@ -171,7 +171,7 @@ class TestBothRolesBindThem:
         )
 
         config = AgentConfig(
-            llm=LLMConfig(name="test-model", flash="test-model"),
+            llm=LLMConfig(name="test-model", background="test-model"),
             security=SecurityConfig(),
             logging=LoggingConfig(),
             sandbox=SandboxConfig(daytona=DaytonaConfig(api_key="test-key")),

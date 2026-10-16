@@ -28,7 +28,7 @@ def _seed(cache: _FakeCache, dispatcher: str, members: list[str], run_pointers: 
     # the status read treats originless members as orphans and reaps them.
     for ptc in members:
         cache.client.kv[keys.ptc_origin_key(ptc)] = json.dumps(
-            {"flash_thread_id": dispatcher, "report_back": True}
+            {"home_thread_id": dispatcher, "report_back": True}
         )
     # Pointers are read via client.mget (raw serialized JSON), matching prod.
     for ptc, run_id in run_pointers.items():
@@ -519,7 +519,7 @@ async def test_a_thread_lists_both_registries_drained_runs_in_thread_order():
 def _seed_summary(cache: _FakeCache, dispatcher: str, ptc: str, *, origin_gen, ptr_gen, run_id="rb-1"):
     cache.client.sets[keys.watch_key(dispatcher)] = {ptc}
     cache.client.kv[keys.ptc_origin_key(ptc)] = json.dumps(
-        {"flash_thread_id": dispatcher, "report_back": True, "dispatch_gen": origin_gen}
+        {"home_thread_id": dispatcher, "report_back": True, "dispatch_gen": origin_gen}
     )
     cache.client.kv[keys.rb_run_key(dispatcher, ptc)] = json.dumps(
         {"run_id": run_id, "dispatch_gen": ptr_gen}
@@ -634,7 +634,7 @@ def _seed_two(cache: _FakeCache, dispatcher: str) -> None:
     cache.client.sets[keys.watch_key(dispatcher)] = {"ptc-owed", "ptc-settled"}
     for ptc, run_id in (("ptc-owed", "rb-owed"), ("ptc-settled", "rb-settled")):
         cache.client.kv[keys.ptc_origin_key(ptc)] = json.dumps(
-            {"flash_thread_id": dispatcher, "report_back": True, "dispatch_gen": "g1"}
+            {"home_thread_id": dispatcher, "report_back": True, "dispatch_gen": "g1"}
         )
         cache.client.kv[keys.rb_run_key(dispatcher, ptc)] = json.dumps(
             {"run_id": run_id, "dispatch_gen": "g1"}

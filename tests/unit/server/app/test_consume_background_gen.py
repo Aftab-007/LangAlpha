@@ -78,7 +78,7 @@ async def test_crash_never_clears_report_back_off_chain():
             tl_db, "get_run", AsyncMock(side_effect=ConnectionError("db down"))
         ),
     ):
-        cache = _FakeCache({"ptc_origin:ptc-1": {"flash_thread_id": "cos-1"}})
+        cache = _FakeCache({"ptc_origin:ptc-1": {"home_thread_id": "cos-1"}})
         clear = AsyncMock()
         p1, p2, _default = _patched(cache, clear)
         finalize = patch.object(
@@ -280,7 +280,7 @@ async def test_live_btm_executor_blocks_last_resort_finalize():
         is_run_live = LocalRunExecutor.is_run_live
 
     fake_manager = _FakeManager()
-    cache = _FakeCache({"ptc_origin:ptc-1": {"flash_thread_id": "cos-1"}})
+    cache = _FakeCache({"ptc_origin:ptc-1": {"home_thread_id": "cos-1"}})
     finalize = AsyncMock()
     clear = AsyncMock()
     p1, p2, p0 = _patched(cache, clear)

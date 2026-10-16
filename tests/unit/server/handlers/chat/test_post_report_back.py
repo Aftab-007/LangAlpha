@@ -17,7 +17,7 @@ from src.server.services.report_back.handoff import executor, leases, requested_
 
 _ORIGIN = {
     "ptc_workspace_id": "ws-ptc",
-    "flash_workspace_id": "ws-cos",
+    "home_workspace_id": "ws-cos",
     "user_id": "u-1",
 }
 
@@ -165,7 +165,7 @@ _DESK = Target(entry="slack:T/C", address="slack:T/C", name="#desk", ok=True)
 
 
 def _asked_from(*entries: dict) -> dict:
-    return {**_ORIGIN, "flash_thread_id": "cos-1", requested_from.KEY: list(entries)}
+    return {**_ORIGIN, "home_thread_id": "cos-1", requested_from.KEY: list(entries)}
 
 
 @pytest.mark.asyncio

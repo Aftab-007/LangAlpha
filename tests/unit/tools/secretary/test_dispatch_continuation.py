@@ -209,9 +209,9 @@ async def test_continuation_normalizes_noncanonical_thread_id():
 
 def _f1_origin() -> dict:
     return {
-        "origin": "flash",
-        "flash_thread_id": "cos-F1",
-        "flash_workspace_id": "ws-F1",
+        "origin": "home",
+        "home_thread_id": "cos-F1",
+        "home_workspace_id": "ws-F1",
         "ptc_thread_id": PTC_THREAD_ID,
         "ptc_workspace_id": WORKSPACE_ID,
         "report_back": True,
@@ -283,9 +283,9 @@ async def test_cross_dispatcher_reuse_proceeds_unwired_touching_nothing():
     # Unwired (another thread owns the origin): must not promise a report-back.
     assert payload.get("report_back") is False, payload
     assert cache.kv.get(f"ptc_origin:{PTC_THREAD_ID}") == _f1_origin()
-    assert PTC_THREAD_ID not in cache.client.sets.get("flash_watch:cos-F2", set())
+    assert PTC_THREAD_ID not in cache.client.sets.get("handoff_watch:cos-F2", set())
     assert PTC_THREAD_ID not in cache.client.sets.get(
-        f"flash_user_pending:{USER_ID}", set()
+        f"handoff_user_pending:{USER_ID}", set()
     )
 
 
@@ -293,7 +293,7 @@ async def test_cross_dispatcher_reuse_proceeds_unwired_touching_nothing():
 async def test_same_dispatcher_reuse_keeps_origin_ownership():
     """A same-thread continuation refreshes its origin with a NEW generation."""
     same = _f1_origin()
-    same["flash_thread_id"] = "cos-F2"  # owned by the dispatching thread
+    same["home_thread_id"] = "cos-F2"  # owned by the dispatching thread
     store = {f"ptc_origin:{PTC_THREAD_ID}": dict(same)}
 
     with _dispatch_env(store) as cache:
@@ -301,11 +301,11 @@ async def test_same_dispatcher_reuse_keeps_origin_ownership():
 
     assert payload.get("success") is True, payload
     refreshed = cache.kv.get(f"ptc_origin:{PTC_THREAD_ID}")
-    assert refreshed["flash_thread_id"] == "cos-F2"
+    assert refreshed["home_thread_id"] == "cos-F2"
     assert refreshed.get("dispatch_gen")  # committed refresh keeps the new gen
     # Same thread owns the wired origin + watch member, so report-back is real.
     assert payload.get("report_back") is True, payload
-    assert store[f"ptc_origin:{PTC_THREAD_ID}"]["flash_thread_id"] == "cos-F2"
+    assert store[f"ptc_origin:{PTC_THREAD_ID}"]["home_thread_id"] == "cos-F2"
 
 
 @pytest.mark.asyncio

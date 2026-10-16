@@ -25,7 +25,7 @@ WORKSPACE_ID = "22222222-2222-2222-2222-222222222222"
 
 _ORIGIN = {
     "user_id": USER_ID,
-    "flash_workspace_id": "ws-cos",
+    "home_workspace_id": "ws-cos",
     "ptc_workspace_id": "ws-ptc",
 }
 

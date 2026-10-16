@@ -84,7 +84,7 @@ def _fill_thread_cap(cache) -> None:
     # over-cap retry, and the cap wouldn't hold.
     for i in range(reserve.MAX_DISPATCH_PER_THREAD):
         cache.kv[keys.ptc_origin_key(f"p{i}")] = {
-            "flash_thread_id": DISPATCHER_THREAD_ID,
+            "home_thread_id": DISPATCHER_THREAD_ID,
             "report_back": True,
         }
 
@@ -478,9 +478,9 @@ def _seed_predecessor(cache) -> None:
     cache.client.sets[keys.watch_key(DISPATCHER_THREAD_ID)] = {PTC_THREAD_ID}
     cache.client.sets[keys.user_pending_key(USER_ID)] = {PTC_THREAD_ID}
     cache.kv[keys.ptc_origin_key(PTC_THREAD_ID)] = {
-        "origin": "flash",
+        "origin": "home",
         "report_back": True,
-        "flash_thread_id": DISPATCHER_THREAD_ID,
+        "home_thread_id": DISPATCHER_THREAD_ID,
         "ptc_thread_id": PTC_THREAD_ID,
         "user_id": USER_ID,
         "dispatch_gen": PRIOR_GEN,

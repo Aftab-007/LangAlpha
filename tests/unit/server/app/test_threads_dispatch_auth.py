@@ -271,7 +271,7 @@ async def test_refused_admission_gate_aborts_dispatch(monkeypatch):
             app,
             body={
                 **_BODY,
-                "origin_flash_thread_id": "cos-1",
+                "origin_home_thread_id": "cos-1",
                 "origin_dispatch_gen": "g-1",
             },
             headers={"X-Dispatch": "background", "X-Service-Token": TOKEN},
@@ -297,7 +297,7 @@ async def test_dispatch_gen_runs_the_refusal_gate(monkeypatch):
             app,
             body={
                 **_BODY,
-                "origin_flash_thread_id": "cos-1",
+                "origin_home_thread_id": "cos-1",
                 "origin_dispatch_gen": "g-1",
             },
             headers={"X-Dispatch": "background", "X-Service-Token": TOKEN},
@@ -350,7 +350,7 @@ async def test_priming_failure_retracts_intent_stamp(
             app,
             body={
                 **_BODY,
-                "origin_flash_thread_id": "cos-1",
+                "origin_home_thread_id": "cos-1",
                 "origin_dispatch_gen": "g-1",
             },
             headers={"X-Dispatch": "background", "X-Service-Token": TOKEN},
@@ -391,7 +391,7 @@ async def test_dispatch_retransmit_race_adopts_existing_run(monkeypatch):
             app,
             body={
                 **_BODY,
-                "origin_flash_thread_id": "cos-1",
+                "origin_home_thread_id": "cos-1",
                 "origin_dispatch_gen": "g-1",
             },
             headers={"X-Dispatch": "background", "X-Service-Token": TOKEN},

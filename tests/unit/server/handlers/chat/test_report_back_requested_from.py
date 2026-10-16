@@ -34,7 +34,7 @@ def _run_turn(*targets: Target, run_id: str = "exec-1") -> dict:
 
 
 def _record(*entries: dict) -> dict:
-    return {"flash_thread_id": DISPATCHER, RF.KEY: list(entries)}
+    return {"home_thread_id": DISPATCHER, RF.KEY: list(entries)}
 
 
 class TestWhatADispatchRecords:
@@ -112,7 +112,7 @@ class TestTheRecordKeepsTheRequestsStillWaiting:
         assert kept == [{"asked": "b"}]
 
     def test_another_threads_record_keeps_nothing(self):
-        previous = {**_record({"asked": "a"}), "flash_thread_id": "cos-2"}
+        previous = {**_record({"asked": "a"}), "home_thread_id": "cos-2"}
         kept = RF.recorded(
             {"asked": "b"}, previous, dispatcher_thread_id=DISPATCHER, reported=False
         )
@@ -178,7 +178,7 @@ class TestTheReminder:
         [
             _record(RF.of_turn({"platform": "web"}, "Value NVDA")),
             _record(RF.of_turn({}, "Value NVDA"), RF.of_turn({}, "And AMD")),
-            {"flash_thread_id": DISPATCHER, "report_back": True, "dispatch_gen": "g1"},
+            {"home_thread_id": DISPATCHER, "report_back": True, "dispatch_gen": "g1"},
             None,
         ],
         ids=["web", "web twice", "a record from before", "no record"],
@@ -267,7 +267,7 @@ class TestTheRunsTheTurnSendsFor:
         "record",
         [
             _record(RF.of_turn({"platform": "slack"}, "a")),
-            {"flash_thread_id": DISPATCHER},
+            {"home_thread_id": DISPATCHER},
             None,
             _record({"delivery": {"id": "exec-1", "targets": [UNLINKED.as_dict()]}}),
         ],
@@ -345,7 +345,7 @@ class TestTheReservedRecord:
     @pytest.mark.asyncio
     async def test_a_record_from_before_adds_only_this_request(self, cache):
         cache.kv[ptc_origin_key(PTC)] = {
-            "flash_thread_id": DISPATCHER,
+            "home_thread_id": DISPATCHER,
             "ptc_thread_id": PTC,
             "report_back": True,
             "user_id": "u-1",

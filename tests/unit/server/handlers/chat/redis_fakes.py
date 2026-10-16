@@ -416,7 +416,7 @@ class FakeClient:
             watch_key, user_key, origin_key = keys
             ptc_id, dispatcher_id, max_thread, max_user, ttl, origin_json = argv
             prev = self._decoded(origin_key)
-            if isinstance(prev, dict) and prev.get("flash_thread_id") not in (
+            if isinstance(prev, dict) and prev.get("home_thread_id") not in (
                 None,
                 dispatcher_id,
             ):
@@ -529,10 +529,10 @@ class FakeCache:
 
 def origin(ptc: str, dispatcher: str = "cos-1", user: str = "u-1") -> dict:
     return {
-        "origin": "flash",
+        "origin": "home",
         "report_back": True,
-        "flash_thread_id": dispatcher,
-        "flash_workspace_id": "fws-1",
+        "home_thread_id": dispatcher,
+        "home_workspace_id": "fws-1",
         "ptc_thread_id": ptc,
         "ptc_workspace_id": f"ws-{ptc}",
         "user_id": user,

@@ -335,7 +335,7 @@ _DELIVERIES = "src.server.services.report_back.handoff.requested_from.deliveries
 def _analyst_cache(origin: dict, *, member: bool = True) -> MagicMock:
     cache = MagicMock()
     cache.get_strict = AsyncMock(
-        side_effect=lambda key: None if key.startswith("flash_rb_run:") else origin
+        side_effect=lambda key: None if key.startswith("handoff_rb_run:") else origin
     )
     cache.client.sismember = AsyncMock(return_value=member)
     return cache
@@ -352,9 +352,9 @@ def _analyst_job(**over) -> dict:
 
 def _origin(**over) -> dict:
     base = {
-        "origin": "flash",
+        "origin": "home",
         "report_back": True,
-        "flash_thread_id": "t-1",
+        "home_thread_id": "t-1",
         "user_id": "u-1",
     }
     base.update(over)
@@ -387,7 +387,7 @@ async def test_analyst_offer_leaves_automation_reports_to_the_executor():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("origin", "member"),
-    [(_origin(flash_thread_id="t-other"), True), (_origin(), False), (None, True)],
+    [(_origin(home_thread_id="t-other"), True), (_origin(), False), (None, True)],
     ids=["owed-to-another-thread", "pair-already-cleared", "origin-gone"],
 )
 async def test_analyst_offer_leaves_what_is_not_owed_here(origin, member):
@@ -417,7 +417,7 @@ async def test_analyst_offer_leaves_a_report_its_executor_is_posting():
     cache.get_strict = AsyncMock(
         side_effect=lambda key: (
             {"request_key": analyst_request_key("job-1")}
-            if key.startswith("flash_rb_run:")
+            if key.startswith("handoff_rb_run:")
             else _origin()
         )
     )

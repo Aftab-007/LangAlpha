@@ -407,9 +407,9 @@ def test_role_registry_buys_no_priority_tier():
 def test_role_registry_compacts_on_the_turns_model_when_none_is_named():
     from src.server.services.llm.clients import role_registry
 
-    cfg = _make_config()  # no compaction, no fetch, no flash
+    cfg = _make_config()  # no compaction, no fetch, no background
     roles = role_registry(cfg, {})
-    # A summary runs on the model the turn runs; fetch, with no flash to
+    # A summary runs on the model the turn runs; fetch, with no background to
     # follow, has no model and so no role.
     assert [(r.key, r.model) for r in roles] == [("compaction", "main-model")]
 

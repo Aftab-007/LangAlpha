@@ -75,7 +75,7 @@ class TestListModelsResponse:
         mock_llm_cls = MagicMock()
         mock_llm_cls.get_model_config.return_value = mock_mc
 
-        agent_cfg = _mock_agent_config(name="gpt-4o", flash="gpt-4o-mini")
+        agent_cfg = _mock_agent_config(name="gpt-4o", background="gpt-4o-mini")
         with (
             patch("src.llms.llm.get_configured_llm_models", return_value=mock_models),
             patch("src.llms.llm.LLM", mock_llm_cls),
@@ -103,7 +103,7 @@ class TestListModelsResponse:
 
         agent_cfg = _mock_agent_config(
             name="claude-sonnet-4-5",
-            flash="claude-haiku-4-5",
+            background="claude-haiku-4-5",
             compaction="claude-haiku-4-5",
             fetch="claude-haiku-4-5",
             fallback=["gpt-4o"],
@@ -119,8 +119,8 @@ class TestListModelsResponse:
         defaults = body["system_defaults"]
         assert defaults["default_model"] == "claude-sonnet-4-5"
         assert defaults["background_model"] == "claude-haiku-4-5"
-        # The old name, still read by clients that have not moved.
-        assert defaults["flash_model"] == "claude-haiku-4-5"
+        # The Background model's old name is gone from the answer.
+        assert "flash_model" not in defaults
         assert defaults["compaction_model"] == "claude-haiku-4-5"
         assert defaults["fetch_model"] == "claude-haiku-4-5"
         assert defaults["fallback_models"] == ["gpt-4o"]

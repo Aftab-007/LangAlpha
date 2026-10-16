@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from src.server.services.llm import thread_model
 
 _MOD = "src.server.services.llm.thread_model"
-SYSTEM = {"default_model": "sys-main", "flash_model": "sys-flash"}
+SYSTEM = {"default_model": "sys-main", "background_model": "sys-background"}
 
 
 def _catalog(names):
@@ -36,9 +36,9 @@ def _catalog(names):
     [
         ({}, SYSTEM, "sys-main"),
         ({"preferred_model": "m-a"}, SYSTEM, "m-a"),
-        # The flash tier's default is not a thread's.
-        ({"preferred_flash_model": "m-f"}, SYSTEM, "sys-main"),
-        ({}, {"default_model": "", "flash_model": "sys-flash"}, None),
+        # The background tier's default is not a thread's.
+        ({"preferred_background_model": "m-f"}, SYSTEM, "sys-main"),
+        ({}, {"default_model": "", "background_model": "sys-background"}, None),
     ],
 )
 def test_effective_default_follows_the_composer_rule(pref, system, expected):
@@ -254,7 +254,7 @@ async def test_no_old_default_moves_nothing():
         {"preferred_model": "m-b"},
         "existing_threads",
         before={},
-        system={"default_model": "", "flash_model": ""},
+        system={"default_model": "", "background_model": ""},
     )
     assert moved == 0
     reassign.assert_not_awaited()

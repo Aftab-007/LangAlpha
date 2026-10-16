@@ -111,7 +111,7 @@ async def test_stopped_turn_closes_its_last_committed_step(monkeypatch):
 
 
 def _search_turn():
-    """A Flash turn stopped while its web search ran: the model's message,
+    """A turn stopped while its web search ran: the model's message,
     text and tool call, committed; the search never returned."""
     return _turn(
         0,

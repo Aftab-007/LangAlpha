@@ -128,7 +128,7 @@ async def test_clear_tears_down_all_per_pair_state():
     assert f"ptc_origin:{ptc}" not in cache.kv
     assert keys.rb_run_key(dispatcher, ptc) not in cache.kv
     assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
-    assert ptc not in cache.client.sets.get("flash_user_pending:u-1", set())
+    assert ptc not in cache.client.sets.get("handoff_user_pending:u-1", set())
 
 
 @pytest.mark.asyncio
@@ -196,7 +196,7 @@ async def test_clear_with_stale_gen_is_skipped_entirely():
     assert f"ptc_origin:{ptc}" in cache.kv
     assert cache.kv[keys.rb_run_key(dispatcher, ptc)] == {"run_id": "rb-NEW"}
     assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
-    assert ptc in cache.client.sets["flash_user_pending:u-1"]
+    assert ptc in cache.client.sets["handoff_user_pending:u-1"]
 
 
 @pytest.mark.asyncio
@@ -233,7 +233,7 @@ async def test_genless_clear_never_touches_a_generated_origin():
     assert not cleared
     assert f"ptc_origin:{ptc}" in cache.kv
     assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
-    assert ptc in cache.client.sets["flash_user_pending:u-1"]
+    assert ptc in cache.client.sets["handoff_user_pending:u-1"]
 
 
 @pytest.mark.asyncio
@@ -259,7 +259,7 @@ async def test_offchain_clear_refuses_while_a_run_pointer_is_live():
     assert f"ptc_origin:{ptc}" in cache.kv
     assert cache.kv[keys.rb_run_key(dispatcher, ptc)] == {"run_id": "rb-live"}
     assert ptc in cache.client.sets[keys.watch_key(dispatcher)]
-    assert ptc in cache.client.sets["flash_user_pending:u-1"]
+    assert ptc in cache.client.sets["handoff_user_pending:u-1"]
     assert f"ptc_rb_tombstone:{ptc}" not in cache.client.sets
 
 
@@ -449,12 +449,12 @@ async def test_clear_releases_cap_slot_via_explicit_user_id_when_origin_expired(
     cache = _FakeCache()
     dispatcher, ptc, user = "cos-1", "ptc-1", "u-1"
     cache.client.sets[keys.watch_key(dispatcher)] = {ptc}
-    cache.client.sets[f"flash_user_pending:{user}"] = {ptc}
+    cache.client.sets[f"handoff_user_pending:{user}"] = {ptc}
     # ptc_origin intentionally absent (expired) -> can't be read for the user id.
 
     await pointer.clear_handoff_report_back(cache, ptc, dispatcher, user_id=user)
 
-    assert ptc not in cache.client.sets.get(f"flash_user_pending:{user}", set())
+    assert ptc not in cache.client.sets.get(f"handoff_user_pending:{user}", set())
     assert ptc not in cache.client.sets.get(keys.watch_key(dispatcher), set())
 
 
@@ -1073,7 +1073,7 @@ async def test_permanently_missing_run_row_force_cleared_at_cap(monkeypatch):
 # Consumption clear (1.7): the completed report-back run enqueues a
 # watch_clear outbox job gated on report_back_ptc_thread_id — no in-process
 # completion hook remains. Ordering keys follow the one rule: the watching
-# dispatching thread (origin_flash_thread_id, else the run's own thread).
+# dispatching thread (origin_home_thread_id, else the run's own thread).
 # ---------------------------------------------------------------------------
 
 

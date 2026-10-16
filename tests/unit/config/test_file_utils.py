@@ -228,13 +228,11 @@ class TestAppEnvOverlay:
 
 
 # ---------------------------------------------------------------------------
-# llm.flash, the Background model's old name
+# llm.flash, the Background model's old name, refused
 # ---------------------------------------------------------------------------
 
 
-class TestRenamedLlmFlash:
-    LOGGER = "ptc_agent.config.file_utils"
-
+class TestRefusedLlmFlash:
     def _write(self, tmp_path, base, overlay=None):
         clear_config_cache()
         (tmp_path / AGENT_CONFIG_FILE).write_text(base)
@@ -242,77 +240,42 @@ class TestRenamedLlmFlash:
             (tmp_path / "agent_config.production.yaml").write_text(overlay)
         return str(tmp_path / AGENT_CONFIG_FILE)
 
-    def _warnings(self, caplog):
-        return [r.getMessage() for r in caplog.records if r.name == self.LOGGER and "llm.flash" in r.getMessage()]
-
-    def test_a_file_on_the_old_name_reads_as_background(self, tmp_path, caplog):
+    def test_a_file_on_the_old_name_is_refused_naming_the_file(self, tmp_path):
         base = self._write(tmp_path, "llm:\n  name: base\n  flash: old-bg\n")
 
-        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING", logger=self.LOGGER):
-            result = load_yaml_config(base)
+        with patch.dict(os.environ, {}, clear=True), pytest.raises(ValueError) as refused:
+            load_yaml_config(base)
 
-        assert result["llm"] == {"name": "base", "background": "old-bg"}
-        [warning] = self._warnings(caplog)
-        assert base in warning and "rename it to llm.background" in warning
+        assert str(refused.value) == f"llm.flash was renamed to llm.background (in {base})"
 
-    def test_an_overlay_on_the_old_name_overrides_a_base_on_the_new(self, tmp_path, caplog):
-        """Per file: merged first, the two names would sit side by side and
-        the base's new name would win over the overlay that meant to change it."""
+    def test_an_overlay_on_the_old_name_is_refused_naming_the_overlay(self, tmp_path):
         base = self._write(
             tmp_path,
             "llm:\n  name: base\n  background: base-bg\n",
             "llm:\n  flash: overlay-bg\n",
         )
 
-        with patch.dict(os.environ, {"APP_ENV": "production"}), caplog.at_level("WARNING", logger=self.LOGGER):
-            result = load_yaml_config(base)
+        with patch.dict(os.environ, {"APP_ENV": "production"}), pytest.raises(ValueError) as refused:
+            load_yaml_config(base)
 
-        assert result["llm"] == {"name": "base", "background": "overlay-bg"}
-        [warning] = self._warnings(caplog)
-        assert "agent_config.production.yaml" in warning
+        assert "llm.flash was renamed to llm.background" in str(refused.value)
+        assert "agent_config.production.yaml" in str(refused.value)
 
-    def test_an_overlay_on_the_new_name_overrides_a_base_on_the_old(self, tmp_path):
-        base = self._write(
-            tmp_path,
-            "llm:\n  name: base\n  flash: base-bg\n",
-            "llm:\n  background: overlay-bg\n",
-        )
-
-        with patch.dict(os.environ, {"APP_ENV": "production"}):
-            result = load_yaml_config(base)
-
-        assert result["llm"] == {"name": "base", "background": "overlay-bg"}
-
-    def test_a_file_naming_both_keeps_background_and_says_flash_is_ignored(self, tmp_path, caplog):
+    def test_a_file_naming_both_is_refused_too(self, tmp_path):
         base = self._write(tmp_path, "llm:\n  name: base\n  flash: old-bg\n  background: new-bg\n")
 
-        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING", logger=self.LOGGER):
-            result = load_yaml_config(base)
-
-        assert result["llm"] == {"name": "base", "background": "new-bg"}
-        [warning] = self._warnings(caplog)
-        assert "ignored" in warning and base in warning
-
-    def test_a_file_warns_once_however_often_it_is_read(self, tmp_path, caplog):
-        base = self._write(tmp_path, "llm:\n  name: base\n  flash: old-bg\n")
-
-        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING", logger=self.LOGGER):
+        with patch.dict(os.environ, {}, clear=True), pytest.raises(ValueError, match="llm.flash was renamed"):
             load_yaml_config(base)
-            load_yaml_config(base)
-
-        assert len(self._warnings(caplog)) == 1
 
     @pytest.mark.parametrize(
         "body",
         ["llm: some-model\n", "llm:\n  name: base\n  background: bg\n", "search_api: tavily\n"],
     )
-    def test_a_file_without_the_old_name_is_left_alone(self, tmp_path, caplog, body):
+    def test_a_file_without_the_old_name_loads(self, tmp_path, body):
         base = self._write(tmp_path, body)
 
-        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING", logger=self.LOGGER):
+        with patch.dict(os.environ, {}, clear=True):
             load_yaml_config(base)
-
-        assert self._warnings(caplog) == []
 
 
 # ---------------------------------------------------------------------------

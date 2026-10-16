@@ -43,8 +43,8 @@ async def test_per_thread_cap_rejects_beyond_limit(cache):
     assert err is not None
     assert str(T.MAX_DISPATCH_PER_THREAD) in err
     # The rejected dispatch left no residue in either SET.
-    assert "p-over" not in cache.client.sets[f"flash_watch:{dispatcher}"]
-    assert "p-over" not in cache.client.sets[f"flash_user_pending:{user}"]
+    assert "p-over" not in cache.client.sets[f"handoff_watch:{dispatcher}"]
+    assert "p-over" not in cache.client.sets[f"handoff_user_pending:{user}"]
 
 
 @pytest.mark.asyncio
@@ -83,13 +83,13 @@ async def test_uncommitted_reserve_rolls_back_both_sets_and_origin(cache):
         assert slot.error is None
         assert slot.wired is True
         assert slot.dispatch_gen
-        assert ptc in cache.client.sets[f"flash_watch:{dispatcher}"]
-        assert ptc in cache.client.sets[f"flash_user_pending:{user}"]
+        assert ptc in cache.client.sets[f"handoff_watch:{dispatcher}"]
+        assert ptc in cache.client.sets[f"handoff_user_pending:{user}"]
         assert cache.kv[T.ptc_origin_key(ptc)]["dispatch_gen"] == slot.dispatch_gen
         # ...exit WITHOUT commit -> rollback
 
-    assert ptc not in cache.client.sets[f"flash_watch:{dispatcher}"]
-    assert ptc not in cache.client.sets[f"flash_user_pending:{user}"]
+    assert ptc not in cache.client.sets[f"handoff_watch:{dispatcher}"]
+    assert ptc not in cache.client.sets[f"handoff_user_pending:{user}"]
     assert T.ptc_origin_key(ptc) not in cache.kv
     # A freed slot is reusable.
     assert await _reserve_err(dispatcher, "p-new", user) is None
@@ -116,8 +116,8 @@ async def test_refresh_rollback_restores_prev_origin_and_memberships(cache):
 
     # ...and the uncommitted exit restored the previous incarnation wholesale.
     assert cache.kv[T.ptc_origin_key(ptc)]["dispatch_gen"] == first_gen
-    assert ptc in cache.client.sets[f"flash_watch:{dispatcher}"]
-    assert ptc in cache.client.sets[f"flash_user_pending:{user}"]
+    assert ptc in cache.client.sets[f"handoff_watch:{dispatcher}"]
+    assert ptc in cache.client.sets[f"handoff_user_pending:{user}"]
 
 
 @pytest.mark.asyncio
@@ -140,8 +140,8 @@ async def test_rollback_is_noop_after_a_rival_rewrote_the_origin(cache):
         cache.kv[T.ptc_origin_key(ptc)] = rival
         # A exits without commit -> its rollback runs against the rival's gen.
 
-    assert ptc in cache.client.sets[f"flash_watch:{dispatcher}"]
-    assert ptc in cache.client.sets[f"flash_user_pending:{user}"]
+    assert ptc in cache.client.sets[f"handoff_watch:{dispatcher}"]
+    assert ptc in cache.client.sets[f"handoff_user_pending:{user}"]
     assert cache.kv[T.ptc_origin_key(ptc)]["dispatch_gen"] == "g-rival"
 
 
@@ -150,9 +150,9 @@ async def test_cross_dispatcher_reserve_proceeds_unwired_touching_nothing(cache)
     """A PTC whose origin belongs to a DIFFERENT Chief of Staff thread can't be wired
     twice: the reserve returns unwired without mutating any state."""
     other_origin = {
-        "origin": "flash",
+        "origin": "home",
         "report_back": True,
-        "flash_thread_id": "cos-OTHER",
+        "home_thread_id": "cos-OTHER",
         "user_id": "u-2",
         "dispatch_gen": "gen-other",
     }
@@ -163,8 +163,8 @@ async def test_cross_dispatcher_reserve_proceeds_unwired_touching_nothing(cache)
         assert slot.dispatch_gen is None
 
     assert cache.kv[T.ptc_origin_key("p1")] == other_origin
-    assert "p1" not in cache.client.sets.get("flash_watch:cos-1", set())
-    assert "p1" not in cache.client.sets.get("flash_user_pending:u-1", set())
+    assert "p1" not in cache.client.sets.get("handoff_watch:cos-1", set())
+    assert "p1" not in cache.client.sets.get("handoff_user_pending:u-1", set())
 
 
 @pytest.mark.asyncio
@@ -182,11 +182,11 @@ async def test_over_cap_reserve_reaps_orphaned_members_and_retries(cache):
         del cache.kv[T.ptc_origin_key(ptc)]
 
     assert await _reserve_err(dispatcher, "p-new", user) is None
-    assert "p0" not in cache.client.sets[f"flash_watch:{dispatcher}"]
-    assert "p1" not in cache.client.sets[f"flash_watch:{dispatcher}"]
-    assert "p-new" in cache.client.sets[f"flash_watch:{dispatcher}"]
+    assert "p0" not in cache.client.sets[f"handoff_watch:{dispatcher}"]
+    assert "p1" not in cache.client.sets[f"handoff_watch:{dispatcher}"]
+    assert "p-new" in cache.client.sets[f"handoff_watch:{dispatcher}"]
     # Members with live origins were untouched by the reap.
-    assert "p2" in cache.client.sets[f"flash_watch:{dispatcher}"]
+    assert "p2" in cache.client.sets[f"handoff_watch:{dispatcher}"]
 
 
 @pytest.mark.asyncio
@@ -224,8 +224,8 @@ async def test_same_pair_lifecycles_serialize_no_resurrection(cache):
 
     # No resurrected incarnation: everything rolled back clean.
     assert T.ptc_origin_key(ptc) not in cache.kv
-    assert ptc not in cache.client.sets.get(f"flash_watch:{dispatcher}", set())
-    assert ptc not in cache.client.sets.get(f"flash_user_pending:{user}", set())
+    assert ptc not in cache.client.sets.get(f"handoff_watch:{dispatcher}", set())
+    assert ptc not in cache.client.sets.get(f"handoff_user_pending:{user}", set())
     assert T._pair_locks == {}
 
 
@@ -298,4 +298,4 @@ async def test_concurrent_reserves_cannot_overshoot_per_thread_cap(cache):
     assert len(rejected) == 1  # the other is capped out
     assert "on this thread" in rejected[0]  # rejected by the per-thread cap
     assert str(T.MAX_DISPATCH_PER_THREAD) in rejected[0]
-    assert len(cache.client.sets[f"flash_watch:{dispatcher}"]) == T.MAX_DISPATCH_PER_THREAD
+    assert len(cache.client.sets[f"handoff_watch:{dispatcher}"]) == T.MAX_DISPATCH_PER_THREAD

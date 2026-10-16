@@ -156,7 +156,7 @@ def _hoc():
     return {
         "type": "agent",
         "agent": "chief_of_staff",
-        "origin_flash_thread_id": str(uuid.uuid4()),
+        "origin_home_thread_id": str(uuid.uuid4()),
         "origin_dispatch_gen": uuid.uuid4().hex,
     }
 
@@ -228,9 +228,9 @@ async def test_a_hand_off_stamps_the_run_and_keeps_every_gen_it_admitted(thread)
     home = str(uuid.uuid4())
     run_id = await _run(
         thread,
-        metadata={"origin_flash_thread_id": home, "origin_dispatch_gen": "gen-a"},
+        metadata={"origin_home_thread_id": home, "origin_dispatch_gen": "gen-a"},
     )
-    origin = {**_hoc(), "origin_flash_thread_id": home, "origin_dispatch_gen": "gen-b"}
+    origin = {**_hoc(), "origin_home_thread_id": home, "origin_dispatch_gen": "gen-b"}
 
     await _accepted(
         thread,
@@ -240,11 +240,11 @@ async def test_a_hand_off_stamps_the_run_and_keeps_every_gen_it_admitted(thread)
         platform=None,
         key="steer:dispatch:gen-b",
         origin=origin,
-        origin_stamp={"origin_flash_thread_id": home, "origin_dispatch_gen": "gen-b"},
+        origin_stamp={"origin_home_thread_id": home, "origin_dispatch_gen": "gen-b"},
     )
 
     meta = (await get_run(run_id))["metadata"]
-    assert meta["origin_flash_thread_id"] == home
+    assert meta["origin_home_thread_id"] == home
     assert meta["origin_dispatch_gen"] == "gen-b"
     assert sorted(meta["dispatch_gens"]) == ["gen-a", "gen-b"]
     assert await run_has_dispatch_gen(run_id, "gen-a")
@@ -257,7 +257,7 @@ async def test_a_hand_off_into_a_run_another_home_owns_is_refused(thread, db_con
     run_id = await _run(
         thread,
         metadata={
-            "origin_flash_thread_id": str(uuid.uuid4()),
+            "origin_home_thread_id": str(uuid.uuid4()),
             "origin_dispatch_gen": "theirs",
         },
     )
@@ -272,7 +272,7 @@ async def test_a_hand_off_into_a_run_another_home_owns_is_refused(thread, db_con
         key=f"steer:dispatch:{mine['origin_dispatch_gen']}",
         origin=mine,
         origin_stamp={
-            "origin_flash_thread_id": mine["origin_flash_thread_id"],
+            "origin_home_thread_id": mine["origin_home_thread_id"],
             "origin_dispatch_gen": mine["origin_dispatch_gen"],
         },
     )

@@ -233,7 +233,7 @@ class TestLLMExtractFallback:
         call_kwargs = mock_instance.complete.call_args.kwargs
         assert call_kwargs["user_id"] == "usr-x"
         assert call_kwargs["response_schema"] is InsightOutputSchema
-        assert call_kwargs["mode"] == "flash"
+        assert call_kwargs["slot"] == "background"
         assert result == _valid_output()
 
     @pytest.mark.asyncio
@@ -259,7 +259,7 @@ class TestLLMExtractFallback:
 
         call_kwargs = mock_instance.complete.call_args.kwargs
         assert call_kwargs["user_id"] is None
-        assert call_kwargs["mode"] == "flash"
+        assert call_kwargs["slot"] == "background"
         assert result == _valid_output()
 
     @pytest.mark.asyncio
