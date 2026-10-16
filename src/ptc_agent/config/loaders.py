@@ -22,6 +22,7 @@ LLM Configuration:
 """
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,8 @@ from ptc_agent.config.file_utils import (
     load_yaml_config,
     rename_llm_flash,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def _resolve_config_file(
@@ -303,6 +306,12 @@ def load_from_dict(
             subagent_definitions[name] = SubagentConfig(**({} if defn_data is None else defn_data))
         except Exception as e:
             raise ValueError(f"Invalid subagent definition '{name}': {e}") from e
+        if subagent_definitions[name].mode == "flash":
+            logger.warning(
+                f"subagents.definitions.{name}: mode: flash is deprecated; "
+                "under sections:, set to false each prompt section it should "
+                "leave out instead"
+            )
 
     # Validate enabled subagent names exist in builtins or user definitions
     known_names = set(BUILTIN_SUBAGENTS) | set(subagent_definitions)
