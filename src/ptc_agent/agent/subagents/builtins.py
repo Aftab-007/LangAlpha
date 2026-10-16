@@ -1,7 +1,7 @@
 """Built-in subagent definitions.
 
-These are the default subagents shipped with the agent.  User-defined
-definitions in ``agent_config.yaml`` can override any of these by name.
+These are the default subagents shipped with the agent. A definition in
+``agent_config.yaml`` with one's name changes only the fields it sets.
 """
 
 from __future__ import annotations

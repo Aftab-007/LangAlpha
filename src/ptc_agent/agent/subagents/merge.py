@@ -1,7 +1,7 @@
 """One user's subagents: the deployment's base with the user's own rows on top.
 
-The base is the built-ins under the deployment's YAML, which still replaces a
-built-in wholesale, then the subagents the user's plugins ship. A user's row
+The base is the built-ins with the deployment's YAML over them, field by
+field as an overlay reads, then the subagents the user's plugins ship. A user's row
 then either overrides a base field by field, storing only what the user
 changed so later improvements to the base still reach them, or is a subagent
 of their own. Pure: rows come in, finished definitions go out, and nothing
@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from ptc_agent.agent.roles import ALL_ROLES, AgentRole
-from ptc_agent.agent.subagents.definition import SubagentDefinition
+from ptc_agent.agent.subagents.definition import CODE_SECTIONS, SubagentDefinition
 from ptc_agent.agent.subagents.registry import SubagentRegistry
 from ptc_agent.config.agent import SubagentsConfig
 
@@ -33,9 +33,6 @@ SWITCHABLE_TOOL_SETS = frozenset(TOOL_WORDS.values())
 # every word on is handed general-purpose's tool list.
 _CUSTOM_TOOL_ORDER = ("execute_code", "filesystem", "bash", "finance", "web_search")
 
-#: The sections about writing and running code, which follow ``code``.
-CODE_SECTIONS = ("tool_guide", "workspace_paths", "data_processing", "visualizations")
-
 #: What a custom subagent saved without ``tools`` binds: the Analyst preset.
 DEFAULT_CUSTOM_TOOLS = ("web", "market_data", "code", "shell")
 
@@ -49,8 +46,9 @@ class BaseSubagent:
     ``key`` is ``builtin:<name>``, ``deployment:<name>`` or
     ``plugin:<plugin name>/<agent>``. An override applies only to the base it
     was written against, so a name that changes hands (a YAML definition
-    replacing a built-in, a plugin removed) orphans it instead of silently
-    reshaping a different subagent.
+    taking a plugin subagent's name, a plugin removed) orphans it instead of
+    silently reshaping a different subagent. A YAML definition with a
+    built-in's name only changes that built-in, which keeps its key.
     """
 
     key: str
@@ -196,7 +194,8 @@ def apply_override(
     if isinstance(fields.get("tools"), list):
         tools = tools_for_words(fields["tools"], defn.tools)
         changes["tools"] = tools
-        changes["tools_narrowed"] = bool(set(defn.tools) - set(tools))
+        # A base the deployment already narrowed stays narrowed.
+        changes["tools_narrowed"] = defn.tools_narrowed or bool(set(defn.tools) - set(tools))
         has_code = "execute_code" in tools
         if has_code != ("execute_code" in defn.tools):
             changes["sections"] = {

@@ -15,6 +15,9 @@ from ptc_agent.agent.roles import ALL_ROLES, AgentRole
 SubagentMode = Literal["ptc", "flash"]
 BrokerageAccess = Literal["off", "on"]
 
+#: The sections about writing and running code, which follow ``execute_code``.
+CODE_SECTIONS = ("tool_guide", "workspace_paths", "data_processing", "visualizations")
+
 
 @dataclass
 class SubagentDefinition:

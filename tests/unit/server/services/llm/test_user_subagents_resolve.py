@@ -167,7 +167,7 @@ async def test_the_roster_is_the_users_enabled_list_narrowed_by_the_request(
 async def test_a_user_who_turns_every_subagent_off_gets_none(rows, plugin_rows):
     rows += [
         _override("research", "builtin:research", enabled=False),
-        _override("data-prep", "deployment:data-prep", enabled=False),
+        _override("data-prep", "builtin:data-prep", enabled=False),
         _override("macro", "deployment:macro", enabled=False),
     ]
     deployment = _deployment()
