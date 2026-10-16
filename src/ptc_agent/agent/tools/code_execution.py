@@ -56,6 +56,7 @@ def create_execute_code_tool(
     session: Any = None,
     call_context: livefs_mount.CallContext | None = None,
     file_tools_only: tuple[str, ...] = (),
+    allowed_servers: frozenset[str] | None = None,
 ) -> BaseTool:
     """Factory function to create execute_code tool with injected dependencies.
 
@@ -70,6 +71,8 @@ def create_execute_code_tool(
             mount reads its defaults from
         file_tools_only: Directories under the sandbox root only the file
             tools reach; a program naming one is refused before it runs
+        allowed_servers: The only MCP servers the code may call, for a
+            subagent the user limited; None leaves the workspace's whole set
 
     Returns:
         Configured execute_code tool function
@@ -126,7 +129,10 @@ def create_execute_code_tool(
                 max_execution_time=max_execution_time_of(backend),
             ):
                 result = await backend.aexecute_code(
-                    code, thread_id=thread_id or None, call_id=call_id
+                    code,
+                    thread_id=thread_id or None,
+                    call_id=call_id,
+                    allowed_servers=allowed_servers,
                 )
 
             mcp_trace = list(getattr(result, "mcp_trace", []) or [])

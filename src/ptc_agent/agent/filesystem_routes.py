@@ -28,6 +28,7 @@ from ptc_agent.agent.backends import (
 from ptc_agent.agent.backends.automations import AutomationsBackend
 from ptc_agent.agent.backends.channels import ChannelsBackend
 from ptc_agent.agent.backends.db_json_route import DbJsonRoute
+from ptc_agent.agent.backends.subagents import SubagentsBackend
 from ptc_agent.agent.backends.user_data import UserDataBackend
 from ptc_agent.agent.middleware.background_subagent.workflow.prebuilt import (
     get_prebuilt_workflows,
@@ -50,7 +51,7 @@ from ptc_agent.core.sandbox.livefs_mount import CallContext
 
 # The routes that serve the user's database rows as files, one per directory
 # of ``USER_DATA_DIRS``.
-USER_DATA_ROUTES = (UserDataBackend, AutomationsBackend)
+USER_DATA_ROUTES = (UserDataBackend, AutomationsBackend, SubagentsBackend)
 
 
 def route_for(path: str) -> type[DbJsonRoute] | None:
@@ -120,6 +121,35 @@ def resolve_identity_gates(
     )
 
 
+#: What a subagent's Write or Edit gets in memory, which its prompt leaves to
+#: the parent agent.
+SUBAGENT_MEMORY_REFUSAL = (
+    "Memory is the parent agent's to write. Put anything it may want to keep "
+    "in your result as a proposed memory."
+)
+
+
+def memory_prefixes(backend: Any, layout: WorkspaceLayout | None) -> tuple[str, str]:
+    """Where the user's and the workspace's memory mount over ``backend``."""
+    sandbox_root = backend.computer_root.rstrip("/")
+    layout = layout or SandboxLayout(sandbox_root).for_workspace(None)
+    return f"{sandbox_root}/{MEMORY_USER_DIR}/", f"{layout.memory}/"
+
+
+def subagent_backend(backend: Any, layout: WorkspaceLayout | None) -> Any:
+    """``backend`` for a subagent's file tools: memory refuses their writes.
+
+    The prompt says a subagent proposes memories rather than saving them, and
+    this holds the file tools to it. Bash and code reach the mount as the main
+    agent's do, which a tool wrapper cannot see.
+    """
+    if not isinstance(backend, CompositeFilesystemBackend):
+        return backend
+    return backend.refusing_writes_under(
+        memory_prefixes(backend.sandbox, layout), SUBAGENT_MEMORY_REFUSAL
+    )
+
+
 def build_filesystem_backend(
     *,
     backend: Any,
@@ -165,6 +195,7 @@ def build_filesystem_backend(
     sandbox_root = backend.computer_root.rstrip("/")
     layout = layout or SandboxLayout(sandbox_root).for_workspace(None)
     workspace_memory_dir = WorkspaceLayout.MEMORY_DIR
+    user_memory, workspace_memory = memory_prefixes(backend, layout)
 
     # INVARIANT: these closures capture identity at agent-creation time
     # (``user_id`` is bound once per call). Safe only because one PTCAgent
@@ -187,7 +218,7 @@ def build_filesystem_backend(
             StoreBackend(
                 store=store,
                 namespace_factory=_user_namespace,
-                root_prefix=f"{sandbox_root}/{MEMORY_USER_DIR}/",
+                root_prefix=user_memory,
                 sandbox_backend=backend,
                 cache=store_cache,
             )
@@ -203,7 +234,7 @@ def build_filesystem_backend(
             StoreBackend(
                 store=store,
                 namespace_factory=_workspace_namespace,
-                root_prefix=f"{layout.memory}/",
+                root_prefix=workspace_memory,
                 sandbox_backend=backend,
                 cache=store_cache,
             )

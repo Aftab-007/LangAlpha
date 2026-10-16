@@ -17,6 +17,7 @@ import {
   type CatalogServerList,
   type McpSignInNeeded,
   type PluginInfo,
+  type SubagentsResponse,
 } from '@/pages/ChatAgent/utils/api';
 import { catalogUpdateFor, useCatalogPlugins } from '../../hooks/useCatalogPlugins';
 import { useKeysAsk } from '../../hooks/useKeysAsk';
@@ -26,7 +27,7 @@ import { PluginDialog } from '../PluginDialog';
 import { PluginKeysStep } from '../PluginKeysStep';
 import { PluginOutcome, type PluginOutcomeOf } from '../PluginOutcome';
 import { RefusalView } from '../RefusalView';
-import { pluginStatus, storedKeys, uninstallLines } from './pluginStatus';
+import { changedSubagents, pluginStatus, storedKeys, uninstallLines } from './pluginStatus';
 
 /**
  * Every verb a plugin answers (switch, update, export, uninstall), shared by
@@ -171,12 +172,22 @@ export function usePluginLifecycle(
   }
 
   async function uninstall() {
+    // Read before the delete, which re-reads the list without them.
+    const changed = changedSubagents(
+      plugin,
+      queryClient.getQueryData<SubagentsResponse>(queryKeys.subagents.list())?.subagents,
+    );
     try {
       const [result, kept] = await Promise.all([deleteMutation.mutateAsync(plugin.name), keptKeys()]);
       setConfirmingUninstall(false);
       const lines = uninstallLines(
         t,
-        { connectors: result.deleted.servers.length, skills: result.deleted.skills.length },
+        {
+          connectors: result.deleted.servers.length,
+          skills: result.deleted.skills.length,
+          subagents: result.deleted.subagents?.length ?? 0,
+          changedSubagents: changed,
+        },
         kept,
         'after',
       );

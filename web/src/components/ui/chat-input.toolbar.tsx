@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
 import {
-  Check, ChevronDown, FileStack, FolderOpen, Layers, Radar, Zap,
+  Check, ChevronDown, ChevronRight, FileStack, FolderOpen, Layers, Radar, Zap,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
 import {
   DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger,
 } from './dropdown-menu';
@@ -223,17 +224,29 @@ export function useToolbarItems({
           <SubagentsGlyph on={subagentsOn} />
         </IconToggle>
       ),
+      // Under the switch, the page that says what each subagent is. Quieter
+      // than the switch and indented to its label, so it reads as part of
+      // the same item rather than a second control.
       menu: () => (
-        <DropdownMenuItem
-          onSelect={(e) => { e.preventDefault(); onToggleSubagents(!subagentsOn); }}
-        >
-          <SubagentsGlyph
-            on={subagentsOn}
-            style={subagentsOn ? { color: 'var(--color-accent-light)' } : undefined}
-          />
-          <span>{t('chat.pills.subagents')}</span>
-          {subagentsOn && <Check className="ml-auto h-4 w-4" style={{ color: 'var(--color-accent-light)' }} />}
-        </DropdownMenuItem>
+        <>
+          <DropdownMenuItem
+            onSelect={(e) => { e.preventDefault(); onToggleSubagents(!subagentsOn); }}
+          >
+            <SubagentsGlyph
+              on={subagentsOn}
+              style={subagentsOn ? { color: 'var(--color-accent-light)' } : undefined}
+            />
+            <span>{t('chat.pills.subagents')}</span>
+            {subagentsOn && <Check className="ml-auto h-4 w-4" style={{ color: 'var(--color-accent-light)' }} />}
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+            <Link to="/plugins?tab=subagents">
+              <span className="w-4 flex-none" aria-hidden />
+              <span>{t('chat.pills.manageSubagents')}</span>
+              <ChevronRight className="ml-auto h-3.5 w-3.5" aria-hidden />
+            </Link>
+          </DropdownMenuItem>
+        </>
       ),
     },
     {

@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ptc_agent.config.plugins import bundled_skill_dirs
 from ptc_agent.config.core import (
@@ -166,8 +166,27 @@ class SubagentConfig(BaseModel):
     tools: list[str] = Field(default_factory=lambda: ["execute_code", "filesystem"])
     skills: list[str] = Field(default_factory=list)
     preload_skills: list[str] = Field(default_factory=list)
-    max_iterations: int = 15
     sections: dict[str, bool] = Field(default_factory=dict)
+    reasoning_effort: str | None = None
+    search_provider: str | None = None
+    search_depth: str | None = None
+    connectors: bool = True
+    brokerages: Literal["off", "on"] = "on"
+    preferred_connectors: list[str] = Field(default_factory=list)
+    # Unset keeps a built-in's own default when this overrides one, and is
+    # on for a subagent of the deployment's own.
+    memory: bool | None = None
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def _effort_is_a_level(cls, value: str | None) -> str | None:
+        # A word outside the vocabulary would reach no model: the client falls
+        # back to the model's default while the pane shows the word.
+        from src.llms.reasoning import REASONING_LEVELS
+
+        if value is not None and value not in REASONING_LEVELS:
+            raise ValueError(f"must be one of {', '.join(REASONING_LEVELS)}")
+        return value
 
 
 class SubagentsConfig(BaseModel):
@@ -179,6 +198,11 @@ class SubagentsConfig(BaseModel):
 
     enabled: list[str] = Field(default_factory=lambda: ["general-purpose"])
     definitions: dict[str, SubagentConfig] = Field(default_factory=dict)
+    #: This user's merged roster (a ``ResolvedSubagents``), written on the
+    #: per-turn copy by ``resolve_llm_config`` for a PTC build. None on the
+    #: shared config and on builds that never resolved a user, which compile
+    #: the deployment's own roster (``merge.turn_roster``).
+    resolved: Any | None = Field(default=None, exclude=True)
 
 
 class LLMDefinition(BaseModel):

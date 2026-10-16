@@ -519,6 +519,7 @@ async def _handle_send_message(
                 thread_id=thread_id,
                 enabled_subagents=request.subagents_enabled,
                 workspace_id=workspace_id,
+                role=route.role,
             )
 
         # A report-back or a channel message has nobody at a client to

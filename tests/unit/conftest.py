@@ -6,6 +6,7 @@ socket creation turns that failure mode into a loud error. AF_UNIX stays
 allowed: asyncio's event loop self-pipe is a unix socketpair.
 """
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,29 @@ def _empty_user_skill_bundle(monkeypatch):
 
     monkeypatch.setattr(user_skills, "load_user_skill_bundle", _empty)
     monkeypatch.setattr(materialize, "load_user_skill_bundle", _empty)
+
+
+@pytest.fixture(autouse=True)
+def _no_user_subagents(monkeypatch):
+    """Stub each user's subagent rows, and their plugins' subagents, to none
+    for unit tests.
+
+    ``resolve_llm_config`` reads them from Postgres on every PTC turn, and
+    unit tests have no pool. A user with no rows is also the case whose turn
+    must match a build that never read any.
+    """
+    from src.server.database import plugin_subagents, user_subagents
+
+    async def _none(user_id, *, conn=None):
+        return []
+
+    @contextlib.asynccontextmanager
+    async def _no_snapshot():
+        yield None
+
+    monkeypatch.setattr(user_subagents, "list_user_subagents", _none)
+    monkeypatch.setattr(plugin_subagents, "list_user_plugin_subagents", _none)
+    monkeypatch.setattr(plugin_subagents, "subagents_snapshot", _no_snapshot)
 
 
 @pytest.fixture(scope="session")

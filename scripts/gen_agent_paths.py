@@ -31,6 +31,7 @@ from ptc_agent.core.paths import (  # noqa: E402
     MEMORY_INDEX_FILENAME,
     AUTOMATION_FILE_NAME,
     SANDBOX_ROOTS,
+    SUBAGENT_FILE_NAME,
     USER_DATA_DIRS,
     USER_DATA_FILES,
     SandboxLayout,
@@ -104,6 +105,7 @@ def render() -> str:
         ("MEMORY_WORKSPACE_DIR", WorkspaceLayout, "MEMORY_DIR"),
         ("MEMO_USER_DIR", SandboxLayout, "MEMO_USER_DIR"),
         ("AUTOMATIONS_DIR", SandboxLayout, "AUTOMATIONS_DIR"),
+        ("USER_AGENTS_DIR", SandboxLayout, "USER_AGENTS_DIR"),
         ("SKILLS_DIR", WorkspaceLayout, "SKILLS_DIR"),
         ("THREADS_DIR", WorkspaceLayout, "THREADS_DIR"),
         ("LARGE_TOOL_RESULTS_DIR", WorkspaceLayout, "LARGE_TOOL_RESULTS_DIR"),
@@ -143,6 +145,11 @@ def render() -> str:
         " *  file per automation. Source: AUTOMATION_FILE_NAME. */\n"
     )
     out.append(f"export const AUTOMATION_FILE_NAME = /^{AUTOMATION_FILE_NAME}$/;\n\n")
+    out.append(
+        "/** The names a subagent's file in USER_AGENTS_DIR may take, one file\n"
+        " *  per subagent, named after it. Source: SUBAGENT_FILE_NAME. */\n"
+    )
+    out.append(f"export const SUBAGENT_FILE_NAME = /^{SUBAGENT_FILE_NAME}$/;\n\n")
 
     out.append(
         "/** Agent-infrastructure dirs at the sandbox root, collapsed by\n"

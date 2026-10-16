@@ -121,16 +121,18 @@ _CACHEABLE_IMAGE_TYPES = frozenset(
 )
 
 # DB-backed virtual files: rows the agent reaches through a composite route
-# (UserDataBackend, AutomationsBackend), never files on the sandbox FS. These
-# paths bypass the system-path filter and route to the DB layer. The panel
-# serves them read-only: a write belongs to the owning surface or the agent's
-# route, which make the schema and version checks this generic API cannot.
+# (UserDataBackend, AutomationsBackend, SubagentsBackend), never files on the
+# sandbox FS. These paths bypass the system-path filter and route to the DB
+# layer. The panel serves them read-only: a write belongs to the owning surface
+# or the agent's route, which make the schema and version checks this generic
+# API cannot.
 _VIRTUAL_DIRS = frozenset(USER_DATA_DIRS)
 
 
 def _virtual_file(client_path: str) -> type[DbJsonRoute] | None:
     """The route a path would be a virtual file of, whether or not one is
-    there (an automation's file exists only while its row does)."""
+    there (an automation's or a custom subagent's file exists only while its
+    row does)."""
     return route_for(client_path)
 
 
@@ -496,7 +498,7 @@ def _is_serve_blocked_path(client_path: str) -> bool:
     ``mcp_servers``, ``_internal``, ...) that those endpoints deliberately hide.
 
     Stricter than the panel: it skips ``_is_system_path``'s carve-out for the
-    user's profile and automation files. Their owner reads them through the
+    user's profile, automation and subagent files. Their owner reads them through the
     file routes, never this core, and the file mount links them into every
     workspace folder, so only containment would stand between a share link and
     the user's holdings.

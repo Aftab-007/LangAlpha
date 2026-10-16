@@ -912,7 +912,7 @@ class AutomationFile(DbJsonFile[dict[str, Any] | None, Document, FilePlan]):
             lines.append(f"Note: {warning}")
         return "\n".join([*lines, *plan.notes])
 
-    async def rename(self, user_id: str, to: str, conn: Any) -> str | None:
+    async def rename(self, user_id: str, to: str, conn: Any, call: CallContext) -> str | None:
         # The row is locked, since a delete on the Automations page takes no
         # user lock: a rename that lost to one moved nothing.
         row = await auto_db.get_automation_file(user_id, self.file_name, conn=conn, lock=True)

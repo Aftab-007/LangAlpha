@@ -79,6 +79,9 @@ export function invalidateMcpFanout(qc: QueryClient) {
   // the list: the catalog beside it marks installed from plugin rows, which no
   // server or key change touches, and each read of it is the whole listing.
   qc.invalidateQueries({ queryKey: queryKeys.plugins.list() });
+  // The subagents list says which preferred connectors are off or gone and
+  // whether a brokerage is connected.
+  qc.invalidateQueries({ queryKey: queryKeys.subagents.all });
 }
 
 // ---------------------------------------------------------------------------

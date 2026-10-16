@@ -31,6 +31,7 @@ vi.mock('../useConfiguredProviders', () => ({
 vi.mock('../usePlatformModels', () => ({
   usePlatformModels: () => ({ platform: null, isLoading: h.platformLoading }),
   useModelAccessMap: () => ({}),
+  getModelAccess: () => 'platform',
 }));
 
 import { useAllModels } from '../useAllModels';

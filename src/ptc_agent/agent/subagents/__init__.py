@@ -10,7 +10,7 @@ Public API:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ptc_agent.agent.roles import AgentRole
 
@@ -19,27 +19,17 @@ from .compiler import SubagentCompiler
 from .definition import SubagentDefinition, SubagentMode
 from .registry import SubagentRegistry
 
+if TYPE_CHECKING:
+    from .merge import ResolvedSubagents
+
 
 def create_subagents(
-    registry: SubagentRegistry,
-    enabled_names: list[str],
+    roster: ResolvedSubagents,
     compiler: SubagentCompiler,
-    role: AgentRole | None = None,
+    role: AgentRole,
 ) -> list[dict[str, Any]]:
-    """Compile enabled subagents into SubAgent TypedDicts.
-
-    Args:
-        registry: The subagent registry (built-in + user definitions).
-        enabled_names: Which subagents to include.
-        compiler: The compiler with runtime context (sandbox, tools, etc.).
-        role: The role of the agent the subagents serve; leaves out the ones
-            that role is not listed for. None keeps every enabled subagent.
-
-    Returns:
-        List of SubAgent TypedDicts ready for ``SubAgentMiddleware``.
-    """
-    definitions = registry.get_enabled(enabled_names, role=role)
-    return compiler.compile_many(definitions)
+    """Compile the roster's enabled subagents for ``role`` into SubAgent TypedDicts."""
+    return [compiler.compile(defn) for defn in roster.for_role(role)]
 
 
 __all__ = [

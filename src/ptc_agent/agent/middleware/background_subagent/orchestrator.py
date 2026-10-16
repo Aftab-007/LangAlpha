@@ -36,7 +36,7 @@ class BackgroundSubagentOrchestrator:
     4. Agent calls TaskOutput() to retrieve cached results
 
     Usage:
-        middleware = BackgroundSubagentMiddleware(timeout=60.0)
+        middleware = BackgroundSubagentMiddleware(timeout=60.0, subagent_types=["research"])
         agent = create_deep_agent(
             model=...,
             tools=...,

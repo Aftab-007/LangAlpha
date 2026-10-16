@@ -991,6 +991,16 @@ def create_llm(
     return instance.get_llm(cache_key=cache_key)
 
 
+def platform_key_configured(model_name: str) -> bool:
+    """Whether the deployment holds a key for a catalog model, the one
+    ``create_llm`` reads when no override is passed."""
+    try:
+        LLM(model_name)._resolve_api_key()
+    except MissingProviderKeyError:
+        return False
+    return True
+
+
 def create_llm_from_custom(
     config: dict,
     api_key: str | None = None,

@@ -123,7 +123,6 @@ async def build_ptc_graph(
     conversation_id: str,
     config: AgentConfig,
     session_provider: SessionProvider,
-    subagent_names: list[str] | None = None,
     sandbox_id: str | None = None,
     operation_callback: Any | None = None,
     checkpointer: Any | None = None,
@@ -155,7 +154,6 @@ async def build_ptc_graph(
     inner_agent = ptc_agent.create_agent(
         sandbox=session.sandbox,
         mcp_registry=session.mcp_registry,
-        subagent_names=subagent_names or config.subagents.enabled,
         operation_callback=operation_callback,
         checkpointer=checkpointer,
         background_registry=background_registry,
@@ -171,8 +169,7 @@ async def build_ptc_graph(
     )
 
     logger.debug(
-        f"Created PTC agent for {conversation_id} with "
-        f"subagents: {subagent_names or config.subagents.enabled} "
+        f"Created PTC agent for {conversation_id} "
         f"(checkpointer={'enabled' if checkpointer else 'disabled'})"
     )
 
@@ -182,7 +179,6 @@ async def build_ptc_graph(
 async def build_ptc_graph_with_session(
     session: Session,
     config: AgentConfig,
-    subagent_names: list[str] | None = None,
     operation_callback: Any | None = None,
     checkpointer: Any | None = None,
     background_registry: Any | None = None,
@@ -265,7 +261,6 @@ async def build_ptc_graph_with_session(
     inner_agent = ptc_agent.create_agent(
         sandbox=session.sandbox,
         mcp_registry=mcp_registry,
-        subagent_names=subagent_names or config.subagents.enabled,
         disable_subagents=disable_subagents,
         operation_callback=operation_callback,
         checkpointer=checkpointer,
@@ -297,8 +292,7 @@ async def build_ptc_graph_with_session(
     )
 
     logger.debug(
-        f"Created PTC agent for workspace {workspace_id} with "
-        f"subagents: {subagent_names or config.subagents.enabled} "
+        f"Created PTC agent for workspace {workspace_id} "
         f"(checkpointer={'enabled' if checkpointer else 'disabled'})"
     )
 

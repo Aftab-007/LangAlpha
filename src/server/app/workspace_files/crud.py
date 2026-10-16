@@ -1209,15 +1209,26 @@ async def delete_workspace_files(
         # and a probe apiece is a hundred sandbox round trips for one click.
         probe_slot: dict[int, int] = {}
         candidates: list[str] = []
+        undeletable: dict[int, str] = {}
         for index, path in enumerate(body.paths):
             candidate = contained_absolute_path(path, work_dir, previous_dirs)
             if candidate is None or not sandbox.validate_path(candidate):
+                continue
+            # A server-held file is refused for what it is, before the probe:
+            # with the file mount down its link resolves to nothing, and the
+            # file the panel lists would read as not found.
+            virtual = _virtual_file(_to_client_path(sandbox, candidate, work_dir))
+            if virtual:
+                undeletable[index] = virtual.undeletable
                 continue
             probe_slot[index] = len(candidates)
             candidates.append(candidate)
         canonicals = await contained_sandbox_paths(sandbox, candidates, work_dir=work_dir)
 
         for index, path in enumerate(body.paths):
+            if index in undeletable:
+                errors.append({"path": path, "detail": undeletable[index]})
+                continue
             slot = probe_slot.get(index)
             normalized = canonicals[slot] if slot is not None else None
             if normalized is None:
@@ -1226,10 +1237,6 @@ async def delete_workspace_files(
 
             addressed = candidates[slot]
             client_path = _to_client_path(sandbox, addressed, work_dir)
-            virtual = _virtual_file(client_path)
-            if virtual:
-                errors.append({"path": path, "detail": virtual.undeletable})
-                continue
             if _is_system_path(client_path):
                 errors.append({"path": path, "detail": "Cannot delete system files"})
                 continue

@@ -1,17 +1,18 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
-import { Select } from '@/components/ui/select';
 import { usePreferences } from '@/hooks/usePreferences';
 import { useModelProfileWriter } from '@/hooks/useModelProfile';
 import { modelPrefs } from '@/lib/modelPreferences';
+import { Select } from '@/components/ui/select';
+import { CompactSelect, EffortSelect } from './EffortSelect';
 import {
   COMPACTION_PROFILE_ORDER,
   EFFORT_LABELS,
-  EFFORT_ORDER,
   GUIDANCE_LABELS,
   GUIDANCE_LEVELS,
   SPEED_LABELS,
+  hasEffortOptions,
   resolveTuning,
 } from '@/lib/modelTuning';
 import type { GuidanceLevel } from '@/lib/modelTuning';
@@ -34,37 +35,6 @@ function NotSupported({ label }: { label: string }) {
     <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
       {label}
     </span>
-  );
-}
-
-function CellSelect({
-  value,
-  onChange,
-  ariaLabel,
-  defaultLabel,
-  options,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  ariaLabel: string;
-  defaultLabel: string;
-  options: Array<{ value: string; label: string }>;
-}) {
-  return (
-    <Select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label={ariaLabel}
-      className="min-w-30"
-      // className lands on the wrapper, so the compact type has to come through
-      // style — the select itself hardcodes text-sm.
-      style={{ fontSize: '0.75rem', paddingTop: '0.25rem', paddingBottom: '0.25rem' }}
-    >
-      <option value="">{defaultLabel}</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
-    </Select>
   );
 }
 
@@ -199,11 +169,6 @@ export function PerModelMatrix({
                   pinnedGuidance,
                 );
                 const storedEffort = profile.reasoning_effort ?? '';
-                // A stored value the model no longer offers still has to be
-                // selectable, or the row shows a setting with no way to clear it.
-                const orderedEfforts = EFFORT_ORDER.filter(
-                  (lv) => efforts.includes(lv) || lv === storedEffort,
-                );
                 const storedSpeed = profile.fast_mode ?? null;
                 const supportsSpeed = meta?.sdk === 'codex' || storedSpeed !== null;
                 return (
@@ -212,8 +177,8 @@ export function PerModelMatrix({
                       {modelLabel(model, metadata)}
                     </td>
                     <td className="py-2 pl-px pr-3 align-middle">
-                      {orderedEfforts.length > 0 ? (
-                        <CellSelect
+                      {hasEffortOptions(efforts, storedEffort) ? (
+                        <EffortSelect
                           value={storedEffort}
                           onChange={(v) => writeProfile(model, { reasoning_effort: v || null })}
                           ariaLabel={`${model} ${t('settings.modelTuning.colEffort')}`}
@@ -222,14 +187,14 @@ export function PerModelMatrix({
                               ? t(EFFORT_LABELS[inherited.reasoning_effort])
                               : null,
                           )}
-                          options={orderedEfforts.map((lv) => ({ value: lv, label: t(EFFORT_LABELS[lv]) }))}
+                          efforts={efforts}
                         />
                       ) : (
                         <NotSupported label={t('settings.modelTuning.notSupported')} />
                       )}
                     </td>
                     <td className="py-2 pl-px pr-3 align-middle">
-                      <CellSelect
+                      <CompactSelect
                         value={profile.compaction_profile ?? ''}
                         onChange={(v) =>
                           writeProfile(model, { compaction_profile: (v as CompactionProfileName) || null })
@@ -244,7 +209,7 @@ export function PerModelMatrix({
                       />
                     </td>
                     <td className="py-2 pl-px pr-3 align-middle">
-                      <CellSelect
+                      <CompactSelect
                         value={profile.prompt_guidance ?? ''}
                         onChange={(v) => writeProfile(model, { prompt_guidance: (v as GuidanceLevel) || null })}
                         ariaLabel={`${model} ${t('settings.modelTuning.colGuidance')}`}
@@ -254,7 +219,7 @@ export function PerModelMatrix({
                     </td>
                     <td className="py-2 pl-px pr-3 align-middle">
                       {supportsSpeed ? (
-                        <CellSelect
+                        <CompactSelect
                           value={storedSpeed === true ? 'fast' : storedSpeed === false ? 'standard' : ''}
                           onChange={(v) => writeProfile(model, { fast_mode: v === '' ? null : v === 'fast' })}
                           ariaLabel={`${model} ${t('settings.modelTuning.colSpeed')}`}

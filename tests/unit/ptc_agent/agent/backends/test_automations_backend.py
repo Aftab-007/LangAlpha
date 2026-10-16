@@ -682,7 +682,7 @@ class TestFileMount:
         report = await backend.arename_versioned(FILE_PATH, f"{PREFIX}other.json")
 
         assert report == "Renamed morning-brief.json to other.json"
-        file.rename.assert_awaited_once_with(USER, "other.json", conn)
+        file.rename.assert_awaited_once_with(USER, "other.json", conn, CALL)
         assert conn.outcome == "committed"
 
 

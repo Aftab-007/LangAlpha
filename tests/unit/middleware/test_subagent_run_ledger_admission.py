@@ -26,6 +26,9 @@ from ptc_agent.agent.middleware.background_subagent.registry import (
     TransportLostError,
     UsageTake,
 )
+from ptc_agent.agent.middleware.background_subagent.subagent import (
+    _unknown_type_refusal,
+)
 from ptc_agent.agent.middleware.credit_gate import CreditStopError
 from src.server.contracts.status import CREDIT_STOP_ERROR_TYPE
 
@@ -114,7 +117,7 @@ def _middleware(owner, ledger) -> BackgroundSubagentMiddleware:
     registry = BackgroundTaskRegistry(thread_id="")
     registry.run_ledger = ledger
     return BackgroundSubagentMiddleware(
-        registry=registry, enabled=True, namespace_owner=owner
+        registry=registry, enabled=True, subagent_types={"general-purpose"}, namespace_owner=owner
     )
 
 
@@ -397,6 +400,35 @@ async def test_resume_rejected_before_reset_leaves_task_resumable():
     assert task.task_run_id == "run-uuid-prev"  # identity not clobbered
     assert owner.released == [task.task_id]
 
+
+@pytest.mark.asyncio
+async def test_resume_of_a_type_off_the_roster_is_refused_before_admission():
+    """A subagent deleted, renamed or turned off since its task ran. Spawned,
+    the Task tool's refusal came after a reply saying the task resumed, and
+    after an admitted row and a reset that made it the task's latest run."""
+    owner = FakeOwner()
+    ledger = FakeLedger(admit="run-uuid-next")
+    mw = _middleware(owner, ledger)
+    mw.subagent_types = frozenset({"general-purpose"})
+    task = await _register_settled_task(mw)
+    task.subagent_type = "gone-desk"
+    mw._reset_task_for_resume = AsyncMock()
+
+    result = await mw.awrap_tool_call(
+        _request(
+            {"action": "resume", "task_id": task.task_id, "prompt": "more"},
+            tool_call_id="tc-2",
+        ),
+        _ok_handler,
+    )
+
+    assert result.status == "error"
+    assert result.content == _unknown_type_refusal(
+        "gone-desk", sorted(mw.subagent_types), resuming=True
+    )
+    assert ledger.started == [] and owner.acquired == []
+    mw._reset_task_for_resume.assert_not_awaited()
+    assert task.completed and task.task_run_id == "run-uuid-prev"
 
 @pytest.mark.asyncio
 async def test_resume_setup_failure_leaves_the_task_resumable_not_inert():

@@ -94,6 +94,7 @@ export function SkillDocument({
   size = 0,
   loading,
   failed,
+  preview,
 }: {
   path?: string;
   /** Null: the file is not text, or too large to show. */
@@ -101,6 +102,8 @@ export function SkillDocument({
   size?: number;
   loading: boolean;
   failed: boolean;
+  /** What Preview renders in place of the text, which Source keeps exact. */
+  preview?: (body: string) => string;
 }) {
   const { t } = useTranslation();
   const locale = useLocale();
@@ -111,7 +114,7 @@ export function SkillDocument({
   const mode = markdown ? chosenMode : 'source';
 
   const text = content ?? '';
-  const body = splitFrontmatter(text);
+  const body = preview ? preview(splitFrontmatter(text)) : splitFrontmatter(text);
   const headings = readHeadings(body, base);
   const idByLine = new Map(headings.map((h) => [h.line, h.id]));
   const lineCount = text ? text.replace(/\n$/, '').split('\n').length : 0;

@@ -420,6 +420,7 @@
   align-items: start;
 }
 .detail-page-body.is-single { grid-template-columns: minmax(0, 1fr); }
+.detail-page-lead { margin-bottom: 28px; }
 .detail-page-main { min-width: 0; display: flex; flex-direction: column; gap: 32px; }
 .detail-page-aside { display: flex; flex-direction: column; gap: 26px; min-width: 0; }
 .detail-aside-block h3 {
@@ -427,6 +428,21 @@
   font-size: 0.78125rem;
   font-weight: 600;
   color: var(--color-text-primary);
+}
+.detail-aside-block h3.has-side {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.detail-aside-side {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  font-size: 0.71875rem;
+  color: var(--color-text-tertiary);
 }
 .detail-page-verbs {
   display: flex;

@@ -140,4 +140,40 @@ describe('useBulkRunner result', () => {
     expect(text).toHaveTextContent("Couldn't change zed: Plugin not found");
     expect(variant).toBeUndefined();
   });
+
+  it('says what the rows that went took with them, from what each run returned, before a failure', async () => {
+    const gone = new ApiError('Request failed with status code 404', 'ERR_BAD_REQUEST', {
+      data: { detail: 'Plugin not found' },
+      status: 404,
+      statusText: '',
+      headers: {},
+    });
+    const outcome = vi.fn((results: unknown[]) => [
+      `Removed ${(results as number[]).reduce((a, b) => a + b, 0)} subagents.`,
+    ]);
+    const { result } = renderHookWithProviders(() => useBulkRunner(selection(), () => {}));
+    await act(() =>
+      result.current.run(
+        [
+          target('ledger', () => Promise.resolve(2)),
+          target('acme', () => Promise.resolve(3)),
+          target('zed', () => Promise.reject(gone)),
+        ],
+        { verb: 'uninstall', noun: 'plugin', outcome },
+      ),
+    );
+    const [args] = toast.mock.calls.at(-1) as [ToastArgs];
+    render(
+      <div data-testid="toast">
+        <div>{args.title}</div>
+        <div>{args.description}</div>
+      </div>,
+    );
+
+    expect(outcome).toHaveBeenCalledTimes(1);
+    expect([...outcome.mock.calls[0][0]].sort()).toEqual([2, 3]);
+    expect(screen.getByTestId('toast').textContent).toBe(
+      "Uninstalled 2 pluginsRemoved 5 subagents.Couldn't change zed: Plugin not found",
+    );
+  });
 });

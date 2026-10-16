@@ -79,19 +79,19 @@ export function bulkSelectionKey(targetKeys: Iterable<string>): string {
 }
 
 /** One executable unit of a bulk action. */
-export interface BulkTarget {
+export interface BulkTarget<R = unknown> {
   key: string;
   /** What the user calls the row, which the result names it by if it fails. */
   name: string;
-  run: () => Promise<unknown>;
+  run: () => Promise<R>;
 }
 
 /** What a bulk action did, which its result is titled by. */
 export type BulkVerb = 'enable' | 'disable' | 'remove' | 'uninstall' | 'scope';
 /** What a tab's rows are, which the result counts. */
-export type BulkNoun = 'plugin' | 'connector' | 'skill';
+export type BulkNoun = 'plugin' | 'connector' | 'skill' | 'subagent';
 
-export interface BulkRunOptions {
+export interface BulkRunOptions<R = unknown> {
   verb: BulkVerb;
   noun: BulkNoun;
   /**
@@ -101,6 +101,9 @@ export interface BulkRunOptions {
    * and a sign-in that lands lets the next switch through or names the next.
    */
   signIn?: (servers: McpSignInNeeded[]) => void;
+  /** Lines about what the rows that succeeded took with them, from the
+   *  values their runs returned, said before any failure. */
+  outcome?: (results: R[]) => string[];
 }
 
 /** Names a result spells out before it counts the rest. */
@@ -127,13 +130,18 @@ export function useBulkRunner(
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const run = useCallback(
-    async (targets: BulkTarget[], opts: BulkRunOptions) => {
+    async <R>(targets: BulkTarget<R>[], opts: BulkRunOptions<R>) => {
       if (targets.length === 0) return;
       setProgress({ done: 0, total: targets.length });
       try {
-        const result = await runBulk(targets, (target) => target.run(), {
-          onProgress: (done, total) => setProgress({ done, total }),
-        });
+        const results: R[] = [];
+        const result = await runBulk(
+          targets,
+          async (target) => {
+            results.push(await target.run());
+          },
+          { onProgress: (done, total) => setProgress({ done, total }) },
+        );
         // A refused sign-in is a next step, not a fault: it is said apart from
         // the failures, by name, and offered rather than reported.
         const refused = result.failed.flatMap(({ item, error }) => {
@@ -154,7 +162,7 @@ export function useBulkRunner(
         const what = t(`plugins.bulk.noun.${opts.noun}`, {
           count: done ? result.ok.length : targets.length,
         });
-        const lines: string[] = [];
+        const lines: string[] = done && opts.outcome ? opts.outcome(results) : [];
         if (refused.length > 0) {
           lines.push(
             t('plugins.bulk.needSignIn', {

@@ -38,6 +38,10 @@ from src.server.database.plugins import (
     plugin_fan_out_lock,
     stamp_plugin_content_hash,
 )
+from src.server.database.plugin_subagents import (
+    delete_plugin_subagents,
+    list_user_plugin_subagent_names,
+)
 from src.server.database.pool import get_db_connection
 from src.server.database.user_skills import delete_user_skill, list_user_skills
 from src.server.database.user_vault_secrets import get_user_secret_names
@@ -82,6 +86,7 @@ from src.server.services.plugins.skill_fanout import (
     fan_out_skills,
     installs_under_dir,
 )
+from src.server.services.plugins.subagent_fanout import install_subagents
 from src.server.services.plugins.supplied_secrets import (
     bind_placeholders,
     drop_secrets,
@@ -115,6 +120,15 @@ async def _refuse_owned_names(
                 f"MCP server {plan.name!r} is owned by plugin "
                 f"{owner_name!r}; uninstall it first"
             )
+
+    agents = {p.name for p in package.agent_plans if p.skip_code is None}
+    if agents:
+        for row in await list_user_plugin_subagent_names(user_id):
+            if row["name"] in agents:
+                raise ValueError(
+                    f"Subagent {row['name']!r} is owned by plugin "
+                    f"{row['plugin_name']!r}; uninstall it first"
+                )
 
     skills = [p for p in package.skill_plans if p.skip_code is None]
     if not skills:
@@ -412,6 +426,9 @@ async def install_plugin_package(
             user_id, plugin_id, plan.plans, report, checked=checked
         )
         await fan_out_skills(user_id, plugin_id, package.skill_plans, report)
+        await install_subagents(
+            user_id, plugin_id, package.name, package.agent_plans, report
+        )
 
         # Under the lock for the reason update writes its row there: an update
         # landing in between would otherwise have its tree stamped as this one.
@@ -433,7 +450,7 @@ async def install_plugin_package(
     logger.info(
         f"[plugins] install user_id={user_id} name={package.name} "
         f"servers={report.servers_created} skills={report.skills_created} "
-        f"complete={report.landed_whole}"
+        f"subagents={report.subagents_created} complete={report.landed_whole}"
     )
     return plugin_row, report
 
@@ -463,6 +480,7 @@ async def uninstall_plugin(
     dropped_archives: list[str | None] = []
     servers: list[dict[str, Any]] = []
     skills: list[dict[str, Any]] = []
+    subagents: list[str] = []
     async with plugin_fan_out_lock(user_id):
         # Outside the transaction, only to name the fence. The authoritative
         # enumeration is the one under the row lock below.
@@ -473,7 +491,7 @@ async def uninstall_plugin(
             async with get_db_connection() as conn:
                 async with conn.transaction():
                     if await lock_plugin_row(user_id, plugin_id, conn=conn) is None:
-                        return UninstalledComponents(servers=[], skills=[])
+                        return UninstalledComponents(servers=[], skills=[], subagents=[])
                     servers = await list_plugin_server_names(
                         user_id, plugin_id, conn=conn
                     )
@@ -495,6 +513,11 @@ async def uninstall_plugin(
                         )
                         if row:
                             dropped_archives.append(row.get("archive_key"))
+                    # With the user's changes to them, which name the plugin
+                    # and so would otherwise outlive it.
+                    subagents = await delete_plugin_subagents(
+                        user_id, plugin_id, plugin["name"], conn=conn
+                    )
                     await delete_plugin_row(user_id, plugin_id, conn=conn)
 
     for key in dropped_archives:
@@ -504,9 +527,10 @@ async def uninstall_plugin(
 
     logger.info(
         f"[plugins] uninstall user_id={user_id} name={name} "
-        f"servers={len(servers)} skills={len(skills)}"
+        f"servers={len(servers)} skills={len(skills)} subagents={len(subagents)}"
     )
     return UninstalledComponents(
         servers=[s["name"] for s in servers],
         skills=[s["name"] for s in skills],
+        subagents=subagents,
     )

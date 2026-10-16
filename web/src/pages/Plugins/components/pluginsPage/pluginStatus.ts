@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next';
 import { serverKeyRefs } from '@/hooks/useSecretUsage';
-import type { CatalogServer, MarketplaceEntry, PluginInfo } from '@/pages/ChatAgent/utils/api';
+import type { CatalogServer, MarketplaceEntry, PluginInfo, SubagentView } from '@/pages/ChatAgent/utils/api';
 import {
   connectorState,
   pluginConnectors,
@@ -138,14 +138,17 @@ export function statusLine(
 /**
  * What an uninstall removes and what outlives it, one sentence each, worded
  * alike before (the page's note) and after (the toast). Only what is there
- * is said: an empty count is left out, and the keys sentence names stored
- * keys the plugin's connectors read, which uninstall leaves in Secrets.
- * Edited parts survive too, but they no longer say which plugin they came
- * from, so neither side can name them and neither claims any.
+ * is said: an empty count is left out, the user's changes to its subagents
+ * (which go with them) only when there are some, and the keys sentence names
+ * stored keys the plugin's connectors read, which uninstall leaves in
+ * Secrets. A connector or skill the user customized survives, but it no
+ * longer says which plugin it came from, so neither side can name it and
+ * neither claims any. `plugins` is how many go at once (Select mode), which
+ * only the subagent sentence's "its" or "their" depends on.
  */
 export function uninstallLines(
   t: TFunction,
-  removed: { connectors: number; skills: number },
+  removed: { connectors: number; skills: number; subagents: number; changedSubagents: number; plugins?: number },
   keptKeys: readonly string[],
   when: 'before' | 'after',
 ): string[] {
@@ -153,32 +156,88 @@ export function uninstallLines(
   const parts = [
     removed.connectors > 0 ? t('plugins.pluginsPage.connectorCount', { count: removed.connectors }) : null,
     removed.skills > 0 ? t('plugins.card.skillCount', { count: removed.skills }) : null,
+    removed.subagents > 0 ? t('plugins.card.subagentCount', { count: removed.subagents }) : null,
   ].filter((p): p is string => p !== null);
   if (parts.length > 0) {
-    const what = parts.length === 2 ? t('plugins.card.partsAnd', { connectors: parts[0], skills: parts[1] }) : parts[0];
+    // "2 connectors, 1 skill and 3 subagents": a list, then "and" before the last.
+    const last = parts[parts.length - 1];
+    const what =
+      parts.length === 1
+        ? last
+        : t('plugins.card.partsAnd', {
+            connectors: parts.slice(0, -1).reduce((a, b) => t('plugins.card.componentCount', { servers: a, skills: b })),
+            skills: last,
+          });
     lines.push(
       when === 'before'
         ? t('plugins.pluginsPage.uninstallNote', { what })
         : t('plugins.card.uninstalledRemoved', { what }),
     );
   }
+  if (removed.subagents > 0 && removed.changedSubagents > 0) {
+    lines.push(t(subagentChangesKey(when, (removed.plugins ?? 1) > 1)));
+  }
   if (keptKeys.length === 1) lines.push(t('plugins.pluginsPage.keyStays', { key: keptKeys[0] }));
   else if (keptKeys.length > 1) lines.push(t('plugins.pluginsPage.keysStay', { n: keptKeys.length }));
   return lines;
 }
 
-/** "7 connectors", "20 skills", "4 connectors, 2 skills". */
+/**
+ * The plugin's subagents the user has changed. While it is on, as the
+ * Subagents list reads them, the fresher read since the agent edits them
+ * mid-thread; none when the list has not been read, so no sentence claims
+ * any. A switched-off plugin's subagents leave that list, as does one a
+ * deployment subagent of the same name shadows, but uninstall still deletes
+ * the user's changes to them, so its components say which.
+ */
+export function changedSubagents(plugin: PluginInfo, views: readonly SubagentView[] | undefined): number {
+  const owned = plugin.components.filter((c) => c.kind === 'subagent');
+  if (!plugin.enabled) return owned.filter((c) => c.edited).length;
+  if (!views) return 0;
+  const listed = views.filter((v) => v.source === 'plugin' && v.plugin.name === plugin.name);
+  const unlisted = owned.filter((c) => c.edited && !listed.some((v) => v.name === c.name));
+  return listed.filter((v) => v.edited).length + unlisted.length;
+}
+
+/**
+ * Select mode's uninstall confirm. The bar has room for a question, not the
+ * page's counts, so it names the kinds that go, subagents only when one of
+ * the plugins carries any, and the user's changes to them only when there
+ * are some, as the single uninstall says it.
+ */
+export function bulkUninstallConfirm(
+  t: TFunction,
+  plugins: readonly PluginInfo[],
+  views: readonly SubagentView[] | undefined,
+): string {
+  const count = plugins.length;
+  const carries = plugins.some((p) => p.components.some((c) => c.kind === 'subagent'));
+  if (!carries) return t('plugins.bulk.confirmUninstall', { count });
+  const changed = plugins.reduce((sum, p) => sum + changedSubagents(p, views), 0);
+  const ask = t('plugins.bulk.confirmUninstallSubagents', { count });
+  if (changed === 0) return ask;
+  return `${ask} ${t(subagentChangesKey('before', count > 1))}`;
+}
+
+/** That the user's changes to the subagents go with them, before or after
+ *  the uninstall, of one plugin or several. */
+function subagentChangesKey(when: 'before' | 'after', many: boolean): string {
+  if (when === 'before') return many ? 'plugins.bulk.subagentChangesGo' : 'plugins.pluginsPage.subagentChangesGo';
+  return many ? 'plugins.bulk.subagentChangesGone' : 'plugins.card.subagentChangesGone';
+}
+
+/** "7 connectors", "20 skills", "4 connectors, 2 skills", "1 skill, 2 subagents". */
 export function partsLabel(t: TFunction, plugin: PluginInfo): string {
   const servers = plugin.components.filter((c) => c.kind === 'mcp').length;
   const skills = plugin.components.filter((c) => c.kind === 'skill').length;
-  const connectorText = t('plugins.pluginsPage.connectorCount', { count: servers });
-  const skillText = t('plugins.card.skillCount', { count: skills });
-  if (servers > 0 && skills > 0) {
-    return t('plugins.card.componentCount', { servers: connectorText, skills: skillText });
-  }
-  if (servers > 0) return connectorText;
-  if (skills > 0) return skillText;
-  return t('plugins.pluginsPage.empty');
+  const subagents = plugin.components.filter((c) => c.kind === 'subagent').length;
+  const parts = [
+    servers > 0 ? t('plugins.pluginsPage.connectorCount', { count: servers }) : null,
+    skills > 0 ? t('plugins.card.skillCount', { count: skills }) : null,
+    subagents > 0 ? t('plugins.card.subagentCount', { count: subagents }) : null,
+  ].filter((part): part is string => part !== null);
+  if (parts.length === 0) return t('plugins.pluginsPage.empty');
+  return parts.reduce((servers, skills) => t('plugins.card.componentCount', { servers, skills }));
 }
 
 export type PluginOrigin = 'builtIn' | 'catalog' | 'git' | 'uploaded';

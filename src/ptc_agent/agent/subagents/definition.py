@@ -13,6 +13,7 @@ from typing import Any, Literal
 from ptc_agent.agent.roles import ALL_ROLES, AgentRole
 
 SubagentMode = Literal["ptc", "flash"]
+BrokerageAccess = Literal["off", "on"]
 
 
 @dataclass
@@ -52,14 +53,18 @@ class SubagentDefinition:
 
     # ── Skills ────────────────────────────────────────────────────────
     skills: list[str] = field(default_factory=list)
-    """Skill names from SKILL_REGISTRY, loaded at runtime via SkillsMiddleware."""
+    """Skill names from SKILL_REGISTRY whose tools the subagent binds."""
 
     preload_skills: list[str] = field(default_factory=list)
-    """Skill names whose SKILL.md content is injected into the prompt at compile time."""
+    """Skill names whose SKILL.md is put into the prompt. Binds no tools."""
 
     # ── Model ─────────────────────────────────────────────────────────
     model: str | None = None
     """Model override.  ``None`` = use the parent agent's model."""
+
+    reasoning_effort: str | None = None
+    """Effort the subagent runs at, whatever its model. ``None`` = the model's
+    saved effort when a model is pinned, else the turn's."""
 
     # ── Tools ─────────────────────────────────────────────────────────
     tools: list[str] = field(default_factory=list)
@@ -68,9 +73,30 @@ class SubagentDefinition:
     extra_tools: list[Any] = field(default_factory=list)
     """Additional raw tool objects injected at runtime (not serialisable to YAML)."""
 
-    # ── Execution limits ──────────────────────────────────────────────
-    max_iterations: int = 15
-    """Maximum tool-call iterations before the subagent stops."""
+    search_provider: str | None = None
+    """Search provider for this subagent's ``web_search``. ``None`` = the turn's."""
+
+    search_depth: str | None = None
+    """Search depth level for that provider. ``None`` = the turn's."""
+
+    tools_narrowed: bool = False
+    """Whether the user's settings leave out a tool its instructions were
+    written for. Its prompt then says a tool it names may be missing, since
+    the built-in role prompts and tool guide name tools by name."""
+
+    # ── Access ────────────────────────────────────────────────────────
+    connectors: bool = True
+    """Whether its code may call connectors other than brokerage connections."""
+
+    brokerages: BrokerageAccess = "on"
+    """Brokerage connections: none, or general access."""
+
+    memory: bool = False
+    """Whether it gets the user's memory indices and the rules for reading them.
+    Read only: anything worth saving comes back in its result."""
+
+    preferred_connectors: list[str] = field(default_factory=list)
+    """Servers its tool guide lists first. They never limit what it can call."""
 
     # ── Template section toggles ──────────────────────────────────────
     sections: dict[str, bool] = field(default_factory=dict)
@@ -94,4 +120,5 @@ class SubagentDefinition:
 
     # ── Source tracking ───────────────────────────────────────────────
     source: str = "builtin"
-    """``"builtin"`` or ``"user"`` — for logging / debugging."""
+    """``"builtin"``, ``"user"`` (deployment YAML), ``"plugin"`` (a plugin's
+    ``agents/`` file) or ``"custom"`` (a user's own row)."""

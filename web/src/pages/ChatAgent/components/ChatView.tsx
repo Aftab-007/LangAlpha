@@ -19,6 +19,7 @@ import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { FLASH_ROUTE_STATE } from '@/hooks/useFlashWorkspace';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
+import { invalidateSubagents } from '@/hooks/useSubagents';
 import { useLocale } from '@/hooks/useLocale';
 import { onboardingKickoff } from '@/pages/Onboarding/connect/kickoff';
 import { cardDownloadKey, trackPending } from '../utils/downloadNotice';
@@ -35,7 +36,7 @@ import { saveChatSession, getChatSession, clearChatSession } from '../hooks/util
 import type { PreviewData } from '../hooks/utils/types';
 import { useCardState } from '../hooks/useCardState';
 import { useWorkspace } from '@/hooks/useWorkspace';
-import { classifyAgentPath } from '../utils/agentPaths';
+import { classifyAgentPath, isSubagentFilePath } from '../utils/agentPaths';
 import { fileArtifactPath } from '../utils/fileArtifact';
 import type { FileOperationArtifactPayload } from '@/types/api';
 import { taskIdFromAgentId } from '../utils/agentId';
@@ -274,6 +275,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       // server writes on save, and the turn may write several.
       profileWrittenRef.current = true;
     }
+    // The Subagents pane is a page away, so this only marks its list stale
+    // for the way back.
+    if (isSubagentFilePath(filePath)) invalidateSubagents(queryClient);
   }, [refreshOwnFiles, queryClient, isFlashMode, workspaceId, effectiveFileWorkspaceId]);
 
   // Stable ref-based callback for opening preview URLs from SSE events.
@@ -1257,19 +1261,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     }
   }, [location.state, workspaceId, threadId, isLoading, isLoadingHistory, handleSendMessage, navigate, location.pathname, isActive, subagentsToSend]);
 
-  // Re-seed the widget context deck from navigation state when there's no
+  // Re-seed the composer from navigation state when there's no
   // initialMessage (the auto-send branch above already consumes them inline).
   // Used by the ContextOverflowPill click handoff: dashboard → /chat with
-  // queued widget cards but no auto-send.
-  const widgetSnapshotReseedRef = useRef(false);
+  // queued widget cards but no auto-send. And by Plugins → Subagents' "Create
+  // with the agent", which hands it a sentence to finish rather than send.
+  const composerReseedRef = useRef(false);
   useEffect(() => {
-    if (widgetSnapshotReseedRef.current) return;
+    if (composerReseedRef.current) return;
     const navState = location.state as LocationState | null;
     const snaps = navState?.widgetSnapshots;
-    if (!snaps?.length || navState?.initialMessage) return;
-    widgetSnapshotReseedRef.current = true;
-    snaps.forEach((s) => chatInputRef.current?.addWidgetSnapshot(s));
-    navigate(location.pathname, { replace: true, state: { ...navState, widgetSnapshots: undefined } });
+    const draft = navState?.draftMessage;
+    if ((!snaps?.length && !draft) || navState?.initialMessage) return;
+    composerReseedRef.current = true;
+    snaps?.forEach((s) => chatInputRef.current?.addWidgetSnapshot(s));
+    if (draft) chatInputRef.current?.setValue(draft);
+    navigate(location.pathname, { replace: true, state: { ...navState, widgetSnapshots: undefined, draftMessage: undefined } });
   }, [location.state, location.pathname, navigate]);
 
 

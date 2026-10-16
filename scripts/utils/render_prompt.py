@@ -41,6 +41,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from ptc_agent.agent.context_stack import SubagentContext
+from ptc_agent.agent.middleware.runtime_context import BaselineSources, MemoryTierSource
 from ptc_agent.agent.prompts import (
     format_current_time,
     format_subagent_summary,
@@ -245,6 +247,27 @@ def resolve_guidance(args: argparse.Namespace) -> str:
     return args.guidance
 
 
+def _preview_subagent_context(args: argparse.Namespace) -> SubagentContext:
+    """A subagent context that reads nothing: its memory tier only tells the
+    compiler memory is there, for a subagent whose switch is on."""
+    return SubagentContext(
+        sources=BaselineSources(
+            store=object(),
+            memory={
+                "user": MemoryTierSource(
+                    namespace_factory=tuple,
+                    display_path=".agents/user/memory/memory.md",
+                )
+            },
+        ),
+        scratchpad=(
+            f"{DEFAULT_SANDBOX_ROOT}/.agents/scratchpad/{args.thread_id[:8]}/"
+            if args.scratchpad
+            else None
+        ),
+    )
+
+
 def render(args: argparse.Namespace) -> str:
     """Render the prompt based on CLI args."""
     now = datetime.now(tz=UTC)
@@ -288,6 +311,7 @@ def render(args: argparse.Namespace) -> str:
             tool_sets=stub_tool_sets,
             user_profile=user_profile,
             config=_PreviewConfig(guidance_vars["guidance"]),
+            context=_preview_subagent_context(args),
         )
         result = compiler.compile(defn)
         return result["system_prompt"]

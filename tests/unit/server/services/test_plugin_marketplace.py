@@ -9,6 +9,7 @@ repository, on the first request only.
 """
 
 import base64
+import hashlib
 import json
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock
@@ -28,7 +29,11 @@ from src.server.services.plugins.marketplace import (
     load_marketplace,
     parse_catalog,
 )
-from src.server.services.plugins.package import validate_package
+from src.server.services.plugins.package import (
+    _tree_hash,
+    select_plugin_files,
+    validate_package,
+)
 from src.server.services.plugins.source import (
     resolve_update_source,
     resolve_url_source,
@@ -308,6 +313,103 @@ class TestInstalledPlugin:
 
         assert (package.name, package.synthesized) == ("notes", True)
         assert {p.dir for p in package.skill_plans} == {"dcf", "comps"}
+        assert result.hashes["notes"] == package.content_hash
+
+
+_WIND = {
+    "plugin.json": b'{"name": "wind"}',
+    "skills/brief/SKILL.md": b"---\nname: brief\n---\nBody.\n",
+}
+_SCREENER = {"agents/screener.md": b"---\ndescription: Screens.\n---\nBody.\n"}
+# What a build before plugin subagents hashed these trees to.
+_WIND_EARLIER = "ef49b173355e5c95acf2cbab75f1befc2fdf9abd73f7a8ba1b450f8d8f35b34f"
+_WIND_SCREENER_EARLIER = "f7e47f539ce392b77e1ba4f6c375928cfff7482103ea32a51053e5e8e84a7ce6"
+
+
+def _earlier_hash(files):
+    """The tree hash as a build before plugin subagents took it, which is
+    what an install by it stored on the row."""
+    digest = hashlib.sha256()
+    for path in sorted(files):
+        digest.update(path.encode() + b"\x00" + len(files[path]).to_bytes(8, "big"))
+        digest.update(files[path])
+    return digest.hexdigest()
+
+
+class TestAgentsReadMark:
+    @pytest.mark.parametrize(
+        ("tree", "earlier"),
+        [
+            pytest.param(_WIND, _WIND_EARLIER, id="no-agents"),
+            # Files under agents/ that no subagent is read from.
+            pytest.param(
+                {
+                    **_WIND,
+                    "agents/README.txt": b"Notes.\n",
+                    "agents/team/lead.md": b"---\ndescription: Nested.\n---\n",
+                },
+                "160c7afb75561eea2d0ce8e716a8b33e2529c56c647664141ee1e631eaa3067e",
+                id="no-subagent-files",
+            ),
+        ],
+    )
+    def test_a_tree_without_a_subagent_hashes_as_before(self, tree, earlier):
+        assert _tree_hash(tree) == earlier
+
+    def test_a_tree_with_a_subagent_hashes_apart_from_its_earlier_reading(self):
+        tree = {**_WIND, **_SCREENER}
+
+        assert _earlier_hash(tree) == _WIND_SCREENER_EARLIER
+        assert _tree_hash(tree) != _WIND_SCREENER_EARLIER
+
+    @pytest.mark.parametrize(
+        ("folder", "behind"),
+        [
+            pytest.param({**_WIND, **_SCREENER}, True, id="agents"),
+            pytest.param(_WIND, False, id="no-agents"),
+        ],
+    )
+    def test_an_earlier_install_of_a_tree_with_subagents_reads_as_out_of_date(
+        self, folder, behind
+    ):
+        files = {
+            "marketplace.json": json.dumps(
+                {"plugins": [{"name": "wind", "source": "./plugins/wind"}]}
+            ).encode(),
+            **{f"plugins/wind/{path}": content for path, content in folder.items()},
+        }
+        result = parse_catalog(HOME, files, None)
+        url = result.entries[0].source_url
+        # Install reads the folder as the listing does, plugin.json adapted.
+        earlier = _earlier_hash(select_plugin_files(folder, name_hint="wind").files)
+        installed_now = validate_package(
+            zip_package(files), subdir="plugins/wind", name_hint="wind"
+        ).content_hash
+
+        def update_available(content_hash):
+            return installed_from(result, [_row("wind", url, content_hash)])[
+                "wind"
+            ].update_available
+
+        assert update_available(earlier) is behind
+        # What this build's install records is what the listing compares
+        # with, so the Update it offers clears once taken.
+        assert update_available(installed_now) is False
+
+    def test_a_folder_of_skills_and_subagents_hashes_as_install_reads_it(self):
+        files = {
+            "marketplace.json": json.dumps(
+                {"plugins": [{"name": "notes", "source": "./plugins/notes"}]}
+            ).encode(),
+            "plugins/notes/dcf/SKILL.md": b"---\nname: dcf\n---\nBody.\n",
+            **{f"plugins/notes/{path}": content for path, content in _SCREENER.items()},
+        }
+        result = parse_catalog(HOME, files, None)
+        package = validate_package(
+            zip_package(files), subdir="plugins/notes", name_hint="notes"
+        )
+
+        assert package.synthesized and [p.name for p in package.agent_plans] == ["screener"]
         assert result.hashes["notes"] == package.content_hash
 
 

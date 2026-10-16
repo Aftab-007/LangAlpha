@@ -2,19 +2,26 @@
 
 Everything a fatal problem could refuse is decided here, before the first
 write — a bad manifest or an ``ai.langalpha`` extension error never reaches
-the database. What survives is a ``ValidatedPackage``: the entry and skill
-plans the fan-outs consume, plus the tree hash the update path diffs against.
+the database. What survives is a ``ValidatedPackage``: the entry, skill and
+subagent plans the fan-outs consume, plus the tree hash the update path diffs
+against.
 """
 
 import hashlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from functools import wraps
 from typing import Any
 
 from src.server.database.user_vault_secrets import get_user_secret_names
 from src.server.models.plugin import Diagnostic
+from src.server.services.plugins.agents import (
+    AgentPlan,
+    collect_agents,
+    is_agent_file,
+)
 from src.server.services.plugins.archive import extract_plugin_archive
 from src.server.services.plugins.bare_skills import wrap_skill_tree
 from src.server.services.plugins.discover import (
@@ -50,7 +57,7 @@ from ptc_agent.core.mcp_sanitize import (
 
 logger = logging.getLogger(__name__)
 
-_MODELED_ROOTS = ("plugin.json", "mcp.json", "skills")
+_MODELED_ROOTS = ("plugin.json", "mcp.json", "skills", "agents")
 
 # Every copy of a mark rides in the stored manifest, which every listing reads,
 # so the copies are capped together as well as one by one: a manifest naming
@@ -182,6 +189,7 @@ class ValidatedPackage:
     # so its name is a guess from where the package came from rather than a
     # claim the package makes.
     synthesized: bool = False
+    agent_plans: list[AgentPlan] = dataclass_field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -205,6 +213,9 @@ class ValidatedPackage:
         return str(version) if version is not None else None
 
 
+_AGENTS_READ_MARK = b"\x00read:agents/1\x00"
+
+
 def _tree_hash(files: dict[str, bytes]) -> str:
     """Deterministic identity of the selected, adapted subtree.
 
@@ -213,6 +224,12 @@ def _tree_hash(files: dict[str, bytes]) -> str:
     commit (and on every gzip-timestamp wobble of the same ref).
     """
     digest = hashlib.sha256()
+    # An install by a build that predates plugin subagents stored the hash of
+    # a reading that dropped agents/, over these same bytes. The mark makes
+    # that install read as out of date, so Update lands its subagents. It
+    # opens with a NUL, which no member path holds, so no file can pose as it.
+    if any(is_agent_file(path) for path in files):
+        digest.update(_AGENTS_READ_MARK)
     for path in sorted(files):
         content = files[path]
         digest.update(path.encode("utf-8"))
@@ -353,8 +370,8 @@ def _report_empty(
             scope="plugin",
             code="no_components",
             message=(
-                "this package declares no MCP servers and carries no skills, "
-                f"so installing it adds nothing you can run.{held}"
+                "this package declares no MCP servers and carries no skills "
+                f"or subagents, so installing it adds nothing you can run.{held}"
             ),
             spec_ref=SPEC_URL,
         )
@@ -400,8 +417,8 @@ def select_plugin_files(
     does. Raises PluginFatal or PluginAmbiguous, as validate_package does.
 
     The folder ``subdir`` names is read as an archive of its own: the plugin
-    at it, else the one plugin below it, else its skills wrapped in a
-    synthesized manifest named after ``name_hint`` (the folder or repository
+    at it, else the one plugin below it, else its skills and a top-level
+    ``agents/`` folder wrapped in a synthesized manifest named after ``name_hint`` (the folder or repository
     it came from). A folder with a manifest anywhere in it is never read as
     skills. The Discover listing reads an in-repo entry by passing its folder
     as the tree, so what it shows is what install takes; it catches around
@@ -435,13 +452,14 @@ def select_plugin_files(
             raise PluginFatal(
                 f"no plugin found {where} (looked for plugin.json, the "
                 ".claude-plugin/.codex-plugin/.cursor-plugin manifest layouts "
-                "and folders holding a SKILL.md, at every level)",
+                "and folders holding a SKILL.md, at every level, and an agents/ "
+                "folder at the top)",
                 diagnostics=[
                     Diagnostic(
                         level="error",
                         scope="plugin",
                         code="missing_manifest",
-                        message=f"no plugin manifest and no SKILL.md {where}",
+                        message=f"no plugin manifest, SKILL.md or agents/ folder {where}",
                     )
                 ],
             )
@@ -508,6 +526,8 @@ def validate_package(
 
     skill_plans, skill_diags = collect_skills(files)
     diagnostics.extend(skill_diags)
+    agent_plans, agent_diags = collect_agents(files)
+    diagnostics.extend(agent_diags)
 
     dropped = sorted(
         {
@@ -516,7 +536,7 @@ def validate_package(
             if path.split("/", 1)[0] not in _MODELED_ROOTS
         }
     )
-    if not entry_plans and not skill_plans:
+    if not entry_plans and not skill_plans and not agent_plans:
         _report_empty(tree, plugin.root, subdir, dropped, diagnostics)
     return ValidatedPackage(
         manifest=plugin.manifest,
@@ -533,6 +553,7 @@ def validate_package(
         dropped_files=dropped,
         content_hash=plugin.content_hash,
         synthesized=plugin.synthesized,
+        agent_plans=agent_plans,
     )
 
 

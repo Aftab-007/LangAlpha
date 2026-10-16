@@ -87,7 +87,7 @@ def ptc_stacks() -> tuple[list, list]:
             return_value=llm,
         ),
         patch("ptc_agent.agent.agent.create_agent", side_effect=_fake_graph(main)),
-        patch("ptc_agent.agent.agent.SubAgentMiddleware", side_effect=spy),
+        patch("ptc_agent.agent.subagents.assembly.SubAgentMiddleware", side_effect=spy),
     ):
         PTCAgent(_config()).create_agent(
             llm=llm, thread_id="t-1", sandbox=MagicMock(), mcp_registry=MagicMock()

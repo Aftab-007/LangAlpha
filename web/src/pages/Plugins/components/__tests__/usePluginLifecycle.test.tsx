@@ -1,21 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
-import { renderWithProviders } from '@/test/utils';
+import type { ReactNode } from 'react';
+import { createTestQueryClient, renderWithProviders } from '@/test/utils';
+import { queryKeys } from '@/lib/queryKeys';
 import { ApiError } from '@/api/client';
 import { toast } from '@/components/ui/use-toast';
 import { getMarketplace, type MarketplaceResponse } from '@/pages/ChatAgent/utils/api/marketplace';
 import {
+  deletePlugin,
   updatePlugin,
   type PluginInfo,
   type PluginInstallResponse,
 } from '@/pages/ChatAgent/utils/api/plugins';
+import type { SubagentView, SubagentsResponse } from '@/pages/ChatAgent/utils/api/subagents';
 import { usePluginLifecycle } from '../pluginsPage/usePluginLifecycle';
 
 vi.mock('@/pages/ChatAgent/utils/api/plugins', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/pages/ChatAgent/utils/api/plugins')>()),
   updatePlugin: vi.fn(),
+  deletePlugin: vi.fn(),
 }));
 
 vi.mock('@/pages/ChatAgent/utils/api/marketplace', async (importOriginal) => ({
@@ -97,6 +102,7 @@ function catalogListing(sourceUrl: string, updateAvailable: boolean): Marketplac
 
 beforeEach(() => {
   vi.mocked(updatePlugin).mockReset();
+  vi.mocked(deletePlugin).mockReset();
   vi.mocked(toast).mockReset();
   vi.mocked(getMarketplace).mockReset();
   vi.mocked(getMarketplace).mockResolvedValue({ ...catalogListing('', false), entries: [] });
@@ -173,5 +179,42 @@ describe('usePluginLifecycle: an update', () => {
 
     await waitFor(() => expect(updatePlugin).toHaveBeenCalledWith('acme', null, null));
     expect(screen.queryByText('newer in the catalog')).not.toBeInTheDocument();
+  });
+});
+
+describe('usePluginLifecycle: an uninstall', () => {
+  function UninstallHarness() {
+    const lifecycle = usePluginLifecycle(plugin);
+    return (
+      <button type="button" onClick={() => void lifecycle.uninstall()}>
+        Uninstall acme
+      </button>
+    );
+  }
+
+  // The toast counts the subagents the server removed, and says the user's
+  // changes to them went too, read from the list as it stood before.
+  it('says the subagents it removed and the changes that went with them', async () => {
+    const user = userEvent.setup();
+    // The page keeps the list observed; here nothing does, so keep it cached.
+    const queryClient = createTestQueryClient();
+    queryClient.setDefaultOptions({ queries: { retry: false, gcTime: Infinity } });
+    const edited = { name: 'screener', edited: true, source: 'plugin', plugin: { name: 'acme', display_name: 'Acme' } };
+    queryClient.setQueryData(queryKeys.subagents.list(), {
+      subagents: [edited as SubagentView],
+    } as SubagentsResponse);
+    vi.mocked(deletePlugin).mockResolvedValue({
+      ok: true,
+      deleted: { servers: ['acme'], skills: [], subagents: ['screener', 'writer'] },
+    });
+    renderWithProviders(<UninstallHarness />, { queryClient });
+
+    await user.click(screen.getByRole('button', { name: 'Uninstall acme' }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledTimes(1));
+    const { description } = vi.mocked(toast).mock.calls[0][0] as { description: ReactNode };
+    render(<>{description}</>);
+    expect(screen.getByText('Removed 1 connector and 2 subagents.')).toBeInTheDocument();
+    expect(screen.getByText('Your changes to its subagents were removed too.')).toBeInTheDocument();
   });
 });

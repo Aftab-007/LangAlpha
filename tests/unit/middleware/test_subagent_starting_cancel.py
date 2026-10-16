@@ -215,7 +215,7 @@ def _pipeline_harness(order: list[str]):
     )
     owner = SimpleNamespace(release_task_ns=AsyncMock(side_effect=_step("release")))
     middleware = BackgroundSubagentMiddleware(
-        registry=registry, enabled=True, namespace_owner=owner
+        registry=registry, enabled=True, subagent_types={"general-purpose"}, namespace_owner=owner
     )
     task = BackgroundTask(
         tool_call_id="tc-1",

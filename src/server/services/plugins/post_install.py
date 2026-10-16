@@ -56,6 +56,7 @@ from src.server.services.plugins.grants import (
 from src.server.services.plugins.manifest import manifest_extension
 from src.server.services.plugins.mcp import McpEntryPlan, validate_mcp_document
 from src.server.services.plugins.server_fanout import fan_out_servers
+from src.server.services.plugins.subagent_fanout import relink_subagents
 from src.server.services.plugins.supplied_secrets import (
     validate_supplied,
     write_supplied,
@@ -220,6 +221,7 @@ async def apply_sse_upgrades(
         await fan_out_servers(
             user_id, plugin["user_plugin_id"], consented, report, checked=checked
         )
+        await relink_subagents(user_id, plugin["user_plugin_id"], plugin["name"])
     disclose_vaulted_literals(report)
     await after_secrets_changed(user_id, report.secrets_created)
     logger.info(

@@ -111,7 +111,7 @@ def _scratchpad_build(machine) -> tuple[dict, list]:
 
     with (
         patch.object(AgentConfig, "feature_enabled", lambda self, k: k == "scratchpad"),
-        patch("ptc_agent.agent.agent.SubAgentMiddleware", side_effect=spy),
+        patch("ptc_agent.agent.subagents.assembly.SubAgentMiddleware", side_effect=spy),
     ):
         built = _build(**machine)
     return built, handed
@@ -173,7 +173,7 @@ def test_the_window_trims_the_main_agent_only(machine):
         return real(*args, **kwargs)
 
     coverage = AsyncMock(return_value=True)
-    with patch("ptc_agent.agent.agent.SubAgentMiddleware", side_effect=spy):
+    with patch("ptc_agent.agent.subagents.assembly.SubAgentMiddleware", side_effect=spy):
         built = _build(subagent_switch=AsyncMock(), window_coverage=coverage, **machine)
     (main,), (sub,) = _compactions(built, handed)
     assert main._coverage is coverage

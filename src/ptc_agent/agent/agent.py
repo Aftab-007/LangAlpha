@@ -18,7 +18,6 @@ from langchain.agents import create_agent
 from ptc_agent.agent.backends import SandboxBackend
 from ptc_agent.core.paths import SandboxLayout, WorkspaceLayout
 from ptc_agent.core.project_context import ProjectContext
-from ptc_agent.agent.middleware import SubAgentMiddleware
 from ptc_agent.agent.limits import UNBOUNDED_RECURSION_LIMIT
 from ptc_agent.agent.main_state import MainAgentState
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
@@ -78,6 +77,7 @@ from ptc_agent.agent.roles import AgentRole
 from ptc_agent.agent.filesystem_routes import (
     build_filesystem_backend,
     resolve_identity_gates,
+    subagent_backend,
 )
 from ptc_agent.agent.middleware.background_subagent.workflow.prebuilt import (
     get_prebuilt_workflows,
@@ -96,6 +96,7 @@ from ptc_agent.agent.middleware.background_subagent.registry import (
 )
 from ptc_agent.agent.middleware.skills.discovery import SkillMetadata
 from ptc_agent.agent.middleware.skills.registry import (
+    SUBAGENT_WITHHELD_SKILLS,
     build_effective_skill_registry,
 )
 from ptc_agent.agent.prompts import (
@@ -106,11 +107,7 @@ from ptc_agent.agent.prompts import (
     guidance_template_vars,
     workspace_path_vars,
 )
-from ptc_agent.agent.subagents import (
-    SubagentCompiler,
-    SubagentRegistry,
-    create_subagents,
-)
+from ptc_agent.agent.subagents.assembly import compile_subagents, task_middleware
 from ptc_agent.agent.tools import (
     create_bash_output_tool,
     create_execute_bash_tool,
@@ -233,7 +230,6 @@ class PTCAgent:
         self,
         sandbox: PTCSandbox,
         mcp_registry: MCPRegistry,
-        subagent_names: list[str] | None = None,
         additional_subagents: list[dict[str, Any]] | None = None,
         background_timeout: float = 300.0,
         checkpointer: Any | None = None,
@@ -371,8 +367,10 @@ class PTCAgent:
         # The folders only the file tools reach, which Bash and code refuse.
         file_tools_only = (SandboxLayout.CHANNELS_DIR,) if gates.channels else ()
 
-        # Create the execute_code tool for MCP invocation
-        execute_code_tool = create_execute_code_tool(
+        # Create the execute_code tool for MCP invocation. The builders are
+        # kept for a subagent limited to some servers, which gets its own.
+        code_tool = partial(
+            create_execute_code_tool,
             backend,
             mcp_registry,
             thread_id=short_thread_id,
@@ -380,14 +378,17 @@ class PTCAgent:
             call_context=call_context,
             file_tools_only=file_tools_only,
         )
+        execute_code_tool = code_tool()
 
         # Create the Bash tool for shell command execution
-        bash_tool = create_execute_bash_tool(
+        shell_tool = partial(
+            create_execute_bash_tool,
             backend,
             thread_id=short_thread_id,
             call_context=call_context,
             file_tools_only=file_tools_only,
         )
+        bash_tool = shell_tool()
         bash_output_tool = create_bash_output_tool(backend, call_context=call_context)
 
         # Create the preview URL tool for sandbox service previews
@@ -416,21 +417,35 @@ class PTCAgent:
             filesystem_backend,
             operation_callback=operation_callback,
         )
+        search_tools = [
+            create_glob_tool(filesystem_backend),  # overrides middleware glob
+            create_grep_tool(filesystem_backend),  # overrides middleware grep
+        ]
         filesystem_tools = [
             read_file,  # overrides middleware read_file
             write_file,  # overrides middleware write_file
             edit_file,  # overrides middleware edit_file
-            create_glob_tool(filesystem_backend),  # overrides middleware glob
-            create_grep_tool(filesystem_backend),  # overrides middleware grep
+            *search_tools,
         ]
         tools.extend(filesystem_tools)
+        # A subagent's own Read, Write and Edit, over a view whose memory
+        # refuses writes. Glob and Grep never write, so they are shared.
+        subagent_files = subagent_backend(filesystem_backend, workspace_layout)
+        subagent_filesystem_tools = (
+            filesystem_tools
+            if subagent_files is filesystem_backend
+            else [
+                *create_filesystem_tools(subagent_files, operation_callback=operation_callback),
+                *search_tools,
+            ]
+        )
 
-        web_search_tool = get_web_search_tool(
-            max_search_results=10,
-            time_range=None,
-            verbose=False,
-            provider=self.config.search_api,
-            depth=self.config.search_depth,
+        # Kept for a subagent set to another provider or depth.
+        search_tool = partial(
+            get_web_search_tool, max_search_results=10, time_range=None, verbose=False
+        )
+        web_search_tool = search_tool(
+            provider=self.config.search_api, depth=self.config.search_depth
         )
         tools.append(web_search_tool)
         tools.append(web_fetch_tool)
@@ -455,9 +470,6 @@ class PTCAgent:
         if self.config.feature_enabled("market_watch"):
             finance_tools.append(watch_market)  # Market watch start/stop (live price injection)
         tools.extend(finance_tools)
-
-        if subagent_names is None:
-            subagent_names = self.config.subagents.enabled
 
         # --- Build shared middleware (for both main agent and subagents) ---
         shared_middleware: list[Any] = []
@@ -540,13 +552,12 @@ class PTCAgent:
         subagent_skill_registry = {
             name: skill
             for name, skill in skill_registry.items()
-            if name != "chart-annotation"
+            if name not in SUBAGENT_WITHHELD_SKILLS
         }
 
         # One per stack rather than one shared instance, because the two stacks
-        # differ in where the manifest goes, and in the one skill above. The
-        # main agent has a baseline to freeze it into; a subagent does not, so
-        # its copy keeps appending the manifest per call.
+        # differ in the one skill above. Both freeze the manifest into their
+        # baseline rather than appending it per call.
         skills_middleware = partial(
             SkillsMiddleware,
             mode="ptc",
@@ -562,7 +573,7 @@ class PTCAgent:
             skill_registry=skill_registry, inject_manifest=False
         )
         subagent_skill_middleware = skills_middleware(
-            skill_registry=subagent_skill_registry, inject_manifest=True
+            skill_registry=subagent_skill_registry, inject_manifest=False
         )
         tools.extend(skill_loader_middleware.tools)
         tools.extend(skill_loader_middleware.get_all_skill_tools())
@@ -591,8 +602,42 @@ class PTCAgent:
         direct_tools = list(direct_mcp.tools) if direct_mcp is not None else []
         main_only_middleware.extend(direct_tool_middleware(direct_mcp, order_ledger))
 
+        # Recursion gate: no subagents compiled, none advertised in the
+        # prompt ("No sub-agents configured."), no Task tool below.
+        subagents: list[dict[str, Any]] = []
+        if not disable_subagents:
+            subagents = compile_subagents(
+                self.config,
+                role,
+                sandbox=sandbox,
+                mcp_registry=mcp_registry,
+                execute_code=execute_code_tool,
+                bash=bash_tool,
+                filesystem=subagent_filesystem_tools,
+                web=[web_search_tool, web_fetch_tool],
+                finance=finance_tools,
+                todo=todo_tools,
+                search_tool=search_tool,
+                sandbox_tools=lambda allowed: [
+                    code_tool(allowed_servers=allowed),
+                    shell_tool(allowed_servers=allowed),
+                ],
+                turn_context=turn_context,
+                user_profile=user_profile,
+                user_data_counts=user_data_counts,
+                current_time=current_time,
+                thread_id=short_thread_id,
+                project=project,
+                sources=baseline_store_sources,
+                skills=lambda state: subagent_skill_middleware.build_manifest(state)
+                or "",
+                scratchpad=scratchpad.folder if scratchpad is not None else None,
+            )
+            subagents.extend(additional_subagents or [])
+
         background_middleware = BackgroundSubagentMiddleware(
             timeout=background_timeout,
+            subagent_types=frozenset(spec["name"] for spec in subagents),
             enabled=not disable_subagents,
             registry=_bg_registry,
             checkpointer=checkpointer,
@@ -610,66 +655,6 @@ class PTCAgent:
             from src.tools.secretary.approvals import StandingApprovalMiddleware
 
             main_only_middleware.append(StandingApprovalMiddleware(user_id))
-
-        from ptc_agent.agent.tools import think_tool
-
-        subagent_registry = SubagentRegistry(
-            user_definitions=(
-                self.config.subagents.definitions
-                if self.config.subagents.definitions
-                else None
-            ),
-        )
-        subagent_tool_sets: dict[str, list[Any]] = {
-            "execute_code": [execute_code_tool],
-            "bash": [bash_tool],
-            "filesystem": list(filesystem_tools) if filesystem_tools else [],
-            "web_search": [web_search_tool, web_fetch_tool],
-            "finance": finance_tools,
-            "think": [think_tool],
-            "todo": todo_tools,
-        }
-        # The compiler gets its own registry: same per-user gates, but
-        # mode-unfiltered — subagent definitions may be flash-mode and preload
-        # flash-only skills the ptc-filtered registry above excludes. It drops
-        # the chart guide for the same reason the subagent manifest does.
-        compiler_skill_registry = build_effective_skill_registry(
-            None,
-            feature_resolver=self.config.feature_enabled,
-            disabled_skills=self.config.disabled_skills,
-            user_skills=self.config.user_skills,
-            user_skill_dir=self.config.user_skill_dir,
-            workspace_skill_dir=self.config.workspace_skill_dir,
-        )
-        compiler_skill_registry.pop("chart-annotation", None)
-        subagent_compiler = SubagentCompiler(
-            sandbox=sandbox,
-            mcp_registry=mcp_registry,
-            tool_sets=subagent_tool_sets,
-            default_model=turn.client,
-            user_profile=user_profile,
-            current_time=current_time,
-            thread_id=short_thread_id,
-            config=self.config,
-            skill_registry=compiler_skill_registry,
-            skill_dirs=[
-                d for d, _ in self.config.skills.local_skill_dirs_with_sandbox()
-            ],
-            project=project,
-        )
-        if disable_subagents:
-            # Recursion gate: no subagents compiled, none advertised in the
-            # prompt ("No sub-agents configured."), no Task tool below.
-            subagents = []
-        else:
-            subagents = create_subagents(
-                registry=subagent_registry,
-                enabled_names=subagent_names,
-                compiler=subagent_compiler,
-                role=role,
-            )
-            if additional_subagents:
-                subagents.extend(additional_subagents)
 
         # The roster the baseline freezes into <mcp-servers>. Prefer the
         # session-cached summary (precomputed once per session in the
@@ -785,8 +770,9 @@ class PTCAgent:
                 TimeUpToolStopMiddleware(),
                 # The turn row a subagent can act on: when its turn opened,
                 # and that it is a child rather than the main agent. The user's
-                # context stays out, a subagent works from its brief. Its rows
-                # go into history from the agent and model hooks, so where it
+                # context is in its definition's baseline, appended last by the
+                # compiler. Its rows go into history from the agent and model
+                # hooks, so where it
                 # sits among the tool wrappers below does not matter. No clock
                 # is injected: this stack is built once per parent turn and run
                 # for every subagent, so the row reads the clock when its own
@@ -830,9 +816,10 @@ class PTCAgent:
 
         # The turn row, the per-thread baseline and the tail envelope, wired
         # for the main agent: the baseline is agent.md, the memory indices, the
-        # memo pointer and the user's identity + steering, which a subagent
-        # never gets because it works from its brief, not from the user's
-        # workspace. Where each of the three has to sit is on ContextMiddleware.
+        # memo pointer and the user's identity + steering. A subagent's
+        # baseline is its definition's (SubagentContext): the profile, its
+        # roster, skills and scratchpad, and memory when its switch is on.
+        # Where each of the three has to sit is on ContextMiddleware.
         context = build_context_middleware(
             now=request_time,
             guidance=turn.guidance,
@@ -867,19 +854,18 @@ class PTCAgent:
 
         # Compiled subagent graphs live on this middleware; the RunWorkflow
         # dispatcher below shares the same instances so direct dispatches get
-        # identical model resolution and middleware wiring. default_tools is
-        # snapshotted so appending RunWorkflow to the main tools afterwards
-        # can never leak it into subagents. Absent entirely under the
-        # recursion gate: this middleware is the sole provider of the Task
-        # tool, so skipping it (plus the TaskOutput extend above) makes a
-        # notification turn structurally unable to spawn subagents —
-        # RunWorkflow drops with it below.
+        # identical model resolution and middleware wiring. Its tools are a
+        # snapshot of the main agent's (see ``task_middleware``). Absent
+        # entirely under the recursion gate: this middleware is the sole
+        # provider of the Task tool, so skipping it (plus the TaskOutput extend
+        # above) makes a notification turn structurally unable to spawn
+        # subagents, and RunWorkflow drops with it below.
         subagent_task_middleware = (
-            SubAgentMiddleware(
-                default_model=turn.client,
-                default_tools=list(tools),
-                subagents=subagents if subagents else [],
-                default_middleware=subagent_middleware,
+            task_middleware(
+                subagents,
+                model=turn.client,
+                tools=tools,
+                middleware=subagent_middleware,
                 registry=background_middleware.registry,
                 checkpointer=checkpointer,
             )

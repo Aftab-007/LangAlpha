@@ -1,6 +1,6 @@
 /**
  * The `?detail=` deep link for the Plugins page detail pages:
- * `detail=server:NAME | brokerage:NAME | skill:NAME | plugin:NAME | catalog:NAME`,
+ * `detail=server:NAME | brokerage:NAME | skill:NAME | plugin:NAME | catalog:NAME | subagent:NAME`,
  * plus `dws=<workspace_id>` when the row is workspace-scoped. `catalog` is a
  * Discover entry that is not installed; an installed one opens as `plugin`. Names cannot contain ':' (validated
  * server-side), so the first colon splits unambiguously. Each tab renders
@@ -8,7 +8,7 @@
  * same navigation.
  */
 
-export type DetailKind = 'server' | 'brokerage' | 'skill' | 'plugin' | 'catalog';
+export type DetailKind = 'server' | 'brokerage' | 'skill' | 'plugin' | 'catalog' | 'subagent';
 
 export interface DetailRef {
   kind: DetailKind;
@@ -16,7 +16,7 @@ export interface DetailRef {
   workspaceId: string | null;
 }
 
-const KINDS: ReadonlySet<string> = new Set(['server', 'brokerage', 'skill', 'plugin', 'catalog']);
+const KINDS: ReadonlySet<string> = new Set(['server', 'brokerage', 'skill', 'plugin', 'catalog', 'subagent']);
 
 /**
  * The tab that renders each kind. A `?detail=` link that names no tab is
@@ -33,6 +33,7 @@ export const DETAIL_KIND_TAB: Record<DetailKind, string> = {
   skill: 'skills',
   plugin: 'plugins',
   catalog: 'plugins',
+  subagent: 'subagents',
 };
 
 /**
@@ -60,6 +61,13 @@ export function parseDetail(params: URLSearchParams): DetailRef | null {
   if (!name || !KINDS.has(kind)) return null;
   return { kind: kind as DetailKind, name, workspaceId: params.get('dws') };
 }
+
+/**
+ * The new-subagent form: `?new=` open on Blank, `?new=<name>` open on a copy
+ * of that subagent. A param of its own rather than a `detail` kind, since
+ * the form is not an item yet and must not resolve against the list.
+ */
+export const NEW_SUBAGENT_PARAM = 'new';
 
 /** A copy of `params` with the detail keys set (or cleared, for null). */
 export function withDetail(

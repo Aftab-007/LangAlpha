@@ -44,6 +44,16 @@ logger = structlog.get_logger(__name__)
 _THREADS = WorkspaceLayout.THREADS_DIR
 _SYSTEM_CODE = SandboxLayout.SYSTEM_CODE_DIR
 
+#: The servers a subagent the user limited may call, which the connector
+#: client checks on every call (``_require_enabled``; that file ships into the
+#: sandbox and cannot import this). Exported only for such a subagent.
+_ALLOWED_SERVERS_ENV = "PTC_ALLOWED_SERVERS"
+
+
+def _allowed_servers_value(servers: frozenset[str]) -> str:
+    """Comma-joined and sorted, so one set always exports one string."""
+    return ",".join(sorted(servers))
+
 
 def _computer_path(sandbox: "PTCSandbox", relative: str) -> str:
     """Absolute path for a runtime directory the machine owns.
@@ -138,6 +148,7 @@ async def execute(
     max_retries: int = 2,
     thread_id: str | None = None,
     call_id: str | None = None,
+    allowed_servers: frozenset[str] | None = None,
     _carry_mcp_trace: list[dict] | None = None,
 ) -> ExecutionResult:
     """Execute Python code in the sandbox with optional auto-install for missing dependencies.
@@ -150,6 +161,8 @@ async def execute(
             thread_id: Optional thread ID (first 8 chars) for thread-scoped code storage
             call_id: The tool call's id for the file mount, which files what
                 this code saves through it under the call
+            allowed_servers: The only MCP servers this code may call, for a
+                subagent the user limited; None leaves the workspace's set
             _carry_mcp_trace: MCP trace accumulated from prior auto-install
                 attempts, prepended to this attempt's trace so provenance from
                 a failed-then-retried run isn't lost (internal).
@@ -233,6 +246,8 @@ async def execute(
             TURN_CWD_ENV: workspace.workspace,
             "PTC_WORKSPACE_CONFIG": workspace.mcp_client_config,
         }
+        if allowed_servers is not None:
+            exec_env[_ALLOWED_SERVERS_ENV] = _allowed_servers_value(allowed_servers)
 
         # Per-execution MCP provenance trace file. A unique id (uuid suffix)
         # keeps the file unique across concurrent executions on a shared
@@ -319,6 +334,7 @@ async def execute(
                         max_retries=max_retries - 1,
                         thread_id=thread_id,
                         call_id=call_id,
+                        allowed_servers=allowed_servers,
                         _carry_mcp_trace=mcp_trace,
                     )
 
@@ -424,6 +440,7 @@ async def execute_bash_command(
     background: bool = False,
     thread_id: str | None = None,
     call_id: str | None = None,
+    allowed_servers: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Execute a bash command in the sandbox.
 
@@ -435,6 +452,7 @@ async def execute_bash_command(
             background: Run command in background
             thread_id: Optional thread ID (first 8 chars) for thread-scoped script storage
             call_id: The tool call's id for the file mount
+            allowed_servers: As for ``execute``
 
         Returns:
             Dictionary with success, stdout, stderr, exit_code, bash_id, command_hash
@@ -530,6 +548,7 @@ async def execute_bash_command(
                 call_id=call_id,
                 trace_path=_sessions.bg_trace_path(sandbox, session_id),
                 own_shell=True,
+                allowed_servers=allowed_servers,
             )
             try:
                 await sandbox._runtime_call(
@@ -577,7 +596,7 @@ async def execute_bash_command(
         # only the executed command carries the exports.
         assert sandbox.runtime is not None
         trace_path, exec_command = sandbox._build_trace_env_command(
-            bash_id, full_command, call_id=call_id
+            bash_id, full_command, call_id=call_id, allowed_servers=allowed_servers
         )
         exec_result = await sandbox._runtime_call(
             sandbox.runtime.exec,
@@ -691,6 +710,7 @@ def _build_trace_env_command(
     call_id: str | None = None,
     trace_path: str | None = None,
     own_shell: bool = False,
+    allowed_servers: frozenset[str] | None = None,
 ) -> tuple[str, str]:
     """Wrap a bash command with the MCP-provenance trace env.
 
@@ -714,9 +734,15 @@ def _build_trace_env_command(
     layout = sandbox.layout
     pythonpath = ":".join(sandbox.workspace().pythonpath(layout))
     trace_path = trace_path or f"{layout.system_trace}/{bash_id}_{uuid.uuid4().hex}.jsonl"
+    limit = (
+        f"export {_ALLOWED_SERVERS_ENV}={shlex.quote(_allowed_servers_value(allowed_servers))} && "
+        if allowed_servers is not None
+        else ""
+    )
     command = (
         f"export MCP_TRACE_FILE={shlex.quote(trace_path)} && "
         f"export PTC_WORKSPACE_CONFIG={shlex.quote(sandbox.workspace().mcp_client_config)} && "
+            f"{limit}"
             f"export PYTHONPATH={shlex.quote(pythonpath)}"
             f"${{PYTHONPATH:+:$PYTHONPATH}} && "
             f"{full_command}"

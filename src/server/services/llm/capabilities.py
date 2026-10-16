@@ -5,14 +5,91 @@ Nothing here resolves a model, which is why it is not in ``config``.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
+
 from . import logger
 
+#: Whether the user's plan reaches a manifest min tier. Fetches the tier at
+#: most once, on first use, for whichever check needs it first.
+TierPermits = Callable[[int], Awaitable[bool]]
 
-async def gate_capabilities(config, user_id: str, model_pref: dict) -> None:
+
+@dataclass(frozen=True)
+class SearchGate:
+    """The search provider and depth to run, and why a set one was not.
+
+    A fallback is ``"not_on_plan"``, ``"unknown"`` for a provider the manifest
+    lacks, or, for a depth, ``"not_offered"`` by the provider left standing;
+    None when the set value runs or none was set.
+    """
+
+    provider: str
+    depth: str
+    provider_fallback: str | None
+    depth_fallback: str | None
+
+
+def _set(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+async def gate_search(
+    provider: str | None,
+    depth: str | None,
+    *,
+    effective_provider: str,
+    effective_depth: str,
+    permits: TierPermits | None,
+) -> SearchGate:
+    """The search pair to run for a set ``provider`` and ``depth`` (None inherits).
+
+    ``effective_*`` is the pair already running, the user's gated one or the
+    deployment's, so a value equal to it is never tier-checked. A depth is
+    judged against the provider left after the provider check, which may not
+    offer even the effective depth, and one that falls back takes the
+    effective depth where that provider offers it, else the provider's
+    default. ``permits`` None gates nothing.
+    """
+    from src.tools.web.manifest import CAPABILITY_SEARCH, get_capability, resolve_min_tier
+
+    async def reached(spec) -> bool:
+        return permits is None or await permits(resolve_min_tier(spec))
+
+    chosen, provider_fallback = effective_provider, None
+    if provider is not None and provider != effective_provider:
+        cap = get_capability(provider, CAPABILITY_SEARCH)
+        if cap is None:
+            logger.warning(f"[CHAT] Ignoring unknown search provider: {provider!r}")
+            provider_fallback = "unknown"
+        elif await reached(cap):
+            chosen = provider
+        else:
+            provider_fallback = "not_on_plan"
+
+    cap = get_capability(chosen, CAPABILITY_SEARCH)
+    inherited = effective_depth
+    if cap is not None and cap.level(effective_depth) is None:
+        inherited = cap.default_level
+    if depth is None or (depth == effective_depth and chosen == effective_provider):
+        return SearchGate(chosen, inherited, provider_fallback, None)
+    spec = cap.level(depth) if cap is not None else None
+    if spec is None:
+        return SearchGate(chosen, inherited, provider_fallback, "not_offered")
+    # The user's own depth is never re-checked against the plan, here or on another provider.
+    if depth == effective_depth or await reached(spec):
+        return SearchGate(chosen, depth, provider_fallback, None)
+    return SearchGate(chosen, inherited, provider_fallback, "not_on_plan")
+
+
+async def gate_capabilities(config, user_id: str, model_pref: dict) -> TierPermits:
     """Apply the user's search and crawl preferences, each behind its manifest tier.
 
     Resolve time is the enforcement point, so a stale preference left by a
     downgraded plan is ignored at consumption rather than trusted from storage.
+    Returns the tier check it used, so the rest of the turn's gates share its
+    one tier fetch.
     """
     from src.config.settings import HOST_MODE
 
@@ -33,56 +110,18 @@ async def gate_capabilities(config, user_id: str, model_pref: dict) -> None:
             user_tier = await _fetch_platform_tier(user_id)
         return user_tier >= min_tier
 
-    pref_search_provider = model_pref.get("search_provider")
-    pref_search_depth = model_pref.get("search_depth")
-    if pref_search_provider or pref_search_depth:
-        from src.tools.web.manifest import (
-            CAPABILITY_SEARCH,
-            get_capability,
-            resolve_min_tier,
-        )
-
-        if pref_search_provider:
-            search_cap = (
-                get_capability(pref_search_provider, CAPABILITY_SEARCH)
-                if isinstance(pref_search_provider, str)
-                else None
-            )
-            if search_cap is None:
-                logger.warning(
-                    f"[CHAT] Ignoring unknown search_provider preference: {pref_search_provider!r}"
-                )
-            elif await _tier_permits(resolve_min_tier(search_cap)):
-                config.search_api = pref_search_provider
-                logger.debug(f"[CHAT] Using search_provider: {pref_search_provider}")
-            else:
-                logger.debug(
-                    f"[CHAT] search_provider pref ignored "
-                    f"(tier below {resolve_min_tier(search_cap)})"
-                )
-
-        if pref_search_depth:
-            # Depth names are provider-scoped: validate against the EFFECTIVE
-            # provider (post-provider-resolution), so a stale depth left over
-            # from another provider degrades to that provider's default.
-            eff_cap = get_capability(config.search_api, CAPABILITY_SEARCH)
-            depth_spec = (
-                eff_cap.level(pref_search_depth)
-                if eff_cap is not None and isinstance(pref_search_depth, str)
-                else None
-            )
-            if depth_spec is None:
-                logger.debug(
-                    f"[CHAT] search_depth pref {pref_search_depth!r} not offered by "
-                    f"provider {config.search_api!r}; using provider default"
-                )
-            elif await _tier_permits(resolve_min_tier(depth_spec)):
-                config.search_depth = depth_spec.name
-                logger.debug(f"[CHAT] Using search_depth: {depth_spec.name}")
-            else:
-                logger.debug(
-                    f"[CHAT] search_depth pref ignored (tier below {resolve_min_tier(depth_spec)})"
-                )
+    # The pair the search tool will run, so a depth the provider lacks reads
+    # as the provider's own wherever the main agent's settings are shown.
+    gate = await gate_search(
+        _set(model_pref.get("search_provider")),
+        _set(model_pref.get("search_depth")),
+        effective_provider=config.search_api,
+        effective_depth=config.search_depth,
+        permits=_tier_permits,
+    )
+    config.search_api, config.search_depth = gate.provider, gate.depth
+    if gate.provider_fallback or gate.depth_fallback:
+        logger.debug(f"[CHAT] Search preference fell back: {gate}")
 
     # Crawl tools (WebCrawl/WebMap): experimental opt-in via the site_crawl
     # feature; for opted-in users the crawl capability's manifest min_tier
@@ -96,5 +135,7 @@ async def gate_capabilities(config, user_id: str, model_pref: dict) -> None:
         if crawl_cap is not None and not await _tier_permits(resolve_min_tier(crawl_cap)):
             config.features["site_crawl"] = False
             logger.debug(f"[CHAT] crawl tools disabled (tier below {resolve_min_tier(crawl_cap)})")
+
+    return _tier_permits
 
 

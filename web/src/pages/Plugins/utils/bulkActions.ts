@@ -13,7 +13,7 @@ import type { PluginListSurface } from '../hooks/usePluginListSurface';
  * a tab has selected. Each tab names only what differs: its rows' state, what
  * holds a row down, the endpoints, and which rows the third action reaches.
  */
-export interface BulkSpec<T> {
+export interface BulkSpec<T, R = unknown> {
   noun: BulkNoun;
   key: (row: T) => string;
   name: (row: T) => string;
@@ -28,10 +28,15 @@ export interface BulkSpec<T> {
   remove: {
     verb: 'remove' | 'uninstall';
     labelKey: string;
-    confirmKey: string;
     eligible: (row: T) => boolean;
-    run: (row: T) => Promise<unknown>;
-  };
+    run: (row: T) => Promise<R>;
+    /** What the rows that went took with them, from what each run returned. */
+    outcome?: (results: R[]) => string[];
+  } & (
+    | { confirmKey: string }
+    /** A confirm that depends on what the rows carry. */
+    | { confirm: (rows: readonly T[]) => string }
+  );
   /** Why the rows the third action leaves out are left out. */
   keptKey: string;
   /** Starts the sign-in a switch-on was refused for. */
@@ -45,13 +50,13 @@ export interface BulkActions {
   note: string | null;
 }
 
-export function buildBulkActions<T>(
+export function buildBulkActions<T, R = unknown>(
   t: TFunction,
   surface: Pick<PluginListSurface, 'run'>,
   selected: readonly T[],
-  spec: BulkSpec<T>,
+  spec: BulkSpec<T, R>,
 ): BulkActions {
-  const target = (row: T, run: () => Promise<unknown>): BulkTarget => ({
+  const target = <V>(row: T, run: () => Promise<V>): BulkTarget<V> => ({
     key: spec.key(row),
     name: spec.name(row),
     run,
@@ -66,7 +71,7 @@ export function buildBulkActions<T>(
     .filter(spec.isOn)
     .map((row) => target(row, () => spec.setEnabled(row, false)));
   const removable = selected.filter(spec.remove.eligible);
-  const { verb } = spec.remove;
+  const { verb, outcome } = spec.remove;
 
   const actions: BulkAction[] = [
     {
@@ -86,11 +91,14 @@ export function buildBulkActions<T>(
       label: t(spec.remove.labelKey, { count: removable.length }),
       destructive: true,
       disabled: removable.length === 0,
-      confirmMessage: t(spec.remove.confirmKey, { count: removable.length }),
+      confirmMessage:
+        'confirm' in spec.remove
+          ? spec.remove.confirm(removable)
+          : t(spec.remove.confirmKey, { count: removable.length }),
       run: () =>
         surface.run(
           removable.map((row) => target(row, () => spec.remove.run(row))),
-          { verb, noun: spec.noun },
+          { verb, noun: spec.noun, outcome },
         ),
     },
   ];

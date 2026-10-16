@@ -7,6 +7,7 @@ import { Brokerages } from './components/Brokerages';
 import { DetailPageProvider } from './components/DetailPage';
 import { McpServers } from './components/McpServers';
 import { SkillsList } from './components/SkillsList';
+import { SubagentsList } from './components/subagents/SubagentsList';
 import { PluginSecrets } from './components/PluginSecrets';
 import { PluginsList } from './components/PluginsList';
 import { WorkspacesLoadNote } from './components/WorkspacesLoadNote';
@@ -15,7 +16,7 @@ import { PageHeader } from './components/shell/PageHeader';
 import { PluginsRail } from './components/shell/PluginsRail';
 import { YoursSummary } from './components/shell/YoursSummary';
 import {
-  isCustomize,
+  hasDiscover,
   readSection,
   readSectionView,
   SCOPED,
@@ -26,7 +27,13 @@ import {
 import { useShellData } from './components/shell/useShellData';
 import { useCatalogOn } from './hooks/useCatalogOn';
 import { ADD_INTENT_TAB, ADD_PARAM, type AddIntent } from './utils/addParam';
-import { parseDetail, VIEW_PARAM, withDetail, type SectionView } from './utils/detailParam';
+import {
+  NEW_SUBAGENT_PARAM,
+  parseDetail,
+  VIEW_PARAM,
+  withDetail,
+  type SectionView,
+} from './utils/detailParam';
 import { SCOPE_TAB, type DiscoverScope } from './utils/marketplace';
 import './Plugins.css';
 
@@ -37,7 +44,7 @@ const Discover = lazy(() =>
 
 /**
  * /plugins — the account's plugins, connectors (MCP servers), skills,
- * brokerages and vault. An enabled server or skill here reaches every
+ * subagents, brokerages and vault. An enabled server or skill here reaches every
  * workspace of the user; OAuth-connected servers are bound into sandboxes
  * through the egress relay (credentials never leave the host).
  *
@@ -66,7 +73,7 @@ function withoutDiscover(params: URLSearchParams, section: Section): URLSearchPa
 }
 
 function SectionBody({ section, view }: { section: Section; view: SectionView }) {
-  if (view === 'discover' && isCustomize(section)) {
+  if (view === 'discover' && hasDiscover(section)) {
     return (
       <Suspense fallback={<ListSkeleton />}>
         <Discover scope={DISCOVER_SCOPE[section]} />
@@ -80,6 +87,8 @@ function SectionBody({ section, view }: { section: Section; view: SectionView })
       return <McpServers />;
     case 'skills':
       return <SkillsList />;
+    case 'subagents':
+      return <SubagentsList />;
     case 'brokerages':
       return <Brokerages />;
     case 'secrets':
@@ -102,6 +111,8 @@ function Plugins() {
     catalogOn === false && readSectionView(searchParams, section) === 'discover';
   const shown = strayDiscover ? withoutDiscover(searchParams, section) : searchParams;
   const detailRef = parseDetail(shown);
+  // The new-subagent form is a page of its own, like a detail.
+  const pageOpen = !!detailRef || (section === 'subagents' && shown.has(NEW_SUBAGENT_PARAM));
   const view = readSectionView(shown, section);
   const query = searchParams.get('q') ?? '';
   const sectionLabel = t(SECTION_LABEL_KEYS[section]);
@@ -154,12 +165,12 @@ function Plugins() {
         <PluginsRail section={section} detail={detailRef} data={shell} />
         <div ref={pageRef} className="plugins-scroll">
           <div className="plugins-column">
-            {!detailRef && (
+            {!pageOpen && (
               <PageHeader
                 section={section}
                 view={view}
                 summary={
-                  view === 'discover' && isCustomize(section) ? (
+                  view === 'discover' && hasDiscover(section) ? (
                     <div className="plugins-summary">
                       <DiscoverSummary scope={DISCOVER_SCOPE[section]} />
                     </div>

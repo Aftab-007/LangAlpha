@@ -58,6 +58,7 @@ def _package(
         extension=LangalphaExtension(),
         entry_plans=[],
         skill_plans=plans,
+        agent_plans=[],
     )
 
 

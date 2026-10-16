@@ -1,10 +1,11 @@
-"""DbJsonFolderRoute: a mounted folder of JSON files, one per row in Postgres.
+"""DbJsonFolderRoute: a mounted folder of files, one per row in Postgres.
 
 Where ``DbJsonRoute`` serves a fixed set of files every user has, a folder
 holds one file per row, under a name the writer picks: writing a new name
 makes one, and the file mount deletes and renames them. A file can therefore
 go between a Read and the Write after it, which the save answers as such
-rather than as a change. ``AutomationsBackend`` is the one folder.
+rather than as a change. ``AutomationsBackend`` and ``SubagentsBackend`` are
+the folders.
 """
 
 from __future__ import annotations
@@ -17,12 +18,12 @@ from ptc_agent.agent.backends.db_json_route import (
     Stored,
     UserDataValidationError,
 )
-from ptc_agent.agent.backends.langgraph_store import lock_for_namespace
+from ptc_agent.agent.backends.langgraph_store import ReadOnlyStoreError, lock_for_namespace
 from ptc_agent.agent.backends.results import WriteTextResult
 
 
 class DbJsonFolderRoute(DbJsonRoute):
-    """A folder of DB-backed JSON files, one per row, plus a README. A
+    """A folder of DB-backed files, one per row, plus a README. A
     subclass names its files from its rows, overriding ``file_named``,
     ``names`` and ``rendered``."""
 
@@ -75,6 +76,8 @@ class DbJsonFolderRoute(DbJsonRoute):
     def _unwritable(self, file_path: str, filename: str | None) -> UserDataValidationError:
         if filename == README_FILE:
             return self._readme_refusal(file_path)
+        if filename in self.read_only_files:
+            return self._read_only_refusal(file_path)
         name = file_path.rsplit("/", 1)[-1]
         return self._refusal("schema_error", name, f"{file_path} can't be created: {self.name_rule}.")
 
@@ -82,7 +85,7 @@ class DbJsonFolderRoute(DbJsonRoute):
         """As the base's, except that a file the agent hasn't read in this
         run is written only where none is yet, which makes a new one."""
         filename = self._filename(file_path)
-        if filename is None or filename == README_FILE or filename in self._read_cache:
+        if self._read_only(filename) or filename in self._read_cache:
             return await super().awrite_text(file_path, content)
         return self._written(await self._save(filename, content, None, served=None, may_delete=True))
 
@@ -102,6 +105,8 @@ class DbJsonFolderRoute(DbJsonRoute):
             return None
         if filename == README_FILE:
             raise self._documentation(file_path)
+        if filename in self.read_only_files:
+            raise ReadOnlyStoreError(f"{file_path} is kept by the server; it can't be deleted.")
         file = self.file_named(filename)
         user_id = self._user_id
         async with lock_for_namespace(self._namespace()):
@@ -141,10 +146,12 @@ class DbJsonFolderRoute(DbJsonRoute):
             return None
         if filename == README_FILE:
             raise self._documentation(file_path)
+        if filename in self.read_only_files:
+            raise ReadOnlyStoreError(f"{file_path} is kept by the server; it can't be moved.")
         target = self._filename(to)
         if target is None:
             raise self._unwritable(to, None)
-        if target == README_FILE:
+        if target == README_FILE or target in self.read_only_files:
             raise self._refusal(
                 "exists", target, f"{self._absolute(target)} already exists; move the file to another name."
             )
@@ -156,7 +163,7 @@ class DbJsonFolderRoute(DbJsonRoute):
                     there = self.file_named(target)
                     if there.render(await there.fetch(user_id, conn)) is not None:
                         raise self._occupied(filename, target)
-                    report = await file.rename(user_id, target, conn)
+                    report = await file.rename(user_id, target, conn, self._call)
             self._invalidate(filename)
             self._invalidate(target)
         return report

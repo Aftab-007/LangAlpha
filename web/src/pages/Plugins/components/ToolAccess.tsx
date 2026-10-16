@@ -147,7 +147,8 @@ export function ToolAccessSwitches({
   );
 }
 
-function SwitchRow({
+/** One labelled switch of a side column's list, its description under it. */
+export function SwitchRow({
   label,
   desc,
   enabled,

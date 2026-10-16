@@ -1,7 +1,8 @@
-"""DbJsonRoute: a mounted directory of JSON files that are rows in Postgres.
+"""DbJsonRoute: a mounted directory of files that are rows in Postgres.
 
-The shared plumbing behind ``UserDataBackend`` (`.agents/user/profile/`) and
-``AutomationsBackend`` (`.agents/user/automations/`). Reads render live rows.
+The shared plumbing behind ``UserDataBackend`` (`.agents/user/profile/`),
+``AutomationsBackend`` (`.agents/user/automations/`) and ``SubagentsBackend``
+(`.agents/user/agents/`, markdown rather than JSON). Reads render live rows.
 Every save, from the Write and Edit tools or through the file mount, runs the
 same flow: check the content for everything the rows don't decide, then under
 the user's lock check the version the writer last saw, plan the write from the
@@ -215,9 +216,9 @@ _SERVER_FAILURE = (
 )
 
 
-@functools.cache
+@functools.lru_cache(maxsize=256)
 def _text_version(text: str) -> str:
-    """A README's version, hashed once per class rather than per listing."""
+    """A README's version, hashed once per text rather than per listing."""
     return hashlib.sha256(text.encode()).hexdigest()[:32]
 
 
@@ -278,11 +279,11 @@ class DbJsonFile[R, P, C]:
         """What deleting the file changes, in a ``DbJsonFolderRoute``."""
         raise NotImplementedError
 
-    async def rename(self, user_id: str, to: str, conn: Any) -> str | None:
+    async def rename(self, user_id: str, to: str, conn: Any, call: CallContext) -> str | None:
         """File the rows under the name ``to``, in a ``DbJsonFolderRoute``,
         and report it; None when they are gone by the time it holds them.
-        Raises ``UserDataValidationError`` (``exists``) when another writer
-        took ``to`` first."""
+        ``call`` is who the move runs for. Raises ``UserDataValidationError``
+        (``exists``) when another writer took ``to`` first."""
         raise NotImplementedError
 
 
@@ -419,6 +420,11 @@ class DbJsonRoute:
 
     def _absolute(self, filename: str) -> str:
         return f"{self._root_prefix}{filename}"
+
+    async def _readme(self) -> str:
+        """The README as this user reads it; a route whose README names the
+        user's own values renders it here."""
+        return self.readme_content
 
     def _refusal(self, error_type: ErrorType, filename: str, hint: str) -> UserDataValidationError:
         return UserDataValidationError(
@@ -639,7 +645,7 @@ class DbJsonRoute:
             # return None so the composite reports file-not-found.
             return None
         if filename == README_FILE:
-            return self.readme_content
+            return await self._readme()
         try:
             live = await self._live(filename)
         except Exception:
@@ -654,7 +660,7 @@ class DbJsonRoute:
         if filename is None:
             return None
         if filename == README_FILE:
-            content = self.readme_content
+            content = await self._readme()
         else:
             try:
                 live = await self._live(filename)
@@ -804,7 +810,8 @@ class DbJsonRoute:
         if filename is None:
             return None
         if filename == README_FILE:
-            return self.readme_content, _text_version(self.readme_content)
+            readme = await self._readme()
+            return readme, _text_version(readme)
         live = await self._live(filename)
         return (live.content, live.version) if live else None
 
@@ -813,8 +820,9 @@ class DbJsonRoute:
         was rendered from and a read after the listing costs nothing."""
         if path.rstrip("/") != self._root_prefix.rstrip("/"):
             return None
+        readme = await self._readme()
         files = {
-            README_FILE: (self.readme_content, _text_version(self.readme_content)),
+            README_FILE: (readme, _text_version(readme)),
             **await self.rendered(self._user_id),
         }
         return [
@@ -935,7 +943,7 @@ class DbJsonRoute:
         except Exception:
             logger.exception("db json route listing failed", path=self._root_prefix)
             live = {}
-        contents = {README_FILE: self.readme_content}
+        contents = {README_FILE: await self._readme()}
         for filename, (content, _version) in live.items():
             # What the agent last read, else the live file. Never cached: a
             # Grep is no Read a Write can stand on.

@@ -69,11 +69,15 @@ export function DetailPage({
   footer,
   aside,
   crumb,
+  lead,
   children,
 }: {
   labelId: string;
   onClose: () => void;
   header: React.ReactNode;
+  /** Full width between the header and the two columns, for a first step
+   *  the columns below depend on (a new subagent's starting point). */
+  lead?: React.ReactNode;
   /** Lifecycle verbs and confirms: the last block of the side column. */
   footer?: React.ReactNode;
   /** Settings beside the content: availability, the key, facts. */
@@ -107,6 +111,7 @@ export function DetailPage({
         )}
       </nav>
       <header className="detail-page-head">{header}</header>
+      {lead && <div className="detail-page-lead">{lead}</div>}
       <div className={side ? 'detail-page-body' : 'detail-page-body is-single'}>
         <div className="detail-page-main">{children}</div>
         {side && (
@@ -190,11 +195,23 @@ export function DetailSection({
 }
 
 /** A titled block in the side column ("Availability", "Details"): a small
- *  heading over its content, no hairline. */
-export function DetailAsideBlock({ title, children }: { title: string; children: React.ReactNode }) {
+ *  heading over its content, no hairline. `side` sits at the heading's right
+ *  edge, for what the block was shipped with or a menu over its rows. */
+export function DetailAsideBlock({
+  title,
+  side,
+  children,
+}: {
+  title: string;
+  side?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <section className="detail-aside-block">
-      <h3>{title}</h3>
+      <h3 className={side ? 'has-side' : undefined}>
+        {side ? <span>{title}</span> : title}
+        {side && <span className="detail-aside-side">{side}</span>}
+      </h3>
       {children}
     </section>
   );

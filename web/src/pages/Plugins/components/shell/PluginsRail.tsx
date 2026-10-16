@@ -62,6 +62,7 @@ export function PluginsRail({
     plugins: data.plugins ? installed.length + builtIn.length : null,
     mcp: data.connectors?.total ?? null,
     skills: data.skills?.total ?? null,
+    subagents: data.subagents?.total ?? null,
     brokerages: data.brokerages?.connected ?? null,
     secrets: data.secrets,
   };
@@ -70,6 +71,7 @@ export function PluginsRail({
     plugins: false,
     mcp: !!data.connectors && connectorAttention(data.connectors) > 0,
     skills: false,
+    subagents: !!data.subagents && data.subagents.attention > 0,
     brokerages: !!data.brokerages && data.brokerages.signIn > 0,
     secrets: false,
   };

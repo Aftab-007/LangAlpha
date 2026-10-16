@@ -45,10 +45,22 @@ class SubagentRegistry:
                 custom_prompt_template=cfg.custom_prompt_template,
                 custom_prompt=cfg.custom_prompt,
                 tools=cfg.tools,
-                skills=cfg.skills,
+                # A deployment's preloaded skill binds its tools, as it always
+                # has, and keeps them through a user's edit of the preferred list.
+                skills=list(dict.fromkeys([*cfg.skills, *cfg.preload_skills])),
                 preload_skills=cfg.preload_skills,
                 model=cfg.model,
-                max_iterations=cfg.max_iterations,
+                reasoning_effort=cfg.reasoning_effort,
+                search_provider=cfg.search_provider,
+                search_depth=cfg.search_depth,
+                connectors=cfg.connectors,
+                brokerages=cfg.brokerages,
+                preferred_connectors=cfg.preferred_connectors,
+                memory=(
+                    cfg.memory if cfg.memory is not None
+                    else builtin.memory if builtin is not None
+                    else True
+                ),
                 sections=cfg.sections,
                 stateful=(cfg.mode == "ptc"),
                 # The YAML has no say over roles, so an override keeps the
@@ -92,3 +104,4 @@ class SubagentRegistry:
     def list_all(self) -> dict[str, SubagentDefinition]:
         """Return a copy of all registered definitions."""
         return dict(self._definitions)
+

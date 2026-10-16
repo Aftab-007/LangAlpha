@@ -116,6 +116,10 @@ _COUNT_QUERY_LIMIT = MEMO_DISPLAY_CAP + 1
 # diff honest and the history short. A judgement call, not a measured constant.
 DEFAULT_REBUILD_AFTER_UPDATES = 20
 
+# Epochs whose rendered block is kept: one for the main agent, one per run in
+# flight for a subagent's definition.
+_BLOCK_CACHE_SIZE = 8
+
 NamespaceFactory = Callable[[], tuple[str, ...]]
 
 #: Reads the current text of one harness-authored block from the turn's agent
@@ -204,6 +208,11 @@ class BaselineContextMiddleware(AgentMiddleware):
         channels_enabled: Whether the agent has the chat-app settings folder,
             which a rebuild freezes for the block to state. None for a build
             whose block says nothing about it.
+        subagent: A subagent's baseline. It has no workspace block and a
+            profile without the main agent's filesystem steering, reads memory
+            without being told to write it, and its scratchpad has no notes.
+            One instance serves every run of its definition in a parent turn,
+            each with its own epoch in that run's checkpoint.
     """
 
     def __init__(
@@ -226,8 +235,10 @@ class BaselineContextMiddleware(AgentMiddleware):
         files_mounted: bool | None = None,
         role: AgentRole = "analyst",
         channels_enabled: bool | None = None,
+        subagent: bool = False,
     ) -> None:
         super().__init__()
+        self._subagent = subagent
         self._session = session
         self._role = role
         self._files_mounted = files_mounted
@@ -278,10 +289,13 @@ class BaselineContextMiddleware(AgentMiddleware):
         self._model_name = model_name
         self._rebuild_after_updates = max(0, rebuild_after_updates)
         self._read_timeout_s = read_timeout_s
-        # Rendered block, memoized per epoch. The memo is what makes
+        # Rendered blocks, memoized per epoch. The memo is what makes
         # byte-identity a property of the code rather than of the templates
-        # happening to be deterministic.
-        self._block_cache: tuple[Any, str] | None = None
+        # happening to be deterministic. More than one entry because a
+        # subagent's instance renders for every run of its definition at once,
+        # and the scratchpad is in the key because it is what tells two runs'
+        # blocks apart.
+        self._block_cache: dict[tuple[Any, ...], str] = {}
 
     # -- rendering inputs ---------------------------------------------------
 
@@ -354,9 +368,12 @@ class BaselineContextMiddleware(AgentMiddleware):
     ) -> dict[str, Any] | None:
         # A turn that resumes an interrupt re-enters the graph at the
         # interrupted node, never at the entry node, so ``abefore_agent`` does
-        # not run for it. The instance is built per request, so a first model
-        # call on one that never opened a turn is that resume: the boundary
-        # read runs here instead, after the tool result the resume produced.
+        # not run for it. A main agent's instance is built per request, so a
+        # first model call on one that never opened a turn is that resume: the
+        # boundary read runs here instead, after the tool result the resume
+        # produced. A subagent's instance serves every run of its definition in
+        # the parent's turn, and each of those runs enters through
+        # ``abefore_agent``.
         if self._opened:
             return None
         return await self.abefore_agent(state, runtime)
@@ -391,7 +408,7 @@ class BaselineContextMiddleware(AgentMiddleware):
             retained_rows=_retained_change_rows(state),
             profile_available=self._profile_available,
             workspace_available=self._workspace_available,
-            workspace_configured=self._sandbox_enabled,
+            workspace_configured=self._sandbox_enabled and not self._subagent,
             files_mounted=self._files_mounted,
             channels_enabled=self._channels_enabled,
         )
@@ -578,7 +595,10 @@ class BaselineContextMiddleware(AgentMiddleware):
                 continue
             parts.append(
                 render_template(
-                    HARNESS_BLOCKS[kind].template, content=entry.text, guidance=guidance
+                    HARNESS_BLOCKS[kind].template,
+                    content=entry.text,
+                    guidance=guidance,
+                    subagent=self._subagent,
                 )
             )
 
@@ -608,6 +628,7 @@ class BaselineContextMiddleware(AgentMiddleware):
                     path=entry.path or tier,
                     content=entry.text,
                     readonly=not self._sandbox_enabled,
+                    subagent=self._subagent,
                     guidance=guidance,
                 )
             )
@@ -635,13 +656,16 @@ class BaselineContextMiddleware(AgentMiddleware):
             channels = self._channels_enabled
         if not snapshot.user_profile and not snapshot.user_data_counts:
             return ""
+        # A subagent's profile leaves out what only the main agent acts on:
+        # the profile files, the delivery format and where settings live.
+        steering = self._sandbox_enabled and not self._subagent
         try:
             content = render_template(
                 "components/user_profile.md.j2",
                 user_profile=snapshot.user_profile,
                 user_data_counts=snapshot.user_data_counts or None,
-                sandbox_enabled=self._sandbox_enabled,
-                profile_files=self._sandbox_enabled,
+                sandbox_enabled=steering,
+                profile_files=steering,
                 channels_enabled=bool(channels),
             )
         except Exception:  # noqa: BLE001 - one component is not the whole block
@@ -690,11 +714,14 @@ class BaselineContextMiddleware(AgentMiddleware):
         return await handler(request.override(system_message=system_message))
 
     def _cached_block(self, epoch: BaselineEpoch) -> str:
-        key = (epoch.epoch, epoch.built_at)
-        if self._block_cache is not None and self._block_cache[0] == key:
-            return self._block_cache[1]
-        block = self._render_block(epoch)
-        self._block_cache = (key, block)
+        scratchpad = epoch.blocks.get("scratchpad")
+        key = (epoch.epoch, epoch.built_at, scratchpad.text if scratchpad else None)
+        block = self._block_cache.get(key)
+        if block is None:
+            block = self._render_block(epoch)
+            if len(self._block_cache) >= _BLOCK_CACHE_SIZE:
+                self._block_cache.pop(next(iter(self._block_cache)))
+            self._block_cache[key] = block
         return block
 
 

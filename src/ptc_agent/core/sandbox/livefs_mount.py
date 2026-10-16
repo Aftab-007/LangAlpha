@@ -113,6 +113,7 @@ async def through_mount(
 _MEMORY_MARKERS = (f"{MEMORY_USER_DIR}/", f"{WorkspaceLayout.MEMORY_DIR}/", f"{MEMO_USER_DIR}/")
 _SERVED_DIRS = (
     SandboxLayout.AUTOMATIONS_DIR,
+    SandboxLayout.USER_AGENTS_DIR,
     SandboxLayout.USER_PROFILE_DIR,
     SandboxLayout.WORKFLOWS_DIR,
 )

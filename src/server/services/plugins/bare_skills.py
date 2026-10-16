@@ -8,7 +8,8 @@ need was refusing the commonest thing a user pastes. So when nothing in the
 tree is a plugin, each folder holding a SKILL.md is read as a skill, laid out
 under ``skills/<name>/`` beside a synthesized plugin.json, and the validator,
 the fan-out and update run on that exactly as they run on a package written
-that way.
+that way. An ``agents/`` folder at the top comes along as it is: Claude Code
+reads one there without a manifest too.
 """
 
 import json
@@ -20,6 +21,7 @@ from typing import Any
 from ptc_agent.agent.middleware.skills.discovery import validate_skill_name
 from src.server.models.plugin import Diagnostic
 from src.server.services.os_litter import is_os_litter
+from src.server.services.plugins.agents import AGENTS_DIR, is_agent_file
 from src.server.services.plugins.errors import PluginFatal
 from src.server.services.plugins.schemas import PLUGIN_SCHEMA
 from src.server.services.user_skills.validate import peek_frontmatter
@@ -121,6 +123,26 @@ def _skill_dirs(files: dict[str, bytes]) -> list[tuple[str, ...]]:
     return kept
 
 
+def _top_agents(
+    files: dict[str, bytes], directories: Sequence[tuple[str, ...]]
+) -> dict[str, bytes]:
+    """The files under a top-level ``agents/`` that no skill folder holds.
+
+    Loose ones come along too, so the agents reader reports them rather than
+    their going unmentioned.
+    """
+    out: dict[str, bytes] = {}
+    for path, content in files.items():
+        segments = tuple(path.split("/"))
+        if not path.startswith(AGENTS_DIR) or _junk(segments):
+            continue
+        # A SKILL.md at the top makes the whole tree one skill, its agents/ too.
+        if any(segments[:depth] in directories for depth in range(len(segments))):
+            continue
+        out[path] = content
+    return out
+
+
 def _describe(
     files: dict[str, bytes], directory: tuple[str, ...], fallback: str
 ) -> _Skill:
@@ -147,17 +169,35 @@ def wrap_skill_tree(
     files: dict[str, bytes], *, name_hint: str | None
 ) -> tuple[dict[str, bytes], list[Diagnostic]] | None:
     """Lay a manifest-less tree out as a canonical package, or None when it
-    holds no skill either.
+    holds no skill or subagent either.
 
-    The plugin is named after its one skill when there is exactly one with a
-    valid name, which is what the user installed; otherwise after
+    The plugin is named after its one skill when that is all it holds and the
+    skill has a valid name, which is what the user installed; otherwise after
     ``name_hint`` (the folder or repository the package came from).
     """
     directories = _skill_dirs(files)
-    if not directories:
+    agents = _top_agents(files, directories)
+    agent_files = sum(map(is_agent_file, agents))
+    if not agent_files:
+        agents = {}
+    if not directories and not agents:
         return None
     hinted = plugin_name_from_hint(name_hint)
     diagnostics: list[Diagnostic] = []
+    if () in directories and any(map(is_agent_file, files)):
+        # The files still install, inside the skill, so the subagents they
+        # define would otherwise go missing without a word.
+        diagnostics.append(
+            Diagnostic(
+                scope="plugin",
+                code="agents_in_skill",
+                message=(
+                    "a SKILL.md at the top makes this package one skill, so its "
+                    "agents/ folder stays inside that skill and none of it installs "
+                    "as a subagent"
+                ),
+            )
+        )
     skills: dict[str, _Skill] = {}
     owner: dict[tuple[str, ...], str] = {}
     for directory in directories:
@@ -194,20 +234,30 @@ def wrap_skill_tree(
                 out[f"skills/{name}/{'/'.join(rest)}"] = content
             break
 
+    out.update(agents)
+
     source = (name_hint or "").strip() or hinted
-    only = next(iter(skills.values())) if len(skills) == 1 else None
+    only = next(iter(skills.values())) if len(skills) == 1 and not agents else None
     if only is not None and only.declared:
         name, description = only.name, only.description
     else:
         name, description = hinted, ""
+    held = " and ".join(
+        kind for kind, present in (("skills", skills), ("subagents", agents)) if present
+    )
     manifest = {
         "$schema": PLUGIN_SCHEMA["$id"],
         "name": name,
         "version": "0.0.0",
-        "description": description or f"Skills from {source}",
+        "description": description or f"{held.capitalize()} from {source}",
     }
     out["plugin.json"] = json.dumps(manifest, indent=2).encode("utf-8")
-    count = f"{len(skills)} skill{'' if len(skills) == 1 else 's'}"
+    counts = [
+        f"{n} {kind}{'' if n == 1 else 's'}"
+        for n, kind in ((len(skills), "skill"), (agent_files, "subagent"))
+        if n
+    ]
+    count = " and ".join(counts)
     # How the package was read, not something wrong with it: a client says it
     # beside what landed instead of listing it among the warnings.
     diagnostics.insert(
@@ -218,7 +268,7 @@ def wrap_skill_tree(
             code="synthesized_manifest",
             message=(
                 f"this package has no plugin.json, so it was read as a folder "
-                f"of skills: {count} wrapped into a plugin named {name!r}"
+                f"of {held}: {count} wrapped into a plugin named {name!r}"
             ),
         ),
     )

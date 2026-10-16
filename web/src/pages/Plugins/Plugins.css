@@ -176,6 +176,10 @@
 .plugins-summary-sep { color: var(--color-text-quaternary); }
 .plugins-summary .surface-dot { margin-left: 2px; margin-right: -2px; }
 .plugins-summary-name { white-space: nowrap; }
+.plugins-summary-quiet { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.plugins-summary-quiet b { color: var(--color-text-primary); }
+.plugins-summary-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.plugins-summary-link:hover { color: var(--color-text-primary); }
 
 .plugins-head-actions {
   margin-left: auto;
@@ -185,6 +189,16 @@
   padding-top: 1px;
   flex-shrink: 0;
 }
+/* Search and Add sit level with the title only, so the lines under it run
+   the full width: a section line that ends in a link (Subagents' "set in
+   Settings") was cut off short of the empty space beneath the actions. */
+@media (min-width: 768px) {
+  .plugins-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 16px; }
+  .plugins-head-text { display: contents; }
+  .plugins-head-row { grid-column: 1; grid-row: 1; }
+  .plugins-head-actions { grid-column: 2; grid-row: 1; align-self: start; }
+  .plugins-head-text > :not(.plugins-head-row) { grid-column: 1 / -1; }
+}
 .plugins-head-add {
   height: 30px;
   padding: 0 12px;
@@ -192,6 +206,12 @@
   font-weight: 500;
   border-radius: 8px;
 }
+/* An Add item with a second line saying where it starts. The icon sits level
+   with the first line rather than between the two. */
+.plugins-add-item { align-items: flex-start; }
+.plugins-add-item > svg { margin-top: 2px; }
+.plugins-add-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.plugins-add-hint { font-size: 0.6875rem; color: var(--color-text-tertiary); }
 
 /* Yours / Discover */
 .plugins-view {

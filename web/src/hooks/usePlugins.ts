@@ -20,8 +20,9 @@ import {
 
 /**
  * One blast radius for every plugin mutation. Install fans components into
- * the MCP catalog and the skill tier and can create vault secrets, and each
- * of those feeds a query that has already stopped polling.
+ * the MCP catalog, the skill tier and the subagent roster and can create
+ * vault secrets, and each of those feeds a query that has already stopped
+ * polling.
  *
  * This is the widest of the three and belongs only to a mutation that really
  * is plugin-wide. An action confined to one tier takes that tier's fan-out
@@ -32,6 +33,7 @@ export function invalidatePluginFanout(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: queryKeys.plugins.all });
   invalidateMcpFanout(qc);
   invalidateSkillFanout(qc);
+  qc.invalidateQueries({ queryKey: queryKeys.subagents.all });
   qc.invalidateQueries({ queryKey: queryKeys.userVault.all });
 }
 

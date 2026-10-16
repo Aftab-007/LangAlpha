@@ -14,7 +14,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ptc_agent.agent.filesystem_routes import IdentityGates, build_filesystem_backend
+from langgraph.store.memory import InMemoryStore
+
+from ptc_agent.agent.backends.langgraph_store import ReadOnlyStoreError
+from ptc_agent.agent.filesystem_routes import (
+    IdentityGates,
+    build_filesystem_backend,
+    subagent_backend,
+)
 from ptc_agent.core.paths import (
     MEMO_USER_DIR,
     MEMORY_INDEX_FILENAME,
@@ -182,7 +189,14 @@ class TestOtherRoutesStayOnTheComputer:
         ("gate", "expected"),
         [
             ("memo", {f"{ROOT}/{MEMO_USER_DIR}/"}),
-            ("user_data", {f"{ROOT}/.agents/user/profile/", f"{ROOT}/.agents/user/automations/"}),
+            (
+                "user_data",
+                {
+                    f"{ROOT}/.agents/user/profile/",
+                    f"{ROOT}/.agents/user/automations/",
+                    f"{ROOT}/.agents/user/agents/",
+                },
+            ),
         ],
     )
     def test_user_scoped_routes_are_not_moved_into_the_workspace(self, gate, expected):
@@ -192,3 +206,28 @@ class TestOtherRoutesStayOnTheComputer:
         )
 
         assert _prefixes(backend) == expected
+
+
+class TestSubagentView:
+    """A subagent's file tools read the user's memory and leave writing it to
+    the parent, as its prompt says."""
+
+    @pytest.mark.asyncio
+    async def test_memory_refuses_a_subagents_writes_and_shows_the_parents(self):
+        layout = SandboxLayout(ROOT).for_workspace("acme-ab12")
+        backend, _ = build_filesystem_backend(
+            backend=_backend(),
+            gates=_gates(),
+            store=InMemoryStore(),
+            user_id=USER,
+            workspace_id=WORKSPACE,
+            layout=layout,
+        )
+        view = subagent_backend(backend, layout)
+
+        for path in (f"{ROOT}/{MEMORY_USER_DIR}/notes.md", f"{ROOT}/acme-ab12/.agents/memory/notes.md"):
+            assert await backend.awrite_text(path, "kept\n")
+            with pytest.raises(ReadOnlyStoreError, match="parent agent's to write"):
+                await view.awrite_text(path, "changed\n")
+            assert (await view.aedit_text(path, "kept", "changed"))["success"] is False
+            assert "kept" in await view.aread_range(path)

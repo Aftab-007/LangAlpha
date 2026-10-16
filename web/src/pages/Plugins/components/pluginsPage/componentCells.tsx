@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { BrandMark } from '@/pages/ChatAgent/components/mcp/BrandMark';
-import type { SkillInfo } from '@/pages/ChatAgent/utils/api';
+import type { SkillInfo, SubagentView } from '@/pages/ChatAgent/utils/api';
 import { isEffectivelyEnabled } from '../../utils/provenance';
 import { CellState, CommandChip, SurfaceCell } from '../surface/Surface';
 
 /**
- * The cells a plugin's page lists its skills with, and the bare cell for a
- * component whose row is not in the lists (yet). A plugin's connectors use
- * the Connectors grid's own cells without their menu.
+ * The cells a plugin's page lists its skills and subagents with, and the bare
+ * cell for a component whose row is not in the lists (yet). A plugin's
+ * connectors use the Connectors grid's own cells without their menu.
  */
 
 /** A component the plugin lists whose row is not in the lists (yet). */
@@ -52,6 +53,33 @@ export function SkillCell({
       trailing={trailing ?? (skill ? <CellState state={on ? 'on' : 'off'} /> : null)}
       menu={menu}
       onOpen={onOpen}
+    />
+  );
+}
+
+/** A subagent as a cell, saying whether the user has changed it: uninstall
+ *  takes those changes with it. One without a view, which the Subagents list
+ *  leaves out while its plugin is off, has no page there to open. */
+export function SubagentCell({
+  name,
+  view,
+  onOpen,
+}: {
+  name: string;
+  view: SubagentView | null;
+  onOpen: () => void;
+}) {
+  const { t } = useTranslation();
+  const on = view ? view.enabled : true;
+  return (
+    <SurfaceCell
+      mark={<BrandMark name={name} kind="subagent" size="md" />}
+      name={name}
+      meta={view?.edited ? <span className="pp-cell-meta">{t('plugins.subagents.edited')}</span> : null}
+      line={view?.description || null}
+      off={!on}
+      trailing={view ? <CellState state={on ? 'on' : 'off'} /> : null}
+      onOpen={view ? onOpen : undefined}
     />
   );
 }

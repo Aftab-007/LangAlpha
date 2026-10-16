@@ -50,6 +50,7 @@ def _install_env(
         "create_plugin": AsyncMock(return_value={"user_plugin_id": PLUGIN_ID, "name": "demo"}),
         "fan_out_servers": AsyncMock(),
         "fan_out_skills": AsyncMock(),
+        "install_subagents": AsyncMock(),
         "claim_plugin_secrets": AsyncMock(),
         "after_secrets_changed": AsyncMock(),
         "write_supplied": AsyncMock(return_value=([], [])),

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Compass, Plus, Search, X } from 'lucide-react';
+import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,17 +14,19 @@ import type { SectionView } from '../../utils/detailParam';
 import type { AddIntent } from '../../utils/addParam';
 import {
   ADD_ROUTES,
-  isCustomize,
+  hasAdd,
+  hasDiscover,
   SECTION_DEFINITION_KEYS,
   SECTION_LABEL_KEYS,
-  type InstallSection,
+  type AddSection,
   type Section,
 } from './sections';
 
-const SEARCH_PLACEHOLDER_KEYS: Record<InstallSection, string> = {
+const SEARCH_PLACEHOLDER_KEYS: Record<AddSection, string> = {
   plugins: 'plugins.shell.search.plugins',
   mcp: 'plugins.shell.search.mcp',
   skills: 'plugins.shell.search.skills',
+  subagents: 'plugins.shell.search.subagents',
 };
 
 /**
@@ -53,16 +56,23 @@ export function PageHeader({
   onAdd: (intent: AddIntent) => void;
 }) {
   const { t } = useTranslation();
-  // Search and Add belong to the sections that list what can be installed.
+  const allWorkspacesAgent = useAllWorkspacesAgent();
+  // Search and Add belong to the sections that list what the agent uses.
   // An Accounts section adds from inside its own list, and an Add above it
   // that installs something else reads as the same button twice.
-  const installs = isCustomize(section);
+  const installs = hasAdd(section);
+  // A section the catalog does not carry yet has no Discover side to switch
+  // to or to browse from.
+  const catalog = hasCatalog && hasDiscover(section);
+  const routes = installs
+    ? ADD_ROUTES[section].filter((route) => route.needs !== 'allWorkspacesAgent' || allWorkspacesAgent)
+    : [];
   return (
     <header className="plugins-head">
       <div className="plugins-head-text">
         <div className="plugins-head-row">
           <h1 className="plugins-head-title">{t(SECTION_LABEL_KEYS[section])}</h1>
-          {isCustomize(section) && hasCatalog && <ViewSwitch value={view} onChange={onViewChange} />}
+          {catalog && <ViewSwitch value={view} onChange={onViewChange} />}
         </div>
         <p className="plugins-head-def">{t(SECTION_DEFINITION_KEYS[section])}</p>
         {summary}
@@ -89,7 +99,7 @@ export function PageHeader({
               {/* The catalog first: most of what is worth adding is already
                   in it, set up and checked. Already on it, the item would
                   go nowhere. */}
-              {hasCatalog && view !== 'discover' && (
+              {catalog && view !== 'discover' && (
                 <>
                   <DropdownMenuItem onSelect={() => onViewChange('discover')}>
                     <Compass className="h-3.5 w-3.5" />
@@ -98,9 +108,21 @@ export function PageHeader({
                   <DropdownMenuSeparator />
                 </>
               )}
-              {ADD_ROUTES[section].map((route) => (
-                <DropdownMenuItem key={route.intent} onSelect={() => onAdd(route.intent)}>
-                  {t(route.key)}
+              {routes.map((route) => (
+                <DropdownMenuItem
+                  key={route.intent}
+                  className={route.hintKey ? 'plugins-add-item' : undefined}
+                  onSelect={() => onAdd(route.intent)}
+                >
+                  {route.icon && <route.icon className="h-3.5 w-3.5" />}
+                  {route.hintKey ? (
+                    <span className="plugins-add-text">
+                      <span>{t(route.key)}</span>
+                      <span className="plugins-add-hint">{t(route.hintKey)}</span>
+                    </span>
+                  ) : (
+                    t(route.key)
+                  )}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>

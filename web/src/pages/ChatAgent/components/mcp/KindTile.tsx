@@ -1,8 +1,19 @@
 import type { ComponentType } from 'react';
-import { Blocks, KeyRound, ScrollText, Server } from 'lucide-react';
+import {
+  Blocks,
+  Bot,
+  ChartCandlestick,
+  Database,
+  FileText,
+  KeyRound,
+  ScrollText,
+  Server,
+  Telescope,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LangAlphaMark } from '@/components/brand/LangAlphaMark';
-import { TILE_SIZES, type TileSize } from './IdentityTile';
+import { SubagentsRings } from '@/components/ui/subagents-rings';
+import { IdentityTile, TILE_SIZES, type TileSize } from './IdentityTile';
 
 /**
  * What a thing with no logo of its own looks like: what kind of thing it is.
@@ -20,6 +31,10 @@ import { TILE_SIZES, type TileSize } from './IdentityTile';
  * brand are the same fact. It belongs here rather than in `brandArt` because
  * what it needs is a tile's color, not a URL.
  *
+ * Subagents are the other exception. There are a handful, each a role the
+ * agent hands work to, and the user picks between them by role, so each one
+ * takes its name's identity tint and a built-in draws its role's glyph.
+ *
  * Same geometry as `IdentityTile` and `BrandMark`, so a row does not resize
  * when a logo arrives for something that had none.
  */
@@ -28,10 +43,20 @@ const KIND_GLYPH: Record<MarkKind, ComponentType<{ className?: string }>> = {
   skill: ScrollText,
   server: Server,
   secret: KeyRound,
+  subagent: SubagentsRings,
   langalpha: LangAlphaMark,
 };
 
-export type MarkKind = 'plugin' | 'skill' | 'server' | 'secret' | 'langalpha';
+export type MarkKind = 'plugin' | 'skill' | 'server' | 'secret' | 'subagent' | 'langalpha';
+
+/** The built-in roles; any other subagent draws the kind's rings. */
+const SUBAGENT_GLYPH: Record<string, ComponentType<{ className?: string }>> = {
+  'general-purpose': Bot,
+  research: Telescope,
+  'data-prep': Database,
+  'equity-analyst': ChartCandlestick,
+  'report-builder': FileText,
+};
 
 const GLYPH_SIZES: Record<TileSize, string> = {
   xs: 'h-3 w-3',
@@ -54,13 +79,24 @@ const MARK_SIZES: Record<TileSize, string> = {
 
 export function KindTile({
   kind,
+  name,
   size = 'sm',
   className = '',
 }: {
   kind: MarkKind;
+  /** Seeds a subagent's tint and picks a built-in's glyph; other kinds ignore it. */
+  name?: string;
   size?: TileSize;
   className?: string;
 }) {
+  if (kind === 'subagent' && name) {
+    const Glyph = SUBAGENT_GLYPH[name] ?? SubagentsRings;
+    return (
+      <IdentityTile name={name} size={size} className={className}>
+        <Glyph className={GLYPH_SIZES[size]} />
+      </IdentityTile>
+    );
+  }
   const Glyph = KIND_GLYPH[kind];
   // A category glyph is a quiet label and stays out of the way. Our mark is
   // the identity of the row, so it takes the contrast a fetched logo would

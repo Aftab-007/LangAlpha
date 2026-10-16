@@ -52,6 +52,17 @@ export function resolveEffort(requested: string, offered: readonly string[]): st
   return atOrBelow.length > 0 ? atOrBelow[atOrBelow.length - 1] : ladder[0];
 }
 
+/** The levels an effort control lists, weakest first. A stored level the
+ *  ladder no longer offers stays listed, or the setting could not be cleared. */
+export function effortOptions(efforts: readonly string[], stored: string): string[] {
+  return EFFORT_ORDER.filter((lv) => (efforts.includes(lv) || lv === stored) && EFFORT_LABELS[lv]);
+}
+
+/** Whether an effort control has anything to offer for this ladder. */
+export function hasEffortOptions(efforts: readonly string[], stored: string): boolean {
+  return effortOptions(efforts, stored).length > 0;
+}
+
 export const COMPACTION_PROFILE_ORDER: CompactionProfileName[] = [
   'aggressive',
   'moderate',

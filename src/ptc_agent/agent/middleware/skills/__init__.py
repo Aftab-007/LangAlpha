@@ -24,6 +24,7 @@ from ptc_agent.agent.middleware.skills.lock import (
 )
 from ptc_agent.agent.middleware.skills.registry import (
     SKILL_REGISTRY,
+    SUBAGENT_WITHHELD_SKILLS,
     SkillDefinition,
     SkillMode,
     build_effective_skill_registry,
@@ -47,6 +48,7 @@ __all__ = [
     "SkillMode",
     "SkillsLockFile",
     "SKILL_REGISTRY",
+    "SUBAGENT_WITHHELD_SKILLS",
     "SkillPrefixResult",
     "SkillRequest",
     "SkillsMiddleware",

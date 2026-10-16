@@ -94,6 +94,7 @@ from src.server.services.plugins.package import (
 )
 from src.server.services.plugins.reconcile import ReconcileArms, reconcile
 from src.server.services.plugins.server_fanout import fan_out_servers
+from src.server.services.plugins.subagent_fanout import reconcile_subagents
 from src.server.services.plugins.skill_fanout import (
     fan_out_skills,
     store_skill_archive,
@@ -979,6 +980,9 @@ async def update_plugin_package(
         )
         await _update_skills(
             user_id, plugin_id, package, report, installed_at=stored["installed_at"]
+        )
+        await reconcile_subagents(
+            user_id, plugin_id, plugin["name"], package.agent_plans, report
         )
 
         # An unreadable mcp.json left the servers untouched above, so the stored

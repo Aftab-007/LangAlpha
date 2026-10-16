@@ -293,7 +293,7 @@ class TestExecuteCodeTool:
             async def settled_livefs(self, workspace_id=None):
                 return None
 
-            async def aexecute_code(self, code, thread_id=None, call_id=None):
+            async def aexecute_code(self, code, thread_id=None, call_id=None, **_):
                 seen.append(dict(_holders(redis)))
                 return SimpleNamespace(
                     success=True, stdout="ok", stderr="", mcp_trace=[]
@@ -319,7 +319,7 @@ class TestExecuteCodeTool:
             async def settled_livefs(self, workspace_id=None):
                 return None
 
-            async def aexecute_code(self, code, thread_id=None, call_id=None):
+            async def aexecute_code(self, code, thread_id=None, call_id=None, **_):
                 return SimpleNamespace(
                     success=True, stdout="ok", stderr="", mcp_trace=[]
                 )

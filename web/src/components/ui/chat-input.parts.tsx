@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import type { WidgetContextSnapshot } from '@/pages/Dashboard/widgets/framework/contextSnapshot';
 import { WidgetContextDeck } from '@/pages/Dashboard/widgets/framework/WidgetContextDeck';
 import { getSlashCommandIcon } from './chat-input.helpers';
+import { SUBAGENT_CORE, SUBAGENT_SEATS } from './subagents-rings.geometry';
 import type { FileAttachment, SlashCommand } from './chat-input.types';
 
 const formatFileSize = (bytes: number): string => {
@@ -189,8 +190,8 @@ export function PillToggle({
  * a visible hole at 16px. The figure is centered on its box rather than on the
  * core, to sit level with the lucide icons beside it (24 box, 2 stroke).
  */
-const CORE = { x: 12, y: 14.25 };
-const SEATS = [[12, 5.25], [19.79, 18.75], [4.21, 18.75]] as const;
+const CORE = SUBAGENT_CORE;
+const SEATS = SUBAGENT_SEATS;
 
 export function SubagentsGlyph({ on, className, style }: { on: boolean; className?: string; style?: CSSProperties }) {
   return (

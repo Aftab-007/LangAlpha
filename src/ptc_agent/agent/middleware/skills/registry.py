@@ -135,6 +135,11 @@ def _matches_mode(skill: SkillDefinition, mode: SkillMode | None) -> bool:
     return skill.exposure == mode or skill.exposure == "both"
 
 
+# Skills no subagent gets: the chart guide covers annotation tools that only
+# the main agent binds, so a subagent's manifest, its preloads and the names a
+# subagent setting may prefer all leave it out.
+SUBAGENT_WITHHELD_SKILLS: frozenset[str] = frozenset({"chart-annotation"})
+
 # Registry of all available skills
 # Skills are pre-registered at agent creation but tools are hidden until loaded
 SKILL_REGISTRY: dict[str, SkillDefinition] = {

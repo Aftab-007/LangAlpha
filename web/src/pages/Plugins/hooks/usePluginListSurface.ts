@@ -38,7 +38,7 @@ export interface PluginListSurface {
   stateFilter: StateFilter;
   selection: BulkSelection;
   progress: { done: number; total: number } | null;
-  run: (targets: BulkTarget[], opts: BulkRunOptions) => void;
+  run: <R>(targets: BulkTarget<R>[], opts: BulkRunOptions<R>) => void;
   /** A search term or a state pill is narrowing the list. */
   narrowed: boolean;
   /** Drop both narrowing controls at once, the way the empty state offers. */

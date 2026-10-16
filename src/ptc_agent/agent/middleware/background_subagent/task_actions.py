@@ -125,6 +125,12 @@ async def handle_task_action(
             tool_call_id=tool_call_id,
             current_run_id=current_run_id,
         )
+    if (subagent_type or "general-purpose") not in mw.subagent_types:
+        # The Task tool refuses a type it has no graph for before it starts
+        # anything, so the call runs in place: spawned, the refusal reached
+        # the model only after a reply saying the subagent was deployed. An
+        # omitted type means general-purpose, which the user can turn off.
+        return await handler(request)
     return await _handle_init(
         mw,
         request,
@@ -408,6 +414,26 @@ async def _handle_resume(
     if subagent_type and subagent_type != task.subagent_type:
         return ToolMessage(
             content=f"Error: Task-{target_task_id} is a '{task.subagent_type}' agent, not '{subagent_type}'.",
+            tool_call_id=tool_call_id,
+            name="Task",
+            status="error",
+        )
+
+    # The Task tool refuses a type it has no graph for, but a resume reaches
+    # it only inside the spawned writer: by then the reply has said the task
+    # resumed, and the admission and reset below have made the refusal its
+    # latest run. Running in place, as an init does, would lose the task's
+    # own type to the tool's general-purpose fallback.
+    if task.subagent_type not in mw.subagent_types:
+        # Local: subagent imports middleware, which imports this module.
+        from ptc_agent.agent.middleware.background_subagent.subagent import (
+            _unknown_type_refusal,
+        )
+
+        return ToolMessage(
+            content=_unknown_type_refusal(
+                task.subagent_type, sorted(mw.subagent_types), resuming=True
+            ),
             tool_call_id=tool_call_id,
             name="Task",
             status="error",

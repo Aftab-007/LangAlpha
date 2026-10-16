@@ -14,8 +14,9 @@ export interface PluginDiagnostic {
   /** info: how the package was read, not a problem with it. */
   level: 'info' | 'warning' | 'error';
   /** Where the finding isolates: the whole bundle, the MCP component, one
-   * mcp.json entry, one skills/ directory, or one archive member. */
-  scope: 'plugin' | 'mcp' | 'entry' | 'skill' | 'file';
+   * mcp.json entry, one skills/ directory, one agents/ file, or one archive
+   * member. */
+  scope: 'plugin' | 'mcp' | 'entry' | 'skill' | 'subagent' | 'file';
   target: string;
   code: string;
   message: string;
@@ -35,8 +36,9 @@ export type PluginComponentStatus =
   | 'detached';
 
 export interface PluginComponentResult {
-  kind: 'mcp' | 'skill';
-  /** Package identity: the mcp.json key or the skills/ directory name. */
+  kind: 'mcp' | 'skill' | 'subagent';
+  /** Package identity: the mcp.json key, the skills/ directory name or the
+   * agents/ file name. */
   key: string;
   /** Installed row name (post name-coercion); '' when nothing landed. */
   name: string;
@@ -73,12 +75,16 @@ export interface PluginInstallReport {
   dropped_files: string[];
   servers_created: number;
   skills_created: number;
+  /** Absent from a server that predates plugin subagents. */
+  subagents_created?: number;
 }
 
 export interface PluginComponentRef {
-  kind: 'mcp' | 'skill';
+  kind: 'mcp' | 'skill' | 'subagent';
   name: string;
   key: string;
+  /** Subagents only: the user changed it. */
+  edited?: boolean;
 }
 
 export interface PluginInfo {
@@ -288,7 +294,8 @@ export async function upgradePluginSseEntries(
 export async function deletePlugin(name: string) {
   const { data } = await api.delete<{
     ok: boolean;
-    deleted: { servers: string[]; skills: string[] };
+    /** `subagents` is absent from a server that predates plugin subagents. */
+    deleted: { servers: string[]; skills: string[]; subagents?: string[] };
   }>(`/api/v1/plugins/${encodeURIComponent(name)}`);
   return data;
 }

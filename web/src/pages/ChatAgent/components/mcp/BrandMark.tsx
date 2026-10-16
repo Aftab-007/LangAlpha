@@ -30,7 +30,7 @@ export function BrandMark({
   size = 'sm',
   className,
 }: {
-  /** Seeds the monogram fallback and its tint; ignored when `kind` is given. */
+  /** Seeds the monogram fallback and its tint; with `kind`, only a subagent's. */
   name: string;
   art?: BrandArt;
   /** Draw this kind's glyph instead of a monogram when there is no art. */
@@ -44,7 +44,7 @@ export function BrandMark({
 
   if (!art || failedSrc === art.src) {
     return kind ? (
-      <KindTile kind={kind} size={size} className={className} />
+      <KindTile kind={kind} name={name} size={size} className={className} />
     ) : (
       <IdentityTile name={name} size={size} className={className} />
     );

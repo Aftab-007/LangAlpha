@@ -14,9 +14,6 @@ defaults:
   # Task workflow defaults
   max_concurrent_task_units: 3
 
-  # General agent defaults
-  max_iterations: 15
-
   # Component defaults
   include_examples: true
   include_anti_patterns: true

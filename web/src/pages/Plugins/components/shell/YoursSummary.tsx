@@ -1,9 +1,13 @@
 import { Fragment, type ReactNode } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
+import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import type { PluginInfo } from '@/pages/ChatAgent/utils/api';
+import { useAllModels } from '@/hooks/useAllModels';
+import { effortLabelFor } from '@/lib/modelTuning';
+import type { PluginInfo, SubagentsResponse } from '@/pages/ChatAgent/utils/api';
 import { failureBucket, type FailureBucket, type PluginProblem } from '../../utils/connectorState';
 import { StatusDot } from '../surface/Surface';
+import { modelName } from '../subagents/subagentText';
 import type { Section } from './sections';
 import type { ShellData } from './useShellData';
 
@@ -42,7 +46,7 @@ export function YoursSummary({ section, data }: { section: Section; data: ShellD
       ) : line.quiet ? (
         <>
           <span className="plugins-summary-sep" aria-hidden>·</span>
-          <span>{line.quiet}</span>
+          <span className="plugins-summary-quiet">{line.quiet}</span>
         </>
       ) : null}
     </p>
@@ -60,7 +64,7 @@ interface SummaryLine {
   /** What needs the user, each a clause; joined with the locale's comma. */
   attention: Clause[];
   /** Said only when nothing needs attention. */
-  quiet?: string;
+  quiet?: ReactNode;
 }
 
 /**
@@ -155,6 +159,17 @@ function summaryParts(t: TFunction, section: Section, data: ShellData): SummaryL
         quiet: s.off > 0 ? t('plugins.shell.summary.off', { count: s.off }) : undefined,
       };
     }
+    case 'subagents': {
+      const s = data.subagents;
+      if (!s) return null;
+      // A row's problem is on the row and lights the rail; the line says what
+      // the agent handing them work runs on, the one thing no row shows.
+      return {
+        lead: t('plugins.shell.summary.subagents', { count: s.total }),
+        attention: [],
+        quiet: <MainAgentClause main={s.main} />,
+      };
+    }
     case 'brokerages': {
       const b = data.brokerages;
       if (!b) return null;
@@ -178,4 +193,33 @@ function summaryParts(t: TFunction, section: Section, data: ShellData): SummaryL
       };
     }
   }
+}
+
+/**
+ * "The agent itself runs on Sonnet 5.5 at Medium, set in Settings": the
+ * model and effort a subagent left on Thread's model or Thread's setting
+ * starts from on a new thread.
+ */
+function MainAgentClause({ main }: { main: SubagentsResponse['main'] }) {
+  const { t } = useTranslation();
+  const { metadata } = useAllModels();
+  const settings = <Link to="/settings?tab=model" className="plugins-summary-link" />;
+  const model = main.model ? modelName(main.model, metadata) : null;
+  const effort = effortLabelFor(t, main.effort);
+  if (!model) {
+    return <Trans i18nKey="plugins.shell.summary.mainDefault" components={{ settings }} />;
+  }
+  return effort ? (
+    <Trans
+      i18nKey="plugins.shell.summary.mainRunsOn"
+      values={{ model, effort }}
+      components={{ b: <b />, settings }}
+    />
+  ) : (
+    <Trans
+      i18nKey="plugins.shell.summary.mainRunsOnModel"
+      values={{ model }}
+      components={{ b: <b />, settings }}
+    />
+  );
 }

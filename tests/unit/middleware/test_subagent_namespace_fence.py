@@ -71,7 +71,7 @@ def _middleware(owner) -> BackgroundSubagentMiddleware:
     # thread_id="" keeps the real meta writer inert; tests patch it anyway.
     registry = BackgroundTaskRegistry(thread_id="")
     return BackgroundSubagentMiddleware(
-        registry=registry, enabled=True, namespace_owner=owner
+        registry=registry, enabled=True, subagent_types={"general-purpose"}, namespace_owner=owner
     )
 
 
@@ -260,7 +260,7 @@ def _checkpointer(metadata: dict | None):
 async def test_hydrate_running_meta_builds_live_task_with_real_identity():
     mw = BackgroundSubagentMiddleware(
         registry=BackgroundTaskRegistry(thread_id="thread-x"),
-        enabled=True,
+        enabled=True, subagent_types={"general-purpose"},
         namespace_owner=FakeOwner(),
         checkpointer=_checkpointer({"subagent_type": "research"}),
     )
@@ -294,7 +294,7 @@ async def test_hydrate_running_meta_without_fence_stays_completed():
     'running' meta is necessarily stale — keep the legacy completed shape."""
     mw = BackgroundSubagentMiddleware(
         registry=BackgroundTaskRegistry(thread_id="thread-x"),
-        enabled=True,
+        enabled=True, subagent_types={"general-purpose"},
         namespace_owner=None,
         checkpointer=_checkpointer({}),
     )
@@ -314,7 +314,7 @@ async def test_hydrate_running_meta_survives_missing_checkpoint():
     must be enough to resolve it."""
     mw = BackgroundSubagentMiddleware(
         registry=BackgroundTaskRegistry(thread_id="thread-x"),
-        enabled=True,
+        enabled=True, subagent_types={"general-purpose"},
         namespace_owner=FakeOwner(),
         checkpointer=_checkpointer(None),
     )
@@ -333,7 +333,7 @@ async def test_hydrate_running_meta_survives_missing_checkpoint():
 async def test_hydrate_no_meta_no_checkpoint_returns_none():
     mw = BackgroundSubagentMiddleware(
         registry=BackgroundTaskRegistry(thread_id="thread-x"),
-        enabled=True,
+        enabled=True, subagent_types={"general-purpose"},
         namespace_owner=FakeOwner(),
         checkpointer=_checkpointer(None),
     )
@@ -370,7 +370,7 @@ async def test_concurrent_hydrations_publish_one_object():
     registry at an inert duplicate while the first object spawns the writer."""
     mw = BackgroundSubagentMiddleware(
         registry=BackgroundTaskRegistry(thread_id="thread-x"),
-        enabled=True,
+        enabled=True, subagent_types={"general-purpose"},
         namespace_owner=FakeOwner(),
         checkpointer=_yielding_checkpointer({}),
     )
@@ -397,7 +397,7 @@ async def test_parallel_resumes_through_hydration_register_the_spawned_writer():
     owner = FakeOwner(grant=True)
     mw = BackgroundSubagentMiddleware(
         registry=BackgroundTaskRegistry(thread_id="thread-x"),
-        enabled=True,
+        enabled=True, subagent_types={"general-purpose"},
         namespace_owner=owner,
         checkpointer=_yielding_checkpointer({}),
     )
@@ -556,7 +556,7 @@ async def test_resume_steals_claim_before_redis_deletes():
     owner = FakeOwner(grant=True)
     registry = BackgroundTaskRegistry(thread_id="thread-x")
     mw = BackgroundSubagentMiddleware(
-        registry=registry, enabled=True, namespace_owner=owner
+        registry=registry, enabled=True, subagent_types={"general-purpose"}, namespace_owner=owner
     )
     mw.registry.write_task_meta = AsyncMock()
     task = _seed_task(mw, completed=True)

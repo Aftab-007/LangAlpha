@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import posixpath
-from typing import Any, Callable, Protocol, Sequence, TypeVar
+from typing import Any, Callable, Collection, Protocol, Sequence, TypeVar
 
 import structlog
 
@@ -181,6 +181,19 @@ class CompositeFilesystemBackend:
         if sandbox is None:
             raise AttributeError(name)
         return getattr(sandbox, name)
+
+    def refusing_writes_under(
+        self, prefixes: Collection[str], error: str
+    ) -> CompositeFilesystemBackend:
+        """This backend with the store routes mounted at ``prefixes`` read-only,
+        refusing a write with ``error``; every other route is shared as is."""
+        return CompositeFilesystemBackend(
+            sandbox=self._sandbox,
+            routes=[
+                route.read_only_view(error) if route.root_prefix in prefixes else route
+                for route in self._routes
+            ],
+        )
 
     def route_for(self, path: str) -> FilesystemRoute | None:
         """The mounted route that owns ``path``, or None where the sandbox does."""

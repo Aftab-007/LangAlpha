@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -59,11 +60,14 @@ export function IdentityTile({
   name,
   size = 'sm',
   className = '',
+  children,
 }: {
   name: string;
   size?: TileSize;
   /** Extra geometry from the caller (e.g. a round mask on the model picker). */
   className?: string;
+  /** Drawn on the name's tint in place of the monogram. */
+  children?: ReactNode;
 }) {
   const [bg, fg] = TINTS[identityIndex(name)];
   return (
@@ -77,7 +81,7 @@ export function IdentityTile({
       )}
       style={{ color: fg, backgroundColor: bg }}
     >
-      {monogram(name)}
+      {children ?? monogram(name)}
     </span>
   );
 }

@@ -322,7 +322,6 @@ class TestSubagentConfig:
         assert cfg.mode == "ptc"
         assert cfg.model is None
         assert cfg.tools == ["execute_code", "filesystem"]
-        assert cfg.max_iterations == 15
 
     def test_custom_fields(self):
         cfg = SubagentConfig(
@@ -330,10 +329,15 @@ class TestSubagentConfig:
             mode="flash",
             model="claude-haiku-4-5",
             tools=["web_search"],
-            max_iterations=5,
         )
         assert cfg.mode == "flash"
         assert cfg.model == "claude-haiku-4-5"
+
+    def test_effort_is_a_level_of_the_vocabulary(self):
+        # An unknown word would reach no model while the pane showed it.
+        assert SubagentConfig(description="Deep", reasoning_effort="max").reasoning_effort == "max"
+        with pytest.raises(ValueError, match="reasoning_effort"):
+            SubagentConfig(description="Deep", reasoning_effort="ultra")
 
 
 class TestSubagentsConfig:

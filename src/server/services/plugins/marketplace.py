@@ -77,7 +77,9 @@ logger = logging.getLogger(__name__)
 # broken catalog costs one fetch a minute rather than one per page view.
 CACHE_TTL_SECONDS = 600
 FAILURE_TTL_SECONDS = 60
-_CACHE_PREFIX = "plugin-marketplace:v3:"
+# Bumped when the listing or the tree hashes it keeps are computed differently,
+# so no worker serves a listing an earlier build cached.
+_CACHE_PREFIX = "plugin-marketplace:v4:"
 
 # Runaway guards on fetched data, far above any real catalog.
 MAX_ENTRIES = 500

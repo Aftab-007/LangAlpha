@@ -297,17 +297,27 @@ async def test_is_byok_none_self_resolves():
 # ---------------------------------------------------------------------------
 
 
+def _roster(**models):
+    from ptc_agent.agent.subagents.definition import SubagentDefinition
+    from ptc_agent.agent.subagents.merge import ResolvedSubagents
+
+    return ResolvedSubagents(
+        definitions={
+            name: SubagentDefinition(name=name, description="", model=model)
+            for name, model in models.items()
+        },
+        enabled=tuple(models),
+    )
+
+
 def test_role_registry_compaction_fetch_and_subagents():
     from src.server.services.llm.clients import LLMRole, role_registry
+    from src.server.services.llm.subagents import subagent_roles
 
     cfg = _make_config(compaction="cm", fetch="fm")
-    sub_with_model = MagicMock()
-    sub_with_model.model = "sub-model"
-    sub_no_model = MagicMock()
-    sub_no_model.model = None
-    subagent_defs = {"research": sub_with_model, "writer": sub_no_model}
+    roster = _roster(research="sub-model", writer=None)
 
-    roles = role_registry(cfg, ["research", "writer"], subagent_defs, {})
+    roles = [*role_registry(cfg, {}), *subagent_roles(roster, {}, None)]
     keys = [r.key for r in roles]
 
     assert "compaction" in keys
@@ -326,10 +336,10 @@ def test_role_registry_gives_each_role_its_own_models_effort():
     exception: a summary runs at the summary level whatever the user set.
     """
     from src.server.services.llm.clients import role_registry
+    from src.server.services.llm.subagents import subagent_roles
 
     cfg = _make_config(compaction="cm", fetch="fm")
-    sub = MagicMock()
-    sub.model = "sub-model"
+    roster = _roster(research="sub-model")  # sets no level of its own
     model_pref = {
         "reasoning_effort": "low",
         "profiles": {"sub-model": {"reasoning_effort": "high"}, "cm": {"reasoning_effort": "max"}},
@@ -341,7 +351,8 @@ def test_role_registry_gives_each_role_its_own_models_effort():
         side_effect=lambda _pref, name: model_entry.get(name),
     ):
         roles = {
-            r.key: r for r in role_registry(cfg, ["research"], {"research": sub}, model_pref)
+            r.key: r
+            for r in [*role_registry(cfg, model_pref), *subagent_roles(roster, model_pref, None)]
         }
 
     # The subagent's model carries a profile; fetch falls to the account.
@@ -370,7 +381,7 @@ def test_compaction_runs_at_medium_else_high(efforts, expected):
         return_value={"reasoning": {"efforts": efforts}},
     ):
         (compaction,) = [
-            r for r in role_registry(_make_config(compaction="cm"), [], {}, {})
+            r for r in role_registry(_make_config(compaction="cm"), {})
             if r.key == "compaction"
         ]
 
@@ -388,7 +399,7 @@ def test_role_registry_buys_no_priority_tier():
     cfg = _make_config(compaction="cm", fetch="fm")
     model_pref = {"fast_mode": True, "profiles": {"cm": {"fast_mode": True}}}
 
-    roles = role_registry(cfg, [], {}, model_pref)
+    roles = role_registry(cfg, model_pref)
 
     assert [r.service_tier for r in roles] == [None, None]
 
@@ -397,7 +408,7 @@ def test_role_registry_compacts_on_the_turns_model_when_none_is_named():
     from src.server.services.llm.clients import role_registry
 
     cfg = _make_config()  # no compaction, no fetch, no flash
-    roles = role_registry(cfg, [], {}, {})
+    roles = role_registry(cfg, {})
     # A summary runs on the model the turn runs; fetch, with no flash to
     # follow, has no model and so no role.
     assert [(r.key, r.model) for r in roles] == [("compaction", "main-model")]
@@ -416,7 +427,7 @@ def test_role_registry_summary_falls_back_to_the_turns_fallback():
             {"reasoning": {"efforts": ["low", "high", "max"]}} if name == "fb-1" else None
         ),
     ):
-        roles = {r.key: r for r in role_registry(cfg, [], {}, {}, "main-model")}
+        roles = {r.key: r for r in role_registry(cfg, {}, "main-model")}
 
     fallback = roles["compaction_fallback"]
     assert (fallback.model, fallback.reasoning_effort, fallback.fallback_to_main) == (
@@ -436,7 +447,7 @@ def test_role_registry_picked_summary_model_falls_back_to_the_turns_model():
         f"{USER_MODELS}.model_entry",
         side_effect=lambda _pref, name: {"reasoning": {"efforts": ["low", "medium", "max"]}},
     ):
-        roles = {r.key: r for r in role_registry(cfg, [], {}, {}, "main-model")}
+        roles = {r.key: r for r in role_registry(cfg, {}, "main-model")}
 
     fallback = roles["compaction_fallback"]
     assert (fallback.model, fallback.reasoning_effort, fallback.fallback_to_main) == (
@@ -444,15 +455,3 @@ def test_role_registry_picked_summary_model_falls_back_to_the_turns_model():
         "medium",
         False,
     )
-
-
-def test_role_registry_unknown_enabled_name_skipped():
-    """An enabled subagent absent from subagent_defs is skipped (no raise)."""
-    from src.server.services.llm.clients import role_registry
-
-    cfg = _make_config(compaction="cm")
-    # 'ghost' is enabled but not in defs (registry.get() returned None → absent)
-    roles = role_registry(cfg, ["ghost"], {}, {})
-    keys = [r.key for r in roles]
-    assert keys == ["compaction"]
-    assert "subagent:ghost" not in keys

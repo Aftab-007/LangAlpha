@@ -3,7 +3,7 @@
  * connected while subagents are on, it flips through a thread host, or holds
  * the pick itself without one. It folds into the ⋯ menu like any toggle, with
  * a check while on and no ⋯ dot, since on is the default and a dot lit for it
- * would never mean anything.
+ * would never mean anything; folded, it links to the Subagents pane under it.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, renderHook, screen } from '@testing-library/react';
@@ -154,10 +154,12 @@ describe('the Subagents toolbar item', () => {
       { initialProps: { allowed: true } },
     );
     const menuOf = () => render(
-      <DropdownMenu open>
-        <DropdownMenuTrigger>more</DropdownMenuTrigger>
-        <DropdownMenuContent>{result.current.find((i) => i.id === 'subagents')!.menu()}</DropdownMenuContent>
-      </DropdownMenu>,
+      <MemoryRouter>
+        <DropdownMenu open>
+          <DropdownMenuTrigger>more</DropdownMenuTrigger>
+          <DropdownMenuContent>{result.current.find((i) => i.id === 'subagents')!.menu()}</DropdownMenuContent>
+        </DropdownMenu>
+      </MemoryRouter>,
     );
 
     const on = menuOf();
@@ -173,5 +175,23 @@ describe('the Subagents toolbar item', () => {
     expect(offItem.querySelector('.lucide-check')).toBeNull();
     fireEvent.click(offItem);
     expect(onToggle).toHaveBeenLastCalledWith(true);
+  });
+
+  it('links to the Subagents pane under the switch', () => {
+    const { result } = renderHook(() =>
+      useToolbarItems({ ...base, subagentsAllowed: true, onToggleSubagents: vi.fn() }),
+    );
+    render(
+      <MemoryRouter>
+        <DropdownMenu open>
+          <DropdownMenuTrigger>more</DropdownMenuTrigger>
+          <DropdownMenuContent>{result.current.find((i) => i.id === 'subagents')!.menu()}</DropdownMenuContent>
+        </DropdownMenu>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('menuitem', { name: 'Manage subagents' })).toHaveAttribute(
+      'href',
+      '/plugins?tab=subagents',
+    );
   });
 });
