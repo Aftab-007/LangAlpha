@@ -29,8 +29,11 @@ export function FallbackSuggestionPill({
   return (
     <div className="flex items-center gap-2 px-3 py-2 rounded-md text-sm"
       role="status" aria-live="polite"
+      // Opaque: the tint is layered over the page surface, so the transcript
+      // scrolling under the composer stack does not read through it.
       style={{
-        backgroundColor: 'var(--color-warning-soft)',
+        backgroundColor: 'var(--color-bg-page)',
+        backgroundImage: 'linear-gradient(var(--color-warning-soft), var(--color-warning-soft))',
         color: 'var(--color-text-secondary)',
         border: '1px solid var(--color-border-muted)',
       }}>
