@@ -267,6 +267,14 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Redis cache initialization failed: {e}")
         logger.warning("Server will continue without caching")
 
+    # Report-back state an earlier build wrote under the Flash agent's names
+    # is renamed before this worker serves; nothing reads the old names.
+    from src.server.services.report_back.handoff.retired_names import (
+        rename_retired_names,
+    )
+
+    await rename_retired_names()
+
     # Sandbox path writes take a Redis lease so the workers agree on one
     # writer per file. Fails open when the cache is down (see the module).
     from src.server.services.path_lock_coordination import install as install_path_lease

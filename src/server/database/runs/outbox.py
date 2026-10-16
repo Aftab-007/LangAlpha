@@ -670,20 +670,15 @@ async def enqueue_compensation_job(
     payload: Dict[str, Any],
     ordering_key: Optional[str],
     idempotency_key: str,
-    backdate_seconds: Optional[float] = None,
     defer: bool = False,
     conn=None,
 ) -> None:
     """Insert a single follow-up job.
 
-    Used by the legacy-FIFO migration sweep (and any caller needing a
-    durable one-off job). ``backdate_seconds`` shifts created_at into the
-    past so a migrated entry keeps its chain position ahead of younger
-    pending rows. ``defer=True`` inserts the row with
-    ``next_retry_at='infinity'`` — durable but never claimable until
-    ``release_deferred_report_backs`` flips it due (interrupted-root task
-    report-backs wait for the thread's next completed finalize). ON
-    CONFLICT DO NOTHING: re-running the sweep never double-registers.
+    ``defer=True`` inserts the row with ``next_retry_at='infinity'`` — durable
+    but never claimable until ``release_deferred_report_backs`` flips it due
+    (interrupted-root task report-backs wait for the thread's next completed
+    finalize). ON CONFLICT DO NOTHING: a retried caller never double-registers.
     ``conn`` joins the caller's transaction — how a job commits atomically
     with the finalize that owes it (subagent report-back).
     """
@@ -691,14 +686,14 @@ async def enqueue_compensation_job(
         async with conn.cursor() as cur:
             await _insert_compensation_job(
                 cur, run_id, thread_id, hook_type, payload,
-                ordering_key, idempotency_key, backdate_seconds, defer,
+                ordering_key, idempotency_key, defer,
             )
         return
     async with pool.get_db_connection() as conn:
         async with conn.cursor() as cur:
             await _insert_compensation_job(
                 cur, run_id, thread_id, hook_type, payload,
-                ordering_key, idempotency_key, backdate_seconds, defer,
+                ordering_key, idempotency_key, defer,
             )
 
 
@@ -710,7 +705,6 @@ async def _insert_compensation_job(
     payload: Dict[str, Any],
     ordering_key: Optional[str],
     idempotency_key: str,
-    backdate_seconds: Optional[float],
     defer: bool,
 ) -> None:
     await cur.execute(
@@ -722,7 +716,7 @@ async def _insert_compensation_job(
         )
         VALUES (
             %s, %s, %s, %s, %s, %s,
-            NOW() - make_interval(secs => %s),
+            NOW(),
             CASE WHEN %s THEN 'infinity'::timestamptz ELSE NULL END
         )
         ON CONFLICT (idempotency_key) DO NOTHING
@@ -734,7 +728,6 @@ async def _insert_compensation_job(
             SafeJson(payload),
             ordering_key,
             idempotency_key,
-            float(backdate_seconds or 0.0),
             defer,
         ),
     )
@@ -1054,47 +1047,6 @@ async def get_recent_notification_run_ids(
                 (thread_id, hook_type, window_seconds, limit),
             )
             return [str(r[0]) for r in await cur.fetchall()]
-
-
-async def list_pending_jobs(hook_type: str) -> List[Dict[str, Any]]:
-    """Pending rows of one hook_type, for the one-shot legacy rekey sweep.
-
-    Only the columns the sweep reads: a deferred row's ``next_retry_at`` is
-    ``'infinity'``, which no Python datetime holds, and the sweep gates every
-    claim, so loading it would stop the drainer for as long as one report-back
-    waits on its thread.
-    """
-    async with pool.get_db_connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                """
-                SELECT hook_outbox_id, ordering_key, payload FROM hook_outbox
-                WHERE status = 'pending' AND hook_type = %s
-                ORDER BY created_at, hook_outbox_id
-                """,
-                (hook_type,),
-            )
-            return list(await cur.fetchall())
-
-
-async def set_job_ordering_key(job_id: str, ordering_key: str) -> bool:
-    """Rekey a still-pending job into its correct ordering chain.
-
-    Guarded to ``pending`` so a job a drainer claimed in the meantime is
-    left alone — rekeying a claimed row would move it under a chain whose
-    gate it already bypassed.
-    """
-    async with pool.get_db_connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                UPDATE hook_outbox
-                SET ordering_key = %s
-                WHERE hook_outbox_id = %s AND status = 'pending'
-                """,
-                (ordering_key, job_id),
-            )
-            return cur.rowcount > 0
 
 
 async def requeue_job_with_key(

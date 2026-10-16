@@ -3,8 +3,7 @@
 ``watch_wakes`` binds the status read-model to the wake wire-protocol; the
 outbox executors (registered at startup, so the outbox service never imports
 this package) validate applicability and delegate into ``executor``/
-``reserve``/``pointer``. The legacy FIFO migration sweeps pre-outbox queues
-once at registration.
+``reserve``/``pointer``.
 """
 
 from __future__ import annotations
@@ -13,8 +12,6 @@ import logging
 
 from src.server.services.report_back.handoff import executor, pointer, reserve, status, wake
 from src.server.services.report_back.handoff.keys import (
-    LEGACY_QUEUE_PATTERN,
-    LEGACY_QUEUED_PREFIX,
     ORIGIN_THREAD_FIELD,
     ptc_origin_key,
 )
@@ -179,121 +176,14 @@ async def _exec_watch_clear(job: dict) -> None:
             await wake.publish_wake(cache, dispatcher_tid, cleared=True)
 
 
-async def _migrate_legacy_fifo_queues() -> None:
-    """One-shot upgrade sweep folding pre-drainer report-back state into the outbox.
-
-    Two legacy shapes can exist at upgrade time: (a) Redis FIFO queues
-    (``LEGACY_QUEUE_PATTERN``) holding completions the old in-process consumer
-    never delivered — re-enqueued as outbox report_back rows keyed on the
-    thread they report to (queue keys deleted only after every entry lands);
-    (b) outbox report_back / watch_clear rows enqueued before origin stamping,
-    keyed on their own PTC thread — rekeyed onto the chain of the thread their
-    execution actually serializes with. Idempotent throughout (stable
-    idempotency keys, pending-only rekey), so a failed sweep simply reruns.
-    """
-    from src.server.database.runs import outbox as outbox_db
-    from src.server.database.runs import lifecycle as tl_db
-    from src.utils.cache.redis_cache import get_cache_client
-
-    def _s(value) -> str:
-        return value.decode() if isinstance(value, (bytes, bytearray)) else value
-
-    cache = get_cache_client()
-    if not cache.enabled:
-        return  # Redis-less deployment: no legacy queues can exist
-    client = cache.client
-    if client is None:
-        raise RuntimeError("Redis enabled but not connected — sweep retries")
-
-    # Backdating puts migrated entries AHEAD of any younger pending outbox
-    # row on the same chain (queue entries are completions that predate
-    # every still-pending row), with intra-queue order preserved via a
-    # per-index millisecond stagger.
-    LEGACY_BACKDATE_SECONDS = 30 * 86400.0
-
-    async for raw_key in client.scan_iter(match=LEGACY_QUEUE_PATTERN):
-        queue_key = _s(raw_key)
-        dispatcher_tid = queue_key.split(":", 1)[1]
-        entries = [_s(e) for e in await client.lrange(queue_key, 0, -1) or []]
-        for i, ptc_tid in enumerate(entries):
-            latest = await tl_db.get_latest_attempt(ptc_tid)
-            if latest is None:
-                # No run row to FK onto — nothing can ever render this turn.
-                # Legacy-scoped clear ONLY (expected_gen=None): the current
-                # origin's gen would authorize destroying whatever is there
-                # NOW — including a rival worker's just-reserved generation
-                # whose START hasn't committed (round-19 P1). A queue entry
-                # proves only a legacy delivery was owed; a generated origin
-                # belongs to a newer incarnation and is left intact (a
-                # fenced-out legacy clear tombstones, so that reservation's
-                # rollback completes it). And like every off-chain caller,
-                # the teardown refuses while a run pointer is live — only
-                # that admission's serialized lifecycle may drain the pair.
-                origin = await cache.get_strict(ptc_origin_key(ptc_tid))
-                await pointer.clear_handoff_report_back(
-                    cache,
-                    ptc_tid,
-                    dispatcher_tid,
-                    user_id=(origin or {}).get("user_id")
-                    if isinstance(origin, dict)
-                    else None,
-                    expected_gen=None,
-                    refuse_if_pointer=True,
-                )
-            else:
-                await outbox_db.enqueue_compensation_job(
-                    run_id=str(latest["conversation_response_id"]),
-                    thread_id=ptc_tid,
-                    hook_type="report_back",
-                    payload={"ptc_thread_id": ptc_tid},
-                    ordering_key=dispatcher_tid,
-                    idempotency_key=f"legacy_fifo:{dispatcher_tid}:{ptc_tid}",
-                    backdate_seconds=LEGACY_BACKDATE_SECONDS - i * 0.001,
-                )
-            # Remove only THIS entry (not the whole key): an entry appended
-            # after the LRANGE snapshot survives for the next process
-            # start's sweep instead of being deleted unread.
-            await client.lrem(queue_key, 1, ptc_tid)
-            await client.srem(f"{LEGACY_QUEUED_PREFIX}{dispatcher_tid}", ptc_tid)
-        if not await client.llen(queue_key):
-            await client.delete(queue_key, f"{LEGACY_QUEUED_PREFIX}{dispatcher_tid}")
-        if entries:
-            logger.info(
-                f"[HookOutbox] migrated {len(entries)} legacy FIFO report-backs "
-                f"for thread {dispatcher_tid}"
-            )
-
-    for hook_type in ("report_back", "watch_clear"):
-        for row in await outbox_db.list_pending_jobs(hook_type):
-            ptc_tid = (row.get("payload") or {}).get("ptc_thread_id")
-            if not ptc_tid:
-                continue
-            origin = await cache.get_strict(ptc_origin_key(ptc_tid))
-            dispatcher_tid = (
-                origin.get(ORIGIN_THREAD_FIELD) if isinstance(origin, dict) else None
-            )
-            if dispatcher_tid and row.get("ordering_key") != dispatcher_tid:
-                if await outbox_db.set_job_ordering_key(
-                    str(row["hook_outbox_id"]), dispatcher_tid
-                ):
-                    logger.info(
-                        f"[HookOutbox] rekeyed legacy {hook_type} job="
-                        f"{row['hook_outbox_id']} onto the chain of {dispatcher_tid}"
-                    )
-
-
 def register_outbox_executors() -> None:
-    """Register this module's executors + legacy sweep with the outbox drainer.
+    """Register this module's executors with the outbox drainer.
 
     Called from app setup BEFORE the drainer starts — an unregistered type's
     jobs nack toward dead.
     """
-    from src.server.services.hook_outbox import (
-        register_hook_executor,
-        register_startup_sweep,
-    )
+    from src.server.services.hook_outbox import register_hook_executor
 
     register_hook_executor("report_back", _exec_handoff_report_back)
     register_hook_executor("needs_input_wake", _exec_needs_input_wake)
     register_hook_executor("watch_clear", _exec_watch_clear)
-    register_startup_sweep(_migrate_legacy_fifo_queues)

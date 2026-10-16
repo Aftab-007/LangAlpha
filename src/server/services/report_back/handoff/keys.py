@@ -7,22 +7,19 @@ import from any layer without cycles.
 
 from __future__ import annotations
 
-# Wire names that outlive a deploy: Redis records and run metadata written by
-# the previous build are still read after one, so these keep their spelling.
 # The ORIGIN_* names are the ``ptc_origin`` record's kind and the fields naming
 # the thread that handed the work off and its workspace; ORIGIN_THREAD_META is
 # the run metadata key (and chat request field) naming the thread a dispatched
-# run reports back to.
-WATCH_PREFIX = "flash_watch:"
-RB_RUN_PREFIX = "flash_rb_run:"
-RB_DONE_PREFIX = "flash_rb_done:"
-USER_PENDING_PREFIX = "flash_user_pending:"
-LEGACY_QUEUE_PATTERN = "flash_rb_queue:*"
-LEGACY_QUEUED_PREFIX = "flash_rb_queued:"
-ORIGIN_KIND = "flash"
-ORIGIN_THREAD_FIELD = "flash_thread_id"
-ORIGIN_WORKSPACE_FIELD = "flash_workspace_id"
-ORIGIN_THREAD_META = "origin_flash_thread_id"
+# run reports back to. State an earlier build left under the retired Flash
+# agent's names is renamed to these at startup (``retired_names``).
+WATCH_PREFIX = "handoff_watch:"
+RB_RUN_PREFIX = "handoff_rb_run:"
+RB_DONE_PREFIX = "handoff_rb_done:"
+USER_PENDING_PREFIX = "handoff_user_pending:"
+ORIGIN_KIND = "home"
+ORIGIN_THREAD_FIELD = "home_thread_id"
+ORIGIN_WORKSPACE_FIELD = "home_workspace_id"
+ORIGIN_THREAD_META = "origin_home_thread_id"
 
 
 def decode(value) -> str:
