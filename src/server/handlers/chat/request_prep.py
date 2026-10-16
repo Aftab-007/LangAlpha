@@ -59,6 +59,11 @@ logger = logging.getLogger("src.server.handlers.chat_handler")
 # stream.
 DISPATCH_STARTED_MARKER = "__dispatch_run_started__"
 
+# Yielded instead, followed by the live run's id, when a dispatched hand-off
+# met a running turn and was accepted into it as a steer: no run of its own
+# starts, and the primer answers with the run that takes it in.
+DISPATCH_STEERED_MARKER = "__dispatch_run_steered__:"
+
 
 # ---------------------------------------------------------------------------
 # Private helpers (moved as-is from original chat_handler.py)
@@ -317,21 +322,6 @@ def serialize_context_metadata(
             ]
 
 
-def setup_steering_tracking(handler) -> None:
-    """Wire up steering tracking on a ``RunSSEProducer``.
-
-    Registers a callback so that messages injected mid-workflow are tracked
-    for post-completion query backfill.
-    """
-
-    async def _track_steerings(messages):
-        handler.injected_steerings.extend(
-            msg for msg in messages if msg.get("content")
-        )
-
-    handler.on_steering_delivered = _track_steerings
-
-
 def normalize_request_messages(request: ChatRequest) -> list[dict]:
     """Convert ``request.messages`` to ``{"id", "role", "content"}`` dicts.
 
@@ -575,6 +565,7 @@ def build_turn_context(
         last_turn_at=prior.last_turn_at,
         platform=request.platform,
         origin=request.origin.type if request.origin else None,
+        origin_agent=request.origin.agent if request.origin else None,
         surface_rules=request.surface_rules,
         inherits_rules=inherits_rules or is_notification_turn(request),
         disk_free_mb=disk_free_mb,

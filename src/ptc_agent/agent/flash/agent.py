@@ -325,10 +325,14 @@ class FlashAgent:
         # Main middleware stack (minimal)
         main_middleware: list[Any] = []
 
-        # Steering middleware (allows injecting steering messages from user)
+        # Takes in what is steered into the thread mid-turn. Flash has no
+        # background tasks, so there are no reports to take.
         from ptc_agent.agent.middleware.steering import SteeringMiddleware
+        from src.server.services.report_back.steer import SteeredReportInbox
 
-        main_middleware.append(SteeringMiddleware())
+        main_middleware.append(
+            SteeringMiddleware(report_inbox=SteeredReportInbox(), kinds=("steer",))
+        )
 
         # Consent is re-read per call, and an order is stopped against its own
         # durable attempt before the vendor sees it.

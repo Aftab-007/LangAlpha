@@ -221,6 +221,7 @@ class TurnContextMiddleware(AgentMiddleware):
             market unconditionally.
         platform: Surface this turn arrived on (web, slack, market_view, ...).
         origin: Who started the thread (agent, automation, system).
+        origin_agent: Which agent, for an ``agent`` origin.
         surface_rules: Delivery rules the posting client wrote for its own
             surface. They stand in for langalpha's built-in line, because the
             client that renders the reply is the authority on what it accepts.
@@ -243,6 +244,7 @@ class TurnContextMiddleware(AgentMiddleware):
         last_turn_at: datetime | None = None,
         platform: str | None = None,
         origin: str | None = None,
+        origin_agent: str | None = None,
         surface_rules: str | None = None,
         inherits_rules: bool = False,
         disk_free_mb: int | None = None,
@@ -256,6 +258,7 @@ class TurnContextMiddleware(AgentMiddleware):
         self._last_turn_at = last_turn_at
         self._platform = platform
         self._origin = origin
+        self._origin_agent = origin_agent
         self._surface_rules = surface_rules
         self._inherits_rules = inherits_rules
         self._disk_free_mb = disk_free_mb
@@ -515,7 +518,7 @@ class TurnContextMiddleware(AgentMiddleware):
             "market": market,
             "surface": surface.name,
             "symbol": surface.symbol,
-            "origin": self._origin,
+            "started_by": started_by(self._origin, self._origin_agent),
             "is_subagent": self._is_subagent,
             "surface_rules": surface_rules,
             "disk_free_mb": self._disk_free_mb,
@@ -591,6 +594,21 @@ def _withdrawn(state: Any, stamp: str, now: datetime) -> dict[str, Any] | None:
         created_at=now,
     )
     return {"messages": [build_update_message(row)]}
+
+
+# -- the run line -----------------------------------------------------------
+
+#: Agents that start a turn for the user, as the run line names them.
+_FOR_THE_USER = {"chief_of_staff": "the Chief of Staff", "flash": "Flash"}
+
+
+def started_by(origin: str | None, agent: str | None) -> str | None:
+    """Who the run line says started the thread: an agent that acts for the
+    user is named as doing so, since the analyst otherwise reads its hand-off
+    as the user's own words."""
+    if origin == "agent" and agent in _FOR_THE_USER:
+        return f"{_FOR_THE_USER[agent]}, on the user's behalf"
+    return origin
 
 
 # -- the delivery rules -----------------------------------------------------

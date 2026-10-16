@@ -101,13 +101,15 @@ class _RecordingGraph:
         self.received_config: dict | None = None
         self.received_state: dict | None = None
         self.received_stream_mode = None
+        self.received_durability = None
         self._final_text = final_text
         self._extra_values = extra_values or {}
 
-    async def astream(self, state, config, stream_mode=None):
+    async def astream(self, state, config, stream_mode=None, durability=None):
         self.received_state = state
         self.received_config = config
         self.received_stream_mode = stream_mode
+        self.received_durability = durability
         snapshot = {
             "messages": [AIMessage(content=self._final_text)],
             **self._extra_values,
@@ -161,6 +163,8 @@ async def test_run_subagent_graph_config_invariants():
     conf = cfg["configurable"]
     # Per-task namespace under the parent thread.
     assert conf["checkpoint_ns"] == "task:task-abc"
+    # A model call confirms the steers the step before it saved.
+    assert graph.received_durability == "sync"
     assert conf["thread_id"] == "parent-thread"
     # Non-checkpoint base keys pass through.
     assert conf["user_id"] == "user-9"

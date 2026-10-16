@@ -345,6 +345,8 @@ async def finalize_task_run(
                     ),
                 )
                 run_row = await cur.fetchone()
+            if run_row is not None:
+                run_row = await _settle_steers(conn, dict(run_row))
             if run_row is not None and run_row["status"] in REPORT_BACK_STATUSES:
                 # Report-back owed ⟺ the run reached a reportable outcome
                 # (REPORT_BACK_STATUSES carries the policy rationale): the
@@ -368,6 +370,49 @@ async def finalize_task_run(
     logger.info(
         f"[subagent_runs] FINALIZE task_run={task_run_id} status={final_status}"
     )
+    return run_row
+
+
+async def _settle_steers(
+    conn, run_row: Dict[str, Any], *, at_stamp: bool = False
+) -> Dict[str, Any]:
+    """Settle the steers sent into the run, in the transaction that stamps its
+    cancel or ends it; ``run_row`` comes back with the returns in its
+    ``replay_facts``, which the run's ``steering_returned`` frames are read
+    from. A run stopped by anyone (the user, a shutdown, a credit stop) gives
+    the user's back; any other ending leaves them to resume the task with.
+    The stamp leaves the rows the run holds for its ending, which confirms
+    the ones its checkpoint read, and stamps ``held_steers`` on ``run_row``
+    with how many of the user's those are."""
+    from src.server.database.runs import outbox as outbox_db
+
+    task_run_id = str(run_row["task_run_id"])
+    returned = await outbox_db.settle_task_run_steers(
+        conn,
+        thread_id=str(run_row["thread_id"]),
+        task_id=str(run_row["task_id"]),
+        # A cancelled ending counts even unstamped: the stamp is best-effort
+        # ahead of a local stop, and a stop never resumes the task.
+        cancelled=run_row.get("cancel_requested_at") is not None
+        or run_row.get("status") == "cancelled",
+        spare_held_by=task_run_id if at_stamp else None,
+    )
+    if at_stamp:
+        run_row["held_steers"] = await outbox_db.count_held_user_steers(
+            conn,
+            ordering_key=outbox_db.steer_ordering_key(
+                str(run_row["thread_id"]), str(run_row["task_id"])
+            ),
+            owner_id=task_run_id,
+        )
+    if returned:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT replay_facts FROM subagent_runs WHERE task_run_id = %s",
+                (run_row["task_run_id"],),
+            )
+            facts = await cur.fetchone()
+        run_row["replay_facts"] = facts["replay_facts"] if facts else None
     return run_row
 
 
@@ -398,6 +443,8 @@ async def request_task_run_cancel(
     Two stamp laps for the START-commit visibility race (see
     runs.lifecycle.request_run_cancel). Returns {"state": "requested"|
     "already_requested"|"already_terminal"|"not_found", "run": row|None}.
+    The stamp settles the run's steers in its transaction, so none is
+    accepted, or read, past it.
     """
     sql = """
         UPDATE subagent_runs
@@ -415,11 +462,13 @@ async def request_task_run_cancel(
     run: Optional[Dict[str, Any]] = None
     for _lap in range(2):
         async with pool.get_db_connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(sql, params)
+                    row = await cur.fetchone()
                 if row:
-                    return {"state": "requested", "run": dict(row)}
+                    run = await _settle_steers(conn, dict(row), at_stamp=True)
+                    return {"state": "requested", "run": run}
 
         run = await get_task_run(task_run_id)
         if run is None or (

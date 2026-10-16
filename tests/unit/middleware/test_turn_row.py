@@ -400,6 +400,19 @@ class TestTheRunLine:
         assert "Surface `market_view`, symbol AAPL, started by automation" in text
 
     @pytest.mark.asyncio
+    async def test_a_hand_off_from_an_agent_for_the_user_says_so(self):
+        text = (await _row(origin="agent", origin_agent="chief_of_staff")).content
+
+        assert "Started by the Chief of Staff, on the user's behalf" in text
+
+    @pytest.mark.asyncio
+    async def test_an_agent_origin_without_a_named_agent_stays_plain(self):
+        text = (await _row(origin="agent")).content
+
+        assert "Started by agent" in text
+        assert "on the user's behalf" not in text
+
+    @pytest.mark.asyncio
     async def test_nothing_to_say_drops_the_line(self):
         text = (await _row()).content
 

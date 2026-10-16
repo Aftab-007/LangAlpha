@@ -41,7 +41,7 @@ ENVELOPE_CASES: dict[str, dict] = {
         "market": "US",
         "surface": "market_view",
         "symbol": "AAPL",
-        "origin": "automation",
+        "started_by": "automation",
         "is_subagent": False,
         "surface_rules": "Surface market_view: ...",
     },
@@ -366,7 +366,7 @@ class TestMissingKwargsDropTheLine:
         assert loader.render("envelope/turn.md.j2", surface="web").strip() == (
             "Surface `web`"
         )
-        assert loader.render("envelope/turn.md.j2", origin="automation").strip() == (
+        assert loader.render("envelope/turn.md.j2", started_by="automation").strip() == (
             "Started by automation"
         )
 

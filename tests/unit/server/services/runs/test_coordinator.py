@@ -133,3 +133,47 @@ async def test_an_export_that_fails_to_schedule_only_logs():
 
     coordinator._schedule_replay_refresh.assert_called_once_with("thread-1")
     coordinator._nudge_hook_drainer.assert_called_once()
+
+
+CONFIRM = "src.server.services.report_back.steer.confirm_checkpointed_holds"
+
+
+@pytest.mark.asyncio
+async def test_an_owner_finalize_confirms_checkpointed_holds_before_its_cas():
+    """A stop between the step that took a steer in and the model call that
+    confirms it leaves the steer in the checkpoint; the CAS's settle would
+    take it as unread."""
+    order = []
+
+    async def finalize(**kwargs):
+        order.append("finalize")
+        return FinalizeResult(applied=False, run=_row("cancelled"))
+
+    async def confirm(thread_id, run_id):
+        order.append(("confirm", thread_id, run_id))
+        return []
+
+    with patch(LIFECYCLE, side_effect=finalize), patch(CONFIRM, side_effect=confirm):
+        await _coordinator().finalize_run(_handle(), RunOutcome(status="cancelled"))
+
+    assert order == [("confirm", "thread-1", "run-1"), "finalize"]
+
+
+@pytest.mark.asyncio
+async def test_a_detached_finalize_confirms_checkpointed_holds_before_its_cas():
+    order = []
+
+    async def finalize(**kwargs):
+        order.append("finalize")
+        return FinalizeResult(applied=False, run=None)
+
+    async def confirm(thread_id, run_id):
+        order.append(("confirm", thread_id, run_id))
+        return []
+
+    with patch(LIFECYCLE, side_effect=finalize), patch(CONFIRM, side_effect=confirm):
+        await _coordinator().finalize_detached_run(
+            "thread-1", "run-1", RunOutcome(status="error")
+        )
+
+    assert order == [("confirm", "thread-1", "run-1"), "finalize"]

@@ -7,7 +7,7 @@ stream was archived, what that archive added under ``LEGACY_KEY``, or, for one
 its checkpoints could not cover, the archive itself under ``ARCHIVE_KEY``
 (migration 069). A subagent run's row holds the captured URLs of the images
 its lane referenced (``images``) and the steering it handed back unread
-(``steering_returned``), both learned after its settle.
+(``steering_returned``), written as each is learned.
 """
 
 from typing import Any, Dict, List, Optional
@@ -22,18 +22,18 @@ ARCHIVE_KEY = "archive"
 
 
 async def append_returned_steering(
-    task_run_id: str, returned: List[Dict[str, Any]]
+    task_run_id: str, returned: List[Dict[str, Any]], conn=None
 ) -> Optional[Dict[str, Any]]:
-    """Append steering a settled run handed back, returning its ``thread_id``
-    and ``parent_run_id`` (None when no row matched).
+    """Append steering a run handed back, returning its ``thread_id``,
+    ``parent_run_id`` and ``replay_facts`` (None when no row matched).
 
-    Not the settle CAS: the sweep that follows it reads the queue. The merge
-    is one statement, so an images write landing on the row at the same
-    time keeps its key.
+    ``conn`` is the transaction that settled the steers, so a return is
+    never recorded for a steer that stayed live. The merge is one statement,
+    so an images write landing on the row at the same time keeps its key.
     """
     if not returned:
         return None
-    async with pool.get_db_connection() as conn:
+    async with pool.get_db_connection(conn) as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(
                 """
@@ -43,7 +43,7 @@ async def append_returned_steering(
                         COALESCE(replay_facts -> 'steering_returned', '[]'::jsonb)
                         || %(returned)s::jsonb)
                 WHERE task_run_id = %(id)s
-                RETURNING thread_id, parent_run_id
+                RETURNING thread_id, parent_run_id, replay_facts
                 """,
                 {"id": task_run_id, "returned": SafeJson(returned)},
             )

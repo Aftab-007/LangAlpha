@@ -38,7 +38,7 @@ class _BeatingGraph:
         self.closed = False
         self.cleanup_s = cleanup_s
 
-    async def astream(self, state, config, stream_mode=None):
+    async def astream(self, state, config, stream_mode=None, durability=None):
         try:
             while True:
                 await asyncio.sleep(0.01)
@@ -49,7 +49,7 @@ class _BeatingGraph:
 
 
 class _AnsweringGraph:
-    async def astream(self, state, config, stream_mode=None):
+    async def astream(self, state, config, stream_mode=None, durability=None):
         yield ("values", {"messages": [AIMessage(content="done")]})
 
 

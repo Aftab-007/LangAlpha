@@ -261,6 +261,13 @@ def _project_human_message(message: HumanMessage, agent: str) -> list[HistoryEve
         ]
 
     if agent != MAIN_AGENT:
+        # A run resumed with messages its predecessor never read opens with
+        # them, as its live stream did: delivered steers, settled by input id.
+        delivered = kwargs.get("steering_delivered")
+        if isinstance(delivered, dict):
+            return [
+                HistoryEvent("steering-delivered", agent, message.id, dict(delivered))
+            ]
         text = content or normalize_text_content(message.content)[0]
         if text:
             return [HistoryEvent("user-message", agent, message.id, {"content": text})]

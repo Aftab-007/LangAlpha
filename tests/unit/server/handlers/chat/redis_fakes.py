@@ -161,11 +161,10 @@ class FakeClient:
         return current
 
     def _steering_eval(self, script, keys, argv):
-        """The steering queue's scripts, or NotImplemented for another."""
+        """The steering middleware's take script, or NotImplemented for another."""
         from ptc_agent.agent.middleware import steering
-        from src.server.services.runs import steer_queue
 
-        if script is steering._TAKE_LUA:
+        if script is not None and script is getattr(steering, "_TAKE_LUA", None):
             queue, take = keys
             ttl, *values = argv
             if take not in self.kv:
@@ -179,88 +178,6 @@ class FakeClient:
                 self.kv[take] = "".join(flags).encode()
                 self.ttls[take] = int(ttl)
             return self.kv[take]
-        if script is steer_queue._STEER_LUA:
-            queue, records = keys
-            message, ttl, request_key, run_id = argv
-            held = self.hashes.setdefault(records, {})
-            if request_key:
-                if request_key in held:
-                    return -1
-                held[request_key] = run_id
-            self.lists.setdefault(queue, []).append(message)
-            self.ttls[queue] = self.ttls[records] = int(ttl)
-            return len(self.lists[queue])
-        if script is steer_queue._UNSTEER_LUA:
-            queue, records = keys
-            (payload,) = argv
-            entries = self.lists.get(queue, [])
-            if payload not in entries:
-                return 0
-            entries.remove(payload)
-            try:
-                request_key = json.loads(payload).get("request_key")
-            except (ValueError, AttributeError):
-                request_key = None
-            if isinstance(request_key, str):
-                self.hashes.get(records, {}).pop(request_key, None)
-            return 1
-        if script is steer_queue._DRAIN_LUA:
-            queue, records = keys
-            entries = self.lists.pop(queue, [])
-            for raw in entries:
-                try:
-                    message = json.loads(raw)
-                except ValueError:
-                    continue
-                if isinstance(message, dict) and isinstance(
-                    message.get("request_key"), str
-                ):
-                    self.hashes.get(records, {}).pop(message["request_key"], None)
-            return list(entries)
-        if script is steer_queue._TAKE_BACK_LUA:
-            queue, records = keys
-            request_key, expected, take = argv
-            run_id = self.hashes.get(records, {}).get(request_key)
-            if run_id is None or (expected and run_id != expected):
-                return [0, (run_id or "").encode()]
-            entries = self.lists.get(queue, [])
-            for raw in entries:
-                try:
-                    message = json.loads(raw)
-                except ValueError:
-                    continue
-                if isinstance(message, dict) and message.get("request_key") == request_key:
-                    if take != "0":
-                        entries.remove(raw)
-                        del self.hashes[records][request_key]
-                    return [2, run_id.encode()]
-            if take == "2":
-                del self.hashes[records][request_key]
-            return [1, run_id.encode()]
-        if script is steer_queue._CARRY_LUA:
-            queue, records = keys
-            request_key, from_run, to_run, message, requeue, ttl = argv
-            held = self.hashes.get(records, {})
-            if held.get(request_key) != from_run:
-                return [0, (held.get(request_key) or "").encode()]
-            entries = self.lists.setdefault(queue, [])
-            for i, raw in enumerate(entries):
-                try:
-                    queued = json.loads(raw)
-                except ValueError:
-                    continue
-                if isinstance(queued, dict) and queued.get("request_key") == request_key:
-                    entries[i] = message
-                    position = i + 1
-                    break
-            else:
-                if requeue != "1":
-                    return [2, b""]
-                entries.append(message)
-                position = len(entries)
-            held[request_key] = to_run
-            self.ttls[queue] = self.ttls[records] = int(ttl)
-            return [1, position]
         return NotImplemented
 
     async def eval(self, script, numkeys, *args):

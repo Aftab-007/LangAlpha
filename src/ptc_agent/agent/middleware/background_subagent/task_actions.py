@@ -6,6 +6,7 @@ handlers share the writer spawn pipeline in ``_spawn_writer``.
 """
 
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,7 @@ from langgraph.types import Command
 from ptc_agent.agent.middleware.background_subagent.context import (
     current_background_agent_id,
     current_background_tool_call_id,
+    hand_off_steer_resume,
 )
 from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTask,
@@ -67,7 +69,7 @@ async def handle_task_action(
 ) -> ToolMessage | Command:
     """Route an intercepted Task tool call by its ``action`` argument.
 
-    1. ``action="update"`` + ``task_id`` → queue follow-up via Redis to running task
+    1. ``action="update"`` + ``task_id`` → send a follow-up into the running task
     2. ``action="resume"`` + ``task_id`` → reset a completed or stopped task and respawn it
     3. ``action="init"`` (default) → new task spawn
     """
@@ -110,6 +112,7 @@ async def handle_task_action(
             prompt=prompt,
             parent_thread_id=parent_thread_id,
             tool_call_id=tool_call_id,
+            input_id=_call_input_id(request, tool_call_id),
         )
     elif action == "resume":
         return await _handle_resume(
@@ -153,6 +156,42 @@ def _settle_resume_failure(task: BackgroundTask, exc: Exception) -> None:
     """
     task.terminal_status = "error"
     task.error = f"resume setup failed before spawn: {exc}"
+
+
+async def _hand_off_steers(
+    mw: "BackgroundSubagentMiddleware",
+    task: BackgroundTask,
+    task_run_id: str,
+    tool_call_id: str,
+) -> ToolMessage | None:
+    """Hand the steers a resume opens with to the run it admitted, before the
+    writer starts. Its first model call confirms them, once its opener is
+    checkpointed, and its ending settles them if it never gets there: no
+    worker lost in between takes them with it. A hand-off that fails
+    refuses the resume, so the launching run gives them back."""
+    try:
+        if await hand_off_steer_resume(task.task_id, task_run_id):
+            return None
+        error: Exception = RuntimeError("its messages were no longer held for it")
+    except Exception as e:
+        error = e
+    logger.warning(
+        "steer hand-off to the resumed run failed",
+        task_id=task.task_id,
+        task_run_id=task_run_id,
+        error=str(error),
+    )
+    await mw._abort_admitted_run(task, error)
+    _settle_resume_failure(task, error)
+    return ToolMessage(
+        content=(
+            f"Error: could not resume {task.display_id}: its messages could "
+            f"not be handed to the new run. Try again."
+        ),
+        tool_call_id=tool_call_id,
+        name="Task",
+        status="error",
+    )
 
 
 async def _spawn_writer(
@@ -219,6 +258,23 @@ async def _spawn_writer(
     return None
 
 
+def _call_input_id(request: ToolCallRequest, tool_call_id: str) -> str | None:
+    """The follow-up's key, from the model message that made the call, so a
+    Retry that runs a saved call again gets the first acceptance back. The
+    message id joins the call id because a provider may reuse call ids across
+    turns; without it, the follow-up takes a fresh key."""
+    state = getattr(request, "state", None)
+    if not isinstance(state, dict):
+        return None
+    for message in reversed(state.get("messages") or []):
+        calls = getattr(message, "tool_calls", None) or []
+        if any(call.get("id") == tool_call_id for call in calls):
+            if not message.id:
+                return None
+            return uuid.uuid5(uuid.NAMESPACE_URL, f"{message.id}:{tool_call_id}").hex
+    return None
+
+
 async def _handle_update(
     mw: "BackgroundSubagentMiddleware",
     *,
@@ -228,8 +284,9 @@ async def _handle_update(
     prompt: str,
     parent_thread_id: str,
     tool_call_id: str,
+    input_id: str | None = None,
 ) -> ToolMessage:
-    """UPDATE: instruct a running task via its Redis steering queue."""
+    """UPDATE: instruct a running task through the steer outbox."""
     resolved = await mw._resolve_or_error(
         target_task_id,
         parent_thread_id,
@@ -277,8 +334,9 @@ async def _handle_update(
             status="error",
         )
 
-    input_id = await mw._queue_followup_to_redis(task, prompt)
-    if input_id:
+    state, detail = await mw._admit_followup(task, prompt, input_id=input_id)
+    if state == "accepted":
+        input_id = detail
         task.last_updated_at = time.time()
         logger.info(
             "Queued follow-up for running task",
@@ -301,41 +359,26 @@ async def _handle_update(
                 }
             },
         )
-    else:
-        # The push-then-verify recheck reclaims a follow-up that
-        # landed after the run settled — report the terminal race
-        # honestly instead of a generic transport error.
-        meta_status = None
-        try:
-            from ptc_agent.agent.middleware.background_subagent.redis_stream import (
-                read_task_meta,
-            )
-
-            meta = await read_task_meta(
-                parent_thread_id or "", task.task_id
-            )
-            meta_status = (meta or {}).get("status")
-        except Exception:
-            pass
-        if meta_status and meta_status != "running":
-            return ToolMessage(
-                content=(
-                    f"Error: Task-{target_task_id} finished "
-                    f"({meta_status}) before the follow-up could be "
-                    f"delivered. Read its result with "
-                    f"TaskOutput(task_id='{target_task_id}'), or use action='resume' to "
-                    f"continue it with new instructions."
-                ),
-                tool_call_id=tool_call_id,
-                name="Task",
-                status="error",
-            )
+    if state == "not_running" and detail:
+        # The run ended between the liveness check above and admission.
         return ToolMessage(
-            content=f"Error: Could not deliver follow-up to {task.display_id} -- message queue not available.",
+            content=(
+                f"Error: Task-{target_task_id} finished "
+                f"({detail}) before the follow-up could be "
+                f"delivered. Read its result with "
+                f"TaskOutput(task_id='{target_task_id}'), or use action='resume' to "
+                f"continue it with new instructions."
+            ),
             tool_call_id=tool_call_id,
             name="Task",
             status="error",
         )
+    return ToolMessage(
+        content=f"Error: Could not deliver follow-up to {task.display_id} -- message queue not available.",
+        tool_call_id=tool_call_id,
+        name="Task",
+        status="error",
+    )
 
 
 async def _handle_resume(
@@ -535,6 +578,10 @@ async def _handle_resume(
         await mw._reset_task_for_resume(
             task, task_run_id=admitted or None, spawned_run_id=resume_run_id
         )
+        if admitted:
+            failure = await _hand_off_steers(mw, task, admitted, tool_call_id)
+            if failure is not None:
+                return failure
 
         # Set ContextVars for the resumed task
         current_background_tool_call_id.set(task.tool_call_id)

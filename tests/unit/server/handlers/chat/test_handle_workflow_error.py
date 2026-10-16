@@ -509,24 +509,27 @@ async def test_a_refused_retransmit_reconnects_to_its_first_copy(
 
 @pytest.mark.asyncio
 async def test_a_refused_resend_of_a_steered_send_reconnects_to_its_turn(
-    coordinator, monkeypatch
+    coordinator,
 ):
     # The first copy went into the running turn as a steer: no run row holds
-    # its key, the steer record names the turn that took it.
+    # its key, the steer job names the turn that took it.
     from fastapi import HTTPException
 
     from src.server.handlers.chat.admission_gate import admission_conflict_detail
-    from src.server.handlers.chat.steering import steer_thread
 
-    from .redis_fakes import FakeCache
-
-    cache = FakeCache()
-    monkeypatch.setattr("src.utils.cache.redis_cache.get_cache_client", lambda: cache)
     request = _keyed_send()
-    await steer_thread(
-        "t-1", "what moved NVDA?", "u-1", run_id="r-first", request_key=request.request_key
-    )
+    job = {
+        "id": "job-1",
+        "status": "pending",
+        "run_id": "r-first",
+        "payload": {"request_key": request.request_key, "steered_run_id": "r-first"},
+    }
     with (
+        patch(
+            "src.server.database.runs.outbox.get_steer_job",
+            AsyncMock(return_value=job),
+            create=True,
+        ),
         patch(_FIND_KEY, AsyncMock(return_value=None)),
         patch(
             "src.server.database.runs.lifecycle.get_run",

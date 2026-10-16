@@ -226,9 +226,10 @@ def _is_service_request(raw_request: Request | None) -> bool:
 
 
 # Fields only the server's own requests set. A user's copy would post a system
-# message, label their message as a report-back, or forge a report-back watch's
-# cleanup; ``surface_rules`` is a channel gateway's, whose text rides the
-# operator role on providers with a native channel.
+# message, label their message as a report-back, forge a report-back watch's
+# cleanup, or settle a parked steer as its own turn; ``surface_rules`` is a
+# channel gateway's, whose text rides the operator role on providers with a
+# native channel.
 _SERVER_ONLY_FIELDS = (
     "query_type",
     "report_back_ptc_thread_id",
@@ -239,6 +240,7 @@ _SERVER_ONLY_FIELDS = (
     "automation_earlier_runs",
     "disable_subagents",
     "surface_rules",
+    "steer_job_id",
 )
 
 
@@ -256,7 +258,11 @@ def _client_body(request: ChatRequest, raw_request: Request) -> ChatRequest:
 
 
 async def _reject_duplicate_request(
-    thread_id: str, request_key: str, user_id: str
+    thread_id: str,
+    request_key: str,
+    user_id: str,
+    *,
+    except_job_id: str | None = None,
 ) -> None:
     """409 if this request_key already reached a run, as its own turn or as
     a steer into another: a retransmit.
@@ -265,11 +271,14 @@ async def _reject_duplicate_request(
     classifying here answers with a clean HTTP 409 before a thread is
     minted, a fork truncates the rows holding the key, or a steering path
     consumes the duplicate. Discloses the existing run's identity only to
-    the owning user.
+    the owning user. ``except_job_id`` is the parked steer a server-posted
+    turn carries, which is that turn's own message, not a copy of it.
     """
     from src.server.services.runs.admission import run_named_by_key
 
-    keyed = await run_named_by_key(thread_id, request_key)
+    keyed = await run_named_by_key(
+        thread_id, request_key, except_job_id=except_job_id
+    )
     if keyed is None:
         return
     existing = keyed.run
@@ -318,7 +327,12 @@ async def _settle_against_branch(
         return request
     except HTTPException as refused:
         if refused.status_code == 409 and request.request_key:
-            await _reject_duplicate_request(thread_id, request.request_key, user_id)
+            await _reject_duplicate_request(
+                thread_id,
+                request.request_key,
+                user_id,
+                except_job_id=request.steer_job_id,
+            )
         raise
 
 
@@ -386,7 +400,12 @@ async def _handle_send_message(
         # retransmit — classify it before any durable work happens for
         # this copy (thread creation, fork truncation, steering).
         if request.request_key:
-            await _reject_duplicate_request(thread_id, request.request_key, user_id)
+            await _reject_duplicate_request(
+                thread_id,
+                request.request_key,
+                user_id,
+                except_job_id=request.steer_job_id,
+            )
 
         # 403 guard: require BYOK, OAuth, or platform access (tier >= 0).
         # All flags are pre-checked by enforce_chat_limit — no DB calls here.
@@ -635,7 +654,10 @@ async def _handle_send_message(
         )
 
     from src.server.database.runs.lifecycle import DuplicateRequestError
-    from src.server.handlers.chat.request_prep import DISPATCH_STARTED_MARKER
+    from src.server.handlers.chat.request_prep import (
+        DISPATCH_STARTED_MARKER,
+        DISPATCH_STEERED_MARKER,
+    )
     from src.server.services.report_back.flash import pointer, reserve
 
     label = f"{runtime.upper()}_DISPATCH"
@@ -657,6 +679,25 @@ async def _handle_send_message(
     gated_gen = (
         request.origin_dispatch_gen if runtime == "ptc" and not rb_ptc else None
     )
+
+    async def steered(target_run_id: str) -> JSONResponse:
+        # The hand-off went into a running turn as a steer: this request's
+        # run never starts, so its pre-START stamp goes. The generation stays
+        # admitted on the ledger, where the steer stamped the running run.
+        await scope.release_slot()
+        if gated_gen:
+            await reserve.retract_dispatch_gen(thread_id, gated_gen, run_id)
+        logger.info(
+            f"[{label}] Hand-off steered into running run {target_run_id} "
+            f"on thread {thread_id}"
+        )
+        return JSONResponse({
+            "status": "steered",
+            "thread_id": thread_id,
+            "run_id": target_run_id,
+            **reply_extra,
+        })
+
     async with pointer.claim(
         rb_cache, thread_id, rb_ptc, run_id,
         request.origin_dispatch_gen,
@@ -742,8 +783,10 @@ async def _handle_send_message(
         try:
             first = await anext(gen)
         except DuplicateRequestError as dup:
-            await scope.release_slot()
             existing = str(dup.existing_run["conversation_response_id"])
+            if dup.steered:
+                return await steered(existing)
+            await scope.release_slot()
             logger.info(
                 f"[{label}] Retransmit adopted existing run {existing} "
                 f"for thread {thread_id}"
@@ -767,6 +810,9 @@ async def _handle_send_message(
                 status_code=503,
                 detail=f"Dispatch could not start durably: {e}",
             )
+        if isinstance(first, str) and first.startswith(DISPATCH_STEERED_MARKER):
+            await gen.aclose()
+            return await steered(first[len(DISPATCH_STEERED_MARKER):])
         if first != DISPATCH_STARTED_MARKER:
             await gen.aclose()
             await scope.release_slot()
@@ -1060,14 +1106,20 @@ async def get_thread_status(
             thread_id, msg_type=msg_type, user_id=meta["user_id"]
         )
 
+    from src.server.database.runs import outbox as outbox_db
     from src.server.services.thread_status import read_thread_runtime_status
 
-    return await read_thread_runtime_status(
+    status = await read_thread_runtime_status(
         thread_id,
         is_shared=bool(meta["is_shared"]),
         msg_type=msg_type,
         user_id=meta["user_id"],
     )
+    # The user's steers no run has read yet, such as those an errored turn
+    # left parked: the next turn reads them, and the view shows them queued
+    # until it does.
+    status["pending_steers"] = await outbox_db.list_pending_steers(thread_id)
+    return status
 
 
 # Upper bound on ids per liveness request — one MGET stays cheap. Ids past the

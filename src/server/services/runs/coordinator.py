@@ -369,6 +369,14 @@ class RunCoordinator:
                 )
                 newest, newest_read = None, False
 
+            # Outside the mutex: a checkpoint read and an outbox write, which
+            # need nothing of the guard's session.
+            from src.server.services.report_back.steer import (
+                confirm_checkpointed_holds,
+            )
+
+            await confirm_checkpointed_holds(handle.thread_id, handle.run_id)
+
             usage_writer = None
             if outcome.per_call_records or outcome.tool_usage:
                 usage_writer = self._build_usage_writer(handle, outcome)
@@ -491,6 +499,9 @@ class RunCoordinator:
         """
         if outcome.status == "error":
             outcome = _with_detached_failure_kind(outcome)
+        from src.server.services.report_back.steer import confirm_checkpointed_holds
+
+        await confirm_checkpointed_holds(thread_id, run_id)
         result = await tl_db.finalize_run(
             run_id=run_id,
             thread_id=thread_id,

@@ -89,6 +89,16 @@ class _ExecHarness:
             patch("src.server.database.runs.outbox.merge_job_payload", self.merge_payload),
             patch("src.server.database.runs.outbox.requeue_job_with_key", self.requeue),
             patch("src.server.database.runs.outbox.fenced_job_guard", self.fenced_guard),
+            # No hand-off waits on the analyst's thread.
+            patch(
+                "src.server.database.runs.outbox.has_live_hand_off",
+                AsyncMock(return_value=False),
+            ),
+            # The run admitted only the generation its report carries.
+            patch(
+                "src.server.database.runs.lifecycle.run_has_dispatch_gen",
+                AsyncMock(return_value=False),
+            ),
             patch.object(notify_turn, "_TERMINAL_POLL", 0.0),
         ]
 

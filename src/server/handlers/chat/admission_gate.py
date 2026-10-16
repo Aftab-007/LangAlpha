@@ -11,14 +11,17 @@ responses (never persisted, never mark_failed).
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from fastapi import HTTPException
 
 from src.server.services.runs.admission import (
     BUSY_STATES,
-    carry_unread_steer,
     dedup_retransmit_or_raise,
+    steer_idempotency_key,
+    steer_job_run_id,
 )
 
 if TYPE_CHECKING:
@@ -45,6 +48,8 @@ ADMISSION_CONFLICT_CODES = {
     # NEWER running turn whose tracker status mark_failed would clobber.
     "stale_retry",
     "not_retryable",
+    # A START posted for a parked steer that a running turn read first.
+    "steer_taken",
 }
 
 
@@ -88,16 +93,80 @@ def steer_allowed(
 ) -> bool:
     """Whether a running turn on the thread may take this request as a steer.
 
-    Foreground turns steer. A dispatched flow, a retry (a /retry that finds
-    another live run is a conflict, not an empty steering message into it), a
-    fork (an edit or a regenerate replaces a turn, which a message added to
-    the running one cannot do) and a non-steerable caller (an automation's
-    instruction is a turn of its own) meet a running peer with a 409 instead.
+    Foreground turns steer, and so does a Chief of Staff or Flash hand-off
+    (``agent_steer_of``). Any other dispatched flow, a retry (a /retry that
+    finds another live run is a conflict, not an empty steering message into
+    it), a fork (an edit or a regenerate replaces a turn, which a message
+    added to the running one cannot do) and a non-steerable caller (an
+    automation's instruction is a turn of its own) meet a running peer with a
+    409 instead.
     """
+    if dispatched:
+        return steerable and _is_agent_hand_off(request)
     is_fork = request.fork_from_turn is not None and bool(request.checkpoint_id)
-    return (
-        steerable and not dispatched and request.retry_of_run_id is None and not is_fork
+    return steerable and request.retry_of_run_id is None and not is_fork
+
+
+def _is_agent_hand_off(request: ChatRequest) -> bool:
+    """A dispatched message from the Chief of Staff or Flash, and nothing
+    else: a report-back summary, a retry, a fork, an answer to a pause, or a
+    turn the server posts for a parked steer is a turn of its own."""
+    origin = request.origin
+    return bool(
+        origin is not None
+        and origin.type == "agent"
+        and origin.agent in ("chief_of_staff", "flash")
+        and not request.report_back_ptc_thread_id
+        and request.report_source is None
+        and request.steer_job_id is None
+        and request.retry_of_run_id is None
+        and request.fork_from_turn is None
+        and not request.hitl_response
     )
+
+
+@dataclass(frozen=True)
+class AgentSteer:
+    """How a Chief of Staff or Flash hand-off enters a running turn."""
+
+    sender: str
+    origin: dict
+    idempotency_key: str
+    # The Home thread and generation the run then reports back to, when the
+    # hand-off asked for a report-back.
+    origin_stamp: dict | None
+
+
+def agent_steer_of(
+    request: ChatRequest, *, dispatched: bool, run_id: str
+) -> AgentSteer | None:
+    """The steer a dispatched hand-off becomes if it meets a running turn.
+
+    Keyed by its dispatch generation, so the executor's later turn and the
+    report-back read the same identity. A hand-off without a report-back has
+    no generation and is keyed by the run id minted for this request.
+    """
+    if not dispatched or not _is_agent_hand_off(request):
+        return None
+    flash_thread_id = request.origin_flash_thread_id
+    gen = request.origin_dispatch_gen
+    stamp = (
+        {"origin_flash_thread_id": flash_thread_id, "origin_dispatch_gen": gen}
+        if flash_thread_id and gen
+        else None
+    )
+    origin = {"type": "agent", "agent": request.origin.agent, "id": request.origin.id}
+    return AgentSteer(
+        sender=request.origin.agent,
+        origin={**origin, **(stamp or {})},
+        idempotency_key=f"steer:dispatch:{gen or run_id}",
+        origin_stamp=stamp,
+    )
+
+
+# How many admission reads a steer may take. A steer meeting a run that
+# ended under it reads admission again, which can find the next run live.
+_STEER_ADMISSION_LAPS = 3
 
 
 async def wait_or_steer(
@@ -110,6 +179,10 @@ async def wait_or_steer(
     can_steer: bool = True,
     platform: str | None = None,
     request_key: str | None = None,
+    workspace_id: str | None = None,
+    steer_job_id: str | None = None,
+    agent: AgentSteer | None = None,
+    agent_mode: str | None = None,
 ) -> tuple[bool, str | None]:
     """Admit a new turn, steer the running one, or 409.
 
@@ -120,161 +193,119 @@ async def wait_or_steer(
     carries a structured ``admission_conflict_detail`` code (surfaced as an SSE
     ``error`` event once the stream has started).
 
+    A steer is a ``hook_outbox`` row on the thread, admitted only while the
+    run it names is in_progress with no stop requested, in the same
+    statement that reads the run. Whatever run reads it next takes it, so
+    one that misses this run becomes the next turn instead of being lost.
+    The row's unique key is the send's ``request_key``, so two copies of a
+    send steer once.
+
     ``steer_only=True`` (gateway steer probes) forbids the fresh-admission
     fallback: the probe's SSE reader only understands ``steering_accepted``/
     ``error``, so admitting a full turn on that connection streams the whole
-    response — interrupts included — into a client that ignores it. A steer
+    response, interrupts included, into a client that ignores it. A steer
     that finds no running turn gets ``not_running`` and the gateway resubmits
-    it as a normal message. A steer accepted just before the workflow's exit
-    may still go unconsumed — the final drain returns it via
-    ``steering_returned`` on the turn stream, not this connection.
+    it as a normal message.
 
     ``can_steer=False`` (whatever ``steer_allowed`` refuses) forbids
     steering entirely: any in-flight run is a hard conflict, never a steer.
-
-    ``request_key`` is checked again past the admission read, which can see
-    a copy of this same send that another worker started after the caller's
-    duplicate probe, and claimed in the step that queues the steer, so two
-    copies racing into one running turn steer once (``DuplicateRequestError``
-    for the other). When another copy started a turn of its own after the
-    turn steered into ended, whichever of the two checks the key second takes
-    the steer back: START's check, or the one after the push here. A copy
-    that meets a claim on a turn that ended without keeping the steer moves
-    it into the running turn, or, on an idle thread, leaves it for its
-    START to take back.
+    ``steer_job_id`` is the parked steer a server-posted turn carries, whose
+    own row is not a copy of it. ``agent`` is a Chief of Staff or Flash
+    hand-off: accepted, it stamps the run with its report-back origin and
+    answers with ``DISPATCH_STEERED_MARKER`` and the run's id for the
+    dispatch primer, which has no SSE reader; a run that reports to another
+    Home thread is a 409.
 
     Admission states (see ``LocalRunExecutor.wait_for_admission``):
     - ``"fresh"``     → start a new turn ``(True, None)``; with ``steer_only``,
       409 ``not_running`` instead.
     - ``"stopping"``/``"compacting"`` → 409 (never start a second checkpoint
       writer, never steer mid-summarize).
-    - ``"running"``   → steer immediately (no wait); an accept that raced the
-      workflow's exit is reclaimed and re-routed as "fresh"; 409 only if
-      steering fails. With ``can_steer=False`` a running peer is a 409 too.
+    - ``"running"``   → steer it; a run that ended or was stopped before the
+      steer landed sends admission round again.
     """
-    # Deferred: steering imports chat-handler modules at module level.
-    from src.server.handlers.chat.steering import (
-        SteerKeyTaken,
-        steer_payload,
-        steer_thread,
-        unsteer_thread,
-    )
-
-    state, active_row = await manager.wait_for_admission(thread_id)
-    # A START that committed before that read, or a steer claimed before it,
-    # is visible from here on, whatever worker made it.
-    await dedup_retransmit_or_raise(thread_id, request_key)
-    if state == "fresh":
-        if steer_only:
-            raise HTTPException(
-                status_code=409, detail=admission_conflict_detail("not_running")
-            )
-        return True, None
-
-    # Only a genuinely-running turn on a steerable path can be steered; every
-    # other non-fresh state, and every request ``steer_allowed`` refuses, is a
-    # conflict. Steering mid-stopping would start a second checkpoint writer;
-    # mid-compaction would corrupt the context rewrite.
-    if state != "running" or not can_steer:
-        raise HTTPException(
-            status_code=409, detail=admission_conflict_detail(state)
-        )
-
-    # state == "running" and steerable → steer the running workflow
-    # immediately, stamped with the run it targets (v4 2.4c): the consuming
-    # middleware delivers only own-run payloads, so a message steered into a
-    # run that then died can never leak into a later turn's context.
     from src.server.database.runs import lifecycle as tl_db
+    from src.server.database.runs import outbox as outbox_db
+    from src.server.handlers.chat.steering import steer_payload
 
-    active_run_id = (
-        str(active_row["conversation_response_id"]) if active_row else None
-    )
-
-    try:
-        result = await steer_thread(
-            thread_id,
-            user_input,
-            user_id,
-            run_id=active_run_id,
-            platform=platform,
-            request_key=request_key,
+    for _lap in range(_STEER_ADMISSION_LAPS):
+        state, active_row = await manager.wait_for_admission(thread_id)
+        # A START that committed before that read, or a steer admitted
+        # before it, is visible from here on, whatever worker made it.
+        await dedup_retransmit_or_raise(
+            thread_id, request_key, except_job_id=steer_job_id
         )
-    except SteerKeyTaken:
-        # Another copy of this send steered between the recheck and here.
-        await dedup_retransmit_or_raise(thread_id, request_key)
-        current = await tl_db.get_active_run(thread_id)
-        if current is None:
-            # Its turn ended without keeping it. This copy starts a turn and
-            # leaves the message where it is: START's own check, which a
-            # client leaving cannot cut short, takes it back, or finds the
-            # other copy's turn and refuses this one.
+        if state == "fresh":
             if steer_only:
                 raise HTTPException(
-                    status_code=409,
-                    detail=admission_conflict_detail("not_running"),
+                    status_code=409, detail=admission_conflict_detail("not_running")
                 )
             return True, None
-        # Its turn ended without keeping it, and the other copy may already
-        # have answered that it was accepted, so this copy moves it into the
-        # running turn, message and claim in one step.
-        active_run_id = str(current["conversation_response_id"])
+
+        # Only a genuinely-running turn on a steerable path can be steered;
+        # every other non-fresh state, and every request ``steer_allowed``
+        # refuses, is a conflict. Steering mid-stopping would start a second
+        # checkpoint writer; mid-compaction would corrupt the context rewrite.
+        if state != "running" or not can_steer or active_row is None:
+            raise HTTPException(
+                status_code=409, detail=admission_conflict_detail(state)
+            )
+
+        active_run_id = str(active_row["conversation_response_id"])
         payload = steer_payload(
             user_input,
             user_id,
-            run_id=active_run_id,
+            sender=agent.sender if agent else "user",
+            workspace_id=workspace_id,
             platform=platform,
             request_key=request_key,
+            origin=agent.origin if agent else None,
+            agent_mode=agent_mode,
         )
-        position = await carry_unread_steer(
-            thread_id, request_key, active_run_id, payload
+        if agent is not None:
+            idempotency_key = agent.idempotency_key
+        elif request_key:
+            idempotency_key = steer_idempotency_key(request_key)
+        else:
+            idempotency_key = f"steer:{uuid4()}"
+        result = await outbox_db.admit_steer(
+            thread_id=thread_id,
+            run_id=active_run_id,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            origin_stamp=agent.origin_stamp if agent else None,
         )
-        if position is None:
-            # Nothing moved: another copy carries it, its turn kept it, or a
-            # fault left it queued, and the running turn's final drain
-            # returns it. The refusal rechecks the key in
-            # ``handle_workflow_error``.
+        if result["state"] == "accepted" and agent is not None:
+            from src.server.handlers.chat.request_prep import (
+                DISPATCH_STEERED_MARKER,
+            )
+
+            return False, DISPATCH_STEERED_MARKER + active_run_id
+        if result["state"] == "accepted":
+            event_data = json.dumps(
+                {
+                    "thread_id": thread_id,
+                    "content": payload["content"],
+                    "position": result["position"],
+                }
+            )
+            return False, f"event: steering_accepted\ndata: {event_data}\n\n"
+        if result["state"] == "duplicate":
+            # Another copy of this send steered between the recheck and here.
+            run_id, steered = steer_job_run_id(result["job"])
+            run = await tl_db.get_run(run_id) if run_id else None
+            if run is None:
+                raise HTTPException(
+                    status_code=409, detail=admission_conflict_detail("running")
+                )
+            raise tl_db.DuplicateRequestError(run, steered=steered)
+        if result["state"] != "not_running":
+            # ``owned_elsewhere``: the run reports back to another Home
+            # thread, so this one's hand-off cannot ride it.
             raise HTTPException(
                 status_code=409, detail=admission_conflict_detail("running")
             )
-        result = {"position": position, "payload": payload}
-    if not result:
-        # Steering failed (e.g. Redis unavailable) on a running turn.
-        raise HTTPException(
-            status_code=409, detail=admission_conflict_detail("running")
-        )
+        # The run ended or was stopped between the admission read and the
+        # insert: nothing was written, so read admission again.
 
-    # Close the accept-after-exit race: the admission snapshot said "running",
-    # but the workflow may have exited — and run its final steering drain —
-    # between that snapshot and the Redis push. If the slot has no live run
-    # anymore (worker-agnostic: the ledger row, not the local registry),
-    # try to reclaim the message: a successful reclaim proves nothing
-    # consumed it, so route as if admission had said "fresh". Reclaim failure is
-    # the best-effort branch: almost always the exit drain got there first and
-    # ``steering_returned`` carried the text back on the turn stream, so report
-    # accepted — but a Redis fault on the reclaim also lands here, so "accepted"
-    # is the graceful default, not a hard delivery guarantee.
-    current = await tl_db.get_active_run(thread_id)
-    if current is None:
-        reclaimed = await unsteer_thread(thread_id, result["payload"])
-        if reclaimed:
-            if steer_only:
-                raise HTTPException(
-                    status_code=409,
-                    detail=admission_conflict_detail("not_running"),
-                )
-            return True, None
-    elif request_key and str(current["conversation_response_id"]) != active_run_id:
-        # The turn steered into ended and another started: a copy of this
-        # send whose START checked the key before this steer was queued.
-        started = await tl_db.find_run_by_request_key(request_key)
-        if started is not None:
-            await unsteer_thread(thread_id, result["payload"])
-            raise tl_db.DuplicateRequestError(started)
-    event_data = json.dumps(
-        {
-            "thread_id": thread_id,
-            "content": user_input,
-            "position": result["position"],
-        }
-    )
-    return False, f"event: steering_accepted\ndata: {event_data}\n\n"
+    raise HTTPException(status_code=409, detail=admission_conflict_detail("running"))

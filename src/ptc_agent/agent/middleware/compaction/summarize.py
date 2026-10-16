@@ -46,6 +46,7 @@ from ptc_agent.agent.transcript.classify import (
 from ptc_agent.agent.transcript import Window
 from ptc_agent.agent.transcript.pointer import TranscriptTurns
 from ptc_agent.agent.transcript.render import message_turns, visible_text
+from ptc_agent.agent.transcript.steer_text import report_text, sender_name, sent_steers
 
 logger = logging.getLogger(__name__)
 
@@ -378,9 +379,9 @@ def _turn_block(
     numbers: Mapping[str, int],
     turns: TranscriptTurns | None,
 ) -> tuple[str, bool]:
-    """One turn as its request, what the user added while it ran, and its
-    last reply, and whether none of them was cut. What the user added can
-    take back what the request asked for, so it is never left out."""
+    """One turn as its request, what was added while it ran, and its last
+    reply, and whether none of them was cut. What was added can take back
+    what the request asked for, so it is never left out."""
     from ptc_agent.agent.middleware.skills.content import skill_blocks_as_names
 
     opener = next((m for m in run if is_run_boundary_message(m)), None)
@@ -401,9 +402,20 @@ def _turn_block(
         whole = len(request) <= _REQUEST_CHARS
     for message in run:
         if isinstance(message, HumanMessage) and human_kind(message) == "steering":
-            added = visible_text(message.content).strip()
-            lines.append(f"Then: {_cut(added, _REQUEST_CHARS)}")
-            whole = whole and len(added) <= _REQUEST_CHARS
+            # A report it carried is what a task found, kept as written.
+            reports = report_text(message)
+            if reports:
+                lines.append(f"Then: {_cut(reports, _REQUEST_CHARS)}")
+                whole = whole and len(reports) <= _REQUEST_CHARS
+            # Each sender's own words: the line that asked the model to answer
+            # them was for the run that read them.
+            for steer in sent_steers(message):
+                added = steer.text.strip()
+                if not added:
+                    continue
+                by = "" if steer.sender == "user" else f" (from {sender_name(steer.sender)})"
+                lines.append(f"Then{by}: {_cut(added, _REQUEST_CHARS)}")
+                whole = whole and len(added) <= _REQUEST_CHARS
     lines.append(f"Last reply: {_cut(reply, _REPLY_CHARS) or '(none)'}")
     return "\n".join(lines), whole and len(reply) <= _REPLY_CHARS
 

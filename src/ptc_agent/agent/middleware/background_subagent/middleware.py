@@ -5,9 +5,7 @@ allowing the main agent to continue working without blocking.
 """
 
 import asyncio
-import json
 import time
-import uuid
 from collections.abc import Awaitable, Callable, Collection
 from typing import TYPE_CHECKING, Any
 
@@ -21,9 +19,6 @@ from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTask,
     BackgroundTaskRegistry,
     TaskRunRejected,
-)
-from ptc_agent.agent.middleware.background_subagent.redis_stream import (
-    steering_queue_key,
 )
 from ptc_agent.agent.middleware.background_subagent.spawn import (
     NamespaceUnfenced,
@@ -48,6 +43,7 @@ from ptc_agent.agent.middleware.background_subagent.context import (  # noqa: E4
     current_background_agent_id,
     current_background_token_tracker,
     current_background_tool_call_id,
+    steer_resume_for,
 )
 
 logger = structlog.get_logger(__name__)
@@ -111,90 +107,43 @@ class BackgroundSubagentMiddleware(AgentMiddleware):
         """Sync path: no background spawn, falls back to blocking execution."""
         return handler(request)
 
-    async def _queue_followup_to_redis(
-        self, task: "BackgroundTask", description: str
-    ) -> str | None:
-        """Push a follow-up message onto the task's steering queue.
-
-        Fenced by run identity: the payload stamps the run the sender
-        believes it is steering, and the queue key is run-scoped so a later
-        resume can never consume it. Returns the message's input_id, or None
-        when queuing failed.
-        """
+    async def _admit_followup(
+        self, task: "BackgroundTask", prompt: str, *, input_id: str | None = None
+    ) -> tuple[str, str | None]:
+        """Send the main agent's follow-up into the task's live run through
+        the server's outbox. ``("accepted", input_id)``, ``("not_running",
+        status)`` when the run ended or was stopped first (``status`` is its
+        ledger status, when known), or ``("unavailable", None)``."""
+        inbox = self.registry.report_inbox
+        admit = getattr(inbox, "admit_task", None)
+        if admit is None or not task.task_run_id:
+            return "unavailable", None
         try:
-            from src.utils.cache.redis_cache import get_cache_client
-
-            cache = get_cache_client()
-            if not cache.enabled or not cache.client:
-                return None
-
-            input_id = uuid.uuid4().hex
-            key = steering_queue_key(task.tool_call_id, task.task_run_id)
-            payload = json.dumps(
-                {
-                    "content": description,
-                    "expected_task_run_id": task.task_run_id,
-                    "input_id": input_id,
-                    "sender": "agent",
-                }
+            result = await admit(
+                thread_id=self.registry.thread_id or "",
+                task_id=task.task_id,
+                task_run_id=task.task_run_id,
+                content=prompt,
+                sender="agent",
+                input_id=input_id,
             )
-            await cache.client.rpush(key, payload)
-            # 1 hour TTL — if not consumed, it's stale
-            await cache.client.expire(key, 3600)
-
-            # Push-then-verify: the terminal sweep drains this queue once,
-            # so a push that lands after it would sit unread until TTL
-            # while the sender reports success. Terminal meta is written
-            # BEFORE the sweep, so a meta read issued AFTER our push that
-            # still says "running" proves the sweep hadn't started — it
-            # will collect our entry if the run ends before delivery.
-            stale = task.completed
-            try:
-                if not stale:
-                    from ptc_agent.agent.middleware.background_subagent.redis_stream import (
-                        read_task_meta,
-                    )
-
-                    meta = await read_task_meta(
-                        self.registry.thread_id or "", task.task_id
-                    )
-                    if meta is not None:
-                        # "Running" must mean THIS run: a rotated epoch means
-                        # our run-scoped entry sits on a queue whose one sweep
-                        # has already passed.
-                        stale = meta.get("status") != "running" or bool(
-                            task.task_run_id
-                            and (meta.get("task_run_id") or None)
-                            != task.task_run_id
-                        )
-                    else:
-                        # Meta lapsed: the injected ledger (when present) is
-                        # the durable authority. An unknown task fails open —
-                        # the arbitration must never be worse than admission.
-                        ledger = getattr(self.registry, "run_ledger", None)
-                        if ledger is not None:
-                            row = await ledger.get_latest_run(task.task_id)
-                            stale = row is not None and (
-                                row.get("status") != "in_progress"
-                                or bool(
-                                    task.task_run_id
-                                    and str(row.get("task_run_id"))
-                                    != task.task_run_id
-                                )
-                            )
-            except Exception:
-                stale = False  # unreadable authority keeps the admission
-            if stale:
-                await cache.client.lrem(key, 0, payload)
-                return None
-            return input_id
         except Exception as e:
             logger.error(
-                "Failed to queue follow-up to Redis",
-                task_id=task.task_id,
-                error=str(e),
+                "Failed to send follow-up", task_id=task.task_id, error=str(e)
             )
-            return None
+            return "unavailable", None
+        if result.get("state") in ("accepted", "duplicate"):
+            return "accepted", result.get("input_id")
+        status = None
+        ledger = getattr(self.registry, "run_ledger", None)
+        if ledger is not None:
+            try:
+                row = await ledger.get_latest_run(task.task_id)
+                status = (row or {}).get("status")
+            except Exception:
+                status = None
+        # Still in progress means its stop is stamped: no steer gets in.
+        return "not_running", "cancelled" if status == "in_progress" else status
 
     async def _acquire_task_ns(self, task_id: str) -> bool:
         """Fail-closed wrapper around the namespace fence: an acquire error
@@ -323,19 +272,27 @@ class BackgroundSubagentMiddleware(AgentMiddleware):
         """First stream entry of a run's epoch: the instruction that launched
         it (spawn and resume alike) — the live counterpart of the checkpointed
         run-boundary HumanMessage, so live and replay share one transcript
-        shape. Best-effort: the run proceeds without it."""
+        shape. A resume for messages the last run never read opens with them
+        as delivered steers instead, as replay does. Best-effort: the run
+        proceeds without it."""
+        resumed = steer_resume_for(task.task_id)
+        if resumed is not None:
+            event = {
+                "event": "steering_delivered",
+                "data": {"agent": f"task:{task.task_id}", **resumed},
+            }
+        else:
+            event = {
+                "event": "user_message",
+                "data": {
+                    "agent": f"task:{task.task_id}",
+                    "role": "user",
+                    "content": prompt,
+                },
+            }
         try:
             await self.registry.append_captured_event(
-                task.tool_call_id,
-                {
-                    "event": "user_message",
-                    "data": {
-                        "agent": f"task:{task.task_id}",
-                        "role": "user",
-                        "content": prompt,
-                    },
-                    "ts": time.time(),
-                },
+                task.tool_call_id, {**event, "ts": time.time()}
             )
         except Exception:
             logger.warning(

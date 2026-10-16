@@ -70,8 +70,11 @@ async def _confirm_dispatch_admission(
         if row is not None:
             if expected_gen is None:
                 return True
-            row_gen = (row.get("metadata") or {}).get("origin_dispatch_gen")
-            if row_gen == expected_gen:
+            metadata = row.get("metadata") or {}
+            # A hand-off steered into a running turn is admitted on that run.
+            if expected_gen == metadata.get("origin_dispatch_gen") or (
+                expected_gen in (metadata.get("dispatch_gens") or [])
+            ):
                 return True
         if loop.time() >= deadline:
             return False
@@ -359,7 +362,7 @@ async def dispatch(
         requested_from=requested_from.of_turn(configurable, question),
     ) as slot:
 
-        def dispatched(run_id: str | None = None) -> Command:
+        def dispatched(run_id: str | None = None, *, steered: bool = False) -> Command:
             # The card for a pre-approved hand-off is drawn from this result,
             # since no approval request carried the workspace's name.
             result = {
@@ -367,9 +370,14 @@ async def dispatch(
                 "workspace_id": workspace_id,
                 "workspace_name": workspace_name,
                 "thread_id": thread_id,
-                "status": "dispatched",
+                "status": "steered" if steered else "dispatched",
                 "report_back": slot.wired,
             }
+            if steered:
+                result["note"] = (
+                    "The analyst is mid-turn: it takes this in before its next "
+                    "step, or as its next turn if that one ends first."
+                )
             if run_id:
                 # What a later stop names, so it ends this hand-off and never
                 # a turn started in the thread since. Absent when the body
@@ -394,6 +402,7 @@ async def dispatch(
         rejected = False
         ambiguous_error: str | None = None
         run_id: str | None = None
+        steered = False
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -439,12 +448,11 @@ async def dispatch(
                         if auto_created_workspace:
                             await _cleanup_auto_created_workspace(workspace_id)
                         if resp.status == 409:
-                            # A dispatch never steers (steer_allowed), so a
-                            # thread mid-turn refuses it; say so, or the model
-                            # reports a failure and retries into the same 409.
-                            # It sends no request_key, retry_of_run_id or
-                            # steer_only, so every 409 left means busy:
-                            # running, stopping or compacting.
+                            # A running turn takes the hand-off as a steer, so
+                            # a 409 means one it cannot ride: stopping,
+                            # compacting, or reporting to another Home thread.
+                            # Say so, or the model reports a failure and
+                            # retries into the same 409.
                             return error_command(_THREAD_BUSY, tool_call_id)
                         return error_command("dispatch_failed", tool_call_id)
                     if resp.status != 200:
@@ -468,9 +476,9 @@ async def dispatch(
                                 "success status 200; treating as dispatched"
                             )
                             body = {"status": "dispatched"}
-                        if (
-                            not isinstance(body, dict)
-                            or body.get("status") != "dispatched"
+                        if not isinstance(body, dict) or body.get("status") not in (
+                            "dispatched",
+                            "steered",
                         ):
                             # A 200 carrying a contradictory body: the status
                             # proof stands (never roll back), but don't claim
@@ -478,6 +486,7 @@ async def dispatch(
                             ambiguous_error = "dispatch_failed"
                         else:
                             run_id = body.get("run_id")
+                            steered = body.get("status") == "steered"
         except asyncio.CancelledError:
             # Cancellation mid-exchange (flash turn cancelled, worker
             # shutdown) is as ambiguous as a lost response: the endpoint may
@@ -549,4 +558,4 @@ async def dispatch(
             )
 
         slot.commit()
-        return dispatched(run_id)
+        return dispatched(run_id, steered=steered)

@@ -234,7 +234,7 @@ def _pipeline_harness(order: list[str]):
 async def test_finalize_cancelled_before_spawn_runs_owner_pipeline():
     """The pre-spawn fallback must settle through the SAME terminal
     pipeline as an owning writer: CAS (deferred run_end) → terminal meta →
-    steering sweep → run_end → sentinel → retention → fence release. An
+    returned steering → run_end → sentinel → retention → fence release. An
     abbreviated finalize would drop acknowledged steering before run_end
     and leave the opener's stream unsealed."""
     order: list[str] = []
@@ -242,13 +242,13 @@ async def test_finalize_cancelled_before_spawn_runs_owner_pipeline():
 
     with patch(
         "ptc_agent.agent.middleware.background_subagent.run_executor."
-        "_return_unconsumed_steering",
-        AsyncMock(side_effect=lambda *a, **k: order.append("sweep")),
+        "_emit_returned_steering",
+        AsyncMock(side_effect=lambda *a, **k: order.append("returned")),
     ):
         await middleware._finalize_cancelled_before_spawn(task)
 
     assert order == [
-        "cas", "meta", "sweep", "run_end", "sentinel", "retention", "release",
+        "cas", "meta", "returned", "run_end", "sentinel", "retention", "release",
     ]
     cas_kwargs = ledger.finalize_task_run.await_args.kwargs
     assert ledger.finalize_task_run.await_args.args[1] == "cancelled"
@@ -275,13 +275,13 @@ async def test_finalize_cancelled_before_spawn_suppresses_run_end_on_torn_stream
 
     with patch(
         "ptc_agent.agent.middleware.background_subagent.run_executor."
-        "_return_unconsumed_steering",
-        AsyncMock(side_effect=lambda *a, **k: order.append("sweep")),
+        "_emit_returned_steering",
+        AsyncMock(side_effect=lambda *a, **k: order.append("returned")),
     ):
         await middleware._finalize_cancelled_before_spawn(task)
 
     assert "run_end" not in order
-    assert order == ["cas", "meta", "sweep", "sentinel", "retention", "release"]
+    assert order == ["cas", "meta", "returned", "sentinel", "retention", "release"]
 
 
 @pytest.mark.asyncio

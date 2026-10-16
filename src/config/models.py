@@ -145,9 +145,6 @@ class RedisTTLConfig(BaseModel):
     cancel_flag: int = Field(
         default=300, description="TTL for workflow cancel flag (5 minutes)"
     )
-    steering: int = Field(
-        default=3600, description="TTL for steering message Redis keys (1 hour)"
-    )
     market_watch: int = Field(default=21600, description="Market watch list TTL in seconds")
     memo_metadata_inflight: int = Field(
         default=300,

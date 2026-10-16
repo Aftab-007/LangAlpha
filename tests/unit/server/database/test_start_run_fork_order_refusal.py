@@ -38,6 +38,20 @@ TASK_RUN_ID = "44444444-4444-4444-4444-444444444444"
 FORK = ForkSpec(from_turn=2, checkpoint_id="ckpt-1", branch_tip="ckpt-tip")
 
 
+@pytest.fixture(autouse=True)
+def _no_steers_to_keep():
+    """The fork's steer lift reads the cursor; these tests script it for
+    the guards alone."""
+    with (
+        patch(
+            "src.server.database.runs.lifecycle.lift_fork_steers",
+            new=AsyncMock(return_value=([], None)),
+        ),
+        patch("src.server.database.runs.lifecycle.land_fork_steers", new=AsyncMock()),
+    ):
+        yield
+
+
 async def _start(conn):
     return await start_run(
         run_id=RUN_ID,

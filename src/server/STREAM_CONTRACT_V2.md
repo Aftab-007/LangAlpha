@@ -76,8 +76,10 @@ lives inside the stream it announces).
 ## Terminal semantics
 
 - `run_end` is written **only after** the terminal status is durably committed
-  (commit-then-signal), and — on the owning worker — only after the steering sweep, so
-  `steering_returned` frames precede it and nothing follows it. The append is
+  (commit-then-signal), and nothing follows it on the run's stream. A task run's
+  `steering_returned` frames precede it, and so does a main-thread one: the `run_end`
+  writer adds it under the same once-only gate, only for chat-app steers the run
+  returned, read from their outbox rows after the finalize that settled them. The append is
   idempotent by last-frame inspection; recovery finalizers (scanner, admission abort)
   append it together with their CAS. A worker dying between CAS and XADD is healed by
   ledger reconciliation — a terminal row whose stream lacks `run_end` closes the

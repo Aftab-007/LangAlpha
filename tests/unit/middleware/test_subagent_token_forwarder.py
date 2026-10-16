@@ -356,7 +356,7 @@ async def test_arun_subagent_streaming_emits_error_event_on_exception(monkeypatc
     registry = BackgroundTaskRegistry()
     task = await _register(registry, task_id_override="taskerr")
 
-    async def fake_astream(state, config, stream_mode=None):
+    async def fake_astream(state, config, stream_mode=None, durability=None):
         yield ("messages", (_chunk("partial"), {}))
         raise RuntimeError("model crashed mid-stream")
 
@@ -551,7 +551,7 @@ async def test_atask_pipeline_forwards_messages_chunks_to_registry(monkeypatch):
     registry = BackgroundTaskRegistry()
     task = await _register(registry, task_id_override="taskpipe")
 
-    async def fake_astream(state, config, stream_mode=None):
+    async def fake_astream(state, config, stream_mode=None, durability=None):
         # Three text-token chunks then a final values yield.
         yield ("messages", (_chunk("Hel"), {}))
         yield ("messages", (_chunk("lo"), {}))
@@ -783,7 +783,7 @@ async def test_atask_pipeline_forwards_custom_events_to_registry(monkeypatch):
     registry = BackgroundTaskRegistry()
     task = await _register(registry, task_id_override="custompipe")
 
-    async def fake_astream(state, config, stream_mode=None):
+    async def fake_astream(state, config, stream_mode=None, durability=None):
         # The driver must subscribe to ``custom`` for this to surface.
         assert "custom" in (stream_mode or [])
         yield (

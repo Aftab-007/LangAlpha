@@ -358,10 +358,6 @@ def get_redis_ttl_cancel_flag() -> int:
     return get_infrastructure_config().redis.ttl.cancel_flag
 
 
-def get_redis_ttl_steering() -> int:
-    return get_infrastructure_config().redis.ttl.steering
-
-
 def get_market_watch_min_interval() -> int:
     return get_infrastructure_config().market_watch.min_interval_seconds
 

@@ -86,7 +86,7 @@ async def test_a_stop_names_its_run_and_tells_the_model_to_wait_for_the_report()
     cancel = AsyncMock(return_value=_CANCELLED)
     payload = await _stop(cancel, thread_id=THREAD_ID, run_id=RUN_ID.upper())
 
-    cancel.assert_awaited_once_with(THREAD_ID, run_id=RUN_ID)
+    cancel.assert_awaited_once_with(THREAD_ID, run_id=RUN_ID, by_user=False)
     assert payload == {"success": True, "cancelled": True, "message": _STOPPING}
 
 
@@ -95,7 +95,7 @@ async def test_without_a_run_id_the_stop_takes_whatever_the_thread_runs():
     cancel = AsyncMock(return_value=_CANCELLED)
     await _stop(cancel, thread_id=THREAD_ID, run_id="")
 
-    cancel.assert_awaited_once_with(THREAD_ID, run_id=None)
+    cancel.assert_awaited_once_with(THREAD_ID, run_id=None, by_user=False)
 
 
 @pytest.mark.asyncio
@@ -126,3 +126,22 @@ async def test_a_cancel_failure_is_stop_failed():
     payload = await _stop(cancel, thread_id=THREAD_ID)
 
     assert payload == {"success": False, "error": "stop_failed"}
+
+
+@pytest.mark.asyncio
+async def test_the_users_steers_never_reach_the_chief_of_staff():
+    """They are the user's to resend; in a tool result the model would act on
+    them or drop them."""
+    cancel = AsyncMock(
+        return_value={
+            "cancelled": False,
+            "thread_id": THREAD_ID,
+            "state": "already_finished",
+            "message": "Run already finished; nothing to cancel.",
+            "returned_steers": [{"content": "also cover bonds"}],
+        }
+    )
+    payload = await _stop(cancel, thread_id=THREAD_ID, run_id=RUN_ID)
+
+    assert "returned_steers" not in payload
+    cancel.assert_awaited_once_with(THREAD_ID, run_id=RUN_ID, by_user=False)

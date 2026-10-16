@@ -171,14 +171,11 @@ async def assemble_finalize_artifacts(
     if interrupt_reason == INTERRUPT_REASON_CREDIT_PAUSE:
         persist_metadata["credit_pause_message"] = pause_message
     # Steering inputs archive on the owning response (v4 identity model:
-    # steering = no run, no turn). Replaces the old backfill that
-    # fabricated query rows for orphan turn indexes.
-    if handler is not None and getattr(handler, "injected_steerings", None):
-        persist_metadata["steering_inputs"] = [
-            m.get("content")
-            for m in handler.injected_steerings
-            if m.get("content")
-        ]
+    # steering = no run, no turn), from the steer rows this run confirmed
+    # delivered.
+    steering_inputs = await _delivered_steering_inputs(key)
+    if steering_inputs:
+        persist_metadata["steering_inputs"] = steering_inputs
     if not (workspace_id and user_id):
         # Usage rows need both; without them the ledger transition still
         # happens, billing artifacts are simply absent.
@@ -196,6 +193,22 @@ async def assemble_finalize_artifacts(
         record=await _producer_record(key, handler, stop_events, status),
         images=await _late_images(key, metadata, handler),
     )
+
+
+async def _delivered_steering_inputs(key: tuple) -> list[str]:
+    """The steers this run read, oldest first. Empty on a read fault: the
+    archive is a record, and the run must still settle."""
+    from src.server.database.runs import outbox as outbox_db
+
+    try:
+        rows = await outbox_db.list_delivered_steers(key[1])
+    except Exception:
+        logger.warning(
+            f"[Finalize] delivered steers unreadable for run {key[1]}",
+            exc_info=True,
+        )
+        return []
+    return [row["content"] for row in rows if row.get("content")]
 
 
 async def _late_images(key: tuple, metadata: dict, handler) -> dict[str, str]:

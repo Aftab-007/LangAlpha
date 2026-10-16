@@ -26,8 +26,15 @@ from src.server.database.runs import subagent_repair
 from src.server.database.runs import subagent_runs as sr_db
 from src.server.database.runs.outbox import (
     build_finalize_jobs_from_run_row,
+    cancel_run_steers,
+    count_held_user_steers,
     enqueue_hooks,
+    land_fork_steers,
+    lift_fork_steers,
+    list_returned_steers,
     release_deferred_report_backs,
+    settle_run_steers,
+    steer_ordering_key,
 )
 from src.server.contracts.status import TERMINAL_STATUSES
 from src.server.database.provenance import MAIN_PROVENANCE_LANE
@@ -387,6 +394,7 @@ async def start_run(
                 if existing:
                     raise DuplicateRequestError(existing)
 
+                kept_steers: List[Dict[str, Any]] = []
                 if fork is not None:
                     # The fork's turn was read off the branch the thread's
                     # pointer named, outside this transaction. A turn or fork
@@ -459,6 +467,14 @@ async def start_run(
                     await oa_db.refuse_attempts_on_fork(
                         thread_id, fork.from_turn, conn=conn
                     )
+                    # The truncation's cascade would delete the user's steers
+                    # with the runs that own them; they move to this run.
+                    kept_steers, input_sent_at = await lift_fork_steers(
+                        conn,
+                        thread_id,
+                        fork.from_turn,
+                        edit=not fork.preserve_query_at_fork,
+                    )
                     deleted = await qr_db.truncate_thread_from_turn(
                         thread_id,
                         fork.from_turn,
@@ -474,6 +490,8 @@ async def start_run(
                     # The run row is the one record of this pin that outlives a
                     # run failing before its first step (``pointer_pinned_by_fork``).
                     metadata = {**(metadata or {}), FORK_BASE_KEY: fork.checkpoint_id}
+                    if input_sent_at is not None:
+                        metadata["input_sent_at"] = input_sent_at.isoformat()
                     logger.info(
                         f"[turn_lifecycle] fork truncated {deleted} rows from "
                         f"turn>={fork.from_turn} thread={thread_id} "
@@ -539,6 +557,7 @@ async def start_run(
                         ),
                     )
                     run_row = dict(await cur.fetchone())
+                await land_fork_steers(conn, kept_steers, run_id)
 
                 async with conn.cursor() as cur:
                     await cur.execute(
@@ -709,6 +728,7 @@ async def finalize_run(
 
                 run_row = dict(run_row)
                 final_status = run_row["status"]
+                run_meta = run_row.get("metadata") or {}
                 if final_status != status:
                     logger.info(
                         f"[turn_lifecycle] durable cancel intent overrode finalize "
@@ -776,6 +796,25 @@ async def finalize_run(
                             f"report-back job(s) for thread={thread_id}"
                         )
 
+                # The thread's steers settle with the run they were sent to,
+                # in the same transaction, so no steer outlives its run
+                # without an outcome or a turn to read it.
+                await settle_run_steers(
+                    conn,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    final_status=final_status,
+                    user_cancel=(
+                        final_status == "cancelled"
+                        and bool(run_meta.get("cancelled_by_user"))
+                        and not run_meta.get("stopped_by_agent")
+                    ),
+                    agent_stop=(
+                        final_status == "cancelled"
+                        and bool(run_meta.get("stopped_by_agent"))
+                    ),
+                )
+
                 if conn.info.transaction_status == psycopg.pq.TransactionStatus.INERROR:
                     raise RuntimeError(
                         f"finalize transaction for run={run_id} poisoned by a "
@@ -813,22 +852,36 @@ async def _get_finalize_row(run_id: str) -> Optional[Dict[str, Any]]:
 
 
 async def request_run_cancel(
-    run_id: str, thread_id: Optional[str] = None
+    run_id: str, thread_id: Optional[str] = None, *, by_user: bool = True
 ) -> Dict[str, Any]:
     """Durable cancel intent: honest, idempotent, never a recorded losing cancel.
 
     ``thread_id`` scopes the write so a caller-supplied run_id can't stamp
     intent on another thread's run. Returns {"state": "requested"|
-    "already_requested"|"already_terminal"|"not_found", "run": row|None}.
+    "already_requested"|"already_terminal"|"not_found", "run": row|None,
+    "returned_steers": [...], "held_steers": int}: the user's steers the stop
+    gave back, settled in the stamp's transaction so a steer is either read by
+    the run or returned here, never both (re-read for a stop asked again),
+    and how many of the user's the run still holds. Those are already in its
+    messages, so its ending settles them: delivered if its checkpoint read
+    them, else returned (``list_returned_steers`` once it has ended).
 
     Two stamp laps: a cancel racing the START commit can run its guarded
     UPDATE before the row is visible (zero rows), then read the committed
     row as in_progress — one lap would misreport that as already_requested
     while no intent ever landed. The second lap stamps the now-visible row.
+
+    ``by_user=False`` is an agent's stop: it marks the run ``stopped_by_agent``
+    and leaves the user's steers for the run's ending to keep.
     """
     sql = """
         UPDATE conversation_responses
-        SET cancel_requested_at = NOW()
+        SET cancel_requested_at = NOW()"""
+    if not by_user:
+        sql += """,
+            metadata = COALESCE(metadata, '{}'::jsonb)
+                || '{"stopped_by_agent": true}'::jsonb"""
+    sql += """
         WHERE conversation_response_id = %s
           AND status = 'in_progress'
           AND cancel_requested_at IS NULL
@@ -839,27 +892,66 @@ async def request_run_cancel(
         params.append(thread_id)
     sql += "        RETURNING *"
 
+    async def _held(conn, thread: str) -> int:
+        if not by_user:
+            return 0
+        return await count_held_user_steers(
+            conn, ordering_key=steer_ordering_key(thread), owner_id=run_id
+        )
+
+    async def _settled(state: str, run: Dict[str, Any]) -> Dict[str, Any]:
+        held = 0
+        if state != "already_terminal":
+            async with pool.get_db_connection() as conn:
+                held = await _held(conn, str(run["conversation_thread_id"]))
+        return {
+            "state": state,
+            "run": run,
+            "returned_steers": await list_returned_steers(run_id),
+            "held_steers": held,
+        }
+
     run: Optional[Dict[str, Any]] = None
     for _lap in range(2):
         async with pool.get_db_connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
-                if row:
-                    return {"state": "requested", "run": dict(row)}
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(sql, params)
+                    row = await cur.fetchone()
+                    if row:
+                        row = dict(row)
+                        returned = await cancel_run_steers(
+                            conn,
+                            thread_id=str(row["conversation_thread_id"]),
+                            run_id=run_id,
+                            by_user=by_user,
+                        )
+                        return {
+                            "state": "requested",
+                            "run": row,
+                            "returned_steers": returned,
+                            "held_steers": await _held(
+                                conn, str(row["conversation_thread_id"])
+                            ),
+                        }
 
         run = await get_run(run_id)
         if run is None or (
             thread_id is not None and str(run["conversation_thread_id"]) != thread_id
         ):
-            return {"state": "not_found", "run": None}
+            return {
+                "state": "not_found",
+                "run": None,
+                "returned_steers": [],
+                "held_steers": 0,
+            }
         if run["status"] != "in_progress":
-            return {"state": "already_terminal", "run": run}
+            return await _settled("already_terminal", run)
         if run.get("cancel_requested_at"):
-            return {"state": "already_requested", "run": run}
+            return await _settled("already_requested", run)
         # in_progress with NULL intent, yet our UPDATE matched nothing:
         # the START-commit visibility race — go around once more.
-    return {"state": "already_requested", "run": run}
+    return await _settled("already_requested", run)
 
 
 async def get_run(run_id: str) -> Optional[Dict[str, Any]]:
@@ -1045,17 +1137,37 @@ async def get_latest_attempt(
 async def thread_has_dispatch_gen(thread_id: str, dispatch_gen: str) -> bool:
     """True if any attempt on this thread was admitted under this dispatch
     generation (``origin_dispatch_gen`` is stamped into run metadata at
-    START) — the durable admission record the orphan resolver defers to."""
+    START) — the durable admission record the orphan resolver defers to.
+    A hand-off steered into a running run is admitted on that run's
+    ``dispatch_gens``."""
     async with pool.get_db_connection() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
                 SELECT 1 FROM conversation_responses
                 WHERE conversation_thread_id = %s
-                  AND metadata->>'origin_dispatch_gen' = %s
+                  AND (metadata->>'origin_dispatch_gen' = %s
+                       OR metadata->'dispatch_gens' ? %s)
                 LIMIT 1
                 """,
-                (thread_id, dispatch_gen),
+                (thread_id, dispatch_gen, dispatch_gen),
+            )
+            return await cur.fetchone() is not None
+
+
+async def run_has_dispatch_gen(run_id: str, dispatch_gen: str) -> bool:
+    """True if ``run_id`` itself was admitted under this generation, at START
+    or as a hand-off steered into it."""
+    async with pool.get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT 1 FROM conversation_responses
+                WHERE conversation_response_id = %s::uuid
+                  AND (metadata->>'origin_dispatch_gen' = %s
+                       OR metadata->'dispatch_gens' ? %s)
+                """,
+                (run_id, dispatch_gen, dispatch_gen),
             )
             return await cur.fetchone() is not None
 

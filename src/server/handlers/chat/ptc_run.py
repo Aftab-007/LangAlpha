@@ -85,7 +85,6 @@ from .request_prep import (
     provenance_metadata,
     retried_on_its_surface,
     serialize_context_metadata,
-    setup_steering_tracking,
     surface_stamp,
     turn_skill_names,
     turn_surface,
@@ -100,14 +99,14 @@ from src.server.services.runs.admission import (
     dedup_retransmit_or_raise,
 )
 
-from .admission_gate import steer_allowed, wait_or_steer
+from .admission_gate import agent_steer_of, steer_allowed, wait_or_steer
 from .attachments import attach_request_files
 from .error_handling import handle_workflow_error
 from .flash_handover import cancel_tool_calls_it_lacks, hand_over_flash_thread
 from src.server.services.llm.clients import is_own_key_turn
 from src.server.services.llm.config import resolve_llm_config
 from src.server.services.llm.thread_model import NamedModel
-from .steering import drain_steering_return_event
+from .steering import open_with_steers_ahead
 from .run_stream_reader import stream_from_log
 from .detached import fire_and_forget as _fire_and_forget
 
@@ -268,13 +267,15 @@ async def astream_ptc_workflow(
         # request_key resolves to its existing run HERE, before the steering
         # or fork paths below can act on the duplicate (raises
         # DuplicateRequestError → structured duplicate_request SSE).
-        await dedup_retransmit_or_raise(thread_id, request.request_key)
+        await dedup_retransmit_or_raise(
+            thread_id, request.request_key, except_job_id=request.steer_job_id
+        )
 
         # =====================================================================
         # Early steering routing
         # =====================================================================
         # If a workflow is already running for this thread, route this POST
-        # through the steering queue *before* any DB write. Detecting steering
+        # into it as a steer *before* any turn row is written. Detecting steering
         # here keeps ``conversation_queries`` clean — a steering message is
         # neither a run nor a turn (v4 identity model); its content is archived
         # on the owning response's metadata at finalize.
@@ -296,6 +297,12 @@ async def astream_ptc_workflow(
             steer_only=request.steer_only,
             platform=request.platform,
             request_key=request.request_key,
+            workspace_id=workspace_id,
+            steer_job_id=request.steer_job_id,
+            # A hand-off into a running turn answers the dispatch primer
+            # with DISPATCH_STEERED_MARKER and that run's id.
+            agent=agent_steer_of(request, dispatched=dispatched, run_id=run_id),
+            agent_mode=request.agent_mode,
             can_steer=steer_allowed(
                 request, dispatched=dispatched, steerable=steerable
             ),
@@ -876,6 +883,11 @@ async def astream_ptc_workflow(
         # lands on ExecutionInfo.run_id and CheckpointMetadata.run_id so
         # LangSmith / checkpoint inspection can correlate by this UUID.
         graph_config["run_id"] = run_id
+        steer_input_id = await open_with_steers_ahead(
+            thread_id, run_id, request, input_state
+        )
+        if steer_input_id:
+            graph_config["configurable"]["steer_input_message_id"] = steer_input_id
 
         handler = RunSSEProducer(
             thread_id=thread_id,
@@ -886,9 +898,6 @@ async def astream_ptc_workflow(
             report_source=query_metadata.get("report_source"),
             turn_index=run_handle.turn_index,
         )
-
-        # Track steering messages injected mid-workflow for post-completion backfill
-        setup_steering_tracking(handler)
 
         # =====================================================================
         # Background Execution with Completion Callback
@@ -1026,17 +1035,6 @@ async def astream_ptc_workflow(
         # task — disconnect cannot reach it.
         async for event in stream_from_log(thread_id, run_id, last_event_id=None):
             yield event
-
-        # After the workflow ends, return any unconsumed steering messages so
-        # the client can re-render them as locally-queued context for the next
-        # turn instead of losing them silently.
-        steering_event = await drain_steering_return_event(thread_id)
-        if steering_event:
-            logger.info(
-                f"[PTC_CHAT] Returning unconsumed steering message(s) "
-                f"to client: thread_id={thread_id}"
-            )
-            yield steering_event
 
     except (asyncio.CancelledError, GeneratorExit):
         if scope.slot_owned:

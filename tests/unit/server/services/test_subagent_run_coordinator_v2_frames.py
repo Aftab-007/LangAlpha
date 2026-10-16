@@ -311,3 +311,32 @@ async def test_a_failed_delivery_stamp_does_not_swallow_the_rejection(monkeypatc
         await SubagentRunCoordinator("t-1").start_task_run(
             task_id="abc123", cause="init"
         )
+
+
+@pytest.mark.asyncio
+async def test_finalize_confirms_checkpointed_task_holds_before_its_cas(monkeypatch):
+    """The CAS's settle would take a row the run held, whose message its
+    checkpoint already carries, as unread."""
+    order = []
+
+    async def confirm(thread_id, task_id, task_run_id):
+        order.append(("confirm", thread_id, task_id, task_run_id))
+        return []
+
+    async def finalize(**kwargs):
+        order.append("finalize")
+        return {"applied": False, "run": _row(status="cancelled")}
+
+    monkeypatch.setattr(
+        "src.server.services.report_back.steer.confirm_checkpointed_task_holds",
+        confirm,
+    )
+    monkeypatch.setattr(f"{COORD_SRDB}.finalize_task_run_idempotent", finalize)
+    coordinator = SubagentRunCoordinator("t-1")
+    monkeypatch.setattr(
+        coordinator, "_read_task_checkpoint_tip", AsyncMock(return_value=None)
+    )
+
+    await coordinator.finalize_task_run("run-1", "cancelled", task_id="abc123")
+
+    assert order == [("confirm", "t-1", "abc123", "run-1"), "finalize"]

@@ -707,6 +707,52 @@ class TestServerSummaryAfterAnEarlierSummary:
         assert second.strip() == "Last reply: second reply"
         assert third.strip() == "Request: third request\nLast reply: (none)"
 
+    def test_a_report_taken_mid_turn_stays_in_the_turn(self):
+        """A task's report rides the steering message ahead of any steer; the
+        turn block keeps it as well as the sender's own words."""
+        from langchain_core.messages import AIMessage
+
+        from ptc_agent.agent.middleware.compaction.summarize import server_summary
+        from ptc_agent.agent.transcript import Window
+        from ptc_agent.agent.transcript.steer_text import STEERS_AT, steer_text
+
+        report = "Task-1 found revenue up 12%."
+        sent = steer_text([("user", ["Also chart it."])])
+        mixed = report + "\n\n" + sent
+        raw = [
+            HumanMessage(content="analyse AAPL", id="h1"),
+            HumanMessage(
+                content=report,
+                id="s1",
+                additional_kwargs={
+                    "lc_source": "steering",
+                    "steering_delivered": {"messages": [{"content": "", "report_source": "task"}]},
+                    STEERS_AT: len(report),
+                },
+            ),
+            HumanMessage(
+                content=mixed,
+                id="s2",
+                additional_kwargs={
+                    "lc_source": "steering",
+                    "steering_delivered": {
+                        "messages": [
+                            {"content": "", "report_source": "task"},
+                            {"content": "Also chart it.", "sender": "user"},
+                        ]
+                    },
+                    STEERS_AT: len(mixed) - len(sent),
+                },
+            ),
+            AIMessage(content="done", id="a1"),
+        ]
+
+        text = server_summary(raw, [], raw_messages=raw, turns=None, window=Window()).text
+
+        assert text.count(f"Then: {report}") == 2
+        assert "Then: Also chart it." in text
+        assert "sent a new message" not in text
+
 
 class TestTrimForSummary:
     """The summarizer gets the newest messages that fit, and never loses the

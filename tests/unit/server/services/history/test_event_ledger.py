@@ -42,7 +42,9 @@ CHECKPOINT_PROJECTED = {
     "artifact",
     "context_window",  # compaction state deltas; a manual compact or offload
     # is the `context_window` ui record its own state write carries
-    "steering_delivered",
+    "steering_delivered",  # the payload rides the injected steering
+    # message's additional_kwargs (request_key and origin included), and a
+    # resumed task run's opening input
     "interrupt",
     "model_fallback",  # ui-channel record pushed by ModelResilienceMiddleware;
     # a stopped or failed run's last step never commits its own, which the
@@ -57,9 +59,12 @@ TABLE_SOURCED = {
     "provenance",  # provenance_records
     "credit_usage",  # conversation_usages
     "error",  # conversation_responses.errors + metadata (terminal event)
-    "steering_returned",  # subagent_runs.replay_facts: undelivered steering
+    "steering_returned",  # subagent_runs.replay_facts, written in the
+    # transaction that settles the task's outbox steers: undelivered steering
     # has no checkpoint twin by design (nothing was injected into the graph);
-    # a run settled before those facts has it in its turn's legacy facts
+    # a run settled before those facts has it in its turn's legacy facts. The
+    # main thread's hands chat-app steers back to their gateway on the run's
+    # own stream, which resubmits them as its next turn; nothing replays it.
 }
 
 LIVE_ONLY = {
@@ -67,7 +72,8 @@ LIVE_ONLY = {
     "workspace_status",  # sandbox bring-up progress
     "warning",
     "retry",  # recoverable-error notice, run restarts
-    "steering_accepted",  # only on the steering POST's own stream
+    "steering_accepted",  # only on the steering POST's own stream; the
+    # steer's durable twin is its steering_delivered or steering_returned
     "model_retry",  # transient
     "tool_call_chunks",  # replay's consolidated tool_calls carries full args
     "compaction_chunk",  # summarize context_window carries summary_text

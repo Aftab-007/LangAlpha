@@ -495,13 +495,14 @@ async def lifespan(app: FastAPI):
     # that must crash the worker loudly — swallowed, it leaves the drainer
     # permanently off behind one WARN line (report-backs undelivered, burst
     # slots leaking).
-    from src.server.services.report_back import subagent
+    from src.server.services.report_back import steer_executor, subagent
     from src.server.services.report_back.flash import core as flash_core
     from src.server.services import automation_settlement, thread_lifecycle_feed
     from src.server.services.hook_outbox import HookOutboxDrainer
 
     flash_core.register_outbox_executors()
     subagent.register_outbox_executors()
+    steer_executor.register_outbox_executors()
     thread_lifecycle_feed.register_outbox_executors()
     automation_settlement.register_outbox_executors()
     try:

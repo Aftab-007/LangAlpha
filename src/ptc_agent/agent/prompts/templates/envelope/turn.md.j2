@@ -31,10 +31,10 @@
 {{ elapsed_human }} since your last turn{% if sessions_closed %} ({{ sessions_closed }} {{ market | default("market", true) }} session{{ "" if sessions_closed == 1 else "s" }} closed in between){% endif %}
 
 {% endif %}
-{% if surface or origin or is_subagent %}
+{% if surface or started_by or is_subagent %}
 {% set run = [] %}
 {% if surface %}{% set _ = run.append("surface `" ~ surface ~ "`" ~ (", symbol " ~ symbol if symbol else "")) %}{% endif %}
-{% if origin %}{% set _ = run.append("started by " ~ origin) %}{% endif %}
+{% if started_by %}{% set _ = run.append("started by " ~ started_by) %}{% endif %}
 {% if is_subagent %}{% set _ = run.append("you are a subagent reporting to a parent agent") %}{% endif %}
 {% set run_line = run | join(", ") %}
 {{ run_line[:1] | upper }}{{ run_line[1:] }}
