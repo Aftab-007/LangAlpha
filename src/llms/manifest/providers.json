@@ -309,6 +309,25 @@
         }
       },
       {
+        "id": "gemini-4-argon",
+        "name": "Gemini 4 Argon",
+        "is_reasoning": true,
+        "description": "Google's flagship reasoning model, for complex software engineering, deep mathematical and scientific problem solving, and autonomous multi-step agents",
+        "pricing": {
+          "input": 2.0,
+          "cached_input": 0.1,
+          "output": 10.0,
+          "unit": "per_1m_tokens"
+        },
+        "scheduled_pricing": {
+          "effective_from": "2026-12-01",
+          "input": 4.0,
+          "cached_input": 0.2,
+          "output": 20.0,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
         "id": "gemini-3.1-pro-preview",
         "name": "Gemini 3.1 Pro Preview",
         "is_reasoning": true,

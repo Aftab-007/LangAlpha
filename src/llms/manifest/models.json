@@ -281,6 +281,33 @@
       "write": "parameters.output_config.effort"
     }
   },
+  "gemini-4-argon": {
+    "prompt_guidance": "lean",
+    "model_id": "gemini-4-argon",
+    "provider": "gemini",
+    "visible": true,
+    "speed": 3,
+    "intelligence": 5,
+    "context": 1000000,
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf",
+      "video"
+    ],
+    "parameters": {
+      "include_thoughts": true
+    },
+    "reasoning": {
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium",
+      "write": "parameters.thinking_level"
+    }
+  },
   "gemini-3.1-pro": {
     "prompt_guidance": "lean",
     "model_id": "gemini-3.1-pro-preview",
