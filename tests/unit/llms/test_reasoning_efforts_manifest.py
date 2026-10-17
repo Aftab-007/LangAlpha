@@ -86,12 +86,12 @@ class TestUnhonoredLevelsDegrade:
 
     def test_above_the_ceiling_steps_down_one(self, config):
         """max on a low/medium/high model runs high, not that model's middle."""
-        assert config.get_reasoning_efforts("gemini-3.1-pro") == [
+        assert config.get_reasoning_efforts("gemini-4-argon") == [
             "low",
             "medium",
             "high",
         ]
-        assert config.resolve_reasoning_effort("gemini-3.1-pro", "max") == "high"
+        assert config.resolve_reasoning_effort("gemini-4-argon", "max") == "high"
 
     def test_below_the_floor_takes_the_lowest(self, config):
         """Nothing at or under the request — the model's minimum is as close as it gets."""
