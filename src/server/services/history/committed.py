@@ -5,7 +5,9 @@ turn waits. A turn's stored slice serves it while the slice is the turn's on
 the current branch, by the rule replay applies (``slices.stored_spans``);
 only a turn without one waits for its projection. Replay's stored lines would
 serve the same text, but checking them reads every row of the thread, which
-costs this path several times what the slice read does.
+costs this path several times what the slice read does. A legacy turn its
+checkpoints never covered reads the stream its row archived instead, which is
+what its replay shows.
 
 A lane whose stream outlived its checkpoints (a worker lost mid-turn, a
 subagent that failed) keeps the provenance of only the tool calls whose
@@ -26,8 +28,12 @@ from typing import Any
 from langchain_core.messages import ToolMessage
 
 from src.server.database.conversation import turn_slices as slices_db
-from src.server.database.conversation.replay_rows import get_branch_pointer
+from src.server.database.conversation.replay_rows import (
+    get_branch_pointer,
+    get_replay_responses,
+)
 from src.server.database.pool import DATABASE_UNAVAILABLE
+from src.server.database.replay_facts import archived_stream
 from src.server.services.history import slices
 from src.server.services.history.projector import (
     history_events_to_sse,
@@ -52,10 +58,10 @@ async def committed_texts(thread_id: str, turns: Mapping[str, Any]) -> dict[str,
     index), cut from the turn's stored slice, which a turn without one has
     projected first, as its settle would have. A turn whose lanes wait on the
     thread's claims pass is read straight from its checkpoints instead: the
-    pass places subagent launches, which its main lane never needs. A
-    response left out has no checkpoint boundary or its read failed. A
-    database fault raises instead: its turns would read as ones that said
-    nothing."""
+    pass places subagent launches, which its main lane never needs. A turn
+    with no checkpoint boundary reads the stream its row archived. A response
+    left out has neither or its read failed. A database fault raises instead:
+    its turns would read as ones that said nothing."""
     from src.server.services.history.replay.refresh import refresh_thread
 
     anchors = await _anchors(thread_id, turns)
@@ -70,6 +76,8 @@ async def committed_texts(thread_id: str, turns: Mapping[str, Any]) -> dict[str,
         )
     if unread := {rid: a for rid, a in anchors.items() if rid not in texts}:
         texts.update(await _checkpoint_texts(thread_id, unread))
+    if unread := [rid for rid in turns if rid not in texts]:
+        texts.update(await _archived_texts(unread))
     return texts
 
 
@@ -131,6 +139,17 @@ async def _checkpoint_texts(
     return _span_texts(thread_id, dict(zip(anchors, turns)))
 
 
+async def _archived_texts(response_ids: list[str]) -> dict[str, str]:
+    """Main-lane text by response id, for the rows that archived their
+    stream."""
+    rows = await get_replay_responses(response_ids)
+    return {
+        response_id: _main_text(stream)
+        for response_id, row in rows.items()
+        if (stream := archived_stream(row)) is not None
+    }
+
+
 def _span_texts(
     thread_id: str, spans: Mapping[str, slices.SpanDelta]
 ) -> dict[str, str]:
@@ -147,16 +166,21 @@ def _span_texts(
                 exc_info=True,
             )
             continue
-        out[response_id] = "".join(
-            d["content"]
-            for i in items
-            if i.get("event") == "message_chunk"
-            and isinstance(d := i.get("data"), dict)
-            and d.get("content_type") == "text"
-            and isinstance(d.get("content"), str)
-            and d["content"]
-        )
+        out[response_id] = _main_text(items)
     return out
+
+
+def _main_text(items: Iterable[dict[str, Any]]) -> str:
+    return "".join(
+        d["content"]
+        for i in items
+        if i.get("event") == "message_chunk"
+        and _lane(i) == "main"
+        and isinstance(d := i.get("data"), dict)
+        and d.get("content_type") == "text"
+        and isinstance(d.get("content"), str)
+        and d["content"]
+    )
 
 
 def saved_tool_calls(messages: Iterable[Any]) -> frozenset[str]:

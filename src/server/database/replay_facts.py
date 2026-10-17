@@ -21,6 +21,26 @@ LEGACY_KEY = "legacy"
 ARCHIVE_KEY = "archive"
 
 
+def archived_stream(
+    response: Optional[Dict[str, Any]],
+) -> Optional[List[Dict[str, Any]]]:
+    """The live stream a legacy turn's row kept whole (``ARCHIVE_KEY``), or
+    None for a row that kept none. A row keeps it only when its checkpoints
+    could not cover its turn, so it is the only record of what the turn
+    said. The rows are copies: replay stamps them in place."""
+    facts = (response or {}).get("replay_facts")
+    rows = facts.get(ARCHIVE_KEY) if isinstance(facts, dict) else None
+    if not isinstance(rows, list):
+        return None
+    return [
+        {"event": row["event"], "data": dict(row["data"])}
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("event")
+        and isinstance(row.get("data"), dict)
+    ]
+
+
 async def append_returned_steering(
     task_run_id: str, returned: List[Dict[str, Any]], conn=None
 ) -> Optional[Dict[str, Any]]:
