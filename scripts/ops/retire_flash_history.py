@@ -2,19 +2,23 @@
 
 ``flash`` named the retired Flash agent. Its threads, runs and usage rows now
 belong to the full agent (``ptc``), and a thread it dispatched reads as the
-Chief of Staff's. Five rewrites, each counted on its own:
+Chief of Staff's. Six rewrites, each counted on its own:
 
     thread_msg_type    conversation_threads.msg_type 'flash' -> 'ptc', llm_model cleared
     thread_origin      conversation_threads.metadata origin.agent 'flash' -> 'chief_of_staff'
     usage_msg_type     conversation_usages.msg_type 'flash' -> 'ptc'
     response_msg_type  conversation_responses.metadata msg_type 'flash' -> 'ptc'
     query_msg_type     conversation_queries.metadata msg_type 'flash' -> 'ptc'
+    usage_workspace    conversation_usages.workspace_id -> its thread's, where they differ
 
 The first is the bulk form of ``promote_flash_thread``, which every Flash
-thread gets on its next turn anyway. Run this once the build that writes no
-new ``flash`` values is live; the later migration that drops ``flash`` from the
-CHECK constraints runs the same rewrite as a catch-up. ``updated_at`` is never
-touched: thread lists order by it, and this is not activity.
+thread gets on its next turn anyway. The last is what a fold of a former flash
+row into Home left behind before it moved usage rows with their threads; a row
+whose thread is already deleted cannot be traced and stays. Run this once the
+build that writes no new ``flash`` values is live; the later migration that
+drops ``flash`` from the CHECK constraints runs the label rewrites again as a
+catch-up. ``updated_at`` is never touched: thread lists order by it, and this
+is not activity.
 
 Online: each table is walked once in primary-key order, one short transaction
 per batch under a lock timeout, retried with backoff when a row is busy.
@@ -79,6 +83,13 @@ class Table:
     rewrites: tuple[Rewrite, ...]
 
 
+# Correlated on the outer row, which both the UPDATE and the dry run's count
+# name by the table itself.
+_THREAD_WORKSPACE = (
+    "(SELECT ct.workspace_id FROM conversation_threads ct "
+    "WHERE ct.conversation_thread_id = conversation_usages.conversation_thread_id)"
+)
+
 TABLES: tuple[Table, ...] = (
     Table(
         "conversation_threads",
@@ -98,7 +109,15 @@ TABLES: tuple[Table, ...] = (
     Table(
         "conversation_usages",
         "conversation_usage_id",
-        (Rewrite("usage_msg_type", "msg_type = 'flash'", "msg_type = 'ptc'"),),
+        (
+            Rewrite("usage_msg_type", "msg_type = 'flash'", "msg_type = 'ptc'"),
+            # Only a fold moves a thread, so a usage row elsewhere is one it left.
+            Rewrite(
+                "usage_workspace",
+                f"workspace_id <> {_THREAD_WORKSPACE}",
+                f"workspace_id = {_THREAD_WORKSPACE}",
+            ),
+        ),
     ),
     Table(
         "conversation_responses",

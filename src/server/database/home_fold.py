@@ -56,6 +56,13 @@ MOVES: dict[str, str] = {
         SET workspace_id = %(home)s, thread_index = moved.thread_index
         FROM moved WHERE t.conversation_thread_id = moved.conversation_thread_id
     """,
+    # A run's place is its thread's workspace, and a usage row outlives its
+    # thread: left on the retired row, a run whose thread is later deleted
+    # would read as some other workspace's.
+    "conversation_usages": """
+        UPDATE conversation_usages SET workspace_id = %(home)s
+        WHERE workspace_id = %(former)s
+    """,
     # Where Home already holds the same key, Home's stays and the former one
     # is left on the retired row.
     "chart_annotations": """
@@ -69,8 +76,6 @@ MOVES: dict[str, str] = {
 }
 
 _SANDBOX = "sandbox state, and a never-bound row has no sandbox"
-_RAN_THERE = "a record of where it ran"
-_NO_SKILL_SCOPE = "nothing offers a flash row skill scope, so it holds none"
 
 STAYS: dict[str, str] = {
     "workspace_files": _SANDBOX,
@@ -78,15 +83,14 @@ STAYS: dict[str, str] = {
     "share_links": _SANDBOX,
     "sandbox_egress_grants": _SANDBOX,
     "sandbox_egress_grant_claims": _SANDBOX,
-    "computers": "origin_workspace_id names the project a sandbox was adopted "
+    "computers": "origin_workspace_id names the workspace a sandbox was adopted "
     "from, and a never-bound row has no sandbox",
     "workspace_mcp_servers": "Home's own MCP selection wins",
     "workspace_mcp_tool_schemas": "cached for the MCP selection, where Home's wins",
     "workspace_vault_secrets": "Home's own secret selection wins",
-    "conversation_usages": _RAN_THERE,
-    "order_attempts": _RAN_THERE,
-    "user_skills": _NO_SKILL_SCOPE,
-    "workspace_skill_disables": _NO_SKILL_SCOPE,
+    "order_attempts": "a record of where it ran",
+    "user_skills": "nothing offers Home as a skill's workspace, so a flash row holds none",
+    "workspace_skill_disables": "Home's own skill selection wins",
     "user_subagents": "its workspace_id is reserved and always NULL, so a flash row holds none",
 }
 

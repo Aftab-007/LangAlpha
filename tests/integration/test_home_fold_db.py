@@ -116,6 +116,15 @@ async def test_former_rows_fold_into_home_and_retire(seed_user, test_db_pool):
             "VALUES (%s, 'pinned', 'cron', 'hi', %s, 'continue', %s)",
             (user_id, elsewhere, middle),
         )
+        # One run's thread moves with it; the other's is already deleted.
+        await conn.execute(
+            "INSERT INTO conversation_usages "
+            "(conversation_response_id, user_id, conversation_thread_id, "
+            " workspace_id, status) "
+            "VALUES (gen_random_uuid(), %s, %s, %s, 'completed'), "
+            "       (gen_random_uuid(), %s, gen_random_uuid(), %s, 'completed')",
+            (user_id, newest, first, user_id, first),
+        )
 
     resolved = await workspaces.get_or_create_flash_workspace(user_id)
 
@@ -152,6 +161,12 @@ async def test_former_rows_fold_into_home_and_retire(seed_user, test_db_pool):
     )
     # The pinned one follows its thread.
     assert automations == [{"name": "daily", "ws": home}, {"name": "pinned", "ws": home}]
+    usages = await _rows(
+        test_db_pool,
+        "SELECT workspace_id::text AS ws FROM conversation_usages WHERE user_id = %s",
+        user_id,
+    )
+    assert usages == [{"ws": home}] * 2
 
 
 @pytest.mark.parametrize("background", [False, True], ids=["root", "subagent"])
