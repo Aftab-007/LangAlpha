@@ -267,27 +267,6 @@
         }
       },
       {
-        "id": "gemini-3.7-flash",
-        "name": "Gemini 3.7 Flash",
-        "is_reasoning": true,
-        "description": "Google's most capable Flash model for agentic workflows and multimodal reasoning",
-        "pricing": {
-          "input": 0.75,
-          "cached_input": 0.075,
-          "output": 3.75,
-          "cache_storage": 0.5,
-          "unit": "per_1m_tokens"
-        },
-        "scheduled_pricing": {
-          "effective_from": "2027-01-01",
-          "input": 1.5,
-          "cached_input": 0.15,
-          "output": 7.5,
-          "cache_storage": 1.0,
-          "unit": "per_1m_tokens"
-        }
-      },
-      {
         "id": "gemini-3.8-flash",
         "name": "Gemini 3.8 Flash",
         "is_reasoning": true,
@@ -328,10 +307,31 @@
         }
       },
       {
+        "id": "gemini-3.7-flash",
+        "name": "Gemini 3.7 Flash",
+        "is_reasoning": true,
+        "description": "Retired 2026-10-17, superseded by Gemini 3.8 Flash. Kept until the next retirement so a custom model on this id still bills.",
+        "pricing": {
+          "input": 0.75,
+          "cached_input": 0.075,
+          "output": 3.75,
+          "cache_storage": 0.5,
+          "unit": "per_1m_tokens"
+        },
+        "scheduled_pricing": {
+          "effective_from": "2027-01-01",
+          "input": 1.5,
+          "cached_input": 0.15,
+          "output": 7.5,
+          "cache_storage": 1.0,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
         "id": "gemini-3.1-pro-preview",
         "name": "Gemini 3.1 Pro Preview",
         "is_reasoning": true,
-        "description": "Google's latest performance, intelligence, and usability improvements for multimodal understanding, agentic capabilities, and vibe-coding",
+        "description": "Retired 2026-10-17, superseded by Gemini 4 Argon. Kept until the next retirement so a custom model on this id still bills.",
         "pricing": {
           "input_tiers": [
             {
