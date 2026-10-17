@@ -334,8 +334,10 @@
     transition: background 0.1s, border-color 0.1s;
     user-select: none;
   }
+  /* The hover tint is translucent and the chip sits over the text it was
+     raised for, so it layers over the opaque fill rather than replacing it. */
   .file-panel-selection-tooltip:hover {
-    background: var(--color-bg-hover);
+    background-image: linear-gradient(var(--color-bg-hover), var(--color-bg-hover));
     border-color: var(--color-border-elevated);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
   }

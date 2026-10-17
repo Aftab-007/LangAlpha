@@ -164,7 +164,10 @@ export default function SetupWizard() {
           className="fixed top-4 right-4 z-50 flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-md text-xs font-medium transition-colors hover:opacity-80"
           style={{
             color: 'var(--color-text-secondary)',
-            background: 'var(--color-bg-surface)',
+            // Fixed over the scrolling page, and the surface fill is translucent
+            // in dark mode: layer it over the page so the steps don't show through.
+            backgroundColor: 'var(--color-bg-page)',
+            backgroundImage: 'linear-gradient(var(--color-bg-surface), var(--color-bg-surface))',
             border: '1px solid var(--color-border-default)',
           }}
         >

@@ -39,7 +39,10 @@ export function SelectionChips({ chips }: { chips: readonly ChartSelection[] }):
               maxWidth: '100%',
               padding: '4px 6px 4px 10px',
               borderRadius: 6,
-              background: 'var(--color-bg-surface)',
+              // The surface fill is translucent in dark mode, and the chat
+              // composer floats over its transcript: layer it over the page.
+              backgroundColor: 'var(--color-bg-page)',
+              backgroundImage: 'linear-gradient(var(--color-bg-surface), var(--color-bg-surface))',
               border: '1px solid var(--color-border-muted)',
               color: 'var(--color-text-secondary)',
               fontSize: '0.75rem',

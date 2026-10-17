@@ -126,6 +126,7 @@ export function DiskWarning({ computer, className }: DiskWarningProps) {
   if (!visible || !disk || !isDiskAlertLevel(level)) return null;
 
   const critical = level === 'critical';
+  const tint = critical ? 'var(--color-loss-soft)' : 'var(--color-warning-soft)';
   const specChange = activeSpecChange(computer);
 
   const title = critical
@@ -170,8 +171,11 @@ export function DiskWarning({ computer, className }: DiskWarningProps) {
       data-testid="disk-warning"
       data-level={level}
       className={cn('flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm', className)}
+      // Opaque: the tint is layered over the page surface, since in a chat the
+      // warning sits above the composer and the transcript scrolls under it.
       style={{
-        backgroundColor: critical ? 'var(--color-loss-soft)' : 'var(--color-warning-soft)',
+        backgroundColor: 'var(--color-bg-page)',
+        backgroundImage: `linear-gradient(${tint}, ${tint})`,
         borderColor: critical ? 'var(--color-loss-muted)' : 'var(--color-warning)',
         color: 'var(--color-text-primary)',
       }}
