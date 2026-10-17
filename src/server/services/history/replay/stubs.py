@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.server.database.conversation.replay_rows import with_replay_facts
-from src.server.database.replay_facts import ARCHIVE_KEY
+from src.server.database.replay_facts import archived_stream
 from src.server.services.history.replay import items
 from src.server.services.history.replay.lines import Line, line_of
 
@@ -85,7 +85,7 @@ def _stub_items(
     response_id = str(response.get("conversation_response_id")) if response else None
     # A turn still going shows what its run streams; an archive on its row is
     # an earlier attempt's.
-    archived = [] if open_run else _archive(response) or []
+    archived = [] if open_run else archived_stream(response) or []
     closing = items.terminal_items(thread_id, response, archived)
     if not closing and _lost(response, open_run):
         closing.append(unavailable_item(thread_id))
@@ -114,23 +114,5 @@ def _lost(response: dict[str, Any] | None, open_run: str | None) -> bool:
         response is not None
         and open_run is None
         and response.get("status") in _ANSWERED
-        and _archive(response) is None
+        and archived_stream(response) is None
     )
-
-
-def _archive(response: dict[str, Any] | None) -> list[dict[str, Any]] | None:
-    """The live stream a legacy turn's row kept whole (``ARCHIVE_KEY``), or
-    None for a row that kept none. A row keeps it only when its checkpoints
-    could not cover its turn, so there was no projection to resolve legacy
-    facts against. The rows are copies: the stub stamps them in place."""
-    facts = (response or {}).get("replay_facts")
-    rows = facts.get(ARCHIVE_KEY) if isinstance(facts, dict) else None
-    if not isinstance(rows, list):
-        return None
-    return [
-        {"event": row["event"], "data": dict(row["data"])}
-        for row in rows
-        if isinstance(row, dict)
-        and row.get("event")
-        and isinstance(row.get("data"), dict)
-    ]
