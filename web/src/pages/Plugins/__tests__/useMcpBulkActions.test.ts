@@ -17,7 +17,7 @@ vi.mock('@/pages/ChatAgent/utils/api', async (importOriginal) => ({
 }));
 vi.mock('@/pages/ChatAgent/utils/api/workspaces', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getFlashWorkspace: vi.fn(async () => ({ workspace_id: 'flash-1' })),
+  getHomeWorkspace: vi.fn(async () => ({ workspace_id: 'home-1' })),
 }));
 
 import { queryKeys } from '@/lib/queryKeys';
@@ -163,75 +163,82 @@ describe('useMcpBulkActions: Only in', () => {
 });
 
 /**
- * A server with a directly bound tool lists Flash in its checklist and the
- * badge counts it there, so "All workspaces" has to clear a Flash deny too, or
- * the row goes on reading "All workspaces except 1" after the button promised
- * all of them. A server added from a workspace starts with exactly that deny.
+ * A user row lists Home in its checklist and the badge counts it there, so
+ * "All workspaces" has to clear a Home deny too, or the row goes on reading
+ * "All workspaces except 1" after the button promised all of them. A server
+ * added from a workspace starts with exactly that deny.
  */
-describe('useMcpBulkActions: All workspaces and Flash', () => {
-  it('clears a Flash deny on a row that lists Flash, and only there', async () => {
+describe('useMcpBulkActions: All workspaces and Home', () => {
+  it('clears a Home deny on a user row, and not on a builtin', async () => {
     const workspaces = [{ id: 'ws-a', name: 'Alpha' }];
-    const catalog = [
-      catalogServer({ name: 'direct', has_direct_tools: true, disabled_workspace_ids: ['flash-1'] }),
-      // No direct tool: its checklist has no Flash, and its badge ignores the deny.
-      catalogServer({ name: 'ptc_only', has_direct_tools: false, disabled_workspace_ids: ['flash-1'] }),
-    ];
+    // A builtin's checklist has no Home, and its badge ignores the deny.
+    const builtin: BuiltinMcpServer = {
+      name: 'builtin_srv',
+      description: '',
+      transport: 'stdio',
+      enabled: true,
+      disabled_workspace_ids: ['home-1'],
+    };
+    const catalog = [catalogServer({ name: 'user_srv', disabled_workspace_ids: ['home-1'] })];
     const run = vi.fn<(targets: BulkTarget[]) => void>();
     const surface = {
-      selection: { selected: new Set(['catalog:direct', 'catalog:ptc_only']) },
+      selection: { selected: new Set(['builtin:builtin_srv', 'catalog:user_srv']) },
       run,
     } as unknown as PluginListSurface;
 
     const { result } = renderHookWithProviders(() =>
-      useMcpBulkActions({ builtins: [], catalog, surface, workspaces }),
+      useMcpBulkActions({ builtins: [builtin], catalog, surface, workspaces }),
     );
     await waitFor(() => expect(result.current.scope.everywhereCount).toBe(1));
 
     result.current.scope.onEverywhere();
     const targets = run.mock.calls[0][0];
-    expect(targets.map((target) => target.key)).toEqual(['catalog:direct']);
+    expect(targets.map((target) => target.key)).toEqual(['catalog:user_srv']);
     for (const target of targets) await target.run();
-    expect(api.setWorkspaceMcpServerEnabled.mock.calls).toEqual([['flash-1', 'direct', true]]);
+    expect(api.setWorkspaceMcpServerEnabled.mock.calls).toEqual([['home-1', 'user_srv', true]]);
   });
 });
 
 /**
- * "Only in" never offers Flash as a choice, so on a row whose checklist lists
- * Flash, Flash is one of the workspaces the pick leaves out. Left on, the
+ * "Only in" never offers Home as a choice, so on a row whose checklist lists
+ * Home, Home is one of the workspaces the pick leaves out. Left on, the
  * badge read "2 workspaces" after the button promised "Only in Alpha".
  */
-describe('useMcpBulkActions: Only in and Flash', () => {
-  it('switches Flash off on a row that lists Flash, and only there', async () => {
+describe('useMcpBulkActions: Only in and Home', () => {
+  it('switches Home off on a user row, and not on a builtin', async () => {
     const workspaces = [
       { id: 'ws-a', name: 'Alpha' },
       { id: 'ws-b', name: 'Beta' },
     ];
-    const catalog = [
-      catalogServer({ name: 'direct', has_direct_tools: true, enabled_in_new_workspaces: false }),
-      // No direct tool: its checklist has no Flash, so Flash is not its to change.
-      catalogServer({ name: 'ptc_only', has_direct_tools: false, enabled_in_new_workspaces: false }),
-    ];
+    // A builtin's checklist has no Home, so Home is not its to change.
+    const builtin: BuiltinMcpServer = {
+      name: 'builtin_srv',
+      description: '',
+      transport: 'stdio',
+      enabled: true,
+    };
+    const catalog = [catalogServer({ name: 'user_srv', enabled_in_new_workspaces: false })];
     const run = vi.fn<(targets: BulkTarget[]) => void>();
     const surface = {
-      selection: { selected: new Set(['catalog:direct', 'catalog:ptc_only']) },
+      selection: { selected: new Set(['builtin:builtin_srv', 'catalog:user_srv']) },
       run,
     } as unknown as PluginListSurface;
 
     const { result, queryClient } = renderHookWithProviders(() =>
-      useMcpBulkActions({ builtins: [], catalog, surface, workspaces }),
+      useMcpBulkActions({ builtins: [builtin], catalog, surface, workspaces }),
     );
-    // Flash resolves through React Query; the row can only name it after that.
+    // Home resolves through React Query; the row can only name it after that.
     await waitFor(() =>
-      expect(queryClient.getQueryData(queryKeys.workspaces.flash())).toBeDefined(),
+      expect(queryClient.getQueryData(queryKeys.workspaces.home())).toBeDefined(),
     );
 
     result.current.scope.onOnlyIn(['ws-a']);
     for (const target of run.mock.calls[0][0]) await target.run();
 
     expect(api.setWorkspaceMcpServerEnabled.mock.calls).toEqual([
-      ['ws-b', 'direct', false],
-      ['flash-1', 'direct', false],
-      ['ws-b', 'ptc_only', false],
+      ['ws-b', 'builtin_srv', false],
+      ['ws-b', 'user_srv', false],
+      ['home-1', 'user_srv', false],
     ]);
   });
 });

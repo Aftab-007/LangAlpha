@@ -6,7 +6,7 @@ import { catalogServer } from '@/test/factories';
 import type { CatalogServer } from '@/pages/ChatAgent/utils/api';
 import { ConnectorCell } from '../ConnectorCells';
 
-vi.mock('@/hooks/useFlashWorkspace', () => ({ useFlashScope: () => () => undefined }));
+vi.mock('@/hooks/useHomeWorkspace', () => ({ useHomeWorkspaceId: () => undefined }));
 
 /**
  * A cell names where a connector is on only when that is not everywhere, in

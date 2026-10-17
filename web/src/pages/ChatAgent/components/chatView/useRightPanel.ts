@@ -41,8 +41,6 @@ export function useRightPanel({
   containerRef,
   setFilePanelWorkspaceId,
   filePanelWorkspaceId = null,
-  dispatches = false,
-  isHome = false,
   messages,
   subagentTranscripts = NO_TRANSCRIPTS,
   watching = false,
@@ -59,13 +57,6 @@ export function useRightPanel({
   setFilePanelWorkspaceId: Dispatch<SetStateAction<string | null>>;
   /** The cross-workspace override the panel shows (usePanelFiles). */
   filePanelWorkspaceId?: string | null;
-  /** Flash or Home: the view dispatches work into other workspaces, whose
-   *  files its links open in the panel (resolveChatMode). */
-  dispatches?: boolean;
-  /** The view is the Chief of Staff's Home. Like PTC, its panel shows its own
-   *  files unless a link names a sibling's; Flash, the other view that
-   *  dispatches, has none. */
-  isHome?: boolean;
   messages: readonly TranscriptMessage[];
   /** Each subagent's own messages, so a tool row clicked in its transcript resolves too. */
   subagentTranscripts?: readonly (readonly TranscriptMessage[])[];
@@ -74,7 +65,6 @@ export function useRightPanel({
 }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const ownFiles = isHome || !dispatches;
 
   // Guards one-shot consumption of the ?file= deep link (report share / copy link).
   const fileDeepLinkConsumedRef = useRef(false);
@@ -331,7 +321,6 @@ export function useRightPanel({
     folders,
     override: filePanelWorkspaceId,
     setOverride: setFilePanelWorkspaceId,
-    ownFiles,
     land: landInFilePanel,
     leave: leaveFiles,
   });
@@ -455,7 +444,7 @@ export function useRightPanel({
       // The panel mints an app's URL for the workspace it shows, so it shows
       // the app's: the view's own, or the sibling the app runs in.
       const next = appWorkspaceId && appWorkspaceId !== workspaceId ? appWorkspaceId : null;
-      if (next !== filePanelWorkspaceId && (ownFiles || next)) {
+      if (next !== filePanelWorkspaceId) {
         leaveFiles(() => {
           setFilePanelWorkspaceId(next);
           land();
@@ -481,7 +470,7 @@ export function useRightPanel({
     if (data.loading && !data.url && appWorkspaceId) {
       resolveAndSetPreview(appWorkspaceId, data.port, data.command, data.path);
     }
-  }, [isMobile, landInFilePanel, ownFiles, filePanelWorkspaceId, leaveFiles, setFilePanelWorkspaceId, applyPanelWidth, pushPanelHistory, workspaceId, resolveAndSetPreview]);
+  }, [isMobile, landInFilePanel, filePanelWorkspaceId, leaveFiles, setFilePanelWorkspaceId, applyPanelWidth, pushPanelHistory, workspaceId, resolveAndSetPreview]);
 
   /**
    * An `/a/` link in a reply, opened as the panel tab its item already has:
@@ -718,12 +707,12 @@ export function useRightPanel({
       // The header's toggle is the view's own files; a sibling shown before
       // the panel closed was reached through a link, and the closed panel
       // holds no draft to lose.
-      if (ownFiles && filePanelWorkspaceId) setFilePanelWorkspaceId(null);
+      if (filePanelWorkspaceId) setFilePanelWorkspaceId(null);
       applyPanelWidth(DEFAULT_PANEL_WIDTH);
       setRightPanelType('file');
       pushPanelHistory();
     }
-  }, [rightPanelType, applyPanelWidth, pushPanelHistory, popPanelHistory, leaveFiles, ownFiles, filePanelWorkspaceId, setFilePanelWorkspaceId]);
+  }, [rightPanelType, applyPanelWidth, pushPanelHistory, popPanelHistory, leaveFiles, filePanelWorkspaceId, setFilePanelWorkspaceId]);
 
   return {
     activeTabKind,

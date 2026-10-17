@@ -48,7 +48,6 @@ function failing({
     trigger_config: null,
     next_run_at: null,
     last_run_at: null,
-    agent_mode: 'flash',
     instruction: 'Summarize the market.',
     workspace_id: null,
     llm_model: null,

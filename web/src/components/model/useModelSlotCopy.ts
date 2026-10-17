@@ -1,5 +1,4 @@
 import { useTranslation } from 'react-i18next';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 
 export interface ModelSlotText {
   label: string;
@@ -28,61 +27,33 @@ export interface ModelSlotCopy {
 }
 
 /**
- * How Setup and Settings name the two model slots. Without the flag they are
- * Primary and Flash, after the two agents; with it Flash is retired, and they
- * are Default and Background, after what each one runs.
+ * How Setup and Settings name the two model slots: Default and Background,
+ * after what each one runs.
  */
 export function useModelSlotCopy(): ModelSlotCopy {
   const { t } = useTranslation();
-  const allWorkspaces = useAllWorkspacesAgent();
-  if (allWorkspaces) {
-    return {
-      default: {
-        label: t('agents.models.defaultModel'),
-        description: t('agents.models.defaultModelDesc'),
-        placeholder: t('agents.models.defaultPlaceholder'),
-        summary: t('agents.models.defaultModel'),
-        explainerTitle: t('agents.models.defaultModel'),
-        explainerBody: t('agents.models.explainerDefaultBody'),
-      },
-      background: {
-        label: t('agents.models.backgroundModel'),
-        description: t('agents.models.backgroundModelDesc'),
-        placeholder: t('agents.models.backgroundPlaceholder'),
-        summary: t('agents.models.backgroundModel'),
-        explainerTitle: t('agents.models.backgroundModel'),
-        explainerBody: t('agents.models.explainerBackgroundBody'),
-      },
-      explainerTitle: t('agents.models.explainerTitle'),
-      defaultsToBackground: t('agents.models.defaultsToBackground'),
-      defaultsToConversation: t('settings.modelTuning.defaultsToConversationModel'),
-      backgroundSameAsDefault: t('agents.models.backgroundSameAsDefault'),
-      fallbackDesc: t('agents.models.fallbackModelsDesc'),
-      chooseDesc: t('agents.models.chooseYourModelsDesc'),
-    };
-  }
   return {
     default: {
-      label: t('setup.primaryModel'),
-      description: t('setup.primaryDescription'),
-      placeholder: t('setup.primaryPlaceholder'),
-      summary: t('setup.primaryModelLabel'),
-      explainerTitle: t('setup.explainerDeepTitle'),
-      explainerBody: t('setup.explainerDeepBody'),
+      label: t('agents.models.defaultModel'),
+      description: t('agents.models.defaultModelDesc'),
+      placeholder: t('agents.models.defaultPlaceholder'),
+      summary: t('agents.models.defaultModel'),
+      explainerTitle: t('agents.models.defaultModel'),
+      explainerBody: t('agents.models.explainerDefaultBody'),
     },
     background: {
-      label: t('setup.flashModel'),
-      description: t('setup.flashDescription'),
-      placeholder: t('setup.flashPlaceholder'),
-      summary: t('setup.flashModelLabel'),
-      explainerTitle: t('setup.explainerFlashTitle'),
-      explainerBody: t('setup.explainerFlashBody'),
+      label: t('agents.models.backgroundModel'),
+      description: t('agents.models.backgroundModelDesc'),
+      placeholder: t('agents.models.backgroundPlaceholder'),
+      summary: t('agents.models.backgroundModel'),
+      explainerTitle: t('agents.models.backgroundModel'),
+      explainerBody: t('agents.models.explainerBackgroundBody'),
     },
-    explainerTitle: t('setup.explainerTitle'),
-    defaultsToBackground: t('settings.modelTuning.defaultsToFlash'),
+    explainerTitle: t('agents.models.explainerTitle'),
+    defaultsToBackground: t('agents.models.defaultsToBackground'),
     defaultsToConversation: t('settings.modelTuning.defaultsToConversationModel'),
-    backgroundSameAsDefault: t('setup.flashSameAsPrimary'),
-    fallbackDesc: t('settings.fallbackModelsDesc'),
-    chooseDesc: t('setup.chooseYourModelsDesc'),
+    backgroundSameAsDefault: t('agents.models.backgroundSameAsDefault'),
+    fallbackDesc: t('agents.models.fallbackModelsDesc'),
+    chooseDesc: t('agents.models.chooseYourModelsDesc'),
   };
 }

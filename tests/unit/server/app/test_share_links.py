@@ -38,6 +38,9 @@ _BASE = f"/api/v1/workspaces/{_WS_ID}/share-links"
 
 _M = "src.server.app.share_links"
 _DBWS = f"{_M}.db_get_workspace"
+# What a workspace's own share routes read the row through, Home's guard
+# included.
+_OWNED_DBWS = "src.server.app.workspace_files._shared.db_get_workspace"
 _GET_LINK = f"{_M}.get_link"
 _CREATE = f"{_M}.ensure_file_link"
 _SET_SHARED = f"{_M}.set_shared"
@@ -103,7 +106,7 @@ async def stranger_client():
 
 async def test_patch_refuses_a_list_that_differs_from_the_recomputed_one(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_link())),
         patch(_MANIFEST, AsyncMock(return_value=_ENTRIES)),
         patch(_SET_SHARED, AsyncMock()) as set_shared,
@@ -121,7 +124,7 @@ async def test_patch_refuses_a_list_that_differs_from_the_recomputed_one(client)
 async def test_patch_accepts_the_same_set_in_another_order(client):
     stored = _link(files=("report.html", "style.css"), shared_at=datetime.now(timezone.utc))
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_link())),
         patch(_MANIFEST, AsyncMock(return_value=_ENTRIES)),
         patch(_SET_SHARED, AsyncMock(return_value=stored)) as set_shared,
@@ -148,7 +151,7 @@ async def test_patch_that_lost_a_race_with_a_stop_is_409(client):
         revision=5,
     )
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=was_shared)),
         patch(_MANIFEST, AsyncMock(return_value=_ENTRIES)),
         patch(_SET_SHARED, AsyncMock(return_value=None)) as set_shared,
@@ -164,7 +167,7 @@ async def test_patch_that_lost_a_race_with_a_stop_is_409(client):
 
 async def test_patch_share_without_a_list_is_422(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_link())),
         patch(_MANIFEST, AsyncMock(return_value=_ENTRIES)) as manifest,
         patch(_SET_SHARED, AsyncMock()) as set_shared,
@@ -177,7 +180,7 @@ async def test_patch_share_without_a_list_is_422(client):
 
 async def test_patch_unshare_makes_the_link_private(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_link(files=("report.html",)))),
         patch(_SET_PRIVATE, AsyncMock(return_value=_link())) as set_private,
     ):
@@ -194,7 +197,7 @@ async def test_patch_unshare_makes_the_link_private(client):
 
 async def test_patch_share_on_an_app_link_is_400(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_app_link())),
         patch(_SET_SHARED, AsyncMock()) as set_shared,
     ):
@@ -207,7 +210,7 @@ async def test_patch_share_on_an_app_link_is_400(client):
 
 async def test_files_on_an_app_link_is_400(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_app_link())),
         patch(_MANIFEST, AsyncMock()) as manifest,
     ):
@@ -221,7 +224,7 @@ async def test_files_on_an_app_link_is_400(client):
 
 async def test_create_refuses_a_hidden_path(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CREATE, AsyncMock()) as create,
     ):
         resp = await client.post(_BASE, json={"kind": "file", "path": ".agents/x.md"})
@@ -231,7 +234,7 @@ async def test_create_refuses_a_hidden_path(client):
 
 async def test_create_returns_the_short_url(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CREATE, AsyncMock(return_value=_link())),
     ):
         resp = await client.post(_BASE, json={"kind": "file", "path": "report.html"})
@@ -243,7 +246,7 @@ async def test_create_returns_the_short_url(client):
 
 async def test_create_folds_a_sandbox_absolute_path(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CREATE, AsyncMock(return_value=_link())) as create,
     ):
         resp = await client.post(
@@ -258,7 +261,7 @@ async def test_create_folds_a_sandbox_absolute_path(client):
 
 async def test_files_too_large_is_422_with_the_cap(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_link())),
         patch(_MANIFEST, AsyncMock(side_effect=ManifestTooLarge("too_many_files", 200))),
     ):
@@ -269,7 +272,7 @@ async def test_files_too_large_is_422_with_the_cap(client):
 
 async def test_files_missing_entry_is_404(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_link())),
         patch(_MANIFEST, AsyncMock(side_effect=ManifestEntryMissing("report.html"))),
     ):
@@ -282,7 +285,7 @@ async def test_files_missing_entry_is_404(client):
 
 async def test_non_owner_cannot_create(stranger_client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CREATE, AsyncMock()) as create,
     ):
         resp = await stranger_client.post(
@@ -294,7 +297,7 @@ async def test_non_owner_cannot_create(stranger_client):
 
 async def test_non_owner_cannot_share(stranger_client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_link())) as get_link,
         patch(_SET_SHARED, AsyncMock()) as set_shared,
     ):
@@ -308,7 +311,7 @@ async def test_non_owner_cannot_share(stranger_client):
 
 async def test_link_of_another_workspace_is_404(client):
     with (
-        patch(_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_OWNED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_GET_LINK, AsyncMock(return_value=_link(workspace_id="ws-fake-0002"))),
         patch(_SET_PRIVATE, AsyncMock()) as set_private,
     ):

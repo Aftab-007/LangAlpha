@@ -6,7 +6,6 @@ import { useDispatchStatus, type PTCDispatchStatus } from '../hooks/usePTCDispat
 import { DispatchStatusIndicator } from './dispatchStatusUi';
 import { useOpenDispatchedThread, type DispatcherContext } from '../hooks/useOpenDispatchedThread';
 import { AUTO_APPROVE, useApproveAlways } from '@/hooks/useAutoApprove';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import Markdown from './Markdown';
 import { OverflowCollapse } from './messageList/OverflowCollapse';
 
@@ -25,7 +24,7 @@ interface PTCAgentCardProps {
   proposalData: ProposalData | null;
   onApprove?: (overrides?: { report_back?: boolean }) => void;
   onReject?: () => void;
-  flashContext?: DispatcherContext | null;
+  dispatcherContext?: DispatcherContext | null;
 }
 
 // Featured-surface visual language (matches ConversationWidget / AIDailyBriefCard).
@@ -166,14 +165,12 @@ function MissionPanel({
  *              (starting → running → completed/needs-input/failed/stopped)
  *   rejected — quiet collapsed "Research declined" row
  */
-function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAgentCardProps) {
+function PTCAgentCard({ proposalData, onApprove, onReject, dispatcherContext }: PTCAgentCardProps) {
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(true);
   const [reportBack, setReportBack] = useState(proposalData?.report_back ?? true);
   const { approveAlways, saving } = useApproveAlways(AUTO_APPROVE.handoffs);
-  // Flash proposes hand-offs too, to a PTC workspace rather than an Analyst.
-  const allWorkspaces = useAllWorkspacesAgent();
-  const openDispatchedThread = useOpenDispatchedThread(flashContext);
+  const openDispatchedThread = useOpenDispatchedThread(dispatcherContext);
   const detailId = useId();
 
   const status = proposalData?.status;
@@ -325,7 +322,7 @@ function PTCAgentCard({ proposalData, onApprove, onReject, flashContext }: PTCAg
         </button>
         <button
           disabled={saving}
-          title={t(allWorkspaces ? 'chat.ptcCard.alwaysApproveHint' : 'chat.ptcCard.alwaysApproveHintPtc')}
+          title={t('chat.ptcCard.alwaysApproveHint')}
           onClick={(e: React.MouseEvent) => { e.stopPropagation(); approveAlways(() => onApprove?.({ report_back: reportBack })); }}
           className="rounded-md px-3.5 py-1.5 text-[0.8125rem] font-medium transition-colors hover:bg-(--color-bg-hover)"
           style={{ border: '1px solid var(--color-border-default)', color: 'var(--color-text-secondary)' }}

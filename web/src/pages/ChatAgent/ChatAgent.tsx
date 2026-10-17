@@ -44,7 +44,6 @@ interface LocationState {
   workspaceId?: string;
   workspaceName?: string;
   workspaceStatus?: string | null;
-  agentMode?: string;
   initialMessage?: string;
   fromThreadId?: string;
   fromWorkspaceId?: string;
@@ -287,11 +286,10 @@ function ChatAgent(): React.ReactElement | null {
     }
   }, [navigate, workspaceId, state, queryClient]);
 
-  const handleThreadSelect = useCallback((selectedWorkspaceId: string, selectedThreadId: string, agentMode?: string | null) => {
+  const handleThreadSelect = useCallback((selectedWorkspaceId: string, selectedThreadId: string) => {
     navigate(`/chat/t/${selectedThreadId}`, {
       state: {
         workspaceId: selectedWorkspaceId,
-        ...(agentMode ? { agentMode } : {}),
         workspaceStatus: state?.workspaceStatus || null,
       },
     });

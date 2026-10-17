@@ -28,7 +28,7 @@ from src.server.services.writer_guard import WriterGuard
 
 def _handle() -> RunHandle:
     return RunHandle(
-        run_id="r-1", thread_id="t-1", turn_index=0, attempt_no=1, msg_type="ptc"
+        run_id="r-1", thread_id="t-1", turn_index=0, attempt_no=1
     )
 
 
@@ -265,7 +265,7 @@ async def test_the_handle_owns_the_guard_until_finalize_takes_it_over():
     ):
         coordinator = RunCoordinator()
         handle = await coordinator.start_run(
-            thread_id="t-1", run_id="r-1", msg_type="ptc"
+            thread_id="t-1", run_id="r-1"
         )
 
     guard.bind_owner.assert_called_once_with(handle)
@@ -324,7 +324,7 @@ async def test_a_disconnect_during_the_start_announcements_leaves_the_run_to_the
         pytest.raises(asyncio.CancelledError),
     ):
         await RunCoordinator().start_run(
-            thread_id="t-1", run_id="r-1", msg_type="ptc", on_started=scope.attach_run
+            thread_id="t-1", run_id="r-1", on_started=scope.attach_run
         )
 
     handle = scope.owned_run_handle

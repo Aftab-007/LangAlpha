@@ -8,6 +8,7 @@ aliases that run the same transition through the project-addressed manager.
 Endpoints:
 - POST /api/v1/workspaces - Create workspace
 - GET /api/v1/workspaces - List workspaces
+- POST /api/v1/workspaces/home - Get or create the user's Home
 - GET /api/v1/workspaces/{workspace_id} - Get workspace details
 - PUT /api/v1/workspaces/{workspace_id} - Update workspace
 - POST /api/v1/workspaces/{workspace_id}/start - Start stopped workspace
@@ -39,7 +40,7 @@ from src.server.database.workspace_names import (
     WorkspaceNameInvalid,
     WorkspaceNameTaken,
 )
-from src.server.database.home_workspace import is_flash_row
+from src.server.database.home_workspace import is_flash_row, is_unbound
 from src.server.database.workspace import (
     get_workspace as db_get_workspace,
     get_workspaces_for_user,
@@ -62,7 +63,7 @@ from src.server.models.computer import CLAIMABLE_FOR_START
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
 from src.server.utils.error_sanitization import sandbox_unreachable_detail
 from src.server.models.workspace_refresh import WorkspaceRefreshResponse
-from src.server.services.turn_runtime import ensure_home, home_enabled
+from src.server.services.turn_runtime import ensure_home
 from src.server.services.workspace_manager import WorkspaceManager
 from src.server.services.workspace_status_pubsub import subscribe_to_status
 
@@ -140,6 +141,7 @@ async def _workspace_action_errors(action: str, workspace_id: str):
 def _workspace_to_response(workspace: dict) -> WorkspaceResponse:
     """Convert workspace dict to response model."""
     computer_id = workspace.get("computer_id")
+    home = is_flash_row(workspace)
     return WorkspaceResponse(
         workspace_id=str(workspace["workspace_id"]),
         user_id=workspace["user_id"],
@@ -149,9 +151,10 @@ def _workspace_to_response(workspace: dict) -> WorkspaceResponse:
         computer_id=str(computer_id) if computer_id else None,
         dir_name=workspace.get("dir_name"),
         previous_dir_names=list(workspace.get("previous_dir_names") or ()),
-        # Clients know the flash row by this status. Bound as Home it carries
-        # its computer's, which the events stream reports.
-        status="flash" if is_flash_row(workspace) else workspace["status"],
+        # Older clients know the flash row by this status. Bound as Home it
+        # carries its computer's, which the events stream reports.
+        status="flash" if home else workspace["status"],
+        is_home=home,
         created_at=workspace["created_at"],
         updated_at=workspace["updated_at"],
         last_activity_at=workspace.get("last_activity_at"),
@@ -213,29 +216,34 @@ async def create_workspace(
         raise HTTPException(status_code=500, detail="Failed to create workspace")
 
 
-@router.post("/flash", response_model=WorkspaceResponse)
-async def get_flash_workspace(
-    x_user_id: CurrentUserId,
-):
-    """
-    Get or create the shared flash workspace for this user.
-
-    Uses a deterministic UUID so the same user always gets the same workspace.
-    Idempotent — safe to call on every app load.
-
-    Returns:
-        Flash workspace details
-    """
+async def _home_response(user_id: str) -> WorkspaceResponse:
     try:
-        workspace = await get_or_create_flash_workspace(x_user_id)
+        workspace = await get_or_create_flash_workspace(user_id)
         return _workspace_to_response(workspace)
     except FlashWorkspaceTaken:
         # The owner check's answer for a row another account holds; no retry
         # makes this one the caller's.
         raise HTTPException(status_code=403, detail="Forbidden") from None
     except Exception as e:
-        logger.exception(f"Error ensuring flash workspace: {e}")
-        raise HTTPException(status_code=500, detail="Failed to ensure flash workspace")
+        logger.exception(f"Error ensuring Home: {e}")
+        raise HTTPException(status_code=500, detail="Failed to ensure Home")
+
+
+@router.post("/home", response_model=WorkspaceResponse)
+async def get_home_workspace(x_user_id: CurrentUserId):
+    """Get or create the user's Home, where work in no particular workspace runs.
+
+    Its id derives from the user id, so it never changes and a client may keep
+    it. Idempotent, and safe to call on every app load. The row is made here;
+    Home joins the user's computer on its first start or turn.
+    """
+    return await _home_response(x_user_id)
+
+
+@router.post("/flash", response_model=WorkspaceResponse)
+async def get_flash_workspace(x_user_id: CurrentUserId):
+    """The former name of ``POST /home``, kept while clients still call it."""
+    return await _home_response(x_user_id)
 
 
 @router.post("/reorder", status_code=204)
@@ -266,7 +274,8 @@ async def list_workspaces(
     sort_by: Literal["activity", "name", "custom"] = Query(
         "custom", description="Sort mode: activity, name, or custom"
     ),
-    include_flash: bool = Query(False, description="Include flash workspaces in results"),
+    include_home: bool = Query(False, description="Include the user's Home"),
+    include_flash: bool = Query(False, description="Former name of include_home"),
 ):
     """
     List workspaces for a user.
@@ -276,7 +285,8 @@ async def list_workspaces(
         limit: Maximum number of results (1-100)
         offset: Number of results to skip
         sort_by: Sort mode — 'activity' (updated_at), 'name' (alphabetical), 'custom' (sort_order)
-        include_flash: Whether to include flash workspaces (default false)
+        include_home: Whether to include the user's Home (default false)
+        include_flash: The former name of include_home
 
     Returns:
         Paginated list of workspaces
@@ -287,7 +297,7 @@ async def list_workspaces(
             limit=limit,
             offset=offset,
             sort_by=sort_by,
-            include_flash=include_flash,
+            include_flash=include_home or include_flash,
         )
 
         return WorkspaceListResponse(
@@ -532,10 +542,9 @@ async def start_workspace(
 
         require_workspace_owner(workspace, user_id=x_user_id)
 
-        if workspace["status"] == "flash" and await home_enabled(x_user_id):
+        if is_unbound(workspace):
             # Home before its first turn: the warm puts it on the computer, as
-            # the turn would. Without the all-workspaces agent, Flash has
-            # nothing to start.
+            # the turn would.
             await ensure_home(x_user_id, workspace)
             workspace = await db_get_workspace(workspace_id)
             if not workspace:
@@ -745,13 +754,12 @@ async def duplicate_workspace(
     x_user_id: CurrentUserId,
 ):
     """
-    Duplicate a workspace, copying its files into a new project.
+    Duplicate a workspace, copying its files into a new workspace.
 
-    The copy lands on the same computer as every other project of this user,
+    The copy lands on the same computer as every other workspace of this user,
     so it takes that machine's tier and always-on rather than the source's,
     allocates nothing, and returns without waiting on a sandbox. Its files are
-    restored the first time the machine starts. Flash workspaces cannot be
-    duplicated.
+    restored the first time the machine starts. Home cannot be duplicated.
 
     Args:
         workspace_id: Source workspace UUID

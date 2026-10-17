@@ -55,11 +55,8 @@ class SubagentDefinition:
     """Raw prompt string — bypasses all template rendering."""
 
     # ── Skills ────────────────────────────────────────────────────────
-    skills: list[str] = field(default_factory=list)
-    """Skill names from SKILL_REGISTRY whose tools the subagent binds."""
-
     preload_skills: list[str] = field(default_factory=list)
-    """Skill names whose SKILL.md is put into the prompt. Binds no tools."""
+    """Skill names whose SKILL.md is put into the prompt."""
 
     # ── Model ─────────────────────────────────────────────────────────
     model: str | None = None

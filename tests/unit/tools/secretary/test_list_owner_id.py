@@ -41,6 +41,9 @@ async def test_workspace_list_rows_carry_only_what_a_hand_off_reads():
     with patch(
         "src.server.database.workspace.get_workspaces_for_user",
         AsyncMock(return_value=([row], 1)),
+    ), patch(
+        "src.server.database.workspace.get_workspace",
+        AsyncMock(return_value={"computer_id": "cmp-1"}),
     ):
         command = await tools.workspaces_list(OWNER, "call-1")
     content = command.update["messages"][0].content

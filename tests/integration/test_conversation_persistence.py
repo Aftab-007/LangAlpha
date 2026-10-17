@@ -96,7 +96,6 @@ class TestEnsureThreadExists:
             conversation_thread_id=thread_id,
             user_id=seed_user["user_id"],
             initial_query="What is AAPL trading at?",
-            msg_type="flash",
         )
 
         threads, total = await get_workspace_threads(ws_id)
@@ -131,7 +130,6 @@ class TestEnsureThreadExists:
             user_id=seed_user["user_id"],
             initial_query="Follow up",
             initial_status="in_progress",
-            msg_type="ptc",
         )
 
         threads, total = await get_workspace_threads(ws_id)

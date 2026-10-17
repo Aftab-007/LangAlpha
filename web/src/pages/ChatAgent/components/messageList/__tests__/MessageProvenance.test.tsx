@@ -13,11 +13,6 @@ import type { MessageProvenance } from '@/types/chat';
 import { deliveredEntryRow } from '../../../session/stream/steeringDelivery';
 import type { MessageRecord } from '../types';
 
-let allWorkspaces = false;
-vi.mock('@/hooks/useAllWorkspacesAgent', () => ({
-  useAllWorkspacesAgent: () => allWorkspaces,
-}));
-
 vi.mock('@/hooks/useUser', () => ({
   useUser: () => ({ user: null }),
 }));
@@ -83,20 +78,18 @@ describe('MessageProvenanceLabel', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('reads an unrecorded dispatcher off the current flag', () => {
-    allWorkspaces = false;
-    const { unmount } = renderLabel({ kind: 'agent', agent: null, threadId: 'th-old' });
-    expect(screen.getByText('From Flash')).toBeInTheDocument();
-    unmount();
-    allWorkspaces = true;
+  it('reads an unrecorded dispatcher as the Chief of Staff', () => {
     renderLabel({ kind: 'agent', agent: null, threadId: 'th-old' });
     expect(screen.getByText('From Chief of Staff')).toBeInTheDocument();
-    allWorkspaces = false;
   });
 
-  it('leaves an unrecorded dispatcher unlabelled in a share, which has no flags of its owner', () => {
+  it('reads a legacy flash dispatcher as the Chief of Staff', () => {
+    renderLabel({ kind: 'agent', agent: 'flash', threadId: 'th-old' });
+    expect(screen.getByText('From Chief of Staff')).toBeInTheDocument();
+  });
+
+  it('leaves an unrecorded dispatcher unlabelled in a share', () => {
     renderLabel({ kind: 'agent', agent: null, threadId: 'th-old' }, { readOnly: true });
-    expect(screen.queryByText('From Flash')).not.toBeInTheDocument();
     expect(screen.queryByText('From Chief of Staff')).not.toBeInTheDocument();
   });
 

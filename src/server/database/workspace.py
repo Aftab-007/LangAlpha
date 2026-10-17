@@ -27,6 +27,7 @@ from src.server.database.pool import get_db_connection
 from src.server.database.home_workspace import get_flash_workspace_id
 from src.server.database.runs.lifecycle import workspace_has_live_runs
 from src.server.database.sql_fences import (
+    EXCLUDE_HOME,
     FENCE_LIVE_WORKSPACE,
     FENCE_NOT_DELETED,
     shadowed_write,
@@ -144,7 +145,8 @@ class FlashWorkspaceTaken(RuntimeError):
 async def get_or_create_flash_workspace(user_id: str, conn=None) -> Dict[str, Any]:
     """Deterministic identity and ON CONFLICT make concurrent creation idempotent.
 
-    Every Flash turn lands here, so a row that exists is touched in one
+    Every turn bound for Home without a read of the row lands here, and so
+    does every app load, so a row that exists is touched in one
     statement with no lock. Only a miss opens a transaction and takes the
     lock, so the workspace commits with the MCP selection it starts with.
     Both statements match the owner as well as the id: the row is the one a
@@ -945,7 +947,7 @@ async def get_workspace_names(
 ) -> Dict[str, str]:
     """Name by canonical id of the user's live workspaces, Home aside, in
     name order: all of them, or those of ``workspace_ids``."""
-    params: dict[str, Any] = {"user_id": user_id, "flash_id": get_flash_workspace_id(user_id)}
+    params: dict[str, Any] = {"user_id": user_id, "home_id": get_flash_workspace_id(user_id)}
     only = ""
     if workspace_ids is not None:
         ids = sorted({n for w in workspace_ids if (n := normalize_uuid(w))})
@@ -954,14 +956,12 @@ async def get_workspace_names(
         params["ids"] = ids
         only = "AND workspace_id = ANY(%(ids)s::uuid[])"
     async with _ws_cursor() as cur:
-        # The flash row by its id too: bound as Home it reads its computer's status.
         await cur.execute(
             f"""
             SELECT workspace_id, name
             FROM workspaces
             WHERE user_id = %(user_id)s {only}
-              AND status NOT IN ('deleted', 'flash')
-              AND workspace_id <> %(flash_id)s
+              AND {FENCE_NOT_DELETED} AND {EXCLUDE_HOME}
             ORDER BY name, workspace_id
             """,
             params,
@@ -981,13 +981,8 @@ async def get_workspaces_for_user(
 ) -> Tuple[List[Dict[str, Any]], int]:
     try:
         status_filter = "" if include_deleted else "AND status != 'deleted'"
-        # The flash row by its id too: bound as Home it reads its computer's status.
-        flash_filter = (
-            ""
-            if include_flash
-            else "AND status != 'flash' AND workspace_id <> %(flash_id)s"
-        )
-        params = {"user_id": user_id, "flash_id": get_flash_workspace_id(user_id)}
+        flash_filter = "" if include_flash else f"AND {EXCLUDE_HOME}"
+        params = {"user_id": user_id, "home_id": get_flash_workspace_id(user_id)}
 
         # Every order ends on workspace_id, appended below: rows that tie would
         # otherwise come back in any order, which shifts an offset page and

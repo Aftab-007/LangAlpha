@@ -1184,7 +1184,7 @@ def ensure_model_in_manifest(model_name: str) -> None:
     Shared guard: when a name reaches create_llm() but isn't in the manifest,
     the factory raises a generic "Model X not found" message that used to leak
     to users as an SSE error. Callers on the post-BYOK fallback path
-    (AgentConfig.get_llm_client, FlashAgent.__init__) call this helper instead,
+    (AgentConfig.get_llm_client, background_client) call this helper instead,
     so a missing manifest entry always surfaces as a user-friendly message
     pointing at Settings. ``resolve_llm_config`` already preflights the main
     model path via HTTPException — this is the belt-and-suspenders guard for

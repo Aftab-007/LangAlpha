@@ -55,14 +55,14 @@ describe('ModelSelector', () => {
       <ModelSelector
         {...defaultProps}
         onChange={onChange}
-        placeholder="Same as Primary model"
+        placeholder="Same as Default model"
         autoOption={{ value: '__auto__', label: 'Auto (gpt-4o-mini)' }}
       />,
     );
 
     const select = document.querySelector('select')!;
     expect([...select.options].slice(0, 2).map((o) => o.textContent)).toEqual([
-      'Same as Primary model',
+      'Same as Default model',
       'Auto (gpt-4o-mini)',
     ]);
     fireEvent.change(select, { target: { value: '__auto__' } });

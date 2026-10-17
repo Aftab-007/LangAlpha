@@ -9,7 +9,6 @@ Covers:
 - LLMConfig fields and defaults
 - SubagentConfig / SubagentsConfig
 - SkillsConfig path resolution
-- FlashConfig defaults
 """
 
 import os
@@ -20,7 +19,6 @@ import pytest
 
 from ptc_agent.config.agent import (
     AgentConfig,
-    FlashConfig,
     LLMConfig,
     LLMDefinition,
     SkillsConfig,
@@ -385,17 +383,6 @@ class TestSkillsConfig:
         before = cfg.local_skill_dirs_with_sandbox()
         monkeypatch.chdir(tmp_path)
         assert cfg.local_skill_dirs_with_sandbox() == before
-
-
-# ---------------------------------------------------------------------------
-# FlashConfig
-# ---------------------------------------------------------------------------
-
-
-class TestFlashConfig:
-    def test_defaults(self):
-        cfg = FlashConfig()
-        assert cfg.enabled is True
 
 
 # ---------------------------------------------------------------------------

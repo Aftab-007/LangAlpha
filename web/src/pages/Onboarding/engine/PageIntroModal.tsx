@@ -10,7 +10,6 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { INTRO_VISUALS, INTRO_VISUAL_ANCHOR } from './introVisuals';
-import { IntroAgentsContext } from './introAgents';
 import type { PageIntroDef } from '../registry';
 import './pageIntro.css';
 
@@ -23,13 +22,9 @@ import './pageIntro.css';
 export function PageIntroModal({
   intro,
   onClose,
-  allWorkspaces = false,
 }: {
   intro: PageIntroDef;
   onClose: () => void;
-  /** Words the intro for a user on the all-workspaces agent: the Chief of
-   *  Staff and each workspace's Analyst instead of Flash and PTC. */
-  allWorkspaces?: boolean;
 }) {
   const { t } = useTranslation();
   const reduceMotion = useReducedMotion();
@@ -57,8 +52,6 @@ export function PageIntroModal({
     }),
   };
   const step = intro.steps[Math.min(stepIdx, intro.steps.length - 1)];
-  const titleKey = (allWorkspaces && step.allWorkspaces?.titleKey) || step.titleKey;
-  const bodyKey = (allWorkspaces && step.allWorkspaces?.bodyKey) || step.bodyKey;
   const isLast = stepIdx >= intro.steps.length - 1;
   const Visual = INTRO_VISUALS[step.visual];
   const anchor = INTRO_VISUAL_ANCHOR[step.visual];
@@ -108,13 +101,13 @@ export function PageIntroModal({
                     className="text-2xl font-semibold leading-tight sm:text-3xl"
                     style={{ color: 'var(--color-text-primary)' }}
                   >
-                    {t(titleKey)}
+                    {t(step.titleKey)}
                   </DialogTitle>
                   <DialogDescription
                     className="text-sm leading-relaxed sm:text-[0.9375rem]"
                     style={{ color: 'var(--color-text-secondary)' }}
                   >
-                    {t(bodyKey)}
+                    {t(step.bodyKey)}
                   </DialogDescription>
                 </DialogHeader>
               </motion.div>
@@ -220,9 +213,7 @@ export function PageIntroModal({
                       anchor === 'center' ? 'center center' : `${anchor} center`,
                   }}
                 >
-                  <IntroAgentsContext value={allWorkspaces}>
-                    <Visual />
-                  </IntroAgentsContext>
+                  <Visual />
                 </div>
               </motion.div>
             </AnimatePresence>

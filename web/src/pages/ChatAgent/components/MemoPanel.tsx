@@ -341,7 +341,7 @@ export default function MemoPanel({ targetKey, onTargetHandled, onOpenFile }: Me
   );
   const { data: wsData } = useWorkspaces({
     limit: 100,
-    includeFlash: true,
+    includeHome: true,
     enabled: hasSandboxSource,
   });
   const workspaceNameById = useMemo(() => {

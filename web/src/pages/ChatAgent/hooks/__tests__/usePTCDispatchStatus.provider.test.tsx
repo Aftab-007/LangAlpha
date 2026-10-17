@@ -1,7 +1,7 @@
 /**
  * DispatchStatusProvider — the turn-level batched dispatch-status reader.
  *
- * Many PTCAgentCards in a flash turn register their thread id with one provider;
+ * Many PTCAgentCards in a Chief of Staff turn register their thread id with one provider;
  * the provider runs a SINGLE getDispatchLiveness query over the sorted id set,
  * distributes each id's status slice, and stops polling once every run is
  * terminal. These tests mock getDispatchLiveness so the batching + distribution

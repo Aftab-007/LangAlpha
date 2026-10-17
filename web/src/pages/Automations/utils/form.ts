@@ -6,12 +6,19 @@ import type {
   PriceTriggerConfig,
   TriggerType,
 } from '@/types/automation';
+import type { ComposerScope } from '@/components/ui/chat-input.types';
 import { deviceTimezone } from '@/lib/deviceTimezone';
 import { DEFAULT_CRON } from './cron';
 import { rezone } from './moments';
+import { runsInHome } from './place';
 import { MIN_COOLDOWN_MINUTES, isIndexSymbol, isPctCondition, isValidSymbol, normalizeSymbol } from './price';
 
 // ── Form State ─────────────────────────────────────────────
+
+/** All workspaces as the form holds it, in the composer's word for that
+ *  scope. Only a save turns it into Home's id, so the form never waits on
+ *  Home to open. */
+export const ALL_WORKSPACES = 'all' satisfies ComposerScope;
 
 type Retrigger = PriceTriggerConfig['retrigger']['mode'];
 
@@ -24,8 +31,9 @@ export interface FormState {
   cron_expression: string;
   timezone: string;
   next_run_at: string;
-  agent_mode: Automation['agent_mode'];
-  workspace_id: string;
+  /** Where it runs: ALL_WORKSPACES, a workspace's id, or empty until the
+   *  reader picks one. */
+  place: string;
   instruction: string;
   thread_strategy: Automation['thread_strategy'];
   max_failures: number;
@@ -51,8 +59,7 @@ export const INITIAL_FORM: FormState = {
   cron_expression: DEFAULT_CRON,
   timezone: deviceTimezone(),
   next_run_at: '',
-  agent_mode: 'flash',
-  workspace_id: '',
+  place: '',
   instruction: '',
   thread_strategy: 'continue',
   max_failures: 3,
@@ -65,7 +72,9 @@ export const INITIAL_FORM: FormState = {
   price_cooldown_minutes: '',
 };
 
-export function automationToFormState(automation: Automation, timezone = deviceTimezone()): FormState {
+/** `homeId` is Home's id, which a row in Home names; a legacy flash row reads
+ *  as All workspaces without it. */
+export function automationToFormState(automation: Automation, timezone = deviceTimezone(), homeId?: string): FormState {
   const tc = automation.trigger_config;
   const condition = tc?.conditions?.[0];
   // A config written before retrigger modes were renamed still says 'cooldown'.
@@ -80,8 +89,7 @@ export function automationToFormState(automation: Automation, timezone = deviceT
     // The instant as the server sent it. Cutting it to a wall-clock string
     // read UTC digits back as local time and moved the run by the offset.
     next_run_at: automation.next_run_at ?? '',
-    agent_mode: automation.agent_mode,
-    workspace_id: automation.workspace_id ?? '',
+    place: runsInHome(automation, homeId) ? ALL_WORKSPACES : automation.workspace_id ?? '',
     instruction: automation.instruction,
     thread_strategy: automation.thread_strategy,
     max_failures: automation.max_failures,
@@ -145,14 +153,13 @@ function cooldownMinutes(text: string): number | null {
  * The server's own rules, checked before the round trip so the reader gets
  * a sentence and the field instead of a 422. `initial` is what an edit
  * opened with: a one-time moment left alone is not the edit's to judge, so
- * a finished run can still be renamed. Under the all-workspaces agent the
- * agent picker offers places, so a missing workspace is named as one.
+ * a finished run can still be renamed. The place picker offers All
+ * workspaces beside the workspaces, so a missing place is asked for as either.
  */
 export function validateForm(
   form: FormState,
   now = Date.now(),
   initial?: FormState,
-  { allWorkspaces = false }: { allWorkspaces?: boolean } = {},
 ): FormProblem | null {
   if (form.trigger_type === 'once' && form.next_run_at !== initial?.next_run_at) {
     const at = Date.parse(form.next_run_at);
@@ -176,10 +183,7 @@ export function validateForm(
   if (fillSymbol(form).includes(SYMBOL_PLACEHOLDER)) {
     return { messageKey: 'automation.instructionSymbolUnfilled', section: 'instruction' };
   }
-  if (form.agent_mode === 'ptc' && !form.workspace_id) {
-    if (allWorkspaces) return { messageKey: 'agents.workspaceRequired', section: 'more' };
-    return { messageKey: 'automation.workspaceRequired', section: 'more' };
-  }
+  if (!form.place) return { messageKey: 'agents.workspaceRequired', section: 'more' };
   return null;
 }
 
@@ -209,22 +213,25 @@ export function formToPriceConfig(form: FormState): PriceTriggerConfig {
 
 type Settings = Pick<
   AutomationPayload,
-  'name' | 'agent_mode' | 'instruction' | 'thread_strategy' | 'max_failures' | 'delivery_config' | 'workspace_id'
+  'name' | 'agent_mode' | 'workspace_id' | 'instruction' | 'thread_strategy' | 'max_failures' | 'delivery_config'
 >;
 type Trigger = Pick<AutomationUpdatePayload, 'cron_expression' | 'next_run_at' | 'timezone' | 'trigger_config'>;
 
-/** What every save states, whatever starts the automation. */
-function settingsPayload(form: FormState): Settings {
-  const settings: Settings = {
+/** What every save states, whatever starts the automation. `workspaceId` is
+ *  where it runs, Home's id for All workspaces. */
+function settingsPayload(form: FormState, workspaceId: string): Settings {
+  return {
     name: form.name,
-    agent_mode: form.agent_mode,
+    // A backend before is_home reads a create without a mode as 'flash' and
+    // keeps a flash row's mode through an edit, and 'flash' runs in Home
+    // whatever workspace is named. 'ptc' runs in the named one on any backend.
+    agent_mode: 'ptc',
+    workspace_id: workspaceId,
     instruction: fillSymbol(form),
     thread_strategy: form.thread_strategy,
     max_failures: form.max_failures,
     delivery_config: { methods: form.delivery_methods },
   };
-  if (form.agent_mode === 'ptc') settings.workspace_id = form.workspace_id;
-  return settings;
 }
 
 /** What starts the automation. A schedule and a moment are read in their
@@ -240,9 +247,9 @@ function triggerPayload(form: FormState): Trigger {
   }
 }
 
-export function formStateToPayload(form: FormState): AutomationPayload {
+export function formStateToPayload(form: FormState, workspaceId: string): AutomationPayload {
   return {
-    ...settingsPayload(form),
+    ...settingsPayload(form, workspaceId),
     ...(form.description ? { description: form.description } : {}),
     trigger_type: form.trigger_type,
     timezone: form.timezone,
@@ -291,8 +298,13 @@ function mergePriceConfig(
  * from the form would lose what the form cannot show (see mergePriceConfig).
  * The description always goes, since an emptied one is a change to clear it.
  */
-export function formStateToUpdatePayload(form: FormState, initial: FormState, original: Automation): AutomationUpdatePayload {
-  const payload: AutomationUpdatePayload = { ...settingsPayload(form), description: form.description };
+export function formStateToUpdatePayload(
+  form: FormState,
+  initial: FormState,
+  original: Automation,
+  workspaceId: string,
+): AutomationUpdatePayload {
+  const payload: AutomationUpdatePayload = { ...settingsPayload(form, workspaceId), description: form.description };
   if (!TRIGGER_FIELDS[form.trigger_type].some((k) => form[k] !== initial[k])) return payload;
   const trigger = triggerPayload(form);
   const saved = original.trigger_config;

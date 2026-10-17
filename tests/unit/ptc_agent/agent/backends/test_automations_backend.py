@@ -25,6 +25,7 @@ from ptc_agent.agent.backends.automations import README_FILE, AutomationsBackend
 from ptc_agent.agent.backends.db_json_route import Plan, UserDataValidationError
 from ptc_agent.agent.middleware.background_subagent.context import current_background_agent_id
 from ptc_agent.core.sandbox.livefs_mount import CallContext
+from src.server.database.home_workspace import get_flash_workspace_id
 from src.server.services.automations.file import (
     AutomationFile,
     AutomationFileError,
@@ -41,7 +42,7 @@ README_PATH = f"{PREFIX}{README_FILE}"
 
 USER = "user-fake-1"
 CALL = CallContext(workspace_id="00000000-0000-4000-8000-00000000aaaa", thread_id=None, timezone="UTC")
-DOCUMENT = Document(fields={}, shown=None, timezone="UTC", model_pref=None)
+DOCUMENT = Document(fields={}, shown=None, timezone="UTC", model_pref=None, home_id=get_flash_workspace_id(USER))
 
 # The rows as a read outside a save finds them, as the save reads them, and as
 # the save leaves them.

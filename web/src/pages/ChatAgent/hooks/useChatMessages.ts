@@ -51,8 +51,9 @@ import { useMarketWatch } from './useMarketWatch';
 import { refreshComputersAfterTurn } from './useComputers';
 // Chart-annotation live bridge: writes agent-drawn annotations into the
 // shared MarketView store so the desktop MarketView chat panel (which uses
-// this engine for both flash and PTC) renders them live. Harmless on the
-// standalone /chat page — the store simply has no chart consumer there.
+// this engine for both Chief of Staff and PTC threads) renders them live.
+// Harmless on the standalone /chat page: the store simply has no chart
+// consumer there.
 
 // --- Module scope extracted to session/types + utils (W1) ---
 import type {
@@ -103,7 +104,6 @@ export function useChatMessages(
   finalizePendingTodos: (() => void) | null = null,
   onFileArtifact: ((event: SSEEvent) => void) | null = null,
   onPreviewUrl: ((data: PreviewData) => void) | null = null,
-  agentMode: string = 'ptc',
   clearSubagentCards: (() => void) | null = null,
   onWorkspaceCreated: ((info: { workspaceId: string; question: string }) => void) | null = null,
   platform: string | null = null,
@@ -253,12 +253,6 @@ export function useChatMessages(
     updater: (prev: Record<string, unknown>[]) => Record<string, unknown>[]
   ) => void;
 
-  // The agent mode the latest run in view was started in. The server picks the
-  // graph that resumes a checkpoint by agent_mode, so a resume answers in this
-  // mode rather than the one the composer shows now. Null for a run this view
-  // only attached to; the resume then sends the current mode.
-  const runAgentModeRef = useRef<string | null>(null);
-
   // Track last-used model options so HITL resume can forward them
   const lastModelOptionsRef = useRef<ModelOptions>({ model: null, reasoningEffort: null, fastMode: null });
 
@@ -280,7 +274,7 @@ export function useChatMessages(
   // The thread a reconnect stream is attached to (set when reconnectToStream
   // marks isStreamingRef). Lets the thread-load effect tell "this thread is
   // streaming" (skip the load) from "a DIFFERENT thread is streaming" (e.g. a
-  // flash report-back) — in the latter case it supersedes that stream so the
+  // report-back), in which case it supersedes that stream so the
   // navigated-to thread can still load and reconnect. Null when no reconnect
   // stream is in flight.
   const streamingThreadIdRef = useRef<string | null>(null);
@@ -440,12 +434,11 @@ export function useChatMessages(
   // content from zero, and its run_id comes from its own metadata frame unless
   // the response header already named it. A stale one would bias a reconnect
   // into the previous run's stream key.
-  const beginRun = (mode: string, runId: string | null = null): void => {
+  const beginRun = (runId: string | null = null): void => {
     contentOrderCounterRef.current = 0;
     currentReasoningIdRef.current = null;
     currentToolCallIdRef.current = null;
     currentRunIdRef.current = runId;
-    runAgentModeRef.current = mode;
   };
   // Highest turn_index this view has RENDERED, compared against
   // /status.latest_turn_index by the reactivation staleness check (a run that
@@ -857,7 +850,6 @@ export function useChatMessages(
         // exotic — resolving one means leaving to buy credits, so wandering off
         // to another thread with it unanswered is the expected way to meet it.
         setPendingInterrupt(null);
-        runAgentModeRef.current = null;
         // Edit text on its way to the composer is the old thread's. Its open
         // edit boxes stay with it, found by thread.
         setReturnedEdit(null);
@@ -1197,18 +1189,18 @@ export function useChatMessages(
     const reloadAsked = reloadTrigger !== reloadSeenRef.current;
     reloadSeenRef.current = reloadTrigger;
     // A reconnect stream is live on a DIFFERENT thread than the one we're now
-    // loading — e.g. a flash report-back is streaming on the flash thread and the
-    // user clicked the dispatch card to jump into the running PTC thread. Without
-    // this, the isStreamingRef guard below would skip the PTC load and it would
-    // appear blank (the report-back stream "holds" the global streaming flag).
-    // Supersede that stream: abort it (it continues server-side and replays on
+    // loading, e.g. a report-back is streaming on the Chief of Staff thread and
+    // the user clicked the dispatch card to jump into the running PTC thread.
+    // Without this, the isStreamingRef guard below would skip the PTC load and
+    // it would appear blank (the report-back stream "holds" the global
+    // streaming flag). Supersede that stream: abort it (it continues server-side and replays on
     // return) so THIS thread can load and reconnect. The aborted stream's finally
     // is a no-op now (its `stillActive` check fails — see reconnectToStream).
     //
-    // We do NOT stop the report-back watch here. Superseding the visible flash
+    // We do NOT stop the report-back watch here. Superseding the visible
     // reader (so the PTC thread can take the slot) must not erase the independent
     // pending report-back: the keyed watch persists, holds its run ids, and
-    // renders again when the user returns to the flash thread.
+    // renders again when the user returns to the Chief of Staff thread.
     const supersedeOtherThreadStream =
       isStreamingRef.current &&
       streamingThreadIdRef.current !== null &&
@@ -1437,7 +1429,7 @@ export function useChatMessages(
       // already on screen, so this never double-streams.
       if (shouldArmForStatus(status)) {
         if (import.meta.env.DEV) console.log('[ReportBack] Pending report-back detected on load, opening watch');
-        // Key the watch to THIS thread (pending_report_back is a flash-thread
+        // Key the watch to THIS thread (pending_report_back is a dispatching-thread
         // property) and seed the run /status already named. Poke a catch-up
         // reconcile ONLY when the thread isn't also active — poking would race
         // the reconnect branch's attach of status.run_id (double-attach); the
@@ -1542,7 +1534,7 @@ export function useChatMessages(
 
     // Cleanup: Cancel loading if workspace or thread changes or component unmounts.
     // The report-back watch is deliberately NOT torn down here — it is keyed to its
-    // flash thread and must survive navigation into the dispatched PTC thread (a
+    // dispatching thread and must survive navigation into the dispatched PTC thread (a
     // dedicated unmount-only effect stops it when the component truly goes away).
     return () => {
       cancelled = true;
@@ -1582,7 +1574,7 @@ export function useChatMessages(
     return () => window.removeEventListener('online', retryFailedLoad);
   }, [workspaceId, threadId, reloadTrigger]);
 
-  // The report-back watch survives thread navigation (so a flash report-back and a
+  // The report-back watch survives thread navigation (so a report-back and a
   // live PTC stream coexist); useReportBackWatch owns its own unmount-time
   // teardown, so the thread-load effect above deliberately doesn't touch it.
 
@@ -1780,7 +1772,7 @@ export function useChatMessages(
     // (c) The thread mux stays attached: the backend cancel finalizes this
     // turn's task runs, and their terminal frames flip the cards to their
     // real outcome (cancelled) instead of a client-side guess. Leave the
-    // report-back watch running: this flash-thread cancel does not stop the
+    // report-back watch running: this Chief of Staff thread cancel does not stop the
     // background PTC analyses on their own threads, so their summaries should
     // still surface live. The aborted reader's finally clears isStreamingRef, so
     // the watch's next reconcile can attach the next head run or drain.
@@ -2013,7 +2005,6 @@ export function useChatMessages(
           if (event.event === 'error' && !answered.refusal) answered.refusal = event;
         },
         additionalContext,
-        agentMode,
         locale: userLocale,
         timezone: userTimezone,
         platform,
@@ -2341,7 +2332,7 @@ export function useChatMessages(
 
     // Create assistant message placeholder
     const assistantMessageId = `assistant-${Date.now()}`;
-    beginRun(agentMode);
+    beginRun();
     // Fresh AbortController so stopWorkflow can abort this stream's reader.
     const abortController = new AbortController();
     mainStreamAbortRef.current = abortController;
@@ -2361,7 +2352,6 @@ export function useChatMessages(
       threadId,
       workspaceId,
       message,
-      agentMode,
       platform,
       timezone: userTimezone,
       subagentsAllowed,
@@ -2404,7 +2394,6 @@ export function useChatMessages(
       const result = await sendChatMessageStream(message, workspaceId, effectiveThreadId, {
         onEvent: processEvent,
         additionalContext,
-        agentMode,
         locale: userLocale,
         timezone: userTimezone,
         llmModel: model || null,
@@ -2591,8 +2580,6 @@ export function useChatMessages(
    * on it, and has to use the current runtime, callbacks and model options.
    */
   const resumeWithHitlResponse = useStableHandler(async (hitlResponse: HitlResponseBody) => {
-    // The resume opens the next run, in the same mode.
-    const resumeAgentMode = runAgentModeRef.current ?? agentMode;
     // Ahead of beginResume, so the settler's fence captures this run's own
     // epoch rather than the previous one (which it would already fail).
     sessionEpochRef.current += 1;
@@ -2616,7 +2603,7 @@ export function useChatMessages(
     const assistantMessageId = `assistant-hitl-${Date.now()}`;
     // HITL resume always opens a fresh run on the backend (1:1 with
     // ``conversation_response_id``).
-    beginRun(resumeAgentMode);
+    beginRun();
 
     // A resume is a turn of its own on the backend, with no user bubble.
     const assistantMessage = createAssistantMessage(assistantMessageId, newestKnownTurn() + 1);
@@ -2661,7 +2648,6 @@ export function useChatMessages(
         llmModel: model,
         reasoningEffort,
         fastMode,
-        agentMode: resumeAgentMode,
         // Latch the fresh run_id from response headers before the first SSE
         // body byte. Without this, an early disconnect (between the pre-POST
         // clear above and the metadata frame) would let
@@ -2910,10 +2896,8 @@ export function useChatMessages(
 
     // Truncate messages and add new user message (if editing) + assistant placeholder
     const assistantMessageId = `assistant-${Date.now()}`;
-    // Edit/regenerate opens a fresh backend run. The retry route takes no
-    // agent_mode, so the server starts it from its default; answering in that
-    // same default resolves to the same graph.
-    beginRun(viaRetryEndpoint ? 'ptc' : agentMode);
+    // Edit/regenerate opens a fresh backend run.
+    beginRun();
     // A fork truncates persisted turns > forkFromTurn server-side; pin the
     // rendered-turn watermark to the fork turn so the reactivation staleness
     // check compares against the post-truncation reality (a stale-high
@@ -3070,7 +3054,6 @@ export function useChatMessages(
         : await sendChatMessageStream(message || '', workspaceId, threadId, {
             onEvent: processEvent,
             additionalContext: request.additionalContext,
-            agentMode,
             locale: userLocale,
             timezone: userTimezone,
             checkpointId,
@@ -3411,7 +3394,7 @@ export function useChatMessages(
   // rewrites the dir_name and previous_dir_names that agent paths fold
   // against, siblings' too: a folder one lands on stops being another's former
   // folder. Cached rows would keep the old folders for minutes.
-  const refreshWorkspaceFolder = agentMode === 'ptc' && workspaceId
+  const refreshWorkspaceFolder = workspaceId
     ? () => { void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.details() }); }
     : null;
 
@@ -3451,7 +3434,7 @@ export function useChatMessages(
     markTranscriptPersisted,
     clearModelStatus,
     finalizePendingTodos,
-    refreshComputerAfterTurn: agentMode === 'ptc' ? () => refreshComputersAfterTurn(queryClient) : null,
+    refreshComputerAfterTurn: () => refreshComputersAfterTurn(queryClient),
     refreshWorkspaceFolder,
     reportBackWatch,
   };

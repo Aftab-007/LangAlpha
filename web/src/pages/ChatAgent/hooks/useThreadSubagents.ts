@@ -3,7 +3,6 @@ import { useIsMutating, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { usePreferences } from '@/hooks/usePreferences';
 import { PREFERENCE_MUTATION_KEY } from '@/hooks/useUpdatePreferences';
-import type { ComposerMode } from '@/lib/modelPreferences';
 import { readSubagentsDefault } from '@/lib/subagentsDefault';
 import { userSessionStorage } from '@/lib/userStorage';
 import { threadDetailQuery } from '../utils/threadQueries';
@@ -16,8 +15,6 @@ const OFFER_CLOSED_PREFIX = 'thread-subagents-offer-closed:';
 interface UseThreadSubagentsOptions {
   /** The view's thread; `__default__` until the first send creates one. */
   threadId: string | null | undefined;
-  /** Subagents are a PTC capability, so a flash send carries none. */
-  mode: ComposerMode;
   /**
    * The navigation whose first send creates the thread, with the pick that
    * send carries, which the new row does not hold until then. A new chat's
@@ -48,7 +45,7 @@ interface UseThreadSubagentsOptions {
  * make that side the default, once the row holds the flip, shown while the
  * thread stays there.
  */
-export function useThreadSubagents({ threadId, mode, landing = null }: UseThreadSubagentsOptions) {
+export function useThreadSubagents({ threadId, landing = null }: UseThreadSubagentsOptions) {
   const { t } = useTranslation();
   const { preferences, isLoaded: preferencesRead } = usePreferences();
   const liveThreadId = threadId && threadId !== '__default__' ? threadId : null;
@@ -123,9 +120,9 @@ export function useThreadSubagents({ threadId, mode, landing = null }: UseThread
     shownBeforeRef.current = liveThreadId;
     if (!liveThreadId || createdRef.current !== liveThreadId || rowValue === null) return;
     createdRef.current = null;
-    if (held === null || mode === 'fast') return;
+    if (held === null) return;
     void save({ threadId: liveThreadId, value: held, before: null });
-  }, [held, liveThreadId, mode, rowValue, save]);
+  }, [held, liveThreadId, rowValue, save]);
 
   // Which thread the composer shows now, for a save that lands after a move.
   const shownThreadRef = useRef(liveThreadId);
@@ -166,10 +163,10 @@ export function useThreadSubagents({ threadId, mode, landing = null }: UseThread
   // follows the default. Until the default is read the switch shows what no
   // preference means, which a stored default may contradict, so the send
   // names what is shown; the server keeps nothing of its own when it agrees.
-  const toSend = mode === 'fast' || liveThreadId
+  const toSend = liveThreadId
     ? undefined
     : held ?? (userDefault === null ? fallback : undefined);
-  const offer = mode !== 'fast' && userDefault !== null && offered !== null && offered === allowed && offered !== userDefault
+  const offer = userDefault !== null && offered !== null && offered === allowed && offered !== userDefault
     ? offered
     : null;
 

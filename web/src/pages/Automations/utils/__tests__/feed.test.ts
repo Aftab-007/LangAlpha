@@ -9,7 +9,6 @@ function run(id: string, started: Date | null, created: Date): AutomationRun {
     automation_execution_id: id,
     automation_id: 'auto-1',
     automation_name: 'Morning briefing',
-    agent_mode: 'flash',
     trigger_type: 'cron',
     workspace_id: null,
     status: started ? 'completed' : 'waiting',

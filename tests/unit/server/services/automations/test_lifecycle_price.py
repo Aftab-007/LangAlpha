@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.server.database.home_workspace import get_flash_workspace_id
+from src.server.services.automations import lifecycle
 from src.server.services.automations.lifecycle import create_automation, resume_automation
 from src.server.models.automation import AutomationCreate
 
@@ -23,6 +25,13 @@ NOW = datetime.now(timezone.utc)
 AUTO_ID = str(uuid.uuid4())
 USER_ID = "test-user-price"
 WORKSPACE_ID = str(uuid.uuid4())
+HOME = get_flash_workspace_id(USER_ID)
+
+
+@pytest.fixture(autouse=True)
+def _home(monkeypatch):
+    """Home's row is the owner's, so an automation placed in Home needs no lookup."""
+    monkeypatch.setattr(lifecycle, "_home", AsyncMock(return_value=HOME))
 
 VALID_TRIGGER_CONFIG = {
     "symbol": "AAPL",
@@ -49,6 +58,7 @@ def _make_create_data(**overrides):
         "instruction": "Notify me when the price crosses threshold",
         "trigger_config": VALID_TRIGGER_CONFIG,
         "timezone": "UTC",
+        "workspace_id": HOME,
     }
     data.update(overrides)
     return AutomationCreate(**data)
@@ -67,9 +77,9 @@ def _make_automation_row(**overrides):
         "trigger_config": VALID_TRIGGER_CONFIG,
         "next_run_at": None,
         "last_run_at": None,
-        "agent_mode": "flash",
+        "agent_mode": "ptc",
         "instruction": "Notify me when the price crosses threshold",
-        "workspace_id": None,
+        "workspace_id": HOME,
         "llm_model": None,
         "additional_context": None,
         "thread_strategy": "new",
@@ -142,9 +152,9 @@ class TestCreatePriceAutomation:
 
     @pytest.mark.asyncio
     @patch("src.server.services.automations.lifecycle.auto_db")
-    async def test_create_price_automation_ptc_requires_workspace_id(self, mock_auto_db):
-        """Raises ValueError when agent_mode='ptc' but workspace_id is not provided."""
-        data = _make_create_data(agent_mode="ptc")
+    async def test_create_price_automation_requires_workspace_id(self, mock_auto_db):
+        """Every automation runs in some workspace, Home's for the user's Home."""
+        data = _make_create_data(workspace_id=None)
 
         with pytest.raises(ValueError, match="workspace_id is required"):
             await create_automation(USER_ID, data)

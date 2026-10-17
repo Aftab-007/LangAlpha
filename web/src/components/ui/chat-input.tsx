@@ -11,10 +11,10 @@ import {
 } from './dropdown-menu';
 import { Loader } from './loader';
 import { usePreferences } from '@/hooks/usePreferences';
-import { useModeDefaultModel } from '@/hooks/useModeDefaultModel';
+import { useDefaultModel } from '@/hooks/useSlotDefaultModels';
 import { useEffectiveTuning, useModelProfileWriter } from '@/hooks/useModelProfile';
 import { useFeatureEnabled } from '@/hooks/useFeatures';
-import { flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
+import { homeWorkspaceQuery } from '@/hooks/useHomeWorkspace';
 import { useAllModels } from '@/hooks/useAllModels';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useQuickAccessModels } from '@/hooks/useQuickAccessModels';
@@ -77,14 +77,8 @@ export interface ChatInputProps {
   onStop?: () => void;
   placeholder?: string;
   files?: string[];
-  /** Flash or PTC; unset runs PTC. Under the all-workspaces agent every
-   *  conversation runs the full agent, so hosts pass `scope` instead. */
-  mode?: 'fast' | 'ptc';
-  onModeChange?: (mode: 'fast' | 'ptc') => void;
-  /** When set, disables switching into PTC mode and shows this reason as a tooltip. */
-  ptcDisabledReason?: string | null;
-  /** Under the all-workspaces agent, where the send goes. With `onScopeChange`
-   *  the toolbar offers the scope picker in place of the mode toggle. */
+  /** Where the send goes. With `onScopeChange` the toolbar offers the scope
+   *  picker. */
   scope?: ComposerScope;
   onScopeChange?: ((scope: ComposerScope) => void) | null;
   /** Shown in the scope picker while there is no workspace to pick. */
@@ -119,7 +113,7 @@ export interface ChatInputProps {
    * The model the pill shows and a send names, owned by the host's thread
    * (`useThreadModel`), which also receives each pick through `onPickModel`.
    * A composer with no thread behind it leaves both unset: it then holds the
-   * pick itself, seeded from the mode default, and the pick rides the next
+   * pick itself, seeded from the account default, and the pick rides the next
    * send, which is how such a composer starts its thread on the chosen model.
    */
   model?: string | null;
@@ -146,11 +140,7 @@ function ChatInput({
   onStop,
   placeholder,
   files: workspaceFiles = [],
-  // Mode toggle
-  mode,
-  onModeChange,
-  ptcDisabledReason = null,
-  // Scope picker (all-workspaces agent)
+  // Scope picker
   scope,
   onScopeChange = null,
   emptyWorkspacesHint = null,
@@ -193,18 +183,17 @@ function ChatInput({
   const { validModelNames, metadata: modelMetadata, isLoading: modelsLoading } = useAllModels();
   const otherPref = (preferences as Record<string, Record<string, unknown>> | null)?.other_preference;
   const [message, setMessage] = useState('');
-  const { attachedFiles, setAttachedFiles, isDragging, handleFiles, removeFile, onDragOver, onDragLeave, onDrop, handlePaste } = useFileAttachments({ mode });
+  const { attachedFiles, setAttachedFiles, isDragging, handleFiles, removeFile, onDragOver, onDragLeave, onDrop, handlePaste } = useFileAttachments();
   const [watchMode, setWatchMode] = useState(false);
-  // Market watch is a PTC capability. The toggle state survives a switch to
-  // flash (the pill just hides), so every payload derives from this gated
-  // value — a watch flipped on in PTC must never ride a flash send.
-  const effectiveMarketWatch = watchMode && marketWatchEnabled && mode !== 'fast';
+  // The toggle state survives the feature going off (the pill just hides), so
+  // every payload derives from this gated value.
+  const effectiveMarketWatch = watchMode && marketWatchEnabled;
 
   // The model a send names. A thread host owns it. Without one the composer
-  // holds it, starting on the account default for this mode, which with
-  // nothing saved is the deployment's (see useModeDefaultModel for why it
-  // waits on the preference), and following the default when it changes.
-  const defaultModel = useModeDefaultModel(mode);
+  // holds it, starting on the account default, which with nothing saved is
+  // the deployment's (see useSlotDefaultModels for why it waits on the
+  // preference), and following the default when it changes.
+  const defaultModel = useDefaultModel();
   const [ownModel, setOwnModel] = useSeededModel(defaultModel);
   const pillModel = hostModel === undefined ? ownModel : hostModel;
 
@@ -239,11 +228,11 @@ function ChatInput({
   // default, and a send names only that pick, leaving the default to the
   // server. Until the default is read the toggle shows what no preference
   // means, which a stored default may contradict, so a send names what it
-  // shows. A PTC capability, gated like market watch.
+  // shows.
   const [ownSubagents, setOwnSubagents] = useState<boolean | null>(null);
   const ownShown = ownSubagents ?? readSubagentsDefault(preferences);
   const shownSubagents = hostSubagents === undefined ? ownShown : hostSubagents;
-  const draftSubagents = hostSubagents === undefined && mode !== 'fast'
+  const draftSubagents = hostSubagents === undefined
     ? ownSubagents ?? (preferencesRead ? undefined : ownShown)
     : undefined;
   const handleToggleSubagents = useCallback((next: boolean) => {
@@ -287,17 +276,17 @@ function ChatInput({
   const mentions = useMentions({ textareaRef, message, setMessage, workspaceFiles });
   // The workspace context scopes the slash menu: inside a workspace the
   // enabled-skill list is the workspace-effective one (workspace-scoped
-  // skills included, its disables applied). All workspaces runs in Home, the
-  // flash row, which loads its skills as any workspace does, so the menu
-  // lists Home's rather than those of the workspace the picker remembers.
+  // skills included, its disables applied). All workspaces runs in Home,
+  // which loads its skills as any workspace does, so the menu lists Home's
+  // rather than those of the workspace the picker remembers.
   const queryClient = useQueryClient();
   const { data: homeWorkspaceId = null } = useQuery({
-    ...flashWorkspaceQuery(queryClient),
+    ...homeWorkspaceQuery(queryClient),
     enabled: scope === 'all',
     select: (workspace) => workspace.workspace_id,
   });
   const slashWorkspaceId = scope === 'all' ? homeWorkspaceId : selectedWorkspaceId;
-  const slash = useSlashCommands({ textareaRef, message, setMessage, mode, workspaceId: slashWorkspaceId });
+  const slash = useSlashCommands({ textareaRef, message, setMessage, workspaceId: slashWorkspaceId });
   const {
     mentionedFiles, setMentionedFiles, pruneRemoved: pruneMentions, detectTrigger: detectMention,
     close: closeMentions, reset: resetMentions, handleKeyDown: mentionKeyDown, open: mentionsOpen,
@@ -635,7 +624,7 @@ function ChatInput({
    * renders the SAME components, so any locale / workspace name / model label
    * is measured, never guessed. */
   const toolbarItems = useToolbarItems({
-    mode, onModeChange, ptcDisabledReason, scope, onScopeChange, emptyWorkspacesHint,
+    scope, onScopeChange, emptyWorkspacesHint,
     subagentsAllowed: shownSubagents, onToggleSubagents: handleToggleSubagents,
     watchMode, setWatchMode, marketWatchEnabled,
     workspaces, selectedWorkspaceId, onWorkspaceChange,
@@ -1045,7 +1034,6 @@ function ChatInput({
         ref={fileInputRef}
         type="file"
         multiple
-        accept={mode === 'fast' ? "image/png,image/jpeg,image/gif,image/webp,application/pdf" : undefined}
         className="hidden"
         onChange={(e) => {
           if (e.target.files) handleFiles(e.target.files);

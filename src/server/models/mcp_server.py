@@ -853,11 +853,6 @@ class CatalogServer(BaseModel):
     # telling a third party who is looking, which is the same reason the
     # brokerage marks are proxied.
     icon_url: Optional[str] = None
-    # Whether any tool on this row resolves to a path that binds directly, and
-    # so whether the row can reach Flash at all: Flash has no sandbox, and a
-    # tool it cannot bind directly it cannot run. Computed from the snapshot
-    # the list already loaded, never a per-row query.
-    has_direct_tools: bool = False
     command: Optional[str] = None
     args: list[str] = Field(default_factory=list)
     url: Optional[str] = None
@@ -1069,7 +1064,6 @@ def catalog_row_to_response(
     granted_capabilities: list[str] | None = None,
     remembered_capabilities: list[str] | None = None,
     icon_url: str | None = None,
-    has_direct_tools: bool = False,
     snapshot: dict[str, Any] | None = None,
 ) -> CatalogServer:
     """Shape a DB catalog row for the owner-scoped API.
@@ -1105,7 +1099,6 @@ def catalog_row_to_response(
         remembered_capabilities=remembered_capabilities,
         tool_count=tool_count,
         icon_url=icon_url,
-        has_direct_tools=has_direct_tools,
         probe=probe.model_copy(update={"tools": []}) if probe else None,
         command=row.get("command"),
         args=row.get("args") or [],

@@ -1,23 +1,19 @@
 /**
  * The mobile market composer lives in a FAB that unmounts it after every
- * send. A composer that held its own model came back from the next expand on
- * the account default, and the follow-up stored that over the model the Fast
- * thread was started on. These render the page as a phone sees it, with the
- * real composer, FAB and thread model hook, and stub only the chart, header,
- * side panels and data feeds around them.
+ * send and fold, so the page holds the model and Subagents picks and hands
+ * them to the chat view with the send. These render the page as a phone sees
+ * it, with the real composer, FAB and thread model hook, and stub only the
+ * chart, header, side panels and data feeds around them.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type React from 'react';
 import { ChatInputRegistry, ContextBus } from '@/lib/contextBus';
 import { queryKeys } from '@/lib/queryKeys';
-import type { Thread } from '@/types/api';
 
 const mocks = vi.hoisted(() => ({
-  sendFlashChatMessage: vi.fn(),
-  getThread: vi.fn(),
   updateThread: vi.fn(),
   selectWorkspace: vi.fn(),
   workspaces: [{ workspace_id: 'ws-1', name: 'Workspace 1' }],
@@ -92,19 +88,12 @@ vi.mock('@/hooks/useWorkspaces', () => ({
     isSuccess: true,
   }),
 }));
-vi.mock('../utils/flashWorkspace', () => ({
-  getOrFetchFlashWorkspaceId: () => Promise.resolve('flash-ws'),
-}));
 
-vi.mock('../utils/api', async (importActual) => ({
-  ...(await importActual<Record<string, unknown>>()),
-  sendFlashChatMessage: (...args: unknown[]) => mocks.sendFlashChatMessage(...args),
-}));
 vi.mock('@/pages/ChatAgent/utils/api', async (importActual) => ({
   ...(await importActual<Record<string, unknown>>()),
   getSkills: vi.fn().mockResolvedValue([]),
   getModelMetadata: vi.fn().mockResolvedValue({}),
-  getThread: mocks.getThread,
+  getHomeWorkspace: vi.fn().mockResolvedValue({ workspace_id: 'home-ws', status: 'running', is_home: true }),
   updateThread: mocks.updateThread,
 }));
 
@@ -160,22 +149,26 @@ vi.mock('@/components/ui/chat-input.modelMenu', () => ({
 
 import MarketView from '../MarketView';
 
-type Emit = (event: Record<string, unknown>) => void;
+/** The account defaults: the Default model, and the Background model that a
+ *  chat never starts on. */
+function prefs(defaultModel = 'model-p0', background = 'model-d') {
+  return { model_preference: { preferred_model: defaultModel, preferred_flash_model: background } };
+}
 
-/** The arg positions `useMarketChat` passes the thread, event callback and model in. */
-const THREAD_ID = 1;
-const ON_EVENT = 2;
-const MODEL = 6;
-
-/** The account defaults: Flash on `flash`, PTC on `ptc`. */
-function prefs(flash: string, ptc = 'model-p0') {
-  return { model_preference: { preferred_model: ptc, preferred_flash_model: flash } };
+interface ChatState {
+  workspaceId?: string;
+  model?: string;
+  subagentsAllowed?: boolean;
 }
 
 function ChatPage() {
-  const state = useLocation().state as { model?: string; subagentsAllowed?: boolean } | null;
+  const state = useLocation().state as ChatState | null;
   return (
-    <div data-testid="chat-page" data-subagents={String(state?.subagentsAllowed)}>
+    <div
+      data-testid="chat-page"
+      data-workspace={state?.workspaceId}
+      data-subagents={String(state?.subagentsAllowed)}
+    >
       {state?.model ?? ''}
     </div>
   );
@@ -200,168 +193,88 @@ function expand() {
   fireEvent.click(screen.getByRole('button', { name: 'Open chat' }));
 }
 
-async function send(text: string) {
-  fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
-  await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
-  });
-}
-
-/** Starts a Fast thread on model-x, picked over the model-d default. The
- *  stream settles inside the send's act, and the send folds the FAB. */
-async function startFlashThreadOnX() {
-  expand();
-  expect(screen.getByText('pill:model-d')).toBeInTheDocument();
-  fireEvent.click(screen.getByText('pick-x'));
-  expect(screen.getByText('pill:model-x')).toBeInTheDocument();
-
-  await send('What is AAPL doing?');
-  expect(mocks.sendFlashChatMessage).toHaveBeenCalledTimes(1);
-  expect(mocks.sendFlashChatMessage.mock.calls[0][THREAD_ID]).toBe('__default__');
-  expect(mocks.sendFlashChatMessage.mock.calls[0][MODEL]).toBe('model-x');
+/** A tap outside folds the FAB, unmounting the composer. */
+function fold() {
+  fireEvent.pointerDown(document.body);
   expect(screen.queryByRole('textbox')).toBeNull();
 }
 
-describe('the mobile market composer on a Fast thread', () => {
+function send(text: string) {
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+}
+
+describe('the mobile market composer', () => {
+  const subagentsPill = () => screen.queryByRole('button', { name: /^Subagents$/ });
+
   beforeEach(() => {
     ContextBus.__resetForTests();
     ChatInputRegistry.__resetForTests();
     Element.prototype.scrollIntoView = vi.fn();
     localStorage.clear();
     sessionStorage.clear();
-    mocks.sendFlashChatMessage.mockReset();
-    mocks.getThread.mockReset();
     mocks.updateThread.mockReset();
-
-    // The first send's stream names the thread it created; later sends go to it.
-    mocks.sendFlashChatMessage.mockImplementation(async (...args: unknown[]) => {
-      const emit = args[ON_EVENT] as Emit;
-      emit({ event: 'metadata', thread_id: 't-1', run_id: `run-${mocks.sendFlashChatMessage.mock.calls.length}` });
-      emit({ event: 'message_chunk', content_type: 'text', content: 'Up 1.2%.' });
-    });
-    // The server stored the model the first send named.
-    mocks.getThread.mockImplementation(async (id: string) => ({ thread_id: id, llm_model: 'model-x' }) as unknown as Thread);
-
+    mocks.selectWorkspace.mockReset();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    queryClient.setQueryData(queryKeys.user.preferences(), prefs('model-d'));
+    queryClient.setQueryData(queryKeys.user.preferences(), prefs());
   });
   afterEach(() => {
     ContextBus.__resetForTests();
     ChatInputRegistry.__resetForTests();
   });
 
-  it("keeps the thread's model across a fold when the default moves, and sends it", async () => {
+  it('keeps a model pick across a fold and sends it into a new chat in Home', async () => {
     renderPage();
-    await startFlashThreadOnX();
-
-    // The Flash default changes elsewhere, for new threads only.
-    act(() => {
-      queryClient.setQueryData(queryKeys.user.preferences(), prefs('model-e'));
-    });
-
     expand();
-    expect(await screen.findByText('pill:model-x')).toBeInTheDocument();
-    expect(screen.getByText('This thread uses Model X. New threads start on Model E.')).toBeInTheDocument();
-
-    await send('And MSFT?');
-    expect(mocks.sendFlashChatMessage).toHaveBeenCalledTimes(2);
-    expect(mocks.sendFlashChatMessage.mock.calls[1][THREAD_ID]).toBe('t-1');
-    expect(mocks.sendFlashChatMessage.mock.calls[1][MODEL]).toBe('model-x');
-  });
-
-  it("keeps a PTC pick off the Fast thread, and sends it into the new chat", async () => {
-    renderPage();
-    await startFlashThreadOnX();
-
-    expand();
-    expect(await screen.findByText('pill:model-x')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Flash' }));
-    // A PTC send opens a new thread, so it starts on the PTC default.
+    expect(screen.getByRole('button', { name: 'All workspaces' })).toBeInTheDocument();
     expect(screen.getByText('pill:model-p0')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('pick-y'));
-    expect(screen.getByText('pill:model-y')).toBeInTheDocument();
-
-    // Back on Flash, the thread's own model, not the PTC pick or the default.
-    fireEvent.click(screen.getByRole('button', { name: 'PTC' }));
-    expect(await screen.findByText('pill:model-x')).toBeInTheDocument();
-
-    // And back on PTC, the pick made there.
-    fireEvent.click(screen.getByRole('button', { name: 'Flash' }));
-    expect(screen.getByText('pill:model-y')).toBeInTheDocument();
-    await send('Build me a DCF');
-
-    expect(await screen.findByTestId('chat-page')).toHaveTextContent('model-y');
-    expect(mocks.sendFlashChatMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.updateThread).not.toHaveBeenCalled();
-  });
-
-  it('keeps a PTC pick off the Fast thread when the PTC default is the thread model', async () => {
-    // Both modes would seed model-x, so nothing but the mode tells the PTC
-    // pick from the thread's model.
-    queryClient.setQueryData(queryKeys.user.preferences(), prefs('model-d', 'model-x'));
-    renderPage();
-    await startFlashThreadOnX();
-
-    expand();
-    expect(await screen.findByText('pill:model-x')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Flash' }));
+    fireEvent.click(screen.getByText('pick-x'));
     expect(screen.getByText('pill:model-x')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('pick-y'));
-    expect(screen.getByText('pill:model-y')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'PTC' }));
-    expect(await screen.findByText('pill:model-x')).toBeInTheDocument();
-    await send('And MSFT?');
+    fold();
+    expand();
+    expect(screen.getByText('pill:model-x')).toBeInTheDocument();
 
-    expect(mocks.sendFlashChatMessage).toHaveBeenCalledTimes(2);
-    expect(mocks.sendFlashChatMessage.mock.calls[1][THREAD_ID]).toBe('t-1');
-    expect(mocks.sendFlashChatMessage.mock.calls[1][MODEL]).toBe('model-x');
+    send('What is AAPL doing?');
+    const chat = await screen.findByTestId('chat-page');
+    expect(chat).toHaveTextContent('model-x');
+    expect(chat).toHaveAttribute('data-workspace', 'home-ws');
+    // A pick rides the send; there is no thread yet to store it on.
     expect(mocks.updateThread).not.toHaveBeenCalled();
   });
-});
 
-describe('the mobile market composer on PTC', () => {
-  const pill = () => screen.queryByRole('button', { name: /^Subagents$/ });
+  it('sends into the selected workspace once the scope moves to it', async () => {
+    renderPage();
+    expand();
+    fireEvent.click(screen.getByRole('button', { name: 'All workspaces' }));
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitemradio', { name: 'Workspace 1' }));
+    expect(screen.getByRole('button', { name: 'Workspace 1' })).toBeInTheDocument();
 
-  beforeEach(() => {
-    ContextBus.__resetForTests();
-    ChatInputRegistry.__resetForTests();
-    Element.prototype.scrollIntoView = vi.fn();
-    localStorage.clear();
-    sessionStorage.clear();
-    mocks.sendFlashChatMessage.mockReset();
-    queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-    queryClient.setQueryData(queryKeys.user.preferences(), {
-      ...prefs('model-d'),
-      other_preference: { subagents_default: true },
-    });
-  });
-  afterEach(() => {
-    ContextBus.__resetForTests();
-    ChatInputRegistry.__resetForTests();
+    send('Build me a DCF');
+    const chat = await screen.findByTestId('chat-page');
+    expect(chat).toHaveAttribute('data-workspace', 'ws-1');
+    // Both scopes run the Default model.
+    expect(chat).toHaveTextContent('model-p0');
   });
 
   it('shows the Subagents toggle, keeps a flip across a fold, and sends it into the new chat', async () => {
+    queryClient.setQueryData(queryKeys.user.preferences(), {
+      ...prefs(),
+      other_preference: { subagents_default: true },
+    });
     renderPage();
     expand();
-    expect(pill()).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Flash' }));
-    expect(pill()).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(pill()!);
-    expect(pill()).toHaveAttribute('aria-pressed', 'false');
+    expect(subagentsPill()).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(subagentsPill()!);
+    expect(subagentsPill()).toHaveAttribute('aria-pressed', 'false');
 
-    // A tap outside folds the FAB, unmounting the composer.
-    fireEvent.pointerDown(document.body);
-    expect(screen.queryByRole('textbox')).toBeNull();
+    fold();
     expand();
-    expect(pill()).toHaveAttribute('aria-pressed', 'false');
+    expect(subagentsPill()).toHaveAttribute('aria-pressed', 'false');
 
-    await send('Build me a DCF');
+    send('Build me a DCF');
     expect(await screen.findByTestId('chat-page')).toHaveAttribute('data-subagents', 'false');
-    expect(mocks.sendFlashChatMessage).not.toHaveBeenCalled();
   });
 });

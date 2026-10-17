@@ -17,7 +17,7 @@ import {
   useMcpCatalog,
   waitForServerTools,
 } from '@/hooks/useMcpServers';
-import { FLASH_ROUTE_STATE, flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
+import { homeWorkspaceQuery, resolveChatWorkspace } from '@/hooks/useHomeWorkspace';
 import { useLocale } from '@/hooks/useLocale';
 import { brokerageArt } from '@/lib/brandArt';
 import { formatList } from '@/lib/format';
@@ -112,8 +112,8 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
   // The interview runs on Home's computer, and starting one can take a minute.
   useEffect(() => {
     let live = true;
-    void queryClient.ensureQueryData(flashWorkspaceQuery(queryClient)).then(
-      (home) => (live ? warmWorkspace(home.workspace_id, queryClient, { home: true }) : undefined),
+    void queryClient.ensureQueryData(homeWorkspaceQuery(queryClient)).then(
+      (home) => (live ? warmWorkspace(home.workspace_id, queryClient) : undefined),
       () => {},
     );
     return () => {
@@ -160,7 +160,7 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
     const controller = new AbortController();
     waitRef.current = controller;
     setWaitingFor(chosen.map((c) => c.label));
-    const home = queryClient.ensureQueryData(flashWorkspaceQuery(queryClient)).catch(() => null);
+    const home = resolveChatWorkspace(queryClient, 'all').catch(() => null);
     // A thread's tools are fixed when it starts, so a turn sent before a fresh
     // connect's discovery lands would run without the brokerage. One already
     // showing its tools has nothing to wait for.
@@ -173,9 +173,9 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
         }),
       ),
     );
-    const workspace = await home;
+    const workspaceId = await home;
     if (controller.signal.aborted) return;
-    if (!workspace) {
+    if (!workspaceId) {
       waitRef.current = null;
       setWaitingFor(null);
       toast({
@@ -190,10 +190,9 @@ function OnboardingConnectSheet({ onClose }: { onClose: () => void }) {
     navigate('/chat/t/__default__', {
       replace: true,
       state: {
-        workspaceId: workspace.workspace_id,
+        workspaceId,
         isOnboarding: true,
         onboardingBrokerages: chosen.map((c) => c.label),
-        ...FLASH_ROUTE_STATE,
       },
     });
   }

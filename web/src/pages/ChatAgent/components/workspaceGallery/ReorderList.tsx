@@ -17,8 +17,9 @@ import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Loader } from '@/components/ui/loader';
-import { useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
-import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
+import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
+import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { queryKeys } from '@/lib/queryKeys';
 
 import { reorderWorkspaces } from '../../utils/api';
@@ -56,7 +57,7 @@ function SortableReorderRow({ workspace, disabled }: SortableReorderRowProps) {
     zIndex: isDragging ? 50 : undefined,
   };
 
-  const isFlash = workspace.status === 'flash';
+  const isHome = isHomeWorkspace(workspace);
 
   return (
     <div
@@ -64,27 +65,27 @@ function SortableReorderRow({ workspace, disabled }: SortableReorderRowProps) {
       className="flex items-center gap-3 px-4 py-3 rounded-xl border mb-2"
       style={{
         ...style,
-        // Same material split as the gallery card: flash rides an elevated
+        // Same material split as the gallery card: Home rides an elevated
         // surface, user rows keep the card wash; its glyph is the accent.
-        background: isFlash
+        background: isHome
           ? 'var(--color-bg-elevated)'
           : 'var(--color-bg-card-gradient, var(--color-border-muted))',
-        borderColor: isFlash ? 'var(--color-border-default)' : 'var(--color-bg-card-border, var(--color-border-muted))',
+        borderColor: isHome ? 'var(--color-border-default)' : 'var(--color-bg-card-border, var(--color-border-muted))',
       }}
     >
-      {/* Flash drags too (within the pinned block), its identity glyph
+      {/* Home drags too (within the pinned block), its identity glyph
           doubles as the grab handle where user rows show the grip. */}
       <button
         {...listeners}
         {...attributes}
         className="shrink-0 cursor-grab active:cursor-grabbing p-1 rounded"
-        style={{ color: isFlash ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)' }}
+        style={{ color: isHome ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)' }}
       >
-        {isFlash ? <FlashRowIcon className="h-5 w-5" /> : <GripVertical className="h-5 w-5" />}
+        {isHome ? <HomeRowIcon className="h-5 w-5" /> : <GripVertical className="h-5 w-5" />}
       </button>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          {!isFlash && workspace.is_pinned && (
+          {!isHome && workspace.is_pinned && (
             <Pin className="h-3.5 w-3.5 shrink-0 rotate-45" style={{ color: 'var(--color-text-tertiary)' }} />
           )}
           <span className="font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>
@@ -97,13 +98,13 @@ function SortableReorderRow({ workspace, disabled }: SortableReorderRowProps) {
 }
 
 interface ReorderListProps {
-  /** Flash rides in the pinned block, so it is part of the order being written. */
-  flashWorkspace: WorkspaceRecord | null;
+  /** Home rides in the pinned block, so it is part of the order being written. */
+  homeWorkspace: WorkspaceRecord | null;
   /** Done: `true` when a drag actually landed, which is what pins 'custom' sort. */
   onDone: (didReorder: boolean) => void;
 }
 
-export function ReorderList({ flashWorkspace, onDone }: ReorderListProps) {
+export function ReorderList({ homeWorkspace, onDone }: ReorderListProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [rows, setRows] = useState<WorkspaceRecord[]>([]);
@@ -130,15 +131,15 @@ export function ReorderList({ flashWorkspace, onDone }: ReorderListProps) {
 
   useEffect(() => {
     if (!allWorkspaces) return;
-    setRows(flashWorkspace ? [flashWorkspace, ...allWorkspaces] : allWorkspaces);
-  }, [allWorkspaces, flashWorkspace]);
+    setRows(homeWorkspace ? [homeWorkspace, ...allWorkspaces] : allWorkspaces);
+  }, [allWorkspaces, homeWorkspace]);
 
   // DnD sensors -- require 8px drag distance before activating
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
 
-  // Pinned block first, Flash counts as always-pinned, then sort_order, then
+  // Pinned block first, Home counts as always-pinned, then sort_order, then
   // recency. Sort keys are computed once per item, not per comparison, and the
   // whole sort re-runs only when the list changes, not on every drag-position
   // render.
@@ -175,17 +176,17 @@ export function ReorderList({ flashWorkspace, onDone }: ReorderListProps) {
     const draggedWs = sortedRows[oldIndex];
     const targetWs = sortedRows[newIndex];
 
-    // Prevent crossing the pin boundary. No flash special case: it counts as
+    // Prevent crossing the pin boundary. No Home special case: it counts as
     // pinned, so this both contains it in the pinned block and keeps
     // unpinned rows out.
     if (isEffectivelyPinned(draggedWs) !== isEffectivelyPinned(targetWs)) return;
 
     const reordered = arrayMove(sortedRows, oldIndex, newIndex);
 
-    // Assign sequential sort_order. Flash is included: it's DB-pinned with a
+    // Assign sequential sort_order. Home is included: it's DB-pinned with a
     // real sort_order, and writing its slot is what makes "pinned workspace
-    // above/below Flash" stick, omitting it leaves a sort_order tie decided
-    // by updated_at, so the pinned block would reshuffle whenever Flash is used.
+    // above/below Home" stick, omitting it leaves a sort_order tie decided
+    // by updated_at, so the pinned block would reshuffle whenever Home is used.
     const items = reordered.map((ws, i) => ({ workspace_id: ws.workspace_id, sort_order: i }));
 
     // Optimistic update

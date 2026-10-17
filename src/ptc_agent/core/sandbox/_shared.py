@@ -190,17 +190,6 @@ def _entry_is_dir(entry) -> bool:
     return bool(getattr(entry, "is_dir", False))
 
 
-def _get_sandbox_eligible_skills() -> tuple[set[str], set[str]]:
-    """Return (sandbox_skill_names, all_registry_names) for flash-only filtering.
-
-    Skills present in SKILL_REGISTRY but not in sandbox_skill_names are
-    flash-only and should be skipped during sandbox operations.
-    """
-    from ptc_agent.agent.middleware.skills import SKILL_REGISTRY, get_sandbox_skill_names
-
-    return get_sandbox_skill_names(), set(SKILL_REGISTRY.keys())
-
-
 def _resolve_disabled_skills(disabled: frozenset[str]) -> frozenset[str]:
     """Disables as the sync must read them: a skill another enabled skill
     declares in ``requires`` keeps its files in the sandbox."""

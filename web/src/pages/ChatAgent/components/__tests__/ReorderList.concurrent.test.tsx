@@ -84,7 +84,7 @@ beforeEach(() => {
 it('ignores another completed drag until the current order is durable', async () => {
   let finishWrite!: () => void;
   mockReorder.mockReturnValue(new Promise<void>((resolve) => { finishWrite = resolve; }));
-  renderWithProviders(<ReorderList flashWorkspace={null} onDone={vi.fn()} />);
+  renderWithProviders(<ReorderList homeWorkspace={null} onDone={vi.fn()} />);
 
   await screen.findByText('Alpha');
   let first: Promise<void> | undefined;

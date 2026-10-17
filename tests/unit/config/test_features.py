@@ -11,7 +11,6 @@ from src.config.features import (
     system_flag,
 )
 from src.config.models import FeatureFlagOverride, InfrastructureConfig
-from src.server.services.turn_runtime import ALL_WORKSPACES_AGENT
 
 
 def _stub_config(monkeypatch, **overrides):
@@ -41,14 +40,6 @@ def test_scratchpad_is_cataloged_enabled_opt_in():
     assert spec.gate is FeatureGate.OPT_IN
     assert spec.label and spec.description
     assert spec.tradeoffs
-
-
-def test_all_workspaces_agent_is_cataloged_on_and_opt_out():
-    """Every turn outside a workspace reads the flag by this key, and one the
-    catalog lacks fails them all."""
-    spec = FEATURES[ALL_WORKSPACES_AGENT]
-    assert spec.enabled is True
-    assert spec.gate is FeatureGate.OPT_OUT
 
 
 def test_system_flag_partial_override_merges_with_catalog(monkeypatch):

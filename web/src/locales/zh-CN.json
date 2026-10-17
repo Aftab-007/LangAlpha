@@ -255,8 +255,6 @@
     "startOnboarding": "开始设置",
     "defaultModel": "默认模型",
     "defaultModelDesc": "用于工作区对话（代码执行、沙箱）。",
-    "flashModel": "快速模型",
-    "flashModelDesc": "用于快速查询（网络搜索、市场数据）。",
     "defaultModelChange": {
       "title": "将 {{model}} 设为默认模型？",
       "title_pair": "将 {{model}} 设为默认模型？",
@@ -366,7 +364,6 @@
     "starredModels": "快速切换模型",
     "starredModelsDesc": "显示在聊天输入框中，方便快速切换。你的默认模型，以及你自己的 API 密钥和已连接账户的模型会自动加入，不需要的可以移除。",
     "fallbackModels": "备用模型",
-    "fallbackModelsDesc": "当主模型或快速模型不可用时，按顺序依次尝试。请只添加你有权访问的模型。未选择时不使用备用模型。",
     "fallbackModelsEmpty": "未找到模型",
     "removeModel": "移除 {{model}}",
     "addModels": "添加",
@@ -438,7 +435,6 @@
       "fetchModelDesc": "用于提取网页内容。",
       "compactionModel": "上下文压缩模型",
       "compactionModelDesc": "用于压缩过长的对话上下文。",
-      "defaultsToFlash": "默认使用快速模型",
       "defaultsToConversationModel": "与对话所用模型相同",
       "subagentsLink": "每个子 Agent 的模型和推理强度在<pane>插件 → 子 Agent</pane>中设置。"
     },
@@ -455,7 +451,6 @@
     "approvals": "审批",
     "autoApproveHandoffs": "交给分析师前不再询问",
     "autoApproveHandoffsDesc": "任务直接交给工作区的分析师，不再弹出审批卡片。每次交接仍会显示为卡片，方便你查看进度或停止运行。",
-    "autoApproveHandoffsDescPtc": "任务直接分派到 PTC 工作区，不再弹出审批卡片。每次交接仍会显示为卡片，方便你查看进度或停止运行。",
     "autoApproveWorkspaceCreation": "创建工作区前不再询问",
     "autoApproveWorkspaceCreationDesc": "为新任务创建工作区时不再弹出审批卡片。"
   },
@@ -1053,9 +1048,7 @@
         "header": "工作区",
         "viewAll": "查看全部",
         "untitled": "未命名工作区",
-        "flashDesc": "即时回答，无需沙箱。",
         "noDescription": "暂无描述",
-        "tagFlash": "flash",
         "tagWorkspace": "工作区",
         "empty": "暂无工作区",
         "emptyCta": "创建第一个 →"
@@ -1069,7 +1062,6 @@
         "bucket_thisWeek": "本周早些",
         "bucket_older": "更早",
         "untitled": "未命名对话",
-        "flash": "Flash",
         "empty": "暂无近期对话",
         "emptyHint": "开始一段对话，记录会出现在这里。"
       },
@@ -1507,7 +1499,6 @@
   "chat": {
     "backToWorkflow": "返回工作流",
     "backToMain": "返回主对话",
-    "backToFlash": "返回 Flash",
     "reconnecting": "重新连接中…",
     "offlineHistoryLoad": "网络已断开，无法刷新此对话。恢复连接后会自动同步。",
     "jumpToLatest": {
@@ -1634,7 +1625,6 @@
       "makeDefault": "将 {{model}} 设为默认"
     },
     "backgroundTasksRunning": "后台任务仍在运行",
-    "reportBackPending": "等待 PTC Agent 汇报结果",
     "taskReportBackPending": "等待子代理结果汇报",
     "tray": {
       "tasks_one": "{{count}} 个任务",
@@ -1646,7 +1636,6 @@
     },
     "provenance": {
       "fromChiefOfStaff": "来自 CoS Agent",
-      "fromFlash": "来自 Flash",
       "automation": "自动化",
       "automationNamed": "自动化 · {{name}}",
       "viaChannel": "来自 {{platform}}",
@@ -1748,8 +1737,7 @@
       "ctaAnswerContinue": "回答并继续",
       "ctaViewThread": "查看对话",
       "alwaysApprove": "始终允许",
-      "alwaysApproveHint": "这次及以后交给分析师的任务都不再询问，可在设置中关闭。",
-      "alwaysApproveHintPtc": "这次及以后分派到 PTC 工作区的任务都不再询问，可在设置中关闭。"
+      "alwaysApproveHint": "这次及以后交给分析师的任务都不再询问，可在设置中关闭。"
     },
     "marketWatch": {
       "watching": "正在监控 {{symbols}}",
@@ -2213,8 +2201,6 @@
       "tooLarge": "文件过大，无法预览",
       "tooLargeHint": "此文件太大，无法在浏览器中打开，但可以下载。",
       "tooLargeNoDownloadHint": "此文件太大，无法在浏览器中打开。",
-      "noSandbox": "无可用沙箱",
-      "noSandboxHint": "Flash 模式工作区没有文件存储。",
       "accessDenied": "访问被拒绝",
       "accessDeniedHint": "此文件位于允许的目录之外。",
       "unknown": "文件加载失败",
@@ -2324,10 +2310,7 @@
     "once": "一次性",
     "cronHelp": "5 字段 cron：分钟 小时 日 月 星期",
     "agentMode": "Agent",
-    "flash": "Flash",
-    "ptcSandbox": "PTC（沙箱）",
     "selectWorkspace": "选择工作区…",
-    "workspaceRequired": "PTC 模式需要选择工作区。",
     "instruction": "指令",
     "showAll": "展开全部",
     "showLess": "收起",
@@ -2485,7 +2468,6 @@
     "failedServerError": "服务端在本次运行中出了问题。这不是你的自动化导致的，无需做任何修改。",
     "failedInterrupted": "服务在本次运行结束前将其中止。这不是你的自动化导致的，无需做任何修改。",
     "skipRun": "跳过",
-    "ptc": "PTC",
     "runNow": "立即运行",
     "pause": "暂停",
     "resume": "恢复",
@@ -2562,7 +2544,6 @@
     "instructionSymbolUnfilled": "请把指令中的 {symbol} 换成要分析的公司或股票代码。",
     "priceValuePositive": "请输入大于 0 的数值。",
     "pctFrom": "相对于",
-    "ptcInWorkspace": "PTC（{{workspace}}）",
     "quoteToday": "今日",
     "quoteSinceOpen": "较开盘",
     "freqDays": "按星期",
@@ -2704,7 +2685,6 @@
     "next": "下次：{{time}}",
     "instruction": "指令",
     "configuration": "配置",
-    "agentMode": "Agent 模式",
     "triggerType": "触发类型",
     "trigger": "触发条件",
     "retrigger": "重复触发",
@@ -3082,18 +3062,6 @@
     "continueToDefaults": "继续设置默认值",
     "defaultsTitle": "设置您的默认模型",
     "defaultsSubtitle": "选择驱动您研究的模型",
-    "primaryModel": "主模型",
-    "primaryDescription": "用于深度研究，支持代码执行和数据分析",
-    "primaryPlaceholder": "选择主模型...",
-    "flashModel": "快速模型",
-    "flashDescription": "用于无需沙箱的快速问答",
-    "flashPlaceholder": "选择快速模型...",
-    "flashSameAsPrimary": "与主模型相同",
-    "explainerTitle": "两种 Agent 模式",
-    "explainerDeepTitle": "PTC 模式（主要）",
-    "explainerDeepBody": "完整的 Agent，带有沙箱环境，支持代码执行、图表和数据分析。由您的主模型驱动。",
-    "explainerFlashTitle": "Flash 模式",
-    "explainerFlashBody": "轻量的 Agent，无需沙箱即可快速回答。由您的快速模型驱动，响应更快。",
     "doneTitle": "准备就绪！",
     "doneSummary": "您的 AI 研究助手已配置完成，随时可用。",
     "goToDashboard": "前往控制台",
@@ -3247,11 +3215,8 @@
     "addAnother": "+ 添加",
     "errorSaveModels": "保存模型选择失败。",
     "chooseYourModels": "选择您的模型",
-    "chooseYourModelsDesc": "选择用于深度研究和快速问答的模型。您可以随时更改。",
     "errorSavePrefs": "保存模型偏好失败。",
     "providerLabel": "提供商",
-    "primaryModelLabel": "主模型",
-    "flashModelLabel": "快速模型",
     "notSet": "未设置",
     "notConfigured": "未配置"
   },
@@ -3322,7 +3287,6 @@
       "openTyped": "按 Enter 打开 {{symbol}}"
     },
     "chatHistory": {
-      "missingThreadHint": "找不到对话？对话按模式和工作区隔离。请尝试在 Flash 与 PTC 之间切换，或选择其他工作区。",
       "triggerLabel": "聊天历史",
       "newChat": "新对话",
       "recent": "最近",
@@ -3336,14 +3300,11 @@
       "nextPage": "下一页"
     },
     "chatPanel": {
-      "ptcDisabledReason": "在 /chat 中创建工作区以使用 PTC 模式",
       "noWorkspacePrompt": "未选择工作区。请在输入框中选择一个。",
       "startConversation": "在下方输入消息开始对话",
       "defaultPlaceholder": "你想了解什么？",
       "returnToChat": "返回对话",
       "openInChat": "在对话中打开",
-      "noWorkspaceToast": "请先创建工作区，再使用 PTC 模式。",
-      "ptcSetupFailed": "无法启动 PTC 模式，请重试。",
       "askStockPlaceholder": "询问这只股票…"
     },
     "chart": {
@@ -3448,25 +3409,8 @@
     "intros": {
       "chat": {
         "steps": {
-          "modes": {
-            "title": "两种模式：Flash 与 PTC",
-            "body": "Agent 以两种模式工作：Flash 负责日常协调与快速问答；PTC 负责深度分析，产出真正的交付物。接下来分别介绍两者的分工。"
-          },
           "workspace": {
-            "title": "认识工作区",
-            "body": "每一个工作区都是一个项目空间：围绕同一任务的对话都集中在这里，共享文件、数据和成果；不同工作区之间完全独立，互不干扰。其中 Flash 工作区由平台统一管理，汇集所有快速问答；你自己创建的每个工作区都运行 PTC。"
-          },
-          "flash": {
-            "title": "Flash：你的个人助理",
-            "body": "Flash 负责统筹日常：你只管提出需求，它会替你创建和管理工作区、将复杂任务分派到 PTC 工作区执行、管理自动化。快速问答也交给它——查股价、看新闻、快速核实信息，几秒内给出答案。所有 Flash 对话统一归入第一张工作区卡片，方便查找历史会话。"
-          },
-          "ptc": {
-            "title": "PTC：完整的分析工作区",
-            "body": "PTC 工作区运行能力最强的 Agent。同一工作区内的所有对话共享文件、数据与已有成果，分析可以持续积累。它能处理大规模数据，并行调度多个子 Agent 完成 Flash 无法胜任的复杂任务，还能生成各类交付物：Excel 模型、Word 文档、PDF、仪表盘。"
-          },
-          "create": {
-            "title": "为正式任务创建 PTC 工作区",
-            "body": "涉及数据处理或需要产出交付物的任务，建议交给 PTC 工作区完成，而不是全部留在 Flash。点击“新建工作区”并按任务命名，Agent 会启动专属沙箱，以完整能力执行。"
+            "title": "认识工作区"
           }
         }
       },
@@ -3524,8 +3468,7 @@
           "desc": "设定风险承受度、投资风格与回答方式。"
         },
         "createWorkspace": {
-          "title": "创建第一个工作区",
-          "desc": "新建一个专属 PTC 工作区，Agent 将在完整沙箱中执行正式分析任务。"
+          "title": "创建第一个工作区"
         },
         "firstChat": {
           "title": "开始第一次分析",
@@ -4289,8 +4232,6 @@
       "onlyIn": "仅“{{name}}”",
       "someWorkspaces_one": "{{count}} 个工作区",
       "someWorkspaces_other": "{{count}} 个工作区",
-      "flash": "Flash",
-      "flashNote": "Flash 仅能使用绑定为直接调用的工具；PTC 工具需要 PTC Agent。",
       "moveToAll": "移至所有工作区",
       "moveToAnother": "移至其他工作区",
       "moveShadowBlocked": "账户层已存在同名项，请先删除或重命名其中一个",
@@ -5263,7 +5204,6 @@
       "create": "创建",
       "availableNextTurn": "从下一轮起可用。",
       "copyStartsOff": "与 {{name}} 一样默认关闭。创建后开启即可使用。",
-      "copyReachesNoAgent": "与 {{name}} 一样只供 CoS Agent 使用，而它已关闭。创建后在“可供使用”中选择“工作区分析师”。",
       "atLimit": "你已有 {{count}} 个自己的子 Agent，已达上限。移除一个后才能再添加。"
     }
   },

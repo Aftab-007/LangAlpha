@@ -257,9 +257,9 @@ export { patchComputerStatusInCaches } from '../utils/warmWorkspace';
  * to, but it is exactly the row a user just pressed Start on in the computers
  * list, and that row is the one that has to stop saying "Starting".
  *
- * Workspaces with no `computer_id` (flash, and rows that predate the split)
- * keep the per-workspace channel as their fallback, since no machine will
- * speak for them.
+ * Workspaces with no `computer_id` (Home before its first start, and rows
+ * that predate the split) keep the per-workspace channel as their fallback,
+ * since no machine will speak for them.
  */
 export function useComputerStatusFanout(): void {
   const queryClient = useQueryClient();

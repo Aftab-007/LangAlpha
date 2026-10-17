@@ -206,6 +206,26 @@ def _deep_merge(base: Any, overlay: Any) -> Any:
     return merged
 
 
+def rename_llm_flash(config: Any, source: str | Path) -> Any:
+    """Read ``llm.flash`` as ``llm.background``, the Background model's new name.
+
+    Run on each file before the layers merge, so an overlay still on the old
+    spelling overrides a base on the new one rather than landing beside it.
+    A file that names both keeps ``background``.
+    """
+    llm = config.get("llm") if isinstance(config, dict) else None
+    if not isinstance(llm, dict) or "flash" not in llm:
+        return config
+    llm = dict(llm)
+    value = llm.pop("flash")
+    if "background" in llm:
+        logger.warning(f"{source}: llm.flash is ignored because llm.background is set; delete llm.flash")
+    else:
+        llm["background"] = value
+        logger.warning(f"{source}: llm.flash is deprecated; rename it to llm.background")
+    return {**config, "llm": llm}
+
+
 def load_yaml_config(file_path: str, use_cache: bool = True) -> dict[str, Any]:
     """Load and process YAML configuration file with env var substitution.
 
@@ -223,7 +243,9 @@ def load_yaml_config(file_path: str, use_cache: bool = True) -> dict[str, Any]:
     if use_cache and cache_key in _config_cache:
         return _config_cache[cache_key]
 
-    raw_config = _read_yaml(file_path)
+    # Renamed keys are read before the result is cached, so each file warns
+    # once per process rather than on every read.
+    raw_config = rename_llm_flash(_read_yaml(file_path), file_path)
 
     if app_env:
         base = Path(file_path)
@@ -232,7 +254,7 @@ def load_yaml_config(file_path: str, use_cache: bool = True) -> dict[str, Any]:
             overlay_config = _read_yaml(overlay)
             if not isinstance(overlay_config, dict):
                 raise ValueError(f"{overlay} must be a mapping of config keys")
-            raw_config = _deep_merge(raw_config, overlay_config)
+            raw_config = _deep_merge(raw_config, rename_llm_flash(overlay_config, overlay))
             logger.info(f"Applied {overlay.name} over {file_path}")
         else:
             logger.warning(f"APP_ENV={app_env} but no {overlay.name} beside {file_path}; using the base file only")

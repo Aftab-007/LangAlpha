@@ -38,7 +38,7 @@ describe('getAllReorderWorkspaces', () => {
     expect(mockGetWorkspaces).toHaveBeenNthCalledWith(2, 100, 100, 'custom', false);
   });
 
-  it('loads every page for gallery search with its active sort and Flash', async () => {
+  it('loads every page for gallery search with its active sort and Home', async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => workspace(index));
     const secondPage = [workspace(100)];
     mockGetWorkspaces

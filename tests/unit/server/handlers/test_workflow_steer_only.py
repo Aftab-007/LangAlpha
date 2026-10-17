@@ -2,7 +2,7 @@
 
 Both the foreground and dispatched paths now flow through the single
 ``wait_or_steer`` admission decision; the entrypoint's only job is to hand it
-the right knobs. Per mode (PTC and Flash) this pins that wiring:
+the right knobs. This pins that wiring:
 - the foreground path forwards ``request.steer_only`` with ``can_steer=True``
   (dropping ``steer_only`` would silently revert the gateway-probe fix), and
 - the dispatched path (X-Dispatch=background) forwards ``can_steer=False`` so
@@ -19,8 +19,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.server.services.turn_runtime import TurnRoute
+
 PTC = "src.server.handlers.chat.ptc_run"
-FLASH = "src.server.handlers.chat.flash_run"
 # RunScope routes burst releases through the definition site.
 RELEASE = "src.server.dependencies.usage_limits.release_burst_slot"
 
@@ -55,7 +56,7 @@ def _make_manager(admission_state: str = "fresh"):
 async def _drain(gen) -> list[str]:
     """Collect events; tolerate the workflow's post-error re-raise (the
     generator yields the SSE error events, then re-raises for the route
-    layer — see the ``except Exception`` tail of both astream functions)."""
+    layer — see the ``except Exception`` tail of ``astream_ptc_workflow``)."""
     collected: list[str] = []
     try:
         async for event in gen:
@@ -101,40 +102,7 @@ async def test_ptc_foreground_forwards_steer_only_and_can_steer():
                 run_id="r-1",
                 user_input="hi",
                 user_id="u-1",
-                workspace_id="ws-1",
-            )
-        )
-
-    mock_wos.assert_awaited_once()
-    kwargs = mock_wos.await_args.kwargs
-    assert kwargs["steer_only"] is True
-    assert kwargs["can_steer"] is True
-
-
-@pytest.mark.asyncio
-async def test_flash_foreground_forwards_steer_only_and_can_steer():
-    from src.server.handlers.chat.flash_run import astream_flash_workflow
-
-    with (
-        patch(f"{FLASH}.setup") as mock_setup,
-        patch(f"{FLASH}.LocalRunExecutor") as mock_btm_cls,
-        patch(RELEASE, new_callable=AsyncMock),
-        patch(
-            f"{FLASH}.wait_or_steer",
-            new_callable=AsyncMock,
-            return_value=(False, None),
-        ) as mock_wos,
-    ):
-        mock_setup.agent_config = MagicMock()
-        mock_btm_cls.get_instance.return_value = _make_manager()
-
-        await _drain(
-            astream_flash_workflow(
-                request=_make_request(steer_only=True),
-                thread_id="t-1",
-                run_id="r-1",
-                user_input="hi",
-                user_id="u-1",
+                route=TurnRoute("ws-1", "analyst"),
             )
         )
 
@@ -178,41 +146,7 @@ async def test_ptc_dispatched_forwards_can_steer_false():
                 run_id="r-1",
                 user_input="hi",
                 user_id="u-1",
-                workspace_id="ws-1",
-                dispatched=True,
-            )
-        )
-
-    mock_wos.assert_awaited_once()
-    kwargs = mock_wos.await_args.kwargs
-    assert kwargs["steer_only"] is True
-    assert kwargs["can_steer"] is False
-
-
-@pytest.mark.asyncio
-async def test_flash_dispatched_forwards_can_steer_false():
-    from src.server.handlers.chat.flash_run import astream_flash_workflow
-
-    with (
-        patch(f"{FLASH}.setup") as mock_setup,
-        patch(f"{FLASH}.LocalRunExecutor") as mock_btm_cls,
-        patch(RELEASE, new_callable=AsyncMock),
-        patch(
-            f"{FLASH}.wait_or_steer",
-            new_callable=AsyncMock,
-            return_value=(False, None),
-        ) as mock_wos,
-    ):
-        mock_setup.agent_config = MagicMock()
-        mock_btm_cls.get_instance.return_value = _make_manager("fresh")
-
-        await _drain(
-            astream_flash_workflow(
-                request=_make_request(steer_only=True),
-                thread_id="t-1",
-                run_id="r-1",
-                user_input="hi",
-                user_id="u-1",
+                route=TurnRoute("ws-1", "analyst"),
                 dispatched=True,
             )
         )

@@ -184,8 +184,7 @@ def build_unsupported_reminder(notes: list[str]) -> str:
     instructions, matching the ``build_directive_reminder`` pattern.
 
     Args:
-        notes: Per-file descriptions (e.g. from the PTC workflow
-            or a simple type summary for Flash mode).
+        notes: Per-file descriptions (e.g. from the PTC workflow).
 
     Returns:
         Formatted ``<system-reminder>`` string ready for

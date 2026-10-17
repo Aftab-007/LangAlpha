@@ -86,8 +86,8 @@ _CRUD_SCAN = "src.server.app.workspace_files.crud.FilePersistenceService.list_sa
 _SYNC_META = "src.server.database.workspace_file.get_file_metadata_for_sync"
 _TOTAL_SIZE = "src.server.database.workspace_file.get_workspace_total_size"
 
-# What the held acquisition reads through, and the row a URL-only route
-# re-reads after a live read.
+# What the held acquisition and an owner route's guard read through, and the
+# row a URL-only route re-reads after a live read.
 _SHARED_DBWS = "src.server.app.workspace_files._shared.db_get_workspace"
 _SHARED_WSMGR = "src.server.app.workspace_files._shared.WorkspaceManager"
 _SHARED_HOLD = "src.server.app.workspace_files._shared.workspace_folder_in_use"
@@ -477,6 +477,7 @@ def _acquired(sandbox, workspace):
 async def test_read_denies_every_reach_for_the_sibling(computer, requested) -> None:
     with (
         patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_SHARED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_WD, return_value=computer.work_dir),
         patch(_CRUD_ACQUIRE_TO_CHANGE, _acquired(computer.sandbox, _workspace())),
@@ -495,6 +496,7 @@ async def test_download_denies_every_reach_for_the_sibling(computer, requested) 
     request.headers = {}
     with (
         patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_SHARED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_WD, return_value=computer.work_dir),
         patch(_CRUD_ACQUIRE_TO_CHANGE, _acquired(computer.sandbox, _workspace())),
@@ -511,6 +513,7 @@ async def test_download_denies_every_reach_for_the_sibling(computer, requested) 
 async def test_listing_never_leaves_the_workspace_folder(computer, requested) -> None:
     with (
         patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_SHARED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_WD, return_value=computer.work_dir),
         patch(_CRUD_ACQUIRE_TO_CHANGE, _acquired(computer.sandbox, _workspace())),
@@ -533,6 +536,7 @@ async def test_write_never_lands_outside_the_workspace_folder(
 ) -> None:
     with (
         patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_SHARED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_WD, return_value=computer.work_dir),
         patch(_CRUD_ACQUIRE_TO_CHANGE, _acquired(computer.sandbox, _workspace())),
@@ -551,6 +555,7 @@ async def test_write_to_the_shared_scratch_folds_into_the_workspace(computer) ->
     """A leading slash is the client's virtual spelling, so ``/tmp/x`` is A's own."""
     with (
         patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_SHARED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_WD, return_value=computer.work_dir),
         patch(_CRUD_ACQUIRE_TO_CHANGE, _acquired(computer.sandbox, _workspace())),
@@ -571,6 +576,7 @@ async def test_delete_never_names_a_path_outside_the_workspace_folder(
 ) -> None:
     with (
         patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_SHARED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_WD, return_value=computer.work_dir),
         patch(_CRUD_ACQUIRE_TO_CHANGE, _acquired(computer.sandbox, _workspace())),
@@ -592,6 +598,7 @@ async def test_delete_unlinks_a_symlink_instead_of_its_target(computer) -> None:
     link.symlink_to("report.html")
     with (
         patch(_CRUD_DBWS, AsyncMock(return_value=_workspace())),
+        patch(_SHARED_DBWS, AsyncMock(return_value=_workspace())),
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_WD, return_value=computer.work_dir),
         patch(_CRUD_ACQUIRE_TO_CHANGE, _acquired(computer.sandbox, _workspace())),
@@ -622,6 +629,7 @@ async def test_listing_after_a_rename_reads_the_folder_the_acquisition_settled(
     before, after = _renamed(computer)
     with (
         patch(_CRUD_DBWS, AsyncMock(return_value=before)),
+        patch(_SHARED_DBWS, AsyncMock(return_value=before)),
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_ACQUIRE_TO_CHANGE, _acquired(computer.sandbox, after)),
     ):
@@ -639,6 +647,7 @@ async def test_write_after_a_rename_does_not_recreate_the_former_folder(
     before, after = _renamed(computer)
     with (
         patch(_CRUD_DBWS, AsyncMock(return_value=before)),
+        patch(_SHARED_DBWS, AsyncMock(return_value=before)),
         patch(_CRUD_OWNER, MagicMock()),
         patch(_CRUD_ACQUIRE_TO_CHANGE, _acquired(computer.sandbox, after)),
     ):

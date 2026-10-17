@@ -1,23 +1,18 @@
-"""Flash's secretary tools: its workspaces, its hand-offs, and their threads.
+"""The workspace and thread actions behind the Chief of Staff's tools.
 
-The workspace and thread actions are shared with the Chief of Staff, whose own
-tools are in ``chief_of_staff``; a hand-off runs through ``dispatch``.
+The tools themselves are in ``chief_of_staff``; a hand-off runs through
+``dispatch``.
 """
 
 import json
 import logging
-from typing import Annotated
 
-from langchain.tools import InjectedState
 from langchain_core.messages import ToolMessage
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool
 from langgraph.types import Command
 
 from ptc_agent.agent.limits import pending_read
 from src.server.contracts.status import is_live
 from src.tools.secretary._commands import (
-    InjectedToolCallId,
     decline_command,
     decline_routing_command,
     error_command,
@@ -26,8 +21,6 @@ from src.tools.secretary._commands import (
     verify_thread_owner,
     verify_workspace_owner,
 )
-from src.tools.secretary.approvals import preapproved
-from src.tools.secretary.dispatch import dispatch
 from src.utils.nested import without_keys
 
 logger = logging.getLogger(__name__)
@@ -57,93 +50,14 @@ _LISTED_WORKSPACE_FIELDS = (
 )
 
 
-def _timezone(configurable: dict) -> str:
-    """The user's zone, which a run's label states its start time in."""
-    return configurable.get("timezone") or "UTC"
-
-
-async def _get_thread_output(
-    user_id: str,
-    thread_id: str,
-    tool_call_id: str,
-    turns: int = 1,
-    timezone: str = "UTC",
-) -> Command:
-    """Verify ownership and extract thread output.
-
-    Shared by agent_output tool and manage_threads(action="get_output").
-    ``turns`` bounds how many recent turns are returned (1 = latest only).
-    """
-    from src.tools.secretary.utils import extract_text_from_thread
-
-    if err := await verify_thread_owner(thread_id, user_id, tool_call_id):
-        return err
-
-    try:
-        result = await extract_text_from_thread(thread_id, turns, timezone=timezone)
-    except Exception as e:
-        logger.error(f"Failed to extract text from thread {thread_id}: {e}")
-        return error_command("failed to retrieve thread output", tool_call_id)
-
-    # A read of a thread mid-run is marked for the loop guard, which cannot
-    # tell a poll from the text: a live run's text grows between reads.
-    running = result.get("status") == "running"
-    return success_command(result, tool_call_id, pending_read() if running else None)
-
-
-# ---------------------------------------------------------------------------
-# Tool 1: manage_workspaces
-# ---------------------------------------------------------------------------
-
-
-@tool("manage_workspaces")
-async def manage_workspaces(
-    action: str,
-    config: RunnableConfig,
-    state: Annotated[dict, InjectedState],
-    name: str | None = None,
-    description: str | None = None,
-    workspace_id: str | None = None,
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
-) -> Command:
-    """Manage user workspaces: list, create, or delete.
-
-    Args:
-        action: One of "list", "create", "delete"
-        name: Workspace name (required for "create")
-        description: Workspace description (optional, for "create")
-        workspace_id: Workspace ID (required for "delete")
-    """
-    configurable = config.get("configurable", {})
-    user_id = configurable.get("user_id")
-    if not user_id:
-        return error_command("user_id not found in config", tool_call_id)
-
-    if action == "list":
-        return await workspaces_list(user_id, tool_call_id)
-    elif action == "create":
-        return await workspaces_create(
-            user_id, name, description, tool_call_id,
-            preapproved=preapproved(state, tool_call_id),
-        )
-    elif action == "delete":
-        return await _workspaces_delete(user_id, workspace_id, tool_call_id)
-    else:
-        return error_command(
-            f"Unknown action: {action}. Use list, create, or delete.",
-            tool_call_id,
-        )
-
-
-async def workspaces_list(
-    user_id: str, tool_call_id: str, *, home_id: str | None = None
-) -> Command:
+async def workspaces_list(user_id: str, tool_call_id: str) -> Command:
     """List workspaces for the user.
 
-    With ``home_id``, the Chief of Staff's listing: a row names its folder only
-    when the workspace is on Home's computer, the one whose folders it reads.
+    A row names its folder only when the workspace is on Home's computer, the
+    one whose folders the Chief of Staff reads.
     """
     try:
+        from src.server.database.home_workspace import get_flash_workspace_id
         from src.server.database.workspace import get_workspace, get_workspaces_for_user
 
         # Every workspace, since one left off the list is one the agent tells
@@ -153,14 +67,13 @@ async def workspaces_list(
         workspaces, _ = await get_workspaces_for_user(
             user_id=user_id, limit=None, sort_by="activity"
         )
-        if home_id is not None:
-            from src.tools.secretary.activity import folder_on
+        from src.tools.secretary.activity import folder_on
 
-            home = await get_workspace(home_id)
-            computer_id = home.get("computer_id") if home else None
-            workspaces = [
-                {**ws, "dir_name": folder_on(ws, computer_id)} for ws in workspaces
-            ]
+        home = await get_workspace(get_flash_workspace_id(user_id))
+        computer_id = home.get("computer_id") if home else None
+        workspaces = [
+            {**ws, "dir_name": folder_on(ws, computer_id)} for ws in workspaces
+        ]
         content = json.dumps(
             {
                 "success": True,
@@ -293,129 +206,11 @@ async def _workspaces_delete(
             tool_call_id,
         )
     except (WorkspaceBusyError, ValueError) as e:
-        # Refusals the user should hear: active work, or Home/flash.
+        # Refusals the user should hear: active work, or Home.
         return error_command(str(e), tool_call_id)
     except Exception as e:
         logger.error(f"Failed to delete workspace: {e}")
         return error_command("failed to delete workspace", tool_call_id)
-
-
-# ---------------------------------------------------------------------------
-# Tool 2: ptc_agent
-# ---------------------------------------------------------------------------
-
-
-@tool("ptc_agent")
-async def ptc_agent(
-    question: str,
-    config: RunnableConfig,
-    state: Annotated[dict, InjectedState],
-    workspace_id: str | None = None,
-    thread_id: str | None = None,
-    report_back: bool = True,
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
-) -> Command:
-    """Dispatch a research question to a PTC agent.
-
-    Two modes:
-    - New thread: pass workspace_id (or omit to auto-create a workspace).
-    - Continue thread: pass thread_id to send a follow-up message.
-
-    The PTC agent runs asynchronously — use agent_output to check results.
-
-    Args:
-        question: The research question or follow-up message
-        workspace_id: Workspace to create a new thread in. Ignored if thread_id is set.
-        thread_id: Existing thread to continue. Overrides workspace_id.
-        report_back: If True, flash will automatically summarize results when PTC completes.
-            Set to False when the user wants to check results themselves.
-    """
-    return await dispatch(
-        question, config, workspace_id, thread_id, report_back, tool_call_id,
-        preapproved=preapproved(state, tool_call_id),
-        dispatcher="flash",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Tool 3: agent_output
-# ---------------------------------------------------------------------------
-
-
-@tool("agent_output")
-async def agent_output(
-    thread_id: str,
-    config: RunnableConfig,
-    turns: int = 1,
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
-) -> Command:
-    """Read what a thread's agent wrote, in any of the user's workspaces, while it runs or after.
-
-    Args:
-        thread_id: The thread to read.
-        turns: How many of the most-recent turns to return. Default 1 (only the
-            latest turn's output). Pass a larger N for the last N turns, or 0
-            for recent history (up to the 50 most recent turns); multiple turns
-            are separated by '---'. A turn still streaming returns only that
-            live turn.
-
-    Returns:
-        The agent's reply text, not its tool calls, each run under a line with its start time, how it ended and whether it was a report-back, and whether the thread is still running.
-    """
-    configurable = config.get("configurable", {})
-    user_id = configurable.get("user_id")
-    if not user_id:
-        return error_command("user_id not found in config", tool_call_id)
-
-    return await _get_thread_output(
-        user_id, thread_id, tool_call_id, turns, _timezone(configurable)
-    )
-
-
-# ---------------------------------------------------------------------------
-# Tool 4: manage_threads
-# ---------------------------------------------------------------------------
-
-
-@tool("manage_threads")
-async def manage_threads(
-    action: str,
-    config: RunnableConfig,
-    workspace_id: str | None = None,
-    thread_id: str | None = None,
-    turns: int = 1,
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
-) -> Command:
-    """Manage conversation threads: list, get output, or delete.
-
-    Args:
-        action: One of "list", "get_output", "delete"
-        workspace_id: Optional workspace ID to filter threads (for "list")
-        thread_id: Thread ID (required for "get_output" and "delete")
-        turns: For "get_output", how many recent turns to return. Default 1
-            (latest only); N for the last N turns; 0 for recent history (up to
-            the 50 most recent turns).
-    """
-    configurable = config.get("configurable", {})
-    user_id = configurable.get("user_id")
-    if not user_id:
-        return error_command("user_id not found in config", tool_call_id)
-
-    if action == "list":
-        return await threads_list(
-            user_id, workspace_id, tool_call_id, configurable.get("thread_id")
-        )
-    elif action == "get_output":
-        return await _threads_get_output(
-            user_id, thread_id, tool_call_id, turns, _timezone(configurable)
-        )
-    elif action == "delete":
-        return await threads_delete(user_id, thread_id, tool_call_id)
-    else:
-        return error_command(
-            f"Unknown action: {action}. Use list, get_output, or delete.",
-            tool_call_id,
-        )
 
 
 async def threads_list(
@@ -478,22 +273,6 @@ async def threads_list(
             ],
         }
     )
-
-
-async def _threads_get_output(
-    user_id: str,
-    thread_id: str | None,
-    tool_call_id: str,
-    turns: int = 1,
-    timezone: str = "UTC",
-) -> Command:
-    """Get output from a specific thread."""
-    if not thread_id:
-        return error_command(
-            "thread_id is required for get_output action", tool_call_id
-        )
-
-    return await _get_thread_output(user_id, thread_id, tool_call_id, turns, timezone)
 
 
 async def threads_stop(

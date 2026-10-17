@@ -12,7 +12,7 @@ const WORKSPACE_PAGE_SIZE = 100;
 /** Every workspace, one capped page at a time. */
 export async function getAllWorkspaces(
   sortBy: string,
-  includeFlash: boolean,
+  includeHome: boolean,
 ): Promise<Workspace[]> {
   const rows: Workspace[] = [];
 
@@ -21,7 +21,7 @@ export async function getAllWorkspaces(
       WORKSPACE_PAGE_SIZE,
       rows.length,
       sortBy,
-      includeFlash,
+      includeHome,
     );
     rows.push(...page.workspaces);
     const reachedTotal = typeof page.total === 'number' && rows.length >= page.total;
@@ -35,11 +35,11 @@ export async function getAllWorkspaces(
  * without looking wrong. Cached in the list shape so an optimistic row patch
  * reaches it too.
  */
-export function useAllWorkspaces({ sortBy = 'custom', includeFlash = false, enabled = true }: { sortBy?: string; includeFlash?: boolean; enabled?: boolean } = {}) {
+export function useAllWorkspaces({ sortBy = 'custom', includeHome = false, enabled = true }: { sortBy?: string; includeHome?: boolean; enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: queryKeys.workspaces.list({ view: 'all', sortBy, includeFlash }),
+    queryKey: queryKeys.workspaces.list({ view: 'all', sortBy, includeHome }),
     queryFn: async () => {
-      const workspaces = await getAllWorkspaces(sortBy, includeFlash);
+      const workspaces = await getAllWorkspaces(sortBy, includeHome);
       return { workspaces, total: workspaces.length };
     },
     enabled,

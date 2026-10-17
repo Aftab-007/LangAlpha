@@ -282,7 +282,7 @@ class TestSerializeContextMetadata:
             additional_context=[skill_ctx, directive_ctx, other_ctx]
         )
         metadata = {}
-        serialize_context_metadata(req, metadata, "hello", mode="flash")
+        serialize_context_metadata(req, metadata, "hello")
 
         assert metadata["additional_context"] == [
             {"type": "skills", "name": "research"},
@@ -300,7 +300,7 @@ class TestSerializeContextMetadata:
             f"{PREP}.detect_slash_commands",
             return_value=("hello", [mock_skill]),
         ):
-            serialize_context_metadata(req, metadata, "hello", mode="flash")
+            serialize_context_metadata(req, metadata, "hello")
 
         assert "additional_context" in metadata
         assert metadata["additional_context"][0]["type"] == "skills"
@@ -315,7 +315,7 @@ class TestSerializeContextMetadata:
             f"{PREP}.detect_slash_commands",
             return_value=("hello", []),
         ):
-            serialize_context_metadata(req, metadata, "hello", mode="flash")
+            serialize_context_metadata(req, metadata, "hello")
 
         assert "additional_context" not in metadata
 
@@ -326,7 +326,7 @@ class TestSerializeContextMetadata:
         metadata = {}
 
         with patch(f"{PREP}.detect_slash_commands") as mock_detect:
-            serialize_context_metadata(req, metadata, "hello", mode="flash")
+            serialize_context_metadata(req, metadata, "hello")
 
         mock_detect.assert_not_called()
 
@@ -339,7 +339,7 @@ class TestSerializeContextMetadata:
         metadata = {}
 
         with patch(f"{PREP}.detect_slash_commands") as mock_detect:
-            serialize_context_metadata(req, metadata, "hello", mode="ptc")
+            serialize_context_metadata(req, metadata, "hello")
 
         # Should not call detect_slash_commands since additional_context was serialized
         mock_detect.assert_not_called()
@@ -360,7 +360,7 @@ class TestPrepareSkillContexts:
         messages = [{"role": "user", "content": "hello"}]
 
         with patch(f"{PREP}.parse_skill_contexts", return_value=[]):
-            result = prepare_skill_contexts(messages, request, mode="flash")
+            result = prepare_skill_contexts(messages, request)
 
         assert result == []
 
@@ -374,7 +374,7 @@ class TestPrepareSkillContexts:
 
         ctx = SkillContext(type="skills", name="research", instruction="find news")
         with patch(f"{PREP}.parse_skill_contexts", return_value=[ctx]):
-            result = prepare_skill_contexts(messages, request, mode="flash")
+            result = prepare_skill_contexts(messages, request)
 
         # Returns plain dicts to thread through config; no body injected here.
         assert result == [{"name": "research", "instruction": "find news"}]
@@ -396,7 +396,7 @@ class TestPrepareSkillContexts:
                 return_value=("market analysis", [ctx]),
             ),
         ):
-            result = prepare_skill_contexts(messages, request, mode="flash")
+            result = prepare_skill_contexts(messages, request)
 
         assert result == [{"name": "research", "instruction": None}]
         # The /command prefix is stripped in place; no skill body appended.
@@ -414,7 +414,7 @@ class TestPrepareSkillContexts:
             patch(f"{PREP}.parse_skill_contexts", return_value=[]),
             patch(f"{PREP}.detect_slash_commands") as mock_detect,
         ):
-            result = prepare_skill_contexts(messages, request, mode="flash")
+            result = prepare_skill_contexts(messages, request)
 
         mock_detect.assert_not_called()
         assert result == []
@@ -440,7 +440,7 @@ class TestPrepareSkillContexts:
                 return_value=("market analysis", [ctx]),
             ),
         ):
-            result = prepare_skill_contexts(messages, request, mode="flash")
+            result = prepare_skill_contexts(messages, request)
 
         assert result == [{"name": "research", "instruction": None}]
         # Prefix stripped in the text block; the image block survives untouched.
@@ -469,7 +469,7 @@ class TestPrepareSkillContexts:
             patch(f"{PREP}.parse_skill_contexts", return_value=[]),
             patch(f"{PREP}.detect_slash_commands") as mock_detect,
         ):
-            result = prepare_skill_contexts(messages, request, mode="flash")
+            result = prepare_skill_contexts(messages, request)
 
         mock_detect.assert_not_called()
         assert result == []

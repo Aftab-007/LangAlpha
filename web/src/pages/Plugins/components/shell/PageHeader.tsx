@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Compass, Plus, Search, X } from 'lucide-react';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -56,7 +55,6 @@ export function PageHeader({
   onAdd: (intent: AddIntent) => void;
 }) {
   const { t } = useTranslation();
-  const allWorkspacesAgent = useAllWorkspacesAgent();
   // Search and Add belong to the sections that list what the agent uses.
   // An Accounts section adds from inside its own list, and an Add above it
   // that installs something else reads as the same button twice.
@@ -64,9 +62,7 @@ export function PageHeader({
   // A section the catalog does not carry yet has no Discover side to switch
   // to or to browse from.
   const catalog = hasCatalog && hasDiscover(section);
-  const routes = installs
-    ? ADD_ROUTES[section].filter((route) => route.needs !== 'allWorkspacesAgent' || allWorkspacesAgent)
-    : [];
+  const routes = installs ? ADD_ROUTES[section] : [];
   return (
     <header className="plugins-head">
       <div className="plugins-head-text">

@@ -1,5 +1,5 @@
 /**
- * A shared Flash transcript relays worker deliverables, and the secretary
+ * A shared Chief of Staff transcript relays worker deliverables, and it
  * qualifies those links with the workspace that holds them. The share token
  * authorizes this thread's workspace alone, so a card naming another one has
  * no bytes to save here: resolving its name against the shared workspace would

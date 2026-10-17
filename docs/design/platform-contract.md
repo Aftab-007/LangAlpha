@@ -124,11 +124,6 @@ Staff attaches them from Home, or from a workspace whose id it passes. Delivery 
 gateway's: it decides who may be reached and re-checks every address on every send, so an
 address the model passes is a claim, not a credential.
 
-The Flash agent, which runs work outside a workspace when the `all_workspaces_agent` flag is
-off, has neither tool. With them configured, a Flash turn leaves its `surface_rules` out, since
-rules written for an agent that replies through `send_message` would tell it to call a tool it
-lacks. Its `platform` still names the surface on the run line.
-
 Both calls carry `X-Service-Token` and `X-User-Id`, and name the conversation the turn is in by
 `thread_id` and `turn_platform`, a send also by `run_id`. `turn_platform` is the turn's surface
 name, without its symbol. A notification turn arrives without a surface of its own, so it sends
@@ -254,8 +249,6 @@ messaging service (the gateway above) instead of the automation webhook
   `delivery` column from the moment the call answers, a start made again under a new id (below)
   replacing it. A worker that stops before the turn starts leaves the sweep that stamp, so the
   run still ends with a `failed` finish rather than lapsing.
-  A run on the Flash agent, which has no `send_message`, is not told its targets: its finish
-  posts to every one of them.
   The id is the execution's own, except for a run that lost its thread to another turn, waited,
   and found its automation's entries changed meanwhile: it starts again under
   `<execution_id>.<n>`, which its sends and its finish then name, so it runs with the delivery

@@ -92,7 +92,7 @@ describe('useRestoredWorkspace', () => {
   it.each([
     ['not found', () => Promise.reject(httpError(404))],
     ['forbidden', () => Promise.reject(httpError(403))],
-    ['a flash workspace', () => Promise.resolve(ws('ws-idle', 'flash'))],
+    ['Home', () => Promise.resolve({ ...ws('ws-idle'), is_home: true })],
   ])('drops a restored workspace past the first page that is %s', async (_, check) => {
     getWorkspace.mockImplementation(check);
     const { result, onDropped } = render('ws-idle', 120);

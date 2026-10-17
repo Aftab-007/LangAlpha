@@ -16,7 +16,6 @@ export interface EnsureThreadIdArgs {
   workspaceId: string;
   /** First user message — becomes the row's first_query_content + title seed. */
   message: string;
-  agentMode: string | undefined;
   platform: string | null | undefined;
   /** The user's zone, which the title reads relative dates on. */
   timezone: string;
@@ -45,7 +44,6 @@ export async function ensureThreadId({
   threadId,
   workspaceId,
   message,
-  agentMode,
   platform,
   timezone,
   subagentsAllowed,
@@ -62,7 +60,6 @@ export async function ensureThreadId({
     const created = await createThreadWithTitle({
       workspaceId,
       firstQuery: message,
-      agentMode: agentMode === 'flash' ? 'flash' : 'ptc',
       platform,
       timezone,
       subagentsAllowed,

@@ -503,6 +503,47 @@ async def test_a_ptc_thread_lists_both_registries_drained_runs_in_thread_order()
     assert resp["recent_report_back_run_ids"] == ["hand-off-2", "task-1", "hand-off-1"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("named", "stored", "reads_tasks"),
+    [
+        ("ptc", None, True),
+        (None, "ptc", True),
+        ("flash", None, False),
+        ("task", None, False),
+        ("", None, False),
+        (None, None, False),
+    ],
+    ids=["ptc", "looked-up-ptc", "flash", "task", "empty", "unknown"],
+)
+async def test_only_a_ptc_thread_reads_its_subagents_registry(
+    named, stored, reads_tasks
+):
+    """A full-agent thread's subagents report back through the outbox; every
+    other thread, and one whose kind is unknown, reads the watch set alone."""
+    handoffs = _task_slice(owed_threads=[])
+    tasks = AsyncMock(return_value=_task_slice())
+    meta = {"user_id": OWNER, **({"msg_type": stored} if stored else {})}
+
+    with (
+        patch.object(
+            status, "read_report_back_status", AsyncMock(return_value=handoffs)
+        ) as watched,
+        patch(
+            "src.server.services.report_back.subagent.read_task_report_back_status",
+            tasks,
+        ),
+        patch(
+            "src.server.database.conversation.get_thread_auth_meta",
+            AsyncMock(return_value=meta),
+        ),
+    ):
+        await status.read_report_back_slice("thread-1", named, OWNER)
+
+    watched.assert_awaited_once_with("thread-1", OWNER)
+    assert tasks.await_count == (1 if reads_tasks else 0)
+
+
 # --- A member is owed until its summary run ends -----------------------------
 
 

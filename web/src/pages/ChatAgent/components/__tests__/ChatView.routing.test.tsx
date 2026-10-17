@@ -24,7 +24,7 @@ describe('computeAgentArtifactRouting — per-kind routing', () => {
     });
   });
 
-  it('routes workspace memory without a wsid → clears stale filePanelWorkspaceId (flash-mode wsid leak guard)', () => {
+  it('routes workspace memory without a wsid → clears stale filePanelWorkspaceId (wsid leak guard for chats whose links name other workspaces)', () => {
     // Regression: prior versions left clearWorkspaceId=false, leaking a stale
     // ws id from a prior cross-workspace click into the new memory query.
     const r = computeAgentArtifactRouting(`${MEMORY_WORKSPACE_DIR}/foo.md`);
@@ -104,7 +104,7 @@ describe('computeAgentArtifactRouting — per-kind routing', () => {
   });
 
   it('user-tier memory always clears workspace id, even when one is provided', () => {
-    // User memory is global — a stale ws id from a flash ws:// link must be
+    // User memory is global: a stale ws id from a cross-workspace ws:// link must be
     // cleared so the memory list doesn't leak into the wrong workspace.
     const r = computeAgentArtifactRouting('.agents/user/memory/foo.md', 'ws-other');
     expect(r.targetMemoryTier).toBe('user');

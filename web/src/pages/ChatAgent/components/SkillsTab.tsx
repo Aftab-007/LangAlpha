@@ -39,7 +39,7 @@ import { SkillRow } from './SkillRow';
 export function SkillsTab({ workspaceId }: { workspaceId: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { data: skills, isLoading, error, refetch } = useSkills(null, {
+  const { data: skills, isLoading, error, refetch } = useSkills({
     workspaceId,
     includeDisabled: true,
   });

@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 import type { Automation, AutomationExecution, DeliveryAttempt } from '@/types/automation';
 import type { ErrorLinkSpec } from '@/utils/rateLimitError';
 import { useAutomationMutations } from '../hooks/useAutomationMutations';
-import { useAgentModeLabels, useRunsAs } from '../hooks/useAgentModeLabels';
+import { useAutomationPlace } from '../hooks/useAutomationPlace';
 import { useDeliveryOptions } from '../hooks/useDeliveryOptions';
 import { useExecutions } from '../hooks/useExecutions';
 import { useOpenThread } from '../hooks/useOpenThread';
@@ -66,14 +66,10 @@ export default function AutomationInspector({
   const { pause, resume, trigger, skip, dismiss, busy } = useAutomationMutations();
   const deliveryMethods = a.delivery_config?.methods ?? [];
   const { executions, loading } = useExecutions(a.automation_id, deliveryMethods.length > 0);
-  const workspaceName = workspaceNameOf(useWorkspaceOptions(), a.workspace_id);
-  const agentModes = useAgentModeLabels();
-  const runsAs = useRunsAs();
-  const delivery = useDeliveryOptions({
-    agentMode: a.agent_mode,
-    workspaceId: a.workspace_id,
-    enabled: deliveryMethods.length > 0,
-  });
+  const place = useAutomationPlace();
+  const workspaceId = place.workspaceOf(a);
+  const workspaceName = workspaceNameOf(useWorkspaceOptions(), workspaceId);
+  const delivery = useDeliveryOptions({ workspaceId, enabled: deliveryMethods.length > 0 });
   // The runs' own names, newest first, name a chat the apps no longer list.
   const names = useMemo(
     () =>
@@ -109,7 +105,7 @@ export default function AutomationInspector({
     reportRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
   }, [runId]);
 
-  const kicker = [t(ui.labelKey), ...agentModes.kicker(runsAs(a.agent_mode, a.workspace_id), workspaceName)];
+  const kicker = [t(ui.labelKey), place.label(a, workspaceName)];
 
   return (
     <article className="automation-inspector">

@@ -34,8 +34,8 @@ class WorkspaceThreadListItem(BaseModel):
         description="Thread annotations. Known keys: 'origin' — "
         "{type: 'agent'|'automation'|'system', id?, name?, agent?} recording "
         "who initiated the thread (name: the automation's; agent: "
-        "'chief_of_staff'|'flash', the dispatcher); absent origin = "
-        "user-initiated.",
+        "'chief_of_staff', or 'flash' on older threads, the dispatcher); "
+        "absent origin = user-initiated.",
     )
     is_shared: bool = Field(False, description="Whether thread is publicly shared")
     is_pinned: bool = Field(
@@ -221,11 +221,13 @@ class WorkspaceMessagesResponse(BaseModel):
 class ThreadCreateRequest(BaseModel):
     """Request model for POST /api/v1/threads (pre-creation with auto-title).
 
-    ``workspace_id`` is required for ptc mode; flash mode resolves the shared
-    flash workspace when omitted — mirroring the message-send path so a
-    pre-created thread is indistinguishable from an ensure_thread_exists row.
+    Resolves its workspace as the message-send path does, Home's id included,
+    so a pre-created thread is indistinguishable from an ensure_thread_exists
+    row. ``agent_mode='flash'`` with no workspace still means Home.
     """
-    workspace_id: Optional[str] = Field(None, description="Target workspace")
+    workspace_id: Optional[str] = Field(
+        None, description="Target workspace; Home's id for the user's Home"
+    )
     first_query: str = Field(
         ..., min_length=1,
         description="The user's first message; stamped as the initial title "

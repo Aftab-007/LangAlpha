@@ -1,4 +1,4 @@
-"""Links relayed into a Flash thread must name the workspace that holds the file."""
+"""Links relayed into Home must name the workspace that holds the file."""
 
 import pytest
 
@@ -24,9 +24,9 @@ Q = f"__wsref__/{WID}"
         ("[d](<file:///home/workspace/Q3 deck.pptx#page=2>)", f"[d](<{Q}/Q3 deck.pptx#page=2>)"),
         # A title is not part of the path. Leaving these alone did not leave them
         # harmless: the parser hands the client the bare destination either way,
-        # so an unqualified one resolves against the Flash workspace and opens
-        # nothing. All three CommonMark title forms, and the bracketed
-        # destination, which previously did not match the pattern at all.
+        # so an unqualified one resolves against Home and opens nothing. All
+        # three CommonMark title forms, and the bracketed destination, which
+        # previously did not match the pattern at all.
         ('[t](results/a.md "a title")', f'[t]({Q}/results/a.md "a title")'),
         ("[t](results/a.md 'a title')", f"[t]({Q}/results/a.md 'a title')"),
         ("[t](results/a.md (a title))", f"[t]({Q}/results/a.md (a title))"),
@@ -37,7 +37,7 @@ Q = f"__wsref__/{WID}"
         # `findHeadingIndex` matches a heading as written and not only as a
         # slug. Cutting the location at the first space left a head ending in
         # `Assumptions`, no file, so these relayed unqualified and opened
-        # nothing in the Flash workspace.
+        # nothing in Home.
         (
             "[s](<results/report.md#Valuation Assumptions>)",
             f"[s](<{Q}/results/report.md#Valuation Assumptions>)",

@@ -22,9 +22,8 @@ vi.mock('../OnboardingProvider', () => ({
 
 const startOnboarding = vi.fn();
 vi.mock('../connect/useStartOnboarding', () => ({
-  useStartOnboarding: () => ({ available: true, start: startOnboarding }),
+  useStartOnboarding: () => ({ start: startOnboarding }),
 }));
-vi.mock('@/hooks/useAllWorkspacesAgent', () => ({ useAllWorkspacesAgent: () => false }));
 
 import { GettingStartedCard } from '../engine/GettingStartedCard';
 

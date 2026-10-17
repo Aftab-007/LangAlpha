@@ -21,6 +21,7 @@ from src.llms.preferences import (
     resolve_tuning,
 )
 from src.server.services.features import effective_flags_for_user
+from src.tools.web.fetch import fetch_llm_client_override, fetch_model_override
 from src.utils.concurrency import cancel_and_join
 
 from .availability import (
@@ -93,9 +94,12 @@ def system_default_models() -> dict[str, str]:
     from src.server.app import setup
 
     llm = setup.agent_config.llm if setup.agent_config and setup.agent_config.llm else None
+    background = (llm.flash or "") if llm else ""
     return {
         "default_model": llm.name if llm else "",
-        "flash_model": (llm.flash or "") if llm else "",
+        "background_model": background,
+        # The same model under its old name, for clients that still read it.
+        "flash_model": background,
     }
 
 
@@ -240,6 +244,21 @@ def apply_compaction(config, tuning: Tuning, entry: dict[str, Any] | None) -> No
     for field, value in preset.items():
         setattr(config.compaction, field, value)
     config.compaction.profile = profile
+
+
+def apply_fetch_override(config) -> None:
+    """Propagate fetch model / client overrides from *config* into context vars.
+
+    A blank fetch means the turn's flash model, the same default ``role_registry``
+    resolves a client for. Without the name override, web_fetch would fall back
+    to re-reading agent_config.yaml and miss the user's own flash choice.
+    """
+    fetch_client = config.subsidiary_llm_clients.get("fetch")
+    if fetch_client:
+        fetch_llm_client_override.set(fetch_client)
+    fetch_model = config.llm and config.llm.fetch_name
+    if fetch_model:
+        fetch_model_override.set(fetch_model)
 
 
 async def check_model_available(

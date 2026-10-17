@@ -18,7 +18,7 @@ export const ALL_WORKSPACES_KEY = '__all__';
 const SEARCH_FROM = 8;
 
 /**
- * Where a composer send goes: All workspaces (when offered) or one workspace.
+ * Where a composer send goes: All workspaces or one workspace.
  * A menu rather than a listbox because a pick always closes it, the current
  * row included, and single selection still announces which row is current.
  */
@@ -28,7 +28,6 @@ export function WorkspacePicker({
   onOpenChange,
   workspaces,
   selectedKey,
-  includeAll = false,
   onPick,
   emptyHint,
   placement,
@@ -41,7 +40,6 @@ export function WorkspacePicker({
   workspaces: Workspace[];
   /** A workspace id, ALL_WORKSPACES_KEY, or null when nothing is chosen. */
   selectedKey: string | null;
-  includeAll?: boolean;
   onPick: (key: string) => void;
   /** Shown under the list when there are no workspaces to pick. */
   emptyHint?: string | null;
@@ -163,16 +161,14 @@ export function WorkspacePicker({
               </p>
             )}
           >
-            {includeAll && (
-              <MenuSection id="all" aria-label={t('agents.allWorkspaces')} className={SECTION}>
-                <Row
-                  id={ALL_WORKSPACES_KEY}
-                  icon={Layers}
-                  label={t('agents.allWorkspaces')}
-                  hint={t('agents.allWorkspacesHint')}
-                />
-              </MenuSection>
-            )}
+            <MenuSection id="all" aria-label={t('agents.allWorkspaces')} className={SECTION}>
+              <Row
+                id={ALL_WORKSPACES_KEY}
+                icon={Layers}
+                label={t('agents.allWorkspaces')}
+                hint={t('agents.allWorkspacesHint')}
+              />
+            </MenuSection>
             {workspaces.length > 0 && (
               <MenuSection id="workspaces" aria-label={t('workspace.workspaces')} className={SECTION}>
                 {workspaces.map((ws) => (

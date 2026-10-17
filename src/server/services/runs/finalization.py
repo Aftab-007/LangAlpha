@@ -143,7 +143,6 @@ async def assemble_finalize_artifacts(
     tool_usage = get_tool_usage_from_handler(metadata, phase, thread_id)
 
     persist_metadata = {
-        "msg_type": metadata.get("msg_type"),
         "stock_code": metadata.get("stock_code"),
         "agent_llm_preset": metadata.get("agent_llm_preset", "default"),
         "deepthinking": metadata.get("deepthinking", False),

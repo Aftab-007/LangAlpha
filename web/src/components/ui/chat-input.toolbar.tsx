@@ -1,7 +1,5 @@
 import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
-import {
-  Check, ChevronDown, ChevronRight, FileStack, FolderOpen, Layers, Radar, Zap,
-} from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, FolderOpen, Layers, Radar } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import {
@@ -21,9 +19,6 @@ import { ALL_WORKSPACES_KEY, WorkspacePicker } from './chat-input.workspacePicke
  * separators between groups are emitted by the menu loop, never by hand.
  */
 export function useToolbarItems({
-  mode,
-  onModeChange,
-  ptcDisabledReason,
   subagentsAllowed,
   onToggleSubagents,
   watchMode,
@@ -39,9 +34,6 @@ export function useToolbarItems({
   menuContainer = null,
   draftRef,
 }: {
-  mode?: 'fast' | 'ptc';
-  onModeChange?: (mode: 'fast' | 'ptc') => void;
-  ptcDisabledReason?: string | null;
   /** Null while the thread's value is not read, which hides the toggle. */
   subagentsAllowed: boolean | null;
   onToggleSubagents: (next: boolean) => void;
@@ -65,19 +57,8 @@ export function useToolbarItems({
   const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
   const workspaceBtnRef = useRef<HTMLButtonElement>(null);
 
-  const hasModeToggle = mode !== undefined && onModeChange !== undefined;
-  // Under the all-workspaces agent there is no Flash/PTC choice, only where the
-  // agent works, so the host passes a scope and no mode.
+  // A host that lets the user say where the agent works passes a scope.
   const hasScopePicker = !!onScopeChange;
-  // PTC unless the composer says flash: a host with no mode toggle either
-  // enforces PTC (no mode at all) or names the thread's mode.
-  const ptcSelected = mode !== 'fast';
-  const showWorkspaceSelector = !!(hasModeToggle && mode === 'ptc' && workspaces && workspaces.length > 0);
-  const ptcBlocked = mode === 'fast' && !!ptcDisabledReason;
-  const selectedWorkspaceName = useMemo(() => {
-    if (!workspaces || !selectedWorkspaceId) return 'Workspace';
-    return workspaces.find((w) => w.workspace_id === selectedWorkspaceId)?.name || 'Workspace';
-  }, [workspaces, selectedWorkspaceId]);
 
   const allSelected = scope === 'all';
   const scopeLabel = allSelected
@@ -102,8 +83,7 @@ export function useToolbarItems({
     {
       id: 'scope',
       group: 'agent',
-      // Takes the mode toggle's slot: it is the one control that says where a
-      // send goes, so it is the last to fold.
+      // The one control that says where a send goes, so it is the last to fold.
       visible: hasScopePicker,
       inline: ({ measureOnly }) => {
         const pill = (
@@ -131,7 +111,6 @@ export function useToolbarItems({
               isOpen={showWorkspaceMenu}
               onOpenChange={setShowWorkspaceMenu}
               workspaces={workspaces ?? []}
-              includeAll
               selectedKey={allSelected ? ALL_WORKSPACES_KEY : selectedWorkspaceId ?? null}
               onPick={(key) => (key === ALL_WORKSPACES_KEY ? pickAll() : pickWorkspace(key))}
               emptyHint={noWorkspacesHint}
@@ -172,47 +151,11 @@ export function useToolbarItems({
       ),
     },
     {
-      id: 'mode',
-      group: 'agent',
-      visible: hasModeToggle,
-      inline: ({ measureOnly }) => (
-        <PillToggle
-          icon={mode === 'fast' ? Zap : FileStack}
-          label={mode === 'fast' ? 'Flash' : 'PTC'}
-          title={mode === 'fast'
-            ? 'Flash — quick answer using flash model'
-            : 'PTC — full agent with workspace and tools'}
-          disabledReason={ptcBlocked ? ptcDisabledReason : null}
-          aria="none"
-          onToggle={() => onModeChange?.(mode === 'fast' ? 'ptc' : 'fast')}
-          measureOnly={measureOnly}
-        />
-      ),
-      menu: () => (
-        <>
-          <DropdownMenuItem onSelect={() => { if (mode !== 'fast') onModeChange?.('fast'); }}>
-            <Zap className="h-4 w-4" />
-            <span>Flash</span>
-            {mode === 'fast' && <Check className="ml-auto h-4 w-4" />}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            disabled={ptcBlocked}
-            title={ptcBlocked ? ptcDisabledReason! : undefined}
-            onSelect={() => { if (mode !== 'ptc') onModeChange?.('ptc'); }}
-          >
-            <FileStack className="h-4 w-4" />
-            <span>PTC</span>
-            {mode === 'ptc' && <Check className="ml-auto h-4 w-4" />}
-          </DropdownMenuItem>
-        </>
-      ),
-    },
-    {
       id: 'subagents',
       group: 'toggle',
-      // Subagents are a PTC capability. Pressed means on, the default, so the
-      // ⋯ dot stays off: lit for the usual state it would never mean anything.
-      visible: ptcSelected && subagentsAllowed !== null,
+      // Pressed means on, the default, so the ⋯ dot stays off: lit for the
+      // usual state it would never mean anything.
+      visible: subagentsAllowed !== null,
       inline: ({ measureOnly }) => (
         <IconToggle
           active={subagentsOn}
@@ -252,8 +195,7 @@ export function useToolbarItems({
     {
       id: 'watch',
       group: 'toggle',
-      // Market watch is a PTC capability too.
-      visible: ptcSelected && marketWatchEnabled,
+      visible: marketWatchEnabled,
       active: watchMode,
       inline: ({ measureOnly }) => (
         <IconToggle
@@ -277,72 +219,10 @@ export function useToolbarItems({
         </DropdownMenuItem>
       ),
     },
-    {
-      id: 'workspace',
-      group: 'workspace',
-      // Widest and least-toggled, so it folds first.
-      visible: showWorkspaceSelector,
-      inline: ({ measureOnly }) => {
-        const pill = (
-          <PillToggle
-            active={showWorkspaceMenu}
-            onToggle={() => setShowWorkspaceMenu(!showWorkspaceMenu)}
-            icon={FolderOpen}
-            label={selectedWorkspaceName}
-            title="Select workspace"
-            trailing={<ChevronDown className="h-3 w-3 flex-none" />}
-            aria="expanded"
-            gap={4}
-            className="min-w-0"
-            labelClassName="min-w-0 max-w-[100px] truncate"
-            buttonRef={measureOnly ? undefined : workspaceBtnRef}
-            measureOnly={measureOnly}
-          />
-        );
-        if (measureOnly) return pill;
-        return (
-          <>
-            {pill}
-            <WorkspacePicker
-              triggerRef={workspaceBtnRef}
-              isOpen={showWorkspaceMenu}
-              onOpenChange={setShowWorkspaceMenu}
-              workspaces={workspaces ?? []}
-              selectedKey={selectedWorkspaceId ?? null}
-              onPick={(key) => { if (key !== selectedWorkspaceId) onWorkspaceChange?.(key); }}
-              placement={menuPlacement}
-              portalContainer={menuContainer}
-              draftRef={draftRef}
-            />
-          </>
-        );
-      },
-      menu: () => (
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <FolderOpen className="h-4 w-4 flex-none" />
-            <span className="min-w-0 max-w-[120px] truncate">{selectedWorkspaceName}</span>
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="max-h-64 overflow-y-auto">
-            {workspaces?.map((ws) => (
-              <DropdownMenuItem
-                key={ws.workspace_id}
-                onSelect={() => onWorkspaceChange?.(ws.workspace_id)}
-              >
-                <span className="truncate">{ws.name}</span>
-                {ws.workspace_id === selectedWorkspaceId && <Check className="ml-auto h-4 w-4 shrink-0" />}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      ),
-    },
   ], [
-    hasModeToggle, mode, onModeChange, ptcBlocked, ptcDisabledReason,
-    ptcSelected, subagentsAllowed, subagentsOn, onToggleSubagents,
-    watchMode, setWatchMode, marketWatchEnabled,
-    showWorkspaceSelector, showWorkspaceMenu, selectedWorkspaceName,
-    workspaces, selectedWorkspaceId, onWorkspaceChange, t,
+    subagentsAllowed, subagentsOn, onToggleSubagents,
+    watchMode, setWatchMode, marketWatchEnabled, showWorkspaceMenu,
+    workspaces, selectedWorkspaceId, t,
     hasScopePicker, allSelected, scopeLabel, noWorkspacesHint, hasSecondSection,
     pickAll, pickWorkspace, menuPlacement, menuContainer, draftRef,
   ]);

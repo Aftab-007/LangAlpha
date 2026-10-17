@@ -13,8 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ptc_agent.agent.limits import is_pending_read
-from src.tools.secretary.chief_of_staff import chief_of_staff_threads
-from src.tools.secretary.tools import agent_output, manage_threads
+from src.tools.secretary.chief_of_staff import agent_output, chief_of_staff_threads
 
 pytestmark = pytest.mark.asyncio
 
@@ -32,7 +31,7 @@ async def _read(tool, status: str, args: dict):
         return_value={"text": "so far", "status": status, "thread_id": OTHER, "workspace_id": ""}
     )
     with patch(
-        "src.tools.secretary.tools.verify_thread_owner", AsyncMock(return_value=None)
+        "src.tools.secretary.chief_of_staff.verify_thread_owner", AsyncMock(return_value=None)
     ), patch("src.tools.secretary.utils.extract_text_from_thread", extract):
         return _result(
             await tool.ainvoke(
@@ -42,17 +41,9 @@ async def _read(tool, status: str, args: dict):
         )
 
 
-@pytest.mark.parametrize(
-    ("tool", "args"),
-    [
-        (agent_output, {"thread_id": OTHER}),
-        (manage_threads, {"action": "get_output", "thread_id": OTHER}),
-    ],
-    ids=["agent_output", "manage_threads get_output"],
-)
-async def test_a_read_of_a_running_thread_is_pending_and_a_settled_one_is_not(tool, args):
-    running = await _read(tool, "running", args)
-    settled = await _read(tool, "completed", args)
+async def test_a_read_of_a_running_thread_is_pending_and_a_settled_one_is_not():
+    running = await _read(agent_output, "running", {"thread_id": OTHER})
+    settled = await _read(agent_output, "completed", {"thread_id": OTHER})
 
     assert is_pending_read(running)
     assert not is_pending_read(settled)
@@ -73,16 +64,15 @@ async def _list(tool, rows: list[dict]):
         )
 
 
-@pytest.mark.parametrize("tool", [chief_of_staff_threads, manage_threads], ids=["cos", "flash"])
 @pytest.mark.parametrize(
     ("other_status", "pending"),
     [("in_progress", True), ("active", True), ("completed", False), ("interrupted", False)],
 )
-async def test_a_listing_is_pending_only_while_another_thread_runs(tool, other_status, pending):
+async def test_a_listing_is_pending_only_while_another_thread_runs(other_status, pending):
     rows = [
         # The caller's own thread, which is always mid-run while it lists, and
         # spelled as the database returns it rather than as the config does.
         {"conversation_thread_id": OWN.upper(), "current_status": "in_progress"},
         {"conversation_thread_id": OTHER, "current_status": other_status},
     ]
-    assert is_pending_read(await _list(tool, rows)) is pending
+    assert is_pending_read(await _list(chief_of_staff_threads, rows)) is pending

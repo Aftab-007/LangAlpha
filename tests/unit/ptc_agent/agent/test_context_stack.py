@@ -9,7 +9,6 @@ def _stack(timezone, **kwargs):
         now=datetime(2026, 9, 13, 6, 0, tzinfo=UTC),
         guidance=None,
         model_name=None,
-        sandbox_enabled=False,
         turn_context=TurnContext(timezone=timezone),
         **kwargs,
     )
@@ -73,7 +72,7 @@ def test_the_role_reaches_the_agentmd_block(monkeypatch):
 
 
 def test_a_build_that_names_no_role_is_the_analyst(monkeypatch):
-    """Subagents, Flash and the CLI build the stack without a role."""
+    """Subagents and the CLI build the stack without a role."""
     assert _agentmd_kwargs(monkeypatch, _stack(timezone=None))["role"] == "analyst"
 
 
@@ -84,7 +83,6 @@ def test_a_notification_turn_reaches_the_turn_row_as_inheriting_its_rules():
         now=datetime(2026, 9, 13, 6, 0, tzinfo=UTC),
         guidance=None,
         model_name=None,
-        sandbox_enabled=False,
         turn_context=TurnContext(inherits_rules=True),
     )
     assert stack.turn._inherits_rules is True

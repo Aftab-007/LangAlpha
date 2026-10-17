@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import pytest
 
@@ -18,6 +19,7 @@ from tests.unit.server.services.automations.file._support import (
     CREATED,
     CREATED_NEXT,
     FOREIGN_WORKSPACE,
+    HOME,
     NEXT_RUN,
     PINNED,
     STRANGER,
@@ -38,15 +40,24 @@ def db(monkeypatch) -> FakeAutomationsDb:
     async def connection():
         yield db.conn
 
-    workspaces = {WORKSPACE: USER, FOREIGN_WORKSPACE: STRANGER}
-    threads = {THREAD: USER, PINNED: USER}
+    workspaces = {WORKSPACE: USER, FOREIGN_WORKSPACE: STRANGER, HOME: USER}
+    # Each thread's owner and the workspace it is in: this conversation is in
+    # the workspace the agent writes from, and the pinned one in Home, where
+    # the fixtures' rows run.
+    threads = {THREAD: (USER, WORKSPACE), PINNED: (USER, HOME)}
 
     async def get_workspace(workspace_id: str, conn: Any = None) -> dict[str, Any] | None:
         owner = workspaces.get(workspace_id)
         return {"workspace_id": workspace_id, "user_id": owner} if owner else None
 
     async def get_thread_owner_id(thread_id: str, *, conn: Any = None) -> str | None:
-        return threads.get(thread_id)
+        return threads[thread_id][0] if thread_id in threads else None
+
+    async def get_thread_auth_meta(thread_id: str, *, conn: Any = None) -> dict[str, Any] | None:
+        if thread_id not in threads:
+            return None
+        owner, workspace_id = threads[thread_id]
+        return {"user_id": owner, "workspace_id": UUID(workspace_id)}
 
     scheduler = MagicMock()
     scheduler.calculate_first_run.return_value = NEXT_RUN
@@ -77,6 +88,7 @@ def db(monkeypatch) -> FakeAutomationsDb:
     monkeypatch.setattr(file, "user_models", models)
     monkeypatch.setattr(lifecycle, "get_workspace", get_workspace)
     monkeypatch.setattr("src.server.database.conversation.get_thread_owner_id", get_thread_owner_id)
+    monkeypatch.setattr("src.server.database.conversation.get_thread_auth_meta", get_thread_auth_meta)
     monkeypatch.setattr(lifecycle, "AutomationScheduler", scheduler)
     monkeypatch.setattr(lifecycle, "settings", MagicMock(AUTOMATION_WEBHOOK_URL="https://hooks.example.com/x"))
     monkeypatch.setattr(lifecycle, "user_models", models)

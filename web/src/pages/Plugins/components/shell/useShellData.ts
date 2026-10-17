@@ -69,7 +69,7 @@ export function useShellData(): ShellData {
   const { data: catalog } = useMcpCatalog();
   const { data: builtinData } = useBuiltinMcpServers();
   // SkillsList's exact arguments: one cache entry for the list and the count.
-  const { data: skills } = useSkills(null, { includeDisabled: true, allScopes: true });
+  const { data: skills } = useSkills({ includeDisabled: true, allScopes: true });
   const { data: shipped } = useBrokerages();
   const { data: vault } = useUserVaultSecrets();
   const { data: subagentData } = useSubagents();

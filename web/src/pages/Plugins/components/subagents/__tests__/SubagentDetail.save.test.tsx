@@ -26,7 +26,6 @@ vi.mock('@/hooks/useSubagents', () => ({
     },
   }),
 }));
-vi.mock('@/hooks/useAllWorkspacesAgent', () => ({ useAllWorkspacesAgent: () => false }));
 vi.mock('@/pages/ChatAgent/components/mcp/BrandMark', () => ({ BrandMark: () => null }));
 vi.mock('../SubagentAside', () => {
   const none = () => null;

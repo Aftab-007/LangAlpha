@@ -2,8 +2,7 @@ import { useEffect } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
-import { flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
+import { homeWorkspaceQuery } from '@/hooks/useHomeWorkspace';
 import { warmWorkspace } from '@/pages/ChatAgent/utils/warmWorkspace';
 
 /** How long after a warm the next interaction warms again. A computer the
@@ -35,14 +34,10 @@ const POWER_CONTROL = '[data-computer-power]';
  */
 export function WarmHome(): null {
   const queryClient = useQueryClient();
-  const allWorkspaces = useAllWorkspacesAgent();
 
   useEffect(() => {
-    if (!allWorkspaces) return;
     // Bumped by a power control and by cleanup, which drops a Home lookup
-    // still pending from before: a warm after a Stop would undo it, and one
-    // after the flag turns off would start a bound Home's computer anyway,
-    // since its row carries the computer's status.
+    // still pending from before: a warm after a Stop would undo it.
     let generation = 0;
     let warmedAt = -Infinity;
     const warm = (event: Event) => {
@@ -54,12 +49,11 @@ export function WarmHome(): null {
       if (Date.now() - warmedAt < REWARM_AFTER_MS) return;
       warmedAt = Date.now();
       // Home's id is read here rather than before listening, so a click made
-      // while it would still be loading counts. Its request upserts the row,
-      // which is why only with the flag on. Best effort, like the warm: a send
-      // still starts the computer and shows what failed.
+      // while it would still be loading counts. Best effort, like the warm: a
+      // send still starts the computer and shows what failed.
       const current = generation;
-      void queryClient.ensureQueryData(flashWorkspaceQuery(queryClient)).then(
-        (home) => (current === generation ? warmWorkspace(home.workspace_id, queryClient, { home: true }) : undefined),
+      void queryClient.ensureQueryData(homeWorkspaceQuery(queryClient)).then(
+        (home) => (current === generation ? warmWorkspace(home.workspace_id, queryClient) : undefined),
         // A lookup that failed started nothing, so the next interaction
         // retries, unless a power control has since begun its own wait.
         () => {
@@ -79,7 +73,7 @@ export function WarmHome(): null {
       window.removeEventListener('pointerdown', warm, options);
       window.removeEventListener('keydown', onKeyDown, options);
     };
-  }, [allWorkspaces, queryClient]);
+  }, [queryClient]);
 
   return null;
 }

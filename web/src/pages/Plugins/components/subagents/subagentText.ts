@@ -208,18 +208,6 @@ export function isCustom(view: SubagentView): boolean {
   return view.kind === 'custom';
 }
 
-/** Whether no agent hands work to a subagent with these audiences: the
- *  Chief of Staff is off and the analyst is not among them. */
-export function reachesNoAgent(audiences: readonly SubagentAudience[], allWorkspaces: boolean): boolean {
-  return !allWorkspaces && !audiences.includes('analyst');
-}
-
-/** Whether its page offers the choice of agent. With the Chief of Staff off
- *  only while no agent reaches it, so it can be handed back to the analyst. */
-export function offersAudience(view: SubagentView, allWorkspaces: boolean): boolean {
-  return isCustom(view) && (allWorkspaces || reachesNoAgent(view.available_to, allWorkspaces));
-}
-
 export function countCustom(data: SubagentsResponse): number {
   return data.subagents.filter(isCustom).length;
 }

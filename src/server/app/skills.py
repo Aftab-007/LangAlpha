@@ -29,7 +29,6 @@ from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 
 from ptc_agent.agent.middleware.skills import (
     SKILL_REGISTRY,
-    SkillMode,
     build_effective_skill_registry,
     list_skills,
     resolve_skill_dir,
@@ -255,14 +254,13 @@ async def _require_owned_workspace(workspace_id: str, user_id: str) -> None:
 
 async def _assemble_skills(
     user_id: str,
-    mode: SkillMode | None,
     include_disabled: bool,
     workspace_id: str | None,
 ) -> dict:
     """The merged listing for one scope: platform + user tier, plus — inside a
     workspace — that workspace's rows shadowing same-named user skills and its
     disables of inherited ones."""
-    platform = list_skills(mode=mode)
+    platform = list_skills()
     disabled_builtins = await get_disabled_builtin_skills(user_id)
     overrides = await get_skill_command_overrides(user_id)
     bundles = await _bundle_state(user_id)
@@ -342,9 +340,7 @@ async def _assemble_skills(
     return {"skills": skills}
 
 
-async def _assemble_all_scopes(
-    user_id: str, mode: SkillMode | None, include_disabled: bool
-) -> dict:
+async def _assemble_all_scopes(user_id: str, include_disabled: bool) -> dict:
     """Every scope at once — the Plugins page's scope-management inventory.
 
     No shadowing or workspace-disable filtering here: each row appears exactly
@@ -359,7 +355,7 @@ async def _assemble_all_scopes(
         disables_by_name.setdefault(d["name"], []).append(d["workspace_id"])
 
     skills: list[SkillInfo] = []
-    for entry in list_skills(mode=mode):
+    for entry in list_skills():
         user_dis = entry["name"] in disabled_builtins
         if user_dis and not include_disabled:
             continue
@@ -394,9 +390,6 @@ async def _assemble_all_scopes(
 @handle_api_exceptions("list skills", logger)
 async def get_skills(
     user_id: OptionalUserId,
-    mode: Optional[SkillMode] = Query(
-        None, description="Filter by agent mode: ptc or flash"
-    ),
     include_disabled: bool = Query(
         False,
         description="Include disabled entries (management view); the default "
@@ -424,7 +417,7 @@ async def get_skills(
                 status_code=400,
                 detail="all_scopes and workspace_id are mutually exclusive",
             )
-        return await _assemble_all_scopes(user_id, mode, include_disabled)
+        return await _assemble_all_scopes(user_id, include_disabled)
     if workspace_id is not None:
         if user_id is None:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -432,8 +425,8 @@ async def get_skills(
     if user_id is None:
         # No attribution here: the bundle a skill came from is only meaningful
         # next to the switch that turns it off, and this view has no account.
-        return {"skills": [_platform_info(s) for s in list_skills(mode=mode)]}
-    return await _assemble_skills(user_id, mode, include_disabled, workspace_id)
+        return {"skills": [_platform_info(s) for s in list_skills()]}
+    return await _assemble_skills(user_id, include_disabled, workspace_id)
 
 
 @router.get("/limits", response_model=SkillLimitsResponse)
@@ -818,7 +811,7 @@ async def _skill_folder(
     # source for management, and a workspace deny-list scopes where a skill
     # runs, not whether its owner may look at it.
     registry = build_effective_skill_registry(
-        None, disabled_skills=await get_disabled_builtin_skills(user_id)
+        disabled_skills=await get_disabled_builtin_skills(user_id)
     )
     skill = registry.get(name)
     # The configured drop-in root, not the field default: an operator who
@@ -828,7 +821,7 @@ async def _skill_folder(
         resolve_skill_dir(
             name, [str(d) for d in configured_skill_dirs()], registry=registry
         )
-        if skill is not None and skill.exposure != "hidden"
+        if skill is not None and not skill.hidden
         else None
     )
     folder = await asyncio.to_thread(DiskFolder, root) if root is not None else None

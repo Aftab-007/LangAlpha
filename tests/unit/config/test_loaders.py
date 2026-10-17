@@ -6,7 +6,7 @@ Covers:
 - load_from_dict() with string LLM format
 - load_from_dict() with dict LLM format
 - Missing required sections
-- Optional sections (agent, subagents, skills, flash)
+- Optional sections (agent, subagents, skills)
 - Subagent validation against builtins
 - load_from_files() config search behavior
 - generate_config_template()
@@ -29,7 +29,7 @@ def _full_config_dict(**overrides) -> dict:
     base = {
         "llm": {
             "name": "test-model",
-            "flash": "test-flash",
+            "background": "test-background",
             "compaction": "test-summary",
             "fetch": "test-fetch",
             "fallback": ["fallback-1"],
@@ -67,7 +67,7 @@ class TestLoadFromDictLLM:
         """LLM section as dict with name and optional fields."""
         config = load_from_dict(_full_config_dict())
         assert config.llm.name == "test-model"
-        assert config.llm.flash == "test-flash"
+        assert config.llm.flash == "test-background"
         assert config.llm.compaction == "test-summary"
         assert config.llm.fetch == "test-fetch"
         assert config.llm.fallback == ["fallback-1"]
@@ -83,7 +83,7 @@ class TestLoadFromDictLLM:
         assert config.llm.fallback is None
 
     def test_dict_llm_missing_name_raises(self):
-        data = _full_config_dict(llm={"flash": "model"})
+        data = _full_config_dict(llm={"background": "model"})
         with pytest.raises(ValueError, match="llm.name is required"):
             load_from_dict(data)
 
@@ -117,6 +117,15 @@ class TestLoadFromDictLLM:
         assert config.llm.name == "gpt-4o"
         assert config.llm.flash is None
         assert config.llm.compaction is None
+
+    def test_the_old_llm_flash_still_names_the_background_model(self, caplog):
+        """A dict handed straight to the loader skips load_yaml_config, so the
+        loader reads the old spelling itself rather than dropping it."""
+        data = _full_config_dict(llm={"name": "gpt-4o", "flash": "gpt-4o-mini"})
+        with caplog.at_level("WARNING", logger="ptc_agent.config.file_utils"):
+            config = load_from_dict(data)
+        assert config.llm.flash == "gpt-4o-mini"
+        assert any("rename it to llm.background" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -177,14 +186,13 @@ class TestLoadFromDictOptionalSections:
         assert config.skills.enabled is False
         assert config.skills.user_skills_dir == "/custom/skills"
 
-    def test_no_flash_section(self):
-        config = load_from_dict(_full_config_dict())
-        assert config.flash.enabled is True
-
-    def test_flash_disabled(self):
+    def test_a_retired_flash_section_still_loads(self):
+        # An agent_config.yaml written for the removed Flash agent keeps
+        # starting the server; the section is ignored, not an error.
         data = _full_config_dict(flash={"enabled": False})
         config = load_from_dict(data)
-        assert config.flash.enabled is False
+        assert "flash" not in type(config).model_fields
+        assert config.llm.flash == "test-background"
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +261,25 @@ class TestLoadFromDictSubagents:
     def test_a_bare_builtin_key_is_an_empty_patch(self):
         data = _full_config_dict(subagents={"definitions": {"research": None}})
         assert load_from_dict(data).subagents.definitions["research"].model_fields_set == set()
+
+    def _one_subagent(self, **defn):
+        return _full_config_dict(subagents={
+            "enabled": ["my-agent"],
+            "definitions": {"my-agent": {"description": "Custom agent", **defn}},
+        })
+
+    def test_mode_flash_warns_naming_what_replaces_it(self, caplog):
+        with caplog.at_level("WARNING", logger="ptc_agent.config.loaders"):
+            load_from_dict(self._one_subagent(mode="flash"))
+        [warning] = [r.getMessage() for r in caplog.records if "mode: flash" in r.getMessage()]
+        assert "my-agent" in warning
+        assert "sections:" in warning
+
+    @pytest.mark.parametrize("defn", [{}, {"mode": "ptc"}])
+    def test_no_warning_without_mode_flash(self, caplog, defn):
+        with caplog.at_level("WARNING", logger="ptc_agent.config.loaders"):
+            load_from_dict(self._one_subagent(**defn))
+        assert not [r for r in caplog.records if "mode: flash" in r.getMessage()]
 
 
 # ---------------------------------------------------------------------------

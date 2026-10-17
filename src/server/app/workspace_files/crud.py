@@ -30,6 +30,7 @@ from src.server.utils.error_sanitization import (
 from src.server.utils.http_headers import content_disposition
 from fastapi.responses import Response, StreamingResponse
 
+from src.server.database.home_workspace import is_unbound
 from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services.workspace_manager import WorkspaceManager
 from src.server.services.persistence.file import FilePersistenceService
@@ -78,8 +79,9 @@ from ._shared import (
     previous_dir_names_of,
     _is_always_hidden_path,
     _is_binary,
-    _is_flash_workspace,
+    HOME_NOT_ON_COMPUTER_REASON,
     _is_hidden_path,
+    owned_workspace_on_computer,
     _is_system_path,
     _normalize_requested_path,
     _record_fs_bytes,
@@ -177,8 +179,8 @@ async def list_workspace_files(
     workspace = await db_get_workspace(workspace_id)
     require_workspace_owner(workspace, user_id=x_user_id)
 
-    if _is_flash_workspace(workspace):
-        return {"files": [], "sandbox_ready": False, "flash_workspace": True}
+    if is_unbound(workspace):
+        return {"files": [], "sandbox_ready": False, "reason": HOME_NOT_ON_COMPUTER_REASON}
 
     work_dir = owner_work_dir(workspace)
     previous_dirs = previous_dir_names_of(workspace)
@@ -339,8 +341,8 @@ async def resolve_workspace_file(
     workspace = await db_get_workspace(workspace_id)
     require_workspace_owner(workspace, user_id=x_user_id)
 
-    if _is_flash_workspace(workspace):
-        return {"status": "unavailable", "reason": "flash_workspace", "matches": []}
+    if is_unbound(workspace):
+        return {"status": "unavailable", "reason": HOME_NOT_ON_COMPUTER_REASON, "matches": []}
 
     work_dir, candidates, recent_writes = _folded_refs(body, workspace)
     if not candidates:
@@ -417,13 +419,7 @@ async def read_workspace_file(
 ) -> dict[str, Any]:
     """Read a file from the workspace's sandbox, or from DB if stopped."""
 
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=x_user_id)
-
-    if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+    workspace = await owned_workspace_on_computer(workspace_id, x_user_id)
 
     # Virtual DB-backed JSON files (user profile, automations) are served from
     # the DB, independent of sandbox state. Works whether the workspace is
@@ -569,13 +565,7 @@ async def write_workspace_file(
 ) -> dict[str, Any]:
     """Write text content to a file in the workspace's sandbox."""
 
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=x_user_id)
-
-    if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+    workspace = await owned_workspace_on_computer(workspace_id, x_user_id)
 
     if served_from_mirror(workspace.get("status")):
         raise HTTPException(
@@ -732,13 +722,7 @@ async def download_workspace_file(
     """Download raw bytes from the workspace's sandbox, or from DB if stopped."""
     disposition = "attachment" if attachment else "inline"
 
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=x_user_id)
-
-    if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+    workspace = await owned_workspace_on_computer(workspace_id, x_user_id)
 
     work_dir = owner_work_dir(workspace)
     previous_dirs = previous_dir_names_of(workspace)
@@ -896,12 +880,7 @@ async def workspace_file_download_url(
     disk. The link skips secret redaction: it is the owner's own file, and
     redacting would mean carrying the bytes through this process.
     """
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=x_user_id)
-    if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+    workspace = await owned_workspace_on_computer(workspace_id, x_user_id)
 
     layout = owner_layout(workspace)
     work_dir = layout.workspace
@@ -955,13 +934,7 @@ async def upload_workspace_file(
 ) -> dict[str, Any]:
     """Upload a file to the workspace's live sandbox."""
 
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=x_user_id)
-
-    if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+    workspace = await owned_workspace_on_computer(workspace_id, x_user_id)
 
     if served_from_mirror(workspace.get("status")):
         raise HTTPException(
@@ -1021,13 +994,7 @@ async def backup_workspace_files(
 ) -> dict[str, Any]:
     """Backup workspace files from sandbox to DB for offline access."""
 
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=x_user_id)
-
-    if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+    workspace = await owned_workspace_on_computer(workspace_id, x_user_id)
 
     if served_from_mirror(workspace.get("status")):
         raise HTTPException(
@@ -1094,7 +1061,7 @@ async def get_backup_status(
         "files_restore_incomplete": restore_incomplete,
     }
 
-    if _is_flash_workspace(workspace):
+    if is_unbound(workspace):
         return empty
 
     from src.server.database.workspace_file import (
@@ -1184,13 +1151,7 @@ async def delete_workspace_files(
 ) -> dict[str, Any]:
     """Delete one or more files from the workspace's live sandbox."""
 
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=x_user_id)
-
-    if _is_flash_workspace(workspace):
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+    workspace = await owned_workspace_on_computer(workspace_id, x_user_id)
 
     if served_from_mirror(workspace.get("status")):
         raise HTTPException(

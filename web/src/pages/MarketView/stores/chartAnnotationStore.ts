@@ -477,9 +477,9 @@ function resolveChartId(payload: Record<string, unknown>): string | null {
 /**
  * Apply one SSE ``chart_annotation`` artifact event to the store.
  *
- * Shared by both chat engines (MarketView's flash ``useMarketChat`` and
- * ChatAgent's ``useChatMessages``) so the live add/remove/clear logic + shape
- * validation lives in one place. The payload carries ``workspace_id`` +
+ * Called from ChatAgent's stream processing, which MarketView's chat panel
+ * runs too, so the live add/remove/clear logic + shape validation lives in one
+ * place. The payload carries ``workspace_id`` +
  * ``chart_id`` (or ``symbol`` + ``timeframe`` to derive it). The store's
  * consumers (LWC primitives) throw on a malformed ``type`` / ``annotation_id``,
  * so we validate before writing. No-op for any other artifact type, a missing

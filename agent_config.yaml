@@ -8,9 +8,9 @@
 llm:
   # Model name from src/llms/manifest/models.json
   name: "claude-opus-5-5"
-  flash: "claude-sonnet-5-5"
+  background: "claude-sonnet-5-5"
   compaction: "" # blank → the model the turn runs
-  fetch: ""         # blank → same model as flash
+  fetch: ""         # blank → the background model
   fallback:
     - "deepseek-flash"
     - "glm-5.2"

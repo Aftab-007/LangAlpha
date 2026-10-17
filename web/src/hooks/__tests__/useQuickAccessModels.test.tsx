@@ -14,12 +14,7 @@ const mocks = vi.hoisted(() => ({
   platform: true,
   accessMap: undefined as Record<string, ModelAccess> | undefined,
   systemDefaults: null as Record<string, string> | null,
-  allWorkspaces: false,
   mutate: vi.fn(),
-}));
-
-vi.mock('../useAllWorkspacesAgent', () => ({
-  useAllWorkspacesAgent: () => mocks.allWorkspaces,
 }));
 
 vi.mock('@/config/hostMode', () => ({
@@ -66,7 +61,6 @@ describe('useQuickAccessModels', () => {
     mocks.platform = true;
     mocks.accessMap = ACCESS;
     mocks.systemDefaults = null;
-    mocks.allWorkspaces = false;
     prefs({});
   });
 
@@ -80,26 +74,19 @@ describe('useQuickAccessModels', () => {
     expect(result.current.starred).toEqual(['model-starred']);
   });
 
-  it('lists the deployment\'s default for each mode the user left unset', () => {
-    // A pick on a thread saves no preference, so this is the way back to them.
-    mocks.systemDefaults = { default_model: 'model-platform', flash_model: 'model-flash' };
-    const { result } = renderHookWithProviders(() => useQuickAccessModels());
-    expect(result.current.models).toEqual(['model-platform', 'model-flash', 'model-oauth', 'model-key']);
-  });
-
-  it('leaves out the background model with the all-workspaces agent, which no conversation runs', () => {
-    mocks.allWorkspaces = true;
+  it('lists the deployment\'s default the user left unset, but not the background model, which no conversation runs', () => {
+    // A pick on a thread saves no preference, so this is the way back to it.
     mocks.systemDefaults = { default_model: 'model-platform', flash_model: 'model-flash' };
     const { result } = renderHookWithProviders(() => useQuickAccessModels());
     expect(result.current.models).toEqual(['model-platform', 'model-oauth', 'model-key']);
   });
 
-  it('lists the deployment\'s defaults for an account with no preferences row', () => {
+  it('lists the deployment\'s default for an account with no preferences row', () => {
     // The read answered 404 (a reset deletes the row): known, with nothing saved.
     mocks.preferences = null;
     mocks.systemDefaults = { default_model: 'model-platform', flash_model: 'model-flash' };
     const { result } = renderHookWithProviders(() => useQuickAccessModels());
-    expect(result.current.models).toEqual(['model-platform', 'model-flash', 'model-oauth', 'model-key']);
+    expect(result.current.models).toEqual(['model-platform', 'model-oauth', 'model-key']);
   });
 
   it('lists no default before preferences are read', () => {

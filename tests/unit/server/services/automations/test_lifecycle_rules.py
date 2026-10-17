@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.server.database.home_workspace import get_flash_workspace_id
 from src.server.models.automation import AutomationCreate
 from src.server.services.automations import lifecycle
 from src.server.services.automations.lifecycle import (
@@ -23,6 +24,13 @@ AUTOMATION_ID = str(uuid.uuid4())
 PAST = datetime(2020, 1, 1, 0, 0, tzinfo=timezone.utc)
 
 _LIFECYCLE = "src.server.services.automations.lifecycle"
+HOME = get_flash_workspace_id(OWNER)
+
+
+@pytest.fixture(autouse=True)
+def _home(monkeypatch):
+    """Home's row is the owner's, so an automation placed in Home needs no lookup."""
+    monkeypatch.setattr(lifecycle, "_home", AsyncMock(return_value=HOME))
 
 
 def _create_data(**overrides):
@@ -32,6 +40,7 @@ def _create_data(**overrides):
         "trigger_type": "cron",
         "cron_expression": "0 9 * * 1-5",
         "timezone": "UTC",
+        "workspace_id": HOME,
     }
     data.update(overrides)
     return AutomationCreate(**data)
@@ -45,8 +54,8 @@ def _row(**overrides):
         "cron_expression": "0 9 * * 1-5",
         "timezone": "UTC",
         "status": "active",
-        "agent_mode": "flash",
-        "workspace_id": None,
+        "agent_mode": "ptc",
+        "workspace_id": HOME,
         "llm_model": None,
     }
     row.update(overrides)
@@ -178,9 +187,9 @@ class TestModelOnUpdate:
 
 @pytest.mark.asyncio
 @patch(f"{_LIFECYCLE}.auto_db")
-async def test_ptc_without_a_workspace_names_the_workspace(mock_auto_db):
+async def test_no_workspace_names_the_workspace(mock_auto_db):
     with pytest.raises(AutomationRefusal) as exc:
-        await create_automation(OWNER, _create_data(agent_mode="ptc"))
+        await create_automation(OWNER, _create_data(workspace_id=None))
 
     assert exc.value.field == "workspace_id"
 

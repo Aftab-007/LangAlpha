@@ -85,7 +85,7 @@ export function SkillUploadModal({
   // The Plugins list's own query, so it is usually already cached. It is what
   // tells a new name from a replacement, so Upload waits for it: read as empty,
   // it let an upload replace a skill without a word.
-  const { data: skills, isError: skillsFailed } = useSkills(null, {
+  const { data: skills, isError: skillsFailed } = useSkills({
     includeDisabled: true,
     allScopes: true,
   });

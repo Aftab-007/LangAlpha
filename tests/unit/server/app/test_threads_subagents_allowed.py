@@ -188,8 +188,8 @@ async def test_create_hands_the_switch_to_the_insert_and_reports_the_row(extra, 
             new=AsyncMock(return_value={"workspace_id": "ws-1", "status": "active"}),
         ),
         patch(
-            f"{CREATE_MOD}.resolve_turn_route",
-            new=AsyncMock(return_value=TurnRoute("ptc", "ws-1")),
+            f"{CREATE_MOD}.turn_route",
+            return_value=TurnRoute("ws-1", "analyst"),
         ),
         patch(
             f"{CREATE_MOD}.create_thread",
@@ -206,6 +206,9 @@ async def test_create_hands_the_switch_to_the_insert_and_reports_the_row(extra, 
     assert resp.status_code == 201
     assert create.await_args.kwargs["subagents_allowed"] is named
     assert resp.json()["subagents_allowed"] is named
+    # The insert owns the producer; the response reports what it stored.
+    assert "msg_type" not in create.await_args.kwargs
+    assert resp.json()["msg_type"] == "ptc"
 
 
 # ---------------------------------------------------------------------------

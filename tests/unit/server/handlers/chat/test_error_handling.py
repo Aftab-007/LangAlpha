@@ -297,8 +297,6 @@ class TestHandleWorkflowErrorHTTPException:
                     start_time=0.0,
                     request=self._request(),
                     is_byok=False,
-                    msg_type="ptc",
-                    log_prefix="PTC_TEST",
                 )
             ]
 
@@ -348,8 +346,6 @@ class TestHandleWorkflowErrorHTTPException:
                     start_time=0.0,
                     request=self._request(),
                     is_byok=False,
-                    msg_type="ptc",
-                    log_prefix="PTC_TEST",
                 )
             ]
 
@@ -397,8 +393,6 @@ class TestHandleWorkflowErrorHTTPException:
                     start_time=0.0,
                     request=self._request(),
                     is_byok=False,
-                    msg_type="ptc",
-                    log_prefix="PTC_TEST",
                 )
             ]
 
@@ -448,8 +442,6 @@ class TestHandleWorkflowErrorHTTPException:
                     start_time=0.0,
                     request=self._request(),
                     is_byok=False,
-                    msg_type="ptc",
-                    log_prefix="PTC_TEST",
                 )
             ]
 

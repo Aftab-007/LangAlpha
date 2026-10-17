@@ -172,8 +172,9 @@ export function splitPreferenceWrite(patch: PreferencePatch): {
   };
 }
 
-/** The composer's two agent modes; anything else is read as PTC. */
-export type ComposerMode = 'fast' | 'ptc';
+/** The two model slots: Default, which every composer and thread starts on,
+ *  and Background, the second, cheaper one. Anything else is read as Default. */
+export type ModelSlot = 'default' | 'background';
 
 /** The deployment's defaults, as the models endpoint reports them. A
  *  deployment that names no flash model reports it as "". */
@@ -182,26 +183,27 @@ export interface DeploymentModelDefaults {
   flash_model?: string;
 }
 
-/** The preference key that holds the default for `mode`. */
-export function defaultModelKey(mode: ComposerMode | undefined): 'preferred_model' | 'preferred_flash_model' {
-  return mode === 'fast' ? 'preferred_flash_model' : 'preferred_model';
+/** The preference key that holds the default for `slot`. The one place a
+ *  slot maps to its stored field. */
+export function defaultModelKey(slot: ModelSlot | undefined): 'preferred_model' | 'preferred_flash_model' {
+  return slot === 'background' ? 'preferred_flash_model' : 'preferred_model';
 }
 
 /**
- * The model a thread with none of its own runs in `mode`.
+ * The model a thread with none of its own runs on in `slot`.
  *
  * The same rule the server runs a turn on and uses to decide which threads sit
  * on the old default when the default moves, so "your default" names one model
- * on both sides. Flash inherits the primary choice unless the user chose Auto
- * for it, then the deployment's flash model, and a deployment without one runs
- * flash on its primary model.
+ * on both sides. Background inherits the Default choice unless the user chose
+ * Auto for it, then the deployment's background model, and a deployment
+ * without one runs it on its default model.
  */
-export function modeDefaultModel(
+export function slotDefaultModel(
   prefs: ModelPreferences,
   deployment: DeploymentModelDefaults | null | undefined,
-  mode: ComposerMode | undefined,
+  slot: ModelSlot | undefined,
 ): string | null {
-  if (mode === 'fast') {
+  if (slot === 'background') {
     const primary = prefs.flash_follows === 'deployment' ? null : prefs.preferred_model;
     return prefs.preferred_flash_model || primary
       || deployment?.flash_model || deployment?.default_model || null;

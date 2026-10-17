@@ -1,5 +1,4 @@
 import type React from 'react';
-import type { ComposerMode } from '@/lib/modelPreferences';
 import type { DefaultModelOffer, RetiredModel } from '../../hooks/useThreadModel';
 import { RetiredModelNotice, ThreadModelBanner } from './ThreadModelBanner';
 import { ThreadSubagentsBanner } from './ThreadSubagentsBanner';
@@ -27,17 +26,15 @@ interface SubagentsNotices {
 export function ThreadNotices({
   model,
   subagents,
-  mode,
 }: {
   model: ModelNotices;
   subagents: SubagentsNotices;
-  mode: ComposerMode;
 }): React.ReactElement {
   return (
     <>
       {/* Inset like the offer rows beside it. */}
       {model.retired && <RetiredModelNotice {...model.retired} className="px-3" />}
-      <ThreadOffers model={model} subagents={subagents} mode={mode} />
+      <ThreadOffers model={model} subagents={subagents} />
     </>
   );
 }
@@ -45,15 +42,13 @@ export function ThreadNotices({
 export function ThreadOffers({
   model,
   subagents,
-  mode,
 }: {
   model: Omit<ModelNotices, 'retired'>;
   subagents: SubagentsNotices;
-  mode: ComposerMode;
 }): React.ReactElement {
   return (
     <>
-      {model.offer && <ThreadModelBanner {...model.offer} mode={mode} onDismiss={model.dismissOffer} />}
+      {model.offer && <ThreadModelBanner {...model.offer} onDismiss={model.dismissOffer} />}
       {subagents.offer !== null && (
         // Keyed by the value, so an offer for the other side starts its own clock.
         <ThreadSubagentsBanner

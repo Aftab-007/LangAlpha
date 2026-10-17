@@ -9,7 +9,6 @@ DB.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1896,74 +1895,29 @@ async def test_workspace_not_found_404(client):
 
 
 # ---------------------------------------------------------------------------
-# Flash grant revocation on a scope change
+# A toggle on a row that is on no computer
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_flash_disable_revokes_the_grant_before_it_answers(client):
-    """A 200 on the toggle has to mean the revocation already happened.
-
-    The per-call ``DirectMCPBinding.check`` rereads connection status and
-    consent but not workspace scope, so the grant is the only thing that stops
-    a Flash turn already in flight from reaching a server just taken out of
-    scope. Scheduling the sync would let the response beat it.
-    """
-    ws = _ws(status="flash")
-    base = _agent_config([_builtin("builtin_search")])
-    released = asyncio.Event()
-    seen: dict = {}
-
-    async def blocking_sync(base_config, *, user_id, workspace_id):
-        seen["user_id"] = user_id
-        seen["workspace_id"] = workspace_id
-        await released.wait()
-
-    with (
-        patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),
-        patch("src.server.app.setup.agent_config", base),
-        patch("src.server.app.mcp_servers.upsert_workspace_server", new=AsyncMock(return_value={})),
-        patch(
-            "src.server.services.egress.flash_binding.sync_flash_grants",
-            new=blocking_sync,
-        ),
-    ):
-        pending = asyncio.ensure_future(
-            client.patch(
-                f"/api/v1/workspaces/{ws['workspace_id']}/mcp/servers/builtin_search/enabled",
-                json={"enabled": False},
-            )
-        )
-        # Hold the sync open and let the loop run everything it can. A
-        # scheduled sync would let the response land here; an awaited one
-        # cannot answer until the revocation does.
-        for _ in range(10):
-            await asyncio.sleep(0)
-        assert not pending.done()
-
-        released.set()
-        resp = await pending
-
-    assert resp.status_code == 200
-    assert seen == {"user_id": USER, "workspace_id": ws["workspace_id"]}
-
-
-@pytest.mark.asyncio
-async def test_flash_disable_fails_loudly_when_the_grant_will_not_retire(client):
-    """A revocation that did not happen must not be reported as a success."""
+async def test_a_toggle_on_home_before_its_first_turn_syncs_grants_without_a_warm(
+    client,
+):
+    """Home before its first turn is on no computer, so there is no sandbox to
+    warm and the acquire would only fail. Its grants are synced all the same."""
     ws = _ws(status="flash")
     base = _agent_config([_builtin("builtin_search")])
     with (
         patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),
         patch("src.server.app.setup.agent_config", base),
         patch("src.server.app.mcp_servers.upsert_workspace_server", new=AsyncMock(return_value={})),
-        patch(
-            "src.server.services.egress.flash_binding.sync_flash_grants",
-            new=AsyncMock(side_effect=RuntimeError("grant store is down")),
-        ),
+        patch("src.server.app.mcp_servers._sync_sandbox_grants_now", new=AsyncMock()) as synced,
+        patch("src.server.app.mcp_servers.schedule_proactive_apply") as warm,
     ):
         resp = await client.patch(
             f"/api/v1/workspaces/{ws['workspace_id']}/mcp/servers/builtin_search/enabled",
             json={"enabled": False},
         )
-    assert resp.status_code == 500
+    assert resp.status_code == 200
+    synced.assert_awaited_once_with(ws["workspace_id"], USER)
+    warm.assert_not_called()

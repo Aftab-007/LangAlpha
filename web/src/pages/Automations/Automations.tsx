@@ -1,7 +1,9 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHomeTimezone } from '@/hooks/useHomeTimezone';
+import { homeWorkspaceQuery } from '@/hooks/useHomeWorkspace';
 import { ListError, ListSkeleton } from '@/components/mcp/McpPrimitives';
 import { useScrollMemory } from '@/lib/scrollMemory';
 import ConfirmDialog from '@/pages/Dashboard/components/ConfirmDialog';
@@ -15,7 +17,6 @@ import { useAutomations } from './hooks/useAutomations';
 import { useOrderedGroups } from './hooks/useOrderedGroups';
 import { useAutomationMutations } from './hooks/useAutomationMutations';
 import { useWatchedReadings } from './hooks/useWatchedReadings';
-import { useRunsAs } from './hooks/useAgentModeLabels';
 import { automationToFormState } from './utils/form';
 import { type TemplateId, applyTemplate } from './utils/templates';
 import type { Automation } from '@/types/automation';
@@ -78,7 +79,10 @@ export default function Automations() {
     busy,
   } = useAutomationMutations();
   const homeZone = useHomeTimezone();
-  const runsAs = useRunsAs();
+  const queryClient = useQueryClient();
+  // A row in Home names Home's id, which an edit reads as All workspaces, so
+  // an edit opens once Home is known (or could not be read).
+  const { data: homeRow, isPending: homePending } = useQuery(homeWorkspaceQuery(queryClient));
   const readings = useWatchedReadings(automations);
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -216,15 +220,12 @@ export default function Automations() {
     if (!form) return null;
     const handlers = { onSubmit: handleSubmit, onCancel: () => setForm(null), onDirtyChange: setDraftDirty, loading: busy };
     if (form.kind === 'edit') {
-      if (!editing) return null;
+      if (!editing || homePending) return null;
       return {
         key: `edit:${editing.automation_id}`,
         props: {
           ...handlers,
-          initialValues: automationToFormState(
-            { ...editing, agent_mode: runsAs(editing.agent_mode, editing.workspace_id) },
-            homeZone,
-          ),
+          initialValues: automationToFormState(editing, homeZone, homeRow?.workspace_id),
           original: editing,
         },
       };
@@ -233,7 +234,7 @@ export default function Automations() {
       key: `create:${form.template}:${form.nonce}`,
       props: { ...handlers, initialValues: applyTemplate(form.template, t, homeZone), original: null },
     };
-  }, [form, editing, handleSubmit, busy, homeZone, runsAs, t]);
+  }, [form, editing, handleSubmit, busy, homeZone, homePending, homeRow, t]);
 
   let body: React.ReactNode;
   if (error && automations.length === 0) {

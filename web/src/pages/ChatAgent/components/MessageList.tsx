@@ -56,10 +56,10 @@ interface MessageListProps {
   /** Feedback keyed by BACKEND TURN — the projection below maps each bubble to
    *  its turn, so a steering continuation shows the continued turn's rating. */
   feedbackByTurn?: Record<number, FeedbackResult>;
-  flashContext?: { threadId: string; workspaceId: string } | null;
+  dispatcherContext?: { threadId: string; workspaceId: string } | null;
 }
 
-function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, readOnly, allowFiles, feedbackByTurn, flashContext }: MessageListProps): React.ReactElement | null {
+function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, readOnly, allowFiles, feedbackByTurn, dispatcherContext }: MessageListProps): React.ReactElement | null {
   const isMobile = useIsMobile();
   const { onOpenFile } = useMessageActions();
   // The deck keeps the workspace's own notes file out on every surface; its
@@ -283,7 +283,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
               <UserBubble
                 provenance={message.provenance as MessageProvenance}
                 readOnly={readOnly}
-                flashContext={flashContext}
+                dispatcherContext={dispatcherContext}
                 className="max-w-[80%]"
               />
             </div>
@@ -321,7 +321,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
           readOnly,
           allowFiles,
           isMobile,
-          flashContext,
+          dispatcherContext,
         };
         // Every bubble gets the wrapper from its first paint: the fold row
         // only exists once the turn has something foldable, and switching a

@@ -7,8 +7,9 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
+import type { ComposerScope } from '@/components/ui/chat-input.types';
 import { US_MARKET_TZ } from '@/lib/bars/exchanges';
-import { INITIAL_FORM, type FormState } from './form';
+import { ALL_WORKSPACES, INITIAL_FORM, type FormState } from './form';
 
 export type TemplateId = 'price_alert' | 'morning_briefing' | 'weekly_review' | 'earnings_watch' | 'custom';
 
@@ -17,6 +18,9 @@ export interface AutomationTemplate {
   nameKey: string;
   descriptionKey: string;
   icon: LucideIcon;
+  /** Where its automation starts out running: All workspaces, or a
+   *  workspace the reader picks, for work that builds on files kept in one. */
+  runsIn: ComposerScope;
   defaults: Partial<FormState>;
 }
 
@@ -26,6 +30,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     nameKey: 'automation.blankAutomation',
     descriptionKey: 'automation.blankAutomationDesc',
     icon: Plus,
+    runsIn: 'all',
     defaults: {},
   },
   {
@@ -33,9 +38,9 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     nameKey: 'automation.templatePriceAlert',
     descriptionKey: 'automation.templatePriceAlertDesc',
     icon: TrendingUp,
+    runsIn: 'all',
     defaults: {
       trigger_type: 'price',
-      agent_mode: 'flash',
       instruction:
         'Analyze recent news and market sentiment for {symbol} to explain the price movement. Include key catalysts, analyst reactions, and short-term outlook.',
     },
@@ -45,11 +50,11 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     nameKey: 'automation.templateMorningBriefing',
     descriptionKey: 'automation.templateMorningBriefingDesc',
     icon: Sun,
+    runsIn: 'all',
     defaults: {
       trigger_type: 'cron',
       cron_expression: '0 7 * * 1-5',
       timezone: US_MARKET_TZ,
-      agent_mode: 'flash',
       instruction:
         'Provide a pre-market briefing covering: overnight market moves, key economic data releases today, notable earnings reports, and sector trends to watch.',
     },
@@ -59,11 +64,11 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     nameKey: 'automation.templateWeeklyReview',
     descriptionKey: 'automation.templateWeeklyReviewDesc',
     icon: BarChart3,
+    runsIn: 'workspace',
     defaults: {
       trigger_type: 'cron',
       cron_expression: '0 22 * * 5',
       timezone: US_MARKET_TZ,
-      agent_mode: 'ptc',
       instruction:
         "Analyze my portfolio's weekly performance. Create charts showing returns vs benchmarks, sector allocation, and risk metrics. Identify positions that need attention and suggest rebalancing actions.",
     },
@@ -73,9 +78,9 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     nameKey: 'automation.templateEarningsWatch',
     descriptionKey: 'automation.templateEarningsWatchDesc',
     icon: CalendarSearch,
+    runsIn: 'workspace',
     defaults: {
       trigger_type: 'once',
-      agent_mode: 'ptc',
       instruction:
         'Run a deep earnings analysis for {symbol}: review recent financial statements, analyst estimates, historical earnings surprises, options activity, and key metrics to watch. Create a comprehensive pre-earnings report.',
     },
@@ -94,9 +99,10 @@ export function templatesById(ids: TemplateId[]): AutomationTemplate[] {
  *  (the pre-market briefing) keeps New York, since its hour is a market's. */
 export function applyTemplate(templateId: TemplateId, t: TFunction, timezone = INITIAL_FORM.timezone): FormState {
   const template = AUTOMATION_TEMPLATES.find((tpl) => tpl.id === templateId);
-  if (!template || template.id === 'custom') return { ...INITIAL_FORM, timezone };
+  const place = template?.runsIn === 'workspace' ? '' : ALL_WORKSPACES;
+  if (!template || template.id === 'custom') return { ...INITIAL_FORM, timezone, place };
   // The field starts as the name the menu showed, so it reads in the
   // reader's language. The blank start's label names a choice, not an
   // automation, so it starts empty.
-  return { ...INITIAL_FORM, timezone, ...template.defaults, name: t(template.nameKey) };
+  return { ...INITIAL_FORM, timezone, place, ...template.defaults, name: t(template.nameKey) };
 }

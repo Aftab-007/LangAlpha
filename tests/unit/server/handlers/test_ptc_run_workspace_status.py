@@ -23,6 +23,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.server.services.turn_runtime import TurnRoute
+
 PTC = "src.server.handlers.chat.ptc_run"
 
 
@@ -167,7 +169,7 @@ async def _run_to_sentinel(
             run_id="r-1",
             user_input="hi",
             user_id="u-1",
-            workspace_id="ws-1",
+            route=TurnRoute("ws-1", "analyst"),
             is_byok=False,
             config=_make_config(),
             named_model=named_model,

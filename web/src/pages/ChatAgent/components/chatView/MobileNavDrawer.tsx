@@ -6,8 +6,7 @@ import { motion, AnimatePresence, type PanInfo } from '@/lib/framer';
 import NavigationPanel from '../NavigationPanel';
 import NavDisplayOptions from '../NavDisplayOptions';
 import { useNavTreeProps, type NavTreeAgents } from '../../hooks/useNavTreeProps';
-import { useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
-import { FLASH_ROUTE_STATE } from '@/hooks/useFlashWorkspace';
+import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
 import type { NavWorkspace } from '../../hooks/useNavigationData';
 
 interface MobileNavDrawerProps {
@@ -44,7 +43,7 @@ export function MobileNavDrawer({ visible, slideIn, onMinimize, isActive, worksp
       state: {
         workspaceId: wsId,
         workspaceName: workspaceLabel(ws),
-        ...(status === 'flash' ? FLASH_ROUTE_STATE : { workspaceStatus: status, agentMode: 'ptc' }),
+        workspaceStatus: status,
       },
     });
   }, [navigate, workspaceLabel]);

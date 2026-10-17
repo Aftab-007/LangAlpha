@@ -18,8 +18,8 @@ import { useWorkspaceActions } from './workspaceActions';
 import { isEffectivelyPinned } from '../hooks/useNavigationData';
 import { pinWorkspaceRow } from '../hooks/workspaceRowActions';
 import { useCreateWorkspace } from '../hooks/useCreateWorkspace';
-import { flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
-import { useWorkspaceLabel } from '@/hooks/useAllWorkspacesAgent';
+import { homeWorkspaceQuery } from '@/hooks/useHomeWorkspace';
+import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
 import { clearChatSession } from '../hooks/utils/chatSessionRestore';
 import { useWorkspaceMutation } from '../hooks/useWorkspaceMutation';
 import { useComputers } from '../hooks/useComputers';
@@ -85,11 +85,11 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   const preSortByRef = useRef(sortBy); // sort mode before entering reorder
   const isSearching = debouncedSearch.length > 0;
 
-  // Flash workspace query (idempotent POST -- creates if not exists). The
+  // Home's query (idempotent POST, creates it if missing). The
   // reorder list shows the whole record, not just its id, so here it goes
   // stale after five minutes rather than never.
-  const { data: flashWs, isLoading: isFlashLoading } = useQuery({
-    ...flashWorkspaceQuery(queryClient),
+  const { data: homeWs, isLoading: isHomeLoading } = useQuery({
+    ...homeWorkspaceQuery(queryClient),
     staleTime: 5 * 60_000,
   });
 
@@ -107,14 +107,14 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     limit: paging.limit,
     offset: paging.offset,
     sortBy,
-    includeFlash: true,
-    enabled: !isSearching && !isReorderMode && !isFlashLoading,
+    includeHome: true,
+    enabled: !isSearching && !isReorderMode && !isHomeLoading,
   });
 
   const allSearchWorkspaces = useQuery({
-    queryKey: queryKeys.workspaces.list({ view: 'search-all', sortBy, includeFlash: true }),
+    queryKey: queryKeys.workspaces.list({ view: 'search-all', sortBy, includeHome: true }),
     queryFn: () => getAllWorkspaces(sortBy, true),
-    enabled: isSearching && !isReorderMode && !isFlashLoading,
+    enabled: isSearching && !isReorderMode && !isHomeLoading,
     staleTime: 30_000,
   });
 
@@ -242,9 +242,9 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
 
   // Server handles sort order; the client only filters by search and enforces
   // the ordering rule shared with the nav tree: the pinned block stays above
-  // unpinned rows, and Flash counts as always-pinned (it isn't guaranteed to
-  // carry is_pinned in the DB). No flash-first hoist — within the pinned
-  // block Flash competes on the server sort like any pinned workspace.
+  // unpinned rows, and Home counts as always-pinned (it isn't guaranteed to
+  // carry is_pinned in the DB). No Home-first hoist: within the pinned
+  // block Home competes on the server sort like any pinned workspace.
   // Matched on the name the card shows, so a search finds Home as All workspaces.
   const visibleWorkspaces = workspaces
     .filter((workspace) =>
@@ -256,7 +256,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
       return bPinned - aPinned; // stable sort: server order preserved within blocks
     });
 
-  if (isWsLoading || isFlashLoading) {
+  if (isWsLoading || isHomeLoading) {
     return (
       // A branch that replaces the whole route replaces its top bar too, so it
       // owes the window a titlebar of its own -- otherwise the column beside the
@@ -477,7 +477,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
 
         {isReorderMode ? (
           <ReorderList
-            flashWorkspace={(flashWs as WorkspaceRecord) ?? null}
+            homeWorkspace={(homeWs as WorkspaceRecord) ?? null}
             onDone={exitReorderMode}
           />
         ) : (

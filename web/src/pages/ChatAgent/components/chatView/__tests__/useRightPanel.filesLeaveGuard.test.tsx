@@ -14,7 +14,7 @@ import type { RouteLeaveGuard } from '../../../contexts/RouteLeaveGuardContext';
 
 const setFilePanelWorkspaceId = vi.fn();
 
-function open(panel: { dispatches?: boolean; filePanelWorkspaceId?: string | null } = {}) {
+function open(panel: { filePanelWorkspaceId?: string | null } = {}) {
   const { result } = renderHook(() => useRightPanel({
     isMobile: false,
     workspaceId: 'ws',
@@ -80,7 +80,7 @@ describe('opening a chat link with a draft open', () => {
   const OTHER_WS = '0f1e2d3c-4b5a-4968-8776-655443322110';
   const MEMO = '.agents/user/memo/my-report.pdf';
 
-  it('opens a memo in PTC without asking', () => {
+  it('opens a memo without asking', () => {
     answer(false);
     const result = open();
     act(() => result.current.handleOpenFileFromChat(MEMO));
@@ -88,25 +88,17 @@ describe('opening a chat link with a draft open', () => {
     expect(result.current.panelTarget).toMatchObject({ kind: 'memo', key: 'my-report.pdf' });
   });
 
-  it('opens a memo in Flash without asking when no override is set', () => {
+  it('opens a file in the sibling the panel already shows without asking', () => {
     answer(false);
-    const result = open({ dispatches: true, filePanelWorkspaceId: null });
-    act(() => result.current.handleOpenFileFromChat(MEMO));
-    expect(guard).not.toHaveBeenCalled();
-    expect(result.current.panelTarget).toMatchObject({ kind: 'memo' });
-  });
-
-  it('opens a file in the workspace Flash already shows without asking', () => {
-    answer(false);
-    const result = open({ dispatches: true, filePanelWorkspaceId: OTHER_WS });
+    const result = open({ filePanelWorkspaceId: OTHER_WS });
     act(() => result.current.handleOpenFileFromChat('results/a.md', OTHER_WS));
     expect(guard).not.toHaveBeenCalled();
     expect(result.current.panelTarget).toMatchObject({ kind: 'file', path: 'results/a.md' });
   });
 
-  it('asks before Flash switches to another workspace, and holds on a no', () => {
+  it("asks before switching to a sibling's files, and holds on a no", () => {
     answer(false);
-    const result = open({ dispatches: true, filePanelWorkspaceId: null });
+    const result = open();
     act(() => result.current.handleOpenFileFromChat('results/a.md', OTHER_WS));
     expect(guard).toHaveBeenCalledTimes(1);
     expect(setFilePanelWorkspaceId).not.toHaveBeenCalledWith(OTHER_WS);

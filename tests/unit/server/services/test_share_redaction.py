@@ -337,6 +337,7 @@ def test_sends_each_secretary_call_as_its_name_and_id_alone():
                     "status": "success",
                 },
             },
+            # The retired Flash agent's hand-off, still in the threads it ran.
             _call("ptc_agent", {"question": "NVDA vs AMD"}, "msg-2", "call_ptc"),
             _answer(json.dumps({"thread_id": "t-1"}), call_id="call_ptc"),
         ]

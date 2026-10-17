@@ -22,13 +22,13 @@ LLM Configuration:
 """
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
 from ptc_agent.config.agent import (
     AgentConfig,
     CompactionConfig,
-    FlashConfig,
     LLMConfig,
     SkillsConfig,
     SubagentConfig,
@@ -55,7 +55,10 @@ from ptc_agent.config.file_utils import (
     get_config_search_paths,
     get_default_config_dir,
     load_yaml_config,
+    rename_llm_flash,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def _resolve_config_file(
@@ -247,9 +250,11 @@ def load_from_dict(
             "Please add these sections to your agent_config.yaml file."
         )
 
-    # Load LLM configuration - extract name and flash LLM
+    # Load LLM configuration - extract name and the Background model
     # llm: null (or omitted) is allowed — users configure models via the UI instead.
-    llm_data = config_data.get("llm")
+    # A dict passed in directly never went through load_yaml_config, which
+    # reads the old llm.flash spelling for a file.
+    llm_data = rename_llm_flash(config_data, "the agent config").get("llm")
 
     llm_config: LLMConfig | None = None
     if isinstance(llm_data, str):
@@ -263,7 +268,7 @@ def load_from_dict(
         # (LLMConfig.compaction_name / fetch_name), not to this file's models.
         llm_config = LLMConfig(
             name=llm_name,
-            flash=llm_data.get("flash"),
+            flash=llm_data.get("background"),
             compaction=llm_data.get("compaction") or None,
             fetch=llm_data.get("fetch") or None,
             fallback=llm_data.get("fallback"),
@@ -301,6 +306,12 @@ def load_from_dict(
             subagent_definitions[name] = SubagentConfig(**({} if defn_data is None else defn_data))
         except Exception as e:
             raise ValueError(f"Invalid subagent definition '{name}': {e}") from e
+        if subagent_definitions[name].mode == "flash":
+            logger.warning(
+                f"subagents.definitions.{name}: mode: flash is deprecated; "
+                "under sections:, set to false each prompt section it should "
+                "leave out instead"
+            )
 
     # Validate enabled subagent names exist in builtins or user definitions
     known_names = set(BUILTIN_SUBAGENTS) | set(subagent_definitions)
@@ -328,13 +339,6 @@ def load_from_dict(
         ),
     )
 
-    # Load Flash configuration (optional section)
-    # Flash LLM is now in llm.flash; compaction uses main compaction config
-    flash_data = config_data.get("flash") or {}
-    flash_config = FlashConfig(
-        enabled=flash_data.get("enabled", True),
-    )
-
     # Load Compaction configuration (optional section)
     compaction_data = config_data.get("compaction") or {}
     compaction_config = CompactionConfig(**compaction_data) if compaction_data else CompactionConfig()
@@ -352,7 +356,6 @@ def load_from_dict(
         mcp=mcp_config,
         filesystem=filesystem_config,
         skills=skills_config,
-        flash=flash_config,
         subagents=subagents_config,
         compaction=compaction_config,
         search_api=search_api,
@@ -382,7 +385,7 @@ cli:
 # Model name from src/llms/manifest/models.json
 llm:
   name: "your-model-name"       # Required: primary model from models.json
-  # flash: "your-flash-model"   # Optional: model for flash agent
+  # background: "your-model"    # Optional: model for background work
   # compaction: "your-model"    # Optional: model for context compaction
   # fetch: "your-model"         # Optional: model for web content extraction
   # fallback:                   # Optional: fallback models when primary fails

@@ -28,7 +28,7 @@ import { mapOutsideCode } from './markdownSegments';
 export interface TurnFile {
   /** Workspace-relative path, with no location suffix. */
   path: string;
-  /** Set when the reference names another workspace (a Flash relay, or a sibling's folder). */
+  /** Set when the reference names another workspace (a Chief of Staff relay, or a sibling's folder). */
   workspaceId?: string;
   /** The spot inside the file the reply pointed at, if it named one. */
   location?: FileLocation;

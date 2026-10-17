@@ -12,7 +12,6 @@ import { SubagentNew } from '../SubagentNew';
  */
 
 let refusal: unknown = null;
-let allWorkspaces = false;
 
 vi.mock('@/hooks/useSubagents', () => ({
   useCreateSubagent: () => ({
@@ -20,7 +19,6 @@ vi.mock('@/hooks/useSubagents', () => ({
     mutate: (_vars: unknown, { onError }: { onError: (err: unknown) => void }) => onError(refusal),
   }),
 }));
-vi.mock('@/hooks/useAllWorkspacesAgent', () => ({ useAllWorkspacesAgent: () => allWorkspaces }));
 vi.mock('@/pages/ChatAgent/components/mcp/BrandMark', () => ({ BrandMark: () => null }));
 
 const MODELS = { models: {}, metadata: {} } as unknown as SubagentModels;
@@ -92,7 +90,6 @@ function create(errors: { field: string; message: string }[]) {
 
 beforeEach(() => {
   refusal = null;
-  allWorkspaces = false;
 });
 
 describe('SubagentNew', () => {
@@ -128,20 +125,10 @@ describe('SubagentNew', () => {
 
   it.each([
     ['r3-source', 'Available from the next turn.'],
+    ['r3-home', 'Available from the next turn.'],
     ['r3-off', 'Starts switched off, like r3-off. Switch it on after creating.'],
   ])('says whether a copy of %s starts on', (source, note) => {
     renderForm(source);
-    expect(screen.getByText(note)).toBeInTheDocument();
-  });
-
-  it.each([
-    [false, 'Like r3-home, it is available only to the Chief of Staff, which is off. Choose Workspace analyst under Available to after creating.'],
-    [true, 'Available from the next turn.'],
-  ])('says whether any agent reaches a copy of one only the Chief of Staff gets (on: %s)', (on, note) => {
-    // The copy keeps the source's audience, and with the Chief of Staff off
-    // the analyst's roster leaves it out.
-    allWorkspaces = on;
-    renderForm('r3-home');
     expect(screen.getByText(note)).toBeInTheDocument();
   });
 

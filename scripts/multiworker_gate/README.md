@@ -39,8 +39,9 @@ uv run python scripts/multiworker_gate/gate.py --user … --clean # delete gate 
 ```
 
 Requirements: Docker access to this worktree's stack, `INTERNAL_SERVICE_TOKEN`
-in the backend container, a working flash-model key (turns are real LLM calls —
-they cost a few flash generations per run). Cell 14 needs one manifest model
+in the backend container, a working key for the user's default model, and the
+user's computer (gate turns name Home's id and run as the Chief of Staff there,
+so they are real LLM calls on a sandbox). Cell 14 needs one manifest model
 whose provider key is **absent** so a run fails deterministically after START
 (default `claude-sonnet-5-5`; override with `GATE_FAIL_MODEL`).
 
@@ -54,7 +55,7 @@ the run and which worker attacks it.
 |---|------|-----------|-------|
 | 1 | Two-process START (slot exclusivity) | ✅ | one 2xx + one 409; ≤1 `in_progress` row |
 | 2 | SIGKILL mid-run → scanner finalizes | ✅ | `error` + `metadata.recovery=scanner` |
-| 3 | Guard-connection loss, Python alive | manual | `pg_terminate_backend` on the run's advisory-lock backend; expect FencedSaver refusal (flash) / guard-monitor abort (PTC), no dual writer |
+| 3 | Guard-connection loss, Python alive | manual | `pg_terminate_backend` on the run's advisory-lock backend; expect a guard-monitor abort or FencedSaver refusal, no dual writer |
 | 4 | Redis outage (mid-run / pre-START / scan) | manual | `docker stop redis` mid-run → owner finalizes `error`; pre-START → instant 503, zero rows; `docker pause` blocks (doesn't fail) the probe |
 | 5 | Owner alive (SIGSTOP) → no reap | manual | SIGSTOP owner ≥3 scanner cycles: guard held, no scanner reap; SIGCONT → owner finalizes |
 | 6 | Two scanners racing one orphan | implicit | every cell-2 run has ≥3 live scanners (main×2 + survivor); single terminal transition is trigger-enforced |

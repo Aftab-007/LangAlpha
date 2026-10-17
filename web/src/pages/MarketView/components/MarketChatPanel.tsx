@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, RefreshCw, MessageSquare } from 'lucide-react';
 import { queryKeys } from '@/lib/queryKeys';
@@ -8,6 +8,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { Loader } from '@/components/ui/loader';
 import LogoLoading from '@/components/ui/logo-loading';
 import ChatInput, { type ChatInputHandle } from '@/components/ui/chat-input';
+import type { ComposerScope } from '@/components/ui/chat-input.types';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { useWorkspace } from '@/hooks/useWorkspace';
 import { usePreferences } from '@/hooks/usePreferences';
@@ -28,8 +29,6 @@ import { DispatchStatusProvider } from '../../ChatAgent/hooks/usePTCDispatchStat
 import { useStreamFollow } from '../../ChatAgent/components/chatView/streamFollow';
 import { useTranscriptFollow } from '../../ChatAgent/components/chatView/useTranscriptFollow';
 import { useActiveThreadPublisher } from '@/lib/threadLifecycle/useActiveThreadPublisher';
-import { FLASH_ROUTE_STATE, flashWorkspaceQuery } from '@/hooks/useFlashWorkspace';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { appendPathSuffix, getPreviewUrl, summarizeThread, offloadThread } from '../../ChatAgent/utils/api';
 import { attachmentsToContexts } from '../../ChatAgent/utils/fileUpload';
 import {
@@ -47,7 +46,6 @@ import { readMarketViewRoute } from '../utils/marketRoute';
 import { normalizeTimeframe } from '../stores/chartAnnotationStore';
 import { chartSelectionStore, useChartSelections, isConfirmedFor } from '../stores/chartSelectionStore';
 import { buildChartSelectionSend } from '../utils/selectionSend';
-import { composerModeProps } from '../utils/composerMode';
 import { SelectionChips } from './SelectionChips';
 import { marketViewAnnotationContext } from '../constants/annotationPrompt';
 import './MarketPanel.css';
@@ -93,8 +91,11 @@ interface MarketChatPanelProps {
   symbol: string;
   /** Current chart interval — tells the agent which timeframe to annotate. */
   interval: string;
-  mode: 'fast' | 'ptc';
-  onModeChange: (mode: 'fast' | 'ptc') => void;
+  scope: ComposerScope;
+  onScopeChange: (scope: ComposerScope) => void;
+  /** The workspace the chat runs in: Home under All workspaces, else the
+   *  selected one. Null until it resolves. */
+  activeWorkspaceId: string | null;
   workspaces: Workspace[];
   selectedWorkspaceId: string | null;
   /** A workspace was restored but not yet checked against the list, so
@@ -131,37 +132,24 @@ function PanelLoading(): React.ReactElement {
  * ChatAgent's `useChatMessages` so the rendering (tool calls, reasoning,
  * artifacts, widgets) stays in lockstep with the main chat page.
  *
- * A PTC panel waits out a pending workspace rather than mounting without one:
- * the scope resolves its stored thread once, at mount, so mounting early would
- * start a fresh chat where the workspace's last one should have reopened.
+ * The workspace scope waits out a pending workspace rather than mounting
+ * without one: the scope resolves its stored thread once, at mount, so
+ * mounting early would start a fresh chat where the workspace's last one
+ * should have reopened.
  */
 export default function MarketChatPanel(props: MarketChatPanelProps): React.ReactElement {
-  if (props.mode === 'ptc' && props.workspacePending) return <PanelLoading />;
+  if (props.scope === 'workspace' && props.workspacePending) return <PanelLoading />;
   return <MarketChatScope {...props} />;
 }
 
 function MarketChatScope(props: MarketChatPanelProps): React.ReactElement {
-  const {
-    symbol,
-    mode,
-    workspaces,
-    selectedWorkspaceId,
-  } = props;
+  const { symbol, scope, activeWorkspaceId } = props;
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
-
-  // Flash workspace: lazily fetched once, cached forever.
-  const { data: flashWs } = useQuery(flashWorkspaceQuery(queryClient));
-
-  // Active workspace per mode. Flash mode uses the shared flash workspace.
-  const activeWorkspaceId = mode === 'fast'
-    ? (flashWs as { workspace_id?: string } | undefined)?.workspace_id ?? null
-    : selectedWorkspaceId;
   // The folder the workspace lives in on a shared computer, and any a rename
   // moved it out of, which the turn file deck needs to tell the workspace's
   // own notes file from a deliverable. Read through the detail query, which a
   // turn re-reads once the folder has settled. The page's list never does, nor
-  // does the flash row, which can predate the turn that gave Home its folder.
+  // does Home's cached row, which can predate the turn that gave Home its folder.
   const { data: activeWorkspace } = useWorkspace(activeWorkspaceId);
   // No sibling list: this page opens no files, so a sibling's has nowhere to go.
   const folders = useMemo(() => computerFolders(activeWorkspace, null), [activeWorkspace]);
@@ -197,7 +185,7 @@ function MarketChatScope(props: MarketChatPanelProps): React.ReactElement {
     }, { replace: true });
   }, [symbol, activeWorkspaceId, setSearchParams]);
 
-  // Reset to a fresh chat when scope (mode / workspace) changes. The user
+  // Reset to a fresh chat when the scope or workspace changes. The user
   // explicitly chose a different scope — surface a clean slate. localStorage
   // is keyed by (workspace, symbol), so the previous scope's pointer stays
   // intact and is reachable via the history dropdown.
@@ -235,7 +223,7 @@ function MarketChatScope(props: MarketChatPanelProps): React.ReactElement {
     }, { replace: true });
   }, [activeWorkspaceId, symbol, setSearchParams]);
 
-  if (mode === 'ptc' && !activeWorkspaceId) {
+  if (scope === 'workspace' && !activeWorkspaceId) {
     return (
       <div className="market-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, padding: 16 }}>
         <span style={{ color: 'var(--color-text-tertiary)', fontSize: '0.875rem' }}>
@@ -254,7 +242,6 @@ function MarketChatScope(props: MarketChatPanelProps): React.ReactElement {
         {...props}
         activeWorkspaceId={activeWorkspaceId}
         initialThreadId={activeThreadInit.split('#')[0]}
-        ptcWorkspaces={workspaces}
         onSelectThread={handleSelectThread}
         onStartNewChat={handleStartNewChat}
       />
@@ -265,7 +252,6 @@ function MarketChatScope(props: MarketChatPanelProps): React.ReactElement {
 interface ChatBodyProps extends MarketChatPanelProps {
   activeWorkspaceId: string;
   initialThreadId: string;
-  ptcWorkspaces: Workspace[];
   onSelectThread: (threadId: string) => void;
   onStartNewChat: () => void;
 }
@@ -274,9 +260,9 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   const {
     symbol,
     interval,
-    mode,
-    onModeChange,
-    ptcWorkspaces,
+    scope,
+    onScopeChange,
+    workspaces,
     selectedWorkspaceId,
     onWorkspaceChange,
     chartImage,
@@ -303,7 +289,6 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { preferences } = usePreferences();
-  const allWorkspaces = useAllWorkspacesAgent();
   const [, setSearchParams] = useSearchParams();
   const [dialogPayload, setDialogPayload] = useState<DialogPayload | null>(null);
   // Port of the preview currently shown — guards against a late URL resolution
@@ -327,16 +312,9 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     [selections, liveSym, liveTf],
   );
 
-  // PTC zero-state — disable PTC option if user has no non-flash workspaces.
-  // Under the all-workspaces agent nothing is disabled: the scope picker still
-  // offers All workspaces, and says why the workspace list is empty.
-  const noWorkspaces = ptcWorkspaces.length === 0;
-  const ptcDisabledReason = noWorkspaces && !allWorkspaces ? t('marketView.chatPanel.ptcDisabledReason') : null;
-  const emptyWorkspacesHint = noWorkspaces && allWorkspaces ? t('agents.market.workspaceDisabledReason') : null;
-
-  // 'fast' is All workspaces under the all-workspaces agent: the flash row,
-  // which the server runs as Home on the full agent.
-  const agentMode = mode === 'fast' && !allWorkspaces ? 'flash' : 'ptc';
+  // With no workspace to pick, the scope picker still offers All workspaces
+  // and says why the workspace list is empty.
+  const emptyWorkspacesHint = workspaces.length === 0 ? t('agents.market.workspaceDisabledReason') : null;
 
   // MarketView always has the live chart beside the chat, so inline
   // chart-annotation cards collapse to a confirmation chip. Tell the chip
@@ -408,7 +386,6 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     null,                       // finalizePendingTodos
     null,                       // onFileArtifact
     handlePreview,              // onPreviewUrl
-    agentMode,
     null,                       // clearSubagentCards
     null,                       // onWorkspaceCreated
     platformValue,
@@ -467,9 +444,8 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   useActiveThreadPublisher(threadId);
 
   // All workspaces runs the default model, as the full agent does in a workspace.
-  const modelMode = agentMode === 'flash' ? 'fast' : 'ptc';
-  const threadModel = useThreadModel({ threadId, mode: modelMode, isLoading });
-  const threadSubagents = useThreadSubagents({ threadId, mode: modelMode });
+  const threadModel = useThreadModel({ threadId, isLoading });
+  const threadSubagents = useThreadSubagents({ threadId });
   const { toSend: subagentsToSend } = threadSubagents;
 
   // Subagent telemetry resolver — feeds ActivityBlock's live token counts.
@@ -746,16 +722,16 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     stableThumbUp, stableThumbDown, stableReportWithAgent, stableWidgetSendPrompt,
   ]);
 
-  // In fast mode, carry the source thread/workspace into a PTC-agent proposal so
-  // its "open in chat" deep-link lands back here. Null in PTC mode. Keyed on the
-  // mode, not the agent: All workspaces runs as 'ptc' but hands off like Flash.
+  // In All workspaces, carry the source thread/workspace into a PTC-agent
+  // proposal so its "open in chat" deep-link lands back here. Null in a
+  // workspace, since only All workspaces hands work off to the workspaces.
   // Memoized: a fresh object per render would defeat the memoized bubbles downstream.
-  const flashContext = useMemo(
+  const dispatcherContext = useMemo(
     () =>
-      mode === 'fast' && threadId && threadId !== '__default__'
+      scope === 'all' && threadId && threadId !== '__default__'
         ? { threadId, workspaceId: activeWorkspaceId }
         : null,
-    [mode, threadId, activeWorkspaceId],
+    [scope, threadId, activeWorkspaceId],
   );
 
   const showQuickQueries = messages.length === 0 && !isLoading && !isLoadingHistory;
@@ -767,9 +743,9 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   const handleOpenInChat = useCallback(() => {
     if (!threadId || threadId === '__default__') return;
     navigate(`/chat/t/${threadId}`, {
-      state: { workspaceId: activeWorkspaceId, ...(mode === 'fast' ? FLASH_ROUTE_STATE : {}) },
+      state: { workspaceId: activeWorkspaceId },
     });
-  }, [navigate, threadId, activeWorkspaceId, mode]);
+  }, [navigate, threadId, activeWorkspaceId]);
 
   // Shared styling for the header's right-hand action chip.
   const headerBtnStyle: React.CSSProperties = {
@@ -888,7 +864,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
                       isLoading={isLoading}
                       isLoadingHistory={isLoadingHistory}
                       feedbackByTurn={feedbackByTurn}
-                      flashContext={flashContext}
+                      dispatcherContext={dispatcherContext}
                     />
                   </DispatchStatusProvider>
                 </MessageActionsProvider>
@@ -960,7 +936,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
               )}
             </div>
           )}
-          <ThreadNotices model={threadModel} subagents={threadSubagents} mode={modelMode} />
+          <ThreadNotices model={threadModel} subagents={threadSubagents} />
         </div>
       )}
 
@@ -975,14 +951,14 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
         onStop={handleStop}
         onAction={handleAction}
         isLoading={isLoading}
-        {...composerModeProps(allWorkspaces, mode, onModeChange)}
+        scope={scope}
+        onScopeChange={onScopeChange}
         model={threadModel.model}
         onPickModel={threadModel.pickModel}
         subagentsAllowed={threadSubagents.allowed}
         onToggleSubagents={threadSubagents.setAllowed}
-        ptcDisabledReason={ptcDisabledReason}
         emptyWorkspacesHint={emptyWorkspacesHint}
-        workspaces={ptcWorkspaces}
+        workspaces={workspaces}
         selectedWorkspaceId={selectedWorkspaceId}
         onWorkspaceChange={onWorkspaceChange}
         onCaptureChart={onCaptureChart}

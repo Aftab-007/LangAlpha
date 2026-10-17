@@ -19,7 +19,8 @@ function ChatInputCard() {
   // The mobile composer mounts only while expanded, and the desktop one is
   // focused while the user writes: either way, they are composing.
   const {
-    composerProps,
+    scope,
+    setScope,
     isLoading,
     handleSend,
     workspaces,
@@ -56,7 +57,8 @@ function ChatInputCard() {
             ref={chatInputRef}
             onSend={handleMobileSend}
             disabled={isLoading}
-            {...composerProps}
+            scope={scope}
+            onScopeChange={setScope}
             workspaces={workspaces}
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={setSelectedWorkspaceId}
@@ -107,7 +109,8 @@ function ChatInputCard() {
             ref={chatInputRef}
             onSend={handleSend}
             disabled={isLoading}
-            {...composerProps}
+            scope={scope}
+            onScopeChange={setScope}
             workspaces={workspaces}
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={setSelectedWorkspaceId}

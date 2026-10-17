@@ -34,8 +34,8 @@ from src.server.app.workspace_files._containment import (
 )
 from src.server.app.workspace_files._shared import (
     DEFAULT_READ_LIMIT_LINES,
+    HOME_NOT_ON_COMPUTER_REASON,
     _is_binary,
-    _is_flash_workspace,
     _is_text_content_type,
     _is_utf8,
     _to_client_path,
@@ -55,6 +55,7 @@ from src.server.app.workspace_files.serve import (
     warm_sandbox,
     warm_sandbox_bytes,
 )
+from src.server.database.home_workspace import is_unbound
 from src.server.services.persistence.file import FilePersistenceService
 from src.server.services.persistence.resolve import resolve_file_bytes_or_none
 from src.server.utils.error_sanitization import single_line
@@ -253,7 +254,7 @@ async def list_shared_files(
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
 
     target = await resolve_shared_files(share_token, require_files=True)
-    if _is_flash_workspace(target.workspace):
+    if is_unbound(target.workspace):
         return {"files": [], "source": "none"}
 
     normalized_path = contained_listing_path(
@@ -275,8 +276,8 @@ async def resolve_shared_file(share_token: str, body: ResolveFileRefRequest):
     scope included.
     """
     target = await resolve_shared_files(share_token, require_files=True)
-    if _is_flash_workspace(target.workspace):
-        return {"status": "unavailable", "reason": "flash_workspace", "matches": []}
+    if is_unbound(target.workspace):
+        return {"status": "unavailable", "reason": HOME_NOT_ON_COMPUTER_REASON, "matches": []}
 
     previous_dirs = previous_dir_names_of(target.workspace)
     candidates = clean_candidates(body.candidates, target.work_dir, previous_dirs)

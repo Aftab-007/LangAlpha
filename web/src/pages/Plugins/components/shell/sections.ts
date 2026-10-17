@@ -56,15 +56,13 @@ export type AddSection = InstallSection | 'subagents';
 /**
  * The ways in besides the catalog, per section. Each section adds only its
  * own kind: a skill upload offered on Connectors lands on a section the user
- * did not ask for. `hintKey` is the item's second line, and `needs` names the
- * feature an item exists only under.
+ * did not ask for. `hintKey` is the item's second line.
  */
 export interface AddRoute {
   intent: AddIntent;
   key: string;
   hintKey?: string;
   icon?: ComponentType<{ className?: string }>;
-  needs?: 'allWorkspacesAgent';
 }
 
 export const ADD_ROUTES: Record<AddSection, AddRoute[]> = {
@@ -74,8 +72,6 @@ export const ADD_ROUTES: Record<AddSection, AddRoute[]> = {
     { intent: 'import', key: 'plugins.addMenu.importServers' },
   ],
   skills: [{ intent: 'skill', key: 'plugins.addMenu.uploadSkill' }],
-  // The chat route writes the file through the Chief of Staff, so it exists
-  // only where Home runs that agent.
   subagents: [
     {
       intent: 'subagent',
@@ -88,7 +84,6 @@ export const ADD_ROUTES: Record<AddSection, AddRoute[]> = {
       icon: MessageSquarePlus,
       key: 'plugins.addMenu.createWithAgent',
       hintKey: 'plugins.addMenu.createWithAgentHint',
-      needs: 'allWorkspacesAgent',
     },
   ],
 };

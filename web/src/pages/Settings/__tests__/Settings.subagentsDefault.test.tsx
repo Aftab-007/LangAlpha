@@ -89,13 +89,13 @@ vi.mock('@/pages/Dashboard/utils/api', () => ({
 }));
 
 vi.mock('@/pages/ChatAgent/utils/api', () => ({
-  getFlashWorkspace: vi.fn(async () => ({ workspace_id: 'ws-flash' })),
+  getHomeWorkspace: vi.fn(async () => ({ workspace_id: 'ws-home' })),
 }));
 
 // Settings renders the onboarding replay/reset buttons; no provider here.
 vi.mock('@/pages/Onboarding', () => ({
   useOnboarding: () => ({ replayGuides: vi.fn(), resetOnboarding: vi.fn() }),
-  useStartOnboarding: () => ({ available: true, start: vi.fn() }),
+  useStartOnboarding: () => ({ start: vi.fn() }),
 }));
 
 // Import after mocks are registered.

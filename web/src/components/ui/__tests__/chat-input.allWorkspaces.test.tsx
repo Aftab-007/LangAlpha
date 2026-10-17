@@ -1,9 +1,8 @@
 /**
- * Under the all-workspaces agent the composer has no Flash/PTC choice: the
- * host passes a scope (All workspaces or a workspace), every conversation runs
- * on the Default model, and the second model slot (now the Background model)
- * is never shown. These pin that normalization and the scope picker that
- * replaces the mode toggle.
+ * The composer's host passes a scope (All workspaces or a workspace), every
+ * conversation runs on the Default model, and the second model slot (the
+ * Background model) is never shown. These pin that normalization and the
+ * scope picker.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, screen, within, waitFor } from '@testing-library/react';
@@ -18,17 +17,12 @@ import { getSkills } from '@/pages/ChatAgent/utils/api';
 vi.mock('@/pages/ChatAgent/utils/api', () => ({
   getSkills: vi.fn().mockResolvedValue([]),
   getModelMetadata: vi.fn().mockResolvedValue({}),
-  getFlashWorkspace: vi.fn().mockResolvedValue({ workspace_id: 'home-1', name: 'Flash', status: 'flash' }),
+  getHomeWorkspace: vi.fn().mockResolvedValue({ workspace_id: 'home-1', name: 'Home', status: 'running', is_home: true }),
 }));
 
 const mocks = vi.hoisted(() => ({
-  allWorkspaces: true,
   preferences: null as unknown,
   mutateAsync: vi.fn(),
-}));
-
-vi.mock('@/hooks/useAllWorkspacesAgent', () => ({
-  useAllWorkspacesAgent: () => mocks.allWorkspaces,
 }));
 
 vi.mock('@/hooks/usePreferences', () => ({
@@ -100,13 +94,12 @@ function composer(props: Partial<ChatInputProps> = {}) {
   );
 }
 
-describe('ChatInput with the all-workspaces agent', () => {
+describe('ChatInput scope picker', () => {
   beforeEach(() => {
     ContextBus.__resetForTests();
     ChatInputRegistry.__resetForTests();
     Element.prototype.scrollIntoView = vi.fn();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    mocks.allWorkspaces = true;
     mocks.preferences = {
       model_preference: { preferred_model: 'model-alpha', preferred_flash_model: 'model-bg' },
     };
@@ -128,14 +121,7 @@ describe('ChatInput with the all-workspaces agent', () => {
     expect(mocks.mutateAsync).not.toHaveBeenCalled();
   });
 
-  it('keeps the Flash model slot with the flag off', () => {
-    mocks.allWorkspaces = false;
-    renderInput({ scope: undefined, onScopeChange: undefined, mode: 'fast', onModeChange: vi.fn() });
-    expect(screen.getByText('pill:model-bg')).toBeInTheDocument();
-    expect(pill('Flash')).toBeInTheDocument();
-  });
-
-  it('replaces the mode toggle with a scope picker that keeps the Subagents switch', () => {
+  it('offers a scope picker beside the Subagents switch, and no agent mode toggle', () => {
     renderInput();
     expect(screen.queryByText('Flash')).not.toBeInTheDocument();
     expect(screen.queryByText('PTC')).not.toBeInTheDocument();
@@ -233,13 +219,12 @@ describe('ChatInput with the all-workspaces agent', () => {
 
   it('stays shut when its pill comes back after leaving the toolbar mid-pick', async () => {
     const user = userEvent.setup();
-    mocks.allWorkspaces = false;
-    const ptc = { scope: undefined, onScopeChange: undefined, mode: 'ptc' as const, onModeChange: vi.fn() };
-    const view = renderInput(ptc);
+    const picking = { scope: 'workspace' as const, onScopeChange: vi.fn() };
+    const view = renderInput(picking);
     await user.click(pill('Alpha desk'));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    view.rerender(composer({ ...ptc, mode: 'fast' }));
-    view.rerender(composer(ptc));
+    view.rerender(composer({ ...picking, onScopeChange: null }));
+    view.rerender(composer(picking));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 

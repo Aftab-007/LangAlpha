@@ -71,7 +71,7 @@ interface MessageBubbleProps {
   readOnly?: boolean;
   allowFiles?: boolean;
   isMobile?: boolean;
-  flashContext?: { threadId: string; workspaceId: string } | null;
+  dispatcherContext?: { threadId: string; workspaceId: string } | null;
 }
 
 /**
@@ -80,7 +80,7 @@ interface MessageBubbleProps {
  * MessageActionsContext (one identity-stable object per host), so a streamed
  * chunk never re-renders settled bubbles through a handler identity.
  */
-export const MessageBubble = memo(function MessageBubble({ message, contentProjection, turnIndex, isTurnTail, isLatestReply = true, isTurnLive, turnFiles, feedback, isLoading, fold = 'unfolded', isSubagentView, readOnly, allowFiles, isMobile, flashContext }: MessageBubbleProps): React.ReactElement | null {
+export const MessageBubble = memo(function MessageBubble({ message, contentProjection, turnIndex, isTurnTail, isLatestReply = true, isTurnLive, turnFiles, feedback, isLoading, fold = 'unfolded', isSubagentView, readOnly, allowFiles, isMobile, dispatcherContext }: MessageBubbleProps): React.ReactElement | null {
   const { onOpenFile, onDownloadFile, onRevealFiles, onOpenSources, onEditMessage, editDrafts, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
   const { t } = useTranslation();
   const projection = contentProjection ?? projectMessageContent(message, isSubagentView);
@@ -416,7 +416,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
           toolApprovals={(message.toolApprovals as Record<string, ToolApprovalState>) || EMPTY_OBJ}
           htmlWidgetProcesses={(message.htmlWidgetProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
           readOnly={readOnly}
-          flashContext={flashContext}
+          dispatcherContext={dispatcherContext}
         />
         </OpenThoughtContext>
         </CreditPausePendingProvider>

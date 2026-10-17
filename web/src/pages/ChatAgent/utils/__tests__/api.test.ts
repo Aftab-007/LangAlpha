@@ -45,6 +45,8 @@ vi.mock('@/lib/authToken', async (importActual) => ({
 import { api } from '@/api/client';
 import {
   getWorkspaces,
+  getHomeWorkspace,
+  createThreadWithTitle,
   createWorkspace,
   deleteWorkspace,
   getWorkspace,
@@ -100,6 +102,57 @@ describe('ChatAgent API utilities', () => {
       expect(mockGet).toHaveBeenCalledWith('/api/v1/workspaces', {
         params: { limit: 10, offset: 5, sort_by: 'name' },
       });
+    });
+
+    it('asks for Home only when the caller includes it, by both names', async () => {
+      mockGet.mockResolvedValue({ data: {} });
+
+      await getWorkspaces(20, 0, 'custom', true);
+      // include_flash is the one a backend before is_home reads.
+      expect(mockGet).toHaveBeenCalledWith('/api/v1/workspaces', {
+        params: { limit: 20, offset: 0, sort_by: 'custom', include_home: true, include_flash: true },
+      });
+    });
+  });
+
+  describe('getHomeWorkspace', () => {
+    const refusal = (status: number) => Object.assign(new Error(`status ${status}`), { response: { status } });
+
+    it("posts to Home's endpoint and returns the row", async () => {
+      const home = { workspace_id: 'home-1', is_home: true, status: 'unbound' };
+      mockPost.mockResolvedValue({ data: home });
+
+      const result = await getHomeWorkspace();
+      expect(mockPost).toHaveBeenCalledTimes(1);
+      expect(mockPost).toHaveBeenCalledWith('/api/v1/workspaces/home');
+      expect(result).toEqual(home);
+    });
+
+    it.each([404, 405])('asks /flash for Home when /home answers %i, as a backend before is_home does', async (status) => {
+      const flash = { workspace_id: 'home-1', status: 'flash' };
+      mockPost.mockRejectedValueOnce(refusal(status)).mockResolvedValueOnce({ data: flash });
+
+      const result = await getHomeWorkspace();
+      expect(mockPost.mock.calls.map(([url]) => url)).toEqual(['/api/v1/workspaces/home', '/api/v1/workspaces/flash']);
+      expect(result).toEqual(flash);
+    });
+
+    it('passes any other refusal through without asking /flash', async () => {
+      mockPost.mockRejectedValueOnce(refusal(500));
+
+      await expect(getHomeWorkspace()).rejects.toThrow('status 500');
+      expect(mockPost).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('createThreadWithTitle', () => {
+    it('names the workspace and no agent mode', async () => {
+      mockPost.mockResolvedValue({ data: { thread_id: 't-1' } });
+
+      await createThreadWithTitle({ workspaceId: 'ws-1', firstQuery: 'hi' });
+      const [url, body] = mockPost.mock.calls[0];
+      expect(url).toBe('/api/v1/threads');
+      expect(body).toEqual({ first_query: 'hi', workspace_id: 'ws-1' });
     });
   });
 
@@ -198,27 +251,15 @@ describe('ChatAgent API utilities', () => {
       global.fetch = originalFetch;
     });
 
-    it('includes agent_mode in request body defaulting to ptc', async () => {
+    it('names the workspace and no agent mode in the request body', async () => {
       await sendHitlResponse({ int1: { decisions: [{ type: 'approve' }] } }, 'ws-1', 't-1', { onEvent: () => {} });
 
       const fetchMock = global.fetch as Mock;
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [, opts] = fetchMock.mock.calls[0];
       const body = JSON.parse(opts.body);
-      expect(body.agent_mode).toBe('ptc');
-    });
-
-    it('passes custom agentMode', async () => {
-      await sendHitlResponse(
-        { int1: { decisions: [{ type: 'approve' }] } },
-        'ws-1', 't-1',
-        { onEvent: () => {}, agentMode: 'flash' },
-      );
-
-      const fetchMock = global.fetch as Mock;
-      const [, opts] = fetchMock.mock.calls[0];
-      const body = JSON.parse(opts.body);
-      expect(body.agent_mode).toBe('flash');
+      expect(body.workspace_id).toBe('ws-1');
+      expect(body).not.toHaveProperty('agent_mode');
     });
 
     it('includes model options when provided', async () => {
@@ -261,7 +302,7 @@ describe('ChatAgent API utilities', () => {
       await sendHitlResponse(
         { int1: { decisions: [{ type: 'approve' }] } },
         'ws-1', 't-1',
-        { onEvent: () => {}, agentMode: 'ptc', onRunIdResolved },
+        { onEvent: () => {}, onRunIdResolved },
       );
 
       expect(onRunIdResolved).toHaveBeenCalledTimes(1);
@@ -286,7 +327,7 @@ describe('ChatAgent API utilities', () => {
       await sendHitlResponse(
         { int1: { decisions: [{ type: 'approve' }] } },
         'ws-1', 't-1',
-        { onEvent: () => {}, agentMode: 'ptc', onRunIdResolved },
+        { onEvent: () => {}, onRunIdResolved },
       );
       expect(onRunIdResolved).not.toHaveBeenCalled();
     });
@@ -344,7 +385,8 @@ describe('ChatAgent API utilities', () => {
     });
 
     it('passes computer_id as undefined when the workspace has no machine', async () => {
-      // A flash workspace frames computer_id: null rather than dropping the key.
+      // Home before its first start frames computer_id: null rather than
+      // dropping the key.
       mockSSEResponse([
         'event: status\ndata: {"workspace_id":"ws-1","computer_id":null,"status":"running"}\n\n',
       ]);
@@ -455,13 +497,13 @@ describe('ChatAgent API utilities', () => {
     /** Run watchThread and resolve with the payload it reports (one-shot). */
     function runWatch(): Promise<{ run_id?: string | null } | undefined> {
       return new Promise((resolve) => {
-        watchThread('flash-1', resolve);
+        watchThread('th-home', resolve);
       });
     }
 
     it('parses the run_id from a wake delivered as a single frame', async () => {
       mockWatchResponse([
-        'event: workflow_started\ndata: {"thread_id":"flash-1","run_id":"rb-1"}\n\n',
+        'event: workflow_started\ndata: {"thread_id":"th-home","run_id":"rb-1"}\n\n',
       ]);
       expect(await runWatch()).toEqual({ run_id: 'rb-1', needs_input: null, cleared: false });
     });
@@ -471,7 +513,7 @@ describe('ChatAgent API utilities', () => {
       // first sight of the event name parsed partial JSON and lost the run_id,
       // forcing a /status fallback that a fast report-back has already torn down.
       mockWatchResponse([
-        'event: workflow_started\ndata: {"thread_id":"flash-1","ru',
+        'event: workflow_started\ndata: {"thread_id":"th-home","ru',
         'n_id":"rb-1"}\n\n',
       ]);
       expect(await runWatch()).toEqual({ run_id: 'rb-1', needs_input: null, cleared: false });
@@ -496,7 +538,7 @@ describe('ChatAgent API utilities', () => {
       // newline (SSE spec). The old single-line regex captured only the first
       // line, truncating the JSON and forcing a /status fallback.
       mockWatchResponse([
-        'event: workflow_started\ndata: {"thread_id":"flash-1",\ndata: "run_id":"rb-7"}\n\n',
+        'event: workflow_started\ndata: {"thread_id":"th-home",\ndata: "run_id":"rb-7"}\n\n',
       ]);
       expect(await runWatch()).toEqual({ run_id: 'rb-7', needs_input: null, cleared: false });
     });
@@ -506,14 +548,14 @@ describe('ChatAgent API utilities', () => {
       // report-back status slice; it must route to onSnapshot — never be
       // mistaken for a wake — and wakes after it must still deliver.
       mockWatchResponse([
-        'event: watch_snapshot\ndata: {"thread_id":"flash-1","pending_report_back":true,"report_back_run_id":"rb-s","active_tasks":["t1"]}\n\n',
+        'event: watch_snapshot\ndata: {"thread_id":"th-home","pending_report_back":true,"report_back_run_id":"rb-s","active_tasks":["t1"]}\n\n',
         'event: workflow_started\ndata: {"run_id":"rb-1"}\n\n',
       ]);
       const snapshots: unknown[] = [];
       const payloads: Array<{ run_id?: string | null } | undefined> = [];
       await new Promise<void>((resolve) => {
         watchThread(
-          'flash-1',
+          'th-home',
           (p) => { payloads.push(p); },
           resolve,
           undefined,
@@ -521,15 +563,15 @@ describe('ChatAgent API utilities', () => {
         );
       });
       expect(snapshots).toEqual([
-        { thread_id: 'flash-1', pending_report_back: true, report_back_run_id: 'rb-s', active_tasks: ['t1'] },
+        { thread_id: 'th-home', pending_report_back: true, report_back_run_id: 'rb-s', active_tasks: ['t1'] },
       ]);
       expect(payloads).toEqual([{ run_id: 'rb-1', needs_input: null, cleared: false }]);
     });
 
     it('keeps reading and delivers EVERY wake on one persistent connection (no cancel mid-stream)', async () => {
-      // A flash thread can dispatch N PTCs whose report-backs arrive as separate
-      // runs. The watch must forward every wake on a single connection — the old
-      // one-shot behavior (cancel + return after wake #1) dropped wake #2+, so
+      // A Chief of Staff thread can dispatch N PTCs whose report-backs arrive as
+      // separate runs. The watch must forward every wake on a single connection:
+      // the old one-shot behavior (cancel + return after wake #1) dropped wake #2+, so
       // only the first report-back streamed and the rest needed a page refresh.
       const { reader } = mockWatchResponse([
         'event: workflow_started\ndata: {"run_id":"rb-1"}\n\n',
@@ -539,7 +581,7 @@ describe('ChatAgent API utilities', () => {
       const onResubscribed = vi.fn();
       await new Promise<void>((resolve) => {
         // onClosed (3rd arg) fires when the backend ends the stream — resolve then.
-        watchThread('flash-1', (p) => { payloads.push(p); }, resolve, onResubscribed);
+        watchThread('th-home', (p) => { payloads.push(p); }, resolve, onResubscribed);
       });
       expect(payloads).toEqual([
         { run_id: 'rb-1', needs_input: null, cleared: false },
@@ -556,7 +598,7 @@ describe('ChatAgent API utilities', () => {
       mockWatchResponse(['event: workflow_started\ndata: {"run_id":"rb-1"}\n\n']);
       const onClosed = vi.fn();
       await new Promise<void>((resolve) => {
-        watchThread('flash-1', () => {}, () => { onClosed(); resolve(); });
+        watchThread('th-home', () => {}, () => { onClosed(); resolve(); });
       });
       expect(onClosed).toHaveBeenCalledTimes(1);
     });
@@ -585,7 +627,7 @@ describe('ChatAgent API utilities', () => {
 
       const onResubscribed = vi.fn();
       const payload = await new Promise<{ run_id?: string | null } | undefined>((resolve) => {
-        watchThread('flash-1', resolve, undefined, onResubscribed);
+        watchThread('th-home', resolve, undefined, onResubscribed);
       });
 
       // Rotated against the token that request actually carried, not whatever
@@ -612,7 +654,7 @@ describe('ChatAgent API utilities', () => {
         authMocks.refreshAccessToken.mockResolvedValue('U');
 
         const closed = new Promise<void>((resolve) => {
-          watchThread('flash-1', () => {}, () => resolve());
+          watchThread('th-home', () => {}, () => resolve());
         });
         await vi.advanceTimersByTimeAsync(30_000);
         await closed;
@@ -635,7 +677,7 @@ describe('ChatAgent API utilities', () => {
 
       const onClosed = vi.fn();
       await new Promise<void>((resolve) => {
-        watchThread('flash-1', () => {}, () => { onClosed(); resolve(); });
+        watchThread('th-home', () => {}, () => { onClosed(); resolve(); });
       });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -651,7 +693,7 @@ describe('ChatAgent API utilities', () => {
       authMocks.refreshAccessToken.mockResolvedValue('still-refused');
 
       await new Promise<void>((resolve) => {
-        watchThread('flash-1', () => {}, resolve);
+        watchThread('th-home', () => {}, resolve);
       });
 
       expect(authMocks.refreshAccessToken).toHaveBeenCalledTimes(1);
@@ -673,7 +715,7 @@ describe('ChatAgent API utilities', () => {
       }) as unknown as typeof fetch;
 
       const onClosed = vi.fn();
-      const { abort } = watchThread('flash-1', () => {}, onClosed);
+      const { abort } = watchThread('th-home', () => {}, onClosed);
       // Simulate fetch: aborting the signal rejects the in-flight read() with
       // an AbortError, which is exactly how the watch loop unwinds on teardown.
       abort.signal.addEventListener('abort', () =>
@@ -715,7 +757,7 @@ describe('ChatAgent API utilities', () => {
         const payloads: Array<{ run_id?: string | null } | undefined> = [];
         const done = new Promise<void>((resolve) => {
           watchThread(
-            'flash-1',
+            'th-home',
             (p) => { payloads.push(p); },
             () => { onClosed(); resolve(); },
             onResubscribed,
@@ -743,7 +785,7 @@ describe('ChatAgent API utilities', () => {
       const onResubscribed = vi.fn();
       const onClosed = vi.fn();
       await new Promise<void>((resolve) => {
-        watchThread('flash-1', () => {}, () => { onClosed(); resolve(); }, onResubscribed);
+        watchThread('th-home', () => {}, () => { onClosed(); resolve(); }, onResubscribed);
       });
       expect(onResubscribed).not.toHaveBeenCalled();
       expect(onClosed).toHaveBeenCalledTimes(1);
@@ -790,7 +832,7 @@ describe('ChatAgent API utilities', () => {
           'Market watch mode is on for this message. If the central tickers are not yet registered, register them with watch_market.',
       };
       await sendChatMessageStream(
-        'hi', 'ws-1', 't-1', { onEvent: () => {}, additionalContext: [skillItem], agentMode: 'ptc' },
+        'hi', 'ws-1', 't-1', { onEvent: () => {}, additionalContext: [skillItem] },
       );
 
       const body = bodyOfLastSend();
@@ -800,6 +842,15 @@ describe('ChatAgent API utilities', () => {
       );
       expect(item).toBeDefined();
       expect(item!.instruction).toBe(skillItem.instruction);
+    });
+
+    // The workspace names where the turn runs; no agent mode rides along.
+    it('names the workspace and no agent mode', async () => {
+      await sendChatMessageStream('hi', 'ws-1', 't-1', { onEvent: () => {} });
+
+      const body = bodyOfLastSend();
+      expect(body.workspace_id).toBe('ws-1');
+      expect(body).not.toHaveProperty('agent_mode');
     });
 
     // Watch OFF: no skills item, no market_watch key.
@@ -1010,7 +1061,7 @@ describe('sendChatMessageStream — per-turn tuning is explicit', () => {
   const send = async (effort: string | null, fast: boolean | null) => {
     await sendChatMessageStream(
       'hi', 'ws-1', 't-1',
-      { onEvent: () => {}, agentMode: 'ptc', llmModel: 'gpt-5.5', reasoningEffort: effort, fastMode: fast },
+      { onEvent: () => {}, llmModel: 'gpt-5.5', reasoningEffort: effort, fastMode: fast },
     );
     const [, opts] = (global.fetch as Mock).mock.calls[0];
     return JSON.parse(opts.body) as Record<string, unknown>;
@@ -1033,7 +1084,7 @@ describe('sendChatMessageStream — per-turn tuning is explicit', () => {
 
 // A send names the thread's subagents setting only when the composer hands it
 // one: the backend stores a named value on the thread, and an omitted key
-// leaves the row as it is, which is what a flash send and an unread row need.
+// leaves the row as it is, which is what an unread row needs.
 describe('sendChatMessageStream: the subagents setting', () => {
   let originalFetch: typeof global.fetch;
 
@@ -1057,7 +1108,7 @@ describe('sendChatMessageStream: the subagents setting', () => {
 
   const send = async (threadId: string | null, settings?: { subagentsAllowed?: boolean }) => {
     await sendChatMessageStream(
-      'hi', 'ws-1', threadId, { onEvent: () => {}, agentMode: 'ptc', threadSettings: settings },
+      'hi', 'ws-1', threadId, { onEvent: () => {}, threadSettings: settings },
     );
     const [url, opts] = (global.fetch as Mock).mock.calls[0];
     return { url: url as string, body: JSON.parse(opts.body) as Record<string, unknown> };

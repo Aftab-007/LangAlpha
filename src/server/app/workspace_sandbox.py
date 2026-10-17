@@ -32,14 +32,17 @@ from pydantic import BaseModel, Field
 
 from src.server.database.share_codes import share_url
 from src.server.database.share_links import ensure_app_link
-from src.server.utils.api import CurrentUserId, require_workspace_owner
+from src.server.utils.api import CurrentUserId
 from src.server.database.workspace import (
     get_preview_command,
-    get_workspace as db_get_workspace,
     get_workspace_dir_name as db_get_workspace_dir_name,
 )
 from src.server.database.workspace_folders import is_top_level, workspace_folder_in_use
-from src.server.app.workspace_files._shared import held_workspace_row, work_dir_for
+from src.server.app.workspace_files._shared import (
+    held_workspace_row,
+    owned_workspace_on_computer,
+    work_dir_for,
+)
 from src.server.services.workspace_layout import WorkspaceLayoutUnavailable
 from src.server.services.workspace_manager import WorkspaceManager
 from ptc_agent.core.paths import DEFAULT_SANDBOX_ROOT, WorkspaceLayout
@@ -285,14 +288,8 @@ _PACKAGE_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+([<>=!~]+.*)?$")
 
 
 async def _get_sandbox(workspace_id: str, user_id: str) -> Any:
-    """Validate workspace ownership, reject flash workspaces, and return the sandbox."""
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=user_id)
-
-    if workspace.get("status") == "flash":
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+    """Validate workspace ownership, reject Home before its computer, and return the sandbox."""
+    await owned_workspace_on_computer(workspace_id, user_id)
 
     manager = WorkspaceManager.get_instance()
     try:
@@ -480,13 +477,7 @@ async def get_sandbox_stats(
     For stopped/archived workspaces: returns metadata only (state, resources, intervals)
     from Daytona API without starting the sandbox.
     """
-    workspace = await db_get_workspace(workspace_id)
-    require_workspace_owner(workspace, user_id=x_user_id)
-
-    if workspace.get("status") == "flash":
-        raise HTTPException(
-            status_code=400, detail="Flash workspaces do not have a sandbox"
-        )
+    workspace = await owned_workspace_on_computer(workspace_id, x_user_id)
 
     if workspace.get("status") == "running":
         return await _get_full_sandbox_stats(workspace_id, x_user_id, workspace)

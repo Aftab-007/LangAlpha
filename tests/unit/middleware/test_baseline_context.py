@@ -300,7 +300,7 @@ class TestTheEpoch:
 
     @pytest.mark.asyncio
     async def test_a_build_that_no_longer_reads_a_source_rebuilds_without_it(self):
-        """A PTC thread continued without a sandbox must not keep rendering agent.md."""
+        """A thread continued on a build without agent.md must not keep rendering it."""
         with_sandbox = _middleware(_session("# Notes\nalpha"))
         state = await with_sandbox.abefore_agent({}, None)
         assert state[STATE_BASELINE]["agent_md"]["text"] == "# Notes\nalpha"
@@ -313,23 +313,6 @@ class TestTheEpoch:
 
         # Settled: the next turn without the source neither rebuilds nor files.
         assert await without.abefore_agent({**state, **second}, None) is None
-
-    @pytest.mark.asyncio
-    async def test_a_build_with_no_workspace_drops_the_one_the_ptc_epoch_froze(self):
-        """Flash reads no workspace at all, which is not a read that failed."""
-        ptc = _middleware(
-            _session("# Notes"), sandbox_enabled=True,
-            workspace_name="Alpha Desk", workspace_description="desk",
-        )
-        state = await ptc.abefore_agent({}, None)
-        assert state[STATE_BASELINE]["workspace"]["name"] == "Alpha Desk"
-
-        flash = _middleware(None)
-        second = await flash.abefore_agent(state, None)
-        assert second[STATE_BASELINE]["reason"] == "source_removed"
-        assert second[STATE_BASELINE]["workspace"]["name"] == ""
-        assert second[STATE_BASELINE]["incomplete"] is False
-        assert "Alpha Desk" not in _text(await _render(flash, {**state, **second}))
 
     @pytest.mark.asyncio
     async def test_the_first_model_call_opens_the_turn_when_the_entry_hook_did_not_run(self):
@@ -349,14 +332,14 @@ class TestTheEpoch:
         session = _session("# Notes\nalpha")
         profile = {"name": "Ada", "timezone": "UTC", "locale": "en-US"}
         counts = {"portfolio_count": 2}
-        first = _middleware(session, user_profile=profile, user_data_counts=counts, sandbox_enabled=True)
+        first = _middleware(session, user_profile=profile, user_data_counts=counts)
         state = await first.abefore_agent({}, None)
         _set_agent_md(session, "# Notes\nalpha\nbeta")
         second = await first.abefore_agent(state, None)
         assert [runtime_update_from_message(m).kind for m in _rows(second)] == ["agent_md_changed"]
 
         event = {**_compaction_event("a1"), "cutoff_index": 0, "anchor_message_id": None}
-        blind = _middleware(session, user_profile=None, user_data_counts=None, sandbox_enabled=True)
+        blind = _middleware(session, user_profile=None, user_data_counts=None)
         third = await blind.abefore_agent({**state, **second, "_summarization_event": event}, None)
         assert third[STATE_BASELINE]["incomplete"] is False
         rows = [runtime_update_from_message(m) for m in _rows(third)]
@@ -369,17 +352,17 @@ class TestTheEpoch:
         """An agent.md row and a profile row in view; only the profile read failed."""
         session = _session("# Notes\nalpha")
         profile = {"name": "Ada", "timezone": "Asia/Hong_Kong", "locale": "en-US"}
-        first = _middleware(session, user_profile=profile, user_data_counts={"portfolio_count": 2}, sandbox_enabled=True)
+        first = _middleware(session, user_profile=profile, user_data_counts={"portfolio_count": 2})
         state = await first.abefore_agent({}, None)
         _set_agent_md(session, "# Notes\nalpha\nbeta")
-        moved = _middleware(session, user_profile=profile, user_data_counts={"portfolio_count": 7}, sandbox_enabled=True)
+        moved = _middleware(session, user_profile=profile, user_data_counts={"portfolio_count": 7})
         second = await moved.abefore_agent(state, None)
         assert sorted(runtime_update_from_message(m).kind for m in _rows(second)) == [
             "agent_md_changed", "profile_changed",
         ]
 
         event = {**_compaction_event("a1"), "cutoff_index": 0, "anchor_message_id": None}
-        blind = _middleware(session, user_profile=None, user_data_counts=None, sandbox_enabled=True)
+        blind = _middleware(session, user_profile=None, user_data_counts=None)
         third = await blind.abefore_agent({**state, **second, "_summarization_event": event}, None)
         rows = [runtime_update_from_message(m) for m in _rows(third)]
         assert [r.kind for r in rows] == ["baseline_rebuilt"]
@@ -395,9 +378,9 @@ class TestTheEpoch:
         and waiting for the retry would keep it in force for as long as agent.md stays down."""
         session = _session("# Notes\nalpha")
         profile = {"name": "Ada", "timezone": "UTC", "locale": "en-US"}
-        first = _middleware(session, user_profile=profile, user_data_counts={"portfolio_count": 2}, sandbox_enabled=True)
+        first = _middleware(session, user_profile=profile, user_data_counts={"portfolio_count": 2})
         state = await first.abefore_agent({}, None)
-        moved = _middleware(session, user_profile=profile, user_data_counts={"portfolio_count": 7}, sandbox_enabled=True)
+        moved = _middleware(session, user_profile=profile, user_data_counts={"portfolio_count": 7})
         second = await moved.abefore_agent(state, None)
         assert [runtime_update_from_message(m).kind for m in _rows(second)] == ["profile_changed"]
 
@@ -755,7 +738,6 @@ class TestProfileFollowsTheGoldenRule:
             _session("# Notes"),
             user_profile=profile,
             user_data_counts=counts,
-            sandbox_enabled=True,
         )
 
     @pytest.mark.asyncio
@@ -860,7 +842,7 @@ class TestProfileFollowsTheGoldenRule:
     async def test_a_profile_read_that_did_not_answer_files_no_row(self):
         """Both platform helpers answer None on failure; that is not a cleared profile."""
         state = await self._turn(self.PROFILE, self.COUNTS).abefore_agent({}, None)
-        blind = _middleware(_session("# Notes"), user_profile=None, user_data_counts=None, sandbox_enabled=True)
+        blind = _middleware(_session("# Notes"), user_profile=None, user_data_counts=None)
 
         assert await blind.abefore_agent(state, None) is None
 
@@ -884,7 +866,7 @@ class TestProfileFollowsTheGoldenRule:
         merged = {**state, **second, "_summarization_event": event}
 
         blind = _middleware(
-            _session("# Notes"), user_profile=None, user_data_counts=None, sandbox_enabled=True
+            _session("# Notes"), user_profile=None, user_data_counts=None
         )
         third = await blind.abefore_agent(merged, None)
         assert third[STATE_BASELINE]["reason"] == "compaction"
@@ -917,7 +899,7 @@ class TestProfileFollowsTheGoldenRule:
         merged = {**state, **second, "_summarization_event": event}
 
         blind = _middleware(
-            _session("# Notes"), user_profile=None, user_data_counts=None, sandbox_enabled=True
+            _session("# Notes"), user_profile=None, user_data_counts=None
         )
         third = await blind.abefore_agent(merged, None)
         fourth = await later.abefore_agent({**merged, **third}, None)
@@ -951,12 +933,12 @@ class TestProfileFollowsTheGoldenRule:
         (an explicit choice, the watchlist); the block stays, the row says."""
         first = _middleware(
             _session("# Notes"), user_profile=self.PROFILE, user_data_counts=self.COUNTS,
-            sandbox_enabled=True, preferred_market="US",
+            preferred_market="US",
         )
         state = await first.abefore_agent({}, None)
         later = _middleware(
             _session("# Notes"), user_profile=self.PROFILE, user_data_counts=self.COUNTS,
-            sandbox_enabled=True, preferred_market="CN",
+            preferred_market="CN",
         )
         second = await later.abefore_agent(state, None)
 
@@ -1010,7 +992,6 @@ class TestProfileFollowsTheGoldenRule:
                 "trading_settings_url": "https://example.com/settings",
             },
             user_data_counts=None,
-            sandbox_enabled=True,
         )
         third = await blind.abefore_agent({**legacy, **quiet}, None)
         rows = [runtime_update_from_message(m) for m in _rows(third)]
@@ -1082,7 +1063,6 @@ class TestRendering:
                 "agent_preference": {"output_format": "html", "tone": "terse"},
             },
             user_data_counts={"portfolio_count": 2, "watchlist_summary": "1:5"},
-            sandbox_enabled=True,
         )
         state = await mw.abefore_agent({}, None)
         text = _text(await _render(mw, state))
@@ -1119,20 +1099,6 @@ class TestRendering:
         assert "the user's locale is the safe choice" in text
 
     @pytest.mark.asyncio
-    async def test_a_flash_style_agent_gets_no_html_routing_and_no_agentmd(self):
-        mw = _middleware(
-            None,
-            user_profile={"agent_preference": {"output_format": "html"}},
-            sandbox_enabled=False,
-        )
-        state = await mw.abefore_agent({}, None)
-        text = _text(await _render(mw, state))
-
-        assert "Output Format: Styled HTML" not in text
-        assert "<agentmd" not in text
-        assert "<user_identity>" in text
-
-    @pytest.mark.asyncio
     async def test_a_missing_agent_md_keeps_the_create_it_placeholder(self):
         mw = _middleware(_session(None))
         state = await mw.abefore_agent({}, None)
@@ -1149,12 +1115,12 @@ class TestRendering:
         """The static prompt calls <workspace> the one authoritative place for
         the name, so a rename has to reach the model without a rebuild."""
         first = _middleware(
-            _session("# Notes"), sandbox_enabled=True,
+            _session("# Notes"),
             workspace_name="Old Name", workspace_description="old desc",
         )
         state = await first.abefore_agent({}, None)
         later = _middleware(
-            _session("# Notes"), sandbox_enabled=True,
+            _session("# Notes"),
             workspace_name="New Name", workspace_description="old desc",
         )
         second = await later.abefore_agent(state, None)
@@ -1179,11 +1145,11 @@ class TestRendering:
     async def test_a_workspace_read_that_did_not_answer_files_no_row(self):
         """A DB blip is not a workspace that lost its name."""
         first = _middleware(
-            _session("# Notes"), sandbox_enabled=True,
+            _session("# Notes"),
             workspace_name="Old Name", workspace_description="old desc",
         )
         state = await first.abefore_agent({}, None)
-        blind = _middleware(_session("# Notes"), sandbox_enabled=True)
+        blind = _middleware(_session("# Notes"))
 
         assert await blind.abefore_agent(state, None) is None
 
@@ -1197,12 +1163,12 @@ class TestRendering:
     @pytest.mark.asyncio
     async def test_a_rebuild_blind_to_the_workspace_leaves_the_rename_row_in_force(self):
         first = _middleware(
-            _session("# Notes"), sandbox_enabled=True,
+            _session("# Notes"),
             workspace_name="Old Name", workspace_description="old desc",
         )
         state = await first.abefore_agent({}, None)
         later = _middleware(
-            _session("# Notes"), sandbox_enabled=True,
+            _session("# Notes"),
             workspace_name="New Name", workspace_description="old desc",
         )
         second = await later.abefore_agent(state, None)
@@ -1210,7 +1176,7 @@ class TestRendering:
         event = {**_compaction_event("a1"), "cutoff_index": 0, "anchor_message_id": None}
         merged = {**state, **second, "_summarization_event": event}
 
-        blind = _middleware(_session("# Notes"), sandbox_enabled=True)
+        blind = _middleware(_session("# Notes"))
         third = await blind.abefore_agent(merged, None)
         assert third[STATE_BASELINE]["workspace"]["name"] == "Old Name"
         assert _rows(third) == []
@@ -1220,7 +1186,7 @@ class TestRendering:
         assert fourth is None or _rows(fourth) == []
 
         renamed_back = _middleware(
-            _session("# Notes"), sandbox_enabled=True,
+            _session("# Notes"),
             workspace_name="Old Name", workspace_description="old desc",
         )
         fifth = await renamed_back.abefore_agent({**merged, **third}, None)
@@ -1229,7 +1195,7 @@ class TestRendering:
         assert row.text.endswith("Name and description are back to what <workspace> says.")
 
     @pytest.mark.asyncio
-    async def test_a_flash_build_drops_the_memo_pointer_a_ptc_epoch_froze(self):
+    async def test_a_build_with_no_memo_source_drops_the_pointer_a_ptc_epoch_froze(self):
         store = MagicMock()
 
         async def aget(namespace, key):
@@ -1239,15 +1205,15 @@ class TestRendering:
 
         store.aget = AsyncMock(side_effect=aget)
         ptc = _middleware(
-            _session("# Notes"), sources=_sources(store, memo=("u", "memos")), sandbox_enabled=True
+            _session("# Notes"), sources=_sources(store, memo=("u", "memos"))
         )
         state = await ptc.abefore_agent({}, None)
         assert "<memo-index" in _text(await _render(ptc, state))
 
-        flash = _middleware(None)
-        second = await flash.abefore_agent(state, None)
+        bare = _middleware(None)
+        second = await bare.abefore_agent(state, None)
         assert second[STATE_BASELINE]["reason"] == "source_removed"
-        assert "<memo-index" not in _text(await _render(flash, {**state, **second}))
+        assert "<memo-index" not in _text(await _render(bare, {**state, **second}))
 
     def test_the_workspace_name_is_escaped_as_element_text(self):
         block = _workspace_block(
@@ -1315,7 +1281,7 @@ class TestTheHarnessBlocks:
 
     @pytest.mark.asyncio
     async def test_a_source_that_is_not_configured_leaves_no_block(self):
-        """Flash has no MCP roster to state, and no hole to rebuild for."""
+        """A build with no MCP roster has none to state, and no hole to rebuild for."""
         mw = _middleware(
             _session("# Notes"), blocks={"skills": lambda _state: self.MANIFEST}
         )
@@ -1713,7 +1679,6 @@ class TestTheChannelsParagraph:
             _session("# Notes"),
             user_profile=self.PROFILE,
             user_data_counts={"portfolio_count": 2},
-            sandbox_enabled=True,
             channels_enabled=channels,
         )
 

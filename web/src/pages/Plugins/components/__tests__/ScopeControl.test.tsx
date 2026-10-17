@@ -67,7 +67,7 @@ const workspaces = [
   { id: 'ws-a', name: 'Alpha' },
   { id: 'ws-b', name: 'Beta' },
 ];
-const flashWorkspace = { id: 'flash', name: 'Flash' };
+const homeWorkspace = { id: 'home', name: 'Home' };
 
 type Props = React.ComponentProps<typeof ScopeControl>;
 
@@ -156,13 +156,13 @@ describe('ScopeControl: the badge on a row new workspaces start without', () => 
     expect(trigger('No workspaces')).toBeInTheDocument();
   });
 
-  it('counts Flash when the checklist offers it', () => {
+  it('counts Home when the checklist offers it', () => {
     renderControl({
       newWorkspacesOn: false,
       disabledWorkspaceIds: ['ws-a', 'ws-b'],
-      flashWorkspace,
+      homeWorkspace,
     });
-    expect(trigger('Only in Flash')).toBeInTheDocument();
+    expect(trigger('Only in Home')).toBeInTheDocument();
   });
 
   it('keeps the deny-list wording on a row new workspaces start with', () => {

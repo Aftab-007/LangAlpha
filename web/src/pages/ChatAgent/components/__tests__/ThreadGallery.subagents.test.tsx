@@ -1,8 +1,8 @@
 /**
  * The workspace page's composer starts its thread in the chat view, so the
- * Subagents pick the composer holds rides the navigation there. A flash
- * workspace has no such setting. Rendered with the real composer; only the
- * data around it is stubbed.
+ * Subagents pick the composer holds rides the navigation there, Home's
+ * included. Rendered with the real composer; only the data around it is
+ * stubbed.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
@@ -11,11 +11,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChatInputRegistry, ContextBus } from '@/lib/contextBus';
 import { queryKeys } from '@/lib/queryKeys';
 
-const mocks = vi.hoisted(() => ({ workspaceId: '7f3c1e2a-9b4d-4c6e-8a1f-2d3b4c5e6f70', status: 'active' }));
+const mocks = vi.hoisted(() => ({ workspaceId: '7f3c1e2a-9b4d-4c6e-8a1f-2d3b4c5e6f70', isHome: false }));
 const WORKSPACE_ID = mocks.workspaceId;
 
 vi.mock('@/hooks/useWorkspace', () => ({
-  useWorkspace: () => ({ data: { workspace_id: mocks.workspaceId, name: 'Research', status: mocks.status }, error: null }),
+  useWorkspace: () => ({
+    data: { workspace_id: mocks.workspaceId, name: 'Research', status: 'running', is_home: mocks.isHome },
+    error: null,
+  }),
 }));
 vi.mock('../../hooks/useWorkspaceFiles', () => ({
   useWorkspaceFiles: () => ({ files: [], loading: false, error: null, refresh: vi.fn() }),
@@ -48,9 +51,9 @@ vi.mock('@/hooks/usePreferences', async () => {
 import ThreadGallery from '../ThreadGallery';
 
 function ChatPage() {
-  const state = useLocation().state as { subagentsAllowed?: boolean; agentMode?: string } | null;
+  const state = useLocation().state as { subagentsAllowed?: boolean; workspaceId?: string } | null;
   return (
-    <div data-testid="chat-page" data-mode={state?.agentMode ?? 'ptc'}>
+    <div data-testid="chat-page" data-workspace={state?.workspaceId}>
       {String(state?.subagentsAllowed)}
     </div>
   );
@@ -88,7 +91,7 @@ describe('ThreadGallery: the Subagents toggle', () => {
     ContextBus.__resetForTests();
     ChatInputRegistry.__resetForTests();
     Element.prototype.scrollIntoView = vi.fn();
-    mocks.status = 'active';
+    mocks.isHome = false;
   });
   afterEach(() => {
     ContextBus.__resetForTests();
@@ -104,18 +107,22 @@ describe('ThreadGallery: the Subagents toggle', () => {
     expect(pill()).toHaveAttribute('aria-pressed', 'false');
     await send('Build me a DCF');
 
-    expect(await screen.findByTestId('chat-page')).toHaveTextContent('false');
+    const page = await screen.findByTestId('chat-page');
+    expect(page).toHaveTextContent('false');
+    expect(page).toHaveAttribute('data-workspace', WORKSPACE_ID);
   });
 
-  it('is hidden on a flash workspace, whose send names none', async () => {
-    mocks.status = 'flash';
+  it("shows on Home too, and a flip rides into Home's new thread", async () => {
+    mocks.isHome = true;
     renderGallery();
     await screen.findByRole('textbox');
-    expect(pill()).toBeNull();
+    expect(pill()).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(pill()!);
     await send('What is AAPL doing?');
 
     const page = await screen.findByTestId('chat-page');
-    expect(page).toHaveAttribute('data-mode', 'flash');
-    expect(page).toHaveTextContent('undefined');
+    expect(page).toHaveAttribute('data-workspace', WORKSPACE_ID);
+    expect(page).toHaveTextContent('false');
   });
 });

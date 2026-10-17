@@ -21,8 +21,6 @@ from ptc_agent.agent.middleware._message_utils import (
 from ptc_agent.agent.middleware.skills.discovery import validate_skill_name
 from ptc_agent.agent.middleware.skills.registry import (
     SkillDefinition,
-    SkillMode,
-    _matches_mode,
     get_skill,
 )
 from ptc_agent.config.agent import host_skill_dirs
@@ -32,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 def _resolve_skill(
     skill_name: str,
-    mode: SkillMode | None,
     registry: Optional[dict[str, SkillDefinition]],
 ) -> Optional[SkillDefinition]:
     """Resolve a skill, treating a passed registry as authoritative.
@@ -43,11 +40,8 @@ def _resolve_skill(
     door.
     """
     if registry is not None:
-        skill = registry.get(skill_name)
-        if skill is not None and not _matches_mode(skill, mode):
-            return None
-        return skill
-    return get_skill(skill_name, mode=mode)
+        return registry.get(skill_name)
+    return get_skill(skill_name)
 
 
 def loaded_skill_marker(name: str, message_id: str | None = None) -> str:
@@ -90,7 +84,6 @@ class SkillPrefixResult:
 def resolve_skill_dir(
     skill_name: str,
     skill_dirs: Optional[list[str]] = None,
-    mode: SkillMode | None = None,
     *,
     registry: Optional[dict[str, SkillDefinition]] = None,
 ) -> Optional[Path]:
@@ -102,7 +95,7 @@ def resolve_skill_dir(
     search directory holding its SKILL.md wins, so an operator's drop-in
     overrides the shipped copy.
     """
-    skill = _resolve_skill(skill_name, mode, registry)
+    skill = _resolve_skill(skill_name, registry)
     if not skill:
         logger.warning(f"Skill '{skill_name}' not found in registry")
         return None
@@ -130,7 +123,6 @@ def resolve_skill_dir(
 def load_skill_content(
     skill_name: str,
     skill_dirs: Optional[list[str]] = None,
-    mode: SkillMode | None = None,
     *,
     registry: Optional[dict[str, SkillDefinition]] = None,
 ) -> Optional[str]:
@@ -140,15 +132,13 @@ def load_skill_content(
         skill_name: Name of the skill (e.g. 'onboarding')
         skill_dirs: Optional list of local skill directories to search.
                    If not provided, uses project_root/skills.
-        mode: Optional agent mode filter. If provided, only loads skills
-              whose exposure matches the mode.
         registry: Per-build registry, authoritative when passed (no global
               fallback — see ``_resolve_skill``).
 
     Returns:
         Content of SKILL.md as string, or None if not found
     """
-    skill_dir = resolve_skill_dir(skill_name, skill_dirs, mode, registry=registry)
+    skill_dir = resolve_skill_dir(skill_name, skill_dirs, registry=registry)
     if skill_dir is None:
         return None
     skill_md_path = skill_dir / "SKILL.md"
@@ -163,35 +153,9 @@ def load_skill_content(
     return content
 
 
-def build_tool_descriptions(
-    skill_name: str,
-    mode: SkillMode | None = None,
-    *,
-    registry: Optional[dict[str, SkillDefinition]] = None,
-) -> Optional[str]:
-    """Build formatted tool descriptions for a skill.
-
-    Mirrors the format from ``SkillsMiddleware._build_skill_result``.
-
-    Args:
-        skill_name: Name of the skill
-        mode: Optional agent mode filter
-        registry: Per-build registry, authoritative when passed
-
-    Returns:
-        Formatted tool description string, or None if skill has no tools
-    """
-    skill = _resolve_skill(skill_name, mode, registry)
-    if not skill or not skill.tools:
-        return None
-
-    return skill.format_tool_descriptions()
-
-
 def build_skill_content(
     skills: list[SkillRequest],
     skill_dirs: Optional[list[str]] = None,
-    mode: SkillMode | None = None,
     already_loaded: Optional[set[str]] = None,
     message_id: Optional[str] = None,
     *,
@@ -212,8 +176,6 @@ def build_skill_content(
     Args:
         skills: Skills to load (anything exposing ``.name``/``.instruction``).
         skill_dirs: Optional list of local skill directories to search.
-        mode: Optional agent mode filter. Skills whose exposure doesn't match the
-              mode are skipped.
         already_loaded: Skill names already active in the thread; their bodies are
               skipped (instruction still refreshed).
         message_id: Framework id of the message this content is appended to. Embedded
@@ -244,40 +206,28 @@ def build_skill_content(
             continue
         seen_names.add(skill_ctx.name)
 
-        # Already active this thread AND still exposed in this mode: tools persist
-        # in state, so skip the body and only refresh the instruction (cheap, may
-        # carry per-turn context). The mode re-check keeps this branch consistent
-        # with the fresh path below — a stale loaded_skills entry for a skill not
-        # exposed in the current mode falls through and is skipped, not injected.
+        # Already active this thread AND still in this build's registry: tools
+        # persist in state, so skip the body and only refresh the instruction
+        # (cheap, may carry per-turn context). The registry re-check keeps this
+        # branch consistent with the fresh path below — a stale loaded_skills
+        # entry for a skill this build no longer carries falls through and is
+        # skipped, not injected.
         if skill_ctx.name in already_loaded and _resolve_skill(
-            skill_ctx.name, mode, registry
+            skill_ctx.name, registry
         ):
             if skill_ctx.instruction:
                 instructions.append((skill_ctx.name, skill_ctx.instruction))
             continue
 
-        content = load_skill_content(
-            skill_ctx.name, skill_dirs, mode=mode, registry=registry
-        )
+        content = load_skill_content(skill_ctx.name, skill_dirs, registry=registry)
         if not content:
             logger.warning(f"Skipping skill '{skill_ctx.name}': SKILL.md not found")
             continue
 
         newly_loaded.append(skill_ctx.name)
-
-        # Build per-skill block with tool descriptions
-        block_parts = [content]
-        tool_desc = build_tool_descriptions(skill_ctx.name, mode=mode, registry=registry)
-        if tool_desc:
-            block_parts.append(f"\n**Available tools:**\n{tool_desc}")
-            block_parts.append(
-                "You can call these tools directly without needing to call LoadSkill."
-            )
-
-        block_content = "\n".join(block_parts)
         skill_blocks.append(
             f"{loaded_skill_marker(skill_ctx.name, message_id)}\n"
-            f"{block_content}\n</loaded-skill>"
+            f"{content}\n</loaded-skill>"
         )
 
         if skill_ctx.instruction:
@@ -357,6 +307,8 @@ def _skill_call(call: Any) -> tuple[str, str, bool] | None:
         if match is None or not validate_skill_name(match.group(1), match.group(1))[0]:
             return None
         return match.group(1), path, _whole_read(args)
+    # A thread the retired Flash agent started loaded skills through this
+    # tool, and its history still carries those calls.
     if name == "LoadSkill" and isinstance(args.get("skill_name"), str):
         return args["skill_name"], "", True
     return None

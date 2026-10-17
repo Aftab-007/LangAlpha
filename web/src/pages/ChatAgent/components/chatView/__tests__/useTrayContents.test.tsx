@@ -21,7 +21,7 @@ function readTray(hasActiveSubagents: boolean) {
     hasActiveSubagents,
     reportBackOwed: false,
     owedThreads: null,
-    mode: 'ptc',
+    isHome: false,
   }), { wrapper });
   return result.current;
 }

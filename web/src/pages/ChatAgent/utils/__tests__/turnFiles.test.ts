@@ -126,7 +126,7 @@ describe('collectTurnFiles', () => {
     expect(files[0].location).toEqual({ line: 42 });
   });
 
-  it('carries the workspace a Flash relay named', () => {
+  it('carries the workspace a Chief of Staff relay named', () => {
     const files = collectTurnFiles([assistant('See [the model](__wsref__/ws-7/results/model.md).')]);
     expect(files[0]).toMatchObject({ path: 'results/model.md', workspaceId: 'ws-7' });
   });

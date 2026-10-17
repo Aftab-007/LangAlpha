@@ -9,20 +9,21 @@ on.
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.server.services import automation_delivery
 from src.server.services.automation_delivery import Delivery, Target
 from src.server.services.report_back.flash import keys, requested_from
-from src.tools.secretary.tools import ptc_agent
+from src.tools.secretary.chief_of_staff import delegate_to_analyst
 from tests.unit.server.handlers.chat.redis_fakes import FakeCache
 
-from .conftest import FakeResp, FakeSession, workspace_manager
+from .conftest import FakeResp, FakeSession
 
 USER_ID = "user-1"
 FLASH_THREAD_ID = "flash-thread-1"
+WORKSPACE_ID = "22222222-2222-2222-2222-222222222222"
 DESK = Target(entry="slack:T/C", address="slack:T/C", name="#desk", ok=True)
 
 
@@ -35,20 +36,20 @@ def cache(monkeypatch):
 
 async def _dispatch(configurable: dict) -> dict:
     call = {
-        "name": "ptc_agent",
-        "args": {"question": "Value NVDA", "state": {}},
+        "name": "delegate_to_analyst",
+        "args": {"question": "Value NVDA", "workspace_id": WORKSPACE_ID, "state": {}},
         "id": "call_1",
         "type": "tool_call",
     }
     with (
         patch("src.tools.secretary.dispatch.hitl_confirm", return_value=(True, {})),
         patch(
-            "src.server.services.workspace_manager.WorkspaceManager.get_instance",
-            return_value=workspace_manager(),
+            "src.server.database.workspace.get_workspace",
+            AsyncMock(return_value={"user_id": USER_ID, "name": "Semis"}),
         ),
         patch("aiohttp.ClientSession", return_value=FakeSession(FakeResp())),
     ):
-        result = await ptc_agent.ainvoke(
+        result = await delegate_to_analyst.ainvoke(
             call,
             config={
                 "configurable": {

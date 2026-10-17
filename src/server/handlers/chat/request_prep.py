@@ -1,11 +1,11 @@
-"""Chat request preparation — shared by the flash & PTC run generators.
+"""Chat request preparation for the PTC run generator.
 
 Everything that turns a raw ``ChatRequest`` into a runnable graph invocation:
 message normalization, HITL response translation, fork/timezone resolution,
 skill contexts, steering setup, thread bootstrap, and graph config assembly.
-Identical between the two run flavors, so it lives once here. The START
-entry and retransmit dedup live in ``services.runs.admission``; error
-classification and the terminal error funnel live in ``error_handling``.
+The START entry and retransmit dedup live in ``services.runs.admission``;
+error classification and the terminal error funnel live in
+``error_handling``.
 """
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ from src.server.utils.skill_context import (
     detect_slash_commands,
     parse_skill_contexts,
 )
-from src.tools.web.fetch import fetch_llm_client_override, fetch_model_override
 from src.utils.timezone_utils import zone_or_none
 from src.utils.tracking import TokenTrackingManager
 from src.tools.decorators import ToolUsageTracker
@@ -116,7 +115,7 @@ def _resolve_fork(
     *, request: ChatRequest, thread_id: str
 ) -> tuple[str, Optional[ForkSpec]]:
     """Compute query_type and the fork cleanup spec (truncation + checkpoint
-    pin), shared by flash and PTC handlers.
+    pin).
 
     The cleanup itself executes INSIDE the START transaction (v4 2.4,
     ``start_run(fork=...)``): truncation, checkpoint pin, and the new attempt
@@ -283,7 +282,6 @@ def serialize_context_metadata(
     request: ChatRequest,
     query_metadata: dict,
     user_input: str,
-    mode: str,
     extra_commands: dict[str, str] | None = None,
     allowed_skills: set[str] | None = None,
 ) -> None:
@@ -312,7 +310,6 @@ def serialize_context_metadata(
     if not request.hitl_response and "additional_context" not in query_metadata:
         _, early_detected = detect_slash_commands(
             user_input,
-            mode=mode,
             extra_commands=extra_commands,
             allowed_skills=allowed_skills,
         )
@@ -370,21 +367,6 @@ def init_tracking(thread_id: str) -> tuple[TokenTrackingManager, ToolUsageTracke
     )
     tool_tracker = ToolUsageTracker(thread_id=thread_id)
     return token_callback, tool_tracker
-
-
-def apply_fetch_override(config) -> None:
-    """Propagate fetch model / client overrides from *config* into context vars.
-
-    A blank fetch means the turn's flash model, the same default ``role_registry``
-    resolves a client for. Without the name override, web_fetch would fall back
-    to re-reading agent_config.yaml and miss the user's own flash choice.
-    """
-    fetch_client = config.subsidiary_llm_clients.get("fetch")
-    if fetch_client:
-        fetch_llm_client_override.set(fetch_client)
-    fetch_model = config.llm and config.llm.fetch_name
-    if fetch_model:
-        fetch_model_override.set(fetch_model)
 
 
 class PriorThread(NamedTuple):
@@ -469,7 +451,6 @@ async def ensure_thread(
     thread_id: str,
     workspace_id: str,
     user_id: str,
-    msg_type: str,
     initial_query: str = "",
 ) -> PriorThread:
     """Ensure a thread record exists in the database, optionally with external linkage.
@@ -488,7 +469,6 @@ async def ensure_thread(
         user_id=user_id,
         initial_query=initial_query,
         initial_status="in_progress",
-        msg_type=msg_type,
     )
     if request.platform:
         ensure_kwargs["platform"] = request.platform
@@ -733,14 +713,14 @@ def user_skill_commands(config) -> dict[str, str] | None:
     return extra or None
 
 
-def turn_skill_names(config, mode: str) -> set[str] | None:
+def turn_skill_names(config) -> set[str] | None:
     """The skill names this turn's build actually exposes.
 
     Slash detection otherwise matches against the process-wide registry, which
-    knows nothing about this user's disables, feature opt-outs, or the build's
-    mode. A command matching a skill the build then refuses does not error: the
-    prefix is stripped and nothing loads, so the model silently receives a
-    shortened message. Assembled from the config ``resolve_llm_config`` already
+    knows nothing about this user's disables or feature opt-outs. A command
+    matching a skill the build then refuses does not error: the prefix is
+    stripped and nothing loads, so the model silently receives a shortened
+    message. Assembled from the config ``resolve_llm_config`` already
     populated, by the same call the agent build makes, so the two cannot drift.
     """
     if config is None:
@@ -751,7 +731,6 @@ def turn_skill_names(config, mode: str) -> set[str] | None:
 
     return set(
         build_effective_skill_registry(
-            mode,  # type: ignore[arg-type]
             feature_resolver=getattr(config, "feature_enabled", None),
             disabled_skills=getattr(config, "disabled_skills", None) or (),
             user_skills=getattr(config, "user_skills", None) or (),
@@ -764,7 +743,6 @@ def turn_skill_names(config, mode: str) -> set[str] | None:
 def prepare_skill_contexts(
     messages: list[dict],
     request: ChatRequest,
-    mode: str,
     extra_commands: dict[str, str] | None = None,
     allowed_skills: set[str] | None = None,
 ) -> list[dict]:
@@ -788,7 +766,6 @@ def prepare_skill_contexts(
         if msg_text:
             cleaned_text, detected = detect_slash_commands(
                 msg_text,
-                mode=mode,
                 extra_commands=extra_commands,
                 allowed_skills=allowed_skills,
             )
@@ -802,7 +779,7 @@ def prepare_skill_contexts(
 
     if skill_contexts:
         logger.info(
-            f"[{mode.upper()}_CHAT] Skills requested: {[s.name for s in skill_contexts]}"
+            f"[PTC_CHAT] Skills requested: {[s.name for s in skill_contexts]}"
         )
 
     return [
@@ -831,7 +808,6 @@ def build_graph_config(
     thread_id: str,
     user_id: str,
     workspace_id: str,
-    mode: str,
     timezone_str: str,
     token_callback,
     request: ChatRequest,
@@ -844,9 +820,8 @@ def build_graph_config(
     surface: str | None = None,
     base_checkpoint_id: str | None = None,
 ) -> dict:
-    """Build the LangGraph ``config`` dict shared by flash and PTC handlers.
+    """Build the LangGraph ``config`` dict for a PTC turn.
 
-    ``mode`` should be ``"flash"`` or ``"ptc"``.
     ``extra_configurable`` is an optional dict merged into ``configurable``.
     ``skill_contexts`` (+ ``skill_dirs``) are passed to ``SkillsMiddleware`` so it
     injects each requested skill's SKILL.md body once; omit on HITL/replay turns.
@@ -859,17 +834,12 @@ def build_graph_config(
     ``base_checkpoint_id`` is where a turn that names no checkpoint starts
     (``turn_start_checkpoint_id``).
     """
-    workflow_type = "flash_agent" if mode == "flash" else "ptc_agent"
-
-    langsmith_tags = get_langsmith_tags(
-        msg_type=mode,
-        locale=request.locale,
-    )
+    langsmith_tags = get_langsmith_tags(locale=request.locale)
     langsmith_metadata = get_langsmith_metadata(
         user_id=user_id,
         workspace_id=workspace_id,
         thread_id=thread_id,
-        workflow_type=workflow_type,
+        workflow_type="ptc_agent",
         locale=request.locale,
         timezone=timezone_str,
         llm_model=effective_model,
@@ -884,7 +854,6 @@ def build_graph_config(
         "thread_id": thread_id,
         "user_id": user_id,
         "workspace_id": workspace_id,
-        "agent_mode": mode,
         "timezone": timezone_str,
         "run_id": run_id,
         "platform": surface,

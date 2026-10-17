@@ -1,8 +1,8 @@
 """Which servers in a resolved workspace earn an egress grant, and of which kind.
 
-One place answers it, because the answer is read by three paths that would
-otherwise drift: the sandbox session's bind, the Flash turn's bind, and the
-config mutations that retire a grant before replying. A server that earns a
+One place answers it, because the answer is read by two paths that would
+otherwise drift: the sandbox session's bind, and the config mutations that
+retire a grant before replying. A server that earns a
 grant on one path and not on another is either a tool the model cannot call or
 an authorization overhang, depending on which way the two disagree.
 
@@ -68,7 +68,6 @@ async def grant_refs(
     resolved: Any,
     *,
     user_id: str,
-    direct_only: bool = False,
     snapshots: ToolSnapshotIndex | None = None,
 ) -> list[GrantRef]:
     """Every grant this workspace should hold, one per server that earns one.
@@ -78,16 +77,11 @@ async def grant_refs(
     address. Everything else that is remote, directly bound and probing clean
     earns a header grant naming the row.
 
-    ``direct_only`` is the Flash shape: with no sandbox, a server reaches the
-    model only through a directly bound tool, so an OAuth grant for anything
-    else would be authority nothing spends. A sandbox workspace keeps one for
-    every OAuth connection instead, because its generated wrappers dial the
-    relay for all of them. A header row is the same on both paths, since the
-    sandbox reaches it with the row's own headers and needs no grant.
+    Every OAuth connection earns one, bound directly or not, because the
+    sandbox's generated wrappers dial the relay for all of them.
 
-    ``snapshots`` is the probe index; pass one already built (the Flash path
-    has it), or leave it out and it is read only if some row could actually
-    earn a header grant.
+    ``snapshots`` is the probe index; pass one already built, or leave it out
+    and it is read only if some row could actually earn a header grant.
     """
     plans = resolved.binding_plans_by_name
     refs: list[GrantRef] = []
@@ -98,8 +92,6 @@ async def grant_refs(
             continue
         server = entry.config
         if server.oauth_connection_id:
-            if direct_only and entry.name not in plans:
-                continue
             kind = GRANT_KIND_OAUTH_MCP
         else:
             if not _header_candidate(server):

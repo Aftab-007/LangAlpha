@@ -60,7 +60,6 @@ function automation(trigger: TriggerType, status: AutomationStatus, last: Execut
     trigger_config: null,
     next_run_at: trigger === 'price' || status === 'completed' || status === 'disabled' ? null : NEXT,
     last_run_at: null,
-    agent_mode: 'flash',
     instruction: 'Summarize the market.',
     workspace_id: null,
     llm_model: null,

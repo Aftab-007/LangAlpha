@@ -55,8 +55,8 @@ describe('queryKeys', () => {
       expect(queryKeys.workspaces.detail('ws-123')).toEqual(['workspaces', 'detail', 'ws-123']);
     });
 
-    it('flash() extends the workspaces base key', () => {
-      expect(queryKeys.workspaces.flash()).toEqual(['workspaces', 'flash']);
+    it('home() extends the workspaces base key', () => {
+      expect(queryKeys.workspaces.home()).toEqual(['workspaces', 'home']);
     });
   });
 
@@ -93,7 +93,7 @@ describe('queryKeys', () => {
       expect(queryKeys.workspaces.lists().slice(0, prefix.length)).toEqual(prefix);
       expect(queryKeys.workspaces.list({}).slice(0, prefix.length)).toEqual(prefix);
       expect(queryKeys.workspaces.detail('x').slice(0, prefix.length)).toEqual(prefix);
-      expect(queryKeys.workspaces.flash().slice(0, prefix.length)).toEqual(prefix);
+      expect(queryKeys.workspaces.home().slice(0, prefix.length)).toEqual(prefix);
     });
   });
 });

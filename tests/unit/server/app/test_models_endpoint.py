@@ -118,6 +118,8 @@ class TestListModelsResponse:
         body = resp.json()
         defaults = body["system_defaults"]
         assert defaults["default_model"] == "claude-sonnet-4-5"
+        assert defaults["background_model"] == "claude-haiku-4-5"
+        # The old name, still read by clients that have not moved.
         assert defaults["flash_model"] == "claude-haiku-4-5"
         assert defaults["compaction_model"] == "claude-haiku-4-5"
         assert defaults["fetch_model"] == "claude-haiku-4-5"

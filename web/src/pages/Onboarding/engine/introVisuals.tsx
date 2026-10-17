@@ -14,8 +14,9 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
 import type { IntroVisualId } from '../registry';
-import { IntroHomeIcon, useAgentNames } from './introAgents';
+import { useAgentNames } from './introAgents';
 import './pageIntro.css';
 
 /*
@@ -133,16 +134,16 @@ function InputDock({ hot = false, delay, chip }: { hot?: boolean; delay?: number
 }
 
 /** A workspace card in the gallery wireframe: title, blurb, updated-at.
-    The Flash card is fully color-filled — that's how users tell it apart
-    from regular (unfilled) workspace cards in the real gallery. */
-function WsCard({ hot = false, flash = false, delay }: { hot?: boolean; flash?: boolean; delay: number }) {
+    The All workspaces card is fully color-filled, which is how users tell it
+    apart from regular (unfilled) workspace cards in the real gallery. */
+function WsCard({ hot = false, home = false, delay }: { hot?: boolean; home?: boolean; delay: number }) {
   return (
     <Region
       hot={hot}
       delay={delay}
       className="flex flex-col gap-1 p-2"
       style={
-        flash
+        home
           ? {
               background:
                 'linear-gradient(135deg, hsl(var(--primary) / 0.22), hsl(var(--primary) / 0.08))',
@@ -152,7 +153,7 @@ function WsCard({ hot = false, flash = false, delay }: { hot?: boolean; flash?: 
       }
     >
       <div className="flex items-center gap-1">
-        {flash && <IntroHomeIcon className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
+        {home && <HomeRowIcon className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
         <Ln w="52%" h={4} c="var(--iv-line-2)" />
       </div>
       <Ln w="88%" />
@@ -164,18 +165,19 @@ function WsCard({ hot = false, flash = false, delay }: { hot?: boolean; flash?: 
   );
 }
 
-/* ── chat · step 1: the agent's two modes, side by side ────────────────── */
+/* ── chat · step 1: the agent's two roles, side by side ────────────────── */
 
-/** Split scene: Flash (instant answer) vs PTC (subagents → deliverable). */
+/** Split scene: the Chief of Staff (coordination) vs a workspace's Analyst
+    (subagents → deliverable). */
 function TwoModes() {
   const names = useAgentNames();
   return (
     <Frame topbar={<Ln w="26%" />}>
       <div className="flex flex-1 gap-2">
-        {/* Flash half: coordinating the desk, with quick answers on the side */}
+        {/* Chief of Staff half: coordinating the desk, with quick answers on the side */}
         <Region hot delay={0.12} className="flex flex-1 flex-col gap-1.5 p-2">
           <div className="flex items-center gap-1.5" style={{ color: 'var(--iv-accent)' }}>
-            <IntroHomeIcon className="h-2.5 w-2.5" />
+            <HomeRowIcon className="h-2.5 w-2.5" />
             <span className="font-mono text-[0.5rem]">{names.home}</span>
           </div>
           <OrchRow
@@ -196,8 +198,9 @@ function TwoModes() {
             coordination · quick answers
           </span>
         </Region>
-        {/* PTC half: subagents fanning out toward a deliverable. Plain region
-            + teal tag — the blue accent belongs to Flash in this comparison */}
+        {/* Analyst half: subagents fanning out toward a deliverable. Plain
+            region + teal tag, since the blue accent belongs to the Chief of Staff
+            in this comparison */}
         <Region delay={0.28} className="flex flex-1 flex-col gap-1.5 p-2">
           <div className="flex items-center">
             <Tag color="var(--iv-teal)">{names.worker}</Tag>
@@ -244,9 +247,9 @@ function WorkspaceGrid() {
           <Ln w="30%" c="var(--iv-line-3)" />
         </Region>
         {/* no hot card here — the step is about the gallery as a whole, and a
-            highlighted card would read as a second Flash card */}
+            highlighted card would read as a second All workspaces card */}
         <div className="grid flex-1 auto-rows-fr grid-cols-2 gap-2">
-          <WsCard flash delay={0.24} />
+          <WsCard home delay={0.24} />
           <WsCard delay={0.32} />
           <WsCard delay={0.4} />
           <WsCard delay={0.48} />
@@ -260,7 +263,7 @@ function WorkspaceGrid() {
   );
 }
 
-/* ── chat · step 2: a Flash chat page ──────────────────────────────────── */
+/* ── chat · step 2: a Chief of Staff chat page ─────────────────────────── */
 
 /** Compact live-quote card, echoing the real quote tool-result card. */
 function QuoteCard({
@@ -309,7 +312,7 @@ function QuoteCard({
   );
 }
 
-/** One line of Flash's orchestration run: icon · action · ✓. */
+/** One line of the Chief of Staff's orchestration run: icon · action · ✓. */
 function OrchRow({
   icon,
   label,
@@ -332,10 +335,10 @@ function OrchRow({
   );
 }
 
-/** Orchestration first: Flash sets up a workspace, dispatches the heavy task
-    to PTC, and schedules an automation; a quick price check follows so fast
-    QA reads as part of the job, not the whole job. */
-function FlashAnswer() {
+/** Orchestration first: the Chief of Staff sets up a workspace, dispatches
+    the heavy task to its Analyst, and schedules an automation; a quick price
+    check follows so fast QA reads as part of the job, not the whole job. */
+function ChiefOfStaffAnswer() {
   const names = useAgentNames();
   return (
     <Frame topbar={<><Ln w="22%" /><Tag>{names.home}</Tag></>}>
@@ -356,7 +359,7 @@ function FlashAnswer() {
         </div>
         <Region hot delay={0.2} className="flex flex-col gap-1.5 p-2">
           <div className="flex items-center gap-1.5" style={{ color: 'var(--iv-accent)' }}>
-            <IntroHomeIcon className="h-2.5 w-2.5" />
+            <HomeRowIcon className="h-2.5 w-2.5" />
             <span className="font-mono text-[0.5rem]">{names.homeRun} · orchestrating</span>
           </div>
           <OrchRow
@@ -391,7 +394,7 @@ function FlashAnswer() {
         </div>
         <Region delay={0.62} className="flex flex-col gap-1.5 p-2">
           <div className="flex items-center gap-1.5" style={{ color: 'var(--iv-accent)' }}>
-            <IntroHomeIcon className="h-2.5 w-2.5" />
+            <HomeRowIcon className="h-2.5 w-2.5" />
             <span className="font-mono text-[0.5rem]">{names.homeRun} · 0.9s</span>
           </div>
           <div className="grid grid-cols-2 gap-1.5">
@@ -405,7 +408,7 @@ function FlashAnswer() {
   );
 }
 
-/* ── chat · step 3: a PTC thread page running code ─────────────────────── */
+/* ── chat · step 3: an Analyst thread page running code ────────────────── */
 
 /** A subagent task card, echoing the real run cards (name · ✓ · n tools). */
 function SubagentCard({ name, tools, delay }: { name: string; tools: string; delay: number }) {
@@ -442,7 +445,7 @@ function PtcSandbox() {
       <div className="flex flex-1 gap-2">
         {/* chat column */}
         <div className="flex min-w-0 flex-[1.5] flex-col gap-2">
-          {/* parallel subagents (Flash can't do this) */}
+          {/* parallel subagents */}
           <SubagentCard name="data-prep" tools="23 tools" delay={0.1} />
           <SubagentCard name="report-builder" tools="10 tools" delay={0.18} />
           {/* narration, blurred */}
@@ -547,7 +550,7 @@ function CreateWorkspace() {
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <WsCard flash delay={0} />
+              <WsCard home delay={0} />
               <WsCard delay={0} />
               <WsCard delay={0} />
               <WsCard delay={0} />
@@ -991,7 +994,7 @@ function DashboardAttach() {
 export const INTRO_VISUALS: Record<IntroVisualId, () => ReactNode> = {
   twoModes: TwoModes,
   workspaceGrid: WorkspaceGrid,
-  flashAnswer: FlashAnswer,
+  chiefOfStaffAnswer: ChiefOfStaffAnswer,
   ptcSandbox: PtcSandbox,
   createWorkspace: CreateWorkspace,
   filePanel: FilePanel,
@@ -1011,7 +1014,7 @@ export const INTRO_VISUAL_ANCHOR: Record<IntroVisualId, 'left' | 'right' | 'cent
   // centered: symmetric comparison, fades its own edges
   twoModes: 'center',
   workspaceGrid: 'left',
-  flashAnswer: 'left',
+  chiefOfStaffAnswer: 'left',
   ptcSandbox: 'left',
   // centered: the scene fades its own edges instead of bleeding one side
   createWorkspace: 'center',

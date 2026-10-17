@@ -1,9 +1,9 @@
 """Starting a question as a background turn of a workspace's own agent.
 
-Flash's ``ptc_agent`` and the Chief of Staff's ``delegate_to_analyst`` both
-hand work over through ``dispatch``. The turn starts over the chat endpoint
-in the background, and a report-back slot taken before the request goes out
-is kept or rolled back by what the reply proves about whether the run started.
+The Chief of Staff's ``delegate_to_analyst`` hands work over through
+``dispatch``. The turn starts over the chat endpoint in the background, and a
+report-back slot taken before the request goes out is kept or rolled back by
+what the reply proves about whether the run started.
 """
 
 import asyncio
@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import uuid
-from typing import Literal
 
 from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -23,7 +22,6 @@ from src.tools.secretary._commands import (
     hitl_confirm,
     success_command,
     verify_thread_owner,
-    verify_workspace_owner,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,8 +30,6 @@ logger = logging.getLogger(__name__)
 _DISPATCH_CONFIRM_GRACE_S = 6.0
 _DISPATCH_CONFIRM_POLL_S = 0.5
 
-# Flash's ptc_agent gets this too and has no stop of its own, so the stop is
-# offered as the user's choice rather than the model's.
 _THREAD_BUSY = (
     "That thread is still working on an earlier message, so this was not "
     "sent. Tell the user it is busy: they can wait for that turn and ask "
@@ -114,24 +110,12 @@ def _unknown_dispatch_command(
     )
 
 
-async def _cleanup_auto_created_workspace(workspace_id: str) -> None:
-    """Best-effort delete of a just-created, provably-unused workspace."""
-    try:
-        from src.server.services.workspace_manager import WorkspaceManager
-
-        await WorkspaceManager.get_instance().delete_workspace(workspace_id)
-    except Exception as cleanup_err:
-        logger.warning(
-            f"Failed to delete auto-created workspace {workspace_id} "
-            f"after failed dispatch: {cleanup_err}"
-        )
-
-
 async def _owned_workspace(workspace_id: str, user_id: str) -> dict | None:
     """The workspace row when ``user_id`` owns it, else None.
 
-    Ownership-scoped so the new-thread dispatch HITL card can't surface another
-    user's workspace name before the ownership check runs.
+    Ownership-scoped so the hand-off card can't surface another user's
+    workspace name. A read that fails is None as well: a continuation only
+    loses the name on its card, and a new thread is refused as not found.
     """
     from src.server.database.workspace import get_workspace
 
@@ -143,34 +127,6 @@ async def _owned_workspace(workspace_id: str, user_id: str) -> dict | None:
     return ws if ws and str(ws.get("user_id")) == user_id else None
 
 
-
-# Concurrent dispatches that planned one name each take the next free number.
-_AUTO_NAME_ATTEMPTS = 5
-
-
-async def _free_workspace_name(user_id: str, name: str) -> str:
-    """A name for a workspace nobody named, numbered past the ones the user has."""
-    from src.server.database.workspace import get_workspace_name_keys
-    from src.server.database.workspace_names import (
-        WorkspaceNameInvalid,
-        checked_workspace_name,
-        first_free_name,
-    )
-
-    try:
-        name = checked_workspace_name(name)
-    except WorkspaceNameInvalid:
-        name = "Research"
-    try:
-        taken = await get_workspace_name_keys(user_id)
-    except Exception as e:
-        # Only the number is lost: creation still refuses a taken name, and
-        # the caller's retry asks again.
-        logger.warning(f"Failed to read workspace names for {user_id}: {e}")
-        return name
-    return first_free_name(name, taken)
-
-
 async def dispatch(
     question: str,
     config: RunnableConfig,
@@ -179,17 +135,14 @@ async def dispatch(
     report_back: bool,
     tool_call_id: str,
     preapproved: bool = False,
-    *,
-    dispatcher: Literal["chief_of_staff", "flash"],
 ) -> Command:
     """Start ``question`` as a background turn of a workspace's own agent.
 
-    The workspace is ``workspace_id``, or ``thread_id``'s when continuing one;
-    with neither, a workspace is created for the question. The dispatcher's
-    own workspace is refused: a turn there is the dispatcher again, not the
-    agent of the workspace it meant. A ``preapproved`` hand-off, one the user
-    approved in advance, starts without asking. ``dispatcher`` names the
-    calling agent on the thread's origin, for history's label only.
+    The workspace is ``thread_id``'s when continuing one, else ``workspace_id``;
+    the caller refuses a call naming neither. The dispatcher's own workspace is
+    refused: a turn there is the dispatcher again, not the agent of the
+    workspace it meant. A ``preapproved`` hand-off, one the user approved in
+    advance, starts without asking.
     """
     import aiohttp
 
@@ -199,8 +152,8 @@ async def dispatch(
         return error_command("user_id not found in config", tool_call_id)
 
     # With auth enabled, the endpoint rejects an unauthenticated background
-    # dispatch (403); abort before any side effect (HITL prompt, workspace
-    # creation, cap reservation) so the user gets the specific error instead.
+    # dispatch (403); abort before any side effect (HITL prompt, cap
+    # reservation) so the user gets the specific error instead.
     from src.config.settings import background_dispatch_requires_token
 
     if background_dispatch_requires_token():
@@ -216,8 +169,6 @@ async def dispatch(
 
     is_continuation = thread_id is not None
 
-    # Resolve workspace_id from existing thread or create/verify workspace
-    workspace = None
     if is_continuation:
         from src.server.database.conversation.threads_read import get_thread_by_id
 
@@ -238,24 +189,17 @@ async def dispatch(
             return err
         thread = await get_thread_by_id(thread_id)
         workspace_id = str(thread["workspace_id"])
-        workspace = await _owned_workspace(workspace_id, user_id)
-        workspace_name = workspace.get("name") if workspace else None
     else:
-        # New thread: surface the existing workspace's real name; when
-        # auto-creating (no workspace_id) use the planned name (question snippet).
-        if workspace_id:
-            # Canonical, as the owner check reads it, so no other spelling of
-            # the dispatcher's own id gets past the check below. One that is
-            # no UUID matches no row, which the owner check refuses.
-            workspace_id = normalize_uuid(workspace_id) or workspace_id
-            workspace = await _owned_workspace(workspace_id, user_id)
-            workspace_name = workspace.get("name") if workspace else None
-        else:
-            workspace_name = await _free_workspace_name(user_id, question[:50])
+        # Canonical, as the owner check reads it, so no other spelling of
+        # the dispatcher's own id gets past the check below. One that is
+        # no UUID matches no row, which the owner check refuses.
+        workspace_id = normalize_uuid(workspace_id) or workspace_id
+    workspace = await _owned_workspace(workspace_id, user_id)
+    workspace_name = workspace.get("name") if workspace else None
 
-    # Any flash row, not only the dispatcher's: a turn there runs on Flash or
-    # as the Chief of Staff in Home, never as a workspace's analyst.
-    if workspace_id is not None and (
+    # Any flash row, not only the dispatcher's: a turn there is never a
+    # workspace's analyst.
+    if (
         workspace_id == normalize_uuid(configurable.get("workspace_id"))
         or is_flash_row(workspace)
     ):
@@ -264,6 +208,11 @@ async def dispatch(
             "dispatch to another workspace.",
             tool_call_id,
         )
+    # Refused before the card, so the user is never asked to approve a
+    # hand-off that cannot run. A continuation's workspace is its thread's,
+    # which the owner check above already proved.
+    if workspace is None and not is_continuation:
+        return error_command("workspace not found", tool_call_id)
 
     if not preapproved:
         approved, response = hitl_confirm(
@@ -288,51 +237,7 @@ async def dispatch(
             if "report_back" in overrides:
                 report_back = overrides["report_back"]
 
-    auto_created_workspace = False
     if not is_continuation:
-        # Create workspace or verify ownership
-        if workspace_id is None:
-            from src.server.services.report_back.flash.reserve import check_dispatch_capacity
-
-            # Advisory cap check BEFORE provisioning: a dispatch reserve() is
-            # certain to reject must not spin up a sandbox it would orphan.
-            # reserve() below remains the atomic authority.
-            cap_err = await check_dispatch_capacity(
-                configurable.get("thread_id") if report_back else None, user_id
-            )
-            if cap_err is not None:
-                return error_command(cap_err, tool_call_id)
-            try:
-                from src.server.database.workspace_names import WorkspaceNameTaken
-                from src.server.services.workspace_manager import WorkspaceManager
-
-                workspace_manager = WorkspaceManager.get_instance()
-                name = workspace_name
-                for attempt in range(_AUTO_NAME_ATTEMPTS):
-                    try:
-                        workspace = await workspace_manager.create_workspace(
-                            user_id=user_id,
-                            name=name,
-                            description=f"Auto-created for: {question[:100]}",
-                        )
-                        break
-                    except WorkspaceNameTaken:
-                        # Another dispatch took it since the last read; the
-                        # next free one is the same name with a later number.
-                        if attempt == _AUTO_NAME_ATTEMPTS - 1:
-                            raise
-                        name = await _free_workspace_name(user_id, workspace_name)
-                workspace_id = str(workspace["workspace_id"])
-                workspace_name = name
-                auto_created_workspace = True
-            except Exception as e:
-                logger.error(f"Failed to create workspace for PTC dispatch: {e}")
-                return error_command("workspace_creation_failed", tool_call_id)
-        else:
-            if err := await verify_workspace_owner(workspace_id, user_id, tool_call_id):
-                return err
-
-        # New thread
         thread_id = str(uuid.uuid4())
 
     # reserve() takes a cap slot + records the PTC origin, rolling back on any
@@ -389,15 +294,10 @@ async def dispatch(
 
         # Cap rejection or a fail-closed origin write — abort (reserve rolls back).
         if slot.error is not None:
-            # No HTTP was sent, so a workspace auto-created above is provably
-            # unused — delete it rather than leak its sandbox (the pre-check
-            # narrows this to the pre-check/reserve race).
-            if auto_created_workspace:
-                await _cleanup_auto_created_workspace(workspace_id)
             return error_command(slot.error, tool_call_id)
         # ``rejected``: a definitive non-scheduling proof was observed — a
-        # cancellation arriving during the subsequent best-effort cleanup must
-        # then NOT commit. ``ambiguous_error``: delivery unproven either way;
+        # cancellation landing while the response and session close must then
+        # NOT commit. ``ambiguous_error``: delivery unproven either way;
         # settled by the admission-marker reconciliation below the try.
         rejected = False
         ambiguous_error: str | None = None
@@ -409,7 +309,6 @@ async def dispatch(
                     f"{self_base_url}/api/v1/threads/{thread_id}/messages",
                     json={
                         "messages": [{"role": "user", "content": question}],
-                        "agent_mode": "ptc",
                         "workspace_id": workspace_id,
                         # Durable provenance on the thread row. Unconditional —
                         # unlike origin_flash_thread_id below, which is a
@@ -417,10 +316,10 @@ async def dispatch(
                         "origin": {
                             "type": "agent",
                             "id": configurable.get("thread_id"),
-                            "agent": dispatcher,
+                            "agent": "chief_of_staff",
                         },
                         # Ordering hint for finalize hooks: only a WIRED
-                        # report-back binds the run to this flash thread's
+                        # report-back binds the run to this thread's
                         # serialization chain.
                         "origin_flash_thread_id": (
                             flash_thread_id if slot.wired else None
@@ -442,11 +341,8 @@ async def dispatch(
                     if resp.status >= 400:
                         # An error status proves the endpoint exited before
                         # scheduling the run (every raise path precedes its
-                        # create_task), so an auto-created workspace is still
-                        # provably unused.
+                        # create_task).
                         rejected = True
-                        if auto_created_workspace:
-                            await _cleanup_auto_created_workspace(workspace_id)
                         if resp.status == 409:
                             # A running turn takes the hand-off as a steer, so
                             # a 409 means one it cannot ride: stopping,
@@ -488,22 +384,18 @@ async def dispatch(
                             run_id = body.get("run_id")
                             steered = body.get("status") == "steered"
         except asyncio.CancelledError:
-            # Cancellation mid-exchange (flash turn cancelled, worker
+            # Cancellation mid-exchange (the dispatching turn cancelled, worker
             # shutdown) is as ambiguous as a lost response: the endpoint may
             # already have scheduled the run, so commit before propagating —
             # UNLESS the outcome was already definitively rejected and the
-            # cancel merely landed during the best-effort cleanup.
+            # cancel merely landed as the response and session closed.
             if not rejected:
                 slot.commit()
             raise
         except (aiohttp.ClientConnectorError, aiohttp.InvalidURL) as e:
-            # The request provably never reached the endpoint — rolling the
-            # reservation back is safe and an auto-created workspace is
-            # provably unused. (A cancel during this cleanup propagates
-            # uncommitted — the rollback is exactly what's wanted.)
+            # The request provably never reached the endpoint, so rolling the
+            # reservation back is safe.
             logger.error(f"PTC dispatch connection failed: {e}")
-            if auto_created_workspace:
-                await _cleanup_auto_created_workspace(workspace_id)
             return error_command("dispatch_failed", tool_call_id)
         except (aiohttp.ClientError, ValueError) as e:
             logger.error(f"PTC dispatch HTTP error: {e}")

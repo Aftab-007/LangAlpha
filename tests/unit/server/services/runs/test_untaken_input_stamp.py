@@ -49,7 +49,6 @@ async def _finalized_metadata(status: str, newest) -> dict:
         thread_id="thread-1",
         turn_index=3,
         attempt_no=1,
-        msg_type="ptc",
         pending_input=STAMP,
     )
     seen = {}

@@ -39,7 +39,6 @@ function run(id: string, msAgo: number, delivery: DeliveryAttempt[] | null, auto
     excerpt: null,
     dismissed_at: null,
     automation_name: 'Morning briefing',
-    agent_mode: 'ptc',
     trigger_type: 'cron',
     workspace_id: null,
   };

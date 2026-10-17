@@ -47,9 +47,6 @@ vi.mock('@/pages/Dashboard/hooks/useOnboarding', () => ({
 let mockIsMobile = false;
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
 
-let mockAllWorkspaces = true;
-vi.mock('@/hooks/useAllWorkspacesAgent', () => ({ useAllWorkspacesAgent: () => mockAllWorkspaces }));
-
 // Deterministic regardless of the .env loaded by vitest: provider tests run in
 // OSS mode (platform-only tasks filtered out).
 vi.mock('@/config/hostMode', () => ({ HOST_MODE: 'oss', isPlatformMode: false }));
@@ -138,7 +135,6 @@ describe('OnboardingProvider', () => {
     mockWorkspaces = [];
     mockSnoozed = false;
     mockIsMobile = false;
-    mockAllWorkspaces = true;
     vi.clearAllMocks();
     // drop any leftover mockResolvedValueOnce queues (clearAllMocks keeps them)
     listWatchlists.mockReset();
@@ -193,13 +189,6 @@ describe('OnboardingProvider', () => {
     mockUser = { user_id: 'u1' }; // personalization not completed
     renderAt('/dashboard');
     expect(phase()).toBe('idle');
-  });
-
-  it('does not hold the dashboard intro for a banner that is not offered without the Chief of Staff', () => {
-    mockUser = { user_id: 'u1' };
-    mockAllWorkspaces = false;
-    renderAt('/dashboard');
-    expect(intro()).toBe('dashboard');
   });
 
   it('never pops an intro over the onboarding connect sheet', () => {
@@ -375,14 +364,6 @@ describe('OnboardingProvider', () => {
     );
   });
 
-  it('getting-started: the interview tasks drop out without the Chief of Staff, which runs it', () => {
-    mockAllWorkspaces = false;
-    renderAt('/settings');
-    expect(screen.getByTestId('taskIds').textContent).toBe(
-      'dashboard,market,createWorkspace,firstChat,models'
-    );
-  });
-
   it('getting-started: the BYOK personalization flag does NOT complete any task', () => {
     mockUser = { user_id: 'u1', personalization_completed: true, onboarding_completed: false };
     renderAt('/settings');
@@ -425,7 +406,7 @@ describe('OnboardingProvider', () => {
     expect(listWatchlists).not.toHaveBeenCalled();
   });
 
-  it('getting-started: createWorkspace stamps when a non-flash workspace exists', () => {
+  it('getting-started: createWorkspace stamps when a workspace other than Home exists', () => {
     mockWorkspaces = [{ workspace_id: 'ws1' }];
     renderAt('/settings');
     expect(markTaskDone).toHaveBeenCalledWith('createWorkspace');

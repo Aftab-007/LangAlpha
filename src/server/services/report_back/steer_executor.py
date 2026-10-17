@@ -133,9 +133,7 @@ async def execute_steer(job: dict) -> None:
     if sender == "user":
         body = {
             "messages": [{"role": "user", "content": payload.get("content") or ""}],
-            # The send's own mode: with the Chief of Staff off, a Flash turn
-            # in a workspace runs as Flash, which "ptc" would not.
-            "agent_mode": payload.get("agent_mode") or "ptc",
+            "agent_mode": "ptc",
             "workspace_id": workspace_id,
             # The surface it was sent from (web, a MarketView panel), so the
             # turn answers under that surface's rules.

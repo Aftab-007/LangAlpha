@@ -5,8 +5,8 @@ import { useLocale } from '@/hooks/useLocale';
 import { useNow } from '@/hooks/useNow';
 import { relativeTime } from '@/lib/format';
 import type { Automation, AutomationRun } from '@/types/automation';
-import { useAgentModeLabels, useRunsAs, type AgentModeLabels } from '../hooks/useAgentModeLabels';
 import { useAutomationMutations, type AutomationMutations } from '../hooks/useAutomationMutations';
+import { type AutomationPlace, useAutomationPlace } from '../hooks/useAutomationPlace';
 import { useOpenThread } from '../hooks/useOpenThread';
 import { useRecentRuns } from '../hooks/useRecentRuns';
 import type { TemplateId } from '../utils/templates';
@@ -45,7 +45,7 @@ export default function FeedView({ automations, readings, onOpenAutomation, onOp
   // Once for the feed, its entries and its rail: each would otherwise hold
   // its own observer for each verb.
   const mutations = useAutomationMutations();
-  const { label: modeLabel } = useAgentModeLabels();
+  const { label: placeLabel } = useAutomationPlace();
 
   const days = useMemo(() => groupRunsByDay(runs), [runs]);
 
@@ -73,7 +73,7 @@ export default function FeedView({ automations, readings, onOpenAutomation, onOp
                     run={run}
                     automation={byId.get(run.automation_id)}
                     mutations={mutations}
-                    modeLabel={modeLabel}
+                    placeLabel={placeLabel}
                     onOpenRun={onOpenRun}
                   />
                 ))}
@@ -105,19 +105,18 @@ function RunEntry({
   run,
   automation,
   mutations,
-  modeLabel,
+  placeLabel,
   onOpenRun,
 }: {
   run: AutomationRun;
   automation: Automation | undefined;
   mutations: AutomationMutations;
-  modeLabel: AgentModeLabels['label'];
+  placeLabel: AutomationPlace['label'];
   onOpenRun: (automationId: string, runId: string) => void;
 }) {
   const { t } = useTranslation();
   const locale = useLocale();
   const openThread = useOpenThread();
-  const runsAs = useRunsAs();
   const view = describeRun(run);
   const { ui } = view;
   // Only a live run shows a time since, so only it needs the clock to move.
@@ -125,7 +124,7 @@ function RunEntry({
 
   const meta: string[] = [];
   if (run.status !== 'completed') meta.push(t(ui.labelKey));
-  meta.push(modeLabel(runsAs(run.agent_mode, run.workspace_id)));
+  meta.push(placeLabel(run));
   if (ui.live) {
     if (run.started_at) meta.push(t('automation.startedAgo', { when: relativeTime(run.started_at, locale, now) }));
   } else if (view.showDuration) {

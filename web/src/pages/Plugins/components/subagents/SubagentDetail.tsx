@@ -3,7 +3,6 @@ import { Link } from 'react-router';
 import { Trans, useTranslation } from 'react-i18next';
 import { Copy, Info, Lock, RotateCcw, Trash2 } from 'lucide-react';
 import { ConfirmStrip } from '@/components/mcp/McpPrimitives';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { useLocale } from '@/hooks/useLocale';
 import { useNow } from '@/hooks/useNow';
 import {
@@ -49,7 +48,6 @@ import {
   isCustom,
   isOrphan,
   isResettable,
-  offersAudience,
   promptSectionsAsMarkdown,
   removalCopy,
   resetLabel,
@@ -83,7 +81,6 @@ export function SubagentDetail({
 }) {
   const { t } = useTranslation();
   const labelId = useId();
-  const allWorkspaces = useAllWorkspacesAgent();
   const patch = usePatchSubagent();
   const custom = isCustom(view);
   const orphan = isOrphan(view);
@@ -157,7 +154,7 @@ export function SubagentDetail({
       }
       aside={
         orphan ? (
-          <InfoBlock view={view} allWorkspaces={allWorkspaces} />
+          <InfoBlock view={view} />
         ) : (
           <>
             <ModelBlock {...aside} />
@@ -166,8 +163,8 @@ export function SubagentDetail({
             {(data.brokerages.connected || view.brokerages !== 'off') && <BrokeragesBlock {...aside} />}
             <MemoryBlock view={view} write={write} />
             <PreferredBlock {...aside} />
-            {offersAudience(view, allWorkspaces) && <AvailableBlock view={view} write={write} />}
-            <InfoBlock view={view} allWorkspaces={allWorkspaces} />
+            {custom && <AvailableBlock view={view} write={write} />}
+            <InfoBlock view={view} />
           </>
         )
       }
@@ -250,7 +247,7 @@ function useProvenance(view: SubagentView): ReactNode {
     : t('plugins.subagents.provenance.user', { when });
 }
 
-function InfoBlock({ view, allWorkspaces }: { view: SubagentView; allWorkspaces: boolean }) {
+function InfoBlock({ view }: { view: SubagentView }) {
   const { t } = useTranslation();
   const locale = useLocale();
   const now = useNow();
@@ -276,7 +273,7 @@ function InfoBlock({ view, allWorkspaces }: { view: SubagentView; allWorkspaces:
             [t('plugins.detail.sourceLabel'), sourceText(t, view)],
             [
               t('plugins.subagents.availableTo'),
-              !custom && allWorkspaces ? audienceFacts(t, view.available_to) : null,
+              !custom ? audienceFacts(t, view.available_to) : null,
             ],
             [t('plugins.subagents.file'), view.file ? <span key="file" className="sa-file">{view.file}</span> : null],
             [t('plugins.detail.updated'), updated],

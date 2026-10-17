@@ -87,8 +87,8 @@ describe('mutationErrorMessage', () => {
 
   it('keeps a plain detail as it is', () => {
     // A handler's ValueError (409), a missing row (404), and the catch-all (500).
-    expect(mutationErrorMessage(refused(409, { detail: "workspace_id is required for agent_mode='ptc'" }), 'fallback')).toBe(
-      "workspace_id is required for agent_mode='ptc'",
+    expect(mutationErrorMessage(refused(409, { detail: 'This run is no longer waiting' }), 'fallback')).toBe(
+      'This run is no longer waiting',
     );
     expect(mutationErrorMessage(refused(404, { detail: 'Automation not found' }), 'fallback')).toBe('Automation not found');
     expect(mutationErrorMessage(refused(500, { detail: 'Failed to trigger automation' }), 'fallback')).toBe(

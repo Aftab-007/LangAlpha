@@ -15,7 +15,7 @@ import type { WidgetRenderProps } from '../../widgets/types';
 
 const mocks = vi.hoisted(() => ({
   workspaces: [{ workspace_id: 'ws-1', name: 'Workspace 1', status: 'active' }],
-  getFlashWorkspace: vi.fn(),
+  getHomeWorkspace: vi.fn(),
 }));
 
 vi.mock('@/hooks/useIsMobile', () => ({
@@ -31,7 +31,7 @@ vi.mock('@/pages/ChatAgent/utils/api', async (importActual) => ({
   getSkills: vi.fn().mockResolvedValue([]),
   getModelMetadata: vi.fn().mockResolvedValue({}),
   getWorkspaceThreads: vi.fn().mockResolvedValue({ threads: [], total: 0 }),
-  getFlashWorkspace: mocks.getFlashWorkspace,
+  getHomeWorkspace: mocks.getHomeWorkspace,
 }));
 
 // Read from the cache, so a test sets the user's default the way a
@@ -63,7 +63,7 @@ function ChatPage() {
 function renderComposer(Composer: React.ComponentType, subagentsDefault: boolean) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(queryKeys.user.preferences(), { other_preference: { subagents_default: subagentsDefault } });
-  // A send waits for the flags; none are on here.
+  // No flags are on here.
   queryClient.setQueryData(queryKeys.features.list(), []);
   render(
     <QueryClientProvider client={queryClient}>
@@ -94,15 +94,15 @@ describe.each([
     ContextBus.__resetForTests();
     ChatInputRegistry.__resetForTests();
     Element.prototype.scrollIntoView = vi.fn();
-    mocks.getFlashWorkspace.mockReset();
-    mocks.getFlashWorkspace.mockResolvedValue({ workspace_id: 'flash-ws' });
+    mocks.getHomeWorkspace.mockReset();
+    mocks.getHomeWorkspace.mockResolvedValue({ workspace_id: 'home-ws', status: 'running', is_home: true });
   });
   afterEach(() => {
     ContextBus.__resetForTests();
     ChatInputRegistry.__resetForTests();
   });
 
-  it('shows the default in PTC, and a flip rides the navigation into the new thread', async () => {
+  it('shows the default, and a flip rides the navigation into the new thread', async () => {
     renderComposer(Composer, true);
     expect(pill()).toHaveAttribute('aria-pressed', 'true');
 
@@ -117,16 +117,6 @@ describe.each([
     renderComposer(Composer, false);
     expect(pill()).toHaveAttribute('aria-pressed', 'false');
     await send('Build me a DCF');
-
-    expect(await screen.findByTestId('chat-page')).toHaveTextContent('undefined');
-  });
-
-  it('is hidden in Flash, whose send names none', async () => {
-    renderComposer(Composer, true);
-    fireEvent.click(pill()!);
-    fireEvent.click(screen.getByRole('button', { name: 'PTC' }));
-    expect(pill()).toBeNull();
-    await send('What is AAPL doing?');
 
     expect(await screen.findByTestId('chat-page')).toHaveTextContent('undefined');
   });

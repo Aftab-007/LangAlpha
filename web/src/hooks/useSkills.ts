@@ -43,7 +43,6 @@ export function invalidateSkillFanout(qc: QueryClient) {
 }
 
 export function useSkills(
-  mode: string | null,
   opts: {
     includeDisabled?: boolean;
     workspaceId?: string | null;
@@ -52,8 +51,8 @@ export function useSkills(
 ) {
   const { includeDisabled = false, workspaceId = null, allScopes = false } = opts;
   return useQuery({
-    queryKey: queryKeys.skills.list(mode, includeDisabled, workspaceId, allScopes),
-    queryFn: () => getSkills({ mode, includeDisabled, workspaceId, allScopes }),
+    queryKey: queryKeys.skills.list(includeDisabled, workspaceId, allScopes),
+    queryFn: () => getSkills({ includeDisabled, workspaceId, allScopes }),
     staleTime: 60_000,
   });
 }

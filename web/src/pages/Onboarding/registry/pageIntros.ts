@@ -8,43 +8,38 @@ import type { PageIntroDef } from './types';
 export const PAGE_INTROS: PageIntroDef[] = [
   {
     id: 'chat',
-    // Workspace gallery + a workspace's thread gallery — where modes are picked.
+    // Workspace gallery + a workspace's thread gallery.
     matchRoute: (p) => p === '/chat' || /^\/chat\/(?!t\/)[^/]+$/.test(p),
     steps: [
       {
         id: 'modes',
-        titleKey: 'onboarding.intros.chat.steps.modes.title',
-        bodyKey: 'onboarding.intros.chat.steps.modes.body',
+        titleKey: 'agents.tour.modes.title',
+        bodyKey: 'agents.tour.modes.body',
         visual: 'twoModes',
-        allWorkspaces: { titleKey: 'agents.tour.modes.title', bodyKey: 'agents.tour.modes.body' },
       },
       {
-        id: 'flash',
-        titleKey: 'onboarding.intros.chat.steps.flash.title',
-        bodyKey: 'onboarding.intros.chat.steps.flash.body',
-        visual: 'flashAnswer',
-        allWorkspaces: { titleKey: 'agents.tour.chiefOfStaff.title', bodyKey: 'agents.tour.chiefOfStaff.body' },
+        id: 'chiefOfStaff',
+        titleKey: 'agents.tour.chiefOfStaff.title',
+        bodyKey: 'agents.tour.chiefOfStaff.body',
+        visual: 'chiefOfStaffAnswer',
       },
       {
         id: 'ptc',
-        titleKey: 'onboarding.intros.chat.steps.ptc.title',
-        bodyKey: 'onboarding.intros.chat.steps.ptc.body',
+        titleKey: 'agents.tour.analyst.title',
+        bodyKey: 'agents.tour.analyst.body',
         visual: 'ptcSandbox',
-        allWorkspaces: { titleKey: 'agents.tour.analyst.title', bodyKey: 'agents.tour.analyst.body' },
       },
       {
         id: 'workspace',
         titleKey: 'onboarding.intros.chat.steps.workspace.title',
-        bodyKey: 'onboarding.intros.chat.steps.workspace.body',
+        bodyKey: 'agents.tour.workspace.body',
         visual: 'workspaceGrid',
-        allWorkspaces: { bodyKey: 'agents.tour.workspace.body' },
       },
       {
         id: 'create',
-        titleKey: 'onboarding.intros.chat.steps.create.title',
-        bodyKey: 'onboarding.intros.chat.steps.create.body',
+        titleKey: 'agents.tour.create.title',
+        bodyKey: 'agents.tour.create.body',
         visual: 'createWorkspace',
-        allWorkspaces: { titleKey: 'agents.tour.create.title', bodyKey: 'agents.tour.create.body' },
       },
     ],
   },

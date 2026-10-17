@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/hooks/usePreferences', () => ({
   usePreferences: () => ({
-    preferences: { model_preference: { preferred_flash_model: 'model-default' } },
+    preferences: { model_preference: { preferred_model: 'model-default' } },
     isLoading: false,
     isLoaded: true,
   }),
@@ -43,13 +43,13 @@ describe('ThreadModelBanner', () => {
   it('drops an open default question when the thread moves to another model', async () => {
     const onDismiss = vi.fn();
     const { rerender } = renderWithProviders(
-      <ThreadModelBanner model="model-a" defaultModel="model-default" mode="fast" onDismiss={onDismiss} />,
+      <ThreadModelBanner model="model-a" defaultModel="model-default" onDismiss={onDismiss} />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Make Model A my default' }));
     await waitFor(() => expect(screen.getByText('Make Model A your default model?')).toBeTruthy());
 
-    rerender(<ThreadModelBanner model="model-b" defaultModel="model-default" mode="fast" onDismiss={onDismiss} />);
+    rerender(<ThreadModelBanner model="model-b" defaultModel="model-default" onDismiss={onDismiss} />);
 
     expect(screen.queryByText('Make Model A your default model?')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Make default' })).toBeNull();
@@ -59,7 +59,7 @@ describe('ThreadModelBanner', () => {
 
   it('keeps focus with the question that replaces its button, and returns it on cancel', async () => {
     renderWithProviders(
-      <ThreadModelBanner model="model-a" defaultModel="model-default" mode="fast" onDismiss={vi.fn()} />,
+      <ThreadModelBanner model="model-a" defaultModel="model-default" onDismiss={vi.fn()} />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Make Model A my default' }));

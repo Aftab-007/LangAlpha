@@ -1,8 +1,9 @@
-"""What the two agents share about "which model is this turn running".
+"""What every agent graph shares about "which model is this turn running".
 
-PTC and Flash diverge honestly on tools, sandbox, MCP and middleware shape.
-They do not diverge on this question, and answering it twice is how the call
-metadata came to reach one client kind and not the others.
+The PTC agent and the market-insight research graph diverge honestly on tools,
+sandbox, MCP and middleware shape. They do not diverge on this question, and
+answering it twice is how the call metadata came to reach one client kind and
+not the others.
 """
 
 from dataclasses import dataclass
@@ -34,9 +35,9 @@ def turn_model(
 ) -> TurnModel:
     """Settle the model for this turn and stamp what the factory cannot see.
 
-    ``flash`` is the single point the two agents differ on; ``default_client``
-    is what each resolved at construction, which they do differently on
-    purpose. ``resolve_llm_config`` stamps every client it builds, so the stamp
+    ``flash`` is for a graph that runs on the Background model rather than the
+    main one; ``default_client`` is what the caller resolved at construction.
+    ``resolve_llm_config`` stamps every client it builds, so the stamp
     here is for the two it never sees: one the caller passed in, and one the
     lazy factory path built.
     """

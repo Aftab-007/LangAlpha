@@ -11,6 +11,8 @@ import { cronToHuman } from '../../../Automations/utils/cron';
 import { isPriceTriggerConfig, formatPriceTrigger, formatRetriggerMode } from '../../../Automations/utils/price';
 import type { PriceTriggerConfig } from '@/types/automation';
 import { formatDateTime, formatDuration } from '../../../Automations/utils/time';
+import { useAutomationPlace } from '../../../Automations/hooks/useAutomationPlace';
+import type { PlaceRow } from '../../../Automations/utils/place';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -148,6 +150,12 @@ function scheduleLabel(auto: Record<string, unknown> | null | undefined, t: TFun
   return (auto.schedule as string) || '\u2014';
 }
 
+/** Whether the card says where the automation runs. An older card may name
+ *  only its mode, and a newer one only its workspace. */
+function hasPlace(auto: PlaceRow): boolean {
+  return !!auto.agent_mode || !!auto.workspace_id;
+}
+
 const ACCENT = 'var(--color-accent-primary)';
 
 interface AutomationsPageLinkProps {
@@ -201,6 +209,7 @@ interface ListPanelProps {
 
 function ListPanel({ automations, total }: ListPanelProps): React.ReactElement {
   const { t } = useTranslation();
+  const { label: placeLabel } = useAutomationPlace();
   const locale = useLocale();
   const now = useNow();
   if (automations.length === 0) {
@@ -238,13 +247,13 @@ function ListPanel({ automations, total }: ListPanelProps): React.ReactElement {
               </span>
               <StatusBadge status={a.status as string} />
             </div>
-            {/* Row 2: schedule + next run + agent mode */}
+            {/* Row 2: schedule + next run + where it runs */}
             <div style={{ display: 'flex', gap: 16, fontSize: '0.75rem', color: TEXT_SECONDARY, flexWrap: 'wrap' }}>
               <span>{scheduleLabel(a, t, locale, now)}</span>
               {!!a.next_run_at && (
                 <span>{t('toolArtifact.next', { time: relativeTime(a.next_run_at as string, locale, now) })}</span>
               )}
-              {!!a.agent_mode && (
+              {hasPlace(a) && (
                 <span
                   style={{
                     fontSize: '0.625rem',
@@ -253,11 +262,9 @@ function ListPanel({ automations, total }: ListPanelProps): React.ReactElement {
                     borderRadius: 4,
                     backgroundColor: 'var(--color-bg-surface)',
                     color: 'var(--color-text-tertiary)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.03em',
                   }}
                 >
-                  {a.agent_mode as string}
+                  {placeLabel(a)}
                 </span>
               )}
             </div>
@@ -279,6 +286,7 @@ interface DetailPanelProps {
 
 function DetailPanel({ automation, executions, totalExecutions }: DetailPanelProps): React.ReactElement | null {
   const { t } = useTranslation();
+  const { label: placeLabel } = useAutomationPlace();
   const locale = useLocale();
   const now = useNow();
   if (!automation) return null;
@@ -365,8 +373,8 @@ function DetailPanel({ automation, executions, totalExecutions }: DetailPanelPro
           {t('toolArtifact.configuration')}
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
-          {!!automation.agent_mode && (
-            <ConfigRow label={t('toolArtifact.agentMode')} value={(automation.agent_mode as string).toUpperCase()} />
+          {hasPlace(automation) && (
+            <ConfigRow label={t('automation.agentMode')} value={placeLabel(automation)} />
           )}
           <ConfigRow label={t('toolArtifact.triggerType')} value={isPrice ? t('toolArtifact.priceTrigger') : isCron ? t('toolArtifact.recurringCron') : t('toolArtifact.oneTime')} />
         </div>

@@ -150,8 +150,15 @@ class WorkspaceResponse(BaseModel):
     status: str = Field(
         description=(
             "Workspace status: creating, starting, running, stopping, stopped, "
-            "error, deleted, flash"
+            "error, deleted; 'flash' for the user's Home"
         )
+    )
+    is_home: bool = Field(
+        False,
+        description=(
+            "Whether this is the user's Home, where work in no particular "
+            "workspace runs; tell Home by this, not by status"
+        ),
     )
     created_at: datetime = Field(description="Creation timestamp")
     updated_at: datetime = Field(description="Last update timestamp")

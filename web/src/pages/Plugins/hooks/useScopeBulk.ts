@@ -36,13 +36,13 @@ export interface ScopeBulkAdapter<T> {
    */
   denyMarkers: (row: T) => readonly string[] | null;
   /**
-   * The Flash workspace when this row's own checklist offers it, else null.
-   * Both actions count it as one of the row's workspaces, as the checklist
-   * does: "All workspaces" clears its deny and "only in" (which never offers
-   * Flash as a choice) switches it off, or the badge the action leaves behind
-   * counts Flash against what the button promised.
+   * Home when this row's own checklist offers it, else null. Both actions
+   * count it as one of the row's workspaces, as the checklist does: "All
+   * workspaces" clears its deny and "only in" (which never offers Home as a
+   * choice) switches it off, or the badge the action leaves behind counts
+   * Home against what the button promised.
    */
-  flashWorkspaceId?: (row: T) => string | null;
+  homeWorkspaceId?: (row: T) => string | null;
   /** Flip one workspace's deny marker on a deny-eligible row. */
   setWorkspaceEnabled: (
     row: T,
@@ -89,8 +89,8 @@ export function useScopeBulk<T>(
   function denyTarget(row: T, chosen: ReadonlySet<string> | null): BulkTarget | null {
     const markers = adapter.denyMarkers(row);
     if (!markers) return null;
-    const flashId = adapter.flashWorkspaceId?.(row) ?? null;
-    const reach = flashId ? [...liveWsIds, flashId] : liveWsIds;
+    const homeId = adapter.homeWorkspaceId?.(row) ?? null;
+    const reach = homeId ? [...liveWsIds, homeId] : liveWsIds;
     const plan = chosen ? onlyInPlan(markers, reach, chosen) : clearDenyPlan(markers, reach);
     const setNew = adapter.newWorkspaces?.(row, chosen === null) ?? null;
     if (plan.length === 0 && !setNew) return null;

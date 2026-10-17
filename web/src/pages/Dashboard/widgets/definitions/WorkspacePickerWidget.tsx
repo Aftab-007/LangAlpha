@@ -5,8 +5,9 @@ import { useNow } from '@/hooks/useNow';
 import { LayoutGrid, ArrowUpRight, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
-import { useWorkspaceText } from '@/hooks/useAllWorkspacesAgent';
-import { FlashRowIcon } from '@/hooks/useFlashWorkspace';
+import { useWorkspaceText } from '@/hooks/useWorkspaceLabel';
+import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { clearChatSession } from '@/pages/ChatAgent/hooks/utils/chatSessionRestore';
 import type { Workspace } from '@/types/api';
 import { registerWidget } from '../framework/WidgetRegistry';
@@ -36,7 +37,7 @@ function WorkspaceTile({
   const now = useNow();
   const workspaceText = useWorkspaceText();
   const text = workspaceText(workspace);
-  const isFlash = workspace.status === 'flash';
+  const isHome = isHomeWorkspace(workspace);
   const relative = relativeTime(workspace.updated_at as string | undefined, locale, now);
   const idx = String(index + 1).padStart(2, '0');
 
@@ -46,26 +47,25 @@ function WorkspaceTile({
       onClick={onOpen}
       className="group relative flex flex-col text-left overflow-hidden rounded-[10px] border transition-colors duration-200"
       style={{
-        background: isFlash
+        background: isHome
           ? 'linear-gradient(135deg, var(--color-accent-soft) 0%, var(--color-bg-card) 75%)'
           : 'var(--color-bg-card)',
-        borderColor: isFlash ? 'var(--color-accent-overlay)' : 'var(--color-border-muted)',
+        borderColor: isHome ? 'var(--color-accent-overlay)' : 'var(--color-border-muted)',
         minHeight: 86,
       }}
       onMouseEnter={(e) => {
-        if (!isFlash) e.currentTarget.style.borderColor = 'var(--color-border-default)';
+        if (!isHome) e.currentTarget.style.borderColor = 'var(--color-border-default)';
       }}
       onMouseLeave={(e) => {
-        if (!isFlash) e.currentTarget.style.borderColor = 'var(--color-border-muted)';
+        if (!isHome) e.currentTarget.style.borderColor = 'var(--color-border-muted)';
       }}
     >
       <div className="flex items-start justify-between gap-2 px-3.5 pt-3 pb-1.5">
         <div className="flex items-center gap-2 min-w-0">
-          {isFlash ? (
-            <FlashRowIcon
+          {isHome ? (
+            <HomeRowIcon
               className="h-3.5 w-3.5 shrink-0"
               style={{ color: 'var(--color-accent-primary)' }}
-              solid
             />
           ) : (
             <span
@@ -103,7 +103,7 @@ function WorkspaceTile({
             className="text-[0.7188rem] italic"
             style={{ color: 'var(--color-text-tertiary)', opacity: 0.7 }}
           >
-            {isFlash ? t('dashboard.widgets.workspacePicker.flashDesc') : t('dashboard.widgets.workspacePicker.noDescription')}
+            {t('dashboard.widgets.workspacePicker.noDescription')}
           </div>
         )}
         {relative ? (

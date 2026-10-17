@@ -118,7 +118,7 @@ describe('FilePanel store tabs', () => {
   });
 
   it('offers the stores from the strip where the panel is locked to one file', async () => {
-    // Flash peeks at one file of a PTC workspace: no tree, so no pinned rows.
+    // A link into a sibling workspace shows only that file: no tree, so no pinned rows.
     renderWithProviders(panel({ singleFileMode: true, readOnly: true, target: { kind: 'file', path: 'notes.md', seq: 1 } }));
     await screen.findByText('notes.md', { selector: '.file-panel-tab-name' });
     expect(document.querySelector('.file-panel-store-group')).toBeNull();

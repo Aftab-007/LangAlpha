@@ -307,8 +307,8 @@ class SessionLifecycleMixin:
 
                 elif status == "flash":
                     raise ValueError(
-                        f"Workspace {workspace_id} is a flash workspace (no sandbox). "
-                        "Use agent_mode='flash' instead, or create a new workspace for PTC mode."
+                        f"Workspace {workspace_id} is a flash workspace with no "
+                        "sandbox; it reaches one only as Home."
                     )
 
                 else:

@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { ArrowRightLeft, Check, ChevronDown, FolderOpen, Globe, PowerOff } from 'lucide-react';
+import { ArrowRightLeft, Check, ChevronDown, FolderOpen, Globe, House, PowerOff } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -14,8 +14,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
-import { FlashGlyph } from '@/hooks/useFlashWorkspace';
 import { scopeOff, type ScopeOff } from '../utils/scopeOff';
 
 /**
@@ -70,7 +68,7 @@ export type ScopeReach =
  *
  * A row new workspaces start with reads as the deny-list it is: all
  * workspaces, less the ones that switched it off. A row they start without
- * reads as the list of workspaces it is actually on in, Flash included when
+ * reads as the list of workspaces it is actually on in, Home included when
  * the checklist offers it, because "All workspaces" there would promise the
  * next workspace a server it will not have. `undefined` is a backend that
  * predates the setting, where every row still inherited.
@@ -78,7 +76,7 @@ export type ScopeReach =
 export function readChecklist(
   workspaces: ScopeWorkspace[],
   disabledWorkspaceIds: string[] = [],
-  flashWorkspace?: ScopeWorkspace,
+  homeWorkspace?: ScopeWorkspace,
   newWorkspacesOn?: boolean,
 ): {
   checklist: ScopeWorkspace[];
@@ -86,7 +84,7 @@ export function readChecklist(
   active: ScopeWorkspace[];
   reach: ScopeReach;
 } {
-  const checklist = flashWorkspace ? [...workspaces, flashWorkspace] : workspaces;
+  const checklist = homeWorkspace ? [...workspaces, homeWorkspace] : workspaces;
   const disabled = new Set(disabledWorkspaceIds);
   const active = checklist.filter((w) => !disabled.has(w.id));
   const off = checklist.length - active.length;
@@ -127,7 +125,7 @@ export function ScopeControl({
   moveBlockedReason = null,
   moveToAllBlockedReason = null,
   busy = false,
-  flashWorkspace,
+  homeWorkspace,
   newWorkspacesOn,
   loading = false,
   onSetWorkspaceDisabled,
@@ -151,10 +149,9 @@ export function ScopeControl({
    * offered. */
   moveToAllBlockedReason?: string | null;
   busy?: boolean;
-  /** Adds the Flash workspace to the checklist, and to nothing else. Only an
-   * MCP server with directly bound tools is reachable from Flash, so rows that
-   * cannot have any leave this unset. */
-  flashWorkspace?: ScopeWorkspace;
+  /** Adds Home to the checklist, and to nothing else: a row can be switched
+   * off there, but never moved there. */
+  homeWorkspace?: ScopeWorkspace;
   /** What a workspace created later starts with, on rows that have their own
    * setting. `false` also switches the badge from the deny-list wording to
    * the workspaces the row is on in. */
@@ -169,9 +166,6 @@ export function ScopeControl({
   onMove?: (toWorkspaceId: string | null) => void;
 }) {
   const { t } = useTranslation();
-  // Under the all-workspaces agent the flash row is the Chief of Staff's
-  // Home, the full agent, so it carries a house and no Flash-only caveat.
-  const allWorkspaces = useAllWorkspacesAgent();
   const useInId = useId();
   const moveId = useId();
   if (loading) return null;
@@ -180,7 +174,7 @@ export function ScopeControl({
   const { checklist, disabled, reach } = readChecklist(
     workspaces,
     disabledWorkspaceIds,
-    flashWorkspace,
+    homeWorkspace,
     newWorkspacesOn,
   );
   const inherits = reach.kind === 'all' || reach.kind === 'allExcept';
@@ -273,21 +267,13 @@ export function ScopeControl({
                     className="h-3.5 w-3.5 mr-2"
                     style={{ opacity: active ? 1 : 0 }}
                   />
-                  {ws === flashWorkspace ? (
-                    <FlashGlyph allWorkspaces={allWorkspaces} home className="h-3.5 w-3.5 mr-1.5 shrink-0" />
+                  {ws === homeWorkspace ? (
+                    <House className="h-3.5 w-3.5 mr-1.5 shrink-0" />
                   ) : null}
                   <span className="truncate">{ws.name}</span>
                 </DropdownMenuCheckboxItem>
               );
             })}
-            {flashWorkspace && !allWorkspaces && (
-              <DropdownMenuLabel
-                className="font-normal pt-0 max-w-[16rem] whitespace-normal"
-                style={{ color: 'var(--color-text-tertiary)' }}
-              >
-                {t('plugins.scope.flashNote')}
-              </DropdownMenuLabel>
-            )}
             {!hasNewWorkspaces && (
               <DropdownMenuLabel
                 className="font-normal"

@@ -7,12 +7,17 @@ import { queryKeys } from '@/lib/queryKeys';
 import { renderWithProviders } from '@/test/utils';
 import type { DeliveryOptions } from '@/types/automation';
 import * as api from '../../utils/api';
-import { type FormPatch, type FormState, INITIAL_FORM } from '../../utils/form';
+import { ALL_WORKSPACES, type FormPatch, type FormState, INITIAL_FORM } from '../../utils/form';
 import AutomationInlineForm from '../AutomationInlineForm';
 import MoreOptions from '../MoreOptions';
 
 vi.mock('@/hooks/useWorkspaces', () => ({
   useWorkspaces: () => ({ data: { workspaces: [{ workspace_id: 'ws-1', name: 'Research' }] } }),
+}));
+
+vi.mock('@/hooks/useHomeWorkspace', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useHomeWorkspace')>()),
+  useHomeWorkspaceId: () => 'home-1',
 }));
 
 vi.mock('../../utils/api', async (importOriginal) => ({
@@ -59,7 +64,7 @@ function serve(options: DeliveryOptions | ApiError = OPTIONS) {
   else vi.mocked(api.getDeliveryOptions).mockResolvedValue({ data: options } as never);
 }
 
-const PTC: FormState = { ...INITIAL_FORM, agent_mode: 'ptc', workspace_id: 'ws-1' };
+const IN_WORKSPACE: FormState = { ...INITIAL_FORM, place: 'ws-1' };
 
 /** MoreOptions unfolded over a form it edits, with the picked entries on show. */
 function Harness({ initial, open = true }: { initial: FormState; open?: boolean }) {
@@ -74,7 +79,7 @@ function Harness({ initial, open = true }: { initial: FormState; open?: boolean 
   );
 }
 
-function renderPicker(methods: string[] = [], initial: FormState = PTC, open = true) {
+function renderPicker(methods: string[] = [], initial: FormState = IN_WORKSPACE, open = true) {
   return renderWithProviders(<Harness initial={{ ...initial, delivery_methods: methods }} open={open} />);
 }
 
@@ -164,7 +169,7 @@ describe('the delivery picker', () => {
     serve();
     renderWithProviders(
       <MoreOptions
-        form={{ ...PTC, delivery_methods: ['slack:T1/C_GONE'] }}
+        form={{ ...IN_WORKSPACE, delivery_methods: ['slack:T1/C_GONE'] }}
         patch={vi.fn()}
         open
         onOpenChange={vi.fn()}
@@ -208,12 +213,13 @@ describe('the delivery picker', () => {
     expect(picked()).toEqual(['discord']);
   });
 
-  it('reads the chats of an automation in no workspace, and offers no default', async () => {
+  it("reads the chats of an automation in All workspaces with Home's id, and offers no default", async () => {
+    // The server answers for Home as for a run in no workspace.
     serve({ ...OPTIONS, workspace_id: null });
-    renderPicker(['slack:T1/C2'], { ...INITIAL_FORM, agent_mode: 'flash' });
+    renderPicker(['slack:T1/C2'], { ...INITIAL_FORM, place: ALL_WORKSPACES });
 
     await addButton();
-    expect(api.getDeliveryOptions).toHaveBeenCalledWith(null);
+    expect(api.getDeliveryOptions).toHaveBeenCalledWith('home-1');
     expect(within(chips()[0]).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
       label('automation.deliveryRemove', { name: '#research' }),
     ]);
@@ -223,7 +229,7 @@ describe('the delivery picker', () => {
 
   it('names the chats in the folded summary', async () => {
     serve();
-    renderPicker(['slack', 'discord:@me'], PTC, false);
+    renderPicker(['slack', 'discord:@me'], IN_WORKSPACE, false);
 
     expect(
       await screen.findByText(new RegExp(label('automation.deliversTo', { method: 'Slack (#demo), Your Discord DM' }).replace(/[()]/g, '\\$&'))),
@@ -349,12 +355,12 @@ describe('the workspace default across a workspace switch', () => {
   };
 
   function Switcher({ methods }: { methods: string[] }) {
-    const [form, setForm] = useState<FormState>({ ...PTC, delivery_methods: methods });
+    const [form, setForm] = useState<FormState>({ ...IN_WORKSPACE, delivery_methods: methods });
     const patch: FormPatch = (key, value) => setForm((f) => ({ ...f, [key]: value }));
     return (
       <>
         <MoreOptions form={form} patch={patch} open onOpenChange={vi.fn()} />
-        <button type="button" onClick={() => patch('workspace_id', 'ws-2')}>
+        <button type="button" onClick={() => patch('place', 'ws-2')}>
           switch
         </button>
       </>
@@ -451,7 +457,7 @@ describe('a save refused over delivery', () => {
     serve();
     return renderWithProviders(
       <AutomationInlineForm
-        initialValues={{ ...PTC, name: 'Brief', instruction: 'Summarize.', delivery_methods: ['slack', 'slack:T1/C2'] }}
+        initialValues={{ ...IN_WORKSPACE, name: 'Brief', instruction: 'Summarize.', delivery_methods: ['slack', 'slack:T1/C2'] }}
         original={null}
         onSubmit={onSubmit}
         onCancel={vi.fn()}

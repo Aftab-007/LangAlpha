@@ -1,4 +1,3 @@
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { useOnboarding } from './OnboardingProvider';
 import { PageIntroModal } from './engine/PageIntroModal';
 import { WhatsNewModal } from './engine/WhatsNewModal';
@@ -11,20 +10,12 @@ import { GettingStartedCard } from './engine/GettingStartedCard';
  */
 export function OnboardingHost() {
   const { phase, activeIntro, unseen, dismissPageIntro, acknowledgeWhatsNew } = useOnboarding();
-  // A prop rather than read inside, because the preview harness renders the
-  // modal without the features query.
-  const allWorkspaces = useAllWorkspacesAgent();
 
   return (
     <>
       {phase === 'pageIntro' && activeIntro && (
         // Keyed so step state never leaks between two different intros.
-        <PageIntroModal
-          key={activeIntro.id}
-          intro={activeIntro}
-          onClose={dismissPageIntro}
-          allWorkspaces={allWorkspaces}
-        />
+        <PageIntroModal key={activeIntro.id} intro={activeIntro} onClose={dismissPageIntro} />
       )}
       {phase === 'whatsNew' && (
         <WhatsNewModal announcements={unseen} onAcknowledge={acknowledgeWhatsNew} />

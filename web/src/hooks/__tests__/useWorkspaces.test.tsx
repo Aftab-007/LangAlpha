@@ -40,6 +40,20 @@ describe('useWorkspaces', () => {
     expect(mockGetWorkspaces).toHaveBeenCalledWith(10, 5, 'name', false);
   });
 
+  it('asks for Home under its own key when includeHome is set', async () => {
+    mockGetWorkspaces.mockResolvedValue({ workspaces: [], total: 0 });
+
+    const { result, queryClient } = renderHookWithProviders(
+      () => useWorkspaces({ includeHome: true })
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockGetWorkspaces).toHaveBeenCalledWith(20, 0, 'custom', true);
+    expect(queryClient.getQueryData([
+      'workspaces', 'list', { limit: 20, offset: 0, sortBy: 'custom', includeHome: true },
+    ])).toEqual({ workspaces: [], total: 0 });
+  });
+
   it('does not fetch when enabled is false', () => {
     const { result } = renderHookWithProviders(
       () => useWorkspaces({ enabled: false })
@@ -69,7 +83,7 @@ describe('useWorkspaces', () => {
 
     // The query key should match queryKeys.workspaces.list(params)
     const cachedData = queryClient.getQueryData([
-      'workspaces', 'list', { limit: 5, offset: 0, sortBy: 'custom', includeFlash: false },
+      'workspaces', 'list', { limit: 5, offset: 0, sortBy: 'custom', includeHome: false },
     ]);
     expect(cachedData).toEqual({ workspaces: [], total: 0 });
   });

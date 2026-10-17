@@ -309,7 +309,7 @@ class TestTheListingAgreesWithDelivery:
         monkeypatch.setattr(
             skills_app,
             "list_skills",
-            lambda mode=None: [
+            lambda: [
                 {
                     "name": n,
                     "description": f"{n} skill",
@@ -335,9 +335,7 @@ class TestTheListingAgreesWithDelivery:
     async def _names(self, *, include_disabled: bool) -> list[str]:
         from src.server.app.skills import _assemble_skills
 
-        payload = await _assemble_skills(
-            "u-1", None, include_disabled, None
-        )
+        payload = await _assemble_skills("u-1", include_disabled, None)
         return [s.name for s in payload["skills"]]
 
     @pytest.mark.asyncio
@@ -352,7 +350,7 @@ class TestTheListingAgreesWithDelivery:
         from src.server.app.skills import _assemble_skills
 
         listing["disabled_bundles"] = {"pack"}
-        payload = await _assemble_skills("u-1", None, True, None)
+        payload = await _assemble_skills("u-1", True, None)
         (alpha,) = [s for s in payload["skills"] if s.name == "alpha"]
         assert (alpha.enabled, alpha.plugin_name, alpha.plugin_enabled) == (
             True, "pack", False,

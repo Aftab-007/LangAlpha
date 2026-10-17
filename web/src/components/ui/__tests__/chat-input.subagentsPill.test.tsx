@@ -1,5 +1,5 @@
 /**
- * The Subagents toggle: an icon with no label, shown in PTC. Pressed and drawn
+ * The Subagents toggle: an icon with no label. Pressed and drawn
  * connected while subagents are on, it flips through a thread host, or holds
  * the pick itself without one. It folds into the ⋯ menu like any toggle, with
  * a check while on and no ⋯ dot, since on is the default and a dot lit for it
@@ -56,9 +56,9 @@ describe('ChatInput: the Subagents pill', () => {
     ChatInputRegistry.__resetForTests();
   });
 
-  it('shows pressed in PTC while subagents are on, and flips through the host', () => {
+  it('shows pressed while subagents are on, and flips through the host', () => {
     const onToggle = vi.fn();
-    const { rerender } = renderInput({ mode: 'ptc', subagentsAllowed: true, onToggleSubagents: onToggle });
+    const { rerender } = renderInput({ subagentsAllowed: true, onToggleSubagents: onToggle });
     expect(pill()).toHaveAttribute('aria-pressed', 'true');
     expect(pill()).not.toHaveTextContent('Subagents');
     expect(pill()!.querySelector('.subagents-glyph')).toHaveAttribute('data-on', 'true');
@@ -69,7 +69,7 @@ describe('ChatInput: the Subagents pill', () => {
     rerender(
       <QueryClientProvider client={new QueryClient()}>
         <MemoryRouter>
-          <ChatInput onSend={vi.fn()} mode="ptc" subagentsAllowed={false} onToggleSubagents={onToggle} />
+          <ChatInput onSend={vi.fn()} subagentsAllowed={false} onToggleSubagents={onToggle} />
         </MemoryRouter>
       </QueryClientProvider>,
     );
@@ -80,30 +80,20 @@ describe('ChatInput: the Subagents pill', () => {
   });
 
   it("is hidden while its thread host has not read the thread's value", () => {
-    renderInput({ mode: 'ptc', subagentsAllowed: null, onToggleSubagents: vi.fn() });
+    renderInput({ subagentsAllowed: null, onToggleSubagents: vi.fn() });
     expect(pill()).toBeNull();
   });
 
   it('stays interactive while a turn streams', () => {
     const onToggle = vi.fn();
-    renderInput({ mode: 'ptc', isLoading: true, subagentsAllowed: true, onToggleSubagents: onToggle });
+    renderInput({ isLoading: true, subagentsAllowed: true, onToggleSubagents: onToggle });
     fireEvent.click(pill()!);
     expect(onToggle).toHaveBeenCalledWith(false);
   });
 
-  it('is hidden on a flash thread, which names its mode without a toggle', () => {
-    renderInput({ mode: 'fast', subagentsAllowed: true, onToggleSubagents: vi.fn() });
-    expect(pill()).toBeNull();
-  });
-
-  it('is hidden when a mode toggle has flash picked', () => {
-    renderInput({ mode: 'fast', onModeChange: vi.fn(), subagentsAllowed: true, onToggleSubagents: vi.fn() });
-    expect(pill()).toBeNull();
-  });
-
-  it('holds its own pick without a host, and a PTC send carries only that pick', () => {
+  it('holds its own pick without a host, and a send carries only that pick', () => {
     const onSend = vi.fn();
-    renderInput({ mode: 'ptc', onModeChange: vi.fn(), onSend });
+    renderInput({ onSend });
     const sendText = (text: string) => {
       fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
@@ -121,7 +111,7 @@ describe('ChatInput: the Subagents pill', () => {
   it('names what it shows while the default is unread, which a stored default may contradict', () => {
     prefs.isLoaded = false;
     const onSend = vi.fn();
-    renderInput({ mode: 'ptc', onModeChange: vi.fn(), onSend });
+    renderInput({ onSend });
     expect(pill()).toHaveAttribute('aria-pressed', 'true');
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'unread' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
@@ -131,17 +121,16 @@ describe('ChatInput: the Subagents pill', () => {
 
 describe('the Subagents toolbar item', () => {
   const base = {
-    mode: 'ptc' as const,
     watchMode: false,
     setWatchMode: vi.fn(),
     marketWatchEnabled: true,
   };
 
-  it('sits between the mode pill and Watch, and raises no ⋯ dot', () => {
+  it('sits between the scope pill and Watch, and raises no ⋯ dot', () => {
     const { result } = renderHook(() => useToolbarItems({
-      ...base, onModeChange: vi.fn(), subagentsAllowed: true, onToggleSubagents: vi.fn(),
+      ...base, onScopeChange: vi.fn(), subagentsAllowed: true, onToggleSubagents: vi.fn(),
     }));
-    expect(result.current.map((i) => i.id)).toEqual(['scope', 'mode', 'subagents', 'watch', 'workspace']);
+    expect(result.current.map((i) => i.id)).toEqual(['scope', 'subagents', 'watch']);
     const item = result.current.find((i) => i.id === 'subagents')!;
     expect(item).toMatchObject({ group: 'toggle', visible: true });
     expect(item.active).toBeFalsy();

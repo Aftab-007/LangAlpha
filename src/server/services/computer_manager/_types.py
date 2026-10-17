@@ -45,14 +45,14 @@ as you work. The system prompt has full guidelines on what to maintain.
 class WorkspaceNotOnComputer(ValueError):
     """Nothing below the edge resolve has a second addressing mode to fall back to.
 
-    Reachable for a flash workspace, which has no sandbox lifecycle at all, and
-    for a row that disappeared between two reads."""
+    Reachable for a flash row that was never bound as Home, and for a row that
+    disappeared between two reads."""
 
     def __init__(self, workspace_id: str):
         self.workspace_id = workspace_id
         super().__init__(
             f"Workspace {workspace_id} is not on a computer, so it has no "
-            "sandbox lifecycle; flash workspaces use agent_mode='flash'"
+            "sandbox lifecycle"
         )
 
 

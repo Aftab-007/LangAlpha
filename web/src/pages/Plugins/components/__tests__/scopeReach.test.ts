@@ -14,7 +14,7 @@ const workspaces = [
   { id: 'ws-b', name: 'Beta' },
   { id: 'ws-c', name: 'Gamma' },
 ];
-const flash = { id: 'flash', name: 'Flash' };
+const home = { id: 'home', name: 'Home' };
 
 describe('scopeReach on a row new workspaces start with', () => {
   it('reads all workspaces when none has switched it off', () => {
@@ -34,12 +34,12 @@ describe('scopeReach on a row new workspaces start with', () => {
     expect(scopeReach(workspaces, ['ws-b'])).toEqual({ kind: 'allExcept', count: 1 });
   });
 
-  it('counts Flash only when the checklist offers it', () => {
-    expect(scopeReach(workspaces, ['flash'], flash, true)).toEqual({
+  it('counts Home only when the checklist offers it', () => {
+    expect(scopeReach(workspaces, ['home'], home, true)).toEqual({
       kind: 'allExcept',
       count: 1,
     });
-    expect(scopeReach(workspaces, ['flash'], undefined, true)).toEqual({ kind: 'all' });
+    expect(scopeReach(workspaces, ['home'], undefined, true)).toEqual({ kind: 'all' });
   });
 });
 
@@ -73,16 +73,16 @@ describe('scopeReach on a row new workspaces start without', () => {
     });
   });
 
-  it('counts Flash as one of the workspaces it is on in', () => {
-    expect(scopeReach(workspaces, ['ws-a', 'ws-b', 'ws-c'], flash, false)).toEqual({
+  it('counts Home as one of the workspaces it is on in', () => {
+    expect(scopeReach(workspaces, ['ws-a', 'ws-b', 'ws-c'], home, false)).toEqual({
       kind: 'only',
-      name: 'Flash',
+      name: 'Home',
     });
-    expect(scopeReach(workspaces, ['ws-b', 'ws-c'], flash, false)).toEqual({
+    expect(scopeReach(workspaces, ['ws-b', 'ws-c'], home, false)).toEqual({
       kind: 'some',
       count: 2,
     });
-    expect(scopeReach(workspaces, ['ws-a', 'ws-b', 'ws-c', 'flash'], flash, false)).toEqual({
+    expect(scopeReach(workspaces, ['ws-a', 'ws-b', 'ws-c', 'home'], home, false)).toEqual({
       kind: 'none',
     });
   });

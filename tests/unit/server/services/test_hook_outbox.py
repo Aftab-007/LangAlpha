@@ -253,6 +253,33 @@ class TestBuildFinalizeJobs:
         # START-stamped origin routes the chain to the watching flash thread.
         assert rb.ordering_key == "flash-7"
 
+    @pytest.mark.parametrize(
+        ("stamp", "owes"),
+        [
+            ({"msg_type": "ptc"}, True),
+            ({}, True),
+            ({"msg_type": None}, True),
+            ({"msg_type": "flash"}, False),
+            ({"msg_type": "task"}, False),
+        ],
+        ids=["ptc", "unstamped", "null", "flash", "task"],
+    )
+    def test_a_run_row_owes_its_watcher_unless_another_agent_ran_it(
+        self, stamp, owes
+    ):
+        """A row with no producer is read as the full agent's. Any other
+        producer owes neither job, since no pair is keyed on its thread."""
+        factory = build_finalize_jobs_from_run_row(
+            {
+                "conversation_response_id": "run-7",
+                "conversation_thread_id": "ptc-7",
+                "metadata": {"user_id": "u-7", **stamp},
+            }
+        )
+
+        assert ("report_back" in _types(factory("completed"))) is owes
+        assert ("needs_input_wake" in _types(factory("interrupted"))) is owes
+
     def test_an_automation_turn_settles_its_firing_on_every_terminal(self):
         """The firing ends as its run did, whichever worker finalized it. A
         run a concurrent one superseded at admission was never the firing's

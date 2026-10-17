@@ -182,7 +182,6 @@ async def wait_or_steer(
     workspace_id: str | None = None,
     steer_job_id: str | None = None,
     agent: AgentSteer | None = None,
-    agent_mode: str | None = None,
 ) -> tuple[bool, str | None]:
     """Admit a new turn, steer the running one, or 409.
 
@@ -260,7 +259,6 @@ async def wait_or_steer(
             platform=platform,
             request_key=request_key,
             origin=agent.origin if agent else None,
-            agent_mode=agent_mode,
         )
         if agent is not None:
             idempotency_key = agent.idempotency_key

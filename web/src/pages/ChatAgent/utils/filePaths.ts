@@ -26,7 +26,7 @@ export type FileKind = 'document' | 'presentation' | 'spreadsheet' | 'page' | 'i
 const KIND_BY_EXT: Record<string, FileKind> = {
   md: 'document', markdown: 'document', pdf: 'document',
   docx: 'document', doc: 'document', rtf: 'document', odt: 'document',
-  // A plain-text answer is still the answer: a Flash relay hands back
+  // A plain-text answer is still the answer: a Chief of Staff relay hands back
   // `notes.txt` as readily as `notes.md`. Executable material stays out
   // (`.py`, `.sh`, `.ipynb`) — that is how the turn got where it went, and a
   // deck of it buries the two files that are the answer.

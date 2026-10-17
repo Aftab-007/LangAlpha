@@ -15,12 +15,7 @@ import pytest
 
 
 class TestPackagePublicAPI:
-    """All 6 public symbols must be importable from src.server.handlers.chat."""
-
-    def test_import_astream_flash_workflow(self):
-        from src.server.handlers.chat import astream_flash_workflow
-
-        assert callable(astream_flash_workflow)
+    """Every public symbol must be importable from src.server.handlers.chat."""
 
     def test_import_astream_ptc_workflow(self):
         from src.server.handlers.chat import astream_ptc_workflow
@@ -41,7 +36,6 @@ class TestPackagePublicAPI:
         import src.server.handlers.chat as pkg
 
         expected = {
-            "astream_flash_workflow",
             "astream_ptc_workflow",
             "steer_subagent",
             "reconnect_to_workflow_stream",
@@ -58,7 +52,6 @@ class TestSubmoduleImports:
         assert hasattr(mod, "process_hitl_response")
         assert hasattr(mod, "normalize_request_messages")
         assert hasattr(mod, "init_tracking")
-        assert hasattr(mod, "apply_fetch_override")
         assert hasattr(mod, "ensure_thread")
         assert hasattr(mod, "prepare_skill_contexts")
         assert hasattr(mod, "build_graph_config")
@@ -82,11 +75,6 @@ class TestSubmoduleImports:
 
         assert hasattr(mod, "steer_payload")
         assert hasattr(mod, "steer_subagent")
-
-    def test_import_flash_workflow(self):
-        import src.server.handlers.chat.flash_run as mod
-
-        assert hasattr(mod, "astream_flash_workflow")
 
     def test_import_ptc_workflow(self):
         import src.server.handlers.chat.ptc_run as mod
@@ -116,7 +104,6 @@ class TestNoCircularImports:
 
         try:
             mod = importlib.import_module("src.server.handlers.chat")
-            assert hasattr(mod, "astream_flash_workflow")
             assert hasattr(mod, "astream_ptc_workflow")
         finally:
             # Restore original modules to avoid polluting other tests

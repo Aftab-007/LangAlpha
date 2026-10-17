@@ -10,7 +10,6 @@ import {
 function params(overrides: Partial<QuickAccessParams> = {}): QuickAccessParams {
   return {
     preferredModel: null,
-    preferredFlashModel: null,
     starredModels: [],
     ownModels: [],
     hiddenModels: [],
@@ -20,21 +19,19 @@ function params(overrides: Partial<QuickAccessParams> = {}): QuickAccessParams {
 }
 
 describe('deriveQuickAccessModels', () => {
-  it('surfaces the current primary + flash defaults even when not starred', () => {
+  it('surfaces the current default even when not starred', () => {
     expect(
       deriveQuickAccessModels(params({
         preferredModel: 'claude-opus',
-        preferredFlashModel: 'claude-sonnet',
         starredModels: ['gpt-5'],
       })),
-    ).toEqual(['claude-opus', 'claude-sonnet', 'gpt-5']);
+    ).toEqual(['claude-opus', 'gpt-5']);
   });
 
-  it('dedupes when defaults overlap each other or a star', () => {
+  it('dedupes when the default overlaps a star', () => {
     expect(
       deriveQuickAccessModels(params({
         preferredModel: 'claude-opus',
-        preferredFlashModel: 'claude-opus',
         starredModels: ['claude-opus', 'gpt-5'],
       })),
     ).toEqual(['claude-opus', 'gpt-5']);
@@ -98,8 +95,7 @@ describe('deriveQuickAccessModels', () => {
     expect(
       deriveQuickAccessModels(params({
         preferredModel: 'claude-opus',
-        preferredFlashModel: 'claude-sonnet',
-        starredModels: ['gpt-5'],
+        starredModels: ['claude-sonnet', 'gpt-5'],
         excludeModels: ['claude-opus'],
       })),
     ).toEqual(['claude-sonnet', 'gpt-5']);

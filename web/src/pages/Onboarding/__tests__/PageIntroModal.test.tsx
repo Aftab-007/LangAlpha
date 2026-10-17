@@ -8,7 +8,7 @@ const intro: PageIntroDef = {
   matchRoute: () => true,
   steps: [
     { id: 's1', titleKey: 'title-1', bodyKey: 'body-1', visual: 'workspaceGrid' },
-    { id: 's2', titleKey: 'title-2', bodyKey: 'body-2', visual: 'flashAnswer' },
+    { id: 's2', titleKey: 'title-2', bodyKey: 'body-2', visual: 'chiefOfStaffAnswer' },
     { id: 's3', titleKey: 'title-3', bodyKey: 'body-3', visual: 'ptcSandbox' },
   ],
 };

@@ -49,7 +49,6 @@ from ptc_agent.core.sandbox._shared import (
     _hash_dict,
     _internal_package_files,
     _resolve_local_path,
-    _get_sandbox_eligible_skills,
     _resolve_disabled_skills,
 )
 from typing import TYPE_CHECKING
@@ -264,11 +263,12 @@ async def _compute_skills_module(
     skills_base = SandboxLayout(sandbox._work_dir).skills
 
     def build() -> dict[str, Any]:
+        from ptc_agent.agent.middleware.skills import skills_outside_sandbox
         from ptc_agent.agent.middleware.skills.discovery import (
             parse_skill_metadata,
         )
 
-        sandbox_skill_names, all_registry_names = _get_sandbox_eligible_skills()
+        outside_sandbox = skills_outside_sandbox()
 
         files: dict[str, str] = {}  # rel_path → sha256
         skills_metadata: dict[str, dict[str, Any]] = {}
@@ -289,11 +289,8 @@ async def _compute_skills_module(
                 skill_name = skill_dir.name
                 if skill_name in disabled:
                     continue
-                # Skip flash-only skills (not needed in sandbox)
-                if (
-                    skill_name not in sandbox_skill_names
-                    and skill_name in all_registry_names
-                ):
+                # Skip registry skills the sandbox does not get
+                if skill_name in outside_sandbox:
                     continue
 
                 # Later sources override earlier ones
@@ -1104,7 +1101,9 @@ async def _collect_local_skill_names(
     disabled = _resolve_disabled_skills(disabled)
 
     def build() -> set[str]:
-        sandbox_skill_names, all_registry_names = _get_sandbox_eligible_skills()
+        from ptc_agent.agent.middleware.skills import skills_outside_sandbox
+
+        outside_sandbox = skills_outside_sandbox()
 
         names: set[str] = set()
         for root_str in local_skill_roots:
@@ -1117,13 +1116,9 @@ async def _collect_local_skill_names(
                 if not (skill_dir / "SKILL.md").exists():
                     continue
                 skill_name = skill_dir.name
-                # Skip disabled + flash-only skills so they get pruned from sandbox
-                if skill_name in disabled:
-                    continue
-                if (
-                    skill_name not in sandbox_skill_names
-                    and skill_name in all_registry_names
-                ):
+                # Skip disabled skills and registry skills the sandbox does
+                # not get, so they get pruned from it
+                if skill_name in disabled or skill_name in outside_sandbox:
                     continue
                 names.add(skill_name)
         return names
@@ -1279,6 +1274,7 @@ async def _upload_skills(
         agent-installed or two-way-synced content occupies them (the caller
         folds these into the module version so the skipped upload retries).
     """
+    from ptc_agent.agent.middleware.skills import skills_outside_sandbox
     from ptc_agent.agent.middleware.skills.lock import is_agent_installed, is_linked
 
     disabled = _resolve_disabled_skills(disabled)
@@ -1294,8 +1290,7 @@ async def _upload_skills(
         logger.debug("No skills found; skipping upload")
         return None, set()
 
-    # Skills eligible for sandbox upload (exposure "ptc" or "both")
-    sandbox_skill_names, all_registry_names = _get_sandbox_eligible_skills()
+    outside_sandbox = skills_outside_sandbox()
 
     # ── Pass 1: Planning (local I/O only) ──
     # For each skill, collect files from the *last* source that provides it.
@@ -1334,12 +1329,7 @@ async def _upload_skills(
                 skill_name = skill_dir.name
                 if skill_name in ("", ".", ".."):
                     continue
-                if skill_name in disabled:
-                    continue
-                if (
-                    skill_name not in sandbox_skill_names
-                    and skill_name in all_registry_names
-                ):
+                if skill_name in disabled or skill_name in outside_sandbox:
                     continue
 
                 plan = _SkillPlan()

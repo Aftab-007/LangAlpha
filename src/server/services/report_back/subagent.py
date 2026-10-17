@@ -393,7 +393,6 @@ async def execute_task_report_back(job: dict) -> None:
         message = verdict.message(steered=False)
         body = {
             "messages": [{"role": "user", "content": message}],
-            "agent_mode": "ptc",
             "workspace_id": workspace_id,
             "query_type": "system",
             "request_key": task_request_key(job_id),

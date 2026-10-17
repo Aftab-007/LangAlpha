@@ -144,21 +144,51 @@ def test_event_hands_back_skills_whose_body_was_summarized():
     raw[0] = HumanMessage(
         content='go\n<loaded-skill name="dcf-model" mid="h1">steps</loaded-skill>', id="h1"
     )
-    for skill_files, how in (
-        (True, "Read its `.agents/skills/<name>/SKILL.md` again."),
-        (False, "call LoadSkill with its name."),
+    event = build_summary_event(
+        Summary("the summary", "model", raw[:4]),
+        TranscriptTurns.of(TRANSCRIPT, raw, window=Window()),
+        raw_messages=raw,
+        to_summarize=raw[:4],
+        preserved=raw[4:],
+        original_count=len(raw),
+    )
+    message = event["summary_message"]
+    assert parse_summary_message(message) == "the summary"
+    assert "covers turns 1 to 2" in message.content
+    assert message.content.endswith("Read its `.agents/skills/<name>/SKILL.md` again.")
+    assert "`dcf-model`" in message.content
+
+
+def test_a_summarizer_carries_the_user_s_skill_names():
+    """The middleware and manual /compact both build their summarizer here,
+    so both reload notes see a user skill under a retired built-in's name."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from ptc_agent.agent.middleware.compaction.compact import Summarizer
+    from ptc_agent.config import AgentConfig, LLMConfig
+    from ptc_agent.config.core import (
+        DaytonaConfig,
+        FilesystemConfig,
+        LoggingConfig,
+        MCPConfig,
+        SandboxConfig,
+        SecurityConfig,
+    )
+
+    config = AgentConfig(
+        llm=LLMConfig(name="main-model"),
+        security=SecurityConfig(),
+        logging=LoggingConfig(),
+        sandbox=SandboxConfig(daytona=DaytonaConfig(api_key="test-key")),
+        mcp=MCPConfig(),
+        filesystem=FilesystemConfig(),
+    )
+    config.user_skills = [SimpleNamespace(name="automation", description="mine")]
+    with patch(
+        "ptc_agent.agent.middleware.compaction.compact.create_llm",
+        return_value=MagicMock(),
     ):
-        event = build_summary_event(
-            Summary("the summary", "model", raw[:4]),
-            TranscriptTurns.of(TRANSCRIPT, raw, window=Window()),
-            raw_messages=raw,
-            to_summarize=raw[:4],
-            preserved=raw[4:],
-            original_count=len(raw),
-            skill_files=skill_files,
-        )
-        message = event["summary_message"]
-        assert parse_summary_message(message) == "the summary"
-        assert "covers turns 1 to 2" in message.content
-        assert message.content.endswith(how)
-        assert "`dcf-model`" in message.content
+        summarizer = Summarizer.for_agent(config)
+
+    assert summarizer.user_skills == frozenset({"automation"})

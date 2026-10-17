@@ -15,6 +15,7 @@ import pytest
 from ptc_agent.agent.backends.automations import AutomationsBackend
 from ptc_agent.agent.backends.db_json_route import UserDataValidationError
 from ptc_agent.core.sandbox.livefs_mount import CallContext
+from src.server.database.home_workspace import get_flash_workspace_id
 from src.server.services.automations.file import AutomationFile
 from tests.unit.server.services.automations._fake_db import FakeAutomationsDb
 
@@ -28,6 +29,7 @@ FOREIGN_WORKSPACE = "00000000-0000-4000-8000-00000000abab"
 THREAD = "00000000-0000-4000-8000-00000000bbbb"
 PINNED = "00000000-0000-4000-8000-00000000cccc"
 UNKNOWN_THREAD = "00000000-0000-4000-8000-00000000dddd"
+HOME = get_flash_workspace_id(USER)
 BRIEF = "00000000-0000-4000-8000-000000000001"
 OTHER = "00000000-0000-4000-8000-000000000002"
 CREATED = "00000000-0000-4000-8000-0000000000ff"
@@ -55,6 +57,7 @@ NEW = {"name": "A", "cron_expression": "0 9 * * *", "instruction": "Go."}
 def _row(**overrides: Any) -> dict[str, Any]:
     row = {
         "automation_id": UUID(BRIEF),
+        "user_id": USER,
         "file_name": FILE_NAME,
         "name": "Morning brief",
         "description": "weekday digest",
@@ -65,8 +68,8 @@ def _row(**overrides: Any) -> dict[str, Any]:
         "trigger_config": None,
         "timezone": "America/New_York",
         "instruction": "Summarize the watchlist.",
-        "agent_mode": "flash",
-        "workspace_id": None,
+        "agent_mode": "ptc",
+        "workspace_id": UUID(HOME),
         "thread_strategy": "new",
         "conversation_thread_id": None,
         "llm_model": None,

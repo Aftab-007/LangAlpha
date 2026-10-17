@@ -19,12 +19,6 @@ _PROMPT_FIELDS = frozenset(
 )
 
 
-def _skills(skills: list[str], preload_skills: list[str]) -> list[str]:
-    # A deployment's preloaded skill binds its tools, as it always has, and
-    # keeps them through a user's edit of the preferred list.
-    return list(dict.fromkeys([*skills, *preload_skills]))
-
-
 def _patched(builtin: SubagentDefinition, cfg: SubagentConfig) -> SubagentDefinition:
     """``builtin`` with only the fields the YAML sets, the way an overlay reads.
 
@@ -48,11 +42,6 @@ def _patched(builtin: SubagentDefinition, cfg: SubagentConfig) -> SubagentDefini
         if has_code != ("execute_code" in builtin.tools):
             sections.update(dict.fromkeys(CODE_SECTIONS, has_code))
         changes["sections"] = {**sections, **changes.get("sections", {})}
-    if "skills" in changes or "preload_skills" in changes:
-        changes["skills"] = _skills(
-            changes.get("skills", builtin.skills),
-            changes.get("preload_skills", builtin.preload_skills),
-        )
     # The built-in's own prompt names its tools, so it says when they are fewer.
     # A prompt field set to the value it has (an empty inline prompt above all,
     # which still renders the role template) leaves that prompt in place.
@@ -98,7 +87,6 @@ class SubagentRegistry:
                 custom_prompt_template=cfg.custom_prompt_template,
                 custom_prompt=cfg.custom_prompt,
                 tools=cfg.tools,
-                skills=_skills(cfg.skills, cfg.preload_skills),
                 preload_skills=cfg.preload_skills,
                 model=cfg.model,
                 reasoning_effort=cfg.reasoning_effort,

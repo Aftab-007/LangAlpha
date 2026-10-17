@@ -180,9 +180,9 @@ vi.mock('@/pages/Dashboard/utils/api', () => ({
   disconnectClaudeOAuth: vi.fn(async () => ({})),
 }));
 
-// Flash workspace — used by preference-modify navigation, never in these tests.
+// Home, used by preference-modify navigation, never in these tests.
 vi.mock('@/pages/ChatAgent/utils/api', () => ({
-  getFlashWorkspace: vi.fn(async () => ({ workspace_id: 'ws-flash' })),
+  getHomeWorkspace: vi.fn(async () => ({ workspace_id: 'ws-home' })),
 }));
 
 // Onboarding — Settings renders replay/reset buttons; no provider in this harness.

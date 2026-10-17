@@ -206,7 +206,7 @@ def _emit_sse_error(handler, payload: dict) -> str:
     return f"event: error\ndata: {json.dumps(payload)}\n\n"
 
 
-async def _run_named_by_key(request: ChatRequest, thread_id: str, log_prefix: str):
+async def _run_named_by_key(request: ChatRequest, thread_id: str):
     """The run this request's key already reached, as its own turn or as a
     steer, or None, also when the read fails: the refusal it would replace
     still stands then."""
@@ -219,7 +219,7 @@ async def _run_named_by_key(request: ChatRequest, thread_id: str, log_prefix: st
         return await run_named_by_key(thread_id, request_key)
     except Exception:
         logger.warning(
-            f"[{log_prefix}] request_key recheck failed; keeping the refusal",
+            "[PTC_CHAT] request_key recheck failed; keeping the refusal",
             exc_info=True,
         )
         return None
@@ -236,8 +236,6 @@ async def handle_workflow_error(
     start_time: float,
     request: ChatRequest,
     is_byok: bool,
-    msg_type: str,
-    log_prefix: str,
     turn_context: TurnContext | None = None,
 ) -> AsyncGenerator[str, None]:
     """Handle a workflow exception: classify, retry-or-fail, finalize, yield SSE events.
@@ -275,7 +273,7 @@ async def handle_workflow_error(
     # still running; ending the stream bare sends the client to reconnect.
     if scope.handed_off:
         logger.warning(
-            f"[{log_prefix}] Stream reader failed after handoff, leaving the "
+            f"[PTC_CHAT] Stream reader failed after handoff, leaving the "
             f"run to its executor: thread_id={thread_id} "
             f"{type(e).__name__}: {str(e)[:100]}"
         )
@@ -295,10 +293,7 @@ async def handle_workflow_error(
 
     # Metadata for persistence calls — built from parameters alone, up here so
     # ``_finalize_error`` never closes over a cell assigned below its def.
-    persist_metadata = {
-        "msg_type": msg_type,
-        "is_byok": is_byok,
-    }
+    persist_metadata = {"is_byok": is_byok}
     if workspace_id is not None:
         persist_metadata["workspace_id"] = workspace_id
     # Prefer request.workspace_id when available (PTC sets it on the request)
@@ -348,7 +343,7 @@ async def handle_workflow_error(
             )
         except Exception:
             logger.critical(
-                f"[{log_prefix}] FINALIZE FAILED for run={run_handle.run_id}: "
+                f"[PTC_CHAT] FINALIZE FAILED for run={run_handle.run_id}: "
                 f"row remains in_progress for recovery",
                 exc_info=True,
             )
@@ -381,7 +376,7 @@ async def handle_workflow_error(
             and e.detail.get("code") in ADMISSION_CONFLICT_CODES
         )
     ):
-        keyed = await _run_named_by_key(request, thread_id, log_prefix)
+        keyed = await _run_named_by_key(request, thread_id)
         if keyed is not None:
             e = DuplicateRequestError(keyed.run, steered=keyed.steered)
 
@@ -403,9 +398,9 @@ async def handle_workflow_error(
         and e.detail.get("code") in ADMISSION_CONFLICT_CODES
     ):
         await scope.release_slot()
-        # Normally pre-START (run_handle is None). The flash RuntimeError
-        # fallback can 409 after START, though — release the durable slot so
-        # it doesn't leak until the stale-run sweep.
+        # Normally pre-START (run_handle is None). One that lands after START
+        # releases the durable slot here, so it doesn't leak until the
+        # stale-run sweep.
         if run_handle is not None:
             await RunCoordinator.get_instance().fail_open_run(
                 run_handle, "admission conflict after START", status="cancelled"
@@ -589,7 +584,7 @@ async def handle_workflow_error(
 
         if retry_count > MAX_RETRIES:
             logger.error(
-                f"[{log_prefix}] Max retries exceeded ({retry_count}/{MAX_RETRIES}) for "
+                f"[PTC_CHAT] Max retries exceeded ({retry_count}/{MAX_RETRIES}) for "
                 f"thread_id={thread_id}: {type(e).__name__}: {str(e)[:100]}"
             )
 
@@ -621,7 +616,7 @@ async def handle_workflow_error(
             yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
         else:
             logger.warning(
-                f"[{log_prefix}] Recoverable error ({error_type}) for thread_id={thread_id} "
+                f"[PTC_CHAT] Recoverable error ({error_type}) for thread_id={thread_id} "
                 f"(retry {retry_count}/{MAX_RETRIES}): "
                 f"{type(e).__name__}: {str(e)[:100]}"
             )
@@ -658,7 +653,7 @@ async def handle_workflow_error(
 
     else:
         # Non-recoverable error
-        logger.exception(f"[{log_prefix.replace('CHAT', 'ERROR')}] thread_id={thread_id}: {e}")
+        logger.exception(f"[PTC_ERROR] thread_id={thread_id}: {e}")
 
         error_type_label = _classify_non_recoverable_error_type(e)
         # error_type/error_class ride the row so replay can reconstruct the

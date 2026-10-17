@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '@/components/ui/use-toast';
 import './MarketView.css';
@@ -7,14 +8,13 @@ import StockHeader from './components/StockHeader';
 import MarketChart from './components/MarketChart';
 import type { MarketChartHandle } from './components/MarketChart';
 import ChatInput from '../../components/ui/chat-input';
+import type { ComposerScope } from '../../components/ui/chat-input.types';
 import MarketChatPanel from './components/MarketChatPanel';
 import MarketSidebarPanel from './components/MarketSidebarPanel';
 import { INTERVALS } from './utils/chartConstants';
 import { MARKET_VIEW_ROUTE_PARAMS, readMarketViewRoute } from './utils/marketRoute';
-import { useMarketChat } from './hooks/useMarketChat';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
-import { FLASH_ROUTE_STATE } from '@/hooks/useFlashWorkspace';
+import { homeWorkspaceQuery, resolveChatWorkspace } from '@/hooks/useHomeWorkspace';
 import type { Workspace } from '@/types/api';
 import type { StockSearchHit } from '@/lib/marketUtils';
 import type { Freshness } from '@/types/market';
@@ -37,8 +37,6 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { useStockData } from './hooks/useStockData';
 import { useStockQuoteModel } from './hooks/useStockQuoteModel';
 import { useChartAnnotationSync } from './hooks/useChartAnnotationSync';
-import { getOrFetchFlashWorkspaceId } from './utils/flashWorkspace';
-import { composerModeProps } from './utils/composerMode';
 import { marketViewAnnotationContext } from './constants/annotationPrompt';
 import { normalizeTimeframe, subscribeLiveAnnotationAdd } from './stores/chartAnnotationStore';
 import { chartSelectionStore, isConfirmedFor, useChartSelections } from './stores/chartSelectionStore';
@@ -96,6 +94,7 @@ function MarketViewInner() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { prices: wsPrices, connectionStatus: wsStatus, dataLevel: wsDataLevel, ginlixDataEnabled, subscribe: wsSubscribe, unsubscribe: wsUnsubscribe, setPreviousClose, setDayOpen } = useMarketDataWSContext();
   // A chart link is the page's opening state, not a correction applied after
   // it: MarketChatPanel reads a symbol or workspace that changes after its
@@ -150,16 +149,18 @@ function MarketViewInner() {
   const isMobile = useIsMobile();
 
   const [prefillMessage, setPrefillMessage] = useState<string>('');
-  const [mode, setMode] = useState<'fast' | 'ptc'>(() => {
-    if (openingRoute.mode) return openingRoute.mode;
-    const stored = loadPref<string>('mode', 'fast');
-    return stored === 'ptc' ? 'ptc' : 'fast';
+  // The composer's scope, stored under its old pref name and values so a
+  // saved pick still reads: 'fast' is All workspaces, 'ptc' the selected
+  // workspace.
+  const [scope, setScope] = useState<ComposerScope>(() => {
+    if (openingRoute.scope) return openingRoute.scope;
+    return loadPref<string>('mode', 'fast') === 'ptc' ? 'workspace' : 'all';
   });
-  // Workspaces for the selector (PTC mode). The shared query, not a local
+  // Workspaces for the selector. The shared query, not a local
   // fetch — a rename elsewhere invalidates this key, and a copy in local state
   // would keep showing the old name until the page remounts. The list is
-  // already PTC-only: this key carries includeFlash=false, and the server
-  // filters flash rows out of that response.
+  // already the user's own workspaces: this key carries includeHome=false,
+  // and the server leaves Home out of that response.
   // refetchOnMount 'always': the reconcile in useRestoredWorkspace only accepts
   // a fetch that happened during this mount, and the 30s staleTime would
   // otherwise serve a remount from cache with no request at all, so the check
@@ -177,21 +178,20 @@ function MarketViewInner() {
     total: workspacesData?.total,
     isFetchedAfterMount,
     isSuccess,
-    onDropped: () => setMode('fast'),
+    onDropped: () => setScope('all'),
   });
 
   useEffect(() => {
-    savePref('mode', mode);
-  }, [mode]);
+    savePref('mode', scope === 'workspace' ? 'ptc' : 'fast');
+  }, [scope]);
 
-  // Under the all-workspaces agent 'fast' is All workspaces, which is always
-  // there. A stored workspace side with no workspace left to select would
-  // leave the chat panel with nothing to send to, so it falls back.
-  const allWorkspaces = useAllWorkspacesAgent();
+  // All workspaces is always there. A stored workspace side with no
+  // workspace left to select would leave the chat panel with nothing to send
+  // to, so it falls back.
   useEffect(() => {
-    if (!allWorkspaces || mode !== 'ptc' || workspacePending) return;
-    if (isFetchedAfterMount && isSuccess && selectableWorkspaces.length === 0) setMode('fast');
-  }, [allWorkspaces, mode, workspacePending, isFetchedAfterMount, isSuccess, selectableWorkspaces.length]);
+    if (scope !== 'workspace' || workspacePending) return;
+    if (isFetchedAfterMount && isSuccess && selectableWorkspaces.length === 0) setScope('all');
+  }, [scope, workspacePending, isFetchedAfterMount, isSuccess, selectableWorkspaces.length]);
 
   // Indices, not text: the picks survive a language switch and only the words re-translate.
   const [quickQueryPicks, setQuickQueryPicks] = useState<number[]>(pickQuickQueryIndices);
@@ -220,60 +220,29 @@ function MarketViewInner() {
   const dragStartX = useRef<number>(0);
   const dragStartWidth = useRef<number>(0);
 
-  // Mobile FAB still uses the legacy useMarketChat (no persistence). Desktop
-  // chat lives in MarketChatPanel which drives its own useChatMessages.
-  const { isLoading, threadId: flashThreadId, handleSendMessage: handleFastModeSend } = useMarketChat();
+  // The mobile FAB hands each send to the chat view; the desktop chat lives in
+  // MarketChatPanel, which drives its own useChatMessages.
+  //
+  // The FAB unmounts its composer after every send, so the model lives here,
+  // which outlives the FAB. No thread is behind it: a send opens a new thread
+  // in the chat view, and the pick goes with that navigation. All workspaces
+  // opens that thread in Home, which runs the default model as a workspace
+  // does.
+  const threadModel = useThreadModel({ threadId: null, isLoading: false });
+  // The Subagents pick lives here too, so a fold keeps it. The send carries
+  // it into the thread it opens.
+  const subagents = useThreadSubagents({ threadId: null });
 
-  // The FAB unmounts its composer after every send, and a composer holding
-  // its own model would reseed from the account default on the next expand,
-  // then store that over the thread's model with the follow-up. So the models
-  // live here, which outlives the FAB, one per mode so a pick never rides to
-  // the other mode's send. Only Fast has a thread behind it: a PTC send opens
-  // a new thread in the chat view, and its pick goes with that navigation.
-  const flashThreadModel = useThreadModel({ threadId: flashThreadId, mode: 'fast', isLoading });
-  const ptcThreadModel = useThreadModel({ threadId: null, mode: 'ptc', isLoading });
-  // Under the all-workspaces agent All workspaces opens a thread in Home, which
-  // runs the default model as a workspace does, so it takes the PTC side.
-  const modelMode = mode === 'fast' && !allWorkspaces ? 'fast' : 'ptc';
-  const threadModel = modelMode === 'fast' ? flashThreadModel : ptcThreadModel;
-  // The Subagents pick lives here too, so a fold keeps it. Only a send to the
-  // full agent carries it, into the thread that send opens.
-  const subagents = useThreadSubagents({ threadId: null, mode: modelMode });
+  // Home's id, which All workspaces runs in. Retried, since
+  // a failed first fetch would otherwise leave All workspaces annotations
+  // unscoped until something refetches it.
+  const { data: homeWorkspace } = useQuery({ ...homeWorkspaceQuery(queryClient), retry: 3 });
 
-  // Resolve the user's flash workspace id once so we can scope chart
-  // annotations to the workspace the chat is actually running in.
-  const [flashWorkspaceId, setFlashWorkspaceId] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // A transient null (e.g. a failed first fetch) would otherwise leave
-    // Fast-mode annotations unscoped for the whole session, so retry a few
-    // times. getOrFetchFlashWorkspaceId clears its cache on failure, so each
-    // call re-attempts the request.
-    const attempt = (remaining: number) => {
-      getOrFetchFlashWorkspaceId().then((id) => {
-        if (cancelled) return;
-        if (id) {
-          setFlashWorkspaceId(id);
-          return;
-        }
-        if (remaining > 0) {
-          timer = setTimeout(() => attempt(remaining - 1), 1500);
-        }
-      });
-    };
-    attempt(3);
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, []);
-
-  // The chart shows the agent-drawn instance for whichever workspace the chat
-  // panel is using — flash workspace in Fast mode, the selected one in PTC.
-  // Annotations are keyed by (workspace_id, chart_id), so this single id scopes
+  // The workspace the chat runs in: Home under All workspaces, the selected
+  // one otherwise. The chart shows the agent-drawn instance for it, and since
+  // annotations are keyed by (workspace_id, chart_id), this single id scopes
   // both the persistence sync and the live chart selection.
-  const activeWorkspaceId = mode === 'fast' ? flashWorkspaceId : selectedWorkspaceId;
+  const activeWorkspaceId = scope === 'all' ? homeWorkspace?.workspace_id ?? null : selectedWorkspaceId;
   useChartAnnotationSync(activeWorkspaceId, selectedStock);
 
   // Switch the chart to a given instance — used by the live-add auto-focus
@@ -309,8 +278,8 @@ function MarketViewInner() {
   // Chat return path — captured from URL when navigating from chat DetailPanel
   const [chatReturnPath, setChatReturnPath] = useState<string | null>(null);
 
-  // Handle URL parameters (symbol + returnTo from chat context, and ws + mode
-  // when opening a chart-annotation card from ChatAgent). Preserve
+  // Handle URL parameters (symbol + returnTo from chat context, and ws when
+  // opening a chart-annotation card from ChatAgent). Preserve
   // `?thread` so MarketChatPanel can pick it up to resume the right
   // conversation in the same workspace. On the first render the state above is
   // already seeded from the same route, so this re-applies identical values;
@@ -332,13 +301,13 @@ function MarketViewInner() {
     if (route.timeframe && INTERVALS.some((i) => i.key === route.timeframe)) {
       setSelectedInterval(route.timeframe);
     }
-    // Apply workspace before mode so MarketChatPanel resolves the right
-    // (ptc) workspace when it mounts the forwarded thread.
+    // Apply workspace before scope so MarketChatPanel resolves the right
+    // workspace when it mounts the forwarded thread.
     if (route.workspaceId) {
       selectWorkspace(route.workspaceId);
     }
-    if (route.mode) {
-      setMode(route.mode);
+    if (route.scope) {
+      setScope(route.scope);
     }
     if (route.returnTo) {
       setChatReturnPath(route.returnTo);
@@ -520,60 +489,46 @@ function MarketViewInner() {
     metaItems.push(...selectionAttachments);
     const attachmentMeta = metaItems.length > 0 ? metaItems : null;
 
-    if (mode === 'fast' && !allWorkspaces) {
-      handleFastModeSend(outgoingMessage, imageContext, attachmentMeta, model);
-      chartSelectionStore.clearAll();
-    } else {
-      // PTC mode: use selected workspace or fall back to default. Under the
-      // all-workspaces agent, All workspaces hands off the same way on the
-      // flash row, which the server runs as Home on the full agent.
-      const toHome = mode === 'fast';
-      try {
-        const workspaceId = toHome
-          ? flashWorkspaceId ?? await getOrFetchFlashWorkspaceId()
-          : selectedWorkspaceId;
-        if (toHome && !workspaceId) {
-          toast({ variant: 'destructive', title: t('common.error'), description: t('agents.market.setupFailed') });
-          return;
-        }
-        if (!workspaceId) {
-          toast({
-            variant: 'destructive',
-            title: t('marketView.chatHistory.noWorkspace'),
-            description: allWorkspaces ? t('agents.market.noWorkspaceToast') : t('marketView.chatPanel.noWorkspaceToast'),
-          });
-          return;
-        }
-
-        navigate(`/chat/t/__default__`, {
-          state: {
-            workspaceId,
-            ...(toHome ? FLASH_ROUTE_STATE : {}),
-            initialMessage: outgoingMessage,
-            ...(subagents.toSend !== undefined ? { subagentsAllowed: subagents.toSend } : {}),
-            additionalContext: imageContext,
-            // Carry the chart-annotation skill over so the PTC agent starts
-            // with the drawing guide (the tools themselves are always bound).
-            skills: ['chart-annotation'],
-            ...(selectionSnapshots.length > 0 ? { chartSelections: selectionSnapshots } : {}),
-            ...(attachmentMeta ? { attachmentMeta } : {}),
-            ...(model ? { model } : {}),
-            ...(reasoningEffort ? { reasoningEffort } : {}),
-          },
-        });
-        chartSelectionStore.clearAll();
-      } catch (error) {
-        console.error('Error setting up PTC mode:', error);
+    // The selected workspace, or under All workspaces Home, which the server
+    // runs on the full agent. A failed Home lookup is the setup toast below.
+    try {
+      const workspaceId = await resolveChatWorkspace(queryClient, scope, selectedWorkspaceId);
+      if (!workspaceId) {
         toast({
           variant: 'destructive',
-          title: t('common.error'),
-          description: allWorkspaces ? t('agents.market.setupFailed') : t('marketView.chatPanel.ptcSetupFailed'),
+          title: t('marketView.chatHistory.noWorkspace'),
+          description: t('agents.market.noWorkspaceToast'),
         });
+        return;
       }
+
+      navigate(`/chat/t/__default__`, {
+        state: {
+          workspaceId,
+          initialMessage: outgoingMessage,
+          ...(subagents.toSend !== undefined ? { subagentsAllowed: subagents.toSend } : {}),
+          additionalContext: imageContext,
+          // Carry the chart-annotation skill over so the agent starts with
+          // the drawing guide (the tools themselves are always bound).
+          skills: ['chart-annotation'],
+          ...(selectionSnapshots.length > 0 ? { chartSelections: selectionSnapshots } : {}),
+          ...(attachmentMeta ? { attachmentMeta } : {}),
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        },
+      });
+      chartSelectionStore.clearAll();
+    } catch (error) {
+      console.error('Error opening the chat:', error);
+      toast({
+        variant: 'destructive',
+        title: t('common.error'),
+        description: t('agents.market.setupFailed'),
+      });
     }
     setChartImage(null);
     setChartImageDesc(null);
-  }, [handleFastModeSend, navigate, toast, t, chartImage, chartImageDesc, mode, selectedWorkspaceId, selectedStock, selectedInterval, allWorkspaces, flashWorkspaceId, subagents.toSend]);
+  }, [navigate, toast, t, queryClient, chartImage, chartImageDesc, scope, selectedWorkspaceId, selectedStock, selectedInterval, subagents.toSend]);
 
   const handleSidebarSymbolClick = useCallback((symbol: string) => {
     setSelectedStock(displaySpelling(symbol));
@@ -686,13 +641,13 @@ function MarketViewInner() {
                 className="flex flex-col gap-1.5 mb-1.5 p-1.5 rounded-2xl border"
                 style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-muted)' }}
               >
-                <ThreadNotices model={threadModel} subagents={subagents} mode={modelMode} />
+                <ThreadNotices model={threadModel} subagents={subagents} />
               </div>
             )}
             <ChatInput
               onSend={(...args: any[]) => { (handleSendMessage as any)(...args); setChatExpanded(false); }}
-              isLoading={isLoading}
-              {...composerModeProps(allWorkspaces, mode, setMode)}
+              scope={scope}
+              onScopeChange={setScope}
               model={threadModel.model}
               onPickModel={threadModel.pickModel}
               subagentsAllowed={subagents.allowed}
@@ -710,7 +665,7 @@ function MarketViewInner() {
               // The desktop panel waits out the same check: until it confirms
               // the restored workspace there is none to send to, and
               // a send would clear the draft into the no-workspace toast.
-              disabled={mode === 'ptc' && workspacePending}
+              disabled={scope === 'workspace' && workspacePending}
             />
           </MobileFabChat>
 
@@ -830,8 +785,9 @@ function MarketViewInner() {
                 <MarketChatPanel
                   symbol={selectedStock}
                   interval={selectedInterval}
-                  mode={mode}
-                  onModeChange={setMode}
+                  scope={scope}
+                  onScopeChange={setScope}
+                  activeWorkspaceId={activeWorkspaceId}
                   workspaces={selectableWorkspaces}
                   selectedWorkspaceId={selectedWorkspaceId}
                   workspacePending={workspacePending}

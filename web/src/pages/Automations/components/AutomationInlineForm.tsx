@@ -1,15 +1,18 @@
 import React, { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useQueryClient } from '@tanstack/react-query';
+import { resolveChatWorkspace } from '@/hooks/useHomeWorkspace';
 import { motion } from '@/lib/framer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import type { Automation, AutomationPayload, AutomationUpdatePayload } from '@/types/automation';
 import { type DeliveryProblem, deliveryProblems } from '../utils/delivery';
+import { mutationErrorMessage } from '../utils/errors';
 import { PANE_ENTER } from '../utils/motion';
 import {
+  ALL_WORKSPACES,
   type FormPatch,
   type FormState,
   formStateToPayload,
@@ -56,13 +59,15 @@ export default function AutomationInlineForm({
   const [opened] = useState(() => ({ values: initialValues, automation: original }));
   const isEdit = !!opened.automation;
   const [form, setForm] = useState<FormState>(initialValues);
+  const queryClient = useQueryClient();
+  // Reading Home's id for All workspaces, before the save starts.
+  const [placing, setPlacing] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   // The delivery entries the last save was refused over, until the delivery
   // changes.
   const [refused, setRefused] = useState<DeliveryProblem[]>([]);
   const uid = useId();
   const ids = { name: `${uid}-name`, instruction: `${uid}-instruction` };
-  const allWorkspaces = useAllWorkspacesAgent();
 
   const patch: FormPatch = (key, value) => {
     if (key === 'delivery_methods') setRefused([]);
@@ -75,18 +80,30 @@ export default function AutomationInlineForm({
   }, [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const problem = validateForm(form, Date.now(), isEdit ? opened.values : undefined, { allWorkspaces });
+    const problem = validateForm(form, Date.now(), isEdit ? opened.values : undefined);
     if (problem) {
       // A field folded away cannot be fixed, so its section opens.
       if (problem.section === 'more') setMoreOpen(true);
       toast({ variant: 'destructive', description: t(problem.messageKey) });
       return;
     }
+    let workspaceId = form.place;
+    if (form.place === ALL_WORKSPACES) {
+      setPlacing(true);
+      try {
+        workspaceId = await resolveChatWorkspace(queryClient, 'all');
+      } catch (err) {
+        toast({ variant: 'destructive', description: mutationErrorMessage(err, t('automation.actionFailed')) });
+        return;
+      } finally {
+        setPlacing(false);
+      }
+    }
     const submission: FormSubmission = opened.automation
-      ? { kind: 'edit', payload: formStateToUpdatePayload(form, opened.values, opened.automation) }
-      : { kind: 'create', payload: formStateToPayload(form) };
+      ? { kind: 'edit', payload: formStateToUpdatePayload(form, opened.values, opened.automation, workspaceId) }
+      : { kind: 'create', payload: formStateToPayload(form, workspaceId) };
     // The refusal itself was already announced; one naming delivery entries
     // is also shown beside them, unfolded.
     void Promise.resolve(onSubmit(submission)).catch((err: unknown) => {
@@ -143,11 +160,11 @@ export default function AutomationInlineForm({
         <div className="automation-form-actions">
           <Button
             type="submit"
-            disabled={loading}
+            disabled={loading || placing}
             className="transition-opacity hover:opacity-90"
             style={{ backgroundColor: 'var(--color-btn-primary-bg)', color: 'var(--color-btn-primary-text)' }}
           >
-            {loading ? t('common.saving') : isEdit ? t('automation.saveChanges') : t('common.create')}
+            {loading || placing ? t('common.saving') : isEdit ? t('automation.saveChanges') : t('common.create')}
           </Button>
           <Button type="button" variant="ghost" onClick={onCancel}>
             {t('common.cancel')}

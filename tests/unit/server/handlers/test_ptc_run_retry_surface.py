@@ -16,6 +16,7 @@ import pytest
 
 from src.server.handlers.chat.request_prep import PriorThread, build_turn_context
 from src.server.models.chat import ChatRequest
+from src.server.services.turn_runtime import TurnRoute
 
 PTC = "src.server.handlers.chat.ptc_run"
 PREP = "src.server.handlers.chat.request_prep"
@@ -75,7 +76,7 @@ async def _start(request: ChatRequest, prior: PriorThread, failed_run: dict):
             run_id="r-1",
             user_input="",
             user_id="u-1",
-            workspace_id="ws-1",
+            route=TurnRoute("ws-1", "analyst"),
             is_byok=False,
             config=config,
         )

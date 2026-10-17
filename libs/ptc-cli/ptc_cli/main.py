@@ -186,12 +186,18 @@ def parse_args() -> argparse.Namespace:
         help="LLM model name from models.json (e.g., 'minimax-m3', 'claude-sonnet-4-5')",
     )
     parser.add_argument(
-        "--flash",
+        "--home",
         action="store_true",
-        help="Use Flash Agent: fast responses without sandbox (no code execution)",
+        help="Chat in your Home, outside any workspace",
     )
+    # The old name of --home, kept so existing scripts still start.
+    parser.add_argument("--flash", action="store_true", help=argparse.SUPPRESS)
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.flash:
+        print("ptc-agent: --flash is deprecated; use --home", file=sys.stderr)
+        args.home = True
+    return args
 
 
 async def chat_loop(
@@ -550,9 +556,9 @@ def run_cli() -> None:
             session_state = SessionState(
                 auto_approve=args.auto_approve,
                 no_splash=args.no_splash,
-                persist_session=not args.new_workspace and not args.flash,
+                persist_session=not args.new_workspace and not args.home,
                 llm_model=args.model,
-                flash_mode=args.flash,
+                flash_mode=args.home,
             )
             session_state.log_file_path = str(log_path)
 

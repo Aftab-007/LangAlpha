@@ -20,6 +20,7 @@ from src.server.services.insight_service import (
     _extract_json_string,
     _extract_structured_output,
     _llm_extract_fallback,
+    _research,
 )
 
 
@@ -299,7 +300,7 @@ class TestGenerateForUser:
 
     @pytest.mark.asyncio
     @patch("src.server.services.insight_service.insight_db")
-    @patch("src.server.services.insight_service._run_flash_agent", new_callable=AsyncMock)
+    @patch("src.server.services.insight_service._research", new_callable=AsyncMock)
     async def test_user_with_watchlist_and_portfolio(self, mock_agent, mock_db):
         """Personalized prompt includes symbols and holdings."""
         user_id = "user-123"
@@ -326,7 +327,7 @@ class TestGenerateForUser:
 
     @pytest.mark.asyncio
     @patch("src.server.services.insight_service.insight_db")
-    @patch("src.server.services.insight_service._run_flash_agent", new_callable=AsyncMock)
+    @patch("src.server.services.insight_service._research", new_callable=AsyncMock)
     async def test_empty_watchlist_falls_back_to_generic(self, mock_agent, mock_db):
         """Empty watchlist/portfolio falls back to generic market_update prompt."""
         user_id = "user-456"
@@ -418,7 +419,7 @@ class TestGenerateForUser:
 
     @pytest.mark.asyncio
     @patch("src.server.services.insight_service.insight_db")
-    @patch("src.server.services.insight_service._run_flash_agent", new_callable=AsyncMock)
+    @patch("src.server.services.insight_service._research", new_callable=AsyncMock)
     async def test_generate_returns_immediately(self, mock_agent, mock_db):
         """generate_for_user returns the generating row without waiting."""
         row = {"market_insight_id": "ins-async", "created_at": datetime.now(timezone.utc), "status": "generating"}
@@ -439,7 +440,7 @@ class TestGenerateForUser:
 
     @pytest.mark.asyncio
     @patch("src.server.services.insight_service.insight_db")
-    @patch("src.server.services.insight_service._run_flash_agent", new_callable=AsyncMock)
+    @patch("src.server.services.insight_service._research", new_callable=AsyncMock)
     async def test_background_timeout_marks_failed(self, mock_agent, mock_db):
         """Background task marks DB row as failed on timeout."""
         mock_db.fail_market_insight = AsyncMock()
@@ -460,7 +461,7 @@ class TestGenerateForUser:
 
     @pytest.mark.asyncio
     @patch("src.server.services.insight_service.insight_db")
-    @patch("src.server.services.insight_service._run_flash_agent", new_callable=AsyncMock)
+    @patch("src.server.services.insight_service._research", new_callable=AsyncMock)
     async def test_background_extraction_failure_marks_failed(self, mock_agent, mock_db):
         """Background task marks DB row as failed when extraction fails."""
         mock_db.fail_market_insight = AsyncMock()
@@ -482,6 +483,38 @@ class TestGenerateForUser:
 # ---------------------------------------------------------------------------
 # _build_user_context
 # ---------------------------------------------------------------------------
+
+class TestResearch:
+    @pytest.mark.asyncio
+    async def test_web_fetch_extracts_with_the_users_fetch_model_for_that_run_only(self):
+        """A brief's WebFetch runs on the user's fetch model and client, as a
+        chat turn's does, and the scheduler's next brief starts without them."""
+        from langchain_core.messages import AIMessage
+
+        from src.tools.web import fetch
+
+        seen = {}
+
+        class Graph:
+            async def ainvoke(self, state, config):
+                seen["model"] = fetch._get_extraction_model()
+                seen["client"] = fetch.fetch_llm_client_override.get()
+                return {"messages": [AIMessage(content="brief")]}
+
+        client = object()
+        resolved = MagicMock()
+        resolved.llm.fetch_name = "user-fetch-model"
+        resolved.subsidiary_llm_clients = {"fetch": client}
+
+        with patch("src.server.app.setup.agent_config", MagicMock()), \
+             patch("src.server.services.llm.config.resolve_llm_config", AsyncMock(return_value=resolved)), \
+             patch("ptc_agent.agent.insight_graph.build_insight_graph", return_value=Graph()):
+            assert await _research("prompt", user_id="user-1") == "brief"
+
+        assert seen == {"model": "user-fetch-model", "client": client}
+        assert fetch.fetch_model_override.get() is None
+        assert fetch.fetch_llm_client_override.get() is None
+
 
 class TestBuildUserContext:
     """Test InsightService._build_user_context."""
@@ -735,10 +768,10 @@ class TestGenerateInsight:
         InsightService._instance = None
 
     @pytest.mark.asyncio
-    @patch("src.server.services.insight_service._run_flash_agent", new_callable=AsyncMock)
+    @patch("src.server.services.insight_service._research", new_callable=AsyncMock)
     @patch("src.server.services.insight_service.insight_db")
     async def test_timeout_marks_row_failed(self, mock_db, mock_agent):
-        """A hung flash agent triggers timeout and marks the DB row as failed."""
+        """A hung research run triggers timeout and marks the DB row as failed."""
         svc = InsightService()
         svc._generation_timeout = 0.1  # 100ms timeout
 

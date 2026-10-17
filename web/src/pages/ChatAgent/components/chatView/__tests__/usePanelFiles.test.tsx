@@ -25,7 +25,6 @@ let queryClient: QueryClient;
 function render(props: Partial<Parameters<typeof usePanelFiles>[0]> = {}) {
   return renderHook(() => usePanelFiles({
     isHome: true,
-    isFlashMode: false,
     workspaceId: HOME,
     includeSystem: false,
     ...props,
@@ -65,12 +64,5 @@ describe('usePanelFiles', () => {
 
     act(() => result.current.panelAccess.onReturnHome?.());
     expect(result.current.shownWorkspaceId).toBe(HOME);
-  });
-
-  it('lists nothing for Flash until a link names a workspace', () => {
-    const result = render({ isHome: false, isFlashMode: true });
-    expect(result.current.shownWorkspaceId).toBeNull();
-    expect(result.current.panelAccess).toMatchObject({ readOnly: true, singleFileMode: false, canShare: false });
-    expect(list).not.toHaveBeenCalled();
   });
 });

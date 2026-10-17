@@ -61,7 +61,7 @@ export interface StreamRouterDeps {
   attachSubagentMux: (tid: string, processEvent: (event: SSEEvent) => void, snapshotAtMs?: number) => void;
   setMarketWatch: React.Dispatch<React.SetStateAction<MarketWatchState | null>>;
   /** Re-read the workspace row, whose folder a run's sandbox acquisition may
-   * have moved; null where a run acquires none (flash). */
+   * have moved; null with no workspace. */
   refreshWorkspaceFolder: (() => void) | null;
   /** Watch this thread for a hand-off's report-back. */
   armReportBack: () => void;

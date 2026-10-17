@@ -12,7 +12,6 @@ import {
 import { useLocation } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useUser } from '@/hooks/useUser';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { usePreferences } from '@/hooks/usePreferences';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -49,8 +48,6 @@ interface GettingStartedState {
 
 /** Tasks offered in this deployment — channel integrations are platform-hosted. */
 const DEPLOYED_TASKS = GETTING_STARTED_TASKS.filter((t) => !t.platformOnly || isPlatformMode);
-/** The interview runs on the Chief of Staff, so without it those tasks drop out. */
-const TASKS_WITHOUT_INTERVIEW = DEPLOYED_TASKS.filter((t) => !t.interview);
 
 /** Any non-empty string value in a preference object (mirrors the backend's check). */
 function hasFilledField(section: unknown): boolean {
@@ -91,8 +88,6 @@ export function useOnboarding(): OnboardingContextValue {
 export function OnboardingProvider({ children }: { children: ReactNode }) {
   const { pathname, search } = useLocation();
   const { user } = useUser();
-  const allWorkspaces = useAllWorkspacesAgent();
-  const offeredTasks = allWorkspaces ? DEPLOYED_TASKS : TASKS_WITHOUT_INTERVIEW;
   const { preferences } = usePreferences();
   const {
     prefs,
@@ -271,7 +266,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     // The connect sheet is the first step of the same flow, over any page.
     new URLSearchParams(search).get(ONBOARDING_PARAM) === ONBOARDING_CONNECT ||
     (!personalizationCompleted &&
-      ((pathname === '/dashboard' && allWorkspaces && !personalizationSnoozed) ||
+      ((pathname === '/dashboard' && !personalizationSnoozed) ||
         pathname === '/chat/t/__default__'));
 
   // Getting-started: auto-complete route-visit tasks. markTaskDone owns the
@@ -279,12 +274,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   // identities its rollback and refetch produce.
   useEffect(() => {
     if (isLoading) return;
-    for (const task of offeredTasks) {
+    for (const task of DEPLOYED_TASKS) {
       if (!task.visitRoute?.(pathname, search)) continue;
       if (prefs.gettingStartedDoneAt[task.id] != null) continue;
       markTaskDone(task.id);
     }
-  }, [isLoading, pathname, search, prefs, markTaskDone, offeredTasks]);
+  }, [isLoading, pathname, search, prefs, markTaskDone]);
 
   // "Tell us your preferences" — live from the prefs the interview writes, so
   // a preferences reset un-checks it. Deliberately NOT the user-row completion
@@ -341,7 +336,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     if (hasStocks && !stocksStamped) markTaskDone('stocks');
   }, [hasStocks, stocksStamped, markTaskDone]);
 
-  // "Create your first workspace" — any non-flash workspace exists. An
+  // "Create your first workspace": any workspace other than Home exists. An
   // independent lightweight probe (limit:1 keys its own cache entry, distinct
   // from the gallery's limit:20); only fetched while the card needs it, and
   // stamped once true like the stocks task.
@@ -357,7 +352,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   }, [hasWorkspace, workspaceStamped, markTaskDone]);
 
   const gettingStarted = useMemo<GettingStartedState>(() => {
-    const tasks = offeredTasks.map((def) => ({
+    const tasks = DEPLOYED_TASKS.map((def) => ({
       def,
       done:
         def.doneWhen === 'hasPreferences'
@@ -375,7 +370,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       dismiss: dismissGettingStarted,
       completeTask: markTaskDone,
     };
-  }, [offeredTasks, prefs, hasPreferences, hasStocks, hasWorkspace, isLoading, dismissGettingStarted, markTaskDone]);
+  }, [prefs, hasPreferences, hasStocks, hasWorkspace, isLoading, dismissGettingStarted, markTaskDone]);
 
   useOnboardingOrchestrator({
     isLoading,

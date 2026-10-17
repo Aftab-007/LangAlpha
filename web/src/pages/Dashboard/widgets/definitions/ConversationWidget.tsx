@@ -10,7 +10,6 @@ import { motion } from '@/lib/framer';
 import ChatInput from '@/components/ui/chat-input';
 import { useChatInput } from '../../hooks/useChatInput';
 import { useUser } from '@/hooks/useUser';
-import { useAllWorkspacesAgent } from '@/hooks/useAllWorkspacesAgent';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { workspaceThreadsQuery } from '@/pages/ChatAgent/utils/threadQueries';
 import type { Thread } from '@/types/api';
@@ -42,15 +41,13 @@ function ConversationWidget({ instance }: WidgetRenderProps<ConversationConfig>)
   const locale = useLocale();
   const now = useNow();
   const navigate = useNavigate();
-  const allWorkspaces = useAllWorkspacesAgent();
   // Focus inside the composer means the user is writing, which warms the
   // target computer.
   const [focused, setFocused] = useState(false);
 
   const {
-    mode,
     scope,
-    composerProps,
+    setScope,
     isLoading,
     handleSend,
     workspaces,
@@ -85,17 +82,14 @@ function ConversationWidget({ instance }: WidgetRenderProps<ConversationConfig>)
   useWidgetContextExport(instance.id, {
     full: () => {
       const selectedWs = workspaces.find((w) => w.workspace_id === selectedWorkspaceId);
-      // Under the all-workspaces agent the composer picks a scope, not a mode,
-      // so the export carries no mode, and the All workspaces scope ignores
-      // the workspace it last selected.
-      const exportedMode = allWorkspaces ? undefined : mode;
-      const inAllWorkspaces = allWorkspaces && scope === 'all';
+      // The All workspaces scope ignores the workspace it last selected.
+      const inAllWorkspaces = scope === 'all';
       const workspaceId = inAllWorkspaces ? null : selectedWorkspaceId;
       const workspaceName = inAllWorkspaces ? t('agents.allWorkspaces') : selectedWs?.name;
       const workspaceLine = inAllWorkspaces
         ? 'Workspace: All workspaces'
         : `Workspace: ${selectedWs?.name ?? '(none)'} (${selectedWorkspaceId ?? 'unset'})`;
-      const lines: string[] = exportedMode ? [`Mode: ${exportedMode}`, workspaceLine] : [workspaceLine];
+      const lines: string[] = [workspaceLine];
       if (recentThreads.length) {
         lines.push('', '**Resume threads:**');
         recentThreads.forEach((th) => {
@@ -105,20 +99,17 @@ function ConversationWidget({ instance }: WidgetRenderProps<ConversationConfig>)
       }
       const text = wrapWidgetContext(
         'agent.conversation',
-        { mode: exportedMode, workspace_id: workspaceId },
+        { workspace_id: workspaceId },
         lines.join('\n'),
       );
       return {
         widget_type: 'agent.conversation',
         widget_id: instance.id,
         label: t('dashboard.widgets.conversation.title'),
-        description: exportedMode
-          ? `${exportedMode} · ${workspaceName ?? 'no workspace'}`
-          : workspaceName ?? 'no workspace',
+        description: workspaceName ?? 'no workspace',
         captured_at: new Date().toISOString(),
         text,
         data: {
-          ...(exportedMode ? { mode: exportedMode } : {}),
           workspace_id: workspaceId,
           workspace_name: workspaceName,
           recent_threads: recentThreads.map((th) => ({
@@ -166,7 +157,8 @@ function ConversationWidget({ instance }: WidgetRenderProps<ConversationConfig>)
           <ChatInput
             onSend={handleSend}
             disabled={isLoading}
-            {...composerProps}
+            scope={scope}
+            onScopeChange={setScope}
             workspaces={workspaces}
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={setSelectedWorkspaceId}

@@ -120,8 +120,8 @@ class CompactionMiddleware(AgentMiddleware):
             keep_messages: The newest messages a summary leaves out.
             offload: Tier 1 settings.
             backend: The sandbox, which holds the transcript and the
-                attachments a summary saves. None for Flash, which has
-                neither.
+                attachments a summary saves. None for a build without a
+                sandbox, which has neither.
             workspace_id: The workspace the turn runs in, whose folder must
                 reach the transcript before anything points at it.
         """

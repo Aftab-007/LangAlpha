@@ -27,7 +27,6 @@ Usage:
 # Agent data classes
 from ptc_agent.config.agent import (
     AgentConfig,
-    FlashConfig,
     LLMConfig,
     LLMDefinition,
     CompactionConfig,
@@ -69,7 +68,6 @@ configure_logging = configure_structlog
 __all__ = [
     # Agent data classes
     "AgentConfig",
-    "FlashConfig",
     # Context enum
     "ConfigContext",
     # Core data classes
