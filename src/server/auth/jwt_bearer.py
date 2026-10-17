@@ -14,6 +14,7 @@ import asyncio
 import contextvars
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import jwt
@@ -55,7 +56,9 @@ class _SigningKeys:
     UNKNOWN_KID_COOLDOWN = 30.0
     FETCH_TIMEOUT = 10.0
 
-    def __init__(self) -> None:
+    def __init__(self, jwks_url: Callable[[], str], *, label: str = "JWKS") -> None:
+        self._jwks_url = jwks_url
+        self._label = label
         self._client: PyJWKClient | None = None
         self._keys: dict[str, PyJWK] = {}
         self._fetched_at = 0.0
@@ -66,11 +69,8 @@ class _SigningKeys:
 
     def _client_for(self) -> PyJWKClient:
         if self._client is None:
-            if not SUPABASE_URL:
-                raise RuntimeError("SUPABASE_URL environment variable is not set")
-            jwks_url = f"{SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
             self._client = PyJWKClient(
-                jwks_url, cache_jwk_set=False, timeout=self.FETCH_TIMEOUT
+                self._jwks_url(), cache_jwk_set=False, timeout=self.FETCH_TIMEOUT
             )
         return self._client
 
@@ -85,7 +85,7 @@ class _SigningKeys:
             self._last_failed = False
         except Exception as exc:
             self._last_failed = True
-            logger.warning(f"[JWKS] Refresh failed, serving the cached set: {exc}")
+            logger.warning(f"[{self._label}] Refresh failed, serving the cached set: {exc}")
 
     def _start_refresh(self) -> asyncio.Task:
         """One fetch at a time; concurrent callers share it."""
@@ -125,7 +125,30 @@ class _SigningKeys:
         return self._keys.get(kid) if self.usable else None
 
 
-_signing_keys = _SigningKeys()
+def _supabase_jwks_url() -> str:
+    if not SUPABASE_URL:
+        raise RuntimeError("SUPABASE_URL environment variable is not set")
+    return f"{SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
+
+
+_signing_keys = _SigningKeys(_supabase_jwks_url)
+
+
+def auth_unavailable(retry_after: int) -> HTTPException:
+    """The 503 for a credential that cannot be checked right now.
+
+    Structured like the credit gate's 503, so clients show an outage rather
+    than reading the status as a quota denial.
+    """
+    return HTTPException(
+        status_code=503,
+        detail={
+            "message": "Service temporarily unavailable. Please try again shortly.",
+            "type": "service_unavailable",
+            "retry_after": retry_after,
+        },
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 async def warm_jwks() -> None:
@@ -143,19 +166,8 @@ async def _decode_token(token: str) -> AuthInfo:
         signing_key = await _signing_keys.get(kid)
         if signing_key is None:
             if not _signing_keys.usable:
-                # Structured like the credit gate's 503, so clients show an
-                # outage rather than reading the status as a quota denial.
                 # The next fetch waits out the cooldown, so retry after it.
-                retry_after = int(_SigningKeys.UNKNOWN_KID_COOLDOWN)
-                raise HTTPException(
-                    status_code=503,
-                    detail={
-                        "message": "Service temporarily unavailable. Please try again shortly.",
-                        "type": "service_unavailable",
-                        "retry_after": retry_after,
-                    },
-                    headers={"Retry-After": str(retry_after)},
-                )
+                raise auth_unavailable(int(_SigningKeys.UNKNOWN_KID_COOLDOWN))
             raise HTTPException(status_code=401, detail="Invalid token")
         payload = jwt.decode(
             token,

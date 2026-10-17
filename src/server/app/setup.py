@@ -663,8 +663,10 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Credit gate wiring check failed: {e}")
 
     from src.server.auth.jwt_bearer import warm_jwks
+    from src.server.auth.oauth_resource import warm_oauth_resource_keys
 
     await warm_jwks()
+    await warm_oauth_resource_keys()
 
     # The shipped brokers' logos, fetched here rather than in front of the first
     # person to open a page that draws one. In the background: a vendor's site
