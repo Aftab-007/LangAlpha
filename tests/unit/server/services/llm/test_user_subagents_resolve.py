@@ -233,9 +233,9 @@ def _agent_config() -> AgentConfig:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("mode", "user_facing"), [("flash", True), ("ptc", False)])
+@pytest.mark.parametrize(("slot", "user_facing"), [("background", True), ("primary", False)])
 async def test_a_build_that_compiles_no_subagents_never_reads_them(
-    monkeypatch, plugin_rows, mode, user_facing
+    monkeypatch, plugin_rows, slot, user_facing
 ):
     from src.server.database import user_subagents
     from src.server.services.llm.config import resolve_llm_config
@@ -245,7 +245,7 @@ async def test_a_build_that_compiles_no_subagents_never_reads_them(
 
     with _offline_turn():
         config = await resolve_llm_config(
-            _agent_config(), USER, None, False, mode=mode, user_facing=user_facing,
+            _agent_config(), USER, None, False, slot=slot, user_facing=user_facing,
         )
 
     reads.assert_not_awaited()

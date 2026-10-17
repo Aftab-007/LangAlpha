@@ -46,13 +46,13 @@ class TestCreateThread:
             conversation_thread_id=str(uuid.uuid4()),
             workspace_id=ws_id,
             current_status="completed",
-            msg_type="flash",
+            msg_type="ptc",
         )
         t2 = await create_thread(
             conversation_thread_id=str(uuid.uuid4()),
             workspace_id=ws_id,
             current_status="in_progress",
-            msg_type="flash",
+            msg_type="ptc",
         )
 
         assert t1["thread_index"] == 0
@@ -68,7 +68,7 @@ class TestCreateThread:
             conversation_thread_id=str(uuid.uuid4()),
             workspace_id=ws_id,
             current_status="in_progress",
-            msg_type="flash",
+            msg_type="ptc",
             external_id="telegram:12345:42",
             platform="telegram",
         )

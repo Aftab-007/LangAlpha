@@ -90,7 +90,8 @@ from .request_prep import (
 )
 from src.server.services import automation_delivery
 from src.server.services.credit_gate_port import build_run_credit_gate
-from src.server.services.report_back.flash import carry
+from src.server.services.report_back.handoff import carry
+from src.server.services.report_back.handoff.keys import ORIGIN_THREAD_META
 from src.server.services.runs.admission import (
     RunScope,
     begin_run,
@@ -101,7 +102,7 @@ from src.server.services.turn_runtime import TurnRoute
 from .admission_gate import agent_steer_of, steer_allowed, wait_or_steer
 from .attachments import attach_request_files
 from .error_handling import handle_workflow_error
-from .flash_handover import cancel_tool_calls_it_lacks, hand_over_flash_thread
+from .agent_change import cancel_tool_calls_it_lacks
 from src.server.services.llm.clients import is_own_key_turn
 from src.server.services.llm.config import apply_fetch_override, resolve_llm_config
 from src.server.services.llm.thread_model import NamedModel
@@ -135,18 +136,18 @@ async def _resolve_project(session, workspace_id: str) -> ProjectContext | None:
 
 
 async def _resolve_origin_meta(request, thread_id: str) -> dict:
-    """The watching flash thread (+ dispatch generation) for this run's hooks.
+    """The watching Chief of Staff thread (+ dispatch generation) for this run's hooks.
 
     The dispatch POST carries them; follow-up turns (HITL resume, user
     continuation) inherit them from the previous attempt — the origin is a
     THREAD property, so the stamp must stay sticky or later completions
-    would fall out of the flash thread's serialization chain (and their
+    would fall out of the Chief of Staff thread's serialization chain (and their
     gen-fenced teardowns out of their dispatch incarnation).
     """
-    supplied = getattr(request, "origin_flash_thread_id", None)
+    supplied = getattr(request, "origin_home_thread_id", None)
     if supplied:
         return {
-            "origin_flash_thread_id": supplied,
+            ORIGIN_THREAD_META: supplied,
             "origin_dispatch_gen": getattr(request, "origin_dispatch_gen", None),
         }
     from src.server.database.runs import lifecycle as tl_db
@@ -154,16 +155,17 @@ async def _resolve_origin_meta(request, thread_id: str) -> dict:
     # A read failure must PROPAGATE (failing the turn start): stamping None
     # on a transient error wouldn't just mis-key this run — inheritance is
     # sticky, so every later turn would inherit the None and the thread
-    # would fall out of its flash chain permanently.
+    # would fall out of its report-back chain permanently.
     prev = await tl_db.get_latest_attempt(thread_id)
     meta = (prev.get("metadata") or {}) if prev is not None else {}
-    if not meta.get("origin_flash_thread_id"):
+    if not meta.get(ORIGIN_THREAD_META):
         # Only a thread a dispatch started has an origin. A generation without
         # one is a report-back's, stamped by the summary turn that answered it
-        # (in Home, or on Flash before it), and is that pair's, not the thread's.
+        # (in Home, or by the retired Flash agent before it), and is that
+        # pair's, not the thread's.
         meta = {}
     return {
-        "origin_flash_thread_id": meta.get("origin_flash_thread_id"),
+        ORIGIN_THREAD_META: meta.get(ORIGIN_THREAD_META),
         "origin_dispatch_gen": meta.get("origin_dispatch_gen"),
     }
 
@@ -376,7 +378,7 @@ async def astream_ptc_workflow(
         # passes it false while still paying its own vendor bill.
         own_key = is_own_key_turn(config)
         query_metadata = {
-            # The resolved one: a request may name none, or a former flash row.
+            # The resolved one: a request may name a former Home row.
             "workspace_id": workspace_id,
         }
         if effective_model:
@@ -712,28 +714,19 @@ async def astream_ptc_workflow(
 
         _mark_phase("graph_build")
 
-        # Read before the handover, which answers a step waiting where the
-        # turn starts, and that is not the newest checkpoint when this is set.
         base_checkpoint_id = await turn_start_checkpoint_id(
             thread_id, request, getattr(ptc_graph, "checkpointer", None)
         )
         cancelled_calls = []
-        if prior_thread.msg_type == "flash":
-            cancelled_calls, base_checkpoint_id = await hand_over_flash_thread(
-                ptc_graph,
-                thread_id,
-                replay=bool(request.checkpoint_id),
-                base=base_checkpoint_id,
-            )
-        elif (
+        if (
             route.role == "chief_of_staff"
             and request.hitl_response
             and not request.checkpoint_id
         ):
-            # A Home thread Flash ran while the all-workspaces agent was off
-            # keeps its type, and may be waiting on a step only Flash has. A
-            # resume has no base: the route refused one whose pause is off
-            # the branch, so the newest checkpoint is the pause it answers.
+            # A Home thread the retired Flash agent ran may be waiting on a
+            # step only Flash had. A resume has no base: the route refused one
+            # whose pause is off the branch, so the newest checkpoint is the
+            # pause it answers.
             cancelled_calls = await cancel_tool_calls_it_lacks(ptc_graph, thread_id)
 
         if session.sandbox:

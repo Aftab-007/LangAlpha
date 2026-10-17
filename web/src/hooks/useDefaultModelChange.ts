@@ -9,7 +9,7 @@ import {
   threadsMoved,
   type ApplyDefaultTo,
   type ModelSlot,
-  type FlashFollows,
+  type BackgroundFollows,
   type PreferencePatch,
 } from '@/lib/modelPreferences';
 import { useSlotDefaultModels } from './useSlotDefaultModels';
@@ -23,7 +23,7 @@ type DefaultModelChoice = Partial<Record<ModelSlot, string>>;
 /** The question a parked change asks, as `DefaultModelScopeChoice` takes it. */
 export interface DefaultModelQuestion {
   /** The new defaults, as the calling surface prints models: one, or the
-   *  primary and flash pair when Settings changes both. */
+   *  primary and Background pair when Settings changes both. */
   models: string[];
   /** The defaults being replaced, printed the same way; empty when unknown. */
   previous: string[];
@@ -108,7 +108,7 @@ export function useDefaultModelChange(label: (model: string) => string) {
       const model = change.models[slot];
       if (model) patch[defaultModelKey(slot)] = model;
     }
-    if (change.models.background) patch.flash_follows = null;
+    if (change.models.background) patch.background_follows = null;
     if (remember) patch.default_model_scope = applyTo;
     let result: Record<string, unknown> | undefined;
     try {
@@ -159,10 +159,10 @@ export function useDefaultModelChange(label: (model: string) => string) {
    *  of `deployment` (Auto) the deployment's background model. The cleared slot
    *  leaves the draft, so its control shows the clear rather than the pick it
    *  replaces. */
-  const clear = useCallback((slot: ModelSlot, follows: FlashFollows = 'primary') => {
+  const clear = useCallback((slot: ModelSlot, follows: BackgroundFollows = 'primary') => {
     mutate(splitPreferenceWrite({
       [defaultModelKey(slot)]: null,
-      ...(slot === 'background' && { flash_follows: follows === 'deployment' ? follows : null }),
+      ...(slot === 'background' && { background_follows: follows === 'deployment' ? follows : null }),
     }));
     setPending((current) => {
       if (!current || !(slot in current.models)) return current;

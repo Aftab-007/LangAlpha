@@ -5,7 +5,7 @@ This module defines response models for workspace thread endpoints that work wit
 the query-response schema (workspaces, thread, query, response).
 """
 
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -34,8 +34,7 @@ class WorkspaceThreadListItem(BaseModel):
         description="Thread annotations. Known keys: 'origin' — "
         "{type: 'agent'|'automation'|'system', id?, name?, agent?} recording "
         "who initiated the thread (name: the automation's; agent: "
-        "'chief_of_staff', or 'flash' on older threads, the dispatcher); "
-        "absent origin = user-initiated.",
+        "'chief_of_staff', the dispatcher); absent origin = user-initiated.",
     )
     is_shared: bool = Field(False, description="Whether thread is publicly shared")
     is_pinned: bool = Field(
@@ -223,7 +222,7 @@ class ThreadCreateRequest(BaseModel):
 
     Resolves its workspace as the message-send path does, Home's id included,
     so a pre-created thread is indistinguishable from an ensure_thread_exists
-    row. ``agent_mode='flash'`` with no workspace still means Home.
+    row.
     """
     workspace_id: Optional[str] = Field(
         None, description="Target workspace; Home's id for the user's Home"
@@ -241,7 +240,6 @@ class ThreadCreateRequest(BaseModel):
         # 4000 chars of it (title-prompt clip; the title stamp is [:255]).
         # Truncate rather than reject so long pastes don't 422 the fast door.
         return v[:4000]
-    agent_mode: Literal["flash", "ptc"] = Field("ptc")
     # Same contract as ChatRequest.platform (see models/chat.py for the format
     # rationale) — pre-created MarketView threads must carry their tag since
     # ensure_thread_exists never updates platform on an existing row.

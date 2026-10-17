@@ -195,7 +195,7 @@ async def _llm_extract_fallback(raw_text: str, user_id: str | None) -> dict:
         ),
         user_prompt=raw_text,
         response_schema=InsightOutputSchema,
-        mode="flash",
+        slot="background",
     )
     return result.model_dump() if hasattr(result, "model_dump") else dict(result)
 
@@ -223,7 +223,7 @@ async def _research(prompt: str, user_id: str | None = None) -> str:
             from src.server.services.llm.config import resolve_llm_config
 
             config = await resolve_llm_config(
-                config, user_id, request_model=None, is_byok=True, mode="flash",
+                config, user_id, request_model=None, is_byok=True, slot="background",
                 user_facing=False,
             )
         except Exception as exc:
@@ -402,7 +402,7 @@ class InsightService:
 
         # Atomic idempotency: try to insert, handle conflict from partial unique index
         row = await insight_db.create_market_insight_if_not_generating(
-            model="flash",
+            model="background",
             type="personalized",
             user_id=user_id,
             metadata={"schema_version": 3, "has_context": bool(symbols_context)},
@@ -727,7 +727,7 @@ class InsightService:
         system_user_id = None if HOST_MODE == "platform" else LOCAL_DEV_USER_ID
 
         row = await insight_db.create_market_insight(
-            model="flash",
+            model="background",
             type=job_type,
             metadata={"instruction": instruction, "schema_version": 3},
         )

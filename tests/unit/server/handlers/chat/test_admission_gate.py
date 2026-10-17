@@ -434,7 +434,7 @@ class TestKeyedSendSteersOnce:
 class TestAdmissionConflictDetail:
     """The single wording source for every in-generator admission 409 — the
     ``stopping``/``compacting``/``running`` conflicts and the ``steer_only``
-    probe's ``not_running`` refusal. Same mapping for PTC and Flash, foreground
+    probe's ``not_running`` refusal. Same mapping for every turn, foreground
     and dispatched."""
 
     def test_compacting_state_names_compaction(self):

@@ -220,7 +220,6 @@ def custom_definition(row: Mapping[str, Any]) -> SubagentDefinition:
     base = SubagentDefinition(
         name=row["name"],
         description=str(fields.get("description") or ""),
-        mode="ptc",
         role_prompt=row.get("instructions") or "",
         tools=tools,
         # The shared tool guide is written for the default set.
@@ -229,7 +228,6 @@ def custom_definition(row: Mapping[str, Any]) -> SubagentDefinition:
         roles=roles or ALL_ROLES,
         # A subagent the user writes reads memory unless they switch it off.
         memory=True,
-        stateful=True,
         source="custom",
     )
     changes = _common_changes(fields, base)

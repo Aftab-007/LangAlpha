@@ -61,7 +61,7 @@ ORCHESTRATOR_SOURCE = "orchestrator"
 #: the agent; the steering message that follows it carries the words.
 STEERING_TRIGGER = "User sent additional instructions."
 _TRIGGER_TAIL = " sent additional instructions."
-_TRIGGER_NAMES = {"user": "User", "chief_of_staff": "Chief of Staff", "flash": "Flash"}
+_TRIGGER_NAMES = {"user": "User", "chief_of_staff": "Chief of Staff"}
 
 
 def steering_trigger(senders: list[str]) -> str:

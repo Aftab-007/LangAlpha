@@ -70,14 +70,10 @@ export function useThreadModel({
   // and the send would store the default over the model the thread holds.
   // With no model named, the server runs the thread's own.
   const unread = !!liveThreadId && !thread && !initialModel;
-  // A thread Flash ran is one Home is taking over. Its model was picked for
-  // Flash's slot, and the takeover forgets it, so the composer starts on the
-  // default rather than naming that model once more.
-  const rowModel = thread?.msg_type === 'flash' ? null : thread?.llm_model;
   const { seed, retired: retiredName } = unread
     ? { seed: null, retired: null }
     : resolveComposerModel(
-      rowModel || initialModel || null,
+      thread?.llm_model || initialModel || null,
       defaultModel,
       catalogModelNames,
     );

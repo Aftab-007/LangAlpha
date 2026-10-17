@@ -670,20 +670,15 @@ async def enqueue_compensation_job(
     payload: Dict[str, Any],
     ordering_key: Optional[str],
     idempotency_key: str,
-    backdate_seconds: Optional[float] = None,
     defer: bool = False,
     conn=None,
 ) -> None:
     """Insert a single follow-up job.
 
-    Used by the legacy-FIFO migration sweep (and any caller needing a
-    durable one-off job). ``backdate_seconds`` shifts created_at into the
-    past so a migrated entry keeps its chain position ahead of younger
-    pending rows. ``defer=True`` inserts the row with
-    ``next_retry_at='infinity'`` — durable but never claimable until
-    ``release_deferred_report_backs`` flips it due (interrupted-root task
-    report-backs wait for the thread's next completed finalize). ON
-    CONFLICT DO NOTHING: re-running the sweep never double-registers.
+    ``defer=True`` inserts the row with ``next_retry_at='infinity'`` — durable
+    but never claimable until ``release_deferred_report_backs`` flips it due
+    (interrupted-root task report-backs wait for the thread's next completed
+    finalize). ON CONFLICT DO NOTHING: a retried caller never double-registers.
     ``conn`` joins the caller's transaction — how a job commits atomically
     with the finalize that owes it (subagent report-back).
     """
@@ -691,14 +686,14 @@ async def enqueue_compensation_job(
         async with conn.cursor() as cur:
             await _insert_compensation_job(
                 cur, run_id, thread_id, hook_type, payload,
-                ordering_key, idempotency_key, backdate_seconds, defer,
+                ordering_key, idempotency_key, defer,
             )
         return
     async with pool.get_db_connection() as conn:
         async with conn.cursor() as cur:
             await _insert_compensation_job(
                 cur, run_id, thread_id, hook_type, payload,
-                ordering_key, idempotency_key, backdate_seconds, defer,
+                ordering_key, idempotency_key, defer,
             )
 
 
@@ -710,7 +705,6 @@ async def _insert_compensation_job(
     payload: Dict[str, Any],
     ordering_key: Optional[str],
     idempotency_key: str,
-    backdate_seconds: Optional[float],
     defer: bool,
 ) -> None:
     await cur.execute(
@@ -722,7 +716,7 @@ async def _insert_compensation_job(
         )
         VALUES (
             %s, %s, %s, %s, %s, %s,
-            NOW() - make_interval(secs => %s),
+            NOW(),
             CASE WHEN %s THEN 'infinity'::timestamptz ELSE NULL END
         )
         ON CONFLICT (idempotency_key) DO NOTHING
@@ -734,7 +728,6 @@ async def _insert_compensation_job(
             SafeJson(payload),
             ordering_key,
             idempotency_key,
-            float(backdate_seconds or 0.0),
             defer,
         ),
     )
@@ -1056,47 +1049,6 @@ async def get_recent_notification_run_ids(
             return [str(r[0]) for r in await cur.fetchall()]
 
 
-async def list_pending_jobs(hook_type: str) -> List[Dict[str, Any]]:
-    """Pending rows of one hook_type, for the one-shot legacy rekey sweep.
-
-    Only the columns the sweep reads: a deferred row's ``next_retry_at`` is
-    ``'infinity'``, which no Python datetime holds, and the sweep gates every
-    claim, so loading it would stop the drainer for as long as one report-back
-    waits on its thread.
-    """
-    async with pool.get_db_connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                """
-                SELECT hook_outbox_id, ordering_key, payload FROM hook_outbox
-                WHERE status = 'pending' AND hook_type = %s
-                ORDER BY created_at, hook_outbox_id
-                """,
-                (hook_type,),
-            )
-            return list(await cur.fetchall())
-
-
-async def set_job_ordering_key(job_id: str, ordering_key: str) -> bool:
-    """Rekey a still-pending job into its correct ordering chain.
-
-    Guarded to ``pending`` so a job a drainer claimed in the meantime is
-    left alone — rekeying a claimed row would move it under a chain whose
-    gate it already bypassed.
-    """
-    async with pool.get_db_connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                UPDATE hook_outbox
-                SET ordering_key = %s
-                WHERE hook_outbox_id = %s AND status = 'pending'
-                """,
-                (ordering_key, job_id),
-            )
-            return cur.rowcount > 0
-
-
 async def requeue_job_with_key(
     job_id: str, *, attempts: int, ordering_key: str, max_attempts: int = 5
 ) -> Optional[str]:
@@ -1176,8 +1128,8 @@ async def merge_job_payload(
 
 
 # ---------------------------------------------------------------------------
-# Steers: a message for a thread's (or a task's) live agent, from the user, the
-# Chief of Staff or Flash. One ``steer`` row per message, parked at insert
+# Steers: a message for a thread's (or a task's) live agent, from the user or
+# the Chief of Staff. One ``steer`` row per message, parked at insert
 # (``next_retry_at='infinity'``). The next model call on the thread holds it
 # (``steered_run_id``) and the step that reads it confirms it; a row no turn
 # takes becomes due (``due_at``, see ``_STEER_DUE_SQL``) and its executor
@@ -1219,8 +1171,8 @@ _TAKEABLE_STEER_SQL = (
     " OR {a}.run_id = %(run_id)s::uuid)"
     " AND NOT EXISTS (SELECT 1 FROM conversation_responses fr"
     " WHERE fr.conversation_response_id = %(run_id)s::uuid"
-    " AND fr.metadata->>'origin_flash_thread_id'"
-    " <> {a}.payload->'origin'->>'origin_flash_thread_id'))"
+    " AND fr.metadata->>'origin_home_thread_id'"
+    " <> {a}.payload->'origin'->>'origin_home_thread_id'))"
 )
 
 
@@ -1332,7 +1284,7 @@ async def admit_steer(
     "job"}`` for a key already accepted, ``{"state": "owned_elsewhere"}`` when
     ``origin_stamp`` names a Home thread other than the one the run reports
     to, else ``{"state": "not_running"}`` (the run ended or was stopped).
-    ``origin_stamp`` (``origin_flash_thread_id``, ``origin_dispatch_gen``)
+    ``origin_stamp`` (``origin_home_thread_id``, ``origin_dispatch_gen``)
     stamps the run so its report-back goes to the steer's sender. Both the
     new generation and the one it displaces go into ``dispatch_gens``, so the
     orphan resolver finds each admitted.
@@ -1352,14 +1304,14 @@ async def admit_steer(
                     existing = await get_steer_job(idempotency_key, conn=conn)
                     if existing is not None:
                         return {"state": "duplicate", "job": existing}
-                    owner_flash = str(origin_stamp["origin_flash_thread_id"])
+                    owner_home = str(origin_stamp["origin_home_thread_id"])
                     gen = str(origin_stamp["origin_dispatch_gen"])
                     await cur.execute(
                         """
                         UPDATE conversation_responses
                         SET metadata = COALESCE(metadata, '{}'::jsonb)
                             || jsonb_build_object(
-                                'origin_flash_thread_id', %(flash)s::text,
+                                'origin_home_thread_id', %(home)s::text,
                                 'origin_dispatch_gen', %(gen)s::text,
                                 'dispatch_gens',
                                 (COALESCE(metadata->'dispatch_gens', '[]'::jsonb)
@@ -1378,12 +1330,12 @@ async def admit_steer(
                           AND conversation_thread_id = %(thread_id)s::uuid
                           AND status = 'in_progress'
                           AND cancel_requested_at IS NULL
-                          AND (metadata->>'origin_flash_thread_id' IS NULL
-                               OR metadata->>'origin_flash_thread_id' = %(flash)s)
+                          AND (metadata->>'origin_home_thread_id' IS NULL
+                               OR metadata->>'origin_home_thread_id' = %(home)s)
                         RETURNING conversation_response_id
                         """,
                         {
-                            "flash": owner_flash,
+                            "home": owner_home,
                             "gen": gen,
                             "run_id": run_id,
                             "thread_id": thread_id,
@@ -1739,8 +1691,8 @@ async def hold_jobs(job_ids: List[str], *, owner: Tuple[str, str]) -> List[str]:
     while it is in progress and, for a steer, not stopped: its ending and its
     cancel stamp both settle the rows it holds, so a hold that commits first
     is settled with them, and one that waits behind them takes nothing. A run
-    taking a Chief of Staff or Flash hand-off is stamped with its report-back
-    origin in the same transaction, as ``admit_steer`` stamps the run it was
+    taking a Chief of Staff hand-off is stamped with its report-back origin
+    in the same transaction, as ``admit_steer`` stamps the run it was
     sent into, so the run that reads it is the one that reports back. A
     report-back is held as ``hold_steered_report_jobs`` holds it."""
     if not job_ids:
@@ -1764,7 +1716,7 @@ async def hold_jobs(job_ids: List[str], *, owner: Tuple[str, str]) -> List[str]:
                     WHERE o.hook_outbox_id = ANY(%(ids)s::uuid[])
                       AND {_steer_sql(_TAKEABLE_STEER_SQL)}
                       AND (%(home)s::text IS NULL OR COALESCE(
-                          o.payload->'origin'->>'origin_flash_thread_id',
+                          o.payload->'origin'->>'origin_home_thread_id',
                           %(home)s::text
                       ) = %(home)s::text)
                       AND EXISTS (SELECT 1 FROM owner)
@@ -1796,7 +1748,7 @@ async def _hand_off_home(cur, job_ids: List[str], run_id: str) -> Optional[str]:
     Home's hand-offs, since it reports back to one thread."""
     await cur.execute(
         """
-        SELECT metadata->>'origin_flash_thread_id' AS home
+        SELECT metadata->>'origin_home_thread_id' AS home
         FROM conversation_responses
         WHERE conversation_response_id = %s::uuid
           AND status = 'in_progress'
@@ -1812,11 +1764,11 @@ async def _hand_off_home(cur, job_ids: List[str], run_id: str) -> Optional[str]:
         return row["home"]
     await cur.execute(
         f"""
-        SELECT o.payload->'origin'->>'origin_flash_thread_id' AS home
+        SELECT o.payload->'origin'->>'origin_home_thread_id' AS home
         FROM hook_outbox o
         WHERE o.hook_outbox_id = ANY(%(ids)s::uuid[])
           AND {_steer_sql(_TAKEABLE_STEER_SQL)}
-          AND o.payload->'origin'->>'origin_flash_thread_id' IS NOT NULL
+          AND o.payload->'origin'->>'origin_home_thread_id' IS NOT NULL
           AND o.payload->'origin'->>'origin_dispatch_gen' IS NOT NULL
         ORDER BY o.created_at, o.hook_outbox_id
         LIMIT 1
@@ -1839,7 +1791,7 @@ async def _stamp_hand_off_origin(
         UPDATE conversation_responses
         SET metadata = COALESCE(metadata, '{}'::jsonb)
             || jsonb_build_object(
-                'origin_flash_thread_id', %(home)s::text,
+                'origin_home_thread_id', %(home)s::text,
                 'origin_dispatch_gen',
                 COALESCE(metadata->>'origin_dispatch_gen', %(latest)s::text),
                 'dispatch_gens',
@@ -1953,7 +1905,7 @@ async def has_live_hand_off(ptc_thread_id: str, home_thread_id: str) -> bool:
                     WHERE o.ordering_key = %s
                       AND {_steer_sql(_LIVE_STEER_SQL)}
                       AND {_steer_sql(_TARGET_SQL)} = 'thread'
-                      AND o.payload->'origin'->>'origin_flash_thread_id' = %s
+                      AND o.payload->'origin'->>'origin_home_thread_id' = %s
                 )
                 """,
                 (steer_ordering_key(ptc_thread_id), home_thread_id),

@@ -4,7 +4,7 @@ The compiler handles:
   * Prompt rendering (custom_prompt > custom_prompt_template > base + role)
   * Tool-set resolution from string identifiers
   * Preloaded skill bodies
-  * Section-toggle computation (mode defaults + definition overrides)
+  * Section-toggle computation (defaults + definition overrides)
 """
 
 from __future__ import annotations
@@ -36,11 +36,11 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-# ── Section toggle defaults per mode ──────────────────────────────────
+# ── Section toggle defaults ───────────────────────────────────────────
 # True = section included, False = excluded.
 # The definition.sections dict overrides these per-subagent.
 
-_PTC_SUBAGENT_DEFAULTS: dict[str, bool] = {
+_SECTION_DEFAULTS: dict[str, bool] = {
     "task_workflow": False,
     "workspace_paths": True,
     "tool_guide": True,
@@ -51,19 +51,6 @@ _PTC_SUBAGENT_DEFAULTS: dict[str, bool] = {
     "workspace_context": False,
     "ask_user_guidelines": False,
 }
-
-_FLASH_SUBAGENT_DEFAULTS: dict[str, bool] = {
-    "task_workflow": False,
-    "workspace_paths": False,
-    "tool_guide": False,
-    "subagent_coordination": False,
-    "data_processing": False,
-    "visualizations": False,
-    "output_guidelines": False,
-    "workspace_context": False,
-    "ask_user_guidelines": False,
-}
-
 
 def _with_preloaded(prompt: str, preloaded: str) -> str:
     """A standalone prompt closed by the block ``subagent_base.md.j2`` ends
@@ -346,13 +333,8 @@ class SubagentCompiler:
         )
 
     def _compute_sections(self, defn: SubagentDefinition) -> dict[str, bool]:
-        """Merge mode defaults with definition overrides."""
-        if defn.mode == "flash":
-            base = dict(_FLASH_SUBAGENT_DEFAULTS)
-        else:
-            base = dict(_PTC_SUBAGENT_DEFAULTS)
-        base.update(defn.sections)
-        return base
+        """Merge the section defaults with the definition's overrides."""
+        return {**_SECTION_DEFAULTS, **defn.sections}
 
     @cached_property
     def _registry(self) -> RegistryTools | None:

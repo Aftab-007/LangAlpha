@@ -67,7 +67,7 @@ class TestLoadFromDictLLM:
         """LLM section as dict with name and optional fields."""
         config = load_from_dict(_full_config_dict())
         assert config.llm.name == "test-model"
-        assert config.llm.flash == "test-background"
+        assert config.llm.background == "test-background"
         assert config.llm.compaction == "test-summary"
         assert config.llm.fetch == "test-fetch"
         assert config.llm.fallback == ["fallback-1"]
@@ -77,7 +77,7 @@ class TestLoadFromDictLLM:
         data = _full_config_dict(llm="claude-sonnet-4-5")
         config = load_from_dict(data)
         assert config.llm.name == "claude-sonnet-4-5"
-        assert config.llm.flash is None
+        assert config.llm.background is None
         assert config.llm.compaction is None
         assert config.llm.fetch is None
         assert config.llm.fallback is None
@@ -115,17 +115,15 @@ class TestLoadFromDictLLM:
         data = _full_config_dict(llm={"name": "gpt-4o"})
         config = load_from_dict(data)
         assert config.llm.name == "gpt-4o"
-        assert config.llm.flash is None
+        assert config.llm.background is None
         assert config.llm.compaction is None
 
-    def test_the_old_llm_flash_still_names_the_background_model(self, caplog):
+    def test_the_old_llm_flash_is_refused_naming_llm_background(self):
         """A dict handed straight to the loader skips load_yaml_config, so the
-        loader reads the old spelling itself rather than dropping it."""
+        loader refuses the old spelling itself rather than dropping it."""
         data = _full_config_dict(llm={"name": "gpt-4o", "flash": "gpt-4o-mini"})
-        with caplog.at_level("WARNING", logger="ptc_agent.config.file_utils"):
-            config = load_from_dict(data)
-        assert config.llm.flash == "gpt-4o-mini"
-        assert any("rename it to llm.background" in r.getMessage() for r in caplog.records)
+        with pytest.raises(ValueError, match=r"llm\.flash was renamed to llm\.background"):
+            load_from_dict(data)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +190,7 @@ class TestLoadFromDictOptionalSections:
         data = _full_config_dict(flash={"enabled": False})
         config = load_from_dict(data)
         assert "flash" not in type(config).model_fields
-        assert config.llm.flash == "test-background"
+        assert config.llm.background == "test-background"
 
 
 # ---------------------------------------------------------------------------
@@ -229,14 +227,13 @@ class TestLoadFromDictSubagents:
             "definitions": {
                 "my-agent": {
                     "description": "Custom agent",
-                    "mode": "flash",
                     "tools": ["web_search"],
                 },
             },
         })
         config = load_from_dict(data)
         assert "my-agent" in config.subagents.enabled
-        assert config.subagents.definitions["my-agent"].mode == "flash"
+        assert config.subagents.definitions["my-agent"].tools == ["web_search"]
 
     @pytest.mark.parametrize(("name", "loads"), [("research", True), ("my-agent", False)])
     def test_only_a_new_subagent_needs_a_description(self, name, loads):
@@ -268,18 +265,32 @@ class TestLoadFromDictSubagents:
             "definitions": {"my-agent": {"description": "Custom agent", **defn}},
         })
 
-    def test_mode_flash_warns_naming_what_replaces_it(self, caplog):
-        with caplog.at_level("WARNING", logger="ptc_agent.config.loaders"):
+    def test_mode_flash_is_refused_naming_sections(self):
+        with pytest.raises(ValueError, match="mode: flash was retired") as refused:
             load_from_dict(self._one_subagent(mode="flash"))
-        [warning] = [r.getMessage() for r in caplog.records if "mode: flash" in r.getMessage()]
-        assert "my-agent" in warning
-        assert "sections:" in warning
+        assert "subagents.definitions.my-agent" in str(refused.value)
+        assert "sections:" in str(refused.value)
 
-    @pytest.mark.parametrize("defn", [{}, {"mode": "ptc"}])
-    def test_no_warning_without_mode_flash(self, caplog, defn):
-        with caplog.at_level("WARNING", logger="ptc_agent.config.loaders"):
-            load_from_dict(self._one_subagent(**defn))
-        assert not [r for r in caplog.records if "mode: flash" in r.getMessage()]
+    def test_mode_flash_on_a_builtin_patch_is_refused_too(self):
+        data = _full_config_dict(subagents={"definitions": {"research": {"mode": "flash"}}})
+        with pytest.raises(ValueError, match="subagents.definitions.research: mode: flash"):
+            load_from_dict(data)
+
+    def test_mode_ptc_is_dropped_as_the_old_default(self):
+        with_mode = load_from_dict(self._one_subagent(mode="ptc"))
+        without = load_from_dict(self._one_subagent())
+        defn = with_mode.subagents.definitions["my-agent"]
+        assert "mode" not in defn.model_fields_set
+        assert defn == without.subagents.definitions["my-agent"]
+
+    @pytest.mark.parametrize("value", ["pttc", None, "Flash"])
+    def test_any_other_mode_is_refused_as_before(self, value):
+        with pytest.raises(ValueError, match="mode was retired; remove it"):
+            load_from_dict(self._one_subagent(mode=value))
+
+    def test_mode_ptc_on_a_builtin_patch_leaves_an_empty_patch(self):
+        data = _full_config_dict(subagents={"definitions": {"research": {"mode": "ptc"}}})
+        assert load_from_dict(data).subagents.definitions["research"].model_fields_set == set()
 
 
 # ---------------------------------------------------------------------------

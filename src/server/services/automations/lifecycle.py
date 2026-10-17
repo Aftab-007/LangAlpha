@@ -25,10 +25,10 @@ from src.llms.preferences import custom_model_names
 from src.server.database import automation as auto_db
 from src.server.database import automation_executions as exec_db
 from src.server.database import conversation as conversation_db
-from src.server.database.home_workspace import get_flash_workspace_id, is_home_id
+from src.server.database.home_workspace import get_home_workspace_id, is_home_id
 from src.server.database.workspace import (
-    FlashWorkspaceTaken,
-    get_or_create_flash_workspace,
+    HomeWorkspaceTaken,
+    get_or_create_home_workspace,
     get_workspace,
 )
 from src.server.models.automation import (
@@ -46,6 +46,7 @@ from src.server.utils.api import (
     require_thread_owner,
     require_workspace_owner,
 )
+from src.server.utils.pg_sanitize import normalize_uuid
 from src.tools.messaging import tools as messaging
 
 logger = logging.getLogger(__name__)
@@ -126,14 +127,14 @@ async def _home(user_id: str, conn) -> str:
     before the upsert, which would hold the row's lock for the rest of a
     caller's transaction.
     """
-    home_id = get_flash_workspace_id(user_id)
+    home_id = get_home_workspace_id(user_id)
     row = await get_workspace(home_id, conn=conn)
     try:
         if row is None:
-            await get_or_create_flash_workspace(user_id, conn=conn)
+            await get_or_create_home_workspace(user_id, conn=conn)
         else:
             require_workspace_owner(row, user_id=user_id)
-    except FlashWorkspaceTaken:
+    except HomeWorkspaceTaken:
         refused = HTTPException(status_code=403, detail="Forbidden")
         raise TargetRefused(refused, field="workspace_id") from None
     except HTTPException as exc:
@@ -141,40 +142,15 @@ async def _home(user_id: str, conn) -> str:
     return home_id
 
 
-def placed(row: Dict[str, Any]) -> str | None:
-    """The workspace a stored automation runs in. A row a former build
-    stored as 'flash' runs in Home whatever its workspace_id says, as the
-    same automation written now stores it."""
-    if row.get("agent_mode") == "flash":
-        return get_flash_workspace_id(str(row["user_id"]))
-    stored = row.get("workspace_id")
-    return str(stored).lower() if stored else None
-
-
-async def _placement(
-    user_id: str,
-    mode: str | None,
-    workspace_id: UUID | str | None,
-    conn,
-    *,
-    named: bool,
-) -> str:
-    """The workspace a write stores, so every automation runs in one.
-
-    'flash' is the former name for Home and stores Home's id whatever else
-    was named, so the row reads 'ptc' like any other. Another workspace is
-    checked only when this write ``named`` it: a stored one was checked when
-    it was written, and nothing reassigns a workspace's owner.
-    """
-    if mode == "flash":
-        return await _home(user_id, conn)
+async def _placement(user_id: str, workspace_id: UUID | str | None, conn) -> str:
+    """The workspace a write stores, so every automation runs in one the
+    user owns."""
     if not workspace_id:
         raise AutomationRefusal(_NO_WORKSPACE, field="workspace_id")
     if is_home_id(user_id, workspace_id):
         return await _home(user_id, conn)
     workspace_id = str(workspace_id).lower()
-    if named:
-        await require_target_ownership(user_id, workspace_id, None, conn=conn)
+    await require_target_ownership(user_id, workspace_id, None, conn=conn)
     return workspace_id
 
 
@@ -189,9 +165,9 @@ async def _require_pin_in(
 ) -> None:
     """Refuse a pinned thread outside the workspace the automation names.
 
-    Runs continue in the pinned thread, wherever it lives, so a pin elsewhere
-    would run the automation somewhere its row doesn't say. Read after the
-    ownership check, which refuses a thread that isn't the user's.
+    A run continues its pinned thread only in the automation's workspace, so
+    a pin elsewhere would never be continued. Read after the ownership check,
+    which refuses a thread that isn't the user's.
     """
     thread = await conversation_db.get_thread_auth_meta(thread_id, conn=conn)
     there = str(thread["workspace_id"]).lower() if thread else None
@@ -350,9 +326,7 @@ async def create_automation(
         else data.next_run_at
     )
 
-    workspace_id = await _placement(
-        user_id, data.agent_mode, data.workspace_id, conn, named=True
-    )
+    workspace_id = await _placement(user_id, data.workspace_id, conn)
     await require_target_ownership(
         user_id, None, data.conversation_thread_id, conn=conn
     )
@@ -378,8 +352,6 @@ async def create_automation(
         timezone=data.timezone,
         trigger_config=data.trigger_config,
         next_run_at=next_run_at,
-        # Named, since the column still defaults to the former 'flash'.
-        agent_mode="ptc",
         workspace_id=workspace_id,
         llm_model=data.llm_model,
         additional_context=data.additional_context,
@@ -439,9 +411,9 @@ async def update_automation(
     Raises:
         ValidationError: A field AutomationUpdate refuses, such as a schedule
             field of another kind than the stored one
-        AutomationRefusal: A merged state with no workspace, a new pin or a
-            move that leaves the pinned thread in another workspace, or a
-            model the user can't run
+        AutomationRefusal: A write naming no workspace, a new pin or a move
+            that leaves the pinned thread in another workspace, or a model
+            the user can't run
         DeliveryRefused: a delivery chat not already saved that can't be used
         TargetRefused: a workspace or thread that isn't the user's
     """
@@ -457,45 +429,39 @@ async def update_automation(
         if update_kwargs.get(field) is not None:
             update_kwargs[field] = str(update_kwargs[field])
 
-    # A row a former build stored as 'flash' moves to Home on its next edit,
-    # so this build writes no 'flash' row. A named workspace is a move to it.
-    if update.agent_mode is not None:
-        mode = update.agent_mode
-    elif update.workspace_id is not None:
-        mode = "ptc"
-    else:
-        mode = current.get("agent_mode")
-    named = bool({"agent_mode", "workspace_id"} & update.model_fields_set)
-    if update_kwargs and (named or mode == "flash"):
-        # The merged state, so a row never runs with no workspace for the
-        # executor to find out about at run time.
-        update_kwargs["agent_mode"] = "ptc"
+    stored_in = normalize_uuid(current.get("workspace_id"))
+    # A named workspace is a move to it.
+    if "workspace_id" in update.model_fields_set:
         update_kwargs["workspace_id"] = await _placement(
-            user_id,
-            mode,
-            update.workspace_id or current.get("workspace_id"),
-            conn,
-            named=update.workspace_id is not None,
+            user_id, update.workspace_id, conn
         )
-        # A pinned thread decides where each run happens, so a move that
-        # names no thread unpins it: the next run starts one in the new place.
+        # The pinned thread stays where it is, so a move that names no thread
+        # unpins it: the next run starts one in the new place.
         if (
             current.get("conversation_thread_id")
             and "conversation_thread_id" not in update.model_fields_set
-            and update_kwargs["workspace_id"] != placed(current)
+            and update_kwargs["workspace_id"] != stored_in
         ):
             update_kwargs["conversation_thread_id"] = None
 
     await require_target_ownership(
         user_id, None, update.conversation_thread_id, conn=conn
     )
-    # Only a new pin or a move is checked: a row a former build stored with
-    # its pin elsewhere stays editable until it is moved or repinned.
-    if pin := update_kwargs.get("conversation_thread_id"):
-        runs_in = update_kwargs.get("workspace_id") or placed(current)
-        stored = current.get("conversation_thread_id")
-        repinned = pin != (str(stored).lower() if stored else None)
-        if repinned or runs_in != placed(current):
+    # Only a new pin, a move, or a switch to continuing is checked: the stored
+    # pin was checked where it was written, and the fold that moves a thread
+    # moves its automations. A row that starts a new thread each run can hold
+    # an older pin nothing checked.
+    stored_pin = normalize_uuid(current.get("conversation_thread_id"))
+    if pin := update_kwargs.get("conversation_thread_id", stored_pin):
+        runs_in = update_kwargs.get("workspace_id") or stored_in
+        continues = (
+            update.thread_strategy == "continue"
+            and current.get("thread_strategy") != "continue"
+        )
+        if pin != stored_pin or runs_in != stored_in or continues:
+            # A row whose workspace was deleted runs nowhere until moved.
+            if runs_in is None:
+                raise AutomationRefusal(_NO_WORKSPACE, field="workspace_id")
             await _require_pin_in(user_id, pin, runs_in, conn)
     # Only a new name is checked: a stored one the user can no longer run
     # must not block an edit to anything else.

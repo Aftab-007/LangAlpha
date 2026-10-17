@@ -15,14 +15,14 @@ import pytest
 
 from src.server.services import automation_delivery
 from src.server.services.automation_delivery import Delivery, Target
-from src.server.services.report_back.flash import keys, requested_from
+from src.server.services.report_back.handoff import keys, requested_from
 from src.tools.secretary.chief_of_staff import delegate_to_analyst
 from tests.unit.server.handlers.chat.redis_fakes import FakeCache
 
 from .conftest import FakeResp, FakeSession
 
 USER_ID = "user-1"
-FLASH_THREAD_ID = "flash-thread-1"
+DISPATCHER_THREAD_ID = "cos-thread-1"
 WORKSPACE_ID = "22222222-2222-2222-2222-222222222222"
 DESK = Target(entry="slack:T/C", address="slack:T/C", name="#desk", ok=True)
 
@@ -54,7 +54,7 @@ async def _dispatch(configurable: dict) -> dict:
             config={
                 "configurable": {
                     "user_id": USER_ID,
-                    "thread_id": FLASH_THREAD_ID,
+                    "thread_id": DISPATCHER_THREAD_ID,
                     **configurable,
                 }
             },

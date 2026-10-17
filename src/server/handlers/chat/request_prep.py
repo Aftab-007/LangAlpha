@@ -378,9 +378,6 @@ class PriorThread(NamedTuple):
     """
 
     last_turn_at: Optional[datetime] = None
-    # 'flash' on a thread Flash started that the full agent has not taken over
-    # yet; a missed read only defers the takeover to the next turn.
-    msg_type: Optional[str] = None
     # The surface the thread is bound to (the one it was created on, or a
     # channel identity stamped onto it later). Stands in for the turn's own
     # surface on a notification, which arrives without one (``turn_surface``).
@@ -400,8 +397,8 @@ def _fork_predecessor_turn(request: ChatRequest) -> Optional[int]:
 async def _read_prior_thread(
     thread_id: str, *, before_turn: Optional[int] = None
 ) -> PriorThread:
-    """The prior-turn time, the thread's type, the surface it is bound to, and
-    the surface its latest attempt ran on.
+    """The prior-turn time, the surface the thread is bound to, and the
+    surface its latest attempt ran on.
 
     The time is the latest attempt row's, never the thread's ``updated_at``: a
     rename or a share bumps the thread stamp between turns, a concurrent POST
@@ -436,7 +433,6 @@ async def _read_prior_thread(
     attempt_platform = ran_on.get("platform") if isinstance(ran_on, dict) else None
     return PriorThread(
         last_turn_at=last_turn_at,
-        msg_type=row.get("msg_type"),
         platform=platform if isinstance(platform, str) and platform else None,
         attempt_platform=(
             attempt_platform

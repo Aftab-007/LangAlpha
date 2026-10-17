@@ -373,9 +373,7 @@ def test_a_custom_rows_instructions_are_its_role_prompt_as_text():
     assert (defn.role_prompt_template, defn.custom_prompt, defn.custom_prompt_template) == (
         None, None, None,
     )
-    assert (defn.name, defn.description, defn.mode, defn.source, defn.stateful) == (
-        "macro-desk", "Macro", "ptc", "custom", True,
-    )
+    assert (defn.name, defn.description, defn.source) == ("macro-desk", "Macro", "custom")
 
 
 def test_a_custom_row_saved_without_tools_gets_the_default_preset():

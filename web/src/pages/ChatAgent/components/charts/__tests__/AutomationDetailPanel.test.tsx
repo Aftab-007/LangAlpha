@@ -1,13 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { renderWithProviders } from '@/test/utils';
 import AutomationDetailPanel from '../AutomationDetailPanel';
 
-vi.mock('@/hooks/useHomeWorkspace', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/hooks/useHomeWorkspace')>()),
-  useHomeWorkspaceId: () => 'home-1',
-}));
-
+// The cards are kept history from a tool that named the agent a run used,
+// never a workspace.
 const card = (place: Record<string, unknown>) => ({
   automation_id: 'auto-1',
   name: 'Morning briefing',
@@ -21,19 +18,14 @@ function renderList(...automations: Record<string, unknown>[]) {
   renderWithProviders(<AutomationDetailPanel data={{ type: 'automations', mode: 'list', automations, total: automations.length }} />);
 }
 
-describe('where an automation card says it runs', () => {
-  it('reads a legacy flash card and one naming Home as All workspaces', () => {
-    renderList(card({ agent_mode: 'flash', workspace_id: null }), card({ agent_mode: 'ptc', workspace_id: 'home-1' }));
-    expect(screen.getAllByText('All workspaces')).toHaveLength(2);
-  });
-
-  it('reads a card that names only its workspace', () => {
-    renderList(card({ workspace_id: 'home-1' }), card({ workspace_id: 'ws-1' }));
+describe('where an automation card says it ran', () => {
+  it('reads a card that ran outside a workspace as All workspaces and a ptc card as a workspace', () => {
+    renderList(card({ agent_mode: 'home' }), card({ agent_mode: 'ptc' }));
     expect(screen.getByText('All workspaces')).toBeInTheDocument();
     expect(screen.getByText('Workspace')).toBeInTheDocument();
   });
 
-  it('says nothing for a card that names neither', () => {
+  it('says nothing for a card that names no agent', () => {
     renderList(card({}));
     expect(screen.queryByText('All workspaces')).not.toBeInTheDocument();
     expect(screen.queryByText('Workspace')).not.toBeInTheDocument();
@@ -42,7 +34,7 @@ describe('where an automation card says it runs', () => {
   it('names the place in the detail view under the Agent row', () => {
     renderWithProviders(
       <AutomationDetailPanel
-        data={{ type: 'automations', mode: 'detail', automation: card({ workspace_id: 'home-1' }), executions: [] }}
+        data={{ type: 'automations', mode: 'detail', automation: card({ agent_mode: 'home' }), executions: [] }}
       />,
     );
     expect(screen.getByText('Agent').nextElementSibling).toHaveTextContent('All workspaces');

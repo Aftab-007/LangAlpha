@@ -74,19 +74,19 @@ def background_client(config: AgentConfig) -> Any:
     A client ``resolve_llm_config`` already built (BYOK, OAuth) is the one this
     user's credentials reach, so it wins over building from the name.
     """
-    if config.llm_client is not None or config.llm is None or not config.llm.flash:
+    if config.llm_client is not None or config.llm is None or not config.llm.background:
         return config.get_llm_client()
     from src.llms import create_llm
     from src.llms.llm import ensure_model_in_manifest
 
     # A name missing from models.json is a custom model with no resolvable BYOK
     # key, or a typo: raise the neutral error, not the factory's generic one.
-    ensure_model_in_manifest(config.llm.flash)
-    return create_llm(config.llm.flash, cache_key=config.cache_key)
+    ensure_model_in_manifest(config.llm.background)
+    return create_llm(config.llm.background, cache_key=config.cache_key)
 
 
 def build_insight_graph(config: AgentConfig) -> Any:
-    turn = turn_model(config, None, background_client(config), flash=True)
+    turn = turn_model(config, None, background_client(config), background=True)
 
     middleware = [
         m

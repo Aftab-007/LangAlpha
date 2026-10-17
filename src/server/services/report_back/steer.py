@@ -1,8 +1,8 @@
 """What a live turn takes in from the outbox: steers and report-backs.
 
 A steer (``hook_type='steer'``) is a message sent into the thread's live run
-by the user, the Chief of Staff or Flash. It waits parked in the outbox
-until the next model call holds it, and the step that reads it confirms it;
+by the user or the Chief of Staff. It waits parked in the outbox until
+the next model call holds it, and the step that reads it confirms it;
 one the turn never reads settles when the turn ends (``settle_run_steers``).
 Everything below about holding and confirming applies to it too, without
 the eligibility reads a report needs.
@@ -331,7 +331,7 @@ async def _overtaken_since_read(held: list[dict], run_id: str) -> set[str]:
     executor, as ``_decide`` does; a failed release leaves it held for no
     message, which the run's finalize releases."""
     from src.server.database.runs import outbox as outbox_db
-    from src.server.services.report_back.flash.executor import overtaking_run
+    from src.server.services.report_back.handoff.executor import overtaking_run
 
     async def overtaken(job: dict) -> bool:
         try:
@@ -402,7 +402,7 @@ async def _task_offer(job: dict) -> SteeredReport | NotOwed | None:
 
 
 async def _analyst_offer(job: dict, thread_id: str) -> SteeredReport | None:
-    from src.server.services.report_back.flash.executor import (
+    from src.server.services.report_back.handoff.executor import (
         analyst_report_verdict,
         analyst_request_key,
         overtaking_run,
@@ -421,7 +421,7 @@ async def _analyst_offer(job: dict, thread_id: str) -> SteeredReport | None:
     # Its summary run already started (the executor recovers the job from
     # there), or a newer run took the report over (the executor drops it).
     if await summary_started(
-        cache, owed.flash_thread_id, owed.ptc_thread_id, analyst_request_key(job_id)
+        cache, owed.dispatcher_thread_id, owed.ptc_thread_id, analyst_request_key(job_id)
     ):
         return None
     if await overtaking_run(job.get("run_id"), owed.ptc_thread_id):
@@ -430,7 +430,7 @@ async def _analyst_offer(job: dict, thread_id: str) -> SteeredReport | None:
     # reads it reports back instead (the executor waits it out).
     from src.server.database.runs import outbox as outbox_db
 
-    if await outbox_db.has_live_hand_off(owed.ptc_thread_id, owed.flash_thread_id):
+    if await outbox_db.has_live_hand_off(owed.ptc_thread_id, owed.dispatcher_thread_id):
         return None
     content, report_source = await report_message(
         owed.ptc_thread_id, owed.origin, owed.final_status, steered=True

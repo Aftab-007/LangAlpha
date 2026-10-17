@@ -35,7 +35,7 @@ def _row(**overrides) -> dict:
     [
         (None, 404, "Workspace not found"),
         (_row(user_id="someone-else"), 403, "Forbidden"),
-        (_row(status="flash"), 400, HOME_NOT_ON_COMPUTER),
+        (_row(status="unbound"), 400, HOME_NOT_ON_COMPUTER),
     ],
     ids=["missing", "another-users", "home-not-on-a-computer"],
 )
@@ -75,7 +75,7 @@ ROUTES = [
 @pytest.mark.parametrize("method, path, kwargs", ROUTES, ids=[f"{m} {p}" for m, p, _ in ROUTES])
 async def test_every_route_that_needs_the_computer_refuses_home_before_it(method, path, kwargs):
     app = create_test_app(files_router, sandbox_router, share_links_router)
-    with patch(_READ, AsyncMock(return_value=_row(status="flash"))):
+    with patch(_READ, AsyncMock(return_value=_row(status="unbound"))):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.request(method, f"{BASE}{path}", **kwargs)
     assert (resp.status_code, resp.json()) == (400, {"detail": HOME_NOT_ON_COMPUTER})

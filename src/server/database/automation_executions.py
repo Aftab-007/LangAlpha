@@ -301,9 +301,10 @@ async def list_executions(
 
     Every row is scoped by its automation's owner, which is the ownership
     check: another user's automation lists nothing. ``workspace_id`` prefers
-    the run thread's workspace: a flash automation stores none and runs in
-    the user's shared flash workspace. One row past the page answers whether
-    another follows, where a count would read every run the user has.
+    the run thread's workspace, where the run happened, over the one the
+    automation names now, which a move may have changed since. One row past
+    the page answers whether another follows, where a count would read every
+    run the user has.
     """
     where_parts = ["a.user_id = %s"]
     params: list = [user_id]
@@ -322,7 +323,7 @@ async def list_executions(
             await cur.execute(f"""
                 SELECT
                     {EXECUTION_COLUMNS},
-                    a.name AS automation_name, a.agent_mode, a.trigger_type,
+                    a.name AS automation_name, a.trigger_type,
                     COALESCE(t.workspace_id, a.workspace_id) AS workspace_id
                 FROM automation_executions e
                 JOIN automations a ON a.automation_id = e.automation_id

@@ -15,20 +15,23 @@ import json
 import logging
 import uuid
 
-from src.server.services.report_back.flash import pointer
-from src.server.services.report_back.flash import requested_from as RF
-from src.server.services.report_back.flash.keys import (
-    FLASH_RB_DONE_MAX,
-    FLASH_RB_DONE_TTL,
+from src.server.services.report_back.handoff import pointer
+from src.server.services.report_back.handoff import requested_from as RF
+from src.server.services.report_back.handoff.keys import (
+    ORIGIN_KIND,
+    ORIGIN_THREAD_FIELD,
+    ORIGIN_WORKSPACE_FIELD,
     PTC_ORIGIN_TTL,
+    RB_DONE_MAX,
+    RB_DONE_TTL,
     decode,
-    flash_rb_done_key,
-    flash_rb_run_key,
-    flash_user_pending_key,
-    flash_watch_key,
     ptc_origin_key,
     ptc_rb_resolved_key,
     ptc_teardown_tombstone_key,
+    rb_done_key,
+    rb_run_key,
+    user_pending_key,
+    watch_key,
 )
 
 # Same hard-coded logger name request_prep uses — existing log routing keys off it.
@@ -39,10 +42,10 @@ logger = logging.getLogger("src.server.handlers.chat_handler")
 # atomic reserve-before-dispatch. Known accepted gap: report_back=False
 # dispatches skip reserve() entirely and count against neither cap (bounded only
 # by per-dispatch HITL approval).
-MAX_DISPATCH_PER_FLASH = 5
+MAX_DISPATCH_PER_THREAD = 5
 MAX_DISPATCH_PER_USER = 10
 
-# The whole reservation (cross-flash check, cap check, membership add, origin
+# The whole reservation (cross-thread check, cap check, membership add, origin
 # write) is ONE Lua script, so Redis itself serializes rival dispatches —
 # across processes, unlike the asyncio lock this replaces. A phased
 # reservation left a window where a concurrent teardown deleted the
@@ -61,10 +64,11 @@ MAX_DISPATCH_PER_USER = 10
 # phantoms would strand the pair to the TTL). A phantom holding either gen
 # may act as that lineage's surrogate teardown; one that displaced
 # somebody ELSE may not touch the pair.
-# KEYS: 1=flash_watch 2=flash_user_pending 3=ptc_origin
-# ARGV: 1=ptc_thread_id 2=flash_thread_id 3=max_flash 4=max_user 5=ttl
+# KEYS: 1=watch set 2=user pending set 3=ptc_origin
+# ARGV: 1=ptc_thread_id 2=dispatcher_thread_id 3=max_thread 4=max_user 5=ttl
 #       6=origin_json
 # Returns {status, added_watch, added_user, prev_origin_json_or_''}.
+# ORIGIN_THREAD_FIELD below is substituted with the origin record's field.
 RESERVE_LUA = """
 local prev = redis.call('get', KEYS[3])
 local prev_gen = nil
@@ -72,7 +76,7 @@ local owner_gen = nil
 if prev then
   local ok, t = pcall(cjson.decode, prev)
   if ok and type(t) == 'table' then
-    if t['flash_thread_id'] and t['flash_thread_id'] ~= ARGV[2] then
+    if t[ORIGIN_THREAD_FIELD] and t[ORIGIN_THREAD_FIELD] ~= ARGV[2] then
       return {'cross', 0, 0, ''}
     end
     if type(t['dispatch_gen']) == 'string' then
@@ -90,7 +94,7 @@ end
 local in_watch = redis.call('sismember', KEYS[1], ARGV[1])
 local in_user = redis.call('sismember', KEYS[2], ARGV[1])
 if in_watch == 0 and redis.call('scard', KEYS[1]) >= tonumber(ARGV[3]) then
-  return {'cap_flash', 0, 0, ''}
+  return {'cap_thread', 0, 0, ''}
 end
 if in_user == 0 and redis.call('scard', KEYS[2]) >= tonumber(ARGV[4]) then
   return {'cap_user', 0, 0, ''}
@@ -106,7 +110,7 @@ if prev_gen then og['prev_gen'] = prev_gen end
 if owner_gen then og['owner_gen'] = owner_gen end
 redis.call('set', KEYS[3], cjson.encode(og), 'EX', ARGV[5])
 return {'ok', 1 - in_watch, 1 - in_user, prev or ''}
-"""
+""".replace("ORIGIN_THREAD_FIELD", f"'{ORIGIN_THREAD_FIELD}'")
 
 # Reservation rollback, CAS'd on OUR minted generation as one script: it
 # reverses the origin (restore the stashed previous incarnation, else
@@ -124,8 +128,8 @@ return {'ok', 1 - in_watch, 1 - in_user, prev or ''}
 # would resurrect state whose only clear already ran — complete the clear
 # instead (whole pair), returning {2, <consumed run pointer or ''>} so the
 # caller can record the drained run id the skipped clear never got to.
-# KEYS: 1=flash_watch 2=flash_user_pending 3=ptc_origin 4=tombstone set
-#       5=flash_rb_run ('' = no flash)
+# KEYS: 1=watch set 2=user pending set 3=ptc_origin 4=tombstone set
+#       5=run pointer ('' = no dispatcher)
 # ARGV: 1=ptc_thread_id 2=minted_gen 3=prev_origin_json ('' = delete)
 #       4=added_watch '1'/'0' 5=added_user '1'/'0' 6=ttl
 ROLLBACK_RESERVE_LUA = """
@@ -188,10 +192,10 @@ return removed
 # ---------------------------------------------------------------------------
 
 
-def _cap_error_flash() -> str:
+def _cap_error_thread() -> str:
     return (
         f"too many concurrent analyses on this thread "
-        f"(max {MAX_DISPATCH_PER_FLASH}); this one was not started. You will be "
+        f"(max {MAX_DISPATCH_PER_THREAD}); this one was not started. You will be "
         f"notified when one finishes; dispatch it again then"
     )
 
@@ -309,7 +313,7 @@ async def admit_dispatch_gen(
         return bool(int(res))
     except Exception:
         logger.warning(
-            f"[FLASH_REPORT_BACK] Admission gate failed for {ptc_thread_id} "
+            f"[HANDOFF_REPORT_BACK] Admission gate failed for {ptc_thread_id} "
             f"(gen {dispatch_gen}); refusing (retriable)",
             exc_info=True,
         )
@@ -341,7 +345,7 @@ async def retract_dispatch_gen(
         )
     except Exception:
         logger.warning(
-            f"[FLASH_REPORT_BACK] Intent-stamp retract failed for "
+            f"[HANDOFF_REPORT_BACK] Intent-stamp retract failed for "
             f"{ptc_thread_id} (gen {dispatch_gen}); stamp decays at origin TTL",
             exc_info=True,
         )
@@ -384,13 +388,13 @@ async def retract_dispatch_gen(
 #     generation (mirroring the gated teardown) — memberships must never
 #     fall while a pointer nobody can discover survives them; a
 #     non-surrogate resolution spares foreign generations' pointers. A
-#     drained run id lands on the flash_rb_done discovery list IN THE SAME
+#     drained run id lands on the drained-run discovery list IN THE SAME
 #     SCRIPT — a wrapper-side record after the pointer DEL would be lost
 #     forever on a crash between the two (the retry finds the pointer
 #     already gone).
 #     The origin is spared — only a gen-authorized teardown destroys it.
 # KEYS: 1=origin 2=watch set|'' 3=user set|''
-#       4=run pointer|'' 5=resolved-receipt set 6=flash_rb_done|''
+#       4=run pointer|'' 5=resolved-receipt set 6=drained-run list|''
 # ARGV: 1=ptc_thread_id 2=fencer gen 3=receipt ttl 4=done max 5=done ttl
 #       6=the fenced clear's own generation ('' = unknown)
 # Returns {1, ptr_json|'', watch_removed, user_removed} on resolve;
@@ -447,7 +451,7 @@ return {1, ptr, watch_removed, user_removed}
 async def resolve_orphaned_watch(
     cache,
     ptc_thread_id: str,
-    flash_thread_id: str | None,
+    dispatcher_thread_id: str | None,
     user_id: str | None,
     *,
     fencer_gen: str,
@@ -457,7 +461,7 @@ async def resolve_orphaned_watch(
     reservation (lost-409 continuation): the memberships the phantom owns —
     or inherited DIRECTLY from the fenced clear's own dying lineage
     (``job_gen``) — fall, so ``pending_report_back`` flips and the cap slot
-    releases; the drained flash run lands on ``flash_rb_done`` (in the same
+    releases; the drained summary run lands on the drained-run list (in the same
     script as the pointer delete, so a wrapper crash can't lose the
     discovery record); and the phantom generation is receipted so its late
     admission is refused. Pair state inherited from an INTERMEDIATE lineage
@@ -487,14 +491,14 @@ async def resolve_orphaned_watch(
         )
     except Exception:
         logger.warning(
-            f"[FLASH_REPORT_BACK] Ledger probe for phantom-fence resolution of "
+            f"[HANDOFF_REPORT_BACK] Ledger probe for phantom-fence resolution of "
             f"{ptc_thread_id} (gen {fencer_gen}) failed; suppressing",
             exc_info=True,
         )
         return False, None
     if admitted or live:
         logger.info(
-            f"[FLASH_REPORT_BACK] Phantom-fence resolution for "
+            f"[HANDOFF_REPORT_BACK] Phantom-fence resolution for "
             f"{ptc_thread_id} (gen {fencer_gen}) suppressed: "
             f"{'admitted' if admitted else 'live run'} (ledger)"
         )
@@ -504,18 +508,18 @@ async def resolve_orphaned_watch(
         ORPHAN_RESOLVE_LUA,
         6,
         ptc_origin_key(ptc_thread_id),
-        flash_watch_key(flash_thread_id) if flash_thread_id else "",
-        flash_user_pending_key(user_id) if user_id else "",
-        flash_rb_run_key(flash_thread_id, ptc_thread_id)
-        if flash_thread_id
+        watch_key(dispatcher_thread_id) if dispatcher_thread_id else "",
+        user_pending_key(user_id) if user_id else "",
+        rb_run_key(dispatcher_thread_id, ptc_thread_id)
+        if dispatcher_thread_id
         else "",
         ptc_rb_resolved_key(ptc_thread_id),
-        flash_rb_done_key(flash_thread_id) if flash_thread_id else "",
+        rb_done_key(dispatcher_thread_id) if dispatcher_thread_id else "",
         ptc_thread_id,
         fencer_gen,
         RESOLVED_RECEIPT_TTL,
-        FLASH_RB_DONE_MAX,
-        FLASH_RB_DONE_TTL,
+        RB_DONE_MAX,
+        RB_DONE_TTL,
         job_gen or "",
     )
     if not (isinstance(res, (list, tuple)) and res and int(res[0])):
@@ -525,7 +529,7 @@ async def resolve_orphaned_watch(
             else "?"
         )
         logger.info(
-            f"[FLASH_REPORT_BACK] Phantom-fence resolution for "
+            f"[HANDOFF_REPORT_BACK] Phantom-fence resolution for "
             f"{ptc_thread_id} (gen {fencer_gen}) suppressed: {reason}"
         )
         return False, None
@@ -535,11 +539,11 @@ async def resolve_orphaned_watch(
     # mutation — a START committing in the gap (a same-gen admission, or an
     # ordinary continuation that never touches the gate) needs the
     # memberships this script just dropped. Pair-consuming outbox jobs are
-    # serialized per flash thread by ordering key, so restoring them before
+    # serialized per Chief of Staff thread by ordering key, so restoring them before
     # this job completes closes the race; a run cannot reach its own
     # terminal hook inside this gap.
     if await _compensate_if_started(
-        cache, ptc_thread_id, flash_thread_id, user_id, fencer_gen, res
+        cache, ptc_thread_id, dispatcher_thread_id, user_id, fencer_gen, res
     ):
         return False, None
     run_id = None
@@ -557,7 +561,7 @@ async def resolve_orphaned_watch(
 async def _compensate_if_started(
     cache,
     ptc_thread_id: str,
-    flash_thread_id: str | None,
+    dispatcher_thread_id: str | None,
     user_id: str | None,
     fencer_gen: str,
     res,
@@ -580,7 +584,7 @@ async def _compensate_if_started(
         )
     except Exception:
         logger.critical(
-            f"[FLASH_REPORT_BACK] Post-resolve ledger revalidation failed for "
+            f"[HANDOFF_REPORT_BACK] Post-resolve ledger revalidation failed for "
             f"{ptc_thread_id} (gen {fencer_gen}); if a START raced the "
             f"resolution its report-back membership is lost",
             exc_info=True,
@@ -593,12 +597,12 @@ async def _compensate_if_started(
     user_removed = len(res) > 3 and bool(int(res[3]))
     try:
         pipe = cache.client.pipeline()
-        if watch_removed and flash_thread_id:
-            pipe.sadd(flash_watch_key(flash_thread_id), ptc_thread_id)
-            pipe.expire(flash_watch_key(flash_thread_id), PTC_ORIGIN_TTL)
+        if watch_removed and dispatcher_thread_id:
+            pipe.sadd(watch_key(dispatcher_thread_id), ptc_thread_id)
+            pipe.expire(watch_key(dispatcher_thread_id), PTC_ORIGIN_TTL)
         if user_removed and user_id:
-            pipe.sadd(flash_user_pending_key(user_id), ptc_thread_id)
-            pipe.expire(flash_user_pending_key(user_id), PTC_ORIGIN_TTL)
+            pipe.sadd(user_pending_key(user_id), ptc_thread_id)
+            pipe.expire(user_pending_key(user_id), PTC_ORIGIN_TTL)
         if admitted_now:
             # The racer was this very generation: un-receipt it so its
             # retransmits aren't refused while its run lives.
@@ -606,14 +610,14 @@ async def _compensate_if_started(
         await pipe.execute()
     except Exception:
         logger.critical(
-            f"[FLASH_REPORT_BACK] Membership restore after raced resolution "
+            f"[HANDOFF_REPORT_BACK] Membership restore after raced resolution "
             f"failed for {ptc_thread_id} (gen {fencer_gen}); report-back for "
             f"the racing run may be lost",
             exc_info=True,
         )
         return True
     logger.warning(
-        f"[FLASH_REPORT_BACK] Phantom-fence resolution for {ptc_thread_id} "
+        f"[HANDOFF_REPORT_BACK] Phantom-fence resolution for {ptc_thread_id} "
         f"(gen {fencer_gen}) raced a START; memberships restored "
         f"(watch={watch_removed}, user={user_removed}, "
         f"same_gen={admitted_now})"
@@ -639,7 +643,7 @@ async def reap_listed_orphans(cache, set_key: str, members: list[str]) -> int:
 
 
 async def _reap_orphan_members(
-    cache, flash_thread_id: str | None, user_id: str | None
+    cache, dispatcher_thread_id: str | None, user_id: str | None
 ) -> int:
     """SREM watch/user members whose ptc_origin key no longer exists.
 
@@ -651,17 +655,17 @@ async def _reap_orphan_members(
     """
     removed = 0
     set_keys = []
-    if flash_thread_id:
-        set_keys.append(flash_watch_key(flash_thread_id))
+    if dispatcher_thread_id:
+        set_keys.append(watch_key(dispatcher_thread_id))
     if user_id:
-        set_keys.append(flash_user_pending_key(user_id))
+        set_keys.append(user_pending_key(user_id))
     for set_key in set_keys:
         members = [decode(m) for m in (await cache.client.smembers(set_key)) or []]
         removed += await reap_listed_orphans(cache, set_key, members)
     if removed:
         logger.info(
-            f"[FLASH_REPORT_BACK] Reaped {removed} orphaned dispatch member(s) "
-            f"for flash={flash_thread_id} user={user_id}"
+            f"[HANDOFF_REPORT_BACK] Reaped {removed} orphaned dispatch member(s) "
+            f"for thread={dispatcher_thread_id} user={user_id}"
         )
     return removed
 
@@ -700,7 +704,7 @@ class _DispatchSlot:
     """Typed outcome of ``reserve()``.
 
     ``error`` (an over-cap message or ``"dispatch_failed"``) tells the caller to
-    abort; ``wired`` is True only when flash_watch membership is durably in place
+    abort; ``wired`` is True only when watch-set membership is durably in place
     (the completion-time gate can then deliver a report-back). ``commit()`` keeps
     the reservation on the success path; any non-commit exit rolls it back.
     """
@@ -714,7 +718,7 @@ class _DispatchSlot:
         self._prev_origin_raw: str | None = None
         self._added: dict = {"watch": False, "user": False}
         self._cache = None
-        self._flash_thread_id: str | None = None
+        self._dispatcher_thread_id: str | None = None
         self._ptc_thread_id: str | None = None
         self._user_id: str | None = None
 
@@ -737,12 +741,12 @@ class _DispatchSlot:
             res = await self._cache.client.eval(
                 ROLLBACK_RESERVE_LUA,
                 5,
-                flash_watch_key(self._flash_thread_id),
-                flash_user_pending_key(self._user_id),
+                watch_key(self._dispatcher_thread_id),
+                user_pending_key(self._user_id),
                 ptc_origin_key(self._ptc_thread_id),
                 ptc_teardown_tombstone_key(self._ptc_thread_id),
-                flash_rb_run_key(self._flash_thread_id, self._ptc_thread_id)
-                if self._flash_thread_id
+                rb_run_key(self._dispatcher_thread_id, self._ptc_thread_id)
+                if self._dispatcher_thread_id
                 else "",
                 self._ptc_thread_id,
                 self.dispatch_gen,
@@ -755,7 +759,7 @@ class _DispatchSlot:
                 isinstance(res, (list, tuple))
                 and res
                 and int(res[0]) == 2
-                and self._flash_thread_id
+                and self._dispatcher_thread_id
             ):
                 ptr_raw = decode(res[1]) if len(res) > 1 else ""
                 run_id = None
@@ -768,14 +772,14 @@ class _DispatchSlot:
                         run_id = None
                 if run_id:
                     await pointer.record_drained_run(
-                        self._cache, self._flash_thread_id, run_id
+                        self._cache, self._dispatcher_thread_id, run_id
                     )
         except Exception:
             pass
 
 
 async def _requests_to_report(
-    cache, flash_thread_id: str, ptc_thread_id: str, entry: dict
+    cache, dispatcher_thread_id: str, ptc_thread_id: str, entry: dict
 ) -> list[dict]:
     """This dispatch's request, after the ones still waiting on the pair's report.
 
@@ -796,7 +800,7 @@ async def _requests_to_report(
         previous = await cache.get_strict(ptc_origin_key(ptc_thread_id))
         if isinstance(previous, dict):
             claim = await cache.get_strict(
-                flash_rb_run_key(flash_thread_id, ptc_thread_id)
+                rb_run_key(dispatcher_thread_id, ptc_thread_id)
             )
             reported = isinstance(claim, dict) and claim.get("dispatch_gen") in (
                 None,
@@ -804,7 +808,7 @@ async def _requests_to_report(
             )
     except Exception:
         logger.debug(
-            f"[FLASH_REPORT_BACK] Could not read the requests waiting on "
+            f"[HANDOFF_REPORT_BACK] Could not read the requests waiting on "
             f"{ptc_thread_id}; recording this dispatch's alone",
             exc_info=True,
         )
@@ -812,28 +816,28 @@ async def _requests_to_report(
     return RF.recorded(
         entry,
         previous if isinstance(previous, dict) else None,
-        flash_thread_id=flash_thread_id,
+        dispatcher_thread_id=dispatcher_thread_id,
         reported=reported,
     )
 
 
 @contextlib.asynccontextmanager
 async def reserve(
-    flash_thread_id: str | None,
+    dispatcher_thread_id: str | None,
     ptc_thread_id: str,
     ptc_workspace_id: str | None,
-    flash_workspace_id: str | None,
+    dispatcher_workspace_id: str,
     user_id: str,
     *,
     requested_from: dict | None = None,
 ):
     """Reserve a report-back dispatch slot + record the PTC origin, as a CM.
 
-    The symmetric partner of ``clear_flash_report_back``: yields a typed
+    The symmetric partner of ``clear_handoff_report_back``: yields a typed
     ``_DispatchSlot`` and rolls the reservation back on any non-committed
-    exit. ``flash_thread_id`` is None for a non-report-back dispatch — a
+    exit. ``dispatcher_thread_id`` is None for a non-report-back dispatch — a
     no-op slot (nothing reserved/wired) so the dispatch still POSTs. The
-    whole reservation (cross-flash check, caps, memberships, origin +
+    whole reservation (cross-thread check, caps, memberships, origin +
     minted generation) is ONE Redis script — there is no window where a
     concurrent teardown or rival dispatch can observe it half-applied.
     Redis off by config: proceeds unwired (no report-back system at all).
@@ -854,12 +858,12 @@ async def reserve(
     from src.utils.cache.redis_cache import get_cache_client
 
     slot = _DispatchSlot()
-    slot._flash_thread_id = flash_thread_id
+    slot._dispatcher_thread_id = dispatcher_thread_id
     slot._ptc_thread_id = ptc_thread_id
     slot._user_id = user_id
 
     # Non-report-back dispatch: nothing to reserve or wire.
-    if not flash_thread_id:
+    if not dispatcher_thread_id:
         yield slot
         return
     cache = get_cache_client()
@@ -878,9 +882,9 @@ async def reserve(
             # PREVIOUS incarnation can then never destroy this one's watch state.
             dispatch_gen = str(uuid.uuid4())
             origin_payload = {
-                "origin": "flash",
-                "flash_thread_id": flash_thread_id,
-                "flash_workspace_id": flash_workspace_id,
+                "origin": ORIGIN_KIND,
+                ORIGIN_THREAD_FIELD: dispatcher_thread_id,
+                ORIGIN_WORKSPACE_FIELD: dispatcher_workspace_id,
                 "ptc_thread_id": ptc_thread_id,
                 "ptc_workspace_id": ptc_workspace_id,
                 "report_back": True,
@@ -889,7 +893,7 @@ async def reserve(
             }
             if requested_from is not None:
                 origin_payload[RF.KEY] = await _requests_to_report(
-                    cache, flash_thread_id, ptc_thread_id, requested_from
+                    cache, dispatcher_thread_id, ptc_thread_id, requested_from
                 )
             status = None
             for attempt in range(2):
@@ -897,12 +901,12 @@ async def reserve(
                     res = await cache.client.eval(
                         RESERVE_LUA,
                         3,
-                        flash_watch_key(flash_thread_id),
-                        flash_user_pending_key(user_id),
+                        watch_key(dispatcher_thread_id),
+                        user_pending_key(user_id),
                         ptc_origin_key(ptc_thread_id),
                         ptc_thread_id,
-                        flash_thread_id,
-                        MAX_DISPATCH_PER_FLASH,
+                        dispatcher_thread_id,
+                        MAX_DISPATCH_PER_THREAD,
                         MAX_DISPATCH_PER_USER,
                         PTC_ORIGIN_TTL,
                         json.dumps(origin_payload),
@@ -913,18 +917,18 @@ async def reserve(
                     yield slot
                     return
                 status = decode(res[0])
-                if status not in ("cap_flash", "cap_user") or attempt == 1:
+                if status not in ("cap_thread", "cap_user") or attempt == 1:
                     break
                 # Over cap: reap members stranded without an origin (lost
                 # reserve replies etc. — nothing else removes them, and every
                 # reserve refreshes the shared SET's TTL) and retry once.
                 try:
-                    if not await _reap_orphan_members(cache, flash_thread_id, user_id):
+                    if not await _reap_orphan_members(cache, dispatcher_thread_id, user_id):
                         break
                 except Exception:
                     break
-            if status == "cap_flash":
-                slot.error = _cap_error_flash()
+            if status == "cap_thread":
+                slot.error = _cap_error_thread()
                 yield slot
                 return
             if status == "cap_user":
@@ -932,7 +936,7 @@ async def reserve(
                 yield slot
                 return
             if status == "cross":
-                # A different flash thread already owns this PTC's origin: we
+                # A different thread already owns this PTC's origin: we
                 # can't wire a second one. Nothing was touched; proceed unwired.
                 yield slot
                 return

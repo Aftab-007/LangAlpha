@@ -24,9 +24,9 @@ export type DefaultModelScope = 'ask' | 'new_threads' | 'existing_threads';
 /** The answer one write carries (`apply_default_to`), never stored itself. */
 export type ApplyDefaultTo = Exclude<DefaultModelScope, 'ask'>;
 
-/** What flash runs with no flash default saved: the primary default, or the
- *  deployment's flash model (Auto). Absent reads as `primary`. */
-export type FlashFollows = 'primary' | 'deployment';
+/** What the Background model runs with no Background default saved: the primary default, or the
+ *  deployment's Background model (Auto). Absent reads as `primary`. */
+export type BackgroundFollows = 'primary' | 'deployment';
 
 /** A sub-provider the user defined, as stored. */
 export interface CustomProviderEntry {
@@ -44,7 +44,7 @@ export interface CustomProviderEntry {
  */
 export interface ModelPreferences extends ModelProfile {
   preferred_model?: string | null;
-  preferred_flash_model?: string | null;
+  preferred_background_model?: string | null;
   compaction_model?: string | null;
   summarization_model?: string | null;
   fetch_model?: string | null;
@@ -57,7 +57,7 @@ export interface ModelPreferences extends ModelProfile {
   profiles?: Record<string, ModelProfile | null> | null;
   /** Absent reads as `ask`. */
   default_model_scope?: DefaultModelScope | null;
-  flash_follows?: FlashFollows | null;
+  background_follows?: BackgroundFollows | null;
 }
 
 /**
@@ -70,7 +70,7 @@ export interface ModelPreferences extends ModelProfile {
  */
 const MOVED_KEYS: readonly (keyof ModelPreferences)[] = [
   'preferred_model',
-  'preferred_flash_model',
+  'preferred_background_model',
   'compaction_model',
   'summarization_model',
   'fetch_model',
@@ -96,13 +96,13 @@ export const MOVED_MODEL_KEYS: ReadonlySet<string> = new Set<string>(MOVED_KEYS)
 export const MODEL_PREF_KEYS: ReadonlySet<string> = new Set<string>([
   ...MOVED_KEYS,
   // None ever lived in `other_preference`: `profiles`, `default_model_scope`
-  // and `flash_follows` are new, and `prompt_guidance` appears there only if
+  // and `background_follows` are new, and `prompt_guidance` appears there only if
   // 034's downgrade puts it back. They route to the model column without
   // having a copy to read underneath.
   'profiles',
   'prompt_guidance',
   'default_model_scope',
-  'flash_follows',
+  'background_follows',
 ]);
 
 /**
@@ -177,16 +177,16 @@ export function splitPreferenceWrite(patch: PreferencePatch): {
 export type ModelSlot = 'default' | 'background';
 
 /** The deployment's defaults, as the models endpoint reports them. A
- *  deployment that names no flash model reports it as "". */
+ *  deployment that names no Background model reports it as "". */
 export interface DeploymentModelDefaults {
   default_model?: string;
-  flash_model?: string;
+  background_model?: string;
 }
 
 /** The preference key that holds the default for `slot`. The one place a
  *  slot maps to its stored field. */
-export function defaultModelKey(slot: ModelSlot | undefined): 'preferred_model' | 'preferred_flash_model' {
-  return slot === 'background' ? 'preferred_flash_model' : 'preferred_model';
+export function defaultModelKey(slot: ModelSlot | undefined): 'preferred_model' | 'preferred_background_model' {
+  return slot === 'background' ? 'preferred_background_model' : 'preferred_model';
 }
 
 /**
@@ -204,23 +204,23 @@ export function slotDefaultModel(
   slot: ModelSlot | undefined,
 ): string | null {
   if (slot === 'background') {
-    const primary = prefs.flash_follows === 'deployment' ? null : prefs.preferred_model;
-    return prefs.preferred_flash_model || primary
-      || deployment?.flash_model || deployment?.default_model || null;
+    const primary = prefs.background_follows === 'deployment' ? null : prefs.preferred_model;
+    return prefs.preferred_background_model || primary
+      || deployment?.background_model || deployment?.default_model || null;
   }
   return prefs.preferred_model || deployment?.default_model || null;
 }
 
-/** The flash default control's value for Auto. Not a model name, which an
+/** The Background default control's value for Auto. Not a model name, which an
  *  option value could not otherwise be told apart from. */
-export const FLASH_AUTO = '__auto__';
+export const BACKGROUND_AUTO = '__auto__';
 
-/** What the flash default control shows: the saved model, Auto, or '' for
+/** What the Background default control shows: the saved model, Auto, or '' for
  *  the primary. Auto beside an unset primary runs what '' does, so it shows
  *  as ''. */
-export function flashDefaultChoice(prefs: ModelPreferences): string {
-  if (prefs.preferred_flash_model) return prefs.preferred_flash_model;
-  return prefs.flash_follows === 'deployment' && prefs.preferred_model ? FLASH_AUTO : '';
+export function backgroundDefaultChoice(prefs: ModelPreferences): string {
+  if (prefs.preferred_background_model) return prefs.preferred_background_model;
+  return prefs.background_follows === 'deployment' && prefs.preferred_model ? BACKGROUND_AUTO : '';
 }
 
 /** The threads a write moved off the old default; undefined from a server

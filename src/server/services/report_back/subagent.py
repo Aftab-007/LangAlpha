@@ -1,4 +1,4 @@
-"""PTC←background-subagent report-backs, mirroring flash←PTC.
+"""PTC←background-subagent report-backs, mirroring Chief of Staff←PTC hand-offs.
 
 A subagent run that reaches a reportable outcome (``REPORT_BACK_STATUSES``)
 bears a ``task_report_back`` outbox job in the same transaction as its
@@ -17,7 +17,7 @@ notification turn via the shared ``notify_turn`` machinery: it announces
 the outcome and leaves TaskOutput to fetch the result from the durable
 archive, so nothing volatile rides the payload.
 
-Unlike the flash pipeline there is no Redis reserve state: the open outbox
+Unlike the hand-off pipeline there is no Redis reserve state: the open outbox
 row IS the pending-registry, owed from enqueue until the notification run
 it dispatched ends (/status reads it via ``read_task_report_back_status``).
 
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # One deterministic request-key namespace per job id (separate from the
-# flash RB namespace so a job id can never mint the same key for both).
+# hand-off RB namespace so a job id can never mint the same key for both).
 TASK_RB_REQUEST_NS = uuid.UUID("3d9c4e8a-1b6f-4a72-9e05-7f8a2c31d4b6")
 
 # POST defer-loop cap per lease chain. Short on purpose: a busy thread's
@@ -65,7 +65,7 @@ async def publish_cleared_wake(thread_id: str) -> None:
     """Tell a thread's watchers to re-read its report-back status now.
     Best-effort: a dropped wake degrades to the watch's own backstop."""
     try:
-        from src.server.services.report_back.flash import wake
+        from src.server.services.report_back.handoff import wake
         from src.utils.cache.redis_cache import get_cache_client
 
         await wake.publish_wake(get_cache_client(), str(thread_id), cleared=True)
@@ -87,7 +87,7 @@ async def publish_cleared_wake_if_no_open_job(thread_id: str) -> None:
     """
     try:
         from src.server.database.runs import outbox as outbox_db
-        from src.server.services.report_back.flash import wake
+        from src.server.services.report_back.handoff import wake
         from src.utils.cache.redis_cache import get_cache_client
 
         open_jobs = await outbox_db.list_open_notification_jobs(
@@ -104,7 +104,7 @@ async def publish_cleared_wake_if_no_open_job(thread_id: str) -> None:
 
 
 async def read_task_report_back_status(thread_id: str) -> dict:
-    """Report-back status slice for a PTC thread (same contract as flash).
+    """Report-back status slice for a PTC thread (same contract as hand-offs).
 
     A non-deferred outbox job is owed until the notification run it
     dispatched ends (see ``ended_run_ids``). The first owed job's
@@ -118,7 +118,7 @@ async def read_task_report_back_status(thread_id: str) -> dict:
     replayable before the ack lands.
     """
     from src.server.database.runs import outbox as outbox_db
-    from src.server.services.report_back.flash.status import ended_run_ids
+    from src.server.services.report_back.handoff.status import ended_run_ids
 
     pending: bool | None = False
     run_id = None
@@ -303,7 +303,7 @@ async def execute_task_report_back(job: dict) -> None:
         park_while_thread_busy,
         post_notification_turn,
     )
-    from src.server.services.report_back.flash import wake
+    from src.server.services.report_back.handoff import wake
     from src.server.services.hook_outbox import LEASE_SECONDS, MAX_ATTEMPTS
     from src.utils.cache.redis_cache import get_cache_client
 
@@ -462,7 +462,7 @@ async def execute_task_report_back(job: dict) -> None:
         log_prefix="[TASK_REPORT_BACK]",
     )
     if outcome == "timeout":
-        # No pair state to tear down (unlike flash): ack and release the
+        # No pair state to tear down (unlike hand-offs): ack and release the
         # chain — the run row itself is the durable record of what happened.
         logger.warning(
             f"[TASK_REPORT_BACK] Terminal wait cap hit for {subject} on "

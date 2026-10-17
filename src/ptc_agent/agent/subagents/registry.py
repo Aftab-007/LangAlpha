@@ -81,7 +81,6 @@ class SubagentRegistry:
             self._definitions[name] = SubagentDefinition(
                 name=name,
                 description=cfg.description or "",
-                mode=cfg.mode,
                 role_prompt=cfg.role_prompt,
                 role_prompt_template=cfg.role_prompt_template,
                 custom_prompt_template=cfg.custom_prompt_template,
@@ -97,7 +96,6 @@ class SubagentRegistry:
                 preferred_connectors=cfg.preferred_connectors,
                 memory=cfg.memory if cfg.memory is not None else True,
                 sections=cfg.sections,
-                stateful=(cfg.mode == "ptc"),
                 roles=ALL_ROLES,
                 source="user",
             )

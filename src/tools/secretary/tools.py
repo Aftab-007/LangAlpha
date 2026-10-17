@@ -57,7 +57,7 @@ async def workspaces_list(user_id: str, tool_call_id: str) -> Command:
     one whose folders the Chief of Staff reads.
     """
     try:
-        from src.server.database.home_workspace import get_flash_workspace_id
+        from src.server.database.home_workspace import get_home_workspace_id
         from src.server.database.workspace import get_workspace, get_workspaces_for_user
 
         # Every workspace, since one left off the list is one the agent tells
@@ -69,7 +69,7 @@ async def workspaces_list(user_id: str, tool_call_id: str) -> Command:
         )
         from src.tools.secretary.activity import folder_on
 
-        home = await get_workspace(get_flash_workspace_id(user_id))
+        home = await get_workspace(get_home_workspace_id(user_id))
         computer_id = home.get("computer_id") if home else None
         workspaces = [
             {**ws, "dir_name": folder_on(ws, computer_id)} for ws in workspaces
@@ -172,7 +172,7 @@ async def _workspaces_delete(
             "workspace_id is required for delete action", tool_call_id
         )
 
-    from src.server.database.home_workspace import is_flash_row
+    from src.server.database.home_workspace import is_home_row
     from src.server.database.workspace import get_workspace
 
     workspace = await get_workspace(workspace_id)
@@ -180,7 +180,7 @@ async def _workspaces_delete(
         return error_command("workspace not found", tool_call_id)
     # Refused before the card, so the user is never asked to approve a delete
     # that cannot happen.
-    if is_flash_row(workspace):
+    if is_home_row(workspace):
         return error_command("Home cannot be deleted.", tool_call_id)
 
     # The card shows the name: an id alone cannot tell the user which

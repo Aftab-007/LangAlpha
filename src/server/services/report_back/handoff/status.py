@@ -1,9 +1,9 @@
 """Report-back read model: the ``/status?fields=report_back`` slice.
 
-``read_report_back_slice`` routes by thread kind (flash pendingness lives in
-the Redis watch set; PTC task pendingness IS the open outbox row, and a PTC
-thread that hands work to analysts holds a watch set too); the flash status
-derivation and the ended-run rule both slices settle on live here.
+``read_report_back_slice`` reads both registries a thread can be owed on
+(analyst hand-offs live in the Redis watch set; task report-back pendingness
+IS the open outbox row); the watch-set status derivation and the ended-run
+rule both slices settle on live here.
 """
 
 from __future__ import annotations
@@ -13,14 +13,14 @@ import json
 import logging
 from collections.abc import Iterable
 
-from src.server.services.report_back.flash import reserve
-from src.server.services.report_back.flash.keys import (
-    FLASH_RB_DONE_MAX,
+from src.server.services.report_back.handoff import reserve
+from src.server.services.report_back.handoff.keys import (
+    RB_DONE_MAX,
     decode,
-    flash_rb_done_key,
-    flash_rb_run_key,
-    flash_watch_key,
     ptc_origin_key,
+    rb_done_key,
+    rb_run_key,
+    watch_key,
 )
 
 # Same hard-coded logger name request_prep uses — existing log routing keys off it.
@@ -28,7 +28,7 @@ logger = logging.getLogger("src.server.handlers.chat_handler")
 
 
 async def read_report_back_status(thread_id: str, user_id: str | None) -> dict:
-    """Report-back-only status slice for a flash thread.
+    """The analyst hand-off slice of a thread's report-back status, from its watch set.
 
     The JSON shape is a frontend contract; the recent list is NEWEST FIRST
     (LPUSH order) and every listed run is terminal — i.e. replayable from
@@ -56,8 +56,8 @@ async def read_report_back_status(thread_id: str, user_id: str | None) -> dict:
             # Membership is the source of truth for "pending"; execution
             # progress lives in the durable outbox, not process memory.
             pipe = cache.client.pipeline(transaction=False)
-            pipe.smembers(flash_watch_key(thread_id))
-            pipe.lrange(flash_rb_done_key(thread_id), 0, FLASH_RB_DONE_MAX - 1)
+            pipe.smembers(watch_key(thread_id))
+            pipe.lrange(rb_done_key(thread_id), 0, RB_DONE_MAX - 1)
             members_raw, recent_raw = await pipe.execute()
 
             recent_report_back_run_ids = [decode(r) for r in (recent_raw or [])]
@@ -65,7 +65,7 @@ async def read_report_back_status(thread_id: str, user_id: str | None) -> dict:
             origins: dict[str, dict | None] = {}
             if members:
                 # A member without an origin is dead state and must not keep
-                # this flash pending forever — under-cap flashes never hit the
+                # this thread pending forever — under-cap threads never hit the
                 # reserve-path reaper, and successful reserves keep refreshing
                 # the shared set's TTL. Filter them out of the derivation and
                 # reap them best-effort (the Lua re-checks EXISTS per member,
@@ -79,12 +79,12 @@ async def read_report_back_status(thread_id: str, user_id: str | None) -> dict:
                     members = [m for m in members if m not in orphans]
                     try:
                         reaped = await reserve.reap_listed_orphans(
-                            cache, flash_watch_key(thread_id), orphans
+                            cache, watch_key(thread_id), orphans
                         )
                         if reaped:
                             logger.info(
-                                f"[FLASH_REPORT_BACK] Status read reaped {reaped} "
-                                f"orphaned member(s) for flash={thread_id}"
+                                f"[HANDOFF_REPORT_BACK] Status read reaped {reaped} "
+                                f"orphaned member(s) for thread={thread_id}"
                             )
                     except Exception:
                         logger.warning(
@@ -92,12 +92,12 @@ async def read_report_back_status(thread_id: str, user_id: str | None) -> dict:
                             exc_info=True,
                         )
             if members:
-                # Each member's per-(flash, ptc) run pointer names its summary
+                # Each member's per-(dispatcher, ptc) run pointer names its summary
                 # run once one is dispatched, and survives until teardown, so
                 # it can name a run that already ended. One MGET vs N serial
                 # GETs; values are raw serialized JSON.
                 ptr_raw = await cache.client.mget(
-                    [flash_rb_run_key(thread_id, ptc) for ptc in members]
+                    [rb_run_key(thread_id, ptc) for ptc in members]
                 )
                 pointers = {
                     m: ptr
@@ -171,8 +171,8 @@ async def read_report_back_status(thread_id: str, user_id: str | None) -> dict:
             dict.fromkeys([*ended, *recent_report_back_run_ids])
         ),
         "owed_threads": owed_threads,
-        # Flash threads run no sandbox subagents; present for shape parity
-        # with the task slice so watch snapshots decode uniformly.
+        # Hand-offs carry no subagent tasks; present for shape parity with
+        # the task slice so watch snapshots decode uniformly.
         "active_tasks": [],
     }
 
@@ -199,28 +199,20 @@ async def _owed_thread_labels(
         return None
 
 
-async def read_report_back_slice(
-    thread_id: str, msg_type: str | None = None, user_id: str | None = None
-) -> dict:
-    """Route to the right pending-registry read for this thread kind.
+async def read_report_back_slice(thread_id: str, user_id: str | None = None) -> dict:
+    """Both pending registries of a thread, merged.
 
-    Flash pendingness lives in the Redis watch set; PTC task report-back
-    pendingness IS the open outbox row. A PTC thread reads both: the Chief of
-    Staff runs on one, and its analysts report back through the watch set
-    while its own subagents use the outbox. ``msg_type`` and the owner's
-    ``user_id`` skip the thread lookup when the caller already holds both, as
-    the ``/status`` route does once it has authorized.
+    A thread's analysts report back through the watch set while its own
+    subagents use the outbox, and any thread may have both, as the Chief of
+    Staff's does. The owner's ``user_id`` skips the thread lookup when the
+    caller already holds it, as the ``/status`` route does once it has
+    authorized.
     """
-    if msg_type is None or user_id is None:
+    if user_id is None:
         from src.server.database.conversation import get_thread_auth_meta
 
         meta = await get_thread_auth_meta(thread_id) or {}
-        if msg_type is None:
-            msg_type = meta.get("msg_type")
-        if user_id is None:
-            user_id = meta.get("user_id")
-    if msg_type != "ptc":
-        return await read_report_back_status(thread_id, user_id)
+        user_id = meta.get("user_id")
     from src.server.services.report_back.subagent import (
         read_task_report_back_status,
     )

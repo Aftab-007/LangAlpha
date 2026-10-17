@@ -59,8 +59,7 @@ export function MessageProvenanceLabel({ provenance, readOnly, dispatcherContext
       if (!provenance.agent && readOnly) return null;
       Icon = Bot;
       // Only the Chief of Staff hands turns out. A row recorded before it named
-      // its dispatcher, or naming the agent it replaced, reads the same, as
-      // the thread's back button does.
+      // its dispatcher reads the same, as the thread's back button does.
       label = t('chat.provenance.fromChiefOfStaff');
       const { threadId } = provenance;
       if (threadId && onOpenDispatcher) open = () => guardLeave(() => onOpenDispatcher(threadId));

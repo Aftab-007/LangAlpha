@@ -1,9 +1,9 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isHomeWorkspace } from '@/lib/homeWorkspace';
+import type { Workspace } from '@/types/api';
 
-interface LabelledWorkspace {
-  is_home?: boolean;
+interface LabelledWorkspace extends Pick<Workspace, 'is_home'> {
   status?: string | null;
   name?: string | null;
   description?: string | null;

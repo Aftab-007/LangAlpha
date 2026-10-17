@@ -2,7 +2,7 @@
  * Slot cleanup after the user deselects a model in ModelPickStep.
  *
  * When a user unchecks a model that was previously filling a dedicated slot
- * (``preferred_model``, ``preferred_flash_model``, ``compaction_model``,
+ * (``preferred_model``, ``preferred_background_model``, ``compaction_model``,
  * ``fetch_model``, or any entry of ``fallback_models``), the slot keeps
  * pointing at the now-hidden model and the chat dropdown re-seeds from it.
  * That's the regression — stale picks appear selected even after the user
@@ -15,7 +15,7 @@
 
 export interface OtherPrefLike {
   preferred_model?: string | null;
-  preferred_flash_model?: string | null;
+  preferred_background_model?: string | null;
   compaction_model?: string | null;
   fetch_model?: string | null;
   fallback_models?: string[];
@@ -24,7 +24,7 @@ export interface OtherPrefLike {
 
 export interface SlotCleanupPatch {
   /** Null-valued overrides for scalar slots whose current pick is orphaned. */
-  nulls: Partial<Record<'preferred_model' | 'preferred_flash_model' | 'compaction_model' | 'fetch_model', null>>;
+  nulls: Partial<Record<'preferred_model' | 'preferred_background_model' | 'compaction_model' | 'fetch_model', null>>;
   /** New fallback list with orphaned entries removed — only set when changed. */
   fallback_models?: string[];
 }
@@ -51,7 +51,7 @@ export function computeSlotCleanup({
 
   const nulls: SlotCleanupPatch['nulls'] = {};
   if (isOrphaned(otherPref.preferred_model)) nulls.preferred_model = null;
-  if (isOrphaned(otherPref.preferred_flash_model)) nulls.preferred_flash_model = null;
+  if (isOrphaned(otherPref.preferred_background_model)) nulls.preferred_background_model = null;
   if (isOrphaned(otherPref.compaction_model)) nulls.compaction_model = null;
   if (isOrphaned(otherPref.fetch_model)) nulls.fetch_model = null;
 

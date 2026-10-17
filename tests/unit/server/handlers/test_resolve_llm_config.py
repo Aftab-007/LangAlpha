@@ -3,7 +3,7 @@ Tests for resolve_llm_config() and related model resolution in chat/llm_config.p
 
 Covers:
 - Model priority: per-request > user preference > system default
-- PTC vs flash mode model field selection
+- Primary vs background slot model field selection
 - User preference application (compaction, fetch, fallback overrides)
 - BYOK client resolution path
 - OAuth client resolution path
@@ -40,7 +40,7 @@ USER_MODELS = "src.server.services.llm.user_models"
 
 def _make_config(**llm_overrides) -> AgentConfig:
     """Create a minimal AgentConfig for testing model resolution."""
-    llm_defaults = {"name": "system-default-model", "flash": "system-flash-model"}
+    llm_defaults = {"name": "system-default-model", "background": "system-background-model"}
     llm_defaults.update(llm_overrides)
     return AgentConfig(
         llm=LLMConfig(**llm_defaults),
@@ -55,7 +55,7 @@ def _make_config(**llm_overrides) -> AgentConfig:
 def _mock_model_config(system_models=None):
     """Create a mock ModelConfig that knows about system models."""
     if system_models is None:
-        system_models = {"system-default-model", "system-flash-model", "gpt-4o"}
+        system_models = {"system-default-model", "system-background-model", "gpt-4o"}
     mc = MagicMock()
     mc.get_model_config.side_effect = lambda name: {"provider": "openai"} if name in system_models else None
     mc.get_provider_info.return_value = {}
@@ -149,14 +149,14 @@ class TestModelPriority:
 
 
 # ---------------------------------------------------------------------------
-# PTC vs Flash mode
+# Primary vs Background slot
 # ---------------------------------------------------------------------------
 
 
 class TestModeModelField:
     @pytest.mark.asyncio
-    async def test_flash_mode_uses_flash_field(self, base_config):
-        """Flash mode reads/writes the 'flash' field, not 'name'."""
+    async def test_background_slot_uses_background_field(self, base_config):
+        """The Background slot reads/writes the 'background' field, not 'name'."""
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config()
@@ -166,14 +166,14 @@ class TestModeModelField:
             patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
         ):
             config = await resolve_llm_config(
-                base_config, "user-1", None, False, mode="flash"
+                base_config, "user-1", None, False, slot="background"
             )
-        # Should use flash field default
-        assert config.llm.flash == "system-flash-model"
+        # Should use background field default
+        assert config.llm.background == "system-background-model"
 
     @pytest.mark.asyncio
-    async def test_flash_mode_per_request_override(self, base_config):
-        """Per-request model in flash mode sets the flash field."""
+    async def test_background_slot_per_request_override(self, base_config):
+        """Per-request model in the background slot sets the background field."""
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config()
@@ -183,13 +183,13 @@ class TestModeModelField:
             patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
         ):
             config = await resolve_llm_config(
-                base_config, "user-1", "gpt-4o", False, mode="flash"
+                base_config, "user-1", "gpt-4o", False, slot="background"
             )
-        assert config.llm.flash == "gpt-4o"
+        assert config.llm.background == "gpt-4o"
 
     @pytest.mark.asyncio
-    async def test_flash_mode_user_preference(self, base_config):
-        """Flash mode uses preferred_flash_model preference key."""
+    async def test_background_slot_user_preference(self, base_config):
+        """The Background slot uses the preferred_background_model preference key."""
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config()
@@ -197,28 +197,28 @@ class TestModeModelField:
             patch(
                 f"{USER_MODELS}.get_model_preference",
                 new_callable=AsyncMock,
-                return_value={"preferred_flash_model": "gpt-4o"},
+                return_value={"preferred_background_model": "gpt-4o"},
             ),
             patch(f"{CLIENTS}.resolve_oauth_llm_client", new_callable=AsyncMock, return_value=None),
             patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
         ):
             config = await resolve_llm_config(
-                base_config, "user-1", None, False, mode="flash"
+                base_config, "user-1", None, False, slot="background"
             )
-        assert config.llm.flash == "gpt-4o"
+        assert config.llm.background == "gpt-4o"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "pref, expected",
         [
-            # No flash default saved: flash runs the saved primary.
+            # No background default saved: background runs the saved primary.
             ({"preferred_model": "gpt-4o"}, "gpt-4o"),
-            ({"preferred_model": "gpt-4o", "flash_follows": "primary"}, "gpt-4o"),
-            # Auto for flash: the deployment's flash model, primary or not.
-            ({"preferred_model": "gpt-4o", "flash_follows": "deployment"}, "system-flash-model"),
+            ({"preferred_model": "gpt-4o", "background_follows": "primary"}, "gpt-4o"),
+            # Auto for background: the deployment's background model, primary or not.
+            ({"preferred_model": "gpt-4o", "background_follows": "deployment"}, "system-background-model"),
         ],
     )
-    async def test_flash_mode_unset_default(self, base_config, pref, expected):
+    async def test_background_slot_unset_default(self, base_config, pref, expected):
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config()
@@ -228,9 +228,9 @@ class TestModeModelField:
             patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
         ):
             config = await resolve_llm_config(
-                base_config, "user-1", None, False, mode="flash"
+                base_config, "user-1", None, False, slot="background"
             )
-        assert config.llm.flash == expected
+        assert config.llm.background == expected
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +242,7 @@ class TestOtherModelPreferences:
     # Every name saved below is a live model: a retired one is dropped before
     # it reaches the config (see ``TestStaleModelPreference``).
     CATALOG = {
-        "system-default-model", "system-flash-model",
+        "system-default-model", "system-background-model",
         "gpt-4o-mini", "legacy-model", "model-a", "model-b",
     }
 
@@ -447,7 +447,7 @@ class TestReasoningEffort:
                 base_config, "user-1", None, False, reasoning_effort="high"
             )
         # Should use per-request "high", not pref "low"
-        # The fetch role builds its own client for the flash model; only the
+        # The fetch role builds its own client for the background model; only the
         # main model's call carries the turn's level.
         main_calls = [c for c in mock_create.call_args_list if c.args[0] == "system-default-model"]
         assert len(main_calls) == 1
@@ -473,7 +473,7 @@ class TestReasoningEffort:
             await resolve_llm_config(
                 base_config, "user-1", None, False, reasoning_effort=None
             )
-        # The fetch role builds its own client for the flash model; only the
+        # The fetch role builds its own client for the background model; only the
         # main model's call carries the turn's level.
         main_calls = [c for c in mock_create.call_args_list if c.args[0] == "system-default-model"]
         assert len(main_calls) == 1
@@ -604,7 +604,7 @@ class TestCustomModelFallback:
         from src.server.services.llm.config import resolve_llm_config
 
         # Model not in system models → treated as custom
-        mock_mc = _mock_model_config(system_models={"system-default-model", "system-flash-model"})
+        mock_mc = _mock_model_config(system_models={"system-default-model", "system-background-model"})
         with (
             patch(
                 f"{USER_MODELS}.get_model_preference",
@@ -638,7 +638,7 @@ class TestCustomModelFallback:
 
         from src.server.services.llm.config import resolve_llm_config
 
-        mock_mc = _mock_model_config(system_models={"system-default-model", "system-flash-model"})
+        mock_mc = _mock_model_config(system_models={"system-default-model", "system-background-model"})
         with (
             patch(
                 f"{USER_MODELS}.get_model_preference",
@@ -669,7 +669,7 @@ class TestCustomModelFallback:
         """Custom model + BYOK on + key present → BYOK client is injected (no error)."""
         from src.server.services.llm.config import resolve_llm_config
 
-        mock_mc = _mock_model_config(system_models={"system-default-model", "system-flash-model"})
+        mock_mc = _mock_model_config(system_models={"system-default-model", "system-background-model"})
         mock_client = MagicMock(name="custom-byok-client")
         with (
             patch(
@@ -705,7 +705,7 @@ class TestCustomModelFallback:
         # gpt-4o exists as a system model AND the user has a custom entry
         # with the same name — the variant-routing use case.
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model", "gpt-4o"}
+            system_models={"system-default-model", "system-background-model", "gpt-4o"}
         )
         mock_client = MagicMock(name="custom-byok-client")
         with (
@@ -844,7 +844,7 @@ class TestCustomModelFallback:
 
         # Only the main model is in models.json; "my-fallback" is custom.
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model"}
+            system_models={"system-default-model", "system-background-model"}
         )
 
         async def _byok_side_effect(user_id, model_name, is_byok, *args, **kwargs):
@@ -973,7 +973,7 @@ class TestTuningReachesEveryClient:
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model", "spare"}
+            system_models={"system-default-model", "system-background-model", "spare"}
         )
         with (
             patch(
@@ -1016,7 +1016,7 @@ class TestTuningReachesEveryClient:
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model", "spare"}
+            system_models={"system-default-model", "system-background-model", "spare"}
         )
         with (
             patch(
@@ -1055,7 +1055,7 @@ class TestTuningReachesEveryClient:
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model", "sub-model"}
+            system_models={"system-default-model", "system-background-model", "sub-model"}
         )
         # Pinned to its own model, with no level of its own.
         base_config.subagents.definitions = {
@@ -1100,7 +1100,7 @@ class TestResolveOneFallbackGuard:
         """If resolve_oauth_llm_client raises for a fallback model, it should be skipped (not crash)."""
         from src.server.services.llm.config import resolve_llm_config
 
-        mock_mc = _mock_model_config(system_models={"system-default-model", "system-flash-model", "oauth-model"})
+        mock_mc = _mock_model_config(system_models={"system-default-model", "system-background-model", "oauth-model"})
 
         async def _oauth_side_effect(user_id, model_name, *args, **kwargs):
             if model_name == "oauth-model":
@@ -1139,7 +1139,7 @@ class TestResolveOneFallbackGuard:
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model", "valid-model", "oauth-model"}
+            system_models={"system-default-model", "system-background-model", "valid-model", "oauth-model"}
         )
         mock_valid_client = MagicMock(name="valid-fallback-client")
 
@@ -1270,7 +1270,7 @@ class TestClassifyModelDedup:
     @pytest.mark.asyncio
     async def test_classify_only_distinct_models(self, base_config):
         """resolve_llm_config only classifies the distinct models in play: the
-        main model, each fallback, and the flash model a blank fetch role
+        main model, each fallback, and the background model a blank fetch role
         resolves to. The pref cache keeps every classify O(1)
         and free of extra DB reads, so the set of names is the invariant we care
         about (the per-name count is an implementation detail of the STEP-0
@@ -1280,7 +1280,7 @@ class TestClassifyModelDedup:
         from src.server.services.llm.user_models import ModelSource
 
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model", "fb-a", "fb-b"}
+            system_models={"system-default-model", "system-background-model", "fb-a", "fb-b"}
         )
 
         async def _classify_side_effect(user_id, model_name, _pref_cache=None):
@@ -1308,28 +1308,28 @@ class TestClassifyModelDedup:
 
         # No model outside {main, fetch role, fallbacks} is ever classified.
         called_names = {call.args[1] for call in classify_mock.await_args_list}
-        assert called_names == {"system-default-model", "system-flash-model", "fb-a", "fb-b"}
+        assert called_names == {"system-default-model", "system-background-model", "fb-a", "fb-b"}
 
 
 # ---------------------------------------------------------------------------
-# Blank fetch follows the user's flash model, on the user's own credential
+# Blank fetch follows the user's background model, on the user's own credential
 # ---------------------------------------------------------------------------
 
 
-class TestBlankFetchFollowsFlash:
-    """A blank fetch means the flash model, and it has to run on the user's own
+class TestBlankFetchFollowsBackground:
+    """A blank fetch means the background model, and it has to run on the user's own
     credential. OAuth only resolves ``-oauth`` manifest entries, so these fakes
     return a client for those names alone, as the real resolver does.
     """
 
     @staticmethod
-    async def _resolve(pref, mode="ptc", config=None):
+    async def _resolve(pref, slot="primary", config=None):
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config(
             system_models={
-                "system-default-model", "system-flash-model",
-                "main-oauth", "flash-oauth",
+                "system-default-model", "system-background-model",
+                "main-oauth", "background-oauth",
             }
         )
 
@@ -1346,51 +1346,51 @@ class TestBlankFetchFollowsFlash:
             patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
         ):
             return await resolve_llm_config(
-                config or _make_config(), "user-1", None, False, mode=mode
+                config or _make_config(), "user-1", None, False, slot=slot
             )
 
     @pytest.mark.asyncio
-    async def test_ptc_turn_takes_the_users_flash(self):
+    async def test_primary_turn_takes_the_users_background(self):
         config = await self._resolve(
-            {"preferred_model": "main-oauth", "preferred_flash_model": "flash-oauth"}
+            {"preferred_model": "main-oauth", "preferred_background_model": "background-oauth"}
         )
 
         assert config.llm.name == "main-oauth"
-        assert config.llm.flash == "flash-oauth"
-        assert config.subsidiary_llm_clients["fetch"]._extract_mock_name() == "oauth:flash-oauth"
+        assert config.llm.background == "background-oauth"
+        assert config.subsidiary_llm_clients["fetch"]._extract_mock_name() == "oauth:background-oauth"
 
     @pytest.mark.asyncio
-    async def test_ptc_turn_with_only_a_primary_runs_its_roles_on_it(self):
-        """An unset flash default is the saved primary on a PTC turn too, as on a
-        flash turn and as Settings says, so compaction and fetch follow it."""
+    async def test_primary_turn_with_only_a_primary_runs_its_roles_on_it(self):
+        """An unset background default is the saved primary on a primary turn too, as on a
+        background turn and as Settings says, so compaction and fetch follow it."""
         config = await self._resolve({"preferred_model": "main-oauth"})
 
-        assert config.llm.flash == "main-oauth"
+        assert config.llm.background == "main-oauth"
         assert config.llm.compaction_name == "main-oauth"
         assert config.llm.fetch_name == "main-oauth"
 
     @pytest.mark.asyncio
-    async def test_flash_without_oauth_falls_back_to_main_client(self):
-        """With Auto for flash the roles keep the deployment's flash, a bare name
+    async def test_background_without_oauth_falls_back_to_main_client(self):
+        """With Auto for background the roles keep the deployment's background, a bare name
         no OAuth account can serve, so the fetch role takes a copy of the user's
         main client instead of leaving web_fetch on a server key.
         """
-        config = await self._resolve({"preferred_model": "main-oauth", "flash_follows": "deployment"})
+        config = await self._resolve({"preferred_model": "main-oauth", "background_follows": "deployment"})
 
-        assert config.llm.flash == "system-flash-model"
+        assert config.llm.background == "system-background-model"
         assert config.subsidiary_llm_clients["fetch"] is config.llm_client.model_copy.return_value
 
     @pytest.mark.asyncio
-    async def test_blank_yaml_fetch_follows_the_users_flash(self):
+    async def test_blank_yaml_fetch_follows_the_users_background(self):
         """Through the real loader: ``fetch: ""`` in agent_config.yaml must not
-        pin the deployment's flash, or the user's flash never reaches the role.
+        pin the deployment's background, or the user's background never reaches the role.
         ``compaction: ""`` follows the model the turn runs.
         """
         from ptc_agent.config.loaders import load_from_dict
 
         base = load_from_dict({
             "llm": {
-                "name": "system-default-model", "flash": "system-flash-model",
+                "name": "system-default-model", "background": "system-background-model",
                 "compaction": "", "fetch": "",
             },
             "daytona": {
@@ -1405,18 +1405,18 @@ class TestBlankFetchFollowsFlash:
             "filesystem": {"allowed_directories": ["/home/workspace"]},
         })
         config = await self._resolve(
-            {"preferred_model": "main-oauth", "preferred_flash_model": "flash-oauth"},
+            {"preferred_model": "main-oauth", "preferred_background_model": "background-oauth"},
             config=base,
         )
 
-        assert config.llm.fetch_name == "flash-oauth"
+        assert config.llm.fetch_name == "background-oauth"
         assert config.llm.compaction_name == "main-oauth"
-        assert config.subsidiary_llm_clients["fetch"]._extract_mock_name() == "oauth:flash-oauth"
+        assert config.subsidiary_llm_clients["fetch"]._extract_mock_name() == "oauth:background-oauth"
         assert config.subsidiary_llm_clients["compaction"]._extract_mock_name() == "oauth:main-oauth"
 
     @pytest.mark.asyncio
     async def test_platform_user_keeps_the_name_path(self):
-        config = await self._resolve({"preferred_flash_model": "system-flash-model"})
+        config = await self._resolve({"preferred_background_model": "system-background-model"})
 
         assert "fetch" not in config.subsidiary_llm_clients
 
@@ -1436,7 +1436,7 @@ class TestStaleModelPreference:
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model"}
+            system_models={"system-default-model", "system-background-model"}
         )
         pref = {"preferred_model": "qwen3.5-flash"}
 
@@ -1496,7 +1496,7 @@ class TestStaleModelPreference:
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model", "good-model"}
+            system_models={"system-default-model", "system-background-model", "good-model"}
         )
         pref = {
             "preferred_model": "qwen3.5-flash",
@@ -1550,7 +1550,7 @@ class TestStaleModelPreference:
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model"}
+            system_models={"system-default-model", "system-background-model"}
         )
         # Prefs already clean from a prior scrub pass
         pref = {}
@@ -1601,7 +1601,7 @@ class TestStaleModelPreference:
         # but no user pref references it, so cleanup shouldn't flag it as
         # "from pref" and shouldn't raise model_removed.
         stale_yaml_config = _make_config(name="stale-yaml-default")
-        mock_mc = _mock_model_config(system_models={"system-flash-model"})
+        mock_mc = _mock_model_config(system_models={"system-background-model"})
 
         with (
             patch(
@@ -1658,7 +1658,7 @@ class TestStaleModelPreference:
         from src.server.services.llm.config import resolve_llm_config
 
         mock_mc = _mock_model_config(
-            system_models={"system-default-model", "system-flash-model", "freshly-saved"}
+            system_models={"system-default-model", "system-background-model", "freshly-saved"}
         )
         # Caller's snapshot: stale preferred_model
         snapshot_pref = {"preferred_model": "qwen3.5-flash"}
@@ -1716,7 +1716,7 @@ class TestStaleModelPreference:
         assert mock_invalidate.await_count == 1
 
     @staticmethod
-    async def _resolve_with_stale_roles(base_config, pref, mode, **kwargs):
+    async def _resolve_with_stale_roles(base_config, pref, slot, **kwargs):
         from src.server.services.llm.config import resolve_llm_config
 
         with (
@@ -1729,7 +1729,7 @@ class TestStaleModelPreference:
             patch("src.server.database.user.invalidate_user_prefs_cache", new_callable=AsyncMock),
         ):
             config = await resolve_llm_config(
-                base_config, "user-1", None, False, mode=mode, **kwargs
+                base_config, "user-1", None, False, slot=slot, **kwargs
             )
         return config, mock_upsert
 
@@ -1737,7 +1737,7 @@ class TestStaleModelPreference:
     async def test_stale_role_model_takes_its_default_and_is_kept(self, base_config):
         """Regression: the turn's own model is fine but a role names a model the
         manifest lacks. A platform user has no client for the role, so the name
-        reached ``get_llm_by_type`` at graph build and failed every PTC turn.
+        reached ``get_llm_by_type`` at graph build and failed every primary turn.
         The role resolves as if never set, and the saved value is left alone:
         a worker that knows fewer models (a rollback, an older build still
         serving) must not delete a pick a newer one can serve."""
@@ -1745,38 +1745,38 @@ class TestStaleModelPreference:
             base_config,
             {
                 "preferred_model": "gpt-4o",
-                "preferred_flash_model": "retired-flash",
+                "preferred_background_model": "retired-background",
                 "compaction_model": "retired-compaction",
             },
-            "ptc",
+            "primary",
         )
 
-        # Never set, an unset flash default is the saved primary.
+        # Never set, an unset background default is the saved primary.
         assert config.llm.name == "gpt-4o"
-        assert config.llm.flash == "gpt-4o"
+        assert config.llm.background == "gpt-4o"
         assert config.llm.compaction_name == "gpt-4o"
         assert config.llm.fetch_name == "gpt-4o"
         mock_upsert.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_role_filter_spares_custom_models_and_other_modes_model(self, base_config):
-        """A custom model is never stale. The PTC model is not a role of a flash
-        turn, so its dead name is left for the PTC turn to refuse with the
+    async def test_role_filter_spares_custom_models_and_other_slots_model(self, base_config):
+        """A custom model is never stale. The primary model is not a role of a background
+        turn, so its dead name is left for the primary turn to refuse with the
         model_removed CTA. A fallback list whose every entry is gone means no
         fallback, not the deployment's list on a key the user never chose."""
         config, mock_upsert = await self._resolve_with_stale_roles(
             base_config,
             {
                 "preferred_model": "retired-main",
-                "preferred_flash_model": "gpt-4o",
+                "preferred_background_model": "gpt-4o",
                 "fetch_model": "my-fetch",
                 "custom_models": [{"name": "my-fetch", "model_id": "x", "provider": "openai"}],
                 "fallback_models": ["retired-fallback"],
             },
-            "flash",
+            "background",
         )
 
-        assert config.llm.flash == "gpt-4o"
+        assert config.llm.background == "gpt-4o"
         assert config.llm.fetch == "my-fetch"
         assert config.llm.fallback == []
         mock_upsert.assert_not_awaited()
@@ -1793,49 +1793,49 @@ class TestStaleModelPreference:
                 "fallback_models": [{"name": "x"}, "gpt-4o"],
                 "custom_providers": ["not-a-dict"],
             },
-            "ptc",
+            "primary",
         )
 
         assert config.llm.fetch_name == "gpt-4o"
         assert config.llm.fallback == ["gpt-4o"]
 
     @pytest.mark.asyncio
-    async def test_a_flash_turns_own_dead_model_is_refused_not_dropped(self, base_config):
-        """The flash key is a role on a PTC turn and the model itself on a flash
-        turn. Filtered there, a flash turn would silently run the deployment's
-        flash model instead of telling the user their pick is gone."""
+    async def test_a_background_turns_own_dead_model_is_refused_not_dropped(self, base_config):
+        """The background key is a role on a primary turn and the model itself on a background
+        turn. Filtered there, a background turn would silently run the deployment's
+        background model instead of telling the user their pick is gone."""
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as excinfo:
             await self._resolve_with_stale_roles(
                 base_config,
-                {"preferred_model": "gpt-4o", "preferred_flash_model": "retired-flash"},
-                "flash",
+                {"preferred_model": "gpt-4o", "preferred_background_model": "retired-background"},
+                "background",
             )
 
         assert excinfo.value.detail["type"] == "model_removed"
-        assert "retired-flash" in excinfo.value.detail["message"]
+        assert "retired-background" in excinfo.value.detail["message"]
 
 
     @pytest.mark.asyncio
     async def test_a_call_nobody_waits_on_reads_its_own_dead_model_as_unset(self, base_config):
-        """Regression: a thread's first turn titles it with a flash call. A dead
-        flash pick counted as that call's own model, so the scrub ran and cleared
+        """Regression: a thread's first turn titles it with a background call. A dead
+        background pick counted as that call's own model, so the scrub ran and cleared
         every dead name, fetch and fallbacks included, behind a CTA only a log
         line ever saw."""
         config, mock_upsert = await self._resolve_with_stale_roles(
             base_config,
             {
                 "preferred_model": "gpt-4o",
-                "preferred_flash_model": "retired-flash",
+                "preferred_background_model": "retired-background",
                 "fetch_model": "retired-fetch",
             },
-            "flash",
+            "background",
             user_facing=False,
         )
 
-        # Read as unset, so flash runs the saved primary.
-        assert config.llm.flash == "gpt-4o"
+        # Read as unset, so background runs the saved primary.
+        assert config.llm.background == "gpt-4o"
         mock_upsert.assert_not_awaited()
 
 # ---------------------------------------------------------------------------

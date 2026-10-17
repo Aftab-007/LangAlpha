@@ -293,7 +293,7 @@ class ModelConfig:
         Deliberately separate from the ``intelligence`` score, which is
         editorial copy for the model picker — a wording change there must not
         move agent behavior. Reads the raw entry (no ``visible`` gate) because
-        flash/compaction/fetch models are not all listed in the picker.
+        Background, compaction and fetch models are not all listed in the picker.
         """
         model_config = self.llm_config.get(model_name)
         if not model_config:

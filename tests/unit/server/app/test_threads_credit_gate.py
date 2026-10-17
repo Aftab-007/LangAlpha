@@ -165,7 +165,6 @@ async def test_credit_gate_byok_arg(
             json={
                 "workspace_id": "ws-placeholder",
                 "messages": [{"role": "user", "content": "test query"}],
-                "agent_mode": "ptc",
             },
         ) as resp:
             assert resp.status_code == 200

@@ -92,7 +92,7 @@ async def test_deleting_home_is_refused_before_the_user_is_asked():
     confirm = MagicMock(side_effect=AssertionError("the user must not be asked"))
     with patch(
         "src.server.database.workspace.get_workspace",
-        AsyncMock(return_value={"user_id": USER_ID, "workspace_id": HOME_ID, "status": "flash", "name": "Home"}),
+        AsyncMock(return_value={"user_id": USER_ID, "workspace_id": HOME_ID, "status": "unbound", "name": "Home"}),
     ), patch("src.tools.secretary.tools.hitl_confirm", confirm):
         result = await chief_of_staff_workspaces.ainvoke(
             _delete_call(HOME_ID),

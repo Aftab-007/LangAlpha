@@ -13,7 +13,7 @@ export interface ModelSlotText {
 export interface ModelSlotCopy {
   /** `preferred_model`, the model conversations run on. */
   default: ModelSlotText;
-  /** `preferred_flash_model`, the cheaper one. */
+  /** `preferred_background_model`, the cheaper one. */
   background: ModelSlotText;
   explainerTitle: string;
   /** Placeholder for a routing slot left blank to follow the second model. */

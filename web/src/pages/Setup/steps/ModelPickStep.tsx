@@ -305,7 +305,7 @@ export default function ModelPickStep() {
 
       const allCustomModels = [...otherProviderCustomModels, ...existingThisProvider, ...newCustomModels];
 
-      // Clear default/flash/compaction/fetch/fallback slots when the user
+      // Clear default/background/compaction/fetch/fallback slots when the user
       // unchecked the model that was filling them. Otherwise an unchecked
       // model keeps appearing as the current selection in the chat dropdown
       // (since chat-input seeds selectedModel from preferred_model).

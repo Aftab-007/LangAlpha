@@ -442,7 +442,7 @@ class SessionCacheMixin:
         sandbox_id = getattr(sandbox, "sandbox_id", None) if sandbox else None
         return str(sandbox_id) if sandbox_id else None
 
-    # A flash workspace never reaches acquisition, so 'running' is the whole set.
+    # An unbound Home never reaches acquisition, so 'running' is the whole set.
     _SESSION_SERVING_STATUSES = frozenset({"running"})
 
     def _identity_is_stale(

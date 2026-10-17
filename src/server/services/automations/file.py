@@ -35,7 +35,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from psycopg.errors import DataError, IntegrityError, UniqueViolation
-from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator
 
 from ptc_agent.agent.backends.db_json_route import (
     DbJsonFile,
@@ -48,7 +48,7 @@ from ptc_agent.agent.backends.db_json_route import (
 from ptc_agent.core.paths import AUTOMATION_FILE_NAME
 from ptc_agent.core.sandbox.livefs_mount import CallContext
 from src.server.database import automation as auto_db
-from src.server.database.home_workspace import get_flash_workspace_id, is_home_id
+from src.server.database.home_workspace import get_home_workspace_id, is_home_id
 from src.server.database.user_lock import lock_user_writes
 from src.server.models.automation import (
     SCHEDULE_FIELD,
@@ -67,6 +67,7 @@ from src.server.models.automation import (
 from src.server.services.automations import lifecycle
 from src.server.services.llm import user_models
 from src.server.services.price_monitor import watched_market
+from src.server.utils.pg_sanitize import normalize_uuid
 from src.utils.timezone_utils import zone_or_none
 
 logger = logging.getLogger(__name__)
@@ -173,11 +174,11 @@ def _definition(row: dict[str, Any]) -> dict[str, Any]:
         entry["next_run_at"] = _iso(row.get("next_run_at"), tz)
     else:
         entry["trigger_config"] = row.get("trigger_config") or {}
-    placed = lifecycle.placed(row)
+    stored = normalize_uuid(row.get("workspace_id"))
     entry.update(
         timezone=tz,
         instruction=row["instruction"],
-        workspace_id=_HOME if is_home_id(row["user_id"], placed) else placed,
+        workspace_id=_HOME if is_home_id(row["user_id"], stored) else stored,
         thread=_thread_value(row),
         llm_model=row.get("llm_model"),
         delivery=[
@@ -273,10 +274,6 @@ class _Entry(BaseModel):
     trigger_config: dict[str, Any] | None = None
     timezone: str | None = None
     instruction: str | None = None
-    # The former way to pick Home, still read from older notes: "flash" reads
-    # as workspace_id "home" whatever workspace_id says, as the lifecycle
-    # reads a 'flash' row; "ptc" changes nothing.
-    agent_mode: Literal["ptc", "flash"] | None = None
     # "home" is read as Home's id, from the validation context.
     workspace_id: UUID | None = None
     thread: dict[str, Any] | None = None
@@ -284,15 +281,6 @@ class _Entry(BaseModel):
     delivery: dict[str, list[str]] | None = None
     max_failures: int | None = None
     state: Any = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _former_home(cls, value: Any) -> Any:
-        # An agent editing a file it read adds the mode beside the
-        # workspace_id it was shown, so the mode wins.
-        if isinstance(value, dict) and value.get("agent_mode") == "flash":
-            return {**value, "workspace_id": _HOME}
-        return value
 
     # Fields every automation has: null is refused rather than read as
     # "clear". A schedule field's null depends on the kind, so the plan reads it.
@@ -336,8 +324,7 @@ class _Entry(BaseModel):
         return run_time(value)
 
 
-# The former agent_mode is read but not offered.
-_ALLOWED = ", ".join(name for name in _Entry.model_fields if name != "agent_mode")
+_ALLOWED = ", ".join(_Entry.model_fields)
 
 
 @dataclass
@@ -570,7 +557,9 @@ def _plan_create(entry: _Entry, call: CallContext, zone: str, problems: _Problem
 def _plan_update(entry: _Entry, raw: dict[str, Any], row: dict[str, Any], problems: _Problems) -> _Update | None:
     """The fields that differ from the row, and the pause or resume a status
     asks for; what the row allows beyond that is the lifecycle's to say."""
-    current = _definition(row)
+    # The file shows Home as "home", which the entry already read as Home's
+    # id, so a workspace is compared with the id the row stores.
+    current = {**_definition(row), "workspace_id": normalize_uuid(row.get("workspace_id"))}
     kind = row["trigger_type"]
     tz = entry.timezone or current["timezone"]
     fields: dict[str, Any] = {}
@@ -631,9 +620,7 @@ def _plan_update(entry: _Entry, raw: dict[str, Any], row: dict[str, Any], proble
                 fields["delivery_config"] = value
                 changed.append(key)
             continue
-        # The file shows Home as "home", which the entry already read as
-        # Home's id, so a workspace is compared with where the row runs.
-        if _same(value, lifecycle.placed(row) if key == "workspace_id" else current.get(key)):
+        if _same(value, current.get(key)):
             continue
         if key == "trigger_config" and current["status"] == "completed":
             problems.add(key, f"this automation {_RAN_ONCE}")
@@ -758,7 +745,7 @@ class AutomationFile(DbJsonFile[dict[str, Any] | None, Document, FilePlan]):
             shown=shown,
             timezone=zone,
             model_pref=await user_models.get_model_preference(user_id) if _names_model(written, shown) else None,
-            home_id=get_flash_workspace_id(user_id),
+            home_id=get_home_workspace_id(user_id),
             delivery=delivery,
             delivery_problems=refused,
         )

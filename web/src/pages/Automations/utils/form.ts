@@ -72,8 +72,8 @@ export const INITIAL_FORM: FormState = {
   price_cooldown_minutes: '',
 };
 
-/** `homeId` is Home's id, which a row in Home names; a legacy flash row reads
- *  as All workspaces without it. */
+/** `homeId` is Home's id, which a row in Home names, so the row opens on All
+ *  workspaces. */
 export function automationToFormState(automation: Automation, timezone = deviceTimezone(), homeId?: string): FormState {
   const tc = automation.trigger_config;
   const condition = tc?.conditions?.[0];
@@ -213,7 +213,7 @@ export function formToPriceConfig(form: FormState): PriceTriggerConfig {
 
 type Settings = Pick<
   AutomationPayload,
-  'name' | 'agent_mode' | 'workspace_id' | 'instruction' | 'thread_strategy' | 'max_failures' | 'delivery_config'
+  'name' | 'workspace_id' | 'instruction' | 'thread_strategy' | 'max_failures' | 'delivery_config'
 >;
 type Trigger = Pick<AutomationUpdatePayload, 'cron_expression' | 'next_run_at' | 'timezone' | 'trigger_config'>;
 
@@ -222,10 +222,6 @@ type Trigger = Pick<AutomationUpdatePayload, 'cron_expression' | 'next_run_at' |
 function settingsPayload(form: FormState, workspaceId: string): Settings {
   return {
     name: form.name,
-    // A backend before is_home reads a create without a mode as 'flash' and
-    // keeps a flash row's mode through an edit, and 'flash' runs in Home
-    // whatever workspace is named. 'ptc' runs in the named one on any backend.
-    agent_mode: 'ptc',
     workspace_id: workspaceId,
     instruction: fillSymbol(form),
     thread_strategy: form.thread_strategy,

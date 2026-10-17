@@ -15,17 +15,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.server.services.report_back.flash import executor as rb_executor
+from src.server.services.report_back.handoff import executor as rb_executor
 from src.tools.secretary.chief_of_staff import delegate_to_analyst
 
 USER_ID = "user-1"
-FLASH_THREAD_ID = "flash-thread-1"
+DISPATCHER_THREAD_ID = "cos-thread-1"
 PTC_THREAD_ID = "ptc-thread-1"
 WORKSPACE_ID = "22222222-2222-2222-2222-222222222222"
 
 _ORIGIN = {
     "user_id": USER_ID,
-    "flash_workspace_id": "ws-flash",
+    "home_workspace_id": "ws-cos",
     "ptc_workspace_id": "ws-ptc",
 }
 
@@ -36,7 +36,7 @@ def _tool_call(args: dict, call_id: str = "call_test") -> dict:
 
 
 def _config() -> dict:
-    return {"configurable": {"user_id": USER_ID, "thread_id": FLASH_THREAD_ID}}
+    return {"configurable": {"user_id": USER_ID, "thread_id": DISPATCHER_THREAD_ID}}
 
 
 def _payload(result) -> dict:
@@ -146,7 +146,7 @@ async def test_report_back_drops_when_service_token_unset(monkeypatch):
         MagicMock(side_effect=AssertionError("report-back HTTP must not run")),
     ):
         status, run_id = await rb_executor._post_report_back(
-            cache, FLASH_THREAD_ID, PTC_THREAD_ID, _ORIGIN, final_status="completed"
+            cache, DISPATCHER_THREAD_ID, PTC_THREAD_ID, _ORIGIN, final_status="completed"
         )
 
     assert status == "drop"
@@ -188,7 +188,7 @@ async def test_report_back_oss_mode_posts_without_token(monkeypatch):
     with patch("aiohttp.ClientSession", MagicMock(return_value=session)):
         outcome = await rb_executor._post_report_back(
             cache=None,
-            flash_thread_id=FLASH_THREAD_ID,
+            dispatcher_thread_id=DISPATCHER_THREAD_ID,
             ptc_thread_id=PTC_THREAD_ID,
             origin=_ORIGIN,
             final_status="completed",

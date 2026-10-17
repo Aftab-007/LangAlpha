@@ -1,4 +1,4 @@
-"""Retry-budget and lease timing for flash report-back delivery.
+"""Retry-budget and lease timing for hand-off report-back delivery.
 
 Every bound here derives from the longest legitimate server-side hold a
 dispatched POST can experience, so drop deadlines can never land while the
@@ -39,7 +39,7 @@ def admission_hold_bound() -> float:
 # Response/backoff slack per admission attempt (30s sock-read + 5s backoff + margin).
 RB_ADMISSION_MARGIN_S = 60.0
 
-# Cap (seconds) on retrying a 409 (flash thread busy with the user's own turn)
+# Cap (seconds) on retrying a 409 (the thread busy with the user's own turn)
 # for one item; derived from the workflow timeout so a long user turn is
 # waited out, FLOORED so the budget structurally fits the priming lease plus
 # one full post-takeover admission attempt (round-3 F1): the drop deadline
@@ -53,7 +53,7 @@ RB_BUSY_WAIT_CAP = max(
 )
 
 # Cap (seconds) on waiting for a POSTed report-back to reach terminal before
-# force-clearing it, so a crashed run can't wedge the whole flash queue.
+# force-clearing it, so a crashed run can't wedge the thread's whole queue.
 RB_TERMINAL_WAIT_CAP = RB_BUSY_WAIT_CAP
 
 
@@ -66,7 +66,7 @@ def derive_priming_lease(retry_budget: float) -> float:
     A rowless crashed pointer therefore always becomes takeover-eligible AND
     completable while 503 retries are still coming; the cost of a small lease
     (takeover racing an unusually slow priming) is bounded by the per-thread
-    in_progress slot — one live run per flash thread.
+    in_progress slot — one live run per Chief of Staff thread.
     """
     return min(900.0, retry_budget / 2)
 

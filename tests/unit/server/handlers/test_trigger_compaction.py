@@ -34,12 +34,12 @@ COMPACT = "ptc_agent.agent.middleware.compaction.compact"
 
 def _make_agent_config(
     compaction_model: str | None = "system-compaction",
-    flash_model: str | None = "system-flash-model",
+    background_model: str | None = "system-background-model",
 ) -> AgentConfig:
     return AgentConfig(
         llm=LLMConfig(
             name="system-default-model",
-            flash=flash_model,
+            background=background_model,
             compaction=compaction_model,
         ),
         security=SecurityConfig(),
@@ -54,7 +54,7 @@ def _mock_model_config(system_models=None):
     if system_models is None:
         system_models = {
             "system-default-model",
-            "system-flash-model",
+            "system-background-model",
             "system-compaction",
             "user-compaction-model",
         }
@@ -219,15 +219,15 @@ async def test_manual_compact_uses_user_compaction_model(base_config):
 THREAD_MODEL = "src.server.services.llm.thread_model"
 
 
-async def _compact_on_thread_model(base_config, resolve_stub, msg_type="ptc"):
+async def _compact_on_thread_model(base_config, resolve_stub):
     """Run a manual /compact on a thread holding ``m-thread``; returns the
-    ``(model, mode)`` pairs ``resolve_llm_config`` was asked for, in order."""
+    ``(model, slot)`` pairs ``resolve_llm_config`` was asked for, in order."""
     from src.server.handlers.thread_maintenance import trigger_compaction
 
     asked: list = []
 
-    async def _resolve(base_cfg, user_id, request_model, is_byok, mode="ptc", **kwargs):
-        asked.append((request_model, mode))
+    async def _resolve(base_cfg, user_id, request_model, is_byok, slot="primary", **kwargs):
+        asked.append((request_model, slot))
         return await resolve_stub(base_cfg, request_model)
 
     compact_mock = AsyncMock(return_value=_compaction())
@@ -239,7 +239,7 @@ async def _compact_on_thread_model(base_config, resolve_stub, msg_type="ptc"):
         patch(
             "src.server.database.conversation.get_thread_auth_meta",
             new_callable=AsyncMock,
-            return_value={"llm_model": "m-thread", "msg_type": msg_type},
+            return_value={"llm_model": "m-thread", "msg_type": "ptc"},
         ),
         patch(f"{THREAD_MODEL}.turn_model", new_callable=AsyncMock, side_effect=lambda *a, held, **k: held),
         patch(f"{LLM_HANDLER}.resolve_llm_config", new=_resolve),
@@ -257,20 +257,7 @@ async def test_manual_compact_runs_the_threads_own_model(base_config):
     async def _resolve(base_cfg, model):
         return base_cfg.model_copy(deep=True)
 
-    assert await _compact_on_thread_model(base_config, _resolve) == [("m-thread", "ptc")]
-
-
-@pytest.mark.asyncio
-async def test_manual_compact_resolves_a_flash_thread_in_flash_mode(base_config):
-    """A flash thread's model sits in the flash slot, which the compaction model
-    falls back to; PTC mode would summarize on the account's flash default
-    while automatic compaction ran on the thread's model."""
-
-    async def _resolve(base_cfg, model):
-        return base_cfg.model_copy(deep=True)
-
-    asked = await _compact_on_thread_model(base_config, _resolve, msg_type="flash")
-    assert asked == [("m-thread", "flash")]
+    assert await _compact_on_thread_model(base_config, _resolve) == [("m-thread", "primary")]
 
 
 @pytest.mark.asyncio
@@ -284,7 +271,7 @@ async def test_manual_compact_runs_the_default_when_the_threads_model_cannot_run
         return base_cfg.model_copy(deep=True)
 
     assert await _compact_on_thread_model(base_config, _resolve) == [
-        ("m-thread", "ptc"), (None, "ptc"),
+        ("m-thread", "primary"), (None, "primary"),
     ]
 
 
@@ -366,7 +353,7 @@ async def test_manual_compact_summarizes_with_the_subsidiary_oauth_client(base_c
     oauth_client = MagicMock(name="oauth-codex-client")
     resolve_kwargs: dict = {}
 
-    async def _resolve_stub(base_cfg, user_id, request_model, is_byok, mode="ptc", **kwargs):
+    async def _resolve_stub(base_cfg, user_id, request_model, is_byok, slot="primary", **kwargs):
         resolve_kwargs.update(kwargs)
         cfg = base_cfg.model_copy(deep=True)
         cfg.llm.compaction = "user-compaction-model"

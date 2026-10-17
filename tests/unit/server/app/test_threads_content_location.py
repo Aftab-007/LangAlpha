@@ -69,7 +69,7 @@ def _resolved_config():
     """Minimal stub for ``resolve_llm_config`` return value."""
     cfg = MagicMock()
     cfg.llm_client = None  # mark request as platform-served, keeps is_byok=False
-    cfg.llm = MagicMock(name="claude-sonnet-4-5", flash="claude-haiku")
+    cfg.llm = MagicMock(name="claude-sonnet-4-5", background="claude-haiku")
     cfg.llm.name = "claude-sonnet-4-5"
     return cfg
 
@@ -117,7 +117,6 @@ class TestContentLocationHeader:
                 json={
                     "workspace_id": "ws-1",
                     "messages": [{"role": "user", "content": "hi"}],
-                    "agent_mode": "ptc",
                 },
             ) as resp:
                 assert resp.status_code == 200

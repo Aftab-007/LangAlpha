@@ -256,7 +256,7 @@ async def test_recorded_cuts_use_the_configured_length_with_tier1_off(in_thread)
 
 @pytest.mark.asyncio
 async def test_args_stay_whole_without_a_saved_transcript(in_thread):
-    # No transcript the agent can read (Flash, an unmounted sandbox, a failed
+    # No transcript the agent can read (no backend, an unmounted sandbox, a failed
     # save, a folder whose links are not in): a cut argument would have no
     # copy left to read, so none is cut. Stale Read results are still
     # cleared, since the file they read is still there.

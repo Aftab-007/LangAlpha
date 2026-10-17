@@ -1,11 +1,11 @@
 /**
- * The flash model a first run fills in beside the primary: another model of
+ * The Background model a first run fills in beside the primary: another model of
  * the primary's provider, else the first listed model.
  *
- * Setup only. Settings leaves an empty flash slot empty, because there it
+ * Setup only. Settings leaves an empty Background slot empty, because there it
  * already runs the primary model.
  */
-export function suggestFlashModel(
+export function suggestBackgroundModel(
   models: Record<string, { models?: string[] }>,
   primaryModel: string,
 ): string | undefined {

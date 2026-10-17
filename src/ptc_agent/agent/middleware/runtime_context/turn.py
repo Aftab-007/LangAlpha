@@ -599,7 +599,7 @@ def _withdrawn(state: Any, stamp: str, now: datetime) -> dict[str, Any] | None:
 # -- the run line -----------------------------------------------------------
 
 #: Agents that start a turn for the user, as the run line names them.
-_FOR_THE_USER = {"chief_of_staff": "the Chief of Staff", "flash": "Flash"}
+_FOR_THE_USER = {"chief_of_staff": "the Chief of Staff"}
 
 
 def started_by(origin: str | None, agent: str | None) -> str | None:

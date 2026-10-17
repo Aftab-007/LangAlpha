@@ -33,7 +33,7 @@ from pydantic import ValidationError
 
 from src.server.database import automation as auto_db
 from src.server.database import automation_executions as exec_db
-from src.server.database.home_workspace import is_flash_row
+from src.server.database.home_workspace import is_home_row
 from src.server.database.workspace import get_workspace
 from src.server.services.automations import lifecycle as handler
 from src.server.services.automations import delivery
@@ -147,7 +147,7 @@ async def _delivery_workspace(user_id: str, workspace_id: Optional[UUID]) -> Opt
         return None
     workspace = await get_workspace(str(workspace_id))
     require_workspace_owner(workspace, user_id=user_id)
-    return None if is_flash_row(workspace) else str(workspace_id)
+    return None if is_home_row(workspace) else str(workspace_id)
 
 
 # Declared before /automations/{automation_id}, which would otherwise capture

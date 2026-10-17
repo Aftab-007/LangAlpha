@@ -96,7 +96,6 @@ class WebhookClient:
                 "run_id": run_id,
                 "failure_reason": failure_reason,
                 "user_id": automation["user_id"],
-                "agent_mode": automation.get("agent_mode"),
                 "workspace_id": str(workspace_id) if workspace_id else None,
                 "title": automation.get("name"),
             }

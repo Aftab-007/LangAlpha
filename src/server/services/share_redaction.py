@@ -53,10 +53,10 @@ _DIRECT_TOOL_PREFIX = "mcp__"
 # travels as its name and id alone. The retired Flash agent's did the same
 # under these names, and threads it ran are still shared, so they stay spelled
 # out here.
-_FLASH_TOOL_NAMES = frozenset(
+_EARLIER_SECRETARY_TOOL_NAMES = frozenset(
     {"manage_workspaces", "ptc_agent", "agent_output", "manage_threads"}
 )
-_SECRETARY_TOOL_NAMES = _FLASH_TOOL_NAMES | frozenset(
+_SECRETARY_TOOL_NAMES = _EARLIER_SECRETARY_TOOL_NAMES | frozenset(
     t.name for t in CHIEF_OF_STAFF_TOOLS
 )
 # The retired user data tools answered with raw rows until they dropped the

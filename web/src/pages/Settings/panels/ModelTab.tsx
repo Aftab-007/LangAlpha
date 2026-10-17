@@ -18,7 +18,7 @@ import { useQuickAccessModels } from '@/hooks/useQuickAccessModels';
 import { modelLabel, modelMatches } from '@/lib/modelLabel';
 import { Trans, useTranslation } from 'react-i18next';
 import { ConnectedAccounts } from './ConnectedAccounts';
-import { FLASH_AUTO, flashDefaultChoice, modelPrefs, readDefaultModelScope, splitPreferenceWrite } from '@/lib/modelPreferences';
+import { BACKGROUND_AUTO, backgroundDefaultChoice, modelPrefs, readDefaultModelScope, splitPreferenceWrite } from '@/lib/modelPreferences';
 import { useModelSlotCopy } from '@/components/model/useModelSlotCopy';
 import type { ModelSlot, DefaultModelScope, PreferencePatch, PreferencesLike } from '@/lib/modelPreferences';
 
@@ -47,7 +47,7 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Model tab: default/flash model selection, starred models, per-model tuning,
+/** Model tab: default/Background model selection, starred models, per-model tuning,
  * account defaults, advanced model routing, search provider/depth, and
  * connected accounts.
  *
@@ -119,19 +119,19 @@ export function ModelTab() {
   // While the question is open each select shows the model the answer would
   // write, and a cancel puts both back on the saved ones.
   const shownDefault = (slot: ModelSlot) => draftDefaults?.[slot]
-    ?? (slot === 'background' ? flashDefaultChoice(mPref) : mPref.preferred_model ?? '');
+    ?? (slot === 'background' ? backgroundDefaultChoice(mPref) : mPref.preferred_model ?? '');
   const setDefault = (slot: ModelSlot) => (model: string) => {
-    if (model === FLASH_AUTO) clearDefault(slot, 'deployment');
+    if (model === BACKGROUND_AUTO) clearDefault(slot, 'deployment');
     else if (model) requestDefault({ [slot]: model });
     else clearDefault(slot);
   };
-  // What each slot runs on Auto. A deployment with no flash model runs flash
+  // What each slot runs on Auto. A deployment with no Background model runs Background
   // on its primary one.
   const deploymentPrimary = hookSystemDefaults?.default_model || undefined;
-  const deploymentFlash = hookSystemDefaults?.flash_model || deploymentPrimary;
+  const deploymentBackground = hookSystemDefaults?.background_model || deploymentPrimary;
   const autoModels = {
     primary: deploymentPrimary && label(deploymentPrimary),
-    flash: deploymentFlash && label(deploymentFlash),
+    background: deploymentBackground && label(deploymentBackground),
   };
   const defaultModelScope = readDefaultModelScope(prefsData);
 
@@ -211,15 +211,15 @@ export function ModelTab() {
         </div>
 
         <div>
-          {/* Default + Flash model selectors. Routing lives in its own group
+          {/* Default + Background model selectors. Routing lives in its own group
               below in Advanced, so the component's own drawer stays closed. */}
           <ModelTierConfig
             models={visibleModels}
             metadata={modelMetadata}
             primaryModel={shownDefault('default')}
             onPrimaryModelChange={setDefault('default')}
-            flashModel={shownDefault('background')}
-            onFlashModelChange={setDefault('background')}
+            backgroundModel={shownDefault('background')}
+            onBackgroundModelChange={setDefault('background')}
             modelAccess={modelAccessMap}
             auto={autoModels}
           />

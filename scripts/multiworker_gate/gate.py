@@ -881,7 +881,7 @@ def cell_21_cos_steer(st: Stack) -> tuple[bool, str]:
 
     The POST is the one ``src/tools/secretary/dispatch.py`` sends: dispatched,
     service-token auth, ``origin`` agent plus the report-back wiring
-    (``origin_flash_thread_id`` / ``origin_dispatch_gen``). The Home thread is
+    (``origin_home_thread_id`` / ``origin_dispatch_gen``). The Home thread is
     a fresh Home thread of the gate's own, so a report-back it may get
     never lands in the user's real Home conversation.
     """
@@ -918,7 +918,7 @@ def cell_21_cos_steer(st: Stack) -> tuple[bool, str]:
                           f"{token}: when you finish, also state the word MANGO."}],
             "workspace_id": ws,
             "origin": {"type": "agent", "id": home_tid, "agent": agent},
-            "origin_flash_thread_id": home_tid,
+            "origin_home_thread_id": home_tid,
             "origin_dispatch_gen": gen,
         }
         hcode, htext = st.api("B", "POST", f"/api/v1/threads/{tid}/messages",

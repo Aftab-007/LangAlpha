@@ -432,53 +432,26 @@ async def test_thread_model_writers_never_touch_updated_at(
 
 
 @pytest.mark.asyncio
-async def test_reassign_thread_models_moves_each_mode_off_its_old_default(
+async def test_reassign_thread_models_moves_threads_off_the_old_default(
     mock_db_connection, mock_cursor
 ):
-    """One statement for both modes: a flash thread is ``msg_type = 'flash'``;
-    anything else (including NULL) runs PTC turns. Only threads on exactly the
-    old name move, and a mode with no move compares against NULL."""
+    """Only threads on exactly the old name move, whatever their type."""
     from src.server.database.conversation.threads_write import (
         reassign_thread_llm_models,
     )
 
     mock_cursor.rowcount = 4
-    moved = await reassign_thread_llm_models(
-        "u-1", {"ptc": ("m-a", "m-b"), "flash": ("m-f", None)}
-    )
+    moved = await reassign_thread_llm_models("u-1", "m-a", "m-b")
 
     assert moved == 4
     mock_cursor.execute.assert_called_once()
     sql, params = mock_cursor.execute.call_args[0]
-    assert params == {
-        "user_id": "u-1",
-        "ptc_old": "m-a",
-        "ptc_new": "m-b",
-        "flash_old": "m-f",
-        "flash_new": None,
-    }
-    assert "WHEN t.msg_type = 'flash'" in sql
-    assert "t.llm_model = %(flash_old)s" in sql
-    assert "t.llm_model = %(ptc_old)s" in sql
+    assert params == {"user_id": "u-1", "old": "m-a", "new": "m-b"}
+    assert "t.llm_model = %(old)s" in sql
+    assert "msg_type" not in sql
     assert "w.user_id = %(user_id)s" in sql
     assert "w.status != 'deleted'" in sql
     assert "updated_at" not in sql
-
-    await reassign_thread_llm_models("u-1", {"ptc": ("m-a", "m-b")})
-    _, params = mock_cursor.execute.call_args[0]
-    assert params["flash_old"] is None and params["flash_new"] is None
-
-
-@pytest.mark.asyncio
-async def test_reassign_thread_models_with_no_moves_touches_nothing(
-    mock_db_connection, mock_cursor
-):
-    from src.server.database.conversation.threads_write import (
-        reassign_thread_llm_models,
-    )
-
-    assert await reassign_thread_llm_models("u-1", {}) == 0
-    mock_cursor.execute.assert_not_called()
 
 
 @pytest.mark.asyncio

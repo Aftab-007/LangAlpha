@@ -213,7 +213,7 @@ class TestClassifyNonRecoverableErrorType:
         assert result == "workflow_error"
 
     def test_unrelated_value_error_defaults_to_workflow_error(self):
-        result = self._classify(ValueError("invalid agent_mode"))
+        result = self._classify(ValueError("invalid reasoning_effort"))
         assert result == "workflow_error"
 
 

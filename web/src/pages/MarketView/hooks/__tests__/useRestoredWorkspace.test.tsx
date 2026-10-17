@@ -14,7 +14,7 @@ import { useRestoredWorkspace } from '../useRestoredWorkspace';
 import { useWorkspace } from '@/hooks/useWorkspace';
 import { savePref } from '../../utils/prefs';
 
-const ws = (id: string, status = 'running'): Workspace => ({ workspace_id: id, name: id, status });
+const ws = (id: string, status = 'running'): Workspace => ({ workspace_id: id, name: id, is_home: false, status });
 // The first page of an account with more workspaces than one page holds.
 const FIRST_PAGE = Array.from({ length: 50 }, (_, i) => ws(`ws-${i}`));
 const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { response: { status } });

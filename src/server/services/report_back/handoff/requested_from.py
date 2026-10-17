@@ -32,6 +32,7 @@ from ptc_agent.agent.middleware.runtime_context.surface import parse_surface
 from ptc_agent.agent.middleware.runtime_context.turn import BUILT_IN_SURFACES
 from src.server.services import automation_delivery
 from src.server.services.automation_delivery import Delivery
+from src.server.services.report_back.handoff.keys import ORIGIN_THREAD_FIELD
 
 #: The report-back record's key for the requests it reports on.
 KEY = "requested_from"
@@ -78,7 +79,7 @@ def recorded(
     entry: dict[str, Any],
     previous: Optional[dict[str, Any]],
     *,
-    flash_thread_id: str,
+    dispatcher_thread_id: str,
     reported: bool,
 ) -> list[dict[str, Any]]:
     """The requests a dispatch records: those still waiting on a report of
@@ -91,7 +92,7 @@ def recorded(
     kept: list[dict[str, Any]] = []
     if (
         previous is not None
-        and previous.get("flash_thread_id") == flash_thread_id
+        and previous.get(ORIGIN_THREAD_FIELD) == dispatcher_thread_id
         and not reported
     ):
         kept = [e for e in entries(previous) if e != entry]

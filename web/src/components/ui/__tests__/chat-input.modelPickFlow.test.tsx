@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   prefsLoaded: true,
   modelsLoading: false,
   validModelNames: new Set<string>(),
-  systemDefaults: { default_model: 'model-default', flash_model: 'model-flash-default' },
+  systemDefaults: { default_model: 'model-default', background_model: 'model-background-default' },
   mutateAsync: vi.fn(),
   mutate: vi.fn(),
 }));
@@ -117,7 +117,7 @@ function expectNoModelPreferenceWrite() {
     for (const [patch] of fn.mock.calls) {
       const model = (patch as { model_preference?: Record<string, unknown> }).model_preference ?? {};
       expect(model).not.toHaveProperty('preferred_model');
-      expect(model).not.toHaveProperty('preferred_flash_model');
+      expect(model).not.toHaveProperty('preferred_background_model');
     }
   }
 }
@@ -132,7 +132,7 @@ describe('ChatInput: the thread owns the model', () => {
     mocks.prefsLoaded = true;
     mocks.modelsLoading = false;
     mocks.validModelNames = new Set();
-    mocks.systemDefaults = { default_model: 'model-default', flash_model: 'model-flash-default' };
+    mocks.systemDefaults = { default_model: 'model-default', background_model: 'model-background-default' };
     mocks.mutateAsync.mockReset();
     mocks.mutate.mockReset();
     localStorage.clear();

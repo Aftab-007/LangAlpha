@@ -14,9 +14,9 @@ from ptc_agent.config.core import (
 from ptc_agent.agent.insight_graph import background_client, insight_tools
 
 
-def _config(flash: str | None = "background-model") -> AgentConfig:
+def _config(background: str | None = "background-model") -> AgentConfig:
     return AgentConfig(
-        llm=LLMConfig(name="main-model", flash=flash),
+        llm=LLMConfig(name="main-model", background=background),
         security=SecurityConfig(),
         logging=LoggingConfig(),
         sandbox=SandboxConfig(daytona=DaytonaConfig(api_key="test-key")),
@@ -78,6 +78,6 @@ def test_no_background_model_runs_the_main_one():
         patch("src.llms.llm.ensure_model_in_manifest"),
         patch("src.llms.create_llm", return_value=built) as create,
     ):
-        assert background_client(_config(flash=None)) is built
+        assert background_client(_config(background=None)) is built
 
     create.assert_called_once_with("main-model", cache_key="thread-1")

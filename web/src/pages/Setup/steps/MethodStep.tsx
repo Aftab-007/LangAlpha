@@ -225,7 +225,7 @@ export default function MethodStep() {
         if (cleanModelPref(modelPref.summarization_model) === null) prefUpdate.summarization_model = null;
         if (cleanModelPref(modelPref.fetch_model) === null) prefUpdate.fetch_model = null;
         if (cleanModelPref(modelPref.preferred_model) === null) prefUpdate.preferred_model = null;
-        if (cleanModelPref(modelPref.preferred_flash_model) === null) prefUpdate.preferred_flash_model = null;
+        if (cleanModelPref(modelPref.preferred_background_model) === null) prefUpdate.preferred_background_model = null;
         const fallback = modelPref.fallback_models ?? [];
         const cleanFallback = fallback.filter(m => !removedModelNames.has(m));
         if (cleanFallback.length !== fallback.length) prefUpdate.fallback_models = cleanFallback.length > 0 ? cleanFallback : null;

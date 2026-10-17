@@ -290,10 +290,10 @@ class TestMultimodalUploadPipeline:
         assert "cannot view" not in reminder.lower()
         assert "AMD_DCF_Analysis.xlsx" in reminder
 
-    # -- Flash pipeline (no sandbox) -----------------------------------------
+    # -- No-sandbox pipeline -------------------------------------------------
 
-    async def test_flash_image_supported_no_upload(self, shared_sandbox):
-        """Flash + Claude + image: native block merged, no file_paths."""
+    async def test_no_sandbox_image_supported_no_upload(self, shared_sandbox):
+        """No sandbox + Claude + image: native block merged, no file_paths."""
         contexts = [_make_image()]
         supported, unsupported, file_only = filter_multimodal_by_capability(
             contexts, ["text", "image"]
@@ -306,8 +306,8 @@ class TestMultimodalUploadPipeline:
         label = next(b for b in blocks if "Attached image" in b.get("text", ""))
         assert "saved to" not in label["text"]
 
-    async def test_flash_image_unsupported(self, shared_sandbox):
-        """Flash + DeepSeek + image: unsupported reminder, no upload."""
+    async def test_no_sandbox_image_unsupported(self, shared_sandbox):
+        """No sandbox + DeepSeek + image: unsupported reminder, no upload."""
         contexts = [_make_image()]
         supported, unsupported, file_only = filter_multimodal_by_capability(
             contexts, ["text"]

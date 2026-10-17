@@ -122,7 +122,7 @@ vi.mock('@/hooks/useAllModels', () => ({
     catalogModelNames: new Set<string>(),
     metadata: {},
     isLoading: false,
-    systemDefaults: { default_model: 'model-default', flash_model: '' },
+    systemDefaults: { default_model: 'model-default', background_model: '' },
   }),
 }));
 
@@ -152,7 +152,7 @@ import MarketView from '../MarketView';
 /** The account defaults: the Default model, and the Background model that a
  *  chat never starts on. */
 function prefs(defaultModel = 'model-p0', background = 'model-d') {
-  return { model_preference: { preferred_model: defaultModel, preferred_flash_model: background } };
+  return { model_preference: { preferred_model: defaultModel, preferred_background_model: background } };
 }
 
 interface ChatState {

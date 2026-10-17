@@ -37,7 +37,7 @@ from src.server.services.thread_control_stream import control_stream_key
 from src.utils.cache.redis_cache import get_cache_client, is_pool_exhaustion
 from src.utils.cache import stream_pool
 
-from src.server.services.report_back.flash.core import watch_wakes
+from src.server.services.report_back.handoff.core import watch_wakes
 from .xread_tuning import (
     XREAD_ERROR_BACKOFF_S,
     XREAD_EXHAUSTION_BACKOFF_S,

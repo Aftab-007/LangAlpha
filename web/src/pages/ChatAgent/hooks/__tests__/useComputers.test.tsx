@@ -36,9 +36,9 @@ const LIST_KEY = queryKeys.workspaces.list({ limit: 20 });
 
 // Four of the live rows: same machine, same sandbox_id, distinct dir_name.
 const WORKSPACES: Workspace[] = [
-  { workspace_id: 'ws-gamma', name: 'Gamma Live Join', status: 'running', computer_id: COMPUTER_ID, dir_name: 'gamma-live-join-514c' },
-  { workspace_id: 'ws-alpha', name: 'Alpha Research', status: 'running', computer_id: COMPUTER_ID, dir_name: 'alpha-research-b8ad' },
-  { workspace_id: 'ws-beta', name: 'Beta Models', status: 'running', computer_id: COMPUTER_ID, dir_name: 'beta-models-2ddd' },
+  { workspace_id: 'ws-gamma', name: 'Gamma Live Join', is_home: false, status: 'running', computer_id: COMPUTER_ID, dir_name: 'gamma-live-join-514c' },
+  { workspace_id: 'ws-alpha', name: 'Alpha Research', is_home: false, status: 'running', computer_id: COMPUTER_ID, dir_name: 'alpha-research-b8ad' },
+  { workspace_id: 'ws-beta', name: 'Beta Models', is_home: false, status: 'running', computer_id: COMPUTER_ID, dir_name: 'beta-models-2ddd' },
   { workspace_id: 'ws-home', name: 'Home', is_home: true, status: 'unbound' },
 ];
 
@@ -130,7 +130,7 @@ describe('useComputerStatusFanout', () => {
   it('falls back to the workspace channel for an in-flight row that names no machine', async () => {
     mockGetComputers.mockResolvedValue({ computers: [], total: 0 });
     mount([
-      { workspace_id: 'ws-legacy', name: 'Legacy', status: 'starting' },
+      { workspace_id: 'ws-legacy', name: 'Legacy', is_home: false, status: 'starting' },
       { workspace_id: 'ws-home', name: 'Home', is_home: true, status: 'unbound' },
     ]);
 
@@ -151,7 +151,7 @@ describe('useComputerStatusFanout', () => {
       await new Promise(() => {});
     });
     const { queryClient } = mount([
-      { workspace_id: 'ws-legacy', name: 'Legacy', status: 'starting' },
+      { workspace_id: 'ws-legacy', name: 'Legacy', is_home: false, status: 'starting' },
     ]);
     queryClient.setQueryData(queryKeys.workspaces.detail('ws-legacy'), {
       workspace_id: 'ws-legacy',
@@ -178,7 +178,7 @@ describe('useComputerStatusFanout', () => {
     // the origin's six HTTP/1.1 connections waiting for news nobody will send.
     mockGetComputers.mockResolvedValue({ computers: [], total: 0 });
     mount([
-      { workspace_id: 'ws-stopped', name: 'Stopped', status: 'stopped' },
+      { workspace_id: 'ws-stopped', name: 'Stopped', is_home: false, status: 'stopped' },
       { workspace_id: 'ws-unknown', name: 'No status' } as Workspace,
     ]);
 
@@ -189,14 +189,14 @@ describe('useComputerStatusFanout', () => {
   it('arms the unbound watch from a cache write, with no list in its props', async () => {
     mockGetComputers.mockResolvedValue({ computers: [], total: 0 });
     const { queryClient } = mount([
-      { workspace_id: 'ws-legacy', name: 'Legacy', status: 'stopped' },
+      { workspace_id: 'ws-legacy', name: 'Legacy', is_home: false, status: 'stopped' },
     ]);
     await waitFor(() => expect(mockGetComputers).toHaveBeenCalled());
     expect(mockStreamWorkspace).not.toHaveBeenCalled();
 
     // What an action does: reflect its own 202 into the cache.
     queryClient.setQueryData(LIST_KEY, {
-      workspaces: [{ workspace_id: 'ws-legacy', name: 'Legacy', status: 'starting' }],
+      workspaces: [{ workspace_id: 'ws-legacy', name: 'Legacy', is_home: false, status: 'starting' }],
       total: 1,
     });
 

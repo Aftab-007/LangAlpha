@@ -279,9 +279,8 @@ class ThreadOrigin(BaseModel):
     id: Optional[str] = Field(default=None, max_length=100)
     # automation: the automation's name at send time, capped as automations cap it
     name: Optional[str] = Field(default=None, max_length=255)
-    # agent: which agent dispatched the thread. 'flash' only on threads the
-    # retired Flash agent dispatched, which is why it is still accepted.
-    agent: Optional[Literal["chief_of_staff", "flash"]] = None
+    # agent: which agent dispatched the thread
+    agent: Optional[Literal["chief_of_staff"]] = None
 
 
 class AnalystReport(BaseModel):
@@ -314,19 +313,12 @@ ReportSource = Annotated[AnalystReport | TaskReport, Field(discriminator="kind")
 class ChatRequest(BaseModel):
     """Request model for streaming chat endpoint."""
 
-    # Agent mode selection
-    agent_mode: Optional[Literal["ptc", "flash"]] = Field(
-        default=None,
-        description="Former way to pick Home: 'flash' with no workspace_id runs "
-        "in the user's Home. Name Home's id in workspace_id instead.",
-    )
-
     # Identity fields (user_id comes from Bearer token JWT sub claim)
     workspace_id: Optional[str] = Field(
         default=None,
         description="Workspace the turn runs in; Home's id (POST /workspaces/home) "
-        "runs it in the user's Home. Required on a new thread, unless "
-        "agent_mode is 'flash'; a follow-up turn defaults to its thread's.",
+        "runs it in the user's Home. Required on a new thread; a follow-up "
+        "turn defaults to its thread's.",
     )
 
     # Messages
@@ -477,22 +469,21 @@ class ChatRequest(BaseModel):
         description="Override query_type for this request. Internal use only.",
     )
 
-    # Internal: PTC thread id whose report-back this flash run consumes. When a
-    # flash report-back run (dispatched after PTC completion) finishes, its
-    # completion hook clears the durable flash_watch entry for this PTC thread.
+    # Internal: PTC thread id whose report-back this run consumes. When a
+    # report-back run (dispatched after PTC completion) finishes, its
+    # completion hook clears the durable watch-set entry for this PTC thread.
     report_back_ptc_thread_id: Optional[str] = Field(
         default=None,
-        description="PTC thread id this flash report-back run consumes. "
+        description="PTC thread id this report-back run consumes. "
         "Internal use only.",
     )
 
-    # Internal: the thread watching this dispatched PTC run, in Home (named
-    # for Flash, which dispatched before the Chief of Staff did). Stamped
+    # Internal: the thread watching this dispatched PTC run, in Home. Stamped
     # into the run's START metadata so finalize can build report-back hook
-    # ordering keys (all completions reporting into one flash thread
+    # ordering keys (all completions reporting into one Chief of Staff thread
     # serialize) without I/O. An ordering hint only — executors re-resolve
     # the authoritative origin from Redis at execution time.
-    origin_flash_thread_id: Optional[str] = Field(
+    origin_home_thread_id: Optional[str] = Field(
         default=None,
         description="Thread watching this dispatched PTC run. "
         "Internal use only.",

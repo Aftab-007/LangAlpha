@@ -242,7 +242,7 @@ def _resumed_by_later_run(branch: list[Any], i: int) -> bool:
     A resume normally marks itself: the waiting node runs again and its
     ``interrupt()`` writes ``__resume__``. When the thread changed agents while
     it waited, the waiting calls are cancelled or run by tools that never ask
-    (``flash_handover``), so nothing writes the mark and the resume shows only
+    (``agent_change``), so nothing writes the mark and the resume shows only
     as execution continuing under another run. Updates between the two (the
     cancellation, a stop's flush) are skipped; an ``input`` checkpoint is a
     new message, its own boundary, not a resume.

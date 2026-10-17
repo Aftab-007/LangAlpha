@@ -206,24 +206,16 @@ def _deep_merge(base: Any, overlay: Any) -> Any:
     return merged
 
 
-def rename_llm_flash(config: Any, source: str | Path) -> Any:
-    """Read ``llm.flash`` as ``llm.background``, the Background model's new name.
+def refuse_renamed_llm_keys(config: Any, source: str | Path) -> None:
+    """Fail on ``llm.flash``, the Background model's name before ``llm.background``.
 
-    Run on each file before the layers merge, so an overlay still on the old
-    spelling overrides a base on the new one rather than landing beside it.
-    A file that names both keeps ``background``.
+    Read as an unknown key it would be ignored, and the Background model would
+    quietly become the main one, so a file still on it stops the load instead.
+    Run on each file, so the error names the one to fix.
     """
     llm = config.get("llm") if isinstance(config, dict) else None
-    if not isinstance(llm, dict) or "flash" not in llm:
-        return config
-    llm = dict(llm)
-    value = llm.pop("flash")
-    if "background" in llm:
-        logger.warning(f"{source}: llm.flash is ignored because llm.background is set; delete llm.flash")
-    else:
-        llm["background"] = value
-        logger.warning(f"{source}: llm.flash is deprecated; rename it to llm.background")
-    return {**config, "llm": llm}
+    if isinstance(llm, dict) and "flash" in llm:
+        raise ValueError(f"llm.flash was renamed to llm.background (in {source})")
 
 
 def load_yaml_config(file_path: str, use_cache: bool = True) -> dict[str, Any]:
@@ -243,9 +235,8 @@ def load_yaml_config(file_path: str, use_cache: bool = True) -> dict[str, Any]:
     if use_cache and cache_key in _config_cache:
         return _config_cache[cache_key]
 
-    # Renamed keys are read before the result is cached, so each file warns
-    # once per process rather than on every read.
-    raw_config = rename_llm_flash(_read_yaml(file_path), file_path)
+    raw_config = _read_yaml(file_path)
+    refuse_renamed_llm_keys(raw_config, file_path)
 
     if app_env:
         base = Path(file_path)
@@ -254,7 +245,8 @@ def load_yaml_config(file_path: str, use_cache: bool = True) -> dict[str, Any]:
             overlay_config = _read_yaml(overlay)
             if not isinstance(overlay_config, dict):
                 raise ValueError(f"{overlay} must be a mapping of config keys")
-            raw_config = _deep_merge(raw_config, rename_llm_flash(overlay_config, overlay))
+            refuse_renamed_llm_keys(overlay_config, overlay)
+            raw_config = _deep_merge(raw_config, overlay_config)
             logger.info(f"Applied {overlay.name} over {file_path}")
         else:
             logger.warning(f"APP_ENV={app_env} but no {overlay.name} beside {file_path}; using the base file only")

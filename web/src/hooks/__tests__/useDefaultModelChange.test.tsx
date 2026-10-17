@@ -11,7 +11,7 @@ import { useDefaultModelChange } from '../useDefaultModelChange';
 
 const mocks = vi.hoisted(() => ({
   preferences: null as unknown,
-  systemDefaults: { default_model: 'deploy-default', flash_model: 'deploy-flash' } as Record<string, string> | null,
+  systemDefaults: { default_model: 'deploy-default', background_model: 'deploy-background' } as Record<string, string> | null,
   put: vi.fn(),
   toast: vi.fn(),
 }));
@@ -54,7 +54,7 @@ async function confirm(result: View, applyTo: 'new_threads' | 'existing_threads'
 describe('useDefaultModelChange', () => {
   beforeEach(() => {
     mocks.preferences = { model_preference: { preferred_model: 'model-old' } };
-    mocks.systemDefaults = { default_model: 'deploy-default', flash_model: 'deploy-flash' };
+    mocks.systemDefaults = { default_model: 'deploy-default', background_model: 'deploy-background' };
     mocks.put.mockReset();
     mocks.put.mockResolvedValue({});
     mocks.toast.mockReset();
@@ -124,7 +124,7 @@ describe('useDefaultModelChange', () => {
     });
   });
 
-  it('writes the flash default from the background slot, measured against the flash it replaces', async () => {
+  it('writes the Background default from the background slot, measured against the one it replaces', async () => {
     mocks.preferences = {
       model_preference: { preferred_model: 'model-old', default_model_scope: 'existing_threads' },
     };
@@ -132,12 +132,12 @@ describe('useDefaultModelChange', () => {
     const { result } = setup();
     act(() => { result.current.request({ background: 'model-quick' }); });
 
-    // Fast falls through to the primary before the deployment's flash model.
+    // Fast falls through to the primary before the deployment's Background model.
     await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith({
       description: 'Default set to label:model-quick. No threads were using label:model-old.',
     }));
     expect(mocks.put).toHaveBeenCalledWith({
-      model_preference: { preferred_flash_model: 'model-quick', flash_follows: null },
+      model_preference: { preferred_background_model: 'model-quick', background_follows: null },
       apply_default_to: 'existing_threads',
     });
   });
@@ -148,7 +148,7 @@ describe('useDefaultModelChange', () => {
 
     expect(result.current.question).toBeNull();
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith({
-      model_preference: { preferred_flash_model: 'model-old', flash_follows: null },
+      model_preference: { preferred_background_model: 'model-old', background_follows: null },
       apply_default_to: 'new_threads',
     }));
   });
@@ -171,7 +171,7 @@ describe('useDefaultModelChange', () => {
       description: 'Defaults set to label:model-new and label:model-quick. 3 threads switched.',
     }));
     expect(mocks.put).toHaveBeenCalledWith({
-      model_preference: { preferred_model: 'model-new', preferred_flash_model: 'model-quick', flash_follows: null },
+      model_preference: { preferred_model: 'model-new', preferred_background_model: 'model-quick', background_follows: null },
       apply_default_to: 'existing_threads',
     });
   });
@@ -187,7 +187,7 @@ describe('useDefaultModelChange', () => {
     await waitFor(() => expect(result.current.question).toBeNull());
     expect(mocks.toast).toHaveBeenCalledWith({ description: 'Default set to label:model-old for new threads.' });
     expect(mocks.put).toHaveBeenCalledWith({
-      model_preference: { preferred_model: 'model-old', preferred_flash_model: 'model-old', flash_follows: null },
+      model_preference: { preferred_model: 'model-old', preferred_background_model: 'model-old', background_follows: null },
       apply_default_to: 'new_threads',
     });
   });
@@ -233,17 +233,17 @@ describe('useDefaultModelChange', () => {
     expect(result.current.draft).toBeNull();
     expect(result.current.question).toBeNull();
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith({
-      model_preference: { preferred_flash_model: null, flash_follows: null },
+      model_preference: { preferred_background_model: null, background_follows: null },
     }));
     expect(mocks.toast).not.toHaveBeenCalled();
   });
 
-  it('writes Auto for flash as following the deployment, without asking', async () => {
+  it('writes Auto for the Background model as following the deployment, without asking', async () => {
     const { result } = setup();
     act(() => { result.current.clear('background', 'deployment'); });
 
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith({
-      model_preference: { preferred_flash_model: null, flash_follows: 'deployment' },
+      model_preference: { preferred_background_model: null, background_follows: 'deployment' },
     }));
     expect(result.current.question).toBeNull();
   });

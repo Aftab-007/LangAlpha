@@ -24,7 +24,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from src.server.database import pool
-from src.server.database.home_workspace import is_flash_row
+from src.server.database.home_workspace import is_home_row
 from src.server.database.pool import get_db_connection
 from src.server.database.session_lock import (
     SharedLockBusy,
@@ -166,7 +166,7 @@ class FolderRow:
     previous_dir_names: tuple[str, ...] = ()
     # Every folder a pass planned to land this row on since it was staged.
     landings: tuple[str, ...] = ()
-    # Home's stored name is "Flash"; its folder is named after Home.
+    # Home's folder is named for Home whatever its row is called.
     home: bool = False
 
     @property
@@ -328,7 +328,7 @@ def _row(record: Mapping[str, Any]) -> FolderRow:
         previous_dir_names=tuple(record.get("previous_dir_names") or ()),
         # Staging writes a fresh list, so any other row's is nothing a pass planned.
         landings=recorded_landings(record.get("landings")) if staged else (),
-        home=is_flash_row(record),
+        home=is_home_row(record),
     )
 
 

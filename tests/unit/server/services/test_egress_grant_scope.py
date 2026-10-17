@@ -1,7 +1,7 @@
 """Which resolved servers earn an egress grant, and of which kind.
 
-One rule, read by the sandbox bind, the Flash bind and the config mutations
-that retire a grant before replying. A server that earns a grant on one path
+One rule, read by the sandbox bind and the config mutations that retire a
+grant before replying. A server that earns a grant on one path
 and not another is either a tool the model cannot call or an authorization
 overhang, so the rule is pinned here rather than at each caller.
 """

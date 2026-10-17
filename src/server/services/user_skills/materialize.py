@@ -93,7 +93,7 @@ class UserSkillBundle:
     account_disabled_builtins: frozenset[str]
     command_overrides: Mapping[str, str] = field(default_factory=dict)
     # Workspace-tier bodies live in their own view: the host still needs them
-    # to answer slash commands and Flash inline delivery, but they must never
+    # to answer slash commands and the agent's skill registry, but they must never
     # enter ``dir``, which is what the sandbox delivery path uploads.
     workspace_dir: str | None = None
     # Names only this workspace switched off. That shared directory serves
@@ -330,8 +330,8 @@ async def load_user_skill_bundle(
     omits, so a narrowed view takes the skill from the sibling workspaces
     too. Workspace-tier rows stay out of it because the reconciler is the
     sole writer of their sandbox dirs. ``workspace_dir`` carries the
-    workspace tier for host-side reads (slash commands, Flash inline
-    delivery), which need every effective skill's body regardless of who
+    workspace tier for host-side reads (slash commands, the agent's skill
+    registry), which need every effective skill's body regardless of who
     delivers it. ``skills`` spans the effective union, where shadowing and
     the workspace's disables do apply.
     """

@@ -1,13 +1,13 @@
 """Shared machinery for synthetic notification turns.
 
 Two dispatch relationships post system-authored turns into a watching
-thread when background work finishes: flash←PTC report-backs and
+thread when background work finishes: Chief of Staff←PTC report-backs and
 PTC←background-subagent task report-backs. Both need the same transport
 discipline: a park while the receiving thread is busy, an admission-aware
 POST defer loop bounded by the outbox lease, and a terminal wait that holds
 the job (and thus the per-thread ordering chain) open until the
 notification turn settles. The pending-registries deliberately stay
-separate (Redis reserve machinery for flash, open outbox rows for tasks);
+separate (Redis reserve machinery for hand-offs, open outbox rows for tasks);
 only this turn machinery is shared.
 """
 

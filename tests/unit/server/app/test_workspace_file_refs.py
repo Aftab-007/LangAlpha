@@ -289,7 +289,7 @@ def _held(sandbox, workspace):
 @patch(f"{CRUD}.db_get_workspace", new_callable=AsyncMock)
 class TestWorkspaceRoute:
     async def test_home_off_a_computer_has_nothing_to_search(self, mock_ws, _wd):
-        mock_ws.return_value = _workspace("flash")
+        mock_ws.return_value = _workspace("unbound")
         result = await resolve_workspace_file("ws-1", "user-1", _body("report.md"))
         assert result == {"status": "unavailable", "reason": "home_not_on_computer", "matches": []}
 
@@ -453,7 +453,7 @@ async def test_a_shared_thread_resolves_against_the_listing_it_browses():
 @pytest.mark.asyncio
 async def test_a_shared_thread_in_home_off_a_computer_has_nothing_to_search():
     with (
-        patch(f"{SHARE}.resolve_shared_files", new_callable=AsyncMock, return_value=_share_target("flash")),
+        patch(f"{SHARE}.resolve_shared_files", new_callable=AsyncMock, return_value=_share_target("unbound")),
         patch(f"{SHARE}._visible_listing", new_callable=AsyncMock) as list_files,
     ):
         result = await resolve_shared_file("tok", _body("report.md"))

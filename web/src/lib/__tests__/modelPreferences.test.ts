@@ -12,8 +12,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   MODEL_PREF_KEYS,
-  FLASH_AUTO,
-  flashDefaultChoice,
+  BACKGROUND_AUTO,
+  backgroundDefaultChoice,
   slotDefaultModel,
   modelPrefs,
   modelProfile,
@@ -136,26 +136,26 @@ describe('splitPreferenceWrite', () => {
 });
 
 describe('slotDefaultModel', () => {
-  const deployment = { default_model: 'deploy-default', flash_model: 'deploy-flash' };
+  const deployment = { default_model: 'deploy-default', background_model: 'deploy-background' };
 
   it("resolves PTC to the user's primary, then the deployment's", () => {
     expect(slotDefaultModel({ preferred_model: 'mine' }, deployment, 'default')).toBe('mine');
     expect(slotDefaultModel({}, deployment, 'default')).toBe('deploy-default');
   });
 
-  it("resolves fast through the user's flash and primary before the deployment's", () => {
-    expect(slotDefaultModel({ preferred_flash_model: 'flash', preferred_model: 'mine' }, deployment, 'background')).toBe('flash');
+  it("resolves fast through the user's Background model and primary before the deployment's", () => {
+    expect(slotDefaultModel({ preferred_background_model: 'bg-pick', preferred_model: 'mine' }, deployment, 'background')).toBe('bg-pick');
     expect(slotDefaultModel({ preferred_model: 'mine' }, deployment, 'background')).toBe('mine');
-    expect(slotDefaultModel({}, deployment, 'background')).toBe('deploy-flash');
-    // A deployment naming no flash model reports it as "".
-    expect(slotDefaultModel({}, { default_model: 'deploy-default', flash_model: '' }, 'background')).toBe('deploy-default');
+    expect(slotDefaultModel({}, deployment, 'background')).toBe('deploy-background');
+    // A deployment naming no Background model reports it as "".
+    expect(slotDefaultModel({}, { default_model: 'deploy-default', background_model: '' }, 'background')).toBe('deploy-default');
   });
 
-  it('resolves fast past the primary when flash is on Auto', () => {
-    expect(slotDefaultModel({ preferred_model: 'mine', flash_follows: 'deployment' }, deployment, 'background')).toBe('deploy-flash');
+  it('resolves fast past the primary when Background is on Auto', () => {
+    expect(slotDefaultModel({ preferred_model: 'mine', background_follows: 'deployment' }, deployment, 'background')).toBe('deploy-background');
     expect(slotDefaultModel(
-      { preferred_flash_model: 'flash', preferred_model: 'mine', flash_follows: 'deployment' }, deployment, 'background',
-    )).toBe('flash');
+      { preferred_background_model: 'bg-pick', preferred_model: 'mine', background_follows: 'deployment' }, deployment, 'background',
+    )).toBe('bg-pick');
   });
 
   it('is null with nothing saved and no deployment defaults loaded', () => {
@@ -163,13 +163,13 @@ describe('slotDefaultModel', () => {
   });
 });
 
-describe('flashDefaultChoice', () => {
-  it('shows a saved flash model, else Auto beside a saved primary, else the primary', () => {
-    expect(flashDefaultChoice({ preferred_flash_model: 'flash', flash_follows: 'deployment' })).toBe('flash');
-    expect(flashDefaultChoice({ preferred_model: 'mine', flash_follows: 'deployment' })).toBe(FLASH_AUTO);
-    expect(flashDefaultChoice({ preferred_model: 'mine' })).toBe('');
+describe('backgroundDefaultChoice', () => {
+  it('shows a saved Background model, else Auto beside a saved primary, else the primary', () => {
+    expect(backgroundDefaultChoice({ preferred_background_model: 'bg-pick', background_follows: 'deployment' })).toBe('bg-pick');
+    expect(backgroundDefaultChoice({ preferred_model: 'mine', background_follows: 'deployment' })).toBe(BACKGROUND_AUTO);
+    expect(backgroundDefaultChoice({ preferred_model: 'mine' })).toBe('');
     // With no primary saved, Auto and following the primary run one model.
-    expect(flashDefaultChoice({ flash_follows: 'deployment' })).toBe('');
+    expect(backgroundDefaultChoice({ background_follows: 'deployment' })).toBe('');
   });
 });
 

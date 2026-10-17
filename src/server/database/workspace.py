@@ -3,7 +3,7 @@
 Rolling-deploy readers and platform capacity accounting still read sandbox_id,
 resource_tier, is_always_on, platform_secret_version, and artifacts here.
 Follow database/computer.py's atomic-write and lock-order rules; NULL computer_id
-rows (flash and shared-sandbox backfill losers) retain single-table behavior.
+rows (an unbound Home and shared-sandbox backfill losers) retain single-table behavior.
 """
 
 import logging
@@ -24,7 +24,7 @@ from src.server.database.home_fold import fold_former_homes
 from src.server.database.livefs_links import drop_workspace_links
 from src.server.database.mcp_servers import start_new_workspace_selection
 from src.server.database.pool import get_db_connection
-from src.server.database.home_workspace import get_flash_workspace_id
+from src.server.database.home_workspace import UNBOUND, get_home_workspace_id
 from src.server.database.runs.lifecycle import workspace_has_live_runs
 from src.server.database.sql_fences import (
     EXCLUDE_HOME,
@@ -43,6 +43,7 @@ from src.server.database.workspace_folders import (
     takes_name_folders,
 )
 from src.server.database.workspace_names import (
+    HOME_FOLDER,
     WorkspaceNameInvalid,
     WorkspaceNameTaken,
     candidate_dir_name,
@@ -130,19 +131,19 @@ async def _ws_transaction(conn=None):
             yield cur
 
 
-class FlashWorkspaceTaken(RuntimeError):
-    """The user's flash id names a row another account owns.
+class HomeWorkspaceTaken(RuntimeError):
+    """The user's Home id names a row another account owns.
 
-    An account merge moves an account's rows onto the account it joins, flash
-    row included, so a merged id that signs in again finds its flash id held by
-    the account it joined.
+    An account merge moves an account's rows onto the account it joins, Home
+    included, so a merged id that signs in again finds its Home id held by the
+    account it joined.
     """
 
     def __init__(self, workspace_id: str, user_id: str) -> None:
-        super().__init__(f"flash workspace {workspace_id} for user {user_id} is owned by another user")
+        super().__init__(f"Home {workspace_id} for user {user_id} is owned by another user")
 
 
-async def get_or_create_flash_workspace(user_id: str, conn=None) -> Dict[str, Any]:
+async def get_or_create_home_workspace(user_id: str, conn=None) -> Dict[str, Any]:
     """Deterministic identity and ON CONFLICT make concurrent creation idempotent.
 
     Every turn bound for Home without a read of the row lands here, and so
@@ -151,14 +152,11 @@ async def get_or_create_flash_workspace(user_id: str, conn=None) -> Dict[str, An
     lock, so the workspace commits with the MCP selection it starts with.
     Both statements match the owner as well as the id: the row is the one a
     turn runs in and Home binds, so another account's must never come back.
-    An account merge can leave a former flash row beside it, which every
+    An account merge can leave a former Home beside it, which every
     resolve tries to fold in; a row with a run in progress, or a fold that
     fails, waits for a later resolve.
     """
-    from psycopg.types.json import Json
-
-    workspace_id = get_flash_workspace_id(user_id)
-    config_json = Json({"flash_mode": True})
+    workspace_id = get_home_workspace_id(user_id)
 
     try:
         async with _ws_cursor(conn) as cur:
@@ -176,34 +174,27 @@ async def get_or_create_flash_workspace(user_id: str, conn=None) -> Dict[str, An
                 await lock_user_writes(cur, user_id)
                 await cur.execute(
                     f"""
-                    INSERT INTO workspaces (workspace_id, user_id, name, description, config, status, is_pinned)
-                    VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                    INSERT INTO workspaces (workspace_id, user_id, name, status, is_pinned)
+                    VALUES (%s, %s, %s, %s, TRUE)
                     ON CONFLICT (workspace_id) DO UPDATE SET updated_at = NOW(), is_pinned = TRUE
                     WHERE workspaces.user_id = EXCLUDED.user_id
                     RETURNING {_WS_COLS}, (xmax = 0) AS inserted
                     """,
-                    (
-                        workspace_id,
-                        user_id,
-                        "Flash",
-                        "Flash mode conversations",
-                        config_json,
-                        "flash",
-                    ),
+                    (workspace_id, user_id, HOME_FOLDER, UNBOUND),
                 )
                 row = await cur.fetchone()
                 if row is None:
-                    raise FlashWorkspaceTaken(workspace_id, user_id)
+                    raise HomeWorkspaceTaken(workspace_id, user_id)
                 result = dict(row)
                 # False when a concurrent first turn inserted it while this
                 # one waited on the lock; that one started the selection.
                 if result.pop("inserted"):
                     await start_new_workspace_selection(cur, user_id, workspace_id)
 
-        logger.info(f"Upserted flash workspace: {workspace_id} for user: {user_id}")
+        logger.info(f"Upserted Home: {workspace_id} for user: {user_id}")
 
     except Exception as e:
-        logger.error(f"Error upserting flash workspace for user {user_id}: {e}")
+        logger.error(f"Error upserting Home for user {user_id}: {e}")
         raise
 
     try:
@@ -225,9 +216,9 @@ async def create_workspace(
 ) -> Dict[str, Any]:
     from psycopg.types.json import Json
 
-    # Flash rows sit outside the name index: they have no folder to collide.
+    # An unbound row sits outside the name index: it has no folder to collide.
     name_key = None
-    if status != "flash":
+    if status != UNBOUND:
         name = checked_workspace_name(name)
         name_key = workspace_name_key(name)
     try:
@@ -236,7 +227,7 @@ async def create_workspace(
         async with _ws_transaction(conn) as cur:
             await lock_user_writes(cur, user_id)
             if workspace_id:
-                # Flash mode may supply thread_id as workspace_id.
+                # A caller may pick the id.
                 await cur.execute(
                     f"""
                     INSERT INTO workspaces (workspace_id, user_id, name, name_key, description, config, status)
@@ -370,10 +361,10 @@ async def find_workspace_by_name_key(user_id: str, key: str) -> Optional[Dict[st
     """
     async with _ws_cursor() as cur:
         await cur.execute(
-            """
+            f"""
             SELECT workspace_id, name FROM workspaces
             WHERE user_id = %s AND name_key = %s
-              AND status NOT IN ('deleted', 'flash')
+              AND {FENCE_LIVE_WORKSPACE}
             """,
             (user_id, key),
         )
@@ -392,10 +383,10 @@ async def get_workspace_name_keys(user_id: str) -> set[str]:
     """Every name key this user's live workspaces hold, for picking a free name."""
     async with _ws_cursor() as cur:
         await cur.execute(
-            """
+            f"""
             SELECT name_key FROM workspaces
             WHERE user_id = %s AND name_key IS NOT NULL
-              AND status NOT IN ('deleted', 'flash')
+              AND {FENCE_LIVE_WORKSPACE}
             """,
             (user_id,),
         )
@@ -429,8 +420,8 @@ async def bind_workspace_to_computer(
     is what the edge resolve passes; the CAS is what stops two concurrent binds
     from each creating a machine for it. The shadow columns come from the
     machine, as create_workspace_on_computer's insert does: a row left naming
-    the old machine's lifecycle is what wedges the idle reaper. A flash row
-    passes the fence because this is how it becomes the user's Home; the
+    the old machine's lifecycle is what wedges the idle reaper. An unbound
+    Home passes the fence because this is how it joins a computer; the
     callers decide which rows may be bound.
     """
     from psycopg.errors import UniqueViolation
@@ -879,7 +870,7 @@ async def adopt_computer_sandbox_into_workspaces(
         return []
     async with _ws_cursor() as cur:
         await cur.execute(
-            """
+            f"""
             WITH comp AS (
                 SELECT computer_id, provider_ref, status, platform_secret_version
                 FROM computers
@@ -895,7 +886,7 @@ async def adopt_computer_sandbox_into_workspaces(
                 updated_at = NOW()
             FROM comp
             WHERE w.computer_id = comp.computer_id
-              AND w.status NOT IN ('deleted', 'flash')
+              AND w.{FENCE_LIVE_WORKSPACE}
               AND (w.sandbox_id IS NULL OR w.sandbox_id = comp.provider_ref)
               AND (
                   w.sandbox_id IS DISTINCT FROM comp.provider_ref
@@ -947,7 +938,7 @@ async def get_workspace_names(
 ) -> Dict[str, str]:
     """Name by canonical id of the user's live workspaces, Home aside, in
     name order: all of them, or those of ``workspace_ids``."""
-    params: dict[str, Any] = {"user_id": user_id, "home_id": get_flash_workspace_id(user_id)}
+    params: dict[str, Any] = {"user_id": user_id, "home_id": get_home_workspace_id(user_id)}
     only = ""
     if workspace_ids is not None:
         ids = sorted({n for w in workspace_ids if (n := normalize_uuid(w))})
@@ -976,13 +967,13 @@ async def get_workspaces_for_user(
     offset: int = 0,
     include_deleted: bool = False,
     sort_by: str = "custom",
-    include_flash: bool = False,
+    include_home: bool = False,
     conn=None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     try:
         status_filter = "" if include_deleted else "AND status != 'deleted'"
-        flash_filter = "" if include_flash else f"AND {EXCLUDE_HOME}"
-        params = {"user_id": user_id, "home_id": get_flash_workspace_id(user_id)}
+        home_filter = "" if include_home else f"AND {EXCLUDE_HOME}"
+        params = {"user_id": user_id, "home_id": get_home_workspace_id(user_id)}
 
         # Every order ends on workspace_id, appended below: rows that tie would
         # otherwise come back in any order, which shifts an offset page and
@@ -1001,7 +992,7 @@ async def get_workspaces_for_user(
                 f"""
                 SELECT COUNT(*) as total
                 FROM workspaces
-                WHERE user_id = %(user_id)s {status_filter} {flash_filter}
+                WHERE user_id = %(user_id)s {status_filter} {home_filter}
                 """,
                 params,
             )
@@ -1012,7 +1003,7 @@ async def get_workspaces_for_user(
                 f"""
                 SELECT {_WS_COLS}
                 FROM workspaces
-                WHERE user_id = %(user_id)s {status_filter} {flash_filter}
+                WHERE user_id = %(user_id)s {status_filter} {home_filter}
                 ORDER BY {order_clause}, workspace_id DESC
                 LIMIT %(limit)s OFFSET %(offset)s
                 """,

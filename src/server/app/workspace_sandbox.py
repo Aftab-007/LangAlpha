@@ -877,8 +877,8 @@ async def owner_preview_url(
 
     The one acquisition path for an authenticated caller: the preview panel
     and the ``/a/`` page both come through here, so a stopped sandbox is
-    started for the owner and for nobody else. Ownership, the flash refusal
-    and every failure status live here rather than in each route.
+    started for the owner and for nobody else. Ownership, the unbound-Home
+    refusal and every failure status live here rather than in each route.
     """
     _session, sandbox = await _get_sandbox(workspace_id, user_id)
     try:

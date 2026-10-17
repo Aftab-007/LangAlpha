@@ -89,11 +89,10 @@ async def test_senders_are_labelled_in_the_order_sent_and_only_the_users_are_cou
     inbox = _inbox(
         _steer("s1", "do x", "chief_of_staff", origin={
             "type": "agent", "agent": "chief_of_staff",
-            "origin_flash_thread_id": "home-1", "origin_dispatch_gen": "g1",
+            "origin_home_thread_id": "home-1", "origin_dispatch_gen": "g1",
         }),
         _steer("s2", "stop that"),
-        _steer("s3", "and y", "flash"),
-        _steer("s4", "then z", "chief_of_staff"),
+        _steer("s3", "then z", "chief_of_staff"),
     )
 
     (msg,) = (await _run(_config(), inbox))["messages"]
@@ -102,8 +101,6 @@ async def test_senders_are_labelled_in_the_order_sent_and_only_the_users_are_cou
         "The Chief of Staff sent a new message on the user's behalf"
         " while you were working:\ndo x"
         "\n\nThe user sent a new message while you were working:\nstop that"
-        "\n\nFlash sent a new message on the user's behalf"
-        " while you were working:\nand y"
         "\n\nThe Chief of Staff sent a new message on the user's behalf"
         " while you were working:\nthen z"
         "\n\nAddress the messages above as you continue this turn."
@@ -113,10 +110,10 @@ async def test_senders_are_labelled_in_the_order_sent_and_only_the_users_are_cou
     # never queued an agent's.
     assert delivered["count"] == 1
     assert [m["content"] for m in delivered["messages"]] == [
-        "do x", "stop that", "and y", "then z",
+        "do x", "stop that", "then z",
     ]
     assert [m.get("sender") for m in delivered["messages"]] == [
-        "chief_of_staff", None, "flash", "chief_of_staff",
+        "chief_of_staff", None, "chief_of_staff",
     ]
     # The reader sees who sent it, never the Home thread it came from.
     assert delivered["messages"][0]["origin"] == {

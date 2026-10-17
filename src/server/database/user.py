@@ -368,6 +368,15 @@ async def upsert_user(
 
 _USER_PREFS_TTL = 86400  # 24h — freshness via explicit invalidation
 
+# Cached-shape version, as for the profile below. A migration that rewrites
+# these rows in raw SQL, as 072 renamed the Background slot's keys, passes no
+# application write path, so it bumps this to retire every row cached before.
+_USER_PREFS_SHAPE = 2
+
+
+def _user_prefs_cache_key(user_id: str) -> str:
+    return f"user_prefs:v{_USER_PREFS_SHAPE}:{user_id}"
+
 
 async def get_user_preferences(user_id: str) -> Optional[Dict[str, Any]]:
     """
@@ -386,7 +395,7 @@ async def get_user_preferences(user_id: str) -> Optional[Dict[str, Any]]:
     import json as _json
     from src.utils.cache.redis_cache import get_cache_client
 
-    cache_key = f"user_prefs:{user_id}"
+    cache_key = _user_prefs_cache_key(user_id)
     cache = get_cache_client()
     if cache.enabled and cache.client:
         try:
@@ -431,7 +440,7 @@ async def invalidate_user_prefs_cache(user_id: str) -> None:
     cache = get_cache_client()
     if cache.enabled and cache.client:
         try:
-            await cache.client.delete(f"user_prefs:{user_id}")
+            await cache.client.delete(_user_prefs_cache_key(user_id))
         except Exception:
             pass
 

@@ -13,8 +13,8 @@ import logging
 import random
 import time
 
-from src.server.services.report_back.flash.keys import thread_wake_key
-from src.server.services.report_back.flash.wake_listener import (
+from src.server.services.report_back.handoff.keys import thread_wake_key
+from src.server.services.report_back.handoff.wake_listener import (
     ThreadWakeListener,
     WakeSubscription,
 )
@@ -93,8 +93,8 @@ async def publish_wake(
         )
 
 
-async def watch_wakes(cache, flash_thread_id: str, *, snapshot_reader):
-    """Yield SSE frames for a flash thread's report-back wake subscription.
+async def watch_wakes(cache, thread_id: str, *, snapshot_reader):
+    """Yield SSE frames for a thread's report-back wake subscription.
 
     Owns the ``WAKE_EVENT`` frame format, keepalives, and the max-duration
     auto-close so the ``/watch`` route stays a thin auth wrapper. Forwards
@@ -113,7 +113,7 @@ async def watch_wakes(cache, flash_thread_id: str, *, snapshot_reader):
         return
 
     listener = ThreadWakeListener.get_instance()
-    sub = listener.attach(flash_thread_id)
+    sub = listener.attach(thread_id)
     if sub is None:
         yield 'event: error\ndata: {"error": "watch unavailable"}\n\n'
         return
@@ -128,7 +128,7 @@ async def watch_wakes(cache, flash_thread_id: str, *, snapshot_reader):
         if not await listener.wait_live(_LIVE_TIMEOUT_S):
             logger.warning(
                 f"[RB_WAKE] Wake listener not live; closing watch for thread "
-                f"{flash_thread_id} (client will resubscribe)"
+                f"{thread_id} (client will resubscribe)"
             )
             return
         # Attach happened before this point without awaiting, so a wake
@@ -151,10 +151,10 @@ async def watch_wakes(cache, flash_thread_id: str, *, snapshot_reader):
             # we snapshot again — a wasted read, never a missed one.
             sub.needs_resync = False
             try:
-                snapshot = await snapshot_reader(flash_thread_id)
+                snapshot = await snapshot_reader(thread_id)
             except Exception:
                 logger.warning(
-                    f"[RB_WAKE] Snapshot read failed for thread {flash_thread_id}",
+                    f"[RB_WAKE] Snapshot read failed for thread {thread_id}",
                     exc_info=True,
                 )
                 if resync:
@@ -178,7 +178,7 @@ async def watch_wakes(cache, flash_thread_id: str, *, snapshot_reader):
                     if dark > _DEAD_LISTENER_S:
                         logger.error(
                             f"[RB_WAKE] Listener dark for {dark:.0f}s; closing "
-                            f"watch for thread {flash_thread_id}"
+                            f"watch for thread {thread_id}"
                         )
                         return
                     yield ': ping\n\n'

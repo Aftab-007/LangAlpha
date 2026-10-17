@@ -34,11 +34,11 @@ class TestApplyFetchOverride:
             config.subsidiary_llm_clients["fetch"]
         )
 
-    def test_blank_fetch_defaults_to_flash(self):
+    def test_blank_fetch_defaults_to_background(self):
         from src.server.services.llm.config import apply_fetch_override
 
         config = MagicMock()
-        config.llm = LLMConfig(name="main-model", fetch=None, flash="gpt-4o-mini")
+        config.llm = LLMConfig(name="main-model", fetch=None, background="gpt-4o-mini")
         config.subsidiary_llm_clients = {}
 
         with (
@@ -50,11 +50,11 @@ class TestApplyFetchOverride:
         mock_model_var.set.assert_called_once_with("gpt-4o-mini")
         mock_client_var.set.assert_not_called()
 
-    def test_skips_when_no_fetch_or_flash(self):
+    def test_skips_when_no_fetch_or_background(self):
         from src.server.services.llm.config import apply_fetch_override
 
         config = MagicMock()
-        config.llm = LLMConfig(name="main-model", fetch=None, flash=None)
+        config.llm = LLMConfig(name="main-model", fetch=None, background=None)
         config.subsidiary_llm_clients = {}
 
         with (
@@ -143,14 +143,14 @@ class TestApplyFetchOverrideContextVars:
         assert snap["model"] == "claude-haiku-4-5"
         assert snap["client"] is None  # default — fetch.py takes the platform path
 
-    def test_blank_fetch_forwards_flash_role_client(self):
-        """A blank fetch means the flash model, and role_registry resolves a
+    def test_blank_fetch_forwards_background_role_client(self):
+        """A blank fetch means the background model, and role_registry resolves a
         client for it. That client must reach web_fetch, or an OAuth user's
         extraction goes out on a server key it does not have.
         """
         fake_client = MagicMock(name="oauth-fetch-client")
         config = MagicMock()
-        config.llm = LLMConfig(name="main-model", fetch=None, flash="claude-sonnet-4-6-oauth")
+        config.llm = LLMConfig(name="main-model", fetch=None, background="claude-sonnet-4-6-oauth")
         config.subsidiary_llm_clients = {"fetch": fake_client}
 
         snap = self._run_and_capture(config)
@@ -158,9 +158,9 @@ class TestApplyFetchOverrideContextVars:
         assert snap["model"] == "claude-sonnet-4-6-oauth"
         assert snap["client"] is fake_client
 
-    def test_no_fetch_or_flash_leaves_both_vars_unset(self):
+    def test_no_fetch_or_background_leaves_both_vars_unset(self):
         config = MagicMock()
-        config.llm = LLMConfig(name="main-model", fetch=None, flash=None)
+        config.llm = LLMConfig(name="main-model", fetch=None, background=None)
         config.subsidiary_llm_clients = {}
 
         snap = self._run_and_capture(config)

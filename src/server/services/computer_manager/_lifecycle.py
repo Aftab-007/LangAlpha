@@ -33,6 +33,7 @@ from src.server.database.computer import (
     update_computer_activity,
     update_computer_status,
 )
+from src.server.database.home_workspace import is_unbound
 from src.server.database.workspace import (
     adopt_computer_sandbox_into_workspaces,
     computer_has_config_hash,
@@ -305,10 +306,10 @@ class SessionLifecycleMixin:
                     # every sibling project on the machine meanwhile.
                     pending_stop_wait = True
 
-                elif status == "flash":
+                elif is_unbound(workspace):
                     raise ValueError(
-                        f"Workspace {workspace_id} is a flash workspace with no "
-                        "sandbox; it reaches one only as Home."
+                        f"Workspace {workspace_id} is a Home on no computer "
+                        "yet; it reaches one only as Home."
                     )
 
                 else:

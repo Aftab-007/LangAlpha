@@ -58,7 +58,6 @@ def extract_state_values(checkpoint_tuple) -> dict:
 async def read_thread_runtime_status(
     thread_id: str,
     is_shared: Optional[bool] = None,
-    msg_type: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> dict:
     """
@@ -69,9 +68,6 @@ async def read_thread_runtime_status(
         is_shared: Pre-resolved share flag. When provided (e.g. the ``/status``
             route already read it while authorizing), skips a redundant thread
             lookup; when ``None``, this fetches it.
-        msg_type: Pre-resolved thread kind; picks the report-back read model
-            (``ptc`` → task outbox, else flash watch set). Fetched with the
-            thread row when ``None`` and the row is read anyway.
         user_id: Pre-resolved thread owner, which scopes the labels of the
             threads a report-back is owed by. Looked up with the report-back
             read when ``None``.
@@ -146,20 +142,18 @@ async def read_thread_runtime_status(
 
                 thread_row = await get_thread_by_id(thread_id)
                 is_shared = bool(thread_row.get("is_shared")) if thread_row else False
-                if msg_type is None and thread_row:
-                    msg_type = thread_row.get("msg_type")
             except Exception as e:
                 logger.debug(f"Could not fetch share status for {thread_id}: {e}")
                 is_shared = False
 
         # Report-back pendingness AND the subagent ids for per-task reattach,
-        # from the thread kind's own read model (task slice = outbox row +
-        # ledger-backed active tasks; flash = Redis watch set, no subagents).
+        # from both read models (task slice = outbox row + ledger-backed
+        # active tasks; analyst hand-offs = Redis watch set).
         # active_tasks is NOT gated on an in_progress run: tail-mode
         # subagents outlive the run's terminal row.
-        from src.server.services.report_back.flash.status import read_report_back_slice
+        from src.server.services.report_back.handoff.status import read_report_back_slice
 
-        rb = await read_report_back_slice(thread_id, msg_type, user_id)
+        rb = await read_report_back_slice(thread_id, user_id)
         active_tasks = rb.get("active_tasks", [])
         pending_report_back = rb["pending_report_back"]
         report_back_run_id = rb["report_back_run_id"]

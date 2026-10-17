@@ -53,7 +53,6 @@ def _make_automation(
             "retrigger": retrigger,
         },
         "status": "active",
-        "agent_mode": "flash",
         "instruction": "Analyze the price movement",
         "workspace_id": None,
         "cron_expression": None,

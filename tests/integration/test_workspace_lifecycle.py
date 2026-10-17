@@ -294,7 +294,7 @@ class TestListWorkspaces:
         assert total == 5
         assert len(workspaces) == 2
 
-    async def test_excludes_flash_workspaces(
+    async def test_excludes_an_unbound_home(
         self, seed_user, patched_get_db_connection
     ):
         from src.server.database.workspace import (
@@ -309,8 +309,8 @@ class TestListWorkspaces:
         )
         await create_workspace(
             user_id=seed_user["user_id"],
-            name="Flash",
-            status="flash",
+            name="Home",
+            status="unbound",
         )
 
         workspaces, total = await get_workspaces_for_user(seed_user["user_id"])
@@ -335,7 +335,7 @@ class TestWorkspaceNames:
         await create_user(user_id="someone-else", email="else@example.com")
         beta = await create_workspace(user_id=owner, name="Beta", status="running")
         alpha = await create_workspace(user_id=owner, name="Alpha", status="stopped")
-        await create_workspace(user_id=owner, name="Flash", status="flash")
+        await create_workspace(user_id=owner, name="Home", status="unbound")
         gone = await create_workspace(user_id=owner, name="Gone", status="running")
         await delete_workspace(str(gone["workspace_id"]))
         await create_workspace(user_id="someone-else", name="Theirs", status="running")
@@ -350,16 +350,16 @@ class TestWorkspaceNames:
     async def test_home_bound_to_a_computer_stays_out(
         self, seed_user, patched_get_db_connection, test_db_pool
     ):
-        """Bound as Home, the flash row takes its computer's status, so only its
-        id still marks it."""
+        """Bound, Home takes its computer's status, so only its id still
+        marks it."""
         from src.server.database.workspace import (
             create_workspace,
-            get_or_create_flash_workspace,
+            get_or_create_home_workspace,
             get_workspace_names,
         )
 
         owner = seed_user["user_id"]
-        home = str((await get_or_create_flash_workspace(owner))["workspace_id"])
+        home = str((await get_or_create_home_workspace(owner))["workspace_id"])
         async with test_db_pool.connection() as conn:
             await conn.execute(
                 "UPDATE workspaces SET status = 'running' WHERE workspace_id = %s",

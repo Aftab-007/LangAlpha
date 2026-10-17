@@ -35,7 +35,7 @@ MAX_ATTEMPTS = 5
 MAX_CONCURRENT_JOBS = 10
 # task_report_back jobs hold their slot through an entire PTC notification
 # turn (sandbox bringup + a full agent run — tens of minutes); cap their
-# share so a burst of tail completions can't starve flash report-backs and
+# share so a burst of tail completions can't starve hand-off report-backs and
 # cheap wakes. Excluded types stay unclaimed but still head their chains.
 TASK_RB_INFLIGHT_QUOTA = 3
 # How long shutdown waits for the loop, and then for its in-flight jobs.
@@ -81,9 +81,6 @@ _CLOSE_FOLLOWUPS: Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]] = {}
 # Best-effort followups for a row its type settles itself at the attempts
 # ceiling rather than parking it dead (a steer, ``outbox._exhaust_steers``).
 _EXHAUST_FOLLOWUPS: Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]] = {}
-# One-shot startup sweeps (e.g. legacy-state migration). The drainer runs
-# every registered sweep as a BARRIER before its first claim.
-_STARTUP_SWEEPS: list[Callable[[], Awaitable[None]]] = []
 
 
 def register_hook_executor(
@@ -106,11 +103,6 @@ def register_hook_executor(
         _CLOSE_FOLLOWUPS[hook_type] = on_closed
     if on_exhausted is not None:
         _EXHAUST_FOLLOWUPS[hook_type] = on_exhausted
-
-
-def register_startup_sweep(sweep: Callable[[], Awaitable[None]]) -> None:
-    if sweep not in _STARTUP_SWEEPS:
-        _STARTUP_SWEEPS.append(sweep)
 
 
 # Dead-letter compensation (a dead report_back's watch_clear) is inserted
@@ -203,28 +195,7 @@ class HookOutboxDrainer:
         self._nudge.set()
 
     async def _loop(self) -> None:
-        legacy_swept = False
         while not self._stopping.is_set():
-            if not legacy_swept:
-                try:
-                    for sweep in _STARTUP_SWEEPS:
-                        await sweep()
-                    legacy_swept = True
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    # The sweep is a BARRIER: claiming before unmigrated rows
-                    # are rekeyed would run them outside their real chain, and
-                    # a claimed row can no longer be rekeyed. Idempotent, so
-                    # back off and retry until it lands.
-                    logger.error(
-                        "[HookOutbox] legacy FIFO migration failed; deferring "
-                        "claims until it succeeds",
-                        exc_info=True,
-                    )
-                    await self._wait_for_nudge()
-                    continue
-
             # Dead-park expired claims that already burned max_attempts leases
             # (crashed owners never nack); their chains unwedge here. The
             # watch_clear compensation rides the same statement.

@@ -104,13 +104,12 @@ describe('ChatAgent API utilities', () => {
       });
     });
 
-    it('asks for Home only when the caller includes it, by both names', async () => {
+    it('asks for Home only when the caller includes it', async () => {
       mockGet.mockResolvedValue({ data: {} });
 
       await getWorkspaces(20, 0, 'custom', true);
-      // include_flash is the one a backend before is_home reads.
       expect(mockGet).toHaveBeenCalledWith('/api/v1/workspaces', {
-        params: { limit: 20, offset: 0, sort_by: 'custom', include_home: true, include_flash: true },
+        params: { limit: 20, offset: 0, sort_by: 'custom', include_home: true },
       });
     });
   });
@@ -128,19 +127,10 @@ describe('ChatAgent API utilities', () => {
       expect(result).toEqual(home);
     });
 
-    it.each([404, 405])('asks /flash for Home when /home answers %i, as a backend before is_home does', async (status) => {
-      const flash = { workspace_id: 'home-1', status: 'flash' };
-      mockPost.mockRejectedValueOnce(refusal(status)).mockResolvedValueOnce({ data: flash });
+    it.each([404, 500])('passes a %i refusal through, with no second endpoint to ask', async (status) => {
+      mockPost.mockRejectedValueOnce(refusal(status));
 
-      const result = await getHomeWorkspace();
-      expect(mockPost.mock.calls.map(([url]) => url)).toEqual(['/api/v1/workspaces/home', '/api/v1/workspaces/flash']);
-      expect(result).toEqual(flash);
-    });
-
-    it('passes any other refusal through without asking /flash', async () => {
-      mockPost.mockRejectedValueOnce(refusal(500));
-
-      await expect(getHomeWorkspace()).rejects.toThrow('status 500');
+      await expect(getHomeWorkspace()).rejects.toThrow(`status ${status}`);
       expect(mockPost).toHaveBeenCalledTimes(1);
     });
   });

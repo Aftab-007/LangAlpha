@@ -601,8 +601,8 @@ async def test_an_unledgered_name_the_sync_did_not_deliver_is_kept(
     mock_get, no_runtime, served
 ):
     """Only what the sync delivered stands in for a lost entry. A user-tier
-    skill whose archive it could not fetch, a disabled or Flash-only skill,
-    and a name a collision kept from upload never reached the tier as a
+    skill whose archive it could not fetch, a disabled skill or one only the
+    retired Flash agent loaded, and a name a collision kept from upload never reached the tier as a
     delivery, so a copy under that name may be the only one there is."""
     mock_get.return_value = [
         _file(".agents/skills/docx/SKILL.md"),

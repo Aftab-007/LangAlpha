@@ -16,7 +16,7 @@ continues it.
 The run's turn carries the run in its config (``turn_configurable``). Work it
 hands off is reported back by a later turn, after the run has settled; the
 hand-off records the run there, so that turn is told where the run delivers
-and sends there under the same id (``report_back.flash.requested_from``). A
+and sends there under the same id (``report_back.handoff.requested_from``). A
 report-back of hand-offs from several runs carries each of them, and every
 send names the run whose targets hold the chat it goes to (``sends_for``).
 

@@ -1,16 +1,14 @@
-"""A step one agent left waiting, resumed by the other, against real agent graphs.
+"""A step the retired Flash agent left waiting, resumed by the Chief of Staff,
+against real agent graphs.
 
-Flash's threads move to the full agent in Home, and Home's move back to Flash
-while the all-workspaces agent is off. An agent cannot resume a confirmation
-for a tool it does not have, so that step is answered as cancelled. What these
-pin is the LangGraph side of that: the update clears the interrupt, keeps the
+Flash's threads continue in Home. An agent cannot resume a confirmation for a
+tool it does not have, so that step is answered as cancelled. What these pin
+is the LangGraph side of that: the update clears the interrupt, keeps the
 result of a call that finished beside it, and leaves the next turn a model
 call, whether it brings a new message or a stale resume.
 """
 
 from __future__ import annotations
-
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain.agents import create_agent
@@ -21,10 +19,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, interrupt
 
 from ptc_agent.agent.state import DeltaAgentState
-from src.server.handlers.chat.flash_handover import (
-    cancel_tool_calls_it_lacks,
-    hand_over_flash_thread,
-)
+from src.server.handlers.chat.agent_change import cancel_tool_calls_it_lacks
 
 CONFIG = {"configurable": {"thread_id": "thread-1"}}
 
@@ -144,46 +139,35 @@ async def test_a_question_the_full_agent_can_resume_is_left_waiting():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("proposer", "resumer", "call"),
-    [
-        (
-            _HOME_TOOLS,
-            _FLASH_TOOLS,
-            {"name": "delegate_to_analyst", "args": {"question": "q"}, "id": "call-d"},
-        ),
-        (
-            _FLASH_TOOLS,
-            _HOME_TOOLS,
-            {"name": "ptc_agent", "args": {"question": "q"}, "id": "call-d"},
-        ),
-    ],
-    ids=["flag_off_home_step_on_flash", "flag_on_flash_step_in_home"],
-)
-async def test_a_step_the_resuming_agent_lacks_is_cancelled_either_way(
-    proposer, resumer, call
-):
-    """Turning the all-workspaces agent off hands Home's threads to Flash, and
-    on again hands them back without a first-promotion handover, since the
-    thread is already the full agent's. Either way the approved call would
-    otherwise reach an agent that has no such tool."""
+async def test_a_step_the_chief_of_staff_lacks_is_cancelled():
+    """The approved call would otherwise reach an agent that has no such tool."""
     saver = InMemorySaver()
     waiting = _agent(
         saver,
-        proposer,
-        AIMessage(content="", tool_calls=[{**call, "type": "tool_call"}]),
+        _FLASH_TOOLS,
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "ptc_agent",
+                    "args": {"question": "q"},
+                    "id": "call-d",
+                    "type": "tool_call",
+                }
+            ],
+        ),
     )
     await waiting.ainvoke({"messages": [HumanMessage("go", id="h-1")]}, CONFIG)
-    resuming = _agent(saver, resumer, AIMessage(content="answer", id="a-2"))
+    home = _agent(saver, _HOME_TOOLS, AIMessage(content="answer", id="a-2"))
 
-    await cancel_tool_calls_it_lacks(resuming, "thread-1")
+    await cancel_tool_calls_it_lacks(home, "thread-1")
 
-    state = await resuming.aget_state(CONFIG)
+    state = await home.aget_state(CONFIG)
     assert not state.interrupts
     (result,) = [m for m in state.values["messages"] if isinstance(m, ToolMessage)]
     assert result.tool_call_id == "call-d"
     assert result.content.startswith("Not run")
-    out = await resuming.ainvoke(
+    out = await home.ainvoke(
         Command(resume={"decisions": [{"type": "approve"}]}), CONFIG
     )
     assert out["messages"][-1].content == "answer"
@@ -203,70 +187,3 @@ async def test_a_step_under_a_name_the_resuming_agent_has_is_left_waiting():
     await cancel_tool_calls_it_lacks(home, "thread-1")
 
     assert (await home.aget_state(CONFIG)).interrupts
-
-
-@pytest.mark.asyncio
-async def test_a_handover_from_the_threads_base_answers_the_step_there():
-    """After a fork whose run never reached the graph, the turn starts from
-    the base the fork pinned, not the newest checkpoint, which is the turn
-    the fork replaced. The step waiting at the base is the one answered, and
-    the turn starts from that answer, which forks from the base."""
-    saver = InMemorySaver()
-    flash = _agent(
-        saver,
-        _FLASH_TOOLS,
-        AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "manage_workspaces",
-                    "args": {"action": "create"},
-                    "id": "call-ws",
-                    "type": "tool_call",
-                }
-            ],
-        ),
-        AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "ptc_agent",
-                    "args": {"question": "q"},
-                    "id": "call-replaced",
-                    "type": "tool_call",
-                }
-            ],
-        ),
-    )
-    await flash.ainvoke({"messages": [HumanMessage("go", id="h-1")]}, CONFIG)
-    base = (await flash.aget_state(CONFIG)).config["configurable"]["checkpoint_id"]
-    await flash.ainvoke({"messages": [HumanMessage("replaced", id="h-2")]}, CONFIG)
-    replaced = await flash.aget_state(CONFIG)
-    full = _agent(saver, [_quote, _ask], AIMessage(content="answer", id="a-3"))
-
-    with patch(
-        "src.server.database.conversation.promote_flash_thread", AsyncMock()
-    ):
-        cancelled, start = await hand_over_flash_thread(
-            full, "thread-1", replay=False, base=base
-        )
-
-    assert [m.tool_call_id for m in cancelled] == ["call-ws"]
-    assert start not in (None, base)
-    at_start = await full.aget_state(
-        {"configurable": {"thread_id": "thread-1", "checkpoint_id": start}}
-    )
-    assert at_start.parent_config["configurable"]["checkpoint_id"] == base
-    assert not at_start.interrupts
-    # The replaced turn's step is left as it was.
-    assert (await full.aget_state(replaced.config)).interrupts
-
-    out = await full.ainvoke(
-        {"messages": [HumanMessage("next", id="h-3")]},
-        {"configurable": {"thread_id": "thread-1", "checkpoint_id": start}},
-    )
-    assert [m.content for m in out["messages"] if isinstance(m, HumanMessage)] == [
-        "go",
-        "next",
-    ]
-    assert out["messages"][-1].content == "answer"

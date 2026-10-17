@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.server.database.home_workspace import get_flash_workspace_id
+from src.server.database.home_workspace import get_home_workspace_id
 from src.server.models.automation import AutomationCreate
 from src.server.services.automations import lifecycle
 from src.server.services.automations.lifecycle import (
@@ -24,7 +24,7 @@ AUTOMATION_ID = str(uuid.uuid4())
 PAST = datetime(2020, 1, 1, 0, 0, tzinfo=timezone.utc)
 
 _LIFECYCLE = "src.server.services.automations.lifecycle"
-HOME = get_flash_workspace_id(OWNER)
+HOME = get_home_workspace_id(OWNER)
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +54,6 @@ def _row(**overrides):
         "cron_expression": "0 9 * * 1-5",
         "timezone": "UTC",
         "status": "active",
-        "agent_mode": "ptc",
         "workspace_id": HOME,
         "llm_model": None,
     }

@@ -297,7 +297,7 @@ async def _admit(thread) -> None:
         run_id=str(uuid.uuid4()),
         thread_id=thread.id,
         request_key=str(uuid.uuid4()),
-        metadata={"msg_type": "flash"},
+        metadata={"msg_type": "ptc"},
     )
 
 

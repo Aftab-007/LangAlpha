@@ -35,7 +35,7 @@ def _tool_call(args: dict, call_id: str = "call_test") -> dict:
 
 def _config(user_id: str | None = USER_ID) -> dict:
     # Deliberately omit ``thread_id`` so the report_back Redis branch is a
-    # no-op (flash_thread_id is None) and we don't have to mock the cache.
+    # no-op (the dispatching thread id is None) and we don't have to mock the cache.
     return {"configurable": {"user_id": user_id}}
 
 
@@ -209,9 +209,9 @@ async def test_continuation_normalizes_noncanonical_thread_id():
 
 def _f1_origin() -> dict:
     return {
-        "origin": "flash",
-        "flash_thread_id": "flash-F1",
-        "flash_workspace_id": "ws-F1",
+        "origin": "home",
+        "home_thread_id": "cos-F1",
+        "home_workspace_id": "ws-F1",
         "ptc_thread_id": PTC_THREAD_ID,
         "ptc_workspace_id": WORKSPACE_ID,
         "report_back": True,
@@ -244,25 +244,25 @@ def _dispatch_env(store: dict, *, resp: _FakeResp | None = None):
         yield cache
 
 
-async def _dispatch_from(flash: str) -> dict:
+async def _dispatch_from(dispatcher: str) -> dict:
     result = await delegate_to_analyst.ainvoke(
         _tool_call({"question": "follow up", "thread_id": PTC_THREAD_ID}),
         config={"configurable": {
             "user_id": USER_ID,
-            "thread_id": flash,
-            "workspace_id": f"ws-{flash}",
+            "thread_id": dispatcher,
+            "workspace_id": f"ws-{dispatcher}",
         }},
     )
     return _payload(result)
 
 
 @pytest.mark.asyncio
-async def test_cross_flash_reuse_does_not_strand_other_flashs_origin():
-    """A second flash's failed dispatch must not clobber/delete F1's origin."""
+async def test_cross_dispatcher_reuse_does_not_strand_other_dispatchers_origin():
+    """A second thread's failed dispatch must not clobber/delete F1's origin."""
     store = {f"ptc_origin:{PTC_THREAD_ID}": _f1_origin()}
 
     with _dispatch_env(store, resp=_FakeResp(status=500)) as cache:
-        payload = await _dispatch_from("flash-F2")
+        payload = await _dispatch_from("cos-F2")
 
     assert payload.get("success") is False, payload  # dispatch failed -> rollback
     # F1's origin survives untouched: not overwritten to F2, not deleted.
@@ -270,42 +270,42 @@ async def test_cross_flash_reuse_does_not_strand_other_flashs_origin():
 
 
 @pytest.mark.asyncio
-async def test_cross_flash_reuse_proceeds_unwired_touching_nothing():
-    """A cross-flash reuse can't be wired: the atomic reserve detects the
-    other flash's origin BEFORE adding anything, so there is no reservation
+async def test_cross_dispatcher_reuse_proceeds_unwired_touching_nothing():
+    """A cross-thread reuse can't be wired: the atomic reserve detects the
+    other thread's origin BEFORE adding anything, so there is no reservation
     to leak, the dispatch still runs, and F1's origin is untouched."""
     store = {f"ptc_origin:{PTC_THREAD_ID}": _f1_origin()}
 
     with _dispatch_env(store) as cache:
-        payload = await _dispatch_from("flash-F2")
+        payload = await _dispatch_from("cos-F2")
 
     assert payload.get("success") is True, payload  # dispatch still succeeds
-    # Unwired (another flash owns the origin): must not promise a report-back.
+    # Unwired (another thread owns the origin): must not promise a report-back.
     assert payload.get("report_back") is False, payload
     assert cache.kv.get(f"ptc_origin:{PTC_THREAD_ID}") == _f1_origin()
-    assert PTC_THREAD_ID not in cache.client.sets.get("flash_watch:flash-F2", set())
+    assert PTC_THREAD_ID not in cache.client.sets.get("handoff_watch:cos-F2", set())
     assert PTC_THREAD_ID not in cache.client.sets.get(
-        f"flash_user_pending:{USER_ID}", set()
+        f"handoff_user_pending:{USER_ID}", set()
     )
 
 
 @pytest.mark.asyncio
-async def test_same_flash_reuse_keeps_origin_ownership():
-    """A same-flash continuation refreshes its origin with a NEW generation."""
+async def test_same_dispatcher_reuse_keeps_origin_ownership():
+    """A same-thread continuation refreshes its origin with a NEW generation."""
     same = _f1_origin()
-    same["flash_thread_id"] = "flash-F2"  # owned by the dispatching flash
+    same["home_thread_id"] = "cos-F2"  # owned by the dispatching thread
     store = {f"ptc_origin:{PTC_THREAD_ID}": dict(same)}
 
     with _dispatch_env(store) as cache:
-        payload = await _dispatch_from("flash-F2")
+        payload = await _dispatch_from("cos-F2")
 
     assert payload.get("success") is True, payload
     refreshed = cache.kv.get(f"ptc_origin:{PTC_THREAD_ID}")
-    assert refreshed["flash_thread_id"] == "flash-F2"
+    assert refreshed["home_thread_id"] == "cos-F2"
     assert refreshed.get("dispatch_gen")  # committed refresh keeps the new gen
-    # Same flash owns the wired origin + watch member, so report-back is real.
+    # Same thread owns the wired origin + watch member, so report-back is real.
     assert payload.get("report_back") is True, payload
-    assert store[f"ptc_origin:{PTC_THREAD_ID}"]["flash_thread_id"] == "flash-F2"
+    assert store[f"ptc_origin:{PTC_THREAD_ID}"]["home_thread_id"] == "cos-F2"
 
 
 @pytest.mark.asyncio
@@ -315,7 +315,7 @@ async def test_unwired_reserve_reports_back_false_but_still_dispatches():
     with _dispatch_env({}) as cache:
         cache.enabled = False
         cache.client = None
-        payload = await _dispatch_from("flash-F1")
+        payload = await _dispatch_from("cos-F1")
 
     assert payload.get("success") is True, payload
     assert payload.get("status") == "dispatched", payload

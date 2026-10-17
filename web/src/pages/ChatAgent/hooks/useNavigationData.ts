@@ -15,7 +15,7 @@ import {
   type ThreadRecord,
   type ThreadsData,
 } from '@/lib/navThreadsStore';
-import type { ResourceTier, ThreadsResponse, WorkspacesResponse } from '@/types/api';
+import type { ResourceTier, ThreadsResponse, Workspace, WorkspacesResponse } from '@/types/api';
 import { getWorkspaces, getWorkspaceThreads, reorderWorkspaces, updateThread } from '../utils/api';
 import { workspaceThreadsQuery } from '../utils/threadQueries';
 import { pinWorkspaceRow, renameWorkspaceRow } from './workspaceRowActions';
@@ -27,11 +27,10 @@ import { denialMessage } from '../utils/denialMessage';
  * options menu render, plus the loose tail the list endpoint carries. Exported
  * so hosts render the tree without re-casting the hook's output.
  */
-export interface NavWorkspace {
+export interface NavWorkspace extends Pick<Workspace, 'is_home'> {
   workspace_id: string;
   name?: string;
   status?: string;
-  is_home?: boolean;
   is_pinned?: boolean;
   is_always_on?: boolean;
   resource_tier?: ResourceTier;
@@ -183,7 +182,7 @@ export function applyStableOrder(
 // pinned one, and Home counts as always-pinned. It can't be assumed to
 // carry is_pinned in every deployment, and pinned workspaces may still
 // outrank it inside the pinned block (by sort_order/recency).
-export function isEffectivelyPinned(ws: { workspace_id?: unknown; is_pinned?: unknown; is_home?: unknown }): boolean {
+export function isEffectivelyPinned(ws: Pick<Workspace, 'is_home'> & { is_pinned?: unknown }): boolean {
   return Boolean(ws.is_pinned) || isHomeWorkspace(ws);
 }
 

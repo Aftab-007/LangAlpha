@@ -16,7 +16,7 @@ from ptc_agent.agent.roles import AgentRole
 
 from .builtins import BUILTIN_SUBAGENTS
 from .compiler import SubagentCompiler
-from .definition import SubagentDefinition, SubagentMode
+from .definition import SubagentDefinition
 from .registry import SubagentRegistry
 
 if TYPE_CHECKING:
@@ -36,7 +36,6 @@ __all__ = [
     "BUILTIN_SUBAGENTS",
     "SubagentCompiler",
     "SubagentDefinition",
-    "SubagentMode",
     "SubagentRegistry",
     "create_subagents",
 ]

@@ -157,25 +157,25 @@ async def test_a_duplicate_keeps_what_its_source_switched_off(seed_user, test_db
     assert await _off_in(test_db_pool, copy_of_other, "builtin") == set()
 
 
-async def test_the_flash_upsert_starts_the_selection_only_on_its_first_insert(seed_user, test_db_pool):
-    """Every Flash turn runs the upsert. A server the user switched on in Flash
+async def test_the_home_upsert_starts_the_selection_only_on_its_first_insert(seed_user, test_db_pool):
+    """Every Home turn runs the upsert. A server the user switched on in Home
     must stay on, so only the call that inserted the row may tombstone."""
     user_id = seed_user["user_id"]
     computer_id = await _computer(user_id)
     research = await _workspace(user_id, computer_id, "Research")
     await servers.create_workspace_catalog_server(user_id, research, "notes", **_STDIO)
 
-    flash = await workspaces.get_or_create_flash_workspace(user_id)
-    flash_id = str(flash["workspace_id"])
-    assert "inserted" not in flash
-    assert "notes" in await _off_in(test_db_pool, flash_id)
+    home = await workspaces.get_or_create_home_workspace(user_id)
+    home_id = str(home["workspace_id"])
+    assert "inserted" not in home
+    assert "notes" in await _off_in(test_db_pool, home_id)
 
-    await servers.delete_workspace_server(flash_id, "notes")
-    again = await workspaces.get_or_create_flash_workspace(user_id)
+    await servers.delete_workspace_server(home_id, "notes")
+    again = await workspaces.get_or_create_home_workspace(user_id)
 
-    assert str(again["workspace_id"]) == flash_id
+    assert str(again["workspace_id"]) == home_id
     assert "inserted" not in again
-    assert await _off_in(test_db_pool, flash_id) == set()
+    assert await _off_in(test_db_pool, home_id) == set()
 
 
 async def test_a_server_created_while_a_workspace_waits_is_off_in_it(seed_user, test_db_pool):

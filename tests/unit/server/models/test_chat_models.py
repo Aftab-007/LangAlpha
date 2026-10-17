@@ -282,7 +282,6 @@ class TestChatRequest:
 
     def test_minimal(self):
         req = ChatRequest()
-        assert req.agent_mode is None
         assert req.messages == []
         assert req.hitl_response is None
 
@@ -291,13 +290,12 @@ class TestChatRequest:
         req = ChatRequest(plan_mode=True)
         assert not hasattr(req, "plan_mode")
 
-    def test_agent_mode_validation(self):
-        req = ChatRequest(agent_mode="flash")
-        assert req.agent_mode == "flash"
-
-    def test_invalid_agent_mode(self):
-        with pytest.raises(ValidationError):
-            ChatRequest(agent_mode="turbo")
+    def test_retired_agent_mode_field_is_ignored(self):
+        # Cached web clients and older CLI builds still send it; a 422 would
+        # drop their turns.
+        req = ChatRequest(agent_mode="flash", workspace_id="ws-1")
+        assert not hasattr(req, "agent_mode")
+        assert req.workspace_id == "ws-1"
 
     def test_reasoning_effort_values(self):
         for level in ("low", "medium", "high", "xhigh"):

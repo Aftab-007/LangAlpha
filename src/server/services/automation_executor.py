@@ -261,55 +261,47 @@ def _pinned_thread(automation: Dict[str, Any]) -> Optional[str]:
 
 @dataclass(frozen=True)
 class _Place:
-    """Where a firing runs: the workspace row its turn names (None runs it in
-    Home), and the pinned thread it continues (None starts one)."""
+    """Where a firing runs: the workspace row its turn names, and the pinned
+    thread it continues (None starts one)."""
 
-    workspace: Optional[Dict[str, Any]]
+    workspace: Dict[str, Any]
     thread_id: Optional[str]
 
 
 async def _turn_place(automation: Dict[str, Any]) -> _Place:
-    """Where the automation's turn runs.
+    """Where the automation's turn runs: always its stored workspace.
 
-    A pinned thread runs in its own workspace, as a message sent on it would:
-    a turn sent elsewhere would run apart from the thread's files. A pinned
-    thread that is gone is made again where the automation lives, and one
-    whose workspace was deleted is left there, the run starting a new thread
-    where the automation lives. That is its stored workspace, whose ownership
-    was verified when the automation was written, or Home for a row a former
-    build stored as 'flash'.
+    A pinned thread is continued while it lives there. Every write keeps a
+    pin in the automation's workspace, and the fold that moves a thread to
+    Home moves its automations with it, so a pin found anywhere else is one
+    this run cannot use: it starts a new thread instead, which 'continue'
+    pins. A pinned thread that is gone is made again where the automation
+    lives.
     """
+    workspace = await _stored_workspace(automation)
     thread_id = _pinned_thread(automation)
     if thread_id is not None:
         from src.server.database.conversation import get_thread_auth_meta
-        from src.server.database.workspace import get_workspace
 
         meta = await get_thread_auth_meta(thread_id)
-        if meta is not None:
-            # The turn runs on the pinned thread wherever it is routed, so a
-            # thread another account holds fails the firing.
-            if str(meta["user_id"]) != str(automation["user_id"]):
-                raise ValueError("The automation's thread belongs to another account")
-            workspace = await get_workspace(str(meta["workspace_id"]))
-            if workspace is not None:
-                return _Place(workspace, thread_id)
+        if meta is not None and (
+            str(meta["workspace_id"]) != str(workspace["workspace_id"])
+            or str(meta["user_id"]) != str(automation["user_id"])
+        ):
             logger.info(
-                f"[AUTOMATION_EXEC] The pinned thread's workspace was deleted, "
-                f"starting a new thread where the automation lives: "
+                f"[AUTOMATION_EXEC] The pinned thread is not in the automation's "
+                f"workspace, starting a new thread there: "
                 f"automation_id={automation.get('automation_id')} thread_id={thread_id}"
             )
             thread_id = None
-    return _Place(await _stored_workspace(automation), thread_id)
+    return _Place(workspace, thread_id)
 
 
-async def _stored_workspace(automation: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The workspace row the automation lives in; None for Home, where a row
-    a former build stored as 'flash' runs. For an automation stored in Home
+async def _stored_workspace(automation: Dict[str, Any]) -> Dict[str, Any]:
+    """The workspace row the automation lives in. For an automation in Home
     that is Home's row, which routes there."""
     from src.server.database.workspace import get_workspace
 
-    if automation["agent_mode"] == "flash":
-        return None
     ws_id = automation.get("workspace_id")
     if not ws_id:
         raise ValueError(
@@ -812,12 +804,10 @@ class AutomationExecutor:
         """
         automation_id = str(automation["automation_id"])
         user_id = automation["user_id"]
-        agent_mode = automation["agent_mode"]
 
         logger.info(
             f"[AUTOMATION_EXEC] Starting execution: "
-            f"automation_id={automation_id} execution_id={execution_id} "
-            f"mode={agent_mode}"
+            f"automation_id={automation_id} execution_id={execution_id}"
         )
         if not await exec_db.transition_execution(
             execution_id,
@@ -837,7 +827,6 @@ class AutomationExecutor:
             attributes={
                 "automation_id": _obs_hash_id(automation_id),
                 "trigger": _trigger,
-                "mode": agent_mode or "unknown",
             },
         )
         keep_alive = asyncio.create_task(
@@ -861,7 +850,7 @@ class AutomationExecutor:
                     _exec_span.set_attribute("status", "skipped")
                     return
                 # Nothing is resolved yet, so the run takes the automation
-                # as it now stands, its mode and thread included.
+                # as it now stands, its workspace and thread included.
                 firing.automation = fresh
 
             # ─── Credential check + credit gate ───────────────────

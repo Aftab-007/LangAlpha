@@ -164,7 +164,6 @@ subagents:
   # definitions:
   #   equity-analyst:
   #     description: "Specialized equity research analyst for deep-dive company analysis"
-  #     mode: ptc                              # ptc or flash
   #     role_prompt: |
   #       You are a senior equity research analyst...
   #     tools: [execute_code, filesystem, finance, web_search]

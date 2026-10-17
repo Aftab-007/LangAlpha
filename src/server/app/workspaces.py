@@ -34,18 +34,18 @@ from src.server.app.status_stream import (
     sse_status_event,
     status_event_stream,
 )
-from src.server.database.workspace import FlashWorkspaceTaken, WorkspaceBusyError
+from src.server.database.workspace import HomeWorkspaceTaken, WorkspaceBusyError
 from src.server.database.workspace_folders import WorkspaceFolderMoving
 from src.server.database.workspace_names import (
     WorkspaceNameInvalid,
     WorkspaceNameTaken,
 )
-from src.server.database.home_workspace import is_flash_row, is_unbound
+from src.server.database.home_workspace import is_home_row, is_unbound
 from src.server.database.workspace import (
     get_workspace as db_get_workspace,
     get_workspaces_for_user,
     update_workspace as db_update_workspace,
-    get_or_create_flash_workspace,
+    get_or_create_home_workspace,
     batch_update_sort_order,
 )
 from src.server.models.workspace import (
@@ -141,7 +141,6 @@ async def _workspace_action_errors(action: str, workspace_id: str):
 def _workspace_to_response(workspace: dict) -> WorkspaceResponse:
     """Convert workspace dict to response model."""
     computer_id = workspace.get("computer_id")
-    home = is_flash_row(workspace)
     return WorkspaceResponse(
         workspace_id=str(workspace["workspace_id"]),
         user_id=workspace["user_id"],
@@ -151,10 +150,8 @@ def _workspace_to_response(workspace: dict) -> WorkspaceResponse:
         computer_id=str(computer_id) if computer_id else None,
         dir_name=workspace.get("dir_name"),
         previous_dir_names=list(workspace.get("previous_dir_names") or ()),
-        # Older clients know the flash row by this status. Bound as Home it
-        # carries its computer's, which the events stream reports.
-        status="flash" if home else workspace["status"],
-        is_home=home,
+        status=workspace["status"],
+        is_home=is_home_row(workspace),
         created_at=workspace["created_at"],
         updated_at=workspace["updated_at"],
         last_activity_at=workspace.get("last_activity_at"),
@@ -216,19 +213,6 @@ async def create_workspace(
         raise HTTPException(status_code=500, detail="Failed to create workspace")
 
 
-async def _home_response(user_id: str) -> WorkspaceResponse:
-    try:
-        workspace = await get_or_create_flash_workspace(user_id)
-        return _workspace_to_response(workspace)
-    except FlashWorkspaceTaken:
-        # The owner check's answer for a row another account holds; no retry
-        # makes this one the caller's.
-        raise HTTPException(status_code=403, detail="Forbidden") from None
-    except Exception as e:
-        logger.exception(f"Error ensuring Home: {e}")
-        raise HTTPException(status_code=500, detail="Failed to ensure Home")
-
-
 @router.post("/home", response_model=WorkspaceResponse)
 async def get_home_workspace(x_user_id: CurrentUserId):
     """Get or create the user's Home, where work in no particular workspace runs.
@@ -237,13 +221,16 @@ async def get_home_workspace(x_user_id: CurrentUserId):
     it. Idempotent, and safe to call on every app load. The row is made here;
     Home joins the user's computer on its first start or turn.
     """
-    return await _home_response(x_user_id)
-
-
-@router.post("/flash", response_model=WorkspaceResponse)
-async def get_flash_workspace(x_user_id: CurrentUserId):
-    """The former name of ``POST /home``, kept while clients still call it."""
-    return await _home_response(x_user_id)
+    try:
+        workspace = await get_or_create_home_workspace(x_user_id)
+        return _workspace_to_response(workspace)
+    except HomeWorkspaceTaken:
+        # The owner check's answer for a row another account holds; no retry
+        # makes this one the caller's.
+        raise HTTPException(status_code=403, detail="Forbidden") from None
+    except Exception as e:
+        logger.exception(f"Error ensuring Home: {e}")
+        raise HTTPException(status_code=500, detail="Failed to ensure Home")
 
 
 @router.post("/reorder", status_code=204)
@@ -275,7 +262,6 @@ async def list_workspaces(
         "custom", description="Sort mode: activity, name, or custom"
     ),
     include_home: bool = Query(False, description="Include the user's Home"),
-    include_flash: bool = Query(False, description="Former name of include_home"),
 ):
     """
     List workspaces for a user.
@@ -286,7 +272,6 @@ async def list_workspaces(
         offset: Number of results to skip
         sort_by: Sort mode — 'activity' (updated_at), 'name' (alphabetical), 'custom' (sort_order)
         include_home: Whether to include the user's Home (default false)
-        include_flash: The former name of include_home
 
     Returns:
         Paginated list of workspaces
@@ -297,7 +282,7 @@ async def list_workspaces(
             limit=limit,
             offset=offset,
             sort_by=sort_by,
-            include_flash=include_home or include_flash,
+            include_home=include_home,
         )
 
         return WorkspaceListResponse(
@@ -433,7 +418,7 @@ async def update_workspace(
         workspace = await db_get_workspace(workspace_id)
         require_workspace_owner(workspace, user_id=x_user_id)
         if (
-            is_flash_row(workspace)
+            is_home_row(workspace)
             and request.name is not None
             and request.name != workspace.get("name")
         ):
@@ -548,7 +533,7 @@ async def start_workspace(
             await ensure_home(x_user_id, workspace)
             workspace = await db_get_workspace(workspace_id)
             if not workspace:
-                # A former flash row, which ensure_home just folded into Home:
+                # A former Home, which ensure_home just folded into Home:
                 # its threads are there now, and the id is gone for every read.
                 raise HTTPException(status_code=404, detail="Workspace not found")
 
@@ -865,13 +850,9 @@ async def delete_workspace(workspace_id: str, x_user_id: CurrentUserId):
         x_user_id: Authenticated user ID
     """
     try:
-        # Guard: prevent deletion of flash workspaces
         workspace = await db_get_workspace(workspace_id)
-        if is_flash_row(workspace):
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot delete flash workspace",
-            )
+        if is_home_row(workspace):
+            raise HTTPException(status_code=400, detail="Cannot delete Home")
         require_workspace_owner(workspace, user_id=x_user_id)
 
         manager = WorkspaceManager.get_instance()

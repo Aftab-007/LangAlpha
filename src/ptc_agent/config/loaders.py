@@ -55,7 +55,7 @@ from ptc_agent.config.file_utils import (
     get_config_search_paths,
     get_default_config_dir,
     load_yaml_config,
-    rename_llm_flash,
+    refuse_renamed_llm_keys,
 )
 
 logger = logging.getLogger(__name__)
@@ -253,8 +253,9 @@ def load_from_dict(
     # Load LLM configuration - extract name and the Background model
     # llm: null (or omitted) is allowed — users configure models via the UI instead.
     # A dict passed in directly never went through load_yaml_config, which
-    # reads the old llm.flash spelling for a file.
-    llm_data = rename_llm_flash(config_data, "the agent config").get("llm")
+    # refuses the retired llm.flash spelling for a file.
+    refuse_renamed_llm_keys(config_data, "the agent config")
+    llm_data = config_data.get("llm")
 
     llm_config: LLMConfig | None = None
     if isinstance(llm_data, str):
@@ -268,7 +269,7 @@ def load_from_dict(
         # (LLMConfig.compaction_name / fetch_name), not to this file's models.
         llm_config = LLMConfig(
             name=llm_name,
-            flash=llm_data.get("background"),
+            background=llm_data.get("background"),
             compaction=llm_data.get("compaction") or None,
             fetch=llm_data.get("fetch") or None,
             fallback=llm_data.get("fallback"),
@@ -301,17 +302,27 @@ def load_from_dict(
 
     subagent_definitions: dict[str, SubagentConfig] = {}
     for name, defn_data in (subagents_data.get("definitions") or {}).items():
+        if isinstance(defn_data, dict) and "mode" in defn_data:
+            # ``mode`` is retired: ``ptc`` was the default, and ``flash`` only
+            # turned every prompt section off, which ``sections:`` says itself.
+            # Any other value was refused while the field existed, so it still is.
+            defn_data = dict(defn_data)
+            mode = defn_data.pop("mode")
+            if mode == "flash":
+                raise ValueError(
+                    f"subagents.definitions.{name}: mode: flash was retired; "
+                    "under sections:, set to false each prompt section it "
+                    "should leave out"
+                )
+            if mode != "ptc":
+                raise ValueError(
+                    f"subagents.definitions.{name}: mode was retired; remove it"
+                )
         try:
             # A bare key is an empty patch; any other value that is not a map fails here.
             subagent_definitions[name] = SubagentConfig(**({} if defn_data is None else defn_data))
         except Exception as e:
             raise ValueError(f"Invalid subagent definition '{name}': {e}") from e
-        if subagent_definitions[name].mode == "flash":
-            logger.warning(
-                f"subagents.definitions.{name}: mode: flash is deprecated; "
-                "under sections:, set to false each prompt section it should "
-                "leave out instead"
-            )
 
     # Validate enabled subagent names exist in builtins or user definitions
     known_names = set(BUILTIN_SUBAGENTS) | set(subagent_definitions)

@@ -1905,7 +1905,7 @@ async def test_a_toggle_on_home_before_its_first_turn_syncs_grants_without_a_war
 ):
     """Home before its first turn is on no computer, so there is no sandbox to
     warm and the acquire would only fail. Its grants are synced all the same."""
-    ws = _ws(status="flash")
+    ws = _ws(status="unbound")
     base = _agent_config([_builtin("builtin_search")])
     with (
         patch("src.server.app.mcp_servers.db_get_workspace", new=AsyncMock(return_value=ws)),

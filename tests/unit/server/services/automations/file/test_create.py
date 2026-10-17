@@ -44,7 +44,6 @@ class TestCreate:
         assert row["file_name"] == NEW_FILE_NAME
         assert row["trigger_type"] == "cron"
         assert row["timezone"] == "America/New_York"
-        assert row["agent_mode"] == "ptc"
         assert row["workspace_id"] == UUID(WORKSPACE)
         assert (row["thread_strategy"], row["conversation_thread_id"]) == ("new", None)
         assert row["max_failures"] == 3

@@ -52,7 +52,6 @@ class TestAutomationCreate:
             instruction="Summarise market news",
         )
         assert a.trigger_type == "cron"
-        assert a.agent_mode is None
         assert a.thread_strategy == "new"
         assert a.max_failures == 3
         assert a.timezone == "UTC"
@@ -73,16 +72,6 @@ class TestAutomationCreate:
                 name="Bad",
                 trigger_type="webhook",
                 instruction="x",
-            )
-
-    def test_invalid_agent_mode(self):
-        with pytest.raises(ValidationError):
-            AutomationCreate(
-                name="Bad",
-                trigger_type="cron",
-                cron_expression="0 9 * * *",
-                instruction="x",
-                agent_mode="turbo",
             )
 
     def test_max_failures_bounds(self):
@@ -383,6 +372,51 @@ class TestAutomationUpdate:
             AutomationUpdate(max_failures=101)
 
 
+class TestRetiredAgentMode:
+    """A client still sending agent_mode: flash is refused; ptc and null are
+    ignored, and any other value is refused as the old field refused it."""
+
+    CREATE = {
+        "name": "Daily Report",
+        "trigger_type": "cron",
+        "cron_expression": "0 9 * * 1-5",
+        "instruction": "Summarise market news",
+    }
+
+    @pytest.mark.parametrize(
+        "build", [
+            lambda **extra: AutomationCreate(**TestRetiredAgentMode.CREATE, **extra),
+            lambda **extra: AutomationUpdate(**extra),
+        ],
+        ids=["create", "update"],
+    )
+    def test_flash_is_refused(self, build):
+        with pytest.raises(ValidationError, match="agent_mode was retired"):
+            build(agent_mode="flash")
+
+    @pytest.mark.parametrize(
+        "build", [
+            lambda **extra: AutomationCreate(**TestRetiredAgentMode.CREATE, **extra),
+            lambda **extra: AutomationUpdate(**extra),
+        ],
+        ids=["create", "update"],
+    )
+    @pytest.mark.parametrize("mode", ["ptc", None])
+    def test_ptc_and_null_are_ignored(self, build, mode):
+        assert "agent_mode" not in build(agent_mode=mode).model_dump()
+
+    @pytest.mark.parametrize(
+        "build", [
+            lambda **extra: AutomationCreate(**TestRetiredAgentMode.CREATE, **extra),
+            lambda **extra: AutomationUpdate(**extra),
+        ],
+        ids=["create", "update"],
+    )
+    def test_any_other_mode_is_refused_as_before(self, build):
+        with pytest.raises(ValidationError, match="agent_mode was retired; remove it"):
+            build(agent_mode="ptcc")
+
+
 # ---------------------------------------------------------------------------
 # AutomationResponse
 # ---------------------------------------------------------------------------
@@ -399,7 +433,6 @@ class TestAutomationResponse:
             name="My Auto",
             trigger_type="cron",
             timezone="UTC",
-            agent_mode="flash",
             instruction="Do something",
             thread_strategy="new",
             status="active",

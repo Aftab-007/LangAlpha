@@ -1,8 +1,8 @@
-"""Folding an account's other flash rows into the Home its id derives.
+"""Folding an account's former Home rows into the Home its id derives.
 
-A flash row's id derives from the user id it was made for, so a row only stops
+A Home's id derives from the user id it was made for, so a row only stops
 matching its owner when it changes accounts: an account merge moves an
-account's rows onto the account it joins, its flash row included, under an id
+account's rows onto the account it joins, its Home included, under an id
 derived from the merged account. The account would then list two "All
 workspaces" entries, one holding the merged account's conversations. The fold
 moves what that row holds into Home and retires it, so the history reads as
@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 # Every table keyed by a workspace either moves or stays, and a test reads the
 # schema for any it finds in neither, so a new one gets a decision.
 MOVES: dict[str, str] = {
-    # Before the threads, in this order: a row pinned to one of them runs in
-    # it, so it moves with the thread wherever it was stored.
+    # Before the threads, in this order: a row continues its pinned thread
+    # only where both live, so it moves with the thread wherever it was stored.
     "automations": """
         UPDATE automations SET workspace_id = %(home)s
         WHERE workspace_id = %(former)s OR conversation_thread_id IN (
@@ -89,19 +89,19 @@ STAYS: dict[str, str] = {
     "workspace_mcp_tool_schemas": "cached for the MCP selection, where Home's wins",
     "workspace_vault_secrets": "Home's own secret selection wins",
     "order_attempts": "a record of where it ran",
-    "user_skills": "nothing offers Home as a skill's workspace, so a flash row holds none",
+    "user_skills": "nothing offers Home as a skill's workspace, so a former Home holds none",
     "workspace_skill_disables": "Home's own skill selection wins",
-    "user_subagents": "its workspace_id is reserved and always NULL, so a flash row holds none",
+    "user_subagents": "its workspace_id is reserved and always NULL, so a former Home holds none",
 }
 
 _HAS_FORMER = """
     SELECT EXISTS (
         SELECT 1 FROM workspaces
-        WHERE user_id = %s AND status = 'flash' AND workspace_id <> %s
+        WHERE user_id = %s AND status = 'unbound' AND workspace_id <> %s
     ) AS found
 """
 
-# The delete convention: a tombstone, which no longer reads as a flash row.
+# The delete convention: a tombstone, which no longer reads as a Home.
 _RETIRE = """
     UPDATE workspaces SET status = 'deleted', is_pinned = FALSE
     WHERE workspace_id = %(former)s
@@ -109,7 +109,7 @@ _RETIRE = """
 
 
 async def fold_former_homes(user_id: str, home_id: str, conn=None) -> list[str]:
-    """Move the user's other flash rows into ``home_id`` and retire them.
+    """Move the user's former Home rows into ``home_id`` and retire them.
 
     Returns the ids retired. Every Home resolve lands here, so a user with no
     former row costs one unlocked read and no transaction.
@@ -130,7 +130,7 @@ async def fold_former_homes(user_id: str, home_id: str, conn=None) -> list[str]:
             await cur.execute(
                 """
                 SELECT workspace_id FROM workspaces
-                WHERE user_id = %s AND status = 'flash' AND workspace_id <> %s
+                WHERE user_id = %s AND status = 'unbound' AND workspace_id <> %s
                 ORDER BY created_at
                 FOR UPDATE
                 """,

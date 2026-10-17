@@ -66,7 +66,6 @@ async def _resend(thread_owner, steered=True):
                 "/api/v1/threads/tid-mine/messages",
                 json={
                     "workspace_id": "ws-placeholder",
-                    "agent_mode": "ptc",
                     "messages": [{"role": "user", "content": "hello"}],
                     "request_key": KEY,
                 },

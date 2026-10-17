@@ -28,6 +28,7 @@ from src.server.database.conversation import (
     get_replay_thread_data,
 )
 from src.server.database.pool import DATABASE_UNAVAILABLE
+from src.server.services.report_back.handoff.keys import ORIGIN_THREAD_META
 from src.server.dependencies.usage_limits import ChatRateLimited
 
 from src.observability import (
@@ -157,7 +158,7 @@ async def _consume_background_gen(
             # This generator was already primed past START (2.4c) — the run
             # row exists, so the coordinator's reconcile (here, or the real
             # owner's finalize) enqueues the durable watch_clear on the
-            # flash ordering chain, which owns any pair teardown. No direct
+            # report-back ordering chain, which owns any pair teardown. No direct
             # report-back clear here: it would run OFF-CHAIN against a live
             # admission (round-19 P1).
             from src.server.services.runs.coordinator import RunCoordinator
@@ -234,7 +235,7 @@ _SERVER_ONLY_FIELDS = (
     "query_type",
     "report_back_ptc_thread_id",
     "report_source",
-    "origin_flash_thread_id",
+    ORIGIN_THREAD_META,
     "origin_dispatch_gen",
     "automation_delivery",
     "automation_earlier_runs",
@@ -365,7 +366,6 @@ async def _handle_send_message(
 
     user_id = auth.user_id
     is_byok = auth.is_byok
-    agent_mode = request.agent_mode or "ptc"
     workspace_id = request.workspace_id
 
     from src.server.services.runs.admission import RunScope
@@ -466,11 +466,10 @@ async def _handle_send_message(
                 detail="PTC Agent not initialized. Check server startup logs.",
             )
 
-        # A turn naming Home's id, a flash request naming no workspace, or any
-        # turn on a thread in Home, runs in Home. The workspace guard comes
-        # first: it pairs with the thread guard above. Home is bound once the
-        # admission gates below pass.
-        workspace = await requested_workspace(user_id, agent_mode, workspace_id)
+        # A turn naming Home's id, or any turn on a thread in Home, runs in
+        # Home. The workspace guard comes first: it pairs with the thread
+        # guard above. Home is bound once the admission gates below pass.
+        workspace = await requested_workspace(user_id, workspace_id)
         route = turn_route(user_id, workspace)
         workspace_id = route.workspace_id
 
@@ -489,7 +488,7 @@ async def _handle_send_message(
         logger.info(
             f"[PTC_CHAT] New request: "
             f"workspace_id={workspace_id} thread_id={thread_id} user_id={user_id} "
-            f"mode={agent_mode} role={route.role}"
+            f"role={route.role}"
         )
 
         # Resolve LLM config eagerly — credit check must happen before SSE stream starts
@@ -503,10 +502,6 @@ async def _handle_send_message(
         # turns, which never pass through this route, keep their own model.
         requested_model = request.llm_model or None
         held_model = thread_meta.get("llm_model") if thread_meta else None
-        # A thread Flash started holds a model picked for Flash's slot. Its
-        # promotion forgets it, but only once the turn runs, so this first
-        # turn passes it over too.
-        taken_over = bool(thread_meta) and thread_meta.get("msg_type") == "flash"
         named_model = (
             thread_model.NamedModel(requested_model, seen=held_model)
             if requested_model
@@ -536,7 +531,7 @@ async def _handle_send_message(
             user_id,
             thread_id,
             named=requested_model,
-            held=None if taken_over else held_model,
+            held=held_model,
             fall_back=from_service,
             resolve=resolve,
         )
@@ -646,11 +641,11 @@ async def _prime_dispatch(
         DISPATCH_STARTED_MARKER,
         DISPATCH_STEERED_MARKER,
     )
-    from src.server.services.report_back.flash import pointer, reserve
+    from src.server.services.report_back.handoff import pointer, reserve
 
     # Report-back idempotency: a lost-response retry of the drainer's POST
     # must NOT start a second summary run. The claim CM SET-NXs the
-    # per-(flash, ptc) run pointer (atomic on its own — no outer lock needed);
+    # per-(dispatcher, ptc) run pointer (atomic on its own — no outer lock needed);
     # a prior admission's incumbent run_id is returned instead, and a
     # non-consummated exit (e.g. a priming failure below) releases the claim.
     # No-op unless report_back_ptc_thread_id is set.
@@ -691,7 +686,7 @@ async def _prime_dispatch(
             logger.info(
                 "[PTC_DISPATCH] Idempotent report-back: returning "
                 f"in-flight run {rb_claim.incumbent} for ptc={rb_ptc} on "
-                f"flash thread {thread_id} (no second run)"
+                f"thread {thread_id} (no second run)"
             )
             return JSONResponse({
                 "status": "dispatched",
@@ -703,7 +698,7 @@ async def _prime_dispatch(
             await scope.release_slot()
             logger.warning(
                 f"[PTC_DISPATCH] Report-back pair for ptc={rb_ptc} on "
-                f"flash thread {thread_id} was already settled; refusing "
+                f"thread {thread_id} was already settled; refusing "
                 "to schedule an orphan summary"
             )
             # 410 is deliberately outside the executor's retry set: the
@@ -720,7 +715,7 @@ async def _prime_dispatch(
             await scope.release_slot()
             logger.info(
                 f"[PTC_DISPATCH] Report-back for ptc={rb_ptc} on "
-                f"flash thread {thread_id} has a rowless incumbent "
+                f"thread {thread_id} has a rowless incumbent "
                 "inside its priming lease; deferring (503 retriable)"
             )
             # 503 is inside the executor's always-retried set: the
@@ -878,7 +873,7 @@ async def watch_thread(thread_id: str, x_user_id: CurrentUserId):
     """Watch for new workflow activity on a thread via SSE + Redis pub/sub.
 
     Opens a lightweight SSE connection that emits a ``workflow_started`` event
-    each time a new workflow begins on this thread (e.g. a flash report-back
+    each time a new workflow begins on this thread (e.g. a report-back
     after a PTC completes). The connection stays open across the whole chain so
     N concurrent PTCs' report-backs are all delivered on one subscription; the
     client reconnects via ``/messages/stream`` per event and closes the watch
@@ -890,7 +885,7 @@ async def watch_thread(thread_id: str, x_user_id: CurrentUserId):
     await auth_api.require_thread_owner(thread_id, x_user_id)
 
     from src.utils.cache.redis_cache import get_cache_client
-    from src.server.services.report_back.flash.core import watch_wakes
+    from src.server.services.report_back.handoff.core import watch_wakes
 
     async def watch_generator():
         cache = get_cache_client()
@@ -1077,16 +1072,10 @@ async def get_thread_status(
         raise HTTPException(status_code=404, detail="Thread not found")
     if meta["user_id"] != x_user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
-    # "" for a thread with no kind, so the report-back read takes it as known
-    # rather than looking the thread up again.
-    msg_type = meta.get("msg_type") or ""
-
     if fields == "report_back":
-        from src.server.services.report_back.flash.status import read_report_back_slice
+        from src.server.services.report_back.handoff.status import read_report_back_slice
 
-        return await read_report_back_slice(
-            thread_id, msg_type=msg_type, user_id=meta["user_id"]
-        )
+        return await read_report_back_slice(thread_id, user_id=meta["user_id"])
 
     from src.server.database.runs import outbox as outbox_db
     from src.server.services.thread_status import read_thread_runtime_status
@@ -1094,7 +1083,6 @@ async def get_thread_status(
     status = await read_thread_runtime_status(
         thread_id,
         is_shared=bool(meta["is_shared"]),
-        msg_type=msg_type,
         user_id=meta["user_id"],
     )
     # The user's steers no run has read yet, such as those an errored turn

@@ -153,7 +153,6 @@ class SubagentConfig(BaseModel):
     """
 
     description: str | None = None
-    mode: Literal["ptc", "flash"] = "ptc"
     model: str | None = None
     role_prompt: str = ""
     role_prompt_template: str | None = None
@@ -238,32 +237,33 @@ class LLMConfig(BaseModel):
     """LLM configuration - references an LLM from models.json."""
 
     name: str  # Name/alias from src/llms/manifest/models.json
-    flash: str | None = None  # Background model, defaults to main llm if None
+    background: str | None = None  # Background model, defaults to main llm if None
     compaction: str | None = None  # LLM for context compaction (summarization step)
     fetch: str | None = None  # LLM for web content extraction (fetch tool)
     fallback: list[str] | None = None  # Fallback model names for retry exhaustion
 
     @property
-    def flash_name(self) -> str:
+    def background_name(self) -> str:
         """The Background model, resolving the ``name`` fallback.
 
         Callers (metadata, tuning lookups) have to agree on which model that
         is, so the rule lives here rather than being spelled out at each site.
         """
-        return self.flash or self.name
+        return self.background or self.name
 
-    # Blank fetch means "whatever flash is for this turn". Resolved on read, not
-    # at load: a user's flash preference replaces ``flash`` per turn, and a
-    # value baked in at load would keep the deployment's flash instead. Blank
-    # compaction means the model the turn runs, which a server turn writes in
-    # (``select_model``); read here it is the PTC model.
+    # Blank fetch means "whatever the Background model is for this turn".
+    # Resolved on read, not at load: a user's Background preference replaces
+    # ``background`` per turn, and a value baked in at load would keep the
+    # deployment's instead. Blank compaction means the model the turn runs,
+    # which a server turn writes in (``select_model``); read here it is the
+    # primary model.
     @property
     def compaction_name(self) -> str | None:
         return self.compaction or self.name
 
     @property
     def fetch_name(self) -> str | None:
-        return self.fetch or self.flash
+        return self.fetch or self.background
 
 
 class AgentConfig(BaseModel):

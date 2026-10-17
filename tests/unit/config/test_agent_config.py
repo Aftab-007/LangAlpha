@@ -66,7 +66,7 @@ class TestLLMConfig:
     def test_defaults(self):
         cfg = LLMConfig(name="gpt-4o")
         assert cfg.name == "gpt-4o"
-        assert cfg.flash is None
+        assert cfg.background is None
         assert cfg.compaction is None
         assert cfg.fetch is None
         assert cfg.fallback is None
@@ -74,12 +74,12 @@ class TestLLMConfig:
     def test_all_fields(self):
         cfg = LLMConfig(
             name="claude-sonnet-4-5",
-            flash="claude-haiku-4-5",
+            background="claude-haiku-4-5",
             compaction="claude-haiku-4-5",
             fetch="claude-haiku-4-5",
             fallback=["gpt-4o", "gpt-4o-mini"],
         )
-        assert cfg.flash == "claude-haiku-4-5"
+        assert cfg.background == "claude-haiku-4-5"
         assert cfg.fallback == ["gpt-4o", "gpt-4o-mini"]
 
 
@@ -317,19 +317,17 @@ class TestAgentConfigGetLlmClient:
 class TestSubagentConfig:
     def test_defaults(self):
         cfg = SubagentConfig(description="Test agent")
-        assert cfg.mode == "ptc"
         assert cfg.model is None
         assert cfg.tools == ["execute_code", "filesystem"]
 
     def test_custom_fields(self):
         cfg = SubagentConfig(
             description="Research",
-            mode="flash",
             model="claude-haiku-4-5",
             tools=["web_search"],
         )
-        assert cfg.mode == "flash"
         assert cfg.model == "claude-haiku-4-5"
+        assert cfg.tools == ["web_search"]
 
     def test_effort_is_a_level_of_the_vocabulary(self):
         # An unknown word would reach no model while the pane showed it.

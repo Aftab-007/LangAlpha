@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from src.server.database.home_workspace import get_flash_workspace_id
+from src.server.database.home_workspace import get_home_workspace_id
 from src.server.models.automation import AutomationCreate
 from src.server.services.automations import lifecycle
 from src.server.services.automations.lifecycle import (
@@ -30,7 +30,7 @@ from tests.unit.server.services.automations._check_target import (  # noqa: F401
 OWNER = "user-owner"
 AUTOMATION_ID = "00000000-0000-4000-8000-000000000001"
 _LIFECYCLE = "src.server.services.automations.lifecycle"
-HOME = get_flash_workspace_id(OWNER)
+HOME = get_home_workspace_id(OWNER)
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +59,6 @@ def _row(methods=None):
         "cron_expression": "0 9 * * 1-5",
         "timezone": "UTC",
         "status": "active",
-        "agent_mode": "ptc",
         "workspace_id": HOME,
         "llm_model": None,
         "delivery_config": {"methods": methods} if methods is not None else None,

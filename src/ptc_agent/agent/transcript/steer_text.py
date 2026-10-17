@@ -22,12 +22,14 @@ from ptc_agent.agent.transcript.classify import STEERING_MARKERS
 SENDER_NAMES = {
     "user": "the user",
     "chief_of_staff": "the Chief of Staff",
+    # No longer a sender, but compaction still names it in steers delivered
+    # before it retired.
     "flash": "Flash",
     "agent": "the parent agent",
 }
 
 #: Senders that act for the user rather than for themselves.
-_ON_USERS_BEHALF = frozenset({"chief_of_staff", "flash"})
+_ON_USERS_BEHALF = frozenset({"chief_of_staff"})
 
 #: Where a steering message's steers start. What comes before them is reports
 #: owed to the thread, which read the same to every reader.

@@ -180,7 +180,7 @@ def test_blanks_the_text_of_a_system_query():
             "type": "system",
             "content": f"The analysis in workspace {_OWNER_WS} completed.",
             "metadata": {
-                "msg_type": "flash",
+                "msg_type": "ptc",
                 "report_source": {
                     "kind": "analyst",
                     "thread_id": "t-1",
@@ -192,7 +192,7 @@ def test_blanks_the_text_of_a_system_query():
     )
     assert content == ""
     # Its label names the same, so it goes too.
-    assert metadata == {"msg_type": "flash"}
+    assert metadata == {"msg_type": "ptc"}
 
 
 # --- An order's identifiers --------------------------------------------------

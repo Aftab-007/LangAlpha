@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from src.server.services.report_back.flash import keys, pointer, reserve
+from src.server.services.report_back.handoff import keys, pointer, reserve
 
 
 class FakePipeline:
@@ -414,17 +414,17 @@ class FakeClient:
             return 0
         if script is reserve.RESERVE_LUA:
             watch_key, user_key, origin_key = keys
-            ptc_id, flash_id, max_flash, max_user, ttl, origin_json = argv
+            ptc_id, dispatcher_id, max_thread, max_user, ttl, origin_json = argv
             prev = self._decoded(origin_key)
-            if isinstance(prev, dict) and prev.get("flash_thread_id") not in (
+            if isinstance(prev, dict) and prev.get("home_thread_id") not in (
                 None,
-                flash_id,
+                dispatcher_id,
             ):
                 return ["cross", 0, 0, ""]
             in_watch = ptc_id in self.sets.get(watch_key, set())
             in_user = ptc_id in self.sets.get(user_key, set())
-            if not in_watch and len(self.sets.get(watch_key, set())) >= int(max_flash):
-                return ["cap_flash", 0, 0, ""]
+            if not in_watch and len(self.sets.get(watch_key, set())) >= int(max_thread):
+                return ["cap_thread", 0, 0, ""]
             if not in_user and len(self.sets.get(user_key, set())) >= int(max_user):
                 return ["cap_user", 0, 0, ""]
             if not in_watch:
@@ -527,27 +527,27 @@ class FakeCache:
         self.kv.pop(key, None)
 
 
-def origin(ptc: str, flash: str = "flash-1", user: str = "u-1") -> dict:
+def origin(ptc: str, dispatcher: str = "cos-1", user: str = "u-1") -> dict:
     return {
-        "origin": "flash",
+        "origin": "home",
         "report_back": True,
-        "flash_thread_id": flash,
-        "flash_workspace_id": "fws-1",
+        "home_thread_id": dispatcher,
+        "home_workspace_id": "fws-1",
         "ptc_thread_id": ptc,
         "ptc_workspace_id": f"ws-{ptc}",
         "user_id": user,
     }
 
 
-def seed_dispatched(cache: FakeCache, flash: str, ptcs: list[str], user: str = "u-1") -> None:
+def seed_dispatched(cache: FakeCache, dispatcher: str, ptcs: list[str], user: str = "u-1") -> None:
     """Mirror what reservation + origin recording leave behind for each FRESH
     dispatch (the reserve script created both memberships, so the origin
     carries ownership of them)."""
     for ptc in ptcs:
-        cache.client.sets.setdefault(keys.flash_watch_key(flash), set()).add(ptc)
-        cache.client.sets.setdefault(keys.flash_user_pending_key(user), set()).add(ptc)
+        cache.client.sets.setdefault(keys.watch_key(dispatcher), set()).add(ptc)
+        cache.client.sets.setdefault(keys.user_pending_key(user), set()).add(ptc)
         cache.kv[keys.ptc_origin_key(ptc)] = {
-            **origin(ptc, flash, user),
+            **origin(ptc, dispatcher, user),
             "owns_watch": True,
             "owns_user": True,
         }
