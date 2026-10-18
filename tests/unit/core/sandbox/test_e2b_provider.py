@@ -50,7 +50,7 @@ def _info(state: str = "running", left_s: float = 3600) -> SimpleNamespace:
     now = datetime.now(UTC)
     return SimpleNamespace(
         sandbox_id="sbx-1",
-        name="ptc-base-standard-abc",
+        name="langalpha-standard-abc",
         state=SimpleNamespace(value=state),
         started_at=now,
         end_at=now + timedelta(seconds=left_s),
@@ -289,7 +289,7 @@ class TestTemplateReadiness:
 
         client.AsyncTemplate.build.assert_awaited_once()
         assert client.AsyncSandbox.create.await_args.kwargs["template"].startswith(
-            "ptc-base-standard-"
+            "langalpha-standard-"
         )
 
     @pytest.mark.asyncio
@@ -301,7 +301,7 @@ class TestTemplateReadiness:
         client.AsyncTemplate.get_build_status.assert_not_awaited()
         assert client.AsyncSandbox.create.await_count == 1
         assert client.AsyncSandbox.create.await_args.kwargs["template"].startswith(
-            "ptc-base-standard-"
+            "langalpha-standard-"
         )
 
     @pytest.mark.asyncio

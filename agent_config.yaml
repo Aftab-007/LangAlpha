@@ -49,7 +49,7 @@ sandbox:
   e2b:
     auto_stop_interval: 3600 # seconds idle before the sandbox pauses
     max_timeout: 3600 # longest continuous run your plan allows (Hobby 3600, Pro 86400); caps every timeout
-    template_name: "ptc-base" # prefix of the per-tier templates: <template_name>-<tier>-<hash>
+    template_name: "langalpha" # prefix of the per-tier templates: <template_name>-<tier>-<hash>
     template_auto_create: true # build a tier's template on first use if missing (takes minutes); false requires `make e2b-templates`
     # false makes ports answer only the preview proxy (needs PREVIEW_PROXY_BASE_URL).
     # A computer keeps the value it was created with, so turning this back on

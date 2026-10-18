@@ -201,7 +201,7 @@ class E2BConfig(CredentialedSandboxConfig):
     # The plan's longest continuous run (3600 on Hobby, 86400 on Pro). It caps
     # every timeout we ask for.
     max_timeout: int = Field(default=3600, ge=300, le=86400)
-    # Prefix of the per-tier template names; None uses "ptc-base".
+    # Prefix of the per-tier template names; None uses "langalpha".
     template_name: str | None = None
     template_auto_create: bool = True
     # Whether a sandbox's ports answer anyone who has its URL. False makes each

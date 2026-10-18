@@ -313,7 +313,7 @@ class E2BProvider(SandboxProvider):
         """``<prefix>-<tier>-<hash>``, where the hash covers the recipe and size."""
         identity = image_identity(self._image_steps(mcp_packages, preset), preset)
         identity["builder"] = {"e2b": _TEMPLATE_REVISION, "warm": list(_WARM_IMPORTS)}
-        prefix = self._config.template_name or "ptc-base"
+        prefix = self._config.template_name or "langalpha"
         raw = f"{prefix}-{tier}-{config_hash(identity)}".lower()
         return _TEMPLATE_NAME_INVALID.sub("-", raw)
 
