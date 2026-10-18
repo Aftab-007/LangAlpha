@@ -127,6 +127,9 @@ _REDIS_BACKGROUND_SINGLETONS: tuple[tuple[str, str], ...] = (
     # Refreshes expiring MCP OAuth connections ahead of the hot path; the
     # per-connection advisory try-lock dedups it across workers.
     ("McpOAuthRefreshSweeper", "src.server.services.mcp_oauth.sweep"),
+    # Keeps running sandboxes' market-data tokens fresh between turns; a
+    # claim on each computer's row in Postgres dedups it across workers.
+    ("DataTokenSweeper", "src.server.services.data_token_sweep"),
 )
 
 

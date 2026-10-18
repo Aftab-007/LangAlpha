@@ -1,8 +1,6 @@
 """PTC Sandbox - Manages sandbox for Programmatic Tool Calling execution."""
 
 import asyncio
-import json
-import secrets
 import shlex
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
@@ -46,9 +44,11 @@ from ..project_context import ProjectContext, current_project
 from ..tool_generator import ToolFunctionGenerator
 
 from ptc_agent.core.sandbox._shared import (
+    REPLACE_UNLESS_NEWER_SCRIPT,
     ExecutionResult,
     SyncResult,
     _internal_package_files,
+    publish_private_file,
 )
 from ptc_agent.core.sandbox import assets as _assets
 from ptc_agent.core.sandbox import execution as _execution
@@ -65,13 +65,6 @@ class PTCSandbox:
     """Manages sandbox for Programmatic Tool Calling (PTC) execution."""
 
     DEFAULT_DEPENDENCIES = DEFAULT_DEPENDENCIES
-
-    # Fallback only, for a mint response that carries no expires_in. The live
-    # threshold derives from it (see _token_needs_refresh): the TTL is set
-    # platform-side, so hardcoding it here lets the two drift apart silently.
-    TOKEN_FRESHNESS_SECONDS = 10 * 60
-    # Re-upload once the sandbox's copy is this far through the token's life.
-    TOKEN_REFRESH_FRACTION = 0.6
 
     def __init__(
         self, config: CoreConfig, mcp_registry: MCPRegistry | None = None,
@@ -454,34 +447,20 @@ class PTCSandbox:
 
         logger.info("Sandbox workspace ready", sandbox_id=self.sandbox_id)
 
-    async def setup_tools_and_mcp(
-        self,
-        *,
-        tokens: dict | None = None,
-        user_id: str | None = None,
-        workspace_id: str | None = None,
-    ) -> None:
+    async def setup_tools_and_mcp(self) -> None:
         """Install tool modules and start MCP servers.
 
         Requires MCP registry to be connected first.
-
-        Args:
-            tokens: Pre-minted OAuth tokens (written to initial manifest).
-            user_id: User ID for token tracking in manifest.
-            workspace_id: Workspace ID for token tracking in manifest.
         """
         logger.info("Setting up tools and MCP servers")
 
-        # Upload MCP server files, internal packages, and tokens in parallel (disjoint paths).
-        # Tokens must be on disk before _start_internal_mcp_servers reads them.
-        # These run here rather than in the first sync so they overlap the
-        # registry connect; the manifest below records them, and that sync
-        # skips whatever it finds recorded at the same version.
-        _, _, token_entry = await asyncio.gather(
+        # Disjoint paths, so in parallel. These run here rather than in the
+        # first sync so they overlap the registry connect; the manifest below
+        # records them, and that sync skips whatever it finds recorded at the
+        # same version.
+        await asyncio.gather(
             self._upload_mcp_server_files_impl(),  # → mcp_servers/
             self._upload_internal_packages(),  # → _internal/src/
-            # → _internal/.mcp_tokens.json; None without tokens or on failure
-            self.upload_token_file(tokens, user_id=user_id, workspace_id=workspace_id),
         )
 
         # No tool install and no supervisor start here. Which workspace folder
@@ -495,67 +474,34 @@ class PTCSandbox:
 
         # The initial manifest records only what is now on disk, so the first
         # sync diffs against it like any other. Tool modules are not: the sync
-        # installs them for the folder it knows. Nor is a token that failed to
-        # upload, which the next sync then sees as owed.
+        # installs them for the folder it knows.
         try:
             manifest = await self._compute_sandbox_manifest()
             manifest["modules"].pop("tool_modules", None)
-            if token_entry is not None:
-                manifest["modules"]["tokens"] = token_entry
             await self._write_unified_manifest(manifest)
         except Exception as e:
             logger.warning("Failed to write initial unified manifest", error=str(e))
 
         logger.info("Tools and MCP servers ready", sandbox_id=self.sandbox_id)
 
-    async def upload_token_file(
-        self,
-        tokens: dict | None,
-        *,
-        user_id: str | None = None,
-        workspace_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Write scoped auth tokens to a file in the sandbox.
+    async def upload_token_file(self, payload: dict[str, Any]) -> bool:
+        """Write the market-data token the in-sandbox client reads.
 
-        Tokens are written as a JSON file (not env vars) because refresh tokens
-        rotate on each use and the MCP server needs to update them in-place.
-        Tokens carry deterministic prefixes (gxsa_, gxsr_) so the host-side
-        LeakDetectionMiddleware can pattern-match them without knowing exact values.
-        A failure is logged rather than raised. Returns the manifest entry for
-        the file once it is written, stamped now, and None otherwise, so the
-        manifest records only a token that is on disk.
+        A file, not an env var, so a fresh token reaches running MCP servers,
+        which re-read it when it changes. The server writes every token; the
+        sandbox only reads. True only once the write is confirmed.
         """
-        import os
-
-        if not tokens or not self.runtime:
-            return None
-
-        # Sandboxes are remote, so these must stay publicly reachable even when
-        # the host reaches the same services over a private address.
-        public_base = os.getenv("PUBLIC_API_BASE_URL", "").rstrip("/")
-
-        token_data = json.dumps(
-            {
-                "access_token": tokens["access_token"],
-                "refresh_token": tokens["refresh_token"],
-                "client_id": tokens["client_id"],
-                "auth_service_url": public_base or os.getenv("AUTH_SERVICE_URL", ""),
-                "ginlix_data_url": public_base or os.getenv("GINLIX_DATA_URL", ""),
-            }
+        if not self.runtime:
+            return False
+        return await publish_private_file(
+            self.runtime,
+            self._token_file_path,
+            payload,
+            what="sandbox token file",
+            script=REPLACE_UNLESS_NEWER_SCRIPT,
+            args=(str(payload["iat_ms"]),),
+            call=self._safe_call,
         )
-
-        try:
-            await self._runtime_call(
-                self.runtime.upload_file,
-                token_data.encode("utf-8"),
-                self._token_file_path,
-                retry_policy=RetryPolicy.SAFE,
-            )
-            logger.debug("Uploaded sandbox token file", path=self._token_file_path)
-        except Exception as e:
-            logger.warning("Failed to upload sandbox token file", error=str(e))
-            return None
-        return _assets.token_manifest_entry(tokens, user_id, workspace_id)
 
     async def upload_egress_relay_credentials(self, payload: dict | None) -> bool:
         """Write (or remove) the egress-relay credential file in the sandbox.
@@ -564,21 +510,15 @@ class PTCSandbox:
         server→grant map. The generated MCP client reads it at call time, so a
         re-upload (JWT remint, grant change) needs no sandbox convergence.
 
-        The write is atomic: content goes to a per-write temp path, gets its
-        0600 mode, then replaces the target with a same-directory
-        ``os.replace`` (rename(2), which fails rather than copies across a
-        filesystem boundary — unlike ``mv``). A reader — the in-sandbox client
-        reads this on every tool call — therefore sees either the complete old
-        file or the complete new one, never a truncated write. That atomicity is
-        what lets two uvicorn workers push the same workspace concurrently
-        without a cross-worker lock: the last rename wins, both relay JWTs are
+        The write is atomic (``publish_private_file``), which is what lets two
+        uvicorn workers push the same workspace concurrently without a
+        cross-worker lock: the last rename wins, both relay JWTs are
         independently valid, and the grant map converges on the next push.
 
-        Returns ``True`` only on **confirmed** success — a nonzero exit from the
-        sandbox is a failure, not a raised exception, so the exit code is
-        checked explicitly. The caller must not record a fresh binding on a
-        ``False`` return, or the process would believe it published a token it
-        did not and skip reminting until that phantom token nears expiry.
+        Returns ``True`` only on **confirmed** success. The caller must not
+        record a fresh binding on a ``False`` return, or the process would
+        believe it published a token it did not and skip reminting until that
+        phantom token nears expiry.
         """
         if not self.runtime:
             return False
@@ -597,49 +537,16 @@ class PTCSandbox:
                 logger.warning("Failed to remove egress relay file", error=str(e))
                 return False
 
-        # 128-bit unique temp so concurrent writers to the same sandbox never
-        # share (and corrupt) a staging file before either renames it into place.
-        tmp_path = f"{path}.{secrets.token_hex(16)}.tmp"
-        try:
-            await self._runtime_call(
-                self.runtime.upload_file,
-                json.dumps(payload).encode("utf-8"),
-                tmp_path,
-                retry_policy=RetryPolicy.SAFE,
-            )
-            # chmod the temp before the rename so the file is 0600 the instant
-            # it appears at the real path — the relay JWT is never briefly
-            # world-readable there (tar/dev uploads land 0644). os.replace is a
-            # same-directory rename(2): atomic, and it raises (nonzero exit)
-            # rather than silently doing a non-atomic cross-fs copy the way
-            # ``mv`` would. argv-passing keeps the paths out of the shell.
-            result = await self._runtime_call(
-                self.runtime.exec,
-                "chmod 600 {t} && python3 -I -c "
-                "'import os,sys; os.replace(sys.argv[1], sys.argv[2])' "
-                "{t} {p}".format(t=shlex.quote(tmp_path), p=shlex.quote(path)),
-                retry_policy=RetryPolicy.SAFE,
-            )
-            if getattr(result, "exit_code", -1) != 0:
-                raise RuntimeError(
-                    f"publish exec exit={getattr(result, 'exit_code', '?')} "
-                    f"stderr={getattr(result, 'stderr', '')[:200]}"
-                )
-            logger.debug("Uploaded egress relay credentials", path=path)
-            return True
-        except Exception as e:
-            logger.warning("Failed to upload egress relay credentials", error=str(e))
-            # A failed rename would otherwise orphan the staging file; a warm
-            # sandbox reminting every few minutes must not accumulate them.
-            try:
-                await self._runtime_call(
-                    self.runtime.exec,
-                    f"rm -f {shlex.quote(tmp_path)}",
-                    retry_policy=RetryPolicy.SAFE,
-                )
-            except Exception:
-                pass
-            return False
+        return await publish_private_file(
+            self.runtime,
+            path,
+            payload,
+            what="egress relay credentials",
+            call=self._safe_call,
+        )
+
+    def _safe_call(self, func: Callable[..., Any], *args: Any) -> Any:
+        return self._runtime_call(func, *args, retry_policy=RetryPolicy.SAFE)
 
     async def ensure_sandbox_ready(self) -> None:
         await self._wait_ready()
@@ -1122,37 +1029,6 @@ class PTCSandbox:
 
 
     @staticmethod
-    def _token_needs_refresh(
-        remote_token_mod: dict[str, Any] | None,
-        tokens: dict | None,
-        user_id: str | None,
-        workspace_id: str | None,
-    ) -> bool:
-        """Check whether tokens need to be re-uploaded based on freshness."""
-        if not tokens:
-            return False
-        if remote_token_mod is None:
-            return True
-        # Re-mint if user or workspace changed
-        if remote_token_mod.get("user_id") != (user_id or ""):
-            return True
-        if remote_token_mod.get("workspace_id") != (workspace_id or ""):
-            return True
-        # Re-mint once the remote copy is most of the way through its life.
-        ttl = tokens.get("expires_in") or 0
-        threshold = (
-            ttl * PTCSandbox.TOKEN_REFRESH_FRACTION
-            if ttl > 0
-            else PTCSandbox.TOKEN_FRESHNESS_SECONDS
-        )
-        minted_at = remote_token_mod.get("minted_at", 0)
-        age = time.time() - minted_at
-        if age > threshold:
-            return True
-        return False
-
-
-    @staticmethod
     def _classify_execution_error(
         e: Exception,
         duration: float,
@@ -1480,8 +1356,6 @@ class PTCSandbox:
         disabled_skills: frozenset[str] = frozenset(),
         reusing_sandbox: bool = False,
         force_refresh: bool = False,
-        tokens: dict | None = None,
-        user_id: str | None = None,
         project: "ProjectContext | None" = None,
         root_owner_dir_name: str | None = None,
         workspace_dir_names: tuple[str, ...] = (),
@@ -1494,8 +1368,6 @@ class PTCSandbox:
             disabled_skills=disabled_skills,
             reusing_sandbox=reusing_sandbox,
             force_refresh=force_refresh,
-            tokens=tokens,
-            user_id=user_id,
             project=project,
             root_owner_dir_name=root_owner_dir_name,
             workspace_dir_names=workspace_dir_names,

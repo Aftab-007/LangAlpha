@@ -1231,7 +1231,7 @@ class TestDiscoveryKickSeesCachedSession:
     def _stub_provisioning(wm):
         """Everything the provision path reaches that is not the kick itself."""
         wm._workspace_folder = AsyncMock(return_value="ws")
-        wm._mint_sandbox_tokens = AsyncMock(return_value={})
+        wm._keep_data_token = AsyncMock()
         wm._apply_session_mcp = AsyncMock(
             return_value=_resolved(1, servers=[_srv("alpha")])
         )

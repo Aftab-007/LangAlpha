@@ -732,6 +732,42 @@ class TestRuntimeReadsTheRootVault:
         finally:
             runtime._apply_config_dict({})
 
+    def test_the_data_token_file_is_stamped_only_for_a_server_naming_it(
+        self, computer
+    ):
+        """The server writes a fresh market-data token every half hour and
+        its reader picks it up itself; stamping the file for every server
+        would respawn each trusted one on every write."""
+        tokens = computer.layout.mcp_tokens
+        trusted = {"transport": "stdio", "untrusted": False, "command": "builtin"}
+        reader = {
+            "transport": "stdio",
+            "untrusted": True,
+            "command": "reader",
+            "env": {"DATA_TOKEN_FILE": tokens},
+        }
+        try:
+            runtime._apply_config_dict(
+                {
+                    "working_dir": computer.root,
+                    "fold_union": False,
+                    "servers": {"builtin": trusted},
+                }
+            )
+            assert tokens not in [row[0] for row in runtime.secret_fingerprint()]
+
+            runtime._apply_config_dict(
+                {
+                    "working_dir": computer.root,
+                    "fold_union": False,
+                    "servers": {"builtin": trusted, "reader": reader},
+                }
+            )
+            assert runtime.server_secret_dependencies("reader") == [tokens]
+            assert tokens in [row[0] for row in runtime.secret_fingerprint()]
+        finally:
+            runtime._apply_config_dict({})
+
     def test_a_discovery_client_does_not_fold_the_union(self, computer):
         computer.sync(A, [_user_server("crm", "https://a.example/pre-edit")])
         edited = _user_server("crm", "https://a.example/edited")

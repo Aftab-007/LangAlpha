@@ -210,6 +210,11 @@ class WorkspaceManager(ComputerManager):
         runtime = getattr(getattr(session, "sandbox", None), "runtime", None)
         if runtime is not None:
             binding = await self.resolve_binding(workspace_id)
+            # Every acquire, warm ones included: no sync runs on most of them,
+            # and an idle computer's token is left to run out, so this is
+            # what has one in place before the turn's code runs. A read of
+            # the row when the token has time left.
+            await self._keep_data_token(binding.computer_id, user_id, session.sandbox)
             await self._settle_folders(
                 binding.computer_id, runtime, root=binding.root_dir, own_run_id=run_id
             )

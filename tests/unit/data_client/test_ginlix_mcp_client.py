@@ -7,12 +7,14 @@ every non-HTTP failure through ``_error_dict``, which surfaces only the action
 label plus the exception type — never the URL.
 """
 
-import asyncio
+import json
+import os
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
+from src.data_client.ginlix_data import mcp_client
 from src.data_client.ginlix_data.mcp_client import GinlixMCPClient
 
 # Made-up internal endpoint — a stand-in whose host/path must never surface.
@@ -100,40 +102,92 @@ class TestV2OverTheSandboxTransport:
         assert url == "/api/v1/data/aggregates/option/O%3ASPY%3Fx%2F..%2Fy"
 
 
-class TestTokenRefresh:
-    @pytest.mark.asyncio
-    async def test_concurrent_expiries_refresh_once_and_every_caller_retries(self):
-        """The refresh token rotates on use, so a second refresh racing the
-        first spends a dead token and its caller fails on the 401."""
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.headers["Authorization"] == "Bearer fresh":
-                return httpx.Response(200, json={"quotes": {}})
-            return httpx.Response(401, json={"detail": "expired"})
+def _write_token(path, token: str) -> None:
+    """Replace the file whole, as the server does."""
+    staged = path.with_suffix(".tmp")
+    staged.write_text(
+        json.dumps({"access_token": token, "ginlix_data_url": "http://ginlix-data.test"})
+    )
+    os.replace(staged, path)
 
+
+class TestTokenFile:
+    """The server writes every token; the client only reads, so a new one
+    reaches it by the file changing."""
+
+    @pytest.fixture
+    def token_file(self, tmp_path, monkeypatch):
+        path = tmp_path / ".mcp_tokens.json"
+        monkeypatch.setattr(mcp_client, "TOKEN_FILE", path)
+        return path
+
+    @staticmethod
+    def _client(handler) -> GinlixMCPClient:
         client = GinlixMCPClient()
         client._http = httpx.AsyncClient(
-            base_url="http://ginlix-data.test", transport=httpx.MockTransport(handler),
-            headers={"Authorization": "Bearer stale"},
+            base_url="http://ginlix-data.test", transport=httpx.MockTransport(handler)
         )
-        refreshes = 0
+        return client
 
-        async def refresh() -> str | None:
-            nonlocal refreshes
-            refreshes += 1
-            first = refreshes == 1
-            await asyncio.sleep(0.01)
-            return "fresh" if first else None  # the rotated token is spent
+    @pytest.mark.asyncio
+    async def test_a_replaced_file_is_read_before_the_next_request(self, token_file):
+        seen: list[str] = []
 
-        client._refresh_access_token = refresh
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.headers["Authorization"])
+            return httpx.Response(200, json={})
+
+        client = self._client(handler)
         try:
-            responses = await asyncio.gather(
-                *(client.request("GET", "/api/v2/data/quotes") for _ in range(3))
-            )
+            _write_token(token_file, "one")
+            await client.request("GET", "/api/v2/data/quotes")
+            await client.request("GET", "/api/v2/data/quotes")
+            _write_token(token_file, "two")
+            await client.request("GET", "/api/v2/data/quotes")
         finally:
             await client.close()
 
-        assert [r.status_code for r in responses] == [200, 200, 200]
-        assert refreshes == 1
+        assert seen == ["Bearer one", "Bearer one", "Bearer two"]
+
+    @pytest.mark.asyncio
+    async def test_a_401_retries_once_with_a_token_written_meanwhile(self, token_file):
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.headers["Authorization"])
+            if request.headers["Authorization"] == "Bearer fresh":
+                return httpx.Response(200, json={})
+            # The server's write lands while this request is in flight.
+            _write_token(token_file, "fresh")
+            return httpx.Response(401, json={"detail": "expired"})
+
+        client = self._client(handler)
+        try:
+            _write_token(token_file, "stale")
+            resp = await client.request("GET", "/api/v2/data/quotes")
+        finally:
+            await client.close()
+
+        assert resp.status_code == 200
+        assert seen == ["Bearer stale", "Bearer fresh"]
+
+    @pytest.mark.asyncio
+    async def test_a_401_with_no_newer_token_is_not_retried(self, token_file):
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.headers["Authorization"])
+            return httpx.Response(401, json={"detail": "revoked"})
+
+        client = self._client(handler)
+        try:
+            _write_token(token_file, "revoked")
+            resp = await client.request("GET", "/api/v2/data/quotes")
+        finally:
+            await client.close()
+
+        assert resp.status_code == 401
+        assert seen == ["Bearer revoked"]
 
 
 class TestFetchStockDataStatus:
@@ -144,7 +198,7 @@ class TestFetchStockDataStatus:
     @pytest.mark.asyncio
     async def test_a_4xx_reaches_the_caller_with_its_status(self, status, reported):
         """price_data reads the status to decide whether FMP may still answer,
-        so a 401 that outlived the refresh has to arrive as one."""
+        so a 401 no newer token answered has to arrive as one."""
         client = GinlixMCPClient()
         client._http = httpx.AsyncClient(
             base_url="http://ginlix-data.test",
@@ -152,7 +206,6 @@ class TestFetchStockDataStatus:
                 lambda request: httpx.Response(status, json={"detail": "nope"})
             ),
         )
-        client._refresh_access_token = AsyncMock(return_value=None)
         try:
             result = await client.fetch_stock_data("AAPL", "1day", "2026-10-01", "2026-10-08")
         finally:

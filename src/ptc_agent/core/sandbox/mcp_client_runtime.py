@@ -1854,10 +1854,14 @@ def secret_fingerprint() -> list:
 
     A stdio server's credentials are baked into its environment at spawn, so a
     rotation reaches it only by respawning; the daemon watches this to know
-    when holding a process has become the wrong thing to do.
+    when holding a process has become the wrong thing to do. The market-data
+    token file is not watched on its own: its reader picks up a new token
+    itself, and the server writes one every half hour, which would respawn
+    every trusted server each time. A server whose config names it still
+    depends on it.
     """
     stamps = []
-    paths = {_VAULT_SECRETS_FILE, _MCP_TOKENS_FILE, _EGRESS_RELAY_FILE}
+    paths = {_VAULT_SECRETS_FILE, _EGRESS_RELAY_FILE}
     for name in _SERVER_CONFIGS:
         dependencies = server_secret_dependencies(name)
         if dependencies:

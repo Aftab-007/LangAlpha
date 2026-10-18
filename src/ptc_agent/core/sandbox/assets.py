@@ -366,28 +366,6 @@ async def _compute_skills_module(
     return await asyncio.to_thread(build)
 
 
-def token_manifest_entry(
-    tokens: dict, user_id: str | None, workspace_id: str | None
-) -> dict[str, Any]:
-    """The manifest entry for a token file written just now.
-
-    Only the upload that wrote the file makes one, so the entry never
-    describes a token that is not on disk. Version captures the config
-    identity; freshness is checked via minted_at.
-    """
-    token_config_parts = {
-        "user_id": user_id or "",
-        "workspace_id": workspace_id or "",
-        "client_id": tokens.get("client_id", ""),
-    }
-    return {
-        "version": _hash_dict(token_config_parts),
-        "minted_at": time.time(),
-        "user_id": user_id or "",
-        "workspace_id": workspace_id or "",
-    }
-
-
 async def _compute_sandbox_manifest(
     sandbox: "PTCSandbox",
     *,
@@ -395,11 +373,7 @@ async def _compute_sandbox_manifest(
     managed_skill_root: str | None = None,
     disabled_skills: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Compute the unified local manifest for the sandbox asset modules.
-
-    Everything but the token file, whose entry only its upload can make
-    (``token_manifest_entry``).
-    """
+    """Compute the unified local manifest for the sandbox asset modules."""
     modules: dict[str, Any] = {}
     config_dir = getattr(sandbox.config, "config_file_dir", None)
 
@@ -708,8 +682,6 @@ async def sync_sandbox_assets(
     disabled_skills: frozenset[str] = frozenset(),
     reusing_sandbox: bool = False,
     force_refresh: bool = False,
-    tokens: dict | None = None,
-    user_id: str | None = None,
     project: ProjectContext | None = None,
     root_owner_dir_name: str | None = None,
     workspace_dir_names: tuple[str, ...] = (),
@@ -722,7 +694,7 @@ async def sync_sandbox_assets(
 
     Replaces the previous ``sync_tools()`` and ``sync_skills()`` methods
     with a single entry point that tracks MCP servers, data client, tool
-    modules, skills, and tokens in one manifest file.
+    modules, and skills in one manifest file.
 
     Args:
         skill_dirs: Ordered list of (local_path, sandbox_path) for skills.
@@ -738,8 +710,6 @@ async def sync_sandbox_assets(
             labels the sync's metrics: what is uploaded follows the sandbox's
             manifest, which on a new sandbox records what setup put there.
         force_refresh: Force re-upload of all modules regardless of manifest.
-        tokens: Pre-minted OAuth tokens (from workspace_manager).
-        user_id: User ID for token tracking.
         project: Which project this sync is for, carrying its id and its
             folder on the computer. None is a machine with no project on
             it yet, which still owns the root. The folder travels here and
@@ -795,7 +765,6 @@ async def sync_sandbox_assets(
             # Downstream joins a folder name onto the root; the root owner is
             # the only place a missing one is still a real answer.
             project = replace(project, dir_name="")
-        workspace_id = project.workspace_id or None
         dir_name = project.dir_name
 
         # Steps 0+1+2: all three are independent — parallelize
@@ -853,13 +822,7 @@ async def sync_sandbox_assets(
 
         # 3. Determine which modules changed (pure CPU). An unreadable manifest
         # says nothing about the disk, so everything goes up; a readable one
-        # is diffed whoever wrote it, a new sandbox's setup included. The token
-        # file is judged by its age rather than a version, so it is decided apart.
-        remote_tokens = ((remote_manifest or {}).get("modules") or {}).get("tokens")
-        tokens_due = bool(tokens) and (
-            force_refresh
-            or sandbox._token_needs_refresh(remote_tokens, tokens, user_id, workspace_id)
-        )
+        # is diffed whoever wrote it, a new sandbox's setup included.
         if force_refresh or remote_manifest is None:
             changed_modules = set(local_manifest["modules"].keys())
         else:
@@ -875,7 +838,7 @@ async def sync_sandbox_assets(
                 ):
                     changed_modules.add(mod_name)
 
-        if not changed_modules and not tokens_due:
+        if not changed_modules:
             # `is None` guard (like the slow path): the cached manifest may
             # already hold the merged local+agent-installed view — overwriting
             # it with the local-only view would drop agent-installed skills
@@ -965,39 +928,11 @@ async def sync_sandbox_assets(
             if on_progress:
                 on_progress("Syncing skills...")
             parallel_uploads.append(("skills", _do_skills_upload()))
-        if tokens_due:
-            if on_progress:
-                on_progress("Uploading tokens...")
-            parallel_uploads.append(
-                (
-                    "tokens",
-                    sandbox.upload_token_file(
-                        tokens, user_id=user_id, workspace_id=workspace_id
-                    ),
-                )
-            )
 
-        token_entry = None
         if parallel_uploads:
-            results = await asyncio.gather(*[coro for _, coro in parallel_uploads])
-            for (name, _), result in zip(parallel_uploads, results, strict=True):
-                if name == "tokens":
-                    # The token upload logs its failure instead of raising.
-                    token_entry = result
-                    if token_entry is None:
-                        continue
-                refreshed.append(name)
+            await asyncio.gather(*[coro for _, coro in parallel_uploads])
+            refreshed.extend(name for name, _ in parallel_uploads)
         _mark_sync("uploads")
-
-        # The tokens entry describes the token file on disk, which only an
-        # upload here changes. With no upload, keep the sandbox's entry as it
-        # was, minted_at included, so the next freshness check judges the
-        # token actually there. A failed upload leaves the file unknown, so
-        # the entry stays out and the next sync with tokens owes one.
-        if token_entry is not None:
-            local_manifest["modules"]["tokens"] = token_entry
-        elif not tokens_due and remote_tokens is not None:
-            local_manifest["modules"]["tokens"] = remote_tokens
 
         # Group 2: tool_modules AFTER mcp_servers (intent: derived from MCP definitions)
         if "tool_modules" in changed_modules or overlay_missing:
