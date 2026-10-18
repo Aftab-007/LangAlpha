@@ -875,7 +875,7 @@ async def test_concurrent_cold_attach_fits_the_pool(
         patch.object(manager, "_reconcile_skills", link_pass),
         patch.object(manager, "_apply_session_mcp", AsyncMock()),
         patch.object(manager, "_workspace_tool_view", MagicMock(return_value=object())),
-        patch.object(manager, "_mint_sandbox_tokens", AsyncMock(return_value={})),
+        patch.object(manager, "_keep_data_token", AsyncMock()),
         patch.object(manager, "_vault_snapshot", AsyncMock(return_value=(None, {}, ""))),
     ):
         async with _pool_of(test_db_uri, patched_get_db_connection, max_size=1, timeout=3):
@@ -948,7 +948,7 @@ async def test_concurrent_cold_restores_fit_the_pool(
         ),
         patch.object(manager, "_apply_session_mcp", AsyncMock()),
         patch.object(manager, "_workspace_tool_view", MagicMock(return_value=object())),
-        patch.object(manager, "_mint_sandbox_tokens", AsyncMock(return_value={})),
+        patch.object(manager, "_keep_data_token", AsyncMock()),
         patch.object(manager, "_vault_snapshot", AsyncMock(return_value=(None, {}, ""))),
     ):
         async with _pool_of(

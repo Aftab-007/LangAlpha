@@ -84,6 +84,7 @@ class ProvisioningMixin:
         # may name someone else's sandbox. NULL means nothing to destroy.
         computer_id = binding.computer_id
         durable_sandbox_id = binding.provider_ref
+        await self._revoke_data_token(computer_id)
         await self._revoke_livefs(computer_id)
         # Its previews end with it rather than at expiry, on every path that
         # retires a machine, the sweep's included.
@@ -200,16 +201,9 @@ class ProvisioningMixin:
             else None
         )
 
-        # Include tokens and user data in the manifest hash to skip unchanged uploads.
         _sync_t0 = time.time()
 
-        async def _mint_and_sync_assets() -> Any:
-            tokens = {}
-            if reusing_sandbox and user_id:
-                tokens = await self._mint_sandbox_tokens(
-                    user_id, workspace_id, binding.computer_id
-                )
-
+        async def _sync_assets() -> Any:
             user_skill_params = await sandbox_skill_sync_params(
                 user_id,
                 self.config.skills.sandbox_skills_base,
@@ -233,8 +227,6 @@ class ProvisioningMixin:
                         skill_dirs=skill_dirs,
                         reusing_sandbox=reusing_sandbox,
                         force_refresh=force_refresh,
-                        tokens=tokens or None,
-                        user_id=user_id,
                         project=ProjectContext(workspace_id, dir_name or ""),
                         root_owner_dir_name=await self._layout_root_owner_dir(
                             replace(binding, dir_name=dir_name)
@@ -257,15 +249,36 @@ class ProvisioningMixin:
             await self._stamp_mcp_config_version(binding.computer_id)
             return result
 
+        # The market-data token is the machine's, not this project's, and
+        # its write touches nothing the sync does, so it runs beside it. Only
+        # into a sandbox the computer is already bound to, which a token is
+        # recorded against; a fresh one gets its token once the acquire that
+        # built it has bound it.
+        token = (
+            asyncio.ensure_future(
+                self._keep_data_token(binding.computer_id, user_id, sandbox)
+            )
+            if reusing_sandbox
+            else None
+        )
         assets: Any = None
         try:
-            assets = await _mint_and_sync_assets()
-        except LayoutMigrationError:
+            try:
+                assets = await _sync_assets()
+            except LayoutMigrationError:
+                raise
+            except WorkspaceFolderMoving:
+                logger.info(
+                    f"Asset sync for {workspace_id} waits for its folder to land"
+                )
+            except Exception as e:
+                logger.warning(f"Asset sync failed for {workspace_id}: {e}")
+        except BaseException:
+            if token is not None:
+                token.cancel()
             raise
-        except WorkspaceFolderMoving:
-            logger.info(f"Asset sync for {workspace_id} waits for its folder to land")
-        except Exception as e:
-            logger.warning(f"Asset sync failed for {workspace_id}: {e}")
+        if token is not None:
+            await token
         total = (time.time() - _sync_t0) * 1000
         logger.info(f"[SYNC_DETAIL] workspace_id={workspace_id} total={total:.0f}ms")
         return assets
@@ -466,15 +479,9 @@ class ProvisioningMixin:
         computer_id = binding.computer_id
         dir_name = binding.dir_name
 
-        sandbox_tokens = await self._mint_sandbox_tokens(
-            user_id or "", workspace_id, computer_id
-        )
         session = self._session_handle(binding, core_config)
         try:
             await session.initialize(
-                sandbox_tokens=sandbox_tokens,
-                user_id=user_id,
-                workspace_id=workspace_id,
                 tier=tier,
                 auto_stop_minutes=auto_stop_minutes,
                 dir_name=dir_name,
@@ -634,6 +641,10 @@ class ProvisioningMixin:
                 f"Recovered workspace {workspace_id} but could not stamp activity: {e}"
             )
         await self._stamp_sandbox_config(binding)
+        # A rebuild no turn follows (a spec change, a platform-secret
+        # rotation) would otherwise leave the new sandbox without a token
+        # until the sweep reached it.
+        await self._keep_data_token(binding.computer_id, user_id, session.sandbox)
         return session
 
     async def _stamp_sandbox_config(self, binding: ComputerBinding) -> None:

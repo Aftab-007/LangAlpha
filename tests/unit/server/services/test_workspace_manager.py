@@ -3148,7 +3148,7 @@ class TestSandboxRecovery:
         mock_session_mgr.get_session.return_value = session
         mock_session_mgr.cleanup_session = AsyncMock()
 
-        manager._mint_sandbox_tokens = AsyncMock(return_value={})
+        manager._keep_data_token = AsyncMock()
         manager._apply_session_mcp = AsyncMock(return_value=None)
         manager._sync_sandbox_assets = AsyncMock()
         # Sandbox is created (initialize ok) but a later step fails.
@@ -5409,7 +5409,7 @@ class TestRecoverSandboxEntitledTier:
         mock_session_mgr.get_session.return_value = session
 
         manager._entitled_tier = AsyncMock(return_value="standard")
-        manager._mint_sandbox_tokens = AsyncMock(return_value={})
+        manager._keep_data_token = AsyncMock()
         manager._apply_session_mcp = AsyncMock(return_value=None)
         manager._sync_sandbox_assets = AsyncMock()
         manager._restore_files = AsyncMock()
@@ -5442,7 +5442,7 @@ class TestRecoverSandboxEntitledTier:
         mock_session_mgr.get_session.return_value = _make_mock_session()
 
         manager._entitled_tier = AsyncMock(return_value="standard")
-        manager._mint_sandbox_tokens = AsyncMock(return_value={})
+        manager._keep_data_token = AsyncMock()
         manager._apply_session_mcp = AsyncMock(return_value=None)
         manager._sync_sandbox_assets = AsyncMock()
         manager._restore_files = AsyncMock()
@@ -6329,7 +6329,7 @@ class TestDuplicateWorkspace:
 
     def _install_create_path(self, manager, session):
         """Stub the eager-create collaborators so the lock body runs clean."""
-        manager._mint_sandbox_tokens = AsyncMock(return_value={})
+        manager._keep_data_token = AsyncMock()
         manager._apply_session_mcp = AsyncMock()
         manager._sync_sandbox_assets = AsyncMock()
         manager._restore_files = AsyncMock()
@@ -6756,7 +6756,7 @@ class TestPlatformSecretWiring:
 
         status = AsyncMock(return_value=workspace)
         with (
-            patch.object(manager, "_mint_sandbox_tokens", AsyncMock(return_value={})),
+            patch.object(manager, "_keep_data_token", AsyncMock()),
             cm_patch("SessionManager") as session_mgr,
             patch.object(manager, "_apply_session_mcp", AsyncMock(return_value=None)),
             patch.object(manager, "_sync_sandbox_assets", AsyncMock()),
@@ -6808,7 +6808,7 @@ class TestPlatformSecretWiring:
         workspace_id = str(uuid.uuid4())
 
         with (
-            patch.object(manager, "_mint_sandbox_tokens", AsyncMock(return_value={})),
+            patch.object(manager, "_keep_data_token", AsyncMock()),
             cm_patch("SessionManager") as session_mgr,
             patch.object(manager, "_apply_session_mcp", AsyncMock(return_value=None)),
             patch.object(manager, "_sync_sandbox_assets", AsyncMock()),
@@ -7013,7 +7013,7 @@ class TestRestoreGuard:
         session = _make_mock_session()
         mock_session_mgr.get_session.return_value = session
         mock_session_mgr.cleanup_session = AsyncMock()
-        manager._mint_sandbox_tokens = AsyncMock(return_value={})
+        manager._keep_data_token = AsyncMock()
         manager._apply_session_mcp = AsyncMock(return_value=None)
         manager._sync_sandbox_assets = AsyncMock()
         # Stop at the restore: the rest of the spine needs a live pool.
@@ -7044,7 +7044,7 @@ class TestRestoreGuard:
         mock_get_ws.return_value = _make_workspace(workspace_id=ws_id, status="running")
         mock_session_mgr.get_session.return_value = _make_mock_session()
         mock_session_mgr.cleanup_session = AsyncMock()
-        manager._mint_sandbox_tokens = AsyncMock(return_value={})
+        manager._keep_data_token = AsyncMock()
         manager._apply_session_mcp = AsyncMock(return_value=None)
         manager._sync_sandbox_assets = AsyncMock()
         manager._restore_files = AsyncMock(side_effect=RuntimeError("stop here"))
@@ -7108,7 +7108,7 @@ class TestRestoreGuard:
             order.append("reconcile")
 
         with (
-            patch.object(manager, "_mint_sandbox_tokens", AsyncMock(return_value={})),
+            patch.object(manager, "_keep_data_token", AsyncMock()),
             cm_patch("SessionManager") as session_mgr,
             patch.object(manager, "_apply_session_mcp", AsyncMock(return_value=None)),
             patch.object(manager, "_sync_sandbox_assets", AsyncMock()),
@@ -7371,7 +7371,7 @@ class TestGeneratedContentGoesToTheHeldFolder:
         manager.resolve_binding = AsyncMock(return_value=_binding("ws-1", dir_name="Macro"))
         manager._apply_session_mcp = AsyncMock()
         manager._workspace_tool_view = MagicMock(return_value=object())
-        manager._mint_sandbox_tokens = AsyncMock(return_value={})
+        manager._keep_data_token = AsyncMock()
         hold, read, restore = self._nested_holds(events)
 
         with ExitStack() as stack:
@@ -7408,7 +7408,7 @@ class TestGeneratedContentGoesToTheHeldFolder:
         events = []
         manager, sandbox = self._asset_sync(events)
         manager.resolve_binding = AsyncMock(return_value=_binding("ws-1", dir_name="Research"))
-        manager._mint_sandbox_tokens = AsyncMock(return_value={})
+        manager._keep_data_token = AsyncMock()
         hold, read, restore = self._nested_holds(events)
 
         with ExitStack() as stack:

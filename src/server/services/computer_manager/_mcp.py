@@ -4,13 +4,10 @@ One file of the ComputerManager split; see the package __init__."""
 
 import asyncio
 import logging
-import os
 import time
 from dataclasses import replace
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
-
-import httpx
 
 from ptc_agent.core.mcp_sanitize import is_untrusted_server
 from ptc_agent.core.project_context import ProjectContext
@@ -206,40 +203,32 @@ class McpSecretsMixin:
         return reached
 
     @staticmethod
-    async def _mint_sandbox_tokens(
-        user_id: str, workspace_id: str, computer_id: str | None = None
-    ) -> dict:
-        """Tokens belong to the machine because its sandbox serves all projects.
+    async def _keep_data_token(
+        computer_id: str, user_id: str | None, sandbox: Any
+    ) -> None:
+        """Write the machine's market-data token, which every project on it
+        shares, when the sandbox holds none with long enough left."""
+        from src.server.services import data_tokens
 
-        Keep workspace_id while the platform still requires it. Mint failures
-        degrade to FMP-only mode."""
-        auth_url = os.getenv("AUTH_SERVICE_URL", "")
-        service_token = os.getenv("INTERNAL_SERVICE_TOKEN", "")
-        ginlix_data_url = os.getenv("GINLIX_DATA_URL", "")
+        if sandbox is None:
+            return
 
-        if not ginlix_data_url or not auth_url or not service_token:
-            return {}
+        # Looked up only once a token is owed, inside keep()'s guard: every
+        # acquire calls this, and nothing on the token's path may fail one.
+        async def write(payload: dict[str, Any]) -> bool:
+            return await sandbox.upload_token_file(payload)
 
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{auth_url}/api/auth/data-tokens",
-                    json={
-                        "user_id": user_id,
-                        "workspace_id": workspace_id,
-                        "computer_id": computer_id,
-                    },
-                    headers={"X-Service-Token": service_token},
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                return resp.json()
-        except Exception as e:
-            logger.warning(
-                f"Failed to mint sandbox tokens, ginlix-data features disabled: {e}",
-                extra={"workspace_id": workspace_id},
-            )
-            return {}
+        await data_tokens.keep(
+            computer_id, user_id, getattr(sandbox, "sandbox_id", None), write
+        )
+
+    @staticmethod
+    async def _revoke_data_token(computer_id: Any) -> None:
+        """A machine leaving service loses market data at once, rather than
+        when the token it holds would have run out."""
+        from src.server.services import data_tokens
+
+        await data_tokens.revoke(computer_id)
 
     # Cache resolution on the session so create_agent performs no per-turn DB
     # resolution. Check mcp_config_version on the post-cooldown read; discovery

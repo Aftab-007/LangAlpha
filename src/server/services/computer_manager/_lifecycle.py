@@ -909,13 +909,19 @@ class SessionLifecycleMixin:
         machine.pending_lazy_sync = False
         workspace_id = binding.workspace_id
         try:
-            await update_workspace_status(workspace_id=workspace_id, status="stopped")
+            reverted = await update_workspace_status(
+                workspace_id=workspace_id, status="stopped"
+            )
         except Exception:
             # Do not mask the sync failure; a failed revert leaves waiters to time out.
             logger.exception(
                 "Failed to revert workspace %s to 'stopped' after Phase 2 failure",
                 workspace_id,
             )
+            return
+        if reverted is not None:
+            # The sync wrote a token beside it into a sandbox left running.
+            await self._revoke_data_token(binding.computer_id)
 
     async def _release_lost_lazy_start(
         self, computer_id: str, sandbox_id: str | None
@@ -924,7 +930,7 @@ class SessionLifecycleMixin:
         worker may have bound its own sandbox meanwhile, and that start's
         status is not this one's to revert."""
         try:
-            await update_computer_status(
+            released = await update_computer_status(
                 computer_id,
                 ComputerStatus.STOPPED,
                 expected="starting",
@@ -938,6 +944,9 @@ class SessionLifecycleMixin:
                 "recovery failed",
                 computer_id,
             )
+            return
+        if released is not None:
+            await self._revoke_data_token(computer_id)
 
     async def _publish_workspace_running_with_current_always_on(
         self,

@@ -480,6 +480,7 @@ class MachineLifecycleMixin:
         if status == ComputerStatus.STOPPED:
             # While the row still reads 'stopping', so no start can have minted
             # a token this would end.
+            await self._revoke_data_token(computer_id)
             await self._revoke_livefs(computer_id)
         if (
             await update_computer_status(computer_id, status, expected="stopping")
@@ -561,7 +562,6 @@ class MachineLifecycleMixin:
         result = await sandbox.sync_sandbox_assets(
             skill_dirs=skill_dirs,
             reusing_sandbox=reusing_sandbox,
-            user_id=user_id,
             workspace_dir_names=await get_workspace_dir_names_for_computer(computer_id),
             root_owner_dir_name=await self._root_owner_folder(
                 computer_id, origin_workspace_id
@@ -646,10 +646,15 @@ class MachineLifecycleMixin:
                     await self._clear_session(computer_id, evict_session=session)
                     session = _handle()
                     reconnected = False
+                else:
+                    # Whatever runs on the sandbox reads market data from here
+                    # (a paused sandbox resumes with its processes), and its
+                    # file still holds the token the stop revoked. The row
+                    # already names this sandbox, so the save's fence holds.
+                    await self._keep_data_token(computer_id, user_id, session.sandbox)
             if not reconnected:
                 await self._publish_build_stage(computer_id, "sandbox")
                 await session.initialize(
-                    user_id=user_id,
                     tier=tier,
                     auto_stop_minutes=0 if always_on else None,
                 )
@@ -775,6 +780,11 @@ class MachineLifecycleMixin:
                 # same sandbox. The bring-up job reconciles each one.
                 await self._queue_reconnect_syncs(computer_id, session.sandbox)
             self._record_sync(computer_id)
+            if not reconnected:
+                # What starts with the machine (an always-on app) reads market
+                # data before any acquire writes a token. A built sandbox takes
+                # one only now, as the save is fenced on the row naming it.
+                await self._keep_data_token(computer_id, user_id, session.sandbox)
             await update_computer_activity(computer_id)
             logger.info(
                 f"Computer {computer_id} is running on sandbox {sandbox_id} "
@@ -812,13 +822,18 @@ class MachineLifecycleMixin:
     async def _revert_machine_start(self, computer_id: str) -> None:
         """CAS only from starting so failure cannot stop a machine another worker moved."""
         try:
-            await update_computer_status(
+            reverted = await update_computer_status(
                 computer_id, ComputerStatus.STOPPED, expected="starting"
             )
         except Exception:
             logger.exception(
                 f"Failed to revert computer {computer_id} after a failed start"
             )
+            return
+        if reverted is not None:
+            # A reconnect writes the token before the start can still fail, and
+            # the resumed sandbox is left running: stopped revokes, as a stop does.
+            await self._revoke_data_token(computer_id)
 
     async def _claim_start_with_capacity(
         self, computer_id: str, *, from_status: str,

@@ -2970,6 +2970,24 @@ class TestTheStampAFolderCarries(_Base):
 
         assert write.await_count == 2
 
+    @pytest.mark.asyncio
+    async def test_a_rebuilt_sandbox_gets_the_owners_data_token(self):
+        """A spec change or platform-secret rotation rebuilds the sandbox with
+        no turn to follow, and the old token went with the old sandbox."""
+        manager = _make_manager()
+        session = _make_session()
+        manager._keep_data_token = AsyncMock()
+
+        with (
+            self._recovering(manager, session),
+            patch.object(manager, "_write_sandbox_stamp", AsyncMock()),
+        ):
+            await manager._recover_sandbox(_make_binding("ws-a"), None, None)
+
+        manager._keep_data_token.assert_awaited_once_with(
+            _make_binding("ws-a").computer_id, "user-1", session.sandbox
+        )
+
 
 # ---------------------------------------------------------------------------
 # The first start of a machine that was never built
@@ -3799,6 +3817,73 @@ class TestStartAnswersToEntitlement(_Base):
         assert policy.threshold == timedelta(minutes=60)
 
     @pytest.mark.asyncio
+    @patch("src.server.services.platform_secret_rollout.certify_platform_secrets")
+    @patch(f"{_MACHINES}.update_computer_activity")
+    @patch(f"{_MACHINES}.try_bind_computer_provider_ref")
+    @patch(f"{_MACHINES}.SessionManager")
+    async def test_a_bare_start_writes_the_owners_data_token_once_bound(
+        self, mock_sm, mock_bind, mock_activity, mock_certify
+    ):
+        # An always-on app reads market data with no acquire to write a token,
+        # and the save fence only takes a sandbox the row is bound to.
+        manager = self._manager(tier="standard")
+        session = self._session()
+        mock_sm.get_session.return_value = session
+        order: list[str] = []
+        mock_bind.side_effect = lambda *a, **k: (
+            order.append("bind") or {"computer_id": "comp-1"}
+        )
+        mock_certify.return_value = 3
+        manager._keep_data_token = AsyncMock(
+            side_effect=lambda *a: order.append("token")
+        )
+        computer = _make_computer(status="starting", provider_ref=None)
+
+        with patch(f"{_MACHINES}.get_computer", AsyncMock(return_value=computer)):
+            await manager._build_machine_session(
+                computer, user_id=None, on_state_observed=None
+            )
+
+        manager._keep_data_token.assert_awaited_once_with(
+            "comp-1", "user-1", session.sandbox
+        )
+        assert order == ["bind", "token"]
+
+    @pytest.mark.asyncio
+    @patch(f"{_MACHINES}.update_computer_activity")
+    @patch(f"{_MACHINES}.update_computer_status")
+    @patch(f"{_MACHINES}.SessionManager")
+    async def test_a_reconnect_replaces_the_revoked_data_token_first(
+        self, mock_sm, mock_status, mock_activity
+    ):
+        # A resumed sandbox runs its processes again from the reconnect on,
+        # and its file still holds the token the stop revoked.
+        manager = self._manager(tier="standard")
+        session = self._session()
+        mock_sm.get_session.return_value = session
+        mock_status.return_value = {"computer_id": "comp-1", "status": "running"}
+        order: list[str] = []
+        session.initialize.side_effect = lambda **_k: order.append("reconnect")
+        manager._sync_machine_assets = AsyncMock(
+            side_effect=lambda *_a, **_k: order.append("sync")
+        )
+        manager._keep_data_token = AsyncMock(
+            side_effect=lambda *_a: order.append("token")
+        )
+        computer = _make_computer(status="starting", provider_ref="sandbox-abc")
+
+        with patch(f"{_MACHINES}.get_computer", AsyncMock(return_value=computer)):
+            await manager._build_machine_session(
+                computer, user_id=None, on_state_observed=None
+            )
+
+        manager._keep_data_token.assert_awaited_once_with(
+            "comp-1", "user-1", session.sandbox
+        )
+        assert order == ["reconnect", "token", "sync"]
+
+
+    @pytest.mark.asyncio
     @patch(f"{_MACHINES}.SessionManager")
     async def test_a_lapsed_tier_does_not_replace_an_undeleted_sandbox(
         self, mock_sm
@@ -3901,6 +3986,52 @@ class TestStartAnswersToEntitlement(_Base):
 
         manager._destroy_sandbox.assert_not_awaited()
         manager._apply_autostop_for_always_on.assert_awaited_once()
+
+
+class TestAFailedStartRevokesWhatItWrote(_Base):
+    """A start writes the token before it can still fail, into a sandbox the
+    unwind leaves running. Landing the row at stopped revokes it, as a stop
+    does; an unwind whose CAS misses leaves another start's token alone."""
+
+    @staticmethod
+    def _lazy(manager):
+        manager._machine_if_known = MagicMock(
+            return_value=SimpleNamespace(pending_lazy_sync=True)
+        )
+        return manager._revert_unpromoted_lazy_start(
+            _make_binding(computer_id="comp-1")
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("target", "unwind"),
+        [
+            (
+                f"{_MACHINES}.update_computer_status",
+                lambda m: m._revert_machine_start("comp-1"),
+            ),
+            (
+                f"{_LIFECYCLE}.update_computer_status",
+                lambda m: m._release_lost_lazy_start("comp-1", "sandbox-abc"),
+            ),
+            (f"{_LIFECYCLE}.update_workspace_status", _lazy),
+        ],
+        ids=["machine-start", "lost-lazy-start", "lazy-phase-2"],
+    )
+    @pytest.mark.parametrize("landed", [True, False], ids=["landed", "missed"])
+    async def test_only_an_unwind_that_lands_stopped_revokes(
+        self, target, unwind, landed
+    ):
+        manager = _make_manager()
+        manager._revoke_data_token = AsyncMock()
+
+        with patch(target, AsyncMock(return_value={"status": "stopped"} if landed else None)):
+            await unwind(manager)
+
+        if landed:
+            manager._revoke_data_token.assert_awaited_once_with("comp-1")
+        else:
+            manager._revoke_data_token.assert_not_awaited()
 
 
 class TestFreshBuildSettlesEachRestoreAfterTheBind(_Base):
@@ -4256,6 +4387,32 @@ async def test_capacity_admission_holds_user_lock_through_committed_claim(denied
         else:
             assert await manager._claim_start_with_capacity("comp-1", from_status="stopped") == {"status": "starting"}
     assert not held
+
+
+@pytest.mark.asyncio
+async def test_machine_asset_sync_matches_the_sandbox_signature():
+    """The start tests stub _sync_machine_assets whole, so none held its call
+    to the sandbox's real signature: an argument the sandbox dropped failed
+    every bare start, always-on start and resize with a TypeError."""
+    from unittest.mock import create_autospec
+
+    from ptc_agent.core.sandbox.ptc_sandbox import PTCSandbox
+
+    manager = _make_manager()
+    sandbox = create_autospec(PTCSandbox, instance=True)
+    manager._root_owner_folder = AsyncMock(return_value="proj")
+    manager._stamp_layout_version = AsyncMock()
+    with (
+        patch(f"{_MACHINES}.sandbox_skill_sync_params", AsyncMock(return_value={})),
+        patch(
+            f"{_MACHINES}.get_workspace_dir_names_for_computer",
+            AsyncMock(return_value=("proj",)),
+        ),
+    ):
+        await manager._sync_machine_assets(
+            "comp-1", "user-1", sandbox, reusing_sandbox=True
+        )
+    sandbox.sync_sandbox_assets.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -49,6 +49,12 @@ GINLIX_DATA_WS_URL: str = os.getenv("GINLIX_DATA_WS_URL", "") or (
 )
 GINLIX_DATA_ENABLED: bool = bool(GINLIX_DATA_URL)
 
+# Where a sandbox reaches the platform's public API, ginlix-data included.
+# Sandboxes are remote, so this stays publicly reachable even when this server
+# reaches the same services over a private address; unset, they use
+# GINLIX_DATA_URL as this server does.
+PUBLIC_API_BASE_URL: str = os.getenv("PUBLIC_API_BASE_URL", "").rstrip("/")
+
 # Public base URL of this server (used in agent-generated URLs like preview links)
 SERVER_BASE_URL: str = os.getenv("SERVER_BASE_URL", "http://localhost:8000")
 
