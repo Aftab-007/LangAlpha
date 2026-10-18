@@ -18,6 +18,7 @@ ProviderConfig = DaytonaConfig | DockerConfig | E2BConfig
 _PROVIDERS: dict[str, str] = {
     "daytona": "ptc_agent.core.sandbox.providers.daytona:DaytonaProvider",
     "docker": "ptc_agent.core.sandbox.providers.docker:DockerProvider",
+    "e2b": "ptc_agent.core.sandbox.providers.e2b:E2BProvider",
 }
 
 PROVIDER_KINDS = tuple(_PROVIDERS)

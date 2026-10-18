@@ -481,12 +481,70 @@ async def test_sweep_uses_each_computers_provider_and_closes_clients():
         provider.close.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_a_never_certified_e2b_sandbox_is_verified_not_scrubbed():
+    # A restart cannot change a fixed env, so there is no scrub: a clean one
+    # is certified as it stands.
+    sweeper = PlatformSecretSweeper()
+    provider = MagicMock()
+    provider.get = AsyncMock(return_value=_runtime())
+    converge = AsyncMock()
+    verify = AsyncMock()
+    stamp = AsyncMock()
+
+    with (
+        patch(f"{_MECHANICS}.converge_sandbox_platform_secrets", converge),
+        patch(f"{_MECHANICS}.remount_platform_secret_bindings", AsyncMock()),
+        patch(f"{_MECHANICS}.verify_runtime_platform_secrets", verify),
+        patch(f"{_ROLLOUT}.stamp_platform_secret_version", stamp),
+    ):
+        converged = await sweeper._converge_locked(
+            COMPUTER_ID, "sb", _row(kind="e2b"), _rollout_set(), provider
+        )
+
+    assert converged is True
+    converge.assert_not_awaited()
+    verify.assert_awaited_once()
+    stamp.assert_awaited_once()
+
+
 def _needs_replacing():
     from ptc_agent.core.sandbox.platform_secrets import (
         PlatformSecretReplacementRequired,
     )
 
     return AsyncMock(side_effect=PlatformSecretReplacementRequired("FMP_API_KEY"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [0, 1])
+async def test_an_e2b_sandbox_holding_plaintext_is_rebuilt(version):
+    from src.server.services.computer_manager import ComputerManager
+
+    sweeper = PlatformSecretSweeper()
+    provider = MagicMock()
+    provider.get = AsyncMock(return_value=_runtime())
+    manager = MagicMock()
+    manager.replace_sandbox_for_platform_secrets = AsyncMock(return_value=True)
+    stamp = AsyncMock()
+
+    with (
+        patch(f"{_MECHANICS}.remount_platform_secret_bindings", AsyncMock()),
+        patch(f"{_MECHANICS}.verify_runtime_platform_secrets", _needs_replacing()),
+        patch(f"{_ROLLOUT}.stamp_platform_secret_version", stamp),
+        patch.object(ComputerManager, "get_instance", return_value=manager),
+    ):
+        converged = await sweeper._converge_locked(
+            COMPUTER_ID, "sb", _row(kind="e2b", version=version),
+            _rollout_set(generation=2), provider,
+        )
+
+    assert converged is True
+    manager.replace_sandbox_for_platform_secrets.assert_awaited_once_with(
+        COMPUTER_ID, "sb"
+    )
+    # The old sandbox is never stamped; the new one is as it binds.
+    stamp.assert_not_awaited()
 
 
 @pytest.mark.asyncio

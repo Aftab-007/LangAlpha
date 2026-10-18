@@ -22,6 +22,7 @@ from ptc_agent.config.core import (
 from ptc_agent.core.sandbox.platform_secrets import (
     PlatformSecretConfigurationError,
     PlatformSecretReconciliationError,
+    PlatformSecretReplacementRequired,
     ReconciledPlatformSecret,
     resolve_platform_secrets,
 )
@@ -251,6 +252,61 @@ class _FixedEnvRuntime(_Runtime):
     """E2B's shape: env is what create set, with no way to update it."""
 
     updates_env = False
+
+
+@pytest.mark.asyncio
+async def test_resync_certifies_a_never_certified_fixed_env_sandbox(monkeypatch):
+    # No scrub can change what a fixed env holds, so there is nothing to wait
+    # for: a clean one is certified on the spot.
+    monkeypatch.setattr("src.config.env.HOST_MODE", "platform")
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    monkeypatch.setattr(
+        f"{_MODULE}.get_platform_secret_rollouts",
+        AsyncMock(return_value=_rollout_set()),
+    )
+    monkeypatch.setattr(f"{_MODULE}.remount_platform_secret_bindings", AsyncMock())
+    verify = AsyncMock()
+    stamp = AsyncMock()
+    monkeypatch.setattr(f"{_MODULE}.verify_runtime_platform_secrets", verify)
+    monkeypatch.setattr(f"{_MODULE}.stamp_platform_secret_version", stamp)
+
+    assert (
+        await _resync(_config(), _FixedEnvRuntime(), db_version=0, kind="e2b") == 1
+    )
+
+    verify.assert_awaited_once()
+    stamp.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_version", [0, 1])
+async def test_resync_hands_a_sandbox_to_replace_back_unwrapped(
+    monkeypatch, db_version
+):
+    """The caller serves it and the sweep rebuilds it; a turn never does."""
+    monkeypatch.setattr("src.config.env.HOST_MODE", "platform")
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    monkeypatch.setattr(
+        f"{_MODULE}.get_platform_secret_rollouts",
+        AsyncMock(return_value=_rollout_set(generation=2)),
+    )
+    remount = AsyncMock()
+    stamp = AsyncMock()
+    monkeypatch.setattr(f"{_MODULE}.remount_platform_secret_bindings", remount)
+    monkeypatch.setattr(
+        f"{_MODULE}.verify_runtime_platform_secrets",
+        AsyncMock(side_effect=PlatformSecretReplacementRequired("FMP_API_KEY")),
+    )
+    monkeypatch.setattr(f"{_MODULE}.stamp_platform_secret_version", stamp)
+
+    with pytest.raises(PlatformSecretReplacementRequired):
+        await _resync(
+            _config(), _FixedEnvRuntime(), db_version=db_version, kind="e2b"
+        )
+
+    # The new rules are on before the refusal, protecting every new request.
+    remount.assert_awaited_once()
+    stamp.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -522,6 +578,33 @@ async def _register_by_kind(reconciled, *, credential_values, provider):
 
 
 @pytest.mark.asyncio
+async def test_served_kinds_are_the_deployments_plus_every_live_capable_kind(
+    live_kinds,
+):
+    live_kinds.return_value = {"daytona": 2, "docker": 5}
+
+    assert await served_platform_secret_kinds(_config(provider="e2b")) == {
+        "daytona": 2,
+        "e2b": 0,
+    }
+    live_kinds.return_value = {}
+    assert await served_platform_secret_kinds(_config(provider="docker")) == {}
+
+
+@pytest.mark.asyncio
+async def test_an_offered_kind_is_served_before_its_first_computer(live_kinds):
+    """Registered at boot and by the sweep, so the first computer created on
+    it does not fail its start until a sweep comes round."""
+    live_kinds.return_value = {"daytona": 3}
+
+    served = await served_platform_secret_kinds(
+        _config(provider="daytona", offered_providers=("e2b", "docker"))
+    )
+
+    assert served == {"daytona": 3, "e2b": 0}
+
+
+@pytest.mark.asyncio
 async def test_a_key_for_a_kind_neither_offered_nor_in_use_is_not_served(
     live_kinds,
 ):
@@ -532,6 +615,55 @@ async def test_a_key_for_a_kind_neither_offered_nor_in_use_is_not_served(
     )
 
     assert served == {"daytona": 0}
+
+
+@pytest.mark.asyncio
+async def test_boot_registers_an_offered_kind_with_no_computers(
+    monkeypatch, live_kinds
+):
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    live_kinds.return_value = {}
+    config = _config(offered_providers=("e2b",))
+    build, built = _kind_providers()
+    register = AsyncMock(side_effect=_register_by_kind)
+
+    with (
+        patch(_BUILD_PROVIDER, side_effect=build),
+        patch(f"{_MODULE}.register_platform_secret_rollouts", register),
+    ):
+        registered = await reconcile_platform_secrets_at_boot(_agent_config(config))
+
+    assert set(registered) == {"daytona", "e2b"}
+    assert set(built) == {"daytona", "e2b"}
+
+
+@pytest.mark.asyncio
+async def test_boot_reconciles_every_served_kind_with_its_own_settings(
+    monkeypatch, live_kinds
+):
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    live_kinds.return_value = {"e2b": 1}
+    config = _config(e2b_namespace="prod-e2b")
+    build, built = _kind_providers()
+    register = AsyncMock(side_effect=_register_by_kind)
+
+    with (
+        patch(_BUILD_PROVIDER, side_effect=build),
+        patch(f"{_MODULE}.register_platform_secret_rollouts", register),
+    ):
+        result = await reconcile_platform_secrets_at_boot(_agent_config(config))
+
+    assert sorted(result) == ["daytona", "e2b"]
+    # The deployment's own kind first, then each kind with its own account.
+    assert [call.kwargs["provider"] for call in register.await_args_list] == [
+        "daytona",
+        "e2b",
+    ]
+    assert built["e2b"].settings is config.sandbox.e2b
+    e2b_secrets = built["e2b"].reconcile_platform_secrets.await_args.args[0]
+    assert [s.name for s in e2b_secrets] == ["prod-e2b-platform-fmp-api-key"]
+    for provider in built.values():
+        provider.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -603,12 +735,134 @@ async def test_hosted_boot_refuses_an_offered_kind_that_cannot_hold_secrets(
 
 
 @pytest.mark.asyncio
+async def test_boot_skips_another_kind_without_credentials(
+    monkeypatch, live_kinds, caplog
+):
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    live_kinds.return_value = {"daytona": 2, "e2b": 3}
+    build, built = _kind_providers()
+
+    with (
+        patch(_BUILD_PROVIDER, side_effect=build),
+        patch(
+            f"{_MODULE}.register_platform_secret_rollouts",
+            AsyncMock(side_effect=_register_by_kind),
+        ),
+        caplog.at_level("ERROR", logger=_MODULE),
+    ):
+        result = await reconcile_platform_secrets_at_boot(
+            _agent_config(_config(e2b_key=""))
+        )
+
+    assert sorted(result) == ["daytona"]
+    # No call is made to a provider the deployment holds no key for.
+    assert sorted(built) == ["daytona"]
+    [skipped] = [r for r in caplog.records if "not reconciled" in r.getMessage()]
+    assert "e2b" in skipped.getMessage()
+    assert "3 computer" in skipped.getMessage()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("e2b_namespace", "failure"),
+    [
+        ("", None),
+        ("prod", PlatformSecretConfigurationError("E2B rejected the API key")),
+    ],
+    ids=["namespace-missing", "provider-refused"],
+)
+async def test_boot_fails_on_another_kinds_configuration_error(
+    monkeypatch, live_kinds, e2b_namespace, failure
+):
+    """Holding its credentials means the deployment serves the kind, so its
+    catalog has to be valid there too; a blue/green deploy then keeps the
+    old color serving."""
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    live_kinds.return_value = {"e2b": 1}
+    build, _ = _kind_providers(**({"e2b": failure} if failure else {}))
+
+    with (
+        patch(_BUILD_PROVIDER, side_effect=build),
+        patch(
+            f"{_MODULE}.register_platform_secret_rollouts",
+            AsyncMock(side_effect=_register_by_kind),
+        ),
+        pytest.raises(PlatformSecretConfigurationError),
+    ):
+        await reconcile_platform_secrets_at_boot(
+            _agent_config(_config(e2b_namespace=e2b_namespace))
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "earlier", [False, True], ids=["nothing-earlier", "earlier-rows"]
+)
+async def test_boot_survives_an_outage_on_another_kind(
+    monkeypatch, live_kinds, earlier
+):
+    """With nothing registered its computers fail readiness until the sweep
+    registers it; with earlier rows they carry on as before."""
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    live_kinds.return_value = {"e2b": 1}
+    build, _ = _kind_providers(e2b=ConnectionError("e2b down"))
+    earlier_set = _rollout_set(provider="e2b")
+    existing = AsyncMock(return_value=earlier_set if earlier else None)
+
+    with (
+        patch(_BUILD_PROVIDER, side_effect=build),
+        patch(
+            f"{_MODULE}.register_platform_secret_rollouts",
+            AsyncMock(side_effect=_register_by_kind),
+        ),
+        patch(f"{_MODULE}._existing_rollouts_or_none", existing),
+    ):
+        result = await reconcile_platform_secrets_at_boot(_agent_config(_config()))
+
+    existing.assert_awaited_once_with("e2b")
+    assert sorted(result) == (["daytona", "e2b"] if earlier else ["daytona"])
+    if earlier:
+        assert result["e2b"] is earlier_set
+
+
+@pytest.mark.asyncio
+async def test_certify_verifies_against_the_computers_own_kind_read_fresh(
+    monkeypatch,
+):
+    """A computer of another kind than the deployment's is certified against
+    its own provider's rows, read past the memo."""
+    e2b_set = _rollout_set(generation=7, provider="e2b")
+    get_rollouts = AsyncMock(return_value=e2b_set)
+    verify = AsyncMock()
+    monkeypatch.setattr(f"{_MODULE}.get_platform_secret_rollouts", get_rollouts)
+    monkeypatch.setattr(f"{_MODULE}.verify_runtime_platform_secrets", verify)
+    runtime = _Runtime()
+
+    version = await certify_platform_secrets(
+        _config(provider="daytona"), runtime=runtime, kind="e2b"
+    )
+
+    assert version == 7
+    get_rollouts.assert_awaited_once_with("e2b", fresh=True)
+    verify.assert_awaited_once_with(runtime, expected=e2b_set.placeholders)
+
+
+@pytest.mark.asyncio
 async def test_certify_is_inert_for_a_kind_without_platform_secrets(monkeypatch):
     get_rollouts = AsyncMock()
     monkeypatch.setattr(f"{_MODULE}.get_platform_secret_rollouts", get_rollouts)
 
     assert await certify_platform_secrets(_config(), runtime=None, kind="docker") == 0
     get_rollouts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resync_reads_the_computers_own_kind(monkeypatch):
+    get_rollouts = AsyncMock(return_value=_rollout_set(provider="e2b"))
+    monkeypatch.setattr(f"{_MODULE}.get_platform_secret_rollouts", get_rollouts)
+
+    assert await _resync(_config(), applied_generation=1, kind="e2b") == 1
+    get_rollouts.assert_awaited_once_with("e2b")
 
 
 @pytest.mark.asyncio

@@ -98,6 +98,49 @@ def test_resolve_hosted_configuration_fails_closed(
         resolve_platform_secrets(_config(namespace=namespace), environ=environ)
 
 
+def test_resolve_on_e2b_reads_its_namespace_and_lowercases_the_name():
+    # E2B stores Secret names lowercased, and a sandbox names the Secret it
+    # wants by that stored form.
+    resolved = resolve_platform_secrets(
+        _config(provider="e2b", namespace="Prod"),
+        environ={"FMP_API_KEY": "value"},
+        host_mode="oss",
+    )
+    assert resolved[0].name == "prod-platform-fmp-api-key"
+
+    with pytest.raises(PlatformSecretConfigurationError, match="E2B_SECRET_NAMESPACE"):
+        resolve_platform_secrets(
+            _config(provider="e2b", namespace=""),
+            environ={"FMP_API_KEY": "value"},
+            host_mode="oss",
+        )
+
+
+def test_resolve_for_a_kind_uses_that_providers_namespace_and_naming():
+    """A computer kept from before a provider switch still gets its own kind's
+    Secret names, whatever the deployment's provider is now."""
+    config = _config(provider="daytona")
+    config.sandbox.daytona.secret_namespace = "Dtn"
+    config.sandbox.e2b.secret_namespace = "E2b"
+    environ = {"FMP_API_KEY": "value"}
+
+    assert [s.name for s in resolve_platform_secrets(
+        config, kind="e2b", environ=environ, host_mode="oss"
+    )] == ["e2b-platform-fmp-api-key"]
+    assert [s.name for s in resolve_platform_secrets(
+        config, environ=environ, host_mode="oss"
+    )] == ["Dtn-platform-fmp-api-key"]
+    assert resolve_platform_secrets(
+        config, kind="docker", environ=environ, host_mode="oss"
+    ) == ()
+    assert platform_secrets_active(_config(provider="docker"), kind="e2b")
+    assert not platform_secrets_active(_config(), kind="docker")
+
+    config.sandbox.e2b.secret_namespace = ""
+    with pytest.raises(PlatformSecretConfigurationError, match="E2B_SECRET_NAMESPACE"):
+        resolve_platform_secrets(config, kind="e2b", environ=environ, host_mode="oss")
+
+
 def test_resolve_hosted_empty_catalog_fails_closed():
     # An empty catalog in hosted Daytona mode is a deploy error, never a
     # silent gate-off.

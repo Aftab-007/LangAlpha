@@ -4949,6 +4949,18 @@ class TestSetComputerAlwaysOn:
             ("provider", False),
         ]
 
+    @pytest.mark.asyncio
+    async def test_a_provider_that_caps_runtime_refuses_always_on(self):
+        manager = WorkspaceManager.get_instance(config=_make_config())
+        persist = AsyncMock()
+        computer = _make_computer(computer_id=_STUB_COMPUTER_ID, kind="e2b")
+        with (
+            patch(f"{_ENTITLEMENTS}.get_computer", AsyncMock(return_value=computer)),
+            patch(f"{_ENTITLEMENTS}.db_set_computer_always_on", persist),
+        ):
+            with pytest.raises(RuntimeError, match="Always-on isn't available"):
+                await manager.set_computer_always_on(_STUB_COMPUTER_ID, True)
+        persist.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_quota_lock_follows_the_local_lock_and_precedes_machine_lock(self):

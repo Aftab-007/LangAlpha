@@ -349,7 +349,7 @@ class TestMintingAComputer(_Base):
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "kind, name", [("docker", "Local computer")]
+        "kind, name", [("e2b", "Cloud computer"), ("docker", "Local computer")]
     )
     @patch("src.server.services.computer_manager._machines.create_computer")
     async def test_a_chosen_kind_takes_the_row_and_its_default_name(
@@ -363,6 +363,25 @@ class TestMintingAComputer(_Base):
         assert mock_create.await_args.kwargs["kind"] == kind
         assert mock_create.await_args.kwargs["name"] == name
 
+    @pytest.mark.asyncio
+    @patch("src.server.services.computer_manager._machines.create_computer")
+    async def test_an_unnamed_machine_is_numbered_past_the_users_others(
+        self, mock_create
+    ):
+        """Daytona and E2B share one default, so a second cloud machine would
+        otherwise read the same as the first in every picker."""
+        manager = _make_manager()
+        mock_create.return_value = _make_computer(status="stopped")
+        self.users_computers.return_value = [
+            {"name": "cloud computer"},
+            {"name": "Cloud computer 2"},
+            {"name": "Research"},
+        ]
+
+        await manager.create_computer_for_user("user-1", kind="e2b")
+
+        assert mock_create.await_args.kwargs["name"] == "Cloud computer 3"
+        self.users_computers.assert_awaited_once_with("user-1")
 
     @pytest.mark.asyncio
     @patch("src.server.services.computer_manager._machines.create_computer")
@@ -4520,7 +4539,7 @@ async def test_legacy_adoption_preserves_provider_and_root_stamp():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind, always_on", [("daytona", True)])
+@pytest.mark.parametrize("kind, always_on", [("daytona", True), ("e2b", False)])
 async def test_legacy_adoption_carries_always_on_only_to_a_kind_that_holds_it(
     kind, always_on
 ):
