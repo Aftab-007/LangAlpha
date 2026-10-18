@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import File, UploadFile
@@ -19,6 +19,7 @@ from src.utils.storage import get_public_url, upload_bytes
 
 from src.server.auth.jwt_bearer import get_current_auth_info, AuthInfo
 from src.server.database.pool import get_db_connection
+from src.server.dependencies.principal import CurrentPrincipal
 from src.server.database.user import (
     create_user as db_create_user,
     create_user_from_auth,
@@ -69,6 +70,27 @@ class AuthSyncRequest(BaseModel):
     avatar_url: Optional[str] = None
     timezone: Optional[str] = None
     locale: Optional[str] = None
+
+
+class AuthPrincipalResponse(BaseModel):
+    user_id: str
+    auth: Literal["session", "oauth"]
+    client_id: Optional[str] = None
+    scopes: list[str]
+
+
+@router.get("/auth/principal", response_model=AuthPrincipalResponse)
+async def get_auth_principal(principal: CurrentPrincipal):
+    """Who is calling: a first-party session, or an outside app and what it may do.
+
+    The one route an outside app's token reaches until routes declare scopes.
+    """
+    return AuthPrincipalResponse(
+        user_id=principal.user_id,
+        auth=principal.auth,
+        client_id=principal.client_id,
+        scopes=list(principal.scopes),
+    )
 
 
 @router.post("/auth/sync", response_model=UserWithPreferencesResponse)

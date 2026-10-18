@@ -17,6 +17,16 @@ LOCAL_DEV_USER_ID: str = os.getenv("AUTH_USER_ID", "local-dev-user")
 # Quota / auth enforcement service URL
 AUTH_SERVICE_URL: str = os.getenv("AUTH_SERVICE_URL", "")
 
+# Access tokens outside apps get from an OAuth issuer. Off unless all three
+# are set; see src/server/auth/oauth_resource.py for what accepts them.
+OAUTH_RESOURCE_ISSUER: str = os.getenv("OAUTH_RESOURCE_ISSUER", "").strip()
+OAUTH_RESOURCE_JWKS_URL: str = os.getenv("OAUTH_RESOURCE_JWKS_URL", "").strip()
+OAUTH_RESOURCE_AUDIENCES: tuple[str, ...] = tuple(
+    aud.strip()
+    for aud in os.getenv("OAUTH_RESOURCE_AUDIENCE", "").split(",")
+    if aud.strip()
+)
+
 # TLS mode for the app-data and checkpointer pools. "prefer" negotiates TLS when the
 # server offers it and falls back to plaintext when it doesn't — the only value that
 # works across the range of Postgres a self-hosted user may bring. The pools log once

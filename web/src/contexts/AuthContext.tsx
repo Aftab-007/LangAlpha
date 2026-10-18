@@ -9,6 +9,7 @@ import { resetStableNavOrder } from '@/pages/ChatAgent/hooks/useNavigationData';
 import { resetSharedWorkspaceThreads } from '@/lib/navThreadsStore';
 import { runAuthResets } from '../lib/authResets';
 import { detectedTimezone } from '@/lib/deviceTimezone';
+import { revokeAllConnectedApps } from '@/api/connectedApps';
 
 import type {
   AuthError,
@@ -266,7 +267,13 @@ function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const updatePassword = useCallback(
-    (password: string) => sb.auth.updateUser({ password }),
+    async (password: string) => {
+      const result = await sb.auth.updateUser({ password });
+      // Outside apps keep their access through a password change unless told
+      // otherwise, so whoever connected one with the old password would too.
+      if (!result.error) revokeAllConnectedApps();
+      return result;
+    },
     [sb.auth]
   );
 
