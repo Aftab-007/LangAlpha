@@ -626,6 +626,15 @@ class InsightService:
             else:
                 catchup_type = "post_market"
 
+            # A restart on a weekend afternoon must not run the hourly update
+            # the weekend schedule leaves out.
+            if catchup_type not in {t for _, t in self._todays_schedule(now_et)}:
+                logger.info(
+                    f"[MARKET_INSIGHT] No {catchup_type} scheduled today "
+                    f"so no catch-up"
+                )
+                return
+
             await self._generate_insight(catchup_type, now_et)
         except Exception as e:
             logger.warning(

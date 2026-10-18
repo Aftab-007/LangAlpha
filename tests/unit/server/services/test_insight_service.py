@@ -642,7 +642,7 @@ class TestSchedule:
 
 
 class TestCatchupIfNeeded:
-    """Catch-up runs the job type for the hour."""
+    """Catch-up runs the job type for the hour, if today's schedule has it."""
 
     async def _catchup_at(self, now_et, **gen_kwargs):
         svc = InsightService()
@@ -679,6 +679,12 @@ class TestCatchupIfNeeded:
     async def test_catchup_picks_post_market_evening(self):
         mock_gen = await self._catchup_at(datetime(2025, 3, 15, 21, 0, tzinfo=ET))
         assert mock_gen.call_args[0][0] == "post_market"
+
+    @pytest.mark.asyncio
+    async def test_catchup_skips_market_update_on_a_weekend(self):
+        """A Saturday afternoon restart runs nothing: the weekend has no hourly update."""
+        mock_gen = await self._catchup_at(datetime(2025, 3, 15, 14, 0, tzinfo=ET))
+        mock_gen.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
