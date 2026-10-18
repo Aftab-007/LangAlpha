@@ -4,6 +4,7 @@ The tools themselves are in ``chief_of_staff``; a hand-off runs through
 ``dispatch``.
 """
 
+import asyncio
 import json
 import logging
 
@@ -54,36 +55,29 @@ async def workspaces_list(user_id: str, tool_call_id: str) -> Command:
     """List workspaces for the user.
 
     A row names its folder only when the workspace is on Home's computer, the
-    one whose folders the Chief of Staff reads.
+    one whose folders the Chief of Staff reads, and its computer only when the
+    user has more than one.
     """
     try:
-        from src.server.database.home_workspace import get_home_workspace_id
-        from src.server.database.workspace import get_workspace, get_workspaces_for_user
+        from src.server.database.workspace import get_workspaces_for_user
+        from src.tools.secretary.utils import read_computer_placement
 
         # Every workspace, since one left off the list is one the agent tells
         # the user does not exist. Pinned, then most recently used: the one a
         # hand-off is for is far likelier to be recent than early in the
         # user's custom order.
-        workspaces, _ = await get_workspaces_for_user(
-            user_id=user_id, limit=None, sort_by="activity"
+        (workspaces, _), placement = await asyncio.gather(
+            get_workspaces_for_user(user_id=user_id, limit=None, sort_by="activity"),
+            read_computer_placement(user_id),
         )
-        from src.tools.secretary.activity import folder_on
-
-        home = await get_workspace(get_home_workspace_id(user_id))
-        computer_id = home.get("computer_id") if home else None
-        workspaces = [
-            {**ws, "dir_name": folder_on(ws, computer_id)} for ws in workspaces
-        ]
-        content = json.dumps(
-            {
-                "success": True,
-                "workspaces": [
-                    {field: ws.get(field) for field in _LISTED_WORKSPACE_FIELDS}
-                    for ws in workspaces
-                ],
-            },
-            default=str,
-        )
+        rows = []
+        for ws in workspaces:
+            row = {field: ws.get(field) for field in _LISTED_WORKSPACE_FIELDS}
+            row["dir_name"] = placement.folder(ws)
+            if placement.names:
+                row["computer"] = placement.computer(ws)
+            rows.append(row)
+        content = json.dumps({"success": True, "workspaces": rows}, default=str)
     except Exception as e:
         logger.error(f"Failed to list workspaces: {e}")
         content = json.dumps({"success": False, "error": "failed to list workspaces"})
@@ -125,6 +119,7 @@ async def workspaces_create(
         WorkspaceNameInvalid,
         WorkspaceNameTaken,
     )
+    from src.server.services.computer_errors import ComputerPreparingError
 
     try:
         from src.server.services.workspace_manager import WorkspaceManager
@@ -158,6 +153,12 @@ async def workspaces_create(
         return error_command(f"{e} {hint}", tool_call_id)
     except WorkspaceNameInvalid as e:
         return error_command(str(e), tool_call_id)
+    except ComputerPreparingError:
+        return error_command(
+            "The user's computer is still being prepared, so no workspace can "
+            "be created on it yet. Tell the user to try again once it is ready.",
+            tool_call_id,
+        )
     except Exception as e:
         logger.error(f"Failed to create workspace: {e}")
         return error_command("failed to create workspace", tool_call_id)
