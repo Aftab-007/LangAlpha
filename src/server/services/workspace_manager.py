@@ -342,6 +342,12 @@ class WorkspaceManager(ComputerManager):
             self._forget_machine(computer_id)
         self._forget_project(workspace_id)
 
+        from src.server.services.market_targets.changes import (
+            cancel_on_workspace_delete,
+        )
+
+        await cancel_on_workspace_delete(workspace_id)
+
         if not retired:
             # Its proxied previews stop now rather than at expiry; a retired
             # machine's teardown already ended them. Revocation is per sandbox,
