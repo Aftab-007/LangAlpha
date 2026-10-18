@@ -721,6 +721,33 @@ async def test_the_activity_stamp_moves_both_rows_on_their_own_cooldowns(
     assert "c.last_activity_at IS NULL" in sql
 
 
+def _shadow_set(sql: str) -> str:
+    shadow = sql[sql.index("shadow AS") :]
+    return shadow[shadow.index("SET") : shadow.index("FROM")]
+
+
+@pytest.mark.asyncio
+async def test_only_the_workspace_s_own_use_moves_it_in_the_gallery(
+    ws_mock_db, mock_cursor
+):
+    """The gallery orders by updated_at. A machine write reaches every folder
+    on the computer, and stamping them all gave them one timestamp after each
+    idle stop; the workspace's own activity is what should move it."""
+    from src.server.database.workspace import (
+        update_workspace_activity,
+        update_workspace_status,
+    )
+
+    mock_cursor.fetchone.return_value = _workspace_row(status="stopped")
+    await update_workspace_status("ws-1", "stopped")
+    assert "updated_at" not in _shadow_set(_one_write_through_statement(mock_cursor))
+
+    mock_cursor.execute.reset_mock()
+    mock_cursor.fetchone.return_value = {"stamped": 1}
+    await update_workspace_activity("ws-1")
+    assert "updated_at = %(now)s" in _shadow_set(_one_write_through_statement(mock_cursor))
+
+
 @pytest.mark.asyncio
 async def test_the_preview_cache_is_written_to_the_machine_too(ws_mock_db, mock_cursor):
     """A port is a namespace of the machine, not of one project."""
