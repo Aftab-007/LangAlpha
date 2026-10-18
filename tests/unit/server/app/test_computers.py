@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from src.server.services.computer_errors import ProviderNotOffered, UnknownResourceTier
 from tests.conftest import create_test_app
 
 USER = "test-user-123"
@@ -33,6 +34,20 @@ def workspace_alias_quota_gate_off():
         ),
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def sandbox_config():
+    """The deployment's sandbox settings, which the manager mocks here lack.
+
+    Daytona by default with nothing else offered; a test that offers a kind
+    sets ``offered_providers`` on what this yields.
+    """
+    from ptc_agent.config.core import SandboxConfig
+
+    config = SandboxConfig()
+    with patch("src.server.app.computers._sandbox_config", return_value=config):
+        yield config
 
 
 @pytest_asyncio.fixture
@@ -103,11 +118,26 @@ def entitled():
         yield gate
 
 
+@pytest.fixture
+def prepares():
+    """A create hands the row to a background start; the start path has its own tests.
+
+    Yields the stand-in, which answers with the status the claim leaves.
+    """
+    with patch(
+        "src.server.app.computers._schedule_claimed_start",
+        AsyncMock(return_value="starting"),
+    ) as schedule:
+        yield schedule
+
+
 @pytest.mark.asyncio
-async def test_create_computer_returns_the_new_machine(client, computer, entitled):
+async def test_create_computer_returns_the_new_machine(
+    client, computer, entitled, prepares
+):
     manager = MagicMock()
     manager.create_computer_for_user = AsyncMock(
-        return_value={**computer, "status": "stopped", "provider_ref": None}
+        return_value={**computer, "status": "creating", "provider_ref": None}
     )
     with patch("src.server.app.computers._computer_manager", return_value=manager):
         resp = await client.post(
@@ -118,17 +148,20 @@ async def test_create_computer_returns_the_new_machine(client, computer, entitle
     assert resp.status_code == 201
     body = resp.json()
     assert body["computer_id"] == COMPUTER_ID
-    # Nothing is provisioned here, so the machine costs nothing until it runs.
-    assert body["status"] == "stopped"
+    # The sandbox is being built in the background, so the row answers as
+    # starting with no sandbox yet; the client follows its events.
+    assert body["status"] == "starting"
     assert body["provider_ref"] is None
     kwargs = manager.create_computer_for_user.call_args.kwargs
     assert kwargs["name"] == "Research box"
     assert kwargs["resource_tier"] == "performance"
+    assert kwargs["prepare"] is True
+    prepares.assert_awaited_once_with(COMPUTER_ID)
 
 
 @pytest.mark.asyncio
 async def test_the_first_computer_is_primary_and_the_second_is_not(
-    client, computer, entitled
+    client, computer, entitled, prepares
 ):
     """Without this the first machine a user names is never their primary, and
     their first project then mints a second "My computer" beside it. The route
@@ -136,7 +169,15 @@ async def test_the_first_computer_is_primary_and_the_second_is_not(
     """
     primaries: set[str] = set()
 
-    async def _create(user_id, *, name=None, resource_tier=None, is_primary=False):
+    async def _create(
+        user_id,
+        *,
+        kind=None,
+        name=None,
+        resource_tier=None,
+        is_primary=False,
+        prepare=False,
+    ):
         # Mirrors the insert's `%s AND NOT EXISTS (... is_primary ...)`, which
         # test_computer_db locks as SQL.
         won = bool(is_primary) and user_id not in primaries
@@ -157,7 +198,7 @@ async def test_the_first_computer_is_primary_and_the_second_is_not(
 
 @pytest.mark.asyncio
 async def test_create_computer_defaults_to_the_standard_tier(
-    client, computer, entitled
+    client, computer, entitled, prepares
 ):
     manager = MagicMock()
     manager.create_computer_for_user = AsyncMock(return_value=computer)
@@ -191,9 +232,18 @@ async def test_create_serializes_the_tier_check_with_the_insert(
         )
     )
     gate = AsyncMock(side_effect=lambda *_args, **_kwargs: events.append(("gate", USER)))
+    limit = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: events.append(("limit", USER))
+    )
+    schedule = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: events.append(("prepare", USER))
+        or "starting"
+    )
     with (
         patch("src.server.app.computers._computer_manager", return_value=manager),
         patch("src.server.app.computers.assert_spec_allowed", gate),
+        patch("src.server.app.computers.enforce_computer_limit", limit),
+        patch("src.server.app.computers._schedule_claimed_start", schedule),
         patch("src.server.app.computers.platform_gating_active", return_value=True),
         patch("src.server.app.computers.computer_capacity_lock", quota_lock),
     ):
@@ -202,55 +252,43 @@ async def test_create_serializes_the_tier_check_with_the_insert(
         )
 
     assert response.status_code == 201
+    # The new row holds a running slot from its insert, so the limit is read
+    # under the same lock; the start claims that slot after the lock is gone.
     assert events == [
         ("lock", USER),
         ("gate", USER),
+        ("limit", USER),
         ("insert", USER),
         ("unlock", USER),
+        ("prepare", USER),
     ]
 
 
 @pytest.mark.asyncio
-async def test_create_computer_defers_active_capacity_to_start():
-    from src.server.app.computers import router
-
-    app = create_test_app(router)
-    post = next(
-        r
-        for r in app.routes
-        if getattr(r, "path", None) == "/api/v1/computers" and "POST" in r.methods
-    )
-    assert "enforce_computer_limit" not in {
-        d.call.__name__ for d in post.dependant.dependencies
-    }
-
-
-@pytest.mark.asyncio
-async def test_a_capped_user_can_prepare_a_stopped_computer(computer):
+async def test_a_capped_user_is_refused_before_the_row_is_written(
+    client, entitled, prepares
+):
+    """Preparing takes a running slot, so the platform's refusal reaches the
+    form with its own message, and no row is left behind to clean up."""
     from fastapi import HTTPException
 
-    from src.server.app.computers import router
-    from src.server.dependencies.usage_limits import enforce_computer_limit
-
-    app = create_test_app(router)
-
-    def _capped():
-        raise HTTPException(status_code=429, detail={"error": "limit_exceeded"})
-
-    app.dependency_overrides[enforce_computer_limit] = _capped
-
     manager = MagicMock()
-    manager.create_computer_for_user = AsyncMock(
-        return_value={**computer, "status": "stopped", "provider_ref": None}
+    manager.create_computer_for_user = AsyncMock()
+    capped = AsyncMock(
+        side_effect=HTTPException(
+            status_code=429, detail={"message": "Limit reached", "remaining": 0}
+        )
     )
-    with patch("src.server.app.computers._computer_manager", return_value=manager):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as capped_client:
-            resp = await capped_client.post("/api/v1/computers", json={})
+    with (
+        patch("src.server.app.computers._computer_manager", return_value=manager),
+        patch("src.server.app.computers.enforce_computer_limit", capped),
+    ):
+        resp = await client.post("/api/v1/computers", json={})
 
-    assert resp.status_code == 201
-    manager.create_computer_for_user.assert_awaited_once()
+    assert resp.status_code == 429
+    assert resp.json()["detail"]["message"] == "Limit reached"
+    manager.create_computer_for_user.assert_not_awaited()
+    prepares.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -279,6 +317,149 @@ async def test_an_unentitled_tier_is_refused_before_the_row_is_written(client):
 async def test_an_unknown_tier_is_rejected_by_the_model(client):
     resp = await client.post("/api/v1/computers", json={"resource_tier": "huge"})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Provider choice: a computer is created on one of the offered kinds, for good
+# ---------------------------------------------------------------------------
+
+
+def _creating_manager(computer):
+    manager = MagicMock()
+    manager.create_computer_for_user = AsyncMock(
+        return_value={**computer, "status": "stopped", "provider_ref": None}
+    )
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_a_create_without_a_kind_lands_on_the_deployment_default(
+    client, computer, entitled, prepares
+):
+    manager = _creating_manager(computer)
+    with patch("src.server.app.computers._computer_manager", return_value=manager):
+        resp = await client.post("/api/v1/computers", json={})
+
+    assert resp.status_code == 201
+    assert manager.create_computer_for_user.call_args.kwargs["kind"] == "daytona"
+
+
+@pytest.mark.asyncio
+async def test_an_offered_kind_reaches_the_manager(
+    client, computer, entitled, sandbox_config, prepares
+):
+    sandbox_config.offered_providers = ("e2b",)
+    manager = _creating_manager({**computer, "kind": "e2b"})
+    with patch("src.server.app.computers._computer_manager", return_value=manager):
+        resp = await client.post("/api/v1/computers", json={"kind": "e2b"})
+
+    assert resp.status_code == 201
+    assert resp.json()["kind"] == "e2b"
+    assert manager.create_computer_for_user.call_args.kwargs["kind"] == "e2b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        ProviderNotOffered("Provider not offered"),
+        UnknownResourceTier("Unknown resource tier"),
+    ],
+)
+async def test_a_create_the_manager_refuses_is_the_clients_error(
+    client, computer, entitled, sandbox_config, refusal
+):
+    """Both are ValueErrors, which this router otherwise answers as a
+    computer that is not there."""
+    sandbox_config.offered_providers = ("e2b",)
+    manager = _creating_manager(computer)
+    manager.create_computer_for_user.side_effect = refusal
+    with patch("src.server.app.computers._computer_manager", return_value=manager):
+        resp = await client.post(
+            "/api/v1/computers", json={"kind": "e2b", "resource_tier": "max"}
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == str(refusal)
+
+
+@pytest.mark.asyncio
+async def test_an_unentitled_kind_is_refused_before_the_row_is_written(
+    client, computer, entitled, sandbox_config
+):
+    from fastapi import HTTPException
+
+    sandbox_config.offered_providers = ("e2b",)
+    manager = _creating_manager(computer)
+    gate = AsyncMock(
+        side_effect=HTTPException(403, detail="Requires scope: workspace:provider:e2b")
+    )
+    with (
+        patch("src.server.app.computers._computer_manager", return_value=manager),
+        patch("src.server.app.computers.assert_provider_allowed", gate),
+    ):
+        resp = await client.post("/api/v1/computers", json={"kind": "e2b"})
+
+    assert resp.status_code == 403
+    gate.assert_awaited_once_with(USER, "e2b", default_kind="daytona")
+    entitled.assert_not_awaited()
+    manager.create_computer_for_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_kind_is_rejected_by_the_model(client):
+    resp = await client.post("/api/v1/computers", json={"kind": "memory"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_providers_lists_only_the_default_when_nothing_is_offered(client):
+    with patch("src.server.app.computers.get_computer") as get_computer:
+        resp = await client.get("/api/v1/computers/providers")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "providers": [{"kind": "daytona", "is_default": True, "allowed": True}]
+    }
+    # Not read as a computer id by GET /{computer_id}.
+    get_computer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_providers_lists_the_default_first_with_what_the_caller_may_pick(
+    client, sandbox_config
+):
+    sandbox_config.provider = "e2b"
+    sandbox_config.offered_providers = ("daytona", "docker")
+    allowances = AsyncMock(
+        return_value={"e2b": True, "daytona": False, "docker": None}
+    )
+    with patch("src.server.app.computers.get_provider_allowances", allowances):
+        resp = await client.get("/api/v1/computers/providers")
+
+    assert resp.status_code == 200
+    assert resp.json()["providers"] == [
+        {"kind": "e2b", "is_default": True, "allowed": True},
+        {"kind": "daytona", "is_default": False, "allowed": False},
+        {"kind": "docker", "is_default": False, "allowed": None},
+    ]
+    allowances.assert_awaited_once_with(
+        USER, ("e2b", "daytona", "docker"), default_kind="e2b"
+    )
+
+
+@pytest.mark.asyncio
+async def test_providers_reads_an_ungated_offer_as_unknown_in_oss_mode(
+    client, sandbox_config
+):
+    sandbox_config.offered_providers = ("e2b",)
+    resp = await client.get("/api/v1/computers/providers")
+
+    assert resp.json()["providers"][1] == {
+        "kind": "e2b",
+        "is_default": False,
+        "allowed": None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1024,6 +1205,87 @@ async def test_stop_forbidden_for_another_user(
 
     assert resp.status_code == 403
     mock_computer_manager.stop_computer.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Remove: an empty computer other than the primary, sandbox and all
+# ---------------------------------------------------------------------------
+
+
+def _removing(row, manager):
+    return (
+        patch("src.server.app.computers.get_computer", AsyncMock(return_value=row)),
+        patch("src.server.app.computers._computer_manager", return_value=manager),
+    )
+
+
+@pytest.mark.asyncio
+async def test_remove_answers_204_once_the_computer_is_gone(
+    client, computer, mock_computer_manager
+):
+    get_row, get_manager = _removing(computer, mock_computer_manager)
+    with get_row, get_manager:
+        resp = await client.delete(f"/api/v1/computers/{COMPUTER_ID}")
+
+    assert resp.status_code == 204
+    assert resp.content == b""
+    mock_computer_manager.remove_computer.assert_awaited_once_with(COMPUTER_ID)
+
+
+@pytest.mark.asyncio
+async def test_remove_of_an_unknown_computer_is_404(client, mock_computer_manager):
+    get_row, get_manager = _removing(None, mock_computer_manager)
+    with get_row, get_manager:
+        resp = await client.delete(f"/api/v1/computers/{COMPUTER_ID}")
+
+    assert resp.status_code == 404
+    mock_computer_manager.remove_computer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_remove_is_forbidden_for_another_user(
+    client, sample_computer_dict, mock_computer_manager
+):
+    foreign = sample_computer_dict(computer_id=COMPUTER_ID, user_id=OTHER_USER)
+    get_row, get_manager = _removing(foreign, mock_computer_manager)
+    with get_row, get_manager:
+        resp = await client.delete(f"/api/v1/computers/{COMPUTER_ID}")
+
+    assert resp.status_code == 403
+    mock_computer_manager.remove_computer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["primary", "has_workspaces", "busy"])
+async def test_a_refused_remove_is_409_with_the_code_the_client_words(
+    client, computer, mock_computer_manager, code
+):
+    from src.server.services.computer_errors import ComputerRemovalRefused
+
+    refusal = ComputerRemovalRefused(code)
+    mock_computer_manager.remove_computer.side_effect = refusal
+    get_row, get_manager = _removing(computer, mock_computer_manager)
+    with get_row, get_manager:
+        resp = await client.delete(f"/api/v1/computers/{COMPUTER_ID}")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {"code": code, "message": str(refusal)}
+    assert str(refusal)
+
+
+@pytest.mark.asyncio
+async def test_a_computer_retired_under_the_remove_is_404(
+    client, computer, mock_computer_manager
+):
+    """Another remove, or the last workspace leaving, retired it first."""
+    mock_computer_manager.remove_computer.side_effect = ValueError(
+        f"Computer {COMPUTER_ID} not found"
+    )
+    get_row, get_manager = _removing(computer, mock_computer_manager)
+    with get_row, get_manager:
+        resp = await client.delete(f"/api/v1/computers/{COMPUTER_ID}")
+
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
