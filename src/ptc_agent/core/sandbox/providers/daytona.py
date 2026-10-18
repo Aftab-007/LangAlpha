@@ -1,8 +1,9 @@
 """Daytona sandbox provider — wraps the Daytona SDK."""
 
 import asyncio
+import contextlib
 import contextvars
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import structlog
@@ -11,6 +12,7 @@ from daytona import (
     CreateSandboxFromSnapshotParams,
     CreateSnapshotParams,
     DaytonaConfig as SDKDaytonaConfig,
+    DaytonaNotFoundError,
     Image,
     Resources,
 )
@@ -35,7 +37,7 @@ from ptc_agent.core.sandbox.providers._image_recipe import (
     image_identity,
     image_steps,
 )
-from ptc_agent.core.sandbox.providers._tiers import resolve_tier
+from ptc_agent.core.sandbox.providers._tiers import TierChoice, resolve_tier
 from ptc_agent.core.sandbox.providers.daytona_runtime import DaytonaRuntime
 from ptc_agent.core.sandbox.providers.daytona_secrets import (
     DaytonaSecretReconciler,
@@ -46,6 +48,16 @@ from ptc_agent.core.sandbox.providers.daytona_secrets import (
 )
 
 logger = structlog.get_logger(__name__)
+
+# A snapshot in one of these is on its way to active (or, removing, to gone).
+_SNAPSHOT_IN_PROGRESS = frozenset(
+    {"pending", "pulling", "building", "snapshotting", "removing"}
+)
+_SNAPSHOT_FAILED = frozenset({"build_failed", "error"})
+
+
+def _state_value(state: Any) -> str:
+    return state.value if hasattr(state, "value") else str(state)
 
 
 def _detach_event_dispatcher(client: AsyncDaytona) -> None:
@@ -121,24 +133,7 @@ class DaytonaProvider(SandboxProvider):
         Returns:
             A DaytonaRuntime wrapping the new sandbox.
         """
-        # Resolved for every tier uniformly (including the default) so the
-        # configured default-tier cpu/mem/disk actually take effect instead of
-        # falling through to the Daytona platform default.
-        choice = resolve_tier(
-            tier,
-            default_tier=self._config.default_tier,
-            resource_tiers=self._config.resource_tiers,
-        )
-        resources = (
-            Resources(
-                cpu=choice.preset.cpu,
-                memory=choice.preset.memory,
-                disk=choice.preset.disk,
-            )
-            if choice.preset is not None
-            else None
-        )
-
+        choice, resources = self._resolve_tier(tier)
         snapshot_name = await self._ensure_snapshot(
             mcp_packages=mcp_packages or [],
             tier=choice.name,
@@ -243,6 +238,108 @@ class DaytonaProvider(SandboxProvider):
 
     # -- Snapshot management --
 
+    def _resolve_tier(self, tier: str | None) -> tuple[TierChoice, Resources | None]:
+        """The tier ``create`` uses and the size baked into its snapshot.
+
+        Resolved for every tier uniformly (including the default) so the
+        configured default-tier cpu/mem/disk actually take effect instead of
+        falling through to the Daytona platform default.
+        """
+        choice = resolve_tier(
+            tier,
+            default_tier=self._config.default_tier,
+            resource_tiers=self._config.resource_tiers,
+        )
+        if choice.preset is None:
+            return choice, None
+        preset = choice.preset
+        return choice, Resources(cpu=preset.cpu, memory=preset.memory, disk=preset.disk)
+
+    def snapshot_name(self, mcp_packages: list[str], *, tier: str | None = None) -> str:
+        """The snapshot ``create`` starts a sandbox of ``tier`` from."""
+        choice, resources = self._resolve_tier(tier)
+        return self._snapshot_name(mcp_packages, choice.name, resources)
+
+    async def snapshot_state(self, name: str) -> str | None:
+        """Daytona's state for the snapshot (``active``, ``building``, ...), None if absent."""
+        try:
+            snapshot = await self._client.snapshot.get(name)
+        except DaytonaNotFoundError:
+            return None
+        return _state_value(snapshot.state)
+
+    async def build_snapshot(
+        self,
+        mcp_packages: list[str],
+        *,
+        tier: str | None = None,
+        on_log: Callable[[str], None] | None = None,
+    ) -> str:
+        """Build ``tier``'s snapshot and wait until it is active; raises if the build fails.
+
+        A snapshot whose last build failed holds the name, so it is removed
+        first, and the build starts once Daytona has let the name go.
+        """
+        choice, resources = self._resolve_tier(tier)
+        name = self._snapshot_name(mcp_packages, choice.name, resources)
+        if await self.snapshot_state(name) in _SNAPSHOT_FAILED:
+            # A server's first create removes a failed snapshot too, and may get there first.
+            with contextlib.suppress(DaytonaNotFoundError):
+                await self._client.snapshot.delete(name)
+            for _ in range(60):
+                if await self.snapshot_state(name) is None:
+                    break
+                await asyncio.sleep(2)
+            else:
+                raise RuntimeError(
+                    f"{name} is still being removed; rerun once it is gone"
+                )
+        await self._create_snapshot(name, mcp_packages, resources, on_log=on_log)
+        return name
+
+    async def _settled_snapshot_state(self, name: str) -> str | None:
+        """The snapshot's state once no build is under way, or after five minutes.
+
+        A build started elsewhere (another worker's first create, or
+        ``make daytona-snapshots``) passes through several states on its way to
+        active, and a sandbox created from it before then fails.
+        """
+        state: str | None = "pending"
+        for _ in range(60):
+            with contextlib.suppress(Exception):
+                state = await self.snapshot_state(name)
+            if state not in _SNAPSHOT_IN_PROGRESS:
+                return state
+            await asyncio.sleep(5)
+        return state
+
+    async def activate_snapshot(self, name: str) -> str:
+        """Make an inactive snapshot usable again; returns the state Daytona reports for it."""
+        return _state_value((await self._client.snapshot.activate(name)).state)
+
+    def _snapshot_name(
+        self, mcp_packages: list[str] | None, tier: str, resources: Resources | None
+    ) -> str:
+        config_hash = self._get_snapshot_hash(mcp_packages, resources=resources)
+        base_name = self._config.snapshot_name or "ptc-base"
+        if resources is not None:
+            return f"{base_name}-{tier}-{config_hash}"
+        return f"{base_name}-{config_hash}"
+
+    async def _create_snapshot(
+        self,
+        name: str,
+        mcp_packages: list[str] | None,
+        resources: Resources | None,
+        *,
+        on_log: Callable[[str], None] | None = None,
+    ) -> None:
+        image = self._create_snapshot_image(mcp_packages, resources=resources)
+        await self._client.snapshot.create(
+            CreateSnapshotParams(name=name, image=image, resources=resources),
+            on_logs=on_log or (lambda log: logger.debug("Snapshot build", log=log)),
+        )
+
     def _image_steps(
         self, mcp_packages: list[str] | None, resources: Resources | None
     ) -> list[Step]:
@@ -306,13 +403,9 @@ class DaytonaProvider(SandboxProvider):
             logger.debug("Snapshot feature disabled in config")
             return None
 
-        config_hash = self._get_snapshot_hash(mcp_packages, resources=resources)
-        base_name = self._config.snapshot_name or "ptc-base"
-        if resources is not None:
-            snapshot_name = f"{base_name}-{tier}-{config_hash}"
-        else:
-            snapshot_name = f"{base_name}-{config_hash}"
-
+        snapshot_name = self._snapshot_name(
+            mcp_packages, tier or self._config.default_tier, resources
+        )
         logger.info("Checking for snapshot", snapshot_name=snapshot_name)
 
         # Check if snapshot exists and is usable
@@ -331,11 +424,7 @@ class DaytonaProvider(SandboxProvider):
                     break
 
             if snapshot_obj:
-                state = (
-                    snapshot_obj.state.value
-                    if hasattr(snapshot_obj.state, "value")
-                    else str(snapshot_obj.state)
-                )
+                state = _state_value(snapshot_obj.state)
                 if state == "build_failed":
                     logger.warning(
                         "Found failed snapshot, will recreate",
@@ -357,46 +446,19 @@ class DaytonaProvider(SandboxProvider):
                     snapshot_exists = False
                 elif state == "active":
                     snapshot_exists = True
-                elif state == "building":
+                elif state in _SNAPSHOT_IN_PROGRESS:
                     logger.info(
                         "Snapshot is still building, waiting...",
                         snapshot_name=snapshot_name,
+                        state=state,
                     )
-                    # Wait for build to complete (poll up to 5 min)
-                    build_resolved = False
-                    for _ in range(60):
-                        await asyncio.sleep(5)
-                        try:
-                            refreshed = await self._client.snapshot.list()
-                            items = (
-                                refreshed.items
-                                if hasattr(refreshed, "items")
-                                else refreshed
-                            )
-                            for s2 in items:
-                                if hasattr(s2, "name") and s2.name == snapshot_name:
-                                    s2_state = (
-                                        s2.state.value
-                                        if hasattr(s2.state, "value")
-                                        else str(s2.state)
-                                    )
-                                    if s2_state == "active":
-                                        logger.info("Snapshot build completed")
-                                        snapshot_exists = True
-                                        build_resolved = True
-                                        break
-                                    elif s2_state == "build_failed":
-                                        logger.warning("Snapshot build failed")
-                                        snapshot_exists = False
-                                        build_resolved = True
-                                        break
-                        except Exception:
-                            pass
-                        if build_resolved:
-                            break
-                    else:
-                        logger.warning("Snapshot build timed out")
-                        snapshot_exists = False
+                    state = await self._settled_snapshot_state(snapshot_name)
+                    if state in _SNAPSHOT_IN_PROGRESS:
+                        logger.warning(
+                            "Snapshot build timed out", snapshot_name=snapshot_name
+                        )
+                        return None
+                    snapshot_exists = state == "active"
                 else:
                     logger.warning(f"Snapshot in unexpected state: {state}")
                     snapshot_exists = False
@@ -410,15 +472,8 @@ class DaytonaProvider(SandboxProvider):
         # Create snapshot if it doesn't exist
         if not snapshot_exists and self._config.snapshot_auto_create:
             logger.info("Creating snapshot", snapshot_name=snapshot_name)
-            image = self._create_snapshot_image(mcp_packages, resources=resources)
-
             try:
-                await self._client.snapshot.create(
-                    CreateSnapshotParams(
-                        name=snapshot_name, image=image, resources=resources
-                    ),
-                    on_logs=lambda log: logger.debug("Snapshot build", log=log),
-                )
+                await self._create_snapshot(snapshot_name, mcp_packages, resources)
                 logger.info(
                     "Snapshot created successfully",
                     snapshot_name=snapshot_name,
@@ -427,6 +482,20 @@ class DaytonaProvider(SandboxProvider):
             except Exception as e:
                 error_str = str(e)
                 if "already exists" in error_str.lower():
+                    # Another build holds the name, and a sandbox can start
+                    # from it only once that build is done.
+                    state = await self._settled_snapshot_state(snapshot_name)
+                    if (
+                        state is None
+                        or state in _SNAPSHOT_IN_PROGRESS
+                        or state in _SNAPSHOT_FAILED
+                    ):
+                        logger.error(
+                            "Snapshot another build holds is not usable",
+                            snapshot_name=snapshot_name,
+                            state=state,
+                        )
+                        return None
                     logger.info(
                         "Snapshot already exists, will use it",
                         snapshot_name=snapshot_name,

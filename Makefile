@@ -1,4 +1,4 @@
-.PHONY: help configup down clean dev dev-web install test test-sandbox e2b-templates test-web test-market-protocol test-all lint data-probe setup-db migrate
+.PHONY: help configup down clean dev dev-web install test test-sandbox e2b-templates daytona-snapshots test-web test-market-protocol test-all lint data-probe setup-db migrate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -56,6 +56,9 @@ test-sandbox: _sandbox-prepare ## Run sandbox integration tests (PROVIDER=memory
 
 e2b-templates: ## Build the E2B sandbox templates for every resource tier
 	uv run python scripts/e2b_templates.py
+
+daytona-snapshots: ## Build the Daytona sandbox snapshots for every resource tier
+	uv run python scripts/daytona_snapshots.py
 
 test-web: ## Run frontend unit tests
 	cd web && pnpm vitest run

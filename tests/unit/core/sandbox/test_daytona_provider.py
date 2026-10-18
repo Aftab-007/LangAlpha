@@ -11,6 +11,7 @@ Covers:
 - DaytonaProvider.is_transient_error() classifies errors correctly
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -447,6 +448,82 @@ class TestDaytonaProvider:
         assert name_small and name_big
         assert name_small != name_big
         assert name_small.startswith("ptc-base-performance-")
+
+    @pytest.mark.asyncio
+    async def test_prebuilt_snapshot_name_is_the_one_create_looks_for(self):
+        """scripts/daytona_snapshots.py builds what ``snapshot_name`` says; a
+        sandbox only starts from it if create asks for the same name."""
+        from ptc_agent.core.sandbox.providers.daytona import DaytonaProvider
+
+        provider = DaytonaProvider.__new__(DaytonaProvider)
+        provider._working_dir = "/home/workspace"
+        provider._config = DaytonaConfig(api_key="test-key", snapshot_name="la")
+        client = AsyncMock()
+        client.snapshot.list = AsyncMock(return_value=MagicMock(items=[]))
+        provider._client = client
+
+        for tier in provider._config.resource_tiers:
+            _, resources = provider._resolve_tier(tier)
+            asked = await provider._ensure_snapshot(
+                ["pkg"], tier=tier, resources=resources
+            )
+            assert asked == provider.snapshot_name(["pkg"], tier=tier)
+            assert asked.startswith(f"la-{tier}-")
+
+    @staticmethod
+    def _snapshot_provider(client):
+        from ptc_agent.core.sandbox.providers.daytona import DaytonaProvider
+
+        provider = DaytonaProvider.__new__(DaytonaProvider)
+        provider._working_dir = "/home/workspace"
+        provider._config = DaytonaConfig(api_key="test-key")
+        provider._client = client
+        return provider
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("listed", ["pending", "pulling", "building", "snapshotting"])
+    async def test_a_build_under_way_is_waited_on_not_duplicated(self, listed, monkeypatch):
+        """Another worker's first create, or the prebuild, holds the name in any
+        of these on its way to active, and a sandbox started before then fails."""
+        monkeypatch.setattr("asyncio.sleep", AsyncMock())
+        client = AsyncMock()
+        provider = self._snapshot_provider(client)
+        choice, resources = provider._resolve_tier(None)
+        name = provider.snapshot_name(["pkg"])
+        client.snapshot.list = AsyncMock(
+            return_value=MagicMock(items=[SimpleNamespace(name=name, state=listed)])
+        )
+        client.snapshot.get = AsyncMock(
+            side_effect=[SimpleNamespace(state=listed), SimpleNamespace(state="active")]
+        )
+
+        got = await provider._ensure_snapshot(["pkg"], tier=choice.name, resources=resources)
+
+        assert got == name
+        assert client.snapshot.get.await_count == 2
+        client.snapshot.create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("settles", "usable"), [("active", True), ("build_failed", False)])
+    async def test_a_name_another_build_took_is_used_only_once_active(
+        self, settles, usable, monkeypatch
+    ):
+        monkeypatch.setattr("asyncio.sleep", AsyncMock())
+        client = AsyncMock()
+        provider = self._snapshot_provider(client)
+        choice, resources = provider._resolve_tier(None)
+        name = provider.snapshot_name(["pkg"])
+        client.snapshot.list = AsyncMock(return_value=MagicMock(items=[]))
+        client.snapshot.create = AsyncMock(
+            side_effect=RuntimeError(f"Snapshot with name {name} already exists")
+        )
+        client.snapshot.get = AsyncMock(
+            side_effect=[SimpleNamespace(state="pending"), SimpleNamespace(state=settles)]
+        )
+
+        got = await provider._ensure_snapshot(["pkg"], tier=choice.name, resources=resources)
+
+        assert got == (name if usable else None)
 
     @patch("ptc_agent.core.sandbox.providers.daytona.AsyncDaytona")
     @pytest.mark.asyncio
