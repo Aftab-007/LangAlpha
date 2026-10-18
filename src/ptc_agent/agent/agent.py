@@ -1014,4 +1014,5 @@ class PTCAgent:
             agent=agent,
             middleware=background_middleware,
             auto_wait=self.config.background_auto_wait,
+            market_alerts=self.config.feature_enabled("market_watch"),
         )

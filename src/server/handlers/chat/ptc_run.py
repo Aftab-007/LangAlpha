@@ -874,6 +874,7 @@ async def astream_ptc_workflow(
             agent_config=config,
             report_source=query_metadata.get("report_source"),
             turn_index=run_handle.turn_index,
+            market_target=query_metadata.get("market_target"),
         )
 
         # =====================================================================
