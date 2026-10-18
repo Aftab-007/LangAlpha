@@ -46,6 +46,7 @@
     "signupEmailExists": "An account with this email already exists.",
     "signupEmailExistsHint": "<1>Sign in</1>, <2>email me a sign-in link</2>, or <3>reset your password</3>.",
     "agreeToTerms": "By continuing, you agree to our <1>Terms of Service</1> and <2>Privacy Policy</2>.",
+    "agreeToTermsOnly": "By continuing, you agree to our <1>Terms of Service</1>.",
     "forgotPassword": "Forgot password?",
     "magicLinkCta": "Email me a sign-in link",
     "continueWithEmail": "Continue with email",
