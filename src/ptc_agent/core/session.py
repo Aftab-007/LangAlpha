@@ -256,7 +256,7 @@ class Session:
             )
 
             try:
-                snapshot_name, _ = await asyncio.gather(
+                await asyncio.gather(
                     self.sandbox.setup_sandbox_workspace(
                         tier=tier,
                         auto_stop_minutes=auto_stop_minutes,
@@ -278,7 +278,6 @@ class Session:
             self.sandbox.mcp_registry = self.mcp_registry
 
             await self.sandbox.setup_tools_and_mcp(
-                snapshot_name,
                 tokens=sandbox_tokens,
                 user_id=user_id,
                 workspace_id=workspace_id,

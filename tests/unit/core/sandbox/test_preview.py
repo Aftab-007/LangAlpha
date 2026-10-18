@@ -244,9 +244,7 @@ class TestStartPreviewServer:
 
     @pytest.mark.asyncio
     async def test_happy_path_creates_per_port_session(self, sandbox, mock_runtime):
-        mock_runtime.session_execute.return_value = SessionCommandResult(
-            cmd_id="preview-cmd-1", exit_code=None, stdout="", stderr=""
-        )
+        mock_runtime.session_execute.return_value = "preview-cmd-1"
 
         cmd_id = await sandbox.start_preview_server("python -m http.server 8080", 8080)
 
@@ -263,9 +261,7 @@ class TestStartPreviewServer:
         # Pre-populate a stale session for port 8080
         sandbox._preview_sessions[8080] = ("preview-8080", "old-cmd")
 
-        mock_runtime.session_execute.return_value = SessionCommandResult(
-            cmd_id="new-cmd", exit_code=None, stdout="", stderr=""
-        )
+        mock_runtime.session_execute.return_value = "new-cmd"
 
         cmd_id = await sandbox.start_preview_server("python app.py", 8080)
 
@@ -284,9 +280,7 @@ class TestStartPreviewServer:
         # delete_session fails but we should continue
         mock_runtime.delete_session.side_effect = Exception("cleanup failed")
 
-        mock_runtime.session_execute.return_value = SessionCommandResult(
-            cmd_id="new-cmd", exit_code=None, stdout="", stderr=""
-        )
+        mock_runtime.session_execute.return_value = "new-cmd"
 
         cmd_id = await sandbox.start_preview_server("python app.py", 8080)
         assert cmd_id == "new-cmd"
@@ -296,9 +290,7 @@ class TestStartPreviewServer:
         mock_runtime.create_session.side_effect = Exception(
             "Session already exists for this sandbox"
         )
-        mock_runtime.session_execute.return_value = SessionCommandResult(
-            cmd_id="reused-cmd", exit_code=None, stdout="", stderr=""
-        )
+        mock_runtime.session_execute.return_value = "reused-cmd"
 
         cmd_id = await sandbox.start_preview_server("node server.js", 3000)
         assert cmd_id == "reused-cmd"

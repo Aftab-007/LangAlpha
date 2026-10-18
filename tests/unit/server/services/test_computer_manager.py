@@ -2222,7 +2222,7 @@ class TestProviderPerRow(_Base):
         manager = WorkspaceManager.get_instance(config=config)
         binding = _make_binding(provider_config={"auto_stop_interval": 600})
         runtime = SimpleNamespace(
-            capabilities={"autostop"}, set_autostop_interval=AsyncMock()
+            autostops=True, set_autostop_interval=AsyncMock()
         )
 
         @asynccontextmanager

@@ -40,6 +40,7 @@ from ..mcp_sanitize import (
 from ..tool_generator import MCP_CLIENT_CODEGEN_VERSION
 from ..project_context import ProjectContext, current_project
 from .tool_overlay import read_union_ledger
+from .tree_upload import upload_tree
 from .vault_helper import VAULT_MODULE_SOURCE
 from ptc_agent.core.sandbox._shared import (
     _LOCK_VOLATILE_KEYS,
@@ -365,17 +366,40 @@ async def _compute_skills_module(
     return await asyncio.to_thread(build)
 
 
+def token_manifest_entry(
+    tokens: dict, user_id: str | None, workspace_id: str | None
+) -> dict[str, Any]:
+    """The manifest entry for a token file written just now.
+
+    Only the upload that wrote the file makes one, so the entry never
+    describes a token that is not on disk. Version captures the config
+    identity; freshness is checked via minted_at.
+    """
+    token_config_parts = {
+        "user_id": user_id or "",
+        "workspace_id": workspace_id or "",
+        "client_id": tokens.get("client_id", ""),
+    }
+    return {
+        "version": _hash_dict(token_config_parts),
+        "minted_at": time.time(),
+        "user_id": user_id or "",
+        "workspace_id": workspace_id or "",
+    }
+
+
 async def _compute_sandbox_manifest(
     sandbox: "PTCSandbox",
     *,
     skill_roots: list[str] | None = None,
     managed_skill_root: str | None = None,
     disabled_skills: frozenset[str] = frozenset(),
-    tokens: dict | None = None,
-    user_id: str | None = None,
-    workspace_id: str | None = None,
 ) -> dict[str, Any]:
-    """Compute the unified local manifest for all sandbox asset modules."""
+    """Compute the unified local manifest for the sandbox asset modules.
+
+    Everything but the token file, whose entry only its upload can make
+    (``token_manifest_entry``).
+    """
     modules: dict[str, Any] = {}
     config_dir = getattr(sandbox.config, "config_file_dir", None)
 
@@ -458,21 +482,6 @@ async def _compute_sandbox_manifest(
         modules["skills"] = await sandbox._compute_skills_module(
             skill_roots, managed_root=managed_skill_root, disabled=disabled_skills
         )
-
-    # ── Module: tokens ──
-    if tokens:
-        # Version captures the config identity; freshness is checked via minted_at.
-        token_config_parts = {
-            "user_id": user_id or "",
-            "workspace_id": workspace_id or "",
-            "client_id": tokens.get("client_id", ""),
-        }
-        modules["tokens"] = {
-            "version": _hash_dict(token_config_parts),
-            "minted_at": time.time(),
-            "user_id": user_id or "",
-            "workspace_id": workspace_id or "",
-        }
 
     return {
         "schema_version": 1,
@@ -725,7 +734,9 @@ async def sync_sandbox_assets(
             from the local set, so the prune removes them from the sandbox.
             One an enabled skill declares in ``requires`` is kept: the
             dependent's mandated read would otherwise miss.
-        reusing_sandbox: Whether reconnecting to an existing sandbox.
+        reusing_sandbox: Whether reconnecting to an existing sandbox. Only
+            labels the sync's metrics: what is uploaded follows the sandbox's
+            manifest, which on a new sandbox records what setup put there.
         force_refresh: Force re-upload of all modules regardless of manifest.
         tokens: Pre-minted OAuth tokens (from workspace_manager).
         user_id: User ID for token tracking.
@@ -805,9 +816,6 @@ async def sync_sandbox_assets(
                 skill_roots=skill_roots,
                 managed_skill_root=managed_root,
                 disabled_skills=disabled_skills,
-                tokens=tokens,
-                user_id=user_id,
-                workspace_id=workspace_id,
             ),
             sandbox._read_unified_manifest(),
             # The claim and vault reads ride along with the manifest's, so
@@ -843,19 +851,22 @@ async def sync_sandbox_assets(
         local_manifest["layout_version"] = layout_version
         await _publish_changed_vault(sandbox, vault_secrets, vault_on_disk)
 
-        # 3. Determine which modules changed (pure CPU)
-        if force_refresh or remote_manifest is None or not reusing_sandbox:
+        # 3. Determine which modules changed (pure CPU). An unreadable manifest
+        # says nothing about the disk, so everything goes up; a readable one
+        # is diffed whoever wrote it, a new sandbox's setup included. The token
+        # file is judged by its age rather than a version, so it is decided apart.
+        remote_tokens = ((remote_manifest or {}).get("modules") or {}).get("tokens")
+        tokens_due = bool(tokens) and (
+            force_refresh
+            or sandbox._token_needs_refresh(remote_tokens, tokens, user_id, workspace_id)
+        )
+        if force_refresh or remote_manifest is None:
             changed_modules = set(local_manifest["modules"].keys())
         else:
             changed_modules: set[str] = set()
             for mod_name, mod_data in local_manifest["modules"].items():
                 remote_mod = remote_manifest.get("modules", {}).get(mod_name)
-                if mod_name == "tokens":
-                    if sandbox._token_needs_refresh(
-                        remote_mod, tokens, user_id, workspace_id
-                    ):
-                        changed_modules.add("tokens")
-                elif mod_name == "tool_modules" and project.dir_name:
+                if mod_name == "tool_modules" and project.dir_name:
                     if overlay_missing:
                         changed_modules.add(mod_name)
                 elif (
@@ -864,7 +875,7 @@ async def sync_sandbox_assets(
                 ):
                     changed_modules.add(mod_name)
 
-        if not changed_modules:
+        if not changed_modules and not tokens_due:
             # `is None` guard (like the slow path): the cached manifest may
             # already hold the merged local+agent-installed view — overwriting
             # it with the local-only view would drop agent-installed skills
@@ -954,15 +965,39 @@ async def sync_sandbox_assets(
             if on_progress:
                 on_progress("Syncing skills...")
             parallel_uploads.append(("skills", _do_skills_upload()))
-        if "tokens" in changed_modules and tokens:
+        if tokens_due:
             if on_progress:
                 on_progress("Uploading tokens...")
-            parallel_uploads.append(("tokens", sandbox.upload_token_file(tokens)))
+            parallel_uploads.append(
+                (
+                    "tokens",
+                    sandbox.upload_token_file(
+                        tokens, user_id=user_id, workspace_id=workspace_id
+                    ),
+                )
+            )
 
+        token_entry = None
         if parallel_uploads:
-            await asyncio.gather(*[coro for _, coro in parallel_uploads])
-            refreshed.extend(name for name, _ in parallel_uploads)
+            results = await asyncio.gather(*[coro for _, coro in parallel_uploads])
+            for (name, _), result in zip(parallel_uploads, results, strict=True):
+                if name == "tokens":
+                    # The token upload logs its failure instead of raising.
+                    token_entry = result
+                    if token_entry is None:
+                        continue
+                refreshed.append(name)
         _mark_sync("uploads")
+
+        # The tokens entry describes the token file on disk, which only an
+        # upload here changes. With no upload, keep the sandbox's entry as it
+        # was, minted_at included, so the next freshness check judges the
+        # token actually there. A failed upload leaves the file unknown, so
+        # the entry stays out and the next sync with tokens owes one.
+        if token_entry is not None:
+            local_manifest["modules"]["tokens"] = token_entry
+        elif not tokens_due and remote_tokens is not None:
+            local_manifest["modules"]["tokens"] = remote_tokens
 
         # Group 2: tool_modules AFTER mcp_servers (intent: derived from MCP definitions)
         if "tool_modules" in changed_modules or overlay_missing:
@@ -1190,6 +1225,10 @@ async def _prune_remote_skills(
     """
     from ptc_agent.agent.middleware.skills.lock import is_agent_installed, is_linked
 
+    if existing_lock is None:
+        # Every entry would be preserved below, so the listing buys nothing;
+        # on a new sandbox this is the usual case.
+        return
     assert sandbox.runtime is not None
     runtime = sandbox.runtime
     entries = await sandbox.als_directory(sandbox_base)
@@ -1207,9 +1246,6 @@ async def _prune_remote_skills(
             continue  # Current platform skill — will be re-uploaded
 
         # Unknown skill — check lock for ownership
-        if existing_lock is None:
-            # Lock unavailable — safe default: preserve everything
-            continue
         lock_entry = existing_lock.get(name)
         if lock_entry is None:
             # Not in lock — unknown origin, preserve (safe default)
@@ -1258,9 +1294,8 @@ async def _upload_skills(
     Uses a two-pass approach to fix override precedence:
     - Pass 1 (local I/O only): Walk all sources, later sources overwrite earlier
       ones for the same skill_name — each skill appears exactly once.
-    - Pass 2 (sandbox I/O): single mkdir, parallel per-skill batch uploads
-      into a staging dir, then one exec that swaps each staged dir into place
-      and merges the lock.
+    - Pass 2 (sandbox I/O): one archive unpacked into a staging dir, then one
+      exec that swaps each staged dir into place and merges the lock.
 
     Args:
         local_skills_dirs: List of (local_path, sandbox_path) tuples.
@@ -1425,37 +1460,23 @@ async def _upload_skills(
 
     staging = f"{sandbox_base}/.staging/sync-{token_hex(8)}"
     try:
-        # 1. Single mkdir for all staged skill dirs + subdirs
-        mkdir_targets: set[str] = set()
+        # 1. Every staged skill dir and file in one archive upload and one
+        # unpack: no race, since planning collapsed duplicates
+        staged_dirs: set[str] = set()
         for name, plan in final_skills.items():
-            mkdir_targets.add(f"{staging}/{name}")
-            mkdir_targets.update(f"{staging}/{name}/{d}" for d in plan.subdirs)
-        mkdir_cmd = "mkdir -p " + " ".join(
-            shlex.quote(d) for d in sorted(mkdir_targets)
-        )
-        await sandbox._runtime_call(
-            runtime.exec,
-            mkdir_cmd,
-            retry_policy=RetryPolicy.SAFE,
+            staged_dirs.add(f"{staging}/{name}")
+            staged_dirs.update(f"{staging}/{name}/{d}" for d in plan.subdirs)
+        await upload_tree(
+            sandbox,
+            [
+                (fp, f"{staging}/{name}/{rel}")
+                for name, plan in final_skills.items()
+                for fp, rel in plan.files
+            ],
+            dirs=sorted(staged_dirs),
         )
 
-        # 2. Parallel per-skill batch uploads: no race, since planning
-        # collapsed duplicates
-        upload_coros = []
-        for name, plan in final_skills.items():
-            if plan.files:
-                batch = [(str(fp), f"{staging}/{name}/{rel}") for fp, rel in plan.files]
-                upload_coros.append(
-                    sandbox._runtime_call(
-                        runtime.upload_files,
-                        batch,
-                        retry_policy=RetryPolicy.SAFE,
-                    )
-                )
-        if upload_coros:
-            await asyncio.gather(*upload_coros)
-
-        # 3. One exec swaps every staged dir into place and merges the lock,
+        # 2. One exec swaps every staged dir into place and merges the lock,
         # both under the same .skills-sync.flock the reconciler holds for its
         # passes. The merge is a fresh read-merge-write inside the sandbox: a
         # host-side merge over `existing_lock` would be a snapshot taken

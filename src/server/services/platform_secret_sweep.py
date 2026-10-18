@@ -262,7 +262,7 @@ class PlatformSecretSweeper:
                     await livefs_restarted(computer_id, sandbox_id)
                 # Auto-stop persists across restarts; re-assert defensively so
                 # a scrubbed always-on sandbox provably stays always-on.
-                if row.get("is_always_on") and "autostop" in runtime.capabilities:
+                if row.get("is_always_on") and runtime.autostops:
                     try:
                         await runtime.set_autostop_interval(0)
                     except Exception:

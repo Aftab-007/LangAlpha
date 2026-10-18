@@ -4,7 +4,7 @@ Tests for DaytonaRuntime and DaytonaProvider with mocked Daytona SDK.
 Covers:
 - DaytonaRuntime delegates all operations to the SDK sandbox object
 - DaytonaRuntime maps SDK state strings to RuntimeState enum
-- DaytonaRuntime exposes correct capabilities and metadata
+- DaytonaRuntime exposes correct abilities and metadata
 - DaytonaProvider.create() returns DaytonaRuntime
 - DaytonaProvider.get() returns DaytonaRuntime
 - DaytonaProvider.close() delegates to client
@@ -211,12 +211,9 @@ class TestDaytonaRuntime:
         assert runtime.working_dir == "/home/workspace"
 
     def test_capabilities_includes_archive_and_snapshot(self, runtime):
-        caps = runtime.capabilities
-        assert "exec" in caps
-        assert "code_run" in caps
-        assert "file_io" in caps
-        assert "archive" in caps
-        assert "snapshot" in caps
+        assert runtime.archives
+        assert runtime.updates_env
+        assert runtime.autostops
 
     @pytest.mark.asyncio
     async def test_get_metadata(self, runtime):
@@ -238,7 +235,7 @@ class TestDaytonaRuntime:
         process.get_session_command_logs = AsyncMock(
             side_effect=[MagicMock(stdout="partial", stderr=""), MagicMock(stdout="all", stderr="")]
         )
-        await runtime.session_execute("bg-0123456789ab", "job", run_async=True)
+        await runtime.session_execute("bg-0123456789ab", "job")
 
         result = await runtime.session_logs("bg-0123456789ab")
 
@@ -260,7 +257,7 @@ class TestDaytonaRuntime:
             return MagicMock(stdout=command_id, stderr="")
 
         process.get_session_command_logs = AsyncMock(side_effect=logs)
-        await runtime.session_execute("bg-0123456789ab", "job", run_async=True)
+        await runtime.session_execute("bg-0123456789ab", "job")
 
         result = await runtime.session_logs("bg-0123456789ab")
 
@@ -372,7 +369,7 @@ class TestDaytonaProvider:
 
         baseline = provider._get_snapshot_hash([], resources=res)
         with patch(
-            "ptc_agent.core.sandbox.providers.daytona.SANDBOX_IMAGE_ENV",
+            "ptc_agent.core.sandbox.providers._image_recipe.SANDBOX_IMAGE_ENV",
             {**SANDBOX_IMAGE_ENV, "NEW_VAR": "/somewhere"},
         ):
             with_added = provider._get_snapshot_hash([], resources=res)

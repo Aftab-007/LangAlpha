@@ -53,7 +53,7 @@ def _row(
 
 def _runtime(*, autostop: bool = True) -> MagicMock:
     runtime = MagicMock()
-    runtime.capabilities = {"autostop"} if autostop else set()
+    runtime.autostops = autostop
     runtime.set_autostop_interval = AsyncMock()
     return runtime
 

@@ -1670,11 +1670,8 @@ class SessionLifecycleMixin:
             async with computer_stop_heartbeat(computer_id):
                 try:
                     async with self._detached_runtime(sandbox_id, binding=binding) as runtime:
-                        if "archive" not in runtime.capabilities:
-                            raise RuntimeError(
-                                f"Provider does not support archiving "
-                                f"(capabilities: {runtime.capabilities})"
-                            )
+                        if not runtime.archives:
+                            raise RuntimeError("Provider does not support archiving")
                         await runtime.archive()
                     await self._settle_machine_stop(computer_id, ComputerStatus.STOPPED)
                 except Exception:

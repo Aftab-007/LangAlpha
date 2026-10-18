@@ -188,7 +188,7 @@ class WorkspaceEntitlementsMixin:
         Interval 0 (never auto-stop) when enabled, else the configured default.
         Reuses ``runtime`` when the caller already holds a connected one (the
         reconnect path) to avoid a throwaway provider and an extra round trip.
-        No-ops if the runtime lacks the ``autostop`` capability.
+        No-ops on a runtime that does not auto-stop.
         """
         settings = (
             self._provider_settings(binding.kind, binding.provider_config)
@@ -201,7 +201,7 @@ class WorkspaceEntitlementsMixin:
         minutes = 0 if enabled else interval // 60
 
         if runtime is not None:
-            if "autostop" in runtime.capabilities:
+            if runtime.autostops:
                 await runtime.set_autostop_interval(minutes)
             return
 
@@ -210,7 +210,7 @@ class WorkspaceEntitlementsMixin:
         # sandbox that may not live there, which is the whole reason a computer
         # carries provider_kind and provider_config.
         async with self._detached_runtime(sandbox_id, binding=binding) as detached:
-            if "autostop" in detached.capabilities:
+            if detached.autostops:
                 await detached.set_autostop_interval(minutes)
 
     async def set_workspace_always_on(

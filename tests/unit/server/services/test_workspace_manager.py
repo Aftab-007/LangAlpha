@@ -301,6 +301,7 @@ def _make_mock_session(initialized=True, has_sandbox=True):
         session.sandbox.is_ready = MagicMock(return_value=True)
         session.sandbox.ensure_sandbox_ready = AsyncMock()
         session.sandbox.sync_sandbox_assets = AsyncMock()
+        session.sandbox.runtime.autostops = False
     session.initialize = AsyncMock()
     session.initialize_lazy = AsyncMock()
     session.stop = AsyncMock()

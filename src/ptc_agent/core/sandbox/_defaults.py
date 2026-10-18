@@ -6,7 +6,6 @@ NOTE: `Dockerfile.sandbox` (the Docker provider's image) hand-mirrors
 at build time. Keep both in sync when editing either.
 """
 
-SNAPSHOT_PYTHON_VERSION = "3.12"  # Intentionally pinned for stability/compatibility.
 SANDBOX_NODE_VERSION = "24.14.1"  # Pinned; mirrored in Dockerfile.sandbox.
 
 # One version for both language ports of Playwright. The npm package and the

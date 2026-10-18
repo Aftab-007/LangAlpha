@@ -539,7 +539,7 @@ async def test_a_scrub_restart_is_recorded_for_every_worker(rows):
 
     sweeper = PlatformSecretSweeper()
     idle = SimpleNamespace(has_active_tasks_for_computer=AsyncMock(return_value=False))
-    provider = SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(capabilities=set())))
+    provider = SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(autostops=False)))
     behind = {"workspace_id": None, "platform_secret_version": 0, "is_always_on": False}
     with (
         patch(
