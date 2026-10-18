@@ -120,6 +120,15 @@ export interface WorkspacesResponse {
   total?: number;
 }
 
+/** Request body for `POST /api/v1/workspaces`. */
+export interface WorkspaceCreate {
+  name: string;
+  description?: string;
+  config?: Record<string, unknown>;
+  /** The caller's live computer to put the folder on. Omitted means the primary. */
+  computer_id?: string;
+}
+
 /** Count-quota status for one elevated capability. `limit === -1` means unlimited. */
 export interface WorkspaceCapacity {
   used: number;
@@ -155,7 +164,8 @@ export type ComputerStatus =
 export interface Computer {
   computer_id: string;
   user_id: string;
-  /** Execution backend, e.g. `daytona` or `docker`. */
+  /** Execution backend. Kept plain like `status`: a kind this build does not
+   *  know is still a real machine, and `providerLabel()` shows it as is. */
   kind: string;
   name: string;
   /** Wire value, kept plain: an unrecognized state is real, and
@@ -271,10 +281,29 @@ export interface ComputerActionResponse {
   message?: string;
 }
 
+/** One entry of `GET /api/v1/computers/providers`. */
+export interface ComputerProviderOption {
+  /** A sandbox backend, plain like {@link Computer.kind}: a deployment can
+   *  offer one this build does not know. */
+  kind: string;
+  /** The deployment's default, which a create without `kind` lands on. */
+  is_default: boolean;
+  /** False when the user's plan lacks it; null when it is not gated or the
+   *  platform did not say, which is treated as allowed. */
+  allowed: boolean | null;
+}
+
+/** The providers a user can create a computer on, default first. */
+export interface ComputerProvidersResponse {
+  providers: ComputerProviderOption[];
+}
+
 /** Request body for `POST /api/v1/computers`. Tier is the machine's, not a workspace's. */
 export interface ComputerCreate {
   name?: string;
   resource_tier?: ResourceTier;
+  /** Omitted means the deployment's default provider. */
+  kind?: string;
 }
 
 export interface ReorderItem {

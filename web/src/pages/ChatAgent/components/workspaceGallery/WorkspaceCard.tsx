@@ -11,6 +11,7 @@ import { shortMonthDay } from '@/lib/format';
 import type { Computer } from '@/types/api';
 
 import { ComputerStatusIndicator } from '../computerStatusUi';
+import { isComputerPreparing } from '../../utils/computerStatus';
 import { diskLevelColor } from '../computerDiskUi';
 import { normalizeTier, tierLabel } from '../tierUi';
 import { effectiveTier } from '../specChangeUi';
@@ -156,7 +157,12 @@ export function WorkspaceCard({ workspace, computer, onSelect, onTogglePin, onRe
               >
                 <Server className="h-3 w-3 shrink-0" aria-hidden="true" />
                 <span className="truncate">{machineName}</span>
-                <ComputerStatusIndicator status={machineStatus} glyphSize={10} className="shrink-0" />
+                <ComputerStatusIndicator
+                  status={machineStatus}
+                  preparing={isComputerPreparing(computer)}
+                  glyphSize={10}
+                  className="shrink-0"
+                />
                 {showDiskDot && (
                   <span
                     className="h-1.5 w-1.5 shrink-0 rounded-full"

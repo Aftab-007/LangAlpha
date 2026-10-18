@@ -2,7 +2,7 @@
  * Workspace management endpoints.
  */
 import { api } from '@/api/client';
-import type { Workspace, WorkspaceQuota, WorkspacesResponse } from '@/types/api';
+import type { Workspace, WorkspaceCreate, WorkspaceQuota, WorkspacesResponse } from '@/types/api';
 import { streamStatusEvents } from './statusStream';
 
 // The shared API client sets no global timeout. Workspace-management ops
@@ -20,8 +20,15 @@ export async function getWorkspaces(limit: number = 20, offset: number = 0, sort
   return data;
 }
 
-export async function createWorkspace(name: string, description: string = '', config: Record<string, unknown> = {}): Promise<Workspace> {
-  const { data } = await api.post<Workspace>('/api/v1/workspaces', { name, description, config });
+/** `computerId` puts the folder on that computer; without it the server uses the primary. */
+export async function createWorkspace(
+  name: string,
+  description: string = '',
+  config: Record<string, unknown> = {},
+  computerId?: string | null,
+): Promise<Workspace> {
+  const body: WorkspaceCreate = { name, description, config, ...(computerId ? { computer_id: computerId } : {}) };
+  const { data } = await api.post<Workspace>('/api/v1/workspaces', body);
   return data;
 }
 
