@@ -203,8 +203,10 @@ async def get_computer_for_workspace(
 
     The join already has the project's row, so ``dir_name`` rides along: the
     binding needs the folder as often as it needs the machine, and a second
-    query for it is a second answer that can disagree with this one. None is
-    normal for an unbound Home and backfill shared-sandbox tie-break losers.
+    query for it is a second answer that can disagree with this one, and so
+    does ``files_epoch``, which says which arrival of the files a worker's
+    record of the folder is for. None is normal for an unbound Home and
+    backfill shared-sandbox tie-break losers.
     """
     workspace_id = normalize_uuid(workspace_id)
     if workspace_id is None:
@@ -213,7 +215,7 @@ async def get_computer_for_workspace(
     async with _computer_cursor(conn) as cur:
         await cur.execute(
             f"""
-            SELECT {computer_cols("c")}, w.dir_name
+            SELECT {computer_cols("c")}, w.dir_name, w.files_epoch
             FROM computers c
             JOIN workspaces w ON w.computer_id = c.computer_id
             WHERE w.workspace_id = %s AND c.{FENCE_NOT_DELETED}

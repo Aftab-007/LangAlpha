@@ -80,8 +80,9 @@ class ComputerManager(
 
         # Startup materialises only its initiating project. Check siblings
         # separately, keyed by sandbox so a rebuilt machine cannot reuse an old
-        # check.
-        self._projects_attached: set[tuple[str, str | None]] = set()
+        # check, and holding the project's files epoch so one that moved away
+        # and back to the same sandbox is attached again.
+        self._projects_attached: dict[tuple[str, str | None], str | None] = {}
 
         # asyncio holds weak task refs; retain publishes until PUBLISH completes.
         self._status_publish_tasks: set[asyncio.Task] = set()

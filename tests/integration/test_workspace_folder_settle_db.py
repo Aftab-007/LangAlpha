@@ -890,7 +890,7 @@ async def test_concurrent_cold_attach_fits_the_pool(
     assert got == [sessions[workspace_id] for workspace_id in ids]
     assert sorted(synced) == ["Macro", "Research"]
     assert link_pass.await_count == len(ids)
-    assert manager._projects_attached == {(w, f"sb-{w}") for w in ids}
+    assert manager._projects_attached.keys() == {(w, f"sb-{w}") for w in ids}
 
 
 async def test_concurrent_cold_restores_fit_the_pool(

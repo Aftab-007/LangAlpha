@@ -3474,7 +3474,7 @@ class TestAStartAttachesItsOwnProject(_Base):
 
         manager = _make_manager()
         session = _make_session()
-        manager._projects_attached.add(self.KEY)
+        manager._projects_attached[self.KEY] = None
 
         await self._start(manager, session, stats=ReconcileStats(link_failed=True))
 

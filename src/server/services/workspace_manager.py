@@ -26,11 +26,15 @@ from src.server.database.computer import (
 )
 from src.server.database.home_workspace import is_home_row
 from src.server.database.workspace import (
+    MOVING_DELETE_REFUSAL,
     SERVER_OWNED_CONFIG_KEYS,
+    WorkspaceBusyError,
+    WorkspaceMovingError,
     complete_workspace_folder_cleanup,
     create_workspace_on_computer,
     delete_workspace as db_delete_workspace,
     get_pending_workspace_folder_cleanups,
+    workspace_is_moving,
 )
 from src.server.database.workspace_folders import (
     WorkspaceFolderMoving,
@@ -199,7 +203,12 @@ class WorkspaceManager(ComputerManager):
         Raises:
             ValueError: If workspace not found
             RuntimeError: If workspace is in error/deleted state
+            WorkspaceMovingError: The workspace is moving to another computer.
         """
+        # Before a start too: a stopped computer starts by restoring its
+        # starter's folder, which a move has set aside.
+        if await workspace_is_moving(workspace_id):
+            raise WorkspaceMovingError(workspace_id)
         session = await self._acquire_session(
             workspace_id,
             user_id=user_id,
@@ -227,6 +236,10 @@ class WorkspaceManager(ComputerManager):
                 if binding.dir_name and not is_top_level(binding.dir_name):
                     # A move a settle could not finish; the agent cannot work in _internal.
                     raise WorkspaceFolderMoving(workspace_id)
+                # Again under the hold a move sets the folder aside under, for
+                # a move claimed while this acquired.
+                if await workspace_is_moving(workspace_id):
+                    raise WorkspaceMovingError(workspace_id)
                 # Per project, not per machine: the acquire above may have handed
                 # back the session a sibling started, which prepared only that
                 # sibling's folder and only that sibling's tool overlay.
@@ -306,6 +319,10 @@ class WorkspaceManager(ComputerManager):
                 # Here rather than only at the route: an agent's tool deletes
                 # through this method too.
                 raise ValueError("Cannot delete Home")
+            # Before the last backup holds the folder, which would fail the
+            # move instead; the delete's own transaction checks again.
+            if await workspace_is_moving(workspace_id):
+                raise WorkspaceBusyError(MOVING_DELETE_REFUSAL)
 
             logger.info(f"Deleting workspace {workspace_id}")
 

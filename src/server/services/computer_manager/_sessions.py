@@ -59,6 +59,9 @@ class SessionCacheMixin:
             resource_tier=computer.get("resource_tier"),
             is_always_on=bool(computer.get("is_always_on")),
             provider_config=computer.get("provider_config") or None,
+            files_epoch=(
+                str(computer["files_epoch"]) if computer.get("files_epoch") else None
+            ),
         )
 
     async def resolve_binding(
