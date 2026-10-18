@@ -233,23 +233,6 @@
           "input_pricing_mode": "input_dependent",
           "unit": "per_1m_tokens"
         }
-      },
-      {
-        "id": "claude-haiku-4-5-20251001",
-        "name": "Claude 4.5 Haiku",
-        "is_reasoning": true,
-        "description": "Retired 2026-10-07, superseded by Claude Haiku 5.5. Kept until the next retirement so a custom model on this id still bills.",
-        "alias": [
-          "claude-haiku-4.5"
-        ],
-        "pricing": {
-          "input": 1.0,
-          "cached_input": 0.1,
-          "cache_5m": 1.25,
-          "cache_1h": 2.0,
-          "output": 5.0,
-          "unit": "per_1m_tokens"
-        }
       }
     ],
     "gemini": [
@@ -262,27 +245,6 @@
           "input": 0.25,
           "cached_input": 0.025,
           "output": 1.5,
-          "cache_storage": 1.0,
-          "unit": "per_1m_tokens"
-        }
-      },
-      {
-        "id": "gemini-3.7-flash",
-        "name": "Gemini 3.7 Flash",
-        "is_reasoning": true,
-        "description": "Google's most capable Flash model for agentic workflows and multimodal reasoning",
-        "pricing": {
-          "input": 0.75,
-          "cached_input": 0.075,
-          "output": 3.75,
-          "cache_storage": 0.5,
-          "unit": "per_1m_tokens"
-        },
-        "scheduled_pricing": {
-          "effective_from": "2027-01-01",
-          "input": 1.5,
-          "cached_input": 0.15,
-          "output": 7.5,
           "cache_storage": 1.0,
           "unit": "per_1m_tokens"
         }
@@ -309,10 +271,50 @@
         }
       },
       {
+        "id": "gemini-4-argon",
+        "name": "Gemini 4 Argon",
+        "is_reasoning": true,
+        "description": "Google's flagship reasoning model, for complex software engineering, deep mathematical and scientific problem solving, and autonomous multi-step agents",
+        "pricing": {
+          "input": 2.0,
+          "cached_input": 0.1,
+          "output": 10.0,
+          "unit": "per_1m_tokens"
+        },
+        "scheduled_pricing": {
+          "effective_from": "2026-12-01",
+          "input": 4.0,
+          "cached_input": 0.2,
+          "output": 20.0,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
+        "id": "gemini-3.7-flash",
+        "name": "Gemini 3.7 Flash",
+        "is_reasoning": true,
+        "description": "Retired 2026-10-17, superseded by Gemini 3.8 Flash. Kept until the next retirement so a custom model on this id still bills.",
+        "pricing": {
+          "input": 0.75,
+          "cached_input": 0.075,
+          "output": 3.75,
+          "cache_storage": 0.5,
+          "unit": "per_1m_tokens"
+        },
+        "scheduled_pricing": {
+          "effective_from": "2027-01-01",
+          "input": 1.5,
+          "cached_input": 0.15,
+          "output": 7.5,
+          "cache_storage": 1.0,
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
         "id": "gemini-3.1-pro-preview",
         "name": "Gemini 3.1 Pro Preview",
         "is_reasoning": true,
-        "description": "Google's latest performance, intelligence, and usability improvements for multimodal understanding, agentic capabilities, and vibe-coding",
+        "description": "Retired 2026-10-17, superseded by Gemini 4 Argon. Kept until the next retirement so a custom model on this id still bills.",
         "pricing": {
           "input_tiers": [
             {
