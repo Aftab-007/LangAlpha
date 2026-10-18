@@ -203,6 +203,7 @@ Open [http://localhost:5173](http://localhost:5173). The API listens on port 800
 | --- | --- |
 | `FMP_API_KEY` | Fundamentals, financial statements, macro and analyst data ([free tier](https://site.financialmodelingprep.com/)) |
 | `DAYTONA_API_KEY` | Cloud sandboxes from [Daytona](https://www.daytona.io/). Without it, sandboxes run in local Docker |
+| `E2B_API_KEY` | Cloud sandboxes from [E2B](https://e2b.dev/), used when no Daytona key is set. Stopping pauses the sandbox and it resumes in about a second. Each resource tier builds its own template on first use, or run `make e2b-templates` to prebuild them. Set `E2B_DOMAIN` (or `E2B_API_URL` and `E2B_SANDBOX_URL`) for a self-hosted E2B, and `sandbox.e2b.max_timeout` in `agent_config.yaml` to your plan's longest run (Hobby 3600 s, the default; Pro 86400 s). Archive is Daytona only. Platform secrets need `E2B_SECRET_NAMESPACE` and a `header` on each catalog entry |
 | `R2_*`, `S3_*` or `OSS_*`, with `storage.provider` | Object storage on Cloudflare R2, AWS S3, Alibaba OSS or MinIO. Holds workspace file snapshots, memos, attachments, skill archives, large transcripts and chat widget data, and serves downloads over signed links. Without a bucket these bytes stay in Postgres and chart image capture is off |
 | `TAVILY_API_KEY`, `SERPER_API_KEY`, `EXA_API_KEY`, `PARALLEL_API_KEY`, `BOCHA_API_KEY` | Web search. The engine is chosen by `search_api` in `agent_config.yaml` (default `tavily`) or per user in Settings |
 | `FIRECRAWL_API_KEY` | Upgraded web fetch and site crawling. The built-in crawler needs no key |
@@ -386,7 +387,7 @@ An order moves real money, so it gets its own path. Order tools are pinned to di
 
 - **Vault.** Store an API key once and use it from code in any workspace with `from vault import get`. Secrets are encrypted at rest and only the owner can reveal or change them.
 - **Leak redaction.** Every tool result is scanned for known secret values before it reaches the model, and matches are replaced with `[REDACTED:NAME]`. Downloads and shared files get the same treatment.
-- **Sandboxed execution.** Agent code runs in a Daytona or Docker sandbox, and protected-path guards refuse tool calls that reach into system directories.
+- **Sandboxed execution.** Agent code runs in a Daytona, E2B or Docker sandbox, and protected-path guards refuse tool calls that reach into system directories.
 
 ## Roadmap
 
