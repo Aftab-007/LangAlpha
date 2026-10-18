@@ -214,7 +214,7 @@ async def test_a_bulk_row_update_is_found_by_a_recheck(threads, capsys):
     before = {(t, i): key for t, i, _, key, *_ in await _rows(*both)}
     async with get_db_connection() as conn:
         await conn.execute(
-            "UPDATE conversation_responses SET sse_events = NULL"
+            "UPDATE conversation_responses SET metadata = metadata"
             " WHERE conversation_thread_id = %s::uuid",
             (threads.whole,),
         )

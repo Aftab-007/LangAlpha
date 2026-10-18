@@ -28,11 +28,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 TIP = "cp-tip"
 RUN_FACTS = {"v": 1, "reasoning_ms": {"msg_1": [250]}}
-STORED = [
-    {"event": "message_chunk", "data": {"id": "lc-1", "content_type": "text", "content": "answer"}},
-    {"event": "context_window", "data": {"action": "offload", "kind": "tool_args"}},
-]
-# What STORED adds to the turn's projection, by the projected row it follows.
+# What the turn's archived stream added to its projection, by the projected
+# row it follows.
 LEGACY = {
     "v": legacy.FACTS_VERSION,
     "merge": {
@@ -47,8 +44,8 @@ LEGACY = {
 @pytest_asyncio.fixture
 async def turn(seed_workspace, seed_response, patched_get_db_connection, monkeypatch):
     """A one-turn legacy thread over a checkpoint that projects the turn: its
-    completed row keeps its archived events, the run facts its finalize
-    wrote, and the legacy facts those events were resolved to."""
+    completed row keeps the run facts its finalize wrote and the legacy facts
+    its archived stream was resolved to."""
     from src.server.database.conversation import create_query, create_thread
 
     thread_id = str(uuid.uuid4())
@@ -66,7 +63,7 @@ async def turn(seed_workspace, seed_response, patched_get_db_connection, monkeyp
         query_type="initial",
     )
     response_id = str(uuid.uuid4())
-    await seed_response(response_id, thread_id, 0, sse_events=STORED)
+    await seed_response(response_id, thread_id, 0)
 
     async def sql(query, params=()):
         async with patched_get_db_connection() as conn:
@@ -122,7 +119,6 @@ async def test_a_legacy_row_replays_with_the_facts_its_read_returns(turn):
 
     assert read["replay_facts"] == {**RUN_FACTS, LEGACY_KEY: LEGACY}
     assert str(read["xmin"]) == (await turn.row())["xmin"]
-    assert "sse_events" not in read
     assert [line.event for line in await _lines(turn.thread_id)] == [
         "user_message",
         "message_chunk",

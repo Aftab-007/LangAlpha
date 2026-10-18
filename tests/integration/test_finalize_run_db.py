@@ -2,13 +2,12 @@
 
 The finalize writes the run's replay facts with its status and rewrites the
 main lane's provenance from the lane's own record, so only a real database
-can show that a subagent lane's records survive, that a lost CAS writes
-nothing, and that an older server's events on the row are left as they were.
+can show that a subagent lane's records survive and that a lost CAS writes
+nothing.
 """
 
 from __future__ import annotations
 
-import json
 import uuid
 
 import pytest
@@ -80,14 +79,6 @@ async def open_run(seed_workspace, patched_get_db_connection):
     return thread_id, run_id
 
 
-async def _sse_events(conn, run_id: str):
-    cur = await conn.execute(
-        "SELECT sse_events FROM conversation_responses WHERE conversation_response_id = %s",
-        (run_id,),
-    )
-    return (await cur.fetchone())["sse_events"]
-
-
 async def _provenance_ids(conn, run_id: str) -> list[str]:
     cur = await conn.execute(
         "SELECT identifier FROM provenance_records "
@@ -97,7 +88,7 @@ async def _provenance_ids(conn, run_id: str) -> list[str]:
     return [r["identifier"] for r in await cur.fetchall()]
 
 
-async def test_finalize_writes_no_events(open_run, db_conn):
+async def test_finalize_settles_the_row(open_run, db_conn):
     thread_id, run_id = open_run
     events = [CHUNK, _provenance("https://final.example")]
 
@@ -106,7 +97,6 @@ async def test_finalize_writes_no_events(open_run, db_conn):
     assert result.applied
     assert set(result.run) == ROW_KEYS
     assert result.run["status"] == "completed"
-    assert await _sse_events(db_conn, run_id) is None
     assert await _provenance_ids(db_conn, run_id) == ["https://final.example"]
     # The outbox jobs are built from the returned row alone.
     cur = await db_conn.execute(
@@ -114,24 +104,6 @@ async def test_finalize_writes_no_events(open_run, db_conn):
         (run_id,),
     )
     assert (await cur.fetchone())["payload"]["run_seq"] == result.run["run_seq"]
-
-
-async def test_an_older_servers_events_are_left_as_they_were(open_run, db_conn):
-    """During a cutover an older server can still append to a row this one
-    settles; its events stay, and the provenance is the lane's own record."""
-    thread_id, run_id = open_run
-    appended = [{"event": "context_window", "data": {"action": "summarize"}}]
-    await db_conn.execute(
-        "UPDATE conversation_responses SET sse_events = %s::jsonb "
-        "WHERE conversation_response_id = %s",
-        (json.dumps(appended), run_id),
-    )
-
-    record = _record(_provenance("https://final.example"))
-    assert (await _finalize(run_id, thread_id, "cancelled", record=record)).applied
-
-    assert await _sse_events(db_conn, run_id) == appended
-    assert await _provenance_ids(db_conn, run_id) == ["https://final.example"]
 
 
 async def test_lost_cas_writes_nothing_and_returns_the_survivor(open_run, db_conn):
@@ -146,7 +118,6 @@ async def test_lost_cas_writes_nothing_and_returns_the_survivor(open_run, db_con
     assert not second.applied
     assert set(second.run) == ROW_KEYS
     assert second.run["status"] == "completed"
-    assert await _sse_events(db_conn, run_id) is None
     assert await _provenance_ids(db_conn, run_id) == ["https://won.example"]
 
 
