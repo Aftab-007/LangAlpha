@@ -32,6 +32,13 @@ from ptc_agent.agent.transcript.classify import (
 logger = structlog.get_logger(__name__)
 
 
+def _is_interrupt(event: Any) -> bool:
+    """Whether a streamed event carries an interrupt. The payload comes last
+    in every shape ``stream_mode`` and ``subgraphs`` give an event."""
+    payload = event[-1] if isinstance(event, tuple) and event else event
+    return isinstance(payload, dict) and "__interrupt__" in payload
+
+
 class BackgroundSubagentOrchestrator:
     """Orchestrator that handles re-invocation after background tasks complete.
 
@@ -207,6 +214,11 @@ class BackgroundSubagentOrchestrator:
         re-invocation so that notification messages create ``source=update``
         checkpoints instead of ``source=input``, avoiding phantom user turns.
 
+        That update drops any interrupt the pass ended on, so re-invoking
+        supersedes it. Interrupt events are therefore held to the end of each
+        pass and only the last pass's go out: the ones the checkpoint still
+        holds pending, which replay shows and a resume can answer.
+
         Args:
             input_state: Initial state for the agent (None to resume from checkpoint)
             config: Optional config dict for the agent
@@ -235,11 +247,15 @@ class BackgroundSubagentOrchestrator:
             # Closing this stream must close the agent's too, and in this task:
             # a bare ``async for`` leaves it to the garbage collector, so its
             # model calls and tools would outlive the close the caller awaits.
+            pauses: list[Any] = []
             async with aclosing(
                 self.agent.astream(current_state, config, **stream_kwargs)
             ) as events:
                 async for event in events:
-                    yield event
+                    if _is_interrupt(event):
+                        pauses.append(event)
+                    else:
+                        yield event
 
             # After first iteration, strip checkpoint_id so subsequent
             # aupdate_state/astream calls use the latest checkpoint.
@@ -264,7 +280,7 @@ class BackgroundSubagentOrchestrator:
                 if await self._reinvoke_for_steering(config, iteration):
                     current_state = None
                     continue
-                return
+                break
 
             # If auto_wait is False, return immediately without waiting
             # CLI will handle displaying task status and collecting results later
@@ -276,7 +292,7 @@ class BackgroundSubagentOrchestrator:
                     "Background tasks pending, returning immediately (auto_wait=False)",
                     pending_count=self.middleware.registry.pending_count,
                 )
-                return
+                break
 
             # Wait for all background tasks to complete
             checker = await self._message_checker(
@@ -296,7 +312,7 @@ class BackgroundSubagentOrchestrator:
                 if await self._reinvoke_for_steering(config, iteration):
                     current_state = None
                     continue
-                return
+                break
 
             logger.info(
                 "Background tasks completed after stream, notifying agent",
@@ -308,6 +324,13 @@ class BackgroundSubagentOrchestrator:
 
             # NOTE: Do NOT clear registry here - agent needs to call TaskOutput()
             # to retrieve results in the next iteration.
+        else:
+            # Every pass ended by injecting, the last included, so none of
+            # their interrupts is still pending.
+            return
+
+        for event in pauses:
+            yield event
 
     async def _inject(self, config: dict[str, Any], content: str) -> None:
         """Append an orchestrator-authored human turn as if from ``__start__``."""
