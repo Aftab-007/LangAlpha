@@ -30,6 +30,7 @@ from src.server.database.sql_fences import (
     EXCLUDE_HOME,
     FENCE_LIVE_WORKSPACE,
     FENCE_NOT_DELETED,
+    FENCE_TAKES_WORKSPACES,
     shadowed_write,
 )
 from src.server.database.user_lock import lock_user_writes
@@ -448,6 +449,7 @@ async def bind_workspace_to_computer(
                            provider_ref, platform_secret_version
                     FROM computers
                     WHERE computer_id = %(computer_id)s AND {FENCE_NOT_DELETED}
+                      AND {FENCE_TAKES_WORKSPACES}
                       AND user_id = (
                           SELECT user_id FROM workspaces
                           WHERE workspace_id = %(workspace_id)s
@@ -723,7 +725,8 @@ async def create_workspace_on_computer(
     FOR SHARE holds status changes until the new row can receive their shadow UPDATE;
     otherwise it may retain a stale status that later transitions skip. Include
     sandbox_id or attachment sees a split binding and rebuilds every sibling's machine.
-    None means the computer is gone: resolve another instead of retrying this one.
+    None means the computer is gone or being retired: resolve another instead of
+    retrying this one.
 
     The folder is the name. A row still holding it on this computer under any
     case (a deleted workspace awaiting cleanup, or a sibling renamed away that
@@ -763,6 +766,8 @@ async def create_workspace_on_computer(
                                        provider_ref, platform_secret_version
                                 FROM computers
                                 WHERE computer_id = %(computer_id)s AND {FENCE_NOT_DELETED}
+                                  AND {FENCE_TAKES_WORKSPACES}
+                                  AND user_id = %(user_id)s
                                 FOR SHARE
                             )
                             INSERT INTO workspaces (
@@ -931,6 +936,34 @@ async def get_workspace_name_and_description(
     except Exception as e:
         logger.error(f"Error reading the name of workspace {workspace_id}: {e}")
         raise
+
+
+async def get_workspace_naming(workspace_id: str) -> Optional[Dict[str, Any]]:
+    """The `<workspace>` block's facts in one narrow read per agent turn.
+
+    The live computer the workspace is on comes with the count of its user's
+    live computers, which decides whether that computer is named at all, so
+    both answer from the snapshot the name does.
+    """
+    workspace_id = normalize_uuid(workspace_id)
+    if workspace_id is None:
+        return None
+
+    async with _ws_cursor() as cur:
+        await cur.execute(
+            f"""
+            SELECT w.name, w.description, c.name AS computer_name,
+                   (SELECT count(*) FROM computers o
+                    WHERE o.user_id = w.user_id AND o.{FENCE_NOT_DELETED}) AS computers
+            FROM workspaces w
+            LEFT JOIN computers c
+              ON c.computer_id = w.computer_id AND c.{FENCE_NOT_DELETED}
+            WHERE w.workspace_id = %s AND w.{FENCE_NOT_DELETED}
+            """,
+            (workspace_id,),
+        )
+        result = await cur.fetchone()
+    return dict(result) if result else None
 
 
 async def get_workspace_names(

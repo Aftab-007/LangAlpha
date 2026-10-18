@@ -29,6 +29,7 @@ async def test_home_restores_each_flagged_sibling_on_the_sandbox_it_holds():
     home = ComputerBinding(
         workspace_id="home",
         computer_id="comp-1",
+        kind="daytona",
         dir_name="Home",
         root_dir="/home/workspace",
         provider_ref="sbx-1",

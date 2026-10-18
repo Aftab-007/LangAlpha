@@ -71,8 +71,8 @@ class ComputerBinding:
 
     workspace_id: str
     computer_id: str
+    kind: str
     dir_name: Optional[str] = None
-    kind: Optional[str] = None
     root_dir: Optional[str] = None
     provider_ref: Optional[str] = None
     resource_tier: Optional[str] = None
@@ -80,7 +80,7 @@ class ComputerBinding:
     provider_config: Optional[Dict[str, Any]] = None
 
     @property
-    def provider_identity(self) -> Tuple[Optional[str], str]:
+    def provider_identity(self) -> Tuple[str, str]:
         """Row-level provider overrides distinguish backends of the same kind."""
         return (self.kind, json.dumps(self.provider_config or {}, sort_keys=True))
 

@@ -51,7 +51,7 @@ class SessionCacheMixin:
             workspace_id=workspace_id,
             computer_id=str(computer["computer_id"]),
             dir_name=computer.get("dir_name"),
-            kind=computer.get("kind"),
+            kind=computer["kind"],
             root_dir=computer.get("root_dir"),
             provider_ref=(
                 str(computer["provider_ref"]) if computer.get("provider_ref") else None

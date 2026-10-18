@@ -21,6 +21,17 @@ FENCE_NOT_DELETED = "status <> 'deleted'"
 # write must not reach it and overwrite the 'unbound' marker.
 FENCE_LIVE_WORKSPACE = "status NOT IN ('deleted', 'unbound')"
 
+# A computer whose retirement is being decided takes no workspace: the decision
+# reads it empty, and its tombstone would take a newcomer down with it. The
+# marker goes on before that read and the row lock orders the two, so a
+# workspace either lands first and is counted, or meets the marker here. A
+# primary is never retired, so the marker a workspace delete writes on one
+# before reading the flag refuses nothing.
+FENCE_TAKES_WORKSPACES = (
+    "(is_primary OR NOT COALESCE(config, '{}'::jsonb)"
+    " @> '{\"retire_when_empty\": true}'::jsonb)"
+)
+
 # A listing of the user's workspaces leaves Home out by its id, since bound it
 # reads its computer's status, and leaves out by status an unbound former Home
 # at another id, which an account merge leaves until the fold. The caller binds

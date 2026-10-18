@@ -43,6 +43,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from ptc_agent.core.sandbox.livefs_runtime.protocol import PREFIX as LIVEFS_PREFIX
 from ptc_agent.core.sandbox.platform_secrets import PlatformSecretError
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
+from src.server.preview_proxy import install_preview_proxy
 from src.config.logging_config import configure_logging
 from src.config.settings import (
     get_allowed_origins,
@@ -53,6 +54,10 @@ from src.observability.private_query import drop_span_query
 from src.server.services.runs.executor import LocalRunExecutor
 from src.server.services.background_registry_store import BackgroundRegistryStore
 from src.server.utils.api import find_malformed_route_ids  # TEMP (malformed-id-diag)
+from src.server.services.preview_base import (
+    PreviewProxyConfigurationError,
+    check_preview_proxy_config,
+)
 from src.server.utils.error_sanitization import (
     sandbox_unreachable_detail,
     single_line,
@@ -316,6 +321,13 @@ async def lifespan(app: FastAPI):
         logger.info("Loading PTC Agent configuration...")
         agent_config = await load_from_files(context=ConfigContext.SDK)
 
+        from src.config.env import PUBLIC_APP_URL, SERVER_BASE_URL
+
+        check_preview_proxy_config(
+            requires_proxy=not agent_config.sandbox.e2b.public_traffic,
+            app_urls=(SERVER_BASE_URL, PUBLIC_APP_URL, *get_allowed_origins()),
+        )
+
         from src.server.services.plugins.bundled import component_owners
 
         bundle_owners = component_owners()
@@ -326,20 +338,6 @@ async def lifespan(app: FastAPI):
 
         await reconcile_platform_secrets_at_boot(agent_config)
         logger.info("PTC Agent configuration loaded successfully")
-
-        # Platform-secret migration sweep: converges running sandboxes left
-        # behind the fleet generation (always-on sandboxes never re-init, so
-        # only this sweep ever scrubs them). Inert without an active catalog.
-        try:
-            from src.server.services.platform_secret_sweep import (
-                PlatformSecretSweeper,
-            )
-
-            PlatformSecretSweeper.get_instance().start(
-                agent_config.to_core_config()
-            )
-        except Exception as e:
-            logger.warning(f"Failed to start PlatformSecretSweeper: {e}")
 
         # Connect once, freeze, install as the process-global registry so every
         # Session borrows the same tool snapshot instead of spawning its own
@@ -387,21 +385,32 @@ async def lifespan(app: FastAPI):
         llm_service = LLMService(agent_config=agent_config, logger=logger)
         logger.info("LLMService initialized")
 
-        # Initialize workspace manager
-        # Derive idle timeout from Daytona auto-stop so the server cleans up
-        # *before* Daytona kills the sandbox (10-min buffer, 5-min floor).
-        daytona_auto_stop = agent_config.daytona.auto_stop_interval  # seconds
-        server_idle_timeout = max(daytona_auto_stop - 600, 300)
-
+        # Initialize workspace manager. Its idle sweep times each computer by
+        # that computer's own provider settings.
         from src.server.services.workspace_manager import WorkspaceManager
 
         workspace_manager = WorkspaceManager.get_instance(
             config=agent_config,
-            idle_timeout=server_idle_timeout,
             cleanup_interval=300,  # 5 minutes
         )
         await workspace_manager.start_cleanup_task()
         logger.info("Workspace Manager initialized")
+
+        # Platform-secret migration sweep: converges running sandboxes left
+        # behind the fleet generation (always-on sandboxes never re-init, so
+        # only this sweep ever scrubs them). Inert without an active catalog.
+        # Started after the Workspace Manager, which creates the
+        # ComputerManager its first pass needs.
+        try:
+            from src.server.services.platform_secret_sweep import (
+                PlatformSecretSweeper,
+            )
+
+            PlatformSecretSweeper.get_instance().start(
+                agent_config.to_core_config()
+            )
+        except Exception as e:
+            logger.warning(f"Failed to start PlatformSecretSweeper: {e}")
 
         # Initialize PTC Agent checkpointer for state persistence
         from src.server.utils.checkpointer import (
@@ -474,6 +483,10 @@ async def lifespan(app: FastAPI):
     except PlatformSecretError:
         # Required platform Secrets are a configuration gate. Hosted mode
         # must never continue into a plaintext fallback or partial startup.
+        raise
+    except PreviewProxyConfigurationError:
+        # The same kind of gate: private computers with nowhere to serve
+        # their previews would hand out only dead links.
         raise
     except Exception as e:
         logger.warning(f"Failed to initialize PTC Agent: {e}")
@@ -819,6 +832,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Error cancelling background subagent tasks: {e}")
 
+    # 2.5. Close the preview proxy's upstream pool; its keep-alive renewals
+    # reach the Workspace Manager, so they go before it does.
+    preview_proxy = getattr(app.state, "preview_proxy", None)
+    if preview_proxy is not None:
+        try:
+            await preview_proxy.aclose()
+        except Exception as e:
+            logger.warning(f"Error closing the preview proxy: {e}")
+
     # 3. Shutdown Workspace Manager (stop cleanup task, clear cache)
     if workspace_manager is not None:
         try:
@@ -1156,6 +1178,10 @@ app.add_middleware(
     ],  # Use the configured list of methods
     allow_headers=["*"],  # Now allow all headers, but can be restricted further
 )
+
+# Previews of private sandboxes, picked out by Host before any middleware
+# above sees the request. Installed last, around the stack the tracing wraps.
+install_preview_proxy(app)
 
 
 # ============================================================================

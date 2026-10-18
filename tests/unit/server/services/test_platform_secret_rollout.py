@@ -11,6 +11,7 @@ import pytest
 from ptc_agent.config.core import (
     CoreConfig,
     DaytonaConfig,
+    E2BConfig,
     FilesystemConfig,
     LoggingConfig,
     MCPConfig,
@@ -29,14 +30,19 @@ from src.server.services.platform_secret_rollout import (
     PlatformSecretReadinessError,
     PlatformSecretRollout,
     PlatformSecretRolloutSet,
+    certify_platform_secrets,
     reconcile_platform_secrets_at_boot,
+    reset_platform_secret_rollout_cache,
     resync_computer_platform_secret,
+    served_platform_secret_kinds,
 )
 
 
 PLACEHOLDER = "dtn_secret_opaque"
 
 _MODULE = "src.server.services.platform_secret_rollout"
+_BUILD_PROVIDER = "ptc_agent.core.sandbox.providers.build_provider"
+_LIVE_KINDS = "src.server.database.computer.get_live_computer_kinds"
 
 
 _FMP_DEFINITION = PlatformSecretDefinition(
@@ -52,11 +58,16 @@ def _config(
     *,
     provider: str = "daytona",
     platform_secrets: tuple[PlatformSecretDefinition, ...] = (_FMP_DEFINITION,),
+    e2b_key: str = "e2b-key",
+    e2b_namespace: str = "prod",
+    offered_providers: tuple[str, ...] = (),
 ) -> CoreConfig:
     return CoreConfig(
         sandbox=SandboxConfig(
             provider=provider,
+            offered_providers=offered_providers,
             daytona=DaytonaConfig(api_key="daytona-key", secret_namespace="prod"),
+            e2b=E2BConfig(api_key=e2b_key, secret_namespace=e2b_namespace),
             platform_secrets=platform_secrets,
         ),
         security=SecurityConfig(),
@@ -66,20 +77,40 @@ def _config(
     )
 
 
-def _rollout_set(generation: int = 1) -> PlatformSecretRolloutSet:
+def _rollout_set(
+    generation: int = 1, *, provider: str = "daytona"
+) -> PlatformSecretRolloutSet:
     rollout = PlatformSecretRollout(
         secret_key="FMP_API_KEY",
-        provider="daytona",
+        provider=provider,
         secret_name="prod-platform-fmp-api-key",
         provider_secret_id="secret-id",
         placeholder_sha256=hashlib.sha256(PLACEHOLDER.encode()).hexdigest(),
         current_credential_sha256="current",
         generation=generation,
     )
-    return PlatformSecretRolloutSet(rollouts=(rollout,), generation=generation)
+    return PlatformSecretRolloutSet(
+        provider=provider, rollouts=(rollout,), generation=generation
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_memo_between_tests():
+    reset_platform_secret_rollout_cache()
+    yield
+    reset_platform_secret_rollout_cache()
+
+
+@pytest.fixture(autouse=True)
+def live_kinds():
+    """The computers' kinds boot reads; none unless a test says otherwise."""
+    with patch(_LIVE_KINDS, AsyncMock(return_value={})) as live:
+        yield live
 
 
 class _Runtime:
+    updates_env = True
+
     async def exec(self, command: str, timeout: int = 60) -> ExecResult:
         return ExecResult(f"{PLACEHOLDER}\n", "", 0)
 
@@ -94,10 +125,12 @@ async def _resync(
     sandbox_id: str | None = "sb",
     db_version: int = 0,
     applied_generation: int | None = None,
+    kind: str = "daytona",
 ):
     return await resync_computer_platform_secret(
         config,
         runtime if runtime is not None else _Runtime(),
+        kind=kind,
         computer_id="cmp",
         sandbox_id=sandbox_id,
         db_version=db_version,
@@ -214,6 +247,12 @@ async def test_resync_remounts_a_legacy_row_without_certifying_it(monkeypatch):
     stamp.assert_not_awaited()
 
 
+class _FixedEnvRuntime(_Runtime):
+    """E2B's shape: env is what create set, with no way to update it."""
+
+    updates_env = False
+
+
 @pytest.mark.asyncio
 async def test_resync_raises_on_remount_failure_without_stamping(monkeypatch):
     monkeypatch.setattr("src.config.env.HOST_MODE", "platform")
@@ -289,10 +328,7 @@ async def test_boot_reconciles_and_registers_provider(monkeypatch):
     register = AsyncMock(return_value=MagicMock())
 
     with (
-        patch(
-            "ptc_agent.core.sandbox.providers.create_provider",
-            return_value=provider,
-        ),
+        patch(_BUILD_PROVIDER, return_value=provider),
         patch(f"{_MODULE}.register_platform_secret_rollouts", register),
     ):
         await reconcile_platform_secrets_at_boot(agent_config)
@@ -316,13 +352,11 @@ async def test_boot_without_catalog_skips_reconciliation(monkeypatch):
         validate_api_keys=MagicMock(),
     )
 
-    with patch(
-        "ptc_agent.core.sandbox.providers.create_provider"
-    ) as create_provider:
+    with patch(_BUILD_PROVIDER) as build_provider:
         result = await reconcile_platform_secrets_at_boot(agent_config)
 
-    assert result is None
-    create_provider.assert_not_called()
+    assert result == {}
+    build_provider.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -351,10 +385,7 @@ async def test_boot_oss_with_catalog_opts_in(monkeypatch):
     register = AsyncMock(return_value=MagicMock())
 
     with (
-        patch(
-            "ptc_agent.core.sandbox.providers.create_provider",
-            return_value=provider,
-        ),
+        patch(_BUILD_PROVIDER, return_value=provider),
         patch(f"{_MODULE}.register_platform_secret_rollouts", register),
     ):
         await reconcile_platform_secrets_at_boot(agent_config)
@@ -379,9 +410,7 @@ async def test_boot_reconcile_softens_provider_outage_with_existing_rollout(
         side_effect=ConnectionError("daytona down")
     )
     provider.close = AsyncMock()
-    monkeypatch.setattr(
-        "ptc_agent.core.sandbox.providers.create_provider", lambda _config: provider
-    )
+    monkeypatch.setattr(_BUILD_PROVIDER, lambda *_a, **_k: provider)
     monkeypatch.setattr(
         f"{_MODULE}.get_platform_secret_rollouts",
         AsyncMock(return_value=rollout_set),
@@ -392,7 +421,7 @@ async def test_boot_reconcile_softens_provider_outage_with_existing_rollout(
 
     result = await reconcile_platform_secrets_at_boot(agent_config)
 
-    assert result is rollout_set
+    assert result == {"daytona": rollout_set}
     provider.close.assert_awaited_once()
 
 
@@ -408,9 +437,7 @@ async def test_boot_reconcile_count_mismatch_fails_closed_despite_prior_rollout(
     provider = MagicMock()
     provider.reconcile_platform_secrets = AsyncMock(return_value=())  # 0 != 1
     provider.close = AsyncMock()
-    monkeypatch.setattr(
-        "ptc_agent.core.sandbox.providers.create_provider", lambda _config: provider
-    )
+    monkeypatch.setattr(_BUILD_PROVIDER, lambda *_a, **_k: provider)
     monkeypatch.setattr(
         f"{_MODULE}.get_platform_secret_rollouts",
         AsyncMock(return_value=_rollout_set()),
@@ -435,9 +462,7 @@ async def test_boot_reconcile_fails_closed_without_prior_rollout(monkeypatch):
         side_effect=ConnectionError("daytona down")
     )
     provider.close = AsyncMock()
-    monkeypatch.setattr(
-        "ptc_agent.core.sandbox.providers.create_provider", lambda _config: provider
-    )
+    monkeypatch.setattr(_BUILD_PROVIDER, lambda *_a, **_k: provider)
     monkeypatch.setattr(
         f"{_MODULE}.get_platform_secret_rollouts",
         AsyncMock(side_effect=PlatformSecretReadinessError("not initialized")),
@@ -450,3 +475,154 @@ async def test_boot_reconcile_fails_closed_without_prior_rollout(monkeypatch):
         await reconcile_platform_secrets_at_boot(agent_config)
 
     provider.close.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# One rollout per provider kind
+# ---------------------------------------------------------------------------
+
+
+def _agent_config(config: CoreConfig) -> SimpleNamespace:
+    return SimpleNamespace(to_core_config=lambda: config, validate_api_keys=MagicMock())
+
+
+def _kind_providers(**failures: BaseException):
+    """``build_provider`` stand-in recording each kind it builds.
+
+    A kind named in ``failures`` raises that from its reconcile; any other
+    reconciles every Secret it is given.
+    """
+    built: dict[str, MagicMock] = {}
+
+    def build(kind, settings, **kwargs):
+        provider = MagicMock(settings=settings)
+        if kind in failures:
+            provider.reconcile_platform_secrets = AsyncMock(side_effect=failures[kind])
+        else:
+            provider.reconcile_platform_secrets = AsyncMock(
+                side_effect=lambda secrets: [
+                    ReconciledPlatformSecret(
+                        definition=secret.definition,
+                        name=secret.name,
+                        provider_secret_id=f"id-{secret.name}",
+                        placeholder=f"placeholder-{kind}",
+                    )
+                    for secret in secrets
+                ]
+            )
+        provider.close = AsyncMock()
+        built[kind] = provider
+        return provider
+
+    return build, built
+
+
+async def _register_by_kind(reconciled, *, credential_values, provider):
+    return _rollout_set(provider=provider)
+
+
+@pytest.mark.asyncio
+async def test_a_key_for_a_kind_neither_offered_nor_in_use_is_not_served(
+    live_kinds,
+):
+    live_kinds.return_value = {}
+
+    served = await served_platform_secret_kinds(
+        _config(provider="daytona", e2b_key="e2b-key")
+    )
+
+    assert served == {"daytona": 0}
+
+
+@pytest.mark.asyncio
+async def test_boot_serves_computers_of_a_capable_kind_under_an_incapable_deployment(
+    monkeypatch, live_kinds
+):
+    """A deployment that left Daytona for Docker still owes its Daytona
+    computers their Secrets, or every one of their provisions fails."""
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    live_kinds.return_value = {"daytona": 3, "docker": 1}
+    build, built = _kind_providers()
+
+    with (
+        patch(_BUILD_PROVIDER, side_effect=build),
+        patch(
+            f"{_MODULE}.register_platform_secret_rollouts",
+            AsyncMock(side_effect=_register_by_kind),
+        ),
+    ):
+        result = await reconcile_platform_secrets_at_boot(
+            _agent_config(_config(provider="docker"))
+        )
+
+    assert sorted(result) == ["daytona"]
+    assert sorted(built) == ["daytona"]
+
+
+@pytest.mark.asyncio
+async def test_hosted_boot_requires_a_catalog_for_an_offered_capable_kind(
+    monkeypatch, live_kinds
+):
+    # A Docker default needs none, but the first Daytona computer would refuse
+    # to prepare, so the deployment never comes up offering Daytona without one.
+    monkeypatch.setattr("src.config.env.HOST_MODE", "platform")
+    config = _config(
+        provider="docker", platform_secrets=(), offered_providers=("daytona",)
+    )
+
+    with pytest.raises(
+        PlatformSecretConfigurationError, match="hosted mode on daytona requires"
+    ):
+        await reconcile_platform_secrets_at_boot(_agent_config(config))
+
+    monkeypatch.setattr("src.config.env.HOST_MODE", "oss")
+    assert await reconcile_platform_secrets_at_boot(_agent_config(config)) == {}
+
+
+@pytest.mark.asyncio
+async def test_hosted_boot_refuses_an_offered_kind_that_cannot_hold_secrets(
+    monkeypatch, live_kinds
+):
+    # Every computer created on it would carry the catalog's credentials as
+    # plaintext env, so the deployment never comes up offering it.
+    monkeypatch.setattr("src.config.env.HOST_MODE", "platform")
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+
+    with (
+        patch(_BUILD_PROVIDER) as build_provider,
+        pytest.raises(
+            PlatformSecretConfigurationError,
+            match="docker cannot hold platform Secrets",
+        ),
+    ):
+        await reconcile_platform_secrets_at_boot(
+            _agent_config(_config(offered_providers=("docker",)))
+        )
+
+    build_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_certify_is_inert_for_a_kind_without_platform_secrets(monkeypatch):
+    get_rollouts = AsyncMock()
+    monkeypatch.setattr(f"{_MODULE}.get_platform_secret_rollouts", get_rollouts)
+
+    assert await certify_platform_secrets(_config(), runtime=None, kind="docker") == 0
+    get_rollouts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resync_rereads_when_the_computer_is_stamped_above_the_memo(
+    monkeypatch,
+):
+    """Only another worker registering a newer identity stamps a computer above
+    this worker's memo; remounting the memo's bindings would regress it."""
+    get_rollouts = AsyncMock(side_effect=[_rollout_set(2), _rollout_set(5)])
+    remount = AsyncMock()
+    monkeypatch.setattr(f"{_MODULE}.get_platform_secret_rollouts", get_rollouts)
+    monkeypatch.setattr(f"{_MODULE}.remount_platform_secret_bindings", remount)
+
+    assert await _resync(_config(), db_version=5) == 5
+
+    assert get_rollouts.await_args_list[1].kwargs == {"fresh": True}
+    remount.assert_not_awaited()

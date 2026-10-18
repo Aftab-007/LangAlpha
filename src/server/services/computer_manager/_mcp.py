@@ -112,11 +112,15 @@ class McpSecretsMixin:
         No busy guard or eviction is needed for this non-destructive work. Failures
         propagate, and slow-path acquisitions retry using the session generation."""
         from ptc_agent.core.sandbox.platform_secrets import (
+            PlatformSecretReplacementRequired,
             platform_secrets_active,
         )
 
         core_config = self.config.to_core_config()
-        if not platform_secrets_active(core_config):
+        # Each kind has its own rollout, so a computer kept from before a
+        # provider switch converges onto its own provider's Secrets.
+        kind = binding.kind
+        if not platform_secrets_active(core_config, kind=kind):
             return
         sandbox = session.sandbox
         runtime = getattr(sandbox, "runtime", None) if sandbox else None
@@ -127,14 +131,27 @@ class McpSecretsMixin:
             resync_computer_platform_secret,
         )
 
-        applied = await resync_computer_platform_secret(
-            core_config,
-            runtime,
-            computer_id=binding.computer_id,
-            sandbox_id=getattr(sandbox, "sandbox_id", None),
-            db_version=ws_version or 0,
-            applied_generation=session.platform_secret_version,
-        )
+        try:
+            applied = await resync_computer_platform_secret(
+                core_config,
+                runtime,
+                kind=kind,
+                computer_id=binding.computer_id,
+                sandbox_id=getattr(sandbox, "sandbox_id", None),
+                db_version=ws_version or 0,
+                applied_generation=session.platform_secret_version,
+            )
+        except PlatformSecretReplacementRequired:
+            # Rebuilding here would take the sandbox from under this turn and
+            # any sibling's, so it is served as it is, unstamped, until the
+            # sweep rebuilds it while idle. It holds nothing it did not hold
+            # before the catalog changed.
+            logger.warning(
+                "Computer %s needs a new sandbox for its platform secrets; "
+                "serving the current one until the sweep rebuilds it",
+                binding.computer_id,
+            )
+            return
         if applied is not None:
             session.platform_secret_version = applied
 
@@ -607,6 +624,7 @@ class McpSecretsMixin:
         sandbox: Any,
         *,
         source: str,
+        attach_key: tuple[str, str | None] | None = None,
     ) -> bool:
         """Reconcile after asset sync and restore so skills see the final disk state.
 
@@ -616,27 +634,38 @@ class McpSecretsMixin:
         folder hold, as the asset sync does, and not at all while it is
         staged: the pass's first script creates its skill directory, and a
         staging folder that exists is what the next settle lands in place of
-        the content still at the old name."""
+        the content still at the old name.
+
+        ``attach_key`` is an attachment the caller recorded on the strength of
+        this pass (see ``_claim_attached``); it is withdrawn unless a full pass
+        ran after the folder's restore, so the attach runs its own."""
+        stats = None
+        complete = False
         if not user_id or sandbox is None:
-            return True
-        try:
-            async with self._held_workspace_folder(workspace_id) as dir_name:
-                stats = await reconcile_workspace_skills(
-                    sandbox,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    source=source,
-                    # With no folder the service refuses the pass; an empty
-                    # one would name the computer root, whose prune reaches
-                    # every sibling.
-                    project=ProjectContext(workspace_id, dir_name) if dir_name else None,
-                )
-            return stats is not None and not stats.link_failed
-        except WorkspaceFolderMoving:
-            logger.info(f"[skill_sync] {source} pass for {workspace_id} waits for its folder to land")
-        except Exception as e:
-            logger.warning(f"[skill_sync] {source} pass for {workspace_id} skipped: {e}")
-        return False
+            complete = True
+        else:
+            try:
+                async with self._held_workspace_folder(workspace_id) as dir_name:
+                    stats = await reconcile_workspace_skills(
+                        sandbox,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        source=source,
+                        # With no folder the service refuses the pass; an empty
+                        # one would name the computer root, whose prune reaches
+                        # every sibling.
+                        project=ProjectContext(workspace_id, dir_name) if dir_name else None,
+                    )
+                complete = stats is not None and not stats.link_failed
+            except WorkspaceFolderMoving:
+                logger.info(f"[skill_sync] {source} pass for {workspace_id} waits for its folder to land")
+            except Exception as e:
+                logger.warning(f"[skill_sync] {source} pass for {workspace_id} skipped: {e}")
+        if attach_key is not None and not (
+            complete and stats is not None and not stats.restore_incomplete
+        ):
+            self._projects_attached.discard(attach_key)
+        return complete
 
     # Strong refs prevent task GC; never consult this set as state.
     _skill_reconcile_tasks: set[asyncio.Task] = set()

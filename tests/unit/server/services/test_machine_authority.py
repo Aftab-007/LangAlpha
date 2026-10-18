@@ -66,6 +66,7 @@ def _workspace(workspace_id, *, computer_id=COMPUTER_ID, status="running"):
 def _computer(*, shadowed, status="running", provider_ref="sandbox-abc"):
     return {
         "computer_id": COMPUTER_ID,
+        "kind": "daytona",
         "status": status,
         "provider_ref": provider_ref,
         "shadowed_workspace_ids": shadowed,
