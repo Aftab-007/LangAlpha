@@ -46,6 +46,7 @@
     "signupEmailExists": "该邮箱已注册。",
     "signupEmailExistsHint": "<1>直接登录</1>、<2>使用邮箱链接登录</2>，或<3>重置密码</3>。",
     "agreeToTerms": "继续即表示你同意我们的<1>服务条款</1>和<2>隐私政策</2>。",
+    "agreeToTermsOnly": "继续即表示你同意我们的<1>服务条款</1>。",
     "forgotPassword": "忘记密码？",
     "magicLinkCta": "使用邮箱链接登录",
     "continueWithEmail": "使用邮箱继续",
