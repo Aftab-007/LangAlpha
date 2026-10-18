@@ -1628,6 +1628,41 @@ class TestDeleteWorkspace:
         with pytest.raises(ValueError, match="not found"):
             await wm.delete_workspace("nonexistent")
 
+    @pytest.mark.asyncio
+    @patch(
+        "src.server.services.workspace_manager.db_delete_workspace",
+        new_callable=AsyncMock,
+    )
+    @cm_patch("db_get_workspace", new_callable=AsyncMock)
+    async def test_a_moving_workspace_is_refused_before_its_last_backup(
+        self, mock_db_get, mock_db_delete
+    ):
+        """The last backup holds the folder the move is about to set aside, so
+        taking it would fail the move rather than wait for it."""
+        from src.server.database.workspace import WorkspaceBusyError
+
+        ws_id = str(uuid.uuid4())
+        mock_db_get.return_value = _make_workspace(
+            workspace_id=ws_id, status="running", dir_name="test-ab12"
+        )
+        wm = WorkspaceManager(_make_config())
+        wm.backup_project_files = AsyncMock()
+        wm._remove_workspace_folder = AsyncMock()
+        wm._teardown_machine = AsyncMock()
+
+        with patch(
+            "src.server.services.workspace_manager.workspace_is_moving",
+            AsyncMock(return_value=True),
+        ) as moving:
+            with pytest.raises(WorkspaceBusyError):
+                await wm.delete_workspace(ws_id)
+
+        moving.assert_awaited_once_with(ws_id)
+        wm.backup_project_files.assert_not_awaited()
+        mock_db_delete.assert_not_awaited()
+        wm._remove_workspace_folder.assert_not_awaited()
+        wm._teardown_machine.assert_not_awaited()
+
 
 class TestDeleteOnASharedMachine:
     """Deleting a project takes the project, never the machine under a sibling.

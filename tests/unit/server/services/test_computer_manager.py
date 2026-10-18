@@ -2256,6 +2256,36 @@ class TestComputerSurface(_Base):
         mock_touch.assert_awaited_with("comp-1")
 
 
+class TestHomeJoinsThePrimary(_Base):
+    """Home's first bind takes only a computer still primary when it locks it."""
+
+    @pytest.mark.asyncio
+    async def test_a_bind_that_lost_to_a_flip_binds_to_the_new_primary(self):
+        manager = ComputerManager.get_instance(config=_make_config())
+        bound = _make_computer("comp-new", status="stopped")
+        manager.ensure_primary_computer = AsyncMock(
+            side_effect=[_make_computer("comp-old"), _make_computer("comp-new")]
+        )
+        manager._place_on_computer = AsyncMock(side_effect=[None, {"status": "stopped"}])
+        with (
+            patch(
+                f"{_MACHINES}.get_computer_for_workspace",
+                AsyncMock(side_effect=[None, None, bound]),
+            ),
+            patch(
+                f"{_MACHINES}.db_get_workspace",
+                AsyncMock(return_value={"dir_name": None, "computer_id": None}),
+            ),
+            patch(f"{_MACHINES}.publish_workspace_binding_change", AsyncMock()) as published,
+        ):
+            assert await manager.ensure_home_bound("user-1") is bound
+
+        placed = manager._place_on_computer.await_args_list
+        assert [c.args[1]["computer_id"] for c in placed] == ["comp-old", "comp-new"]
+        assert all(c.kwargs["primary_only"] for c in placed)
+        published.assert_awaited_once_with(ANY, "stopped", "comp-new")
+
+
 class TestPickForUser(_Base):
     """Which of a user's computers something of theirs runs on."""
 
