@@ -91,6 +91,7 @@ from ptc_agent.agent.middleware.runtime_context import (
     TurnContext,
     TurnContextMiddleware,
 )
+from ptc_agent.agent.middleware.runtime_context.epoch import Workspace
 from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTaskRegistry,
 )
@@ -240,8 +241,7 @@ class PTCAgent:
         namespace_owner: Any | None = None,
         user_profile: dict | None = None,
         thread_id: str | None = None,
-        workspace_name: str | None = None,
-        workspace_description: str | None = None,
+        workspace: Workspace | None = None,
         on_agent_md_write: Any | None = None,
         store: Any | None = None,
         on_signed_url: Any | None = None,
@@ -832,8 +832,7 @@ class PTCAgent:
             turn_context=turn_context,
             user_profile=user_profile,
             session=session,
-            workspace_name=workspace_name,
-            workspace_description=workspace_description,
+            workspace=workspace,
             sources=baseline_store_sources,
             files_mounted=files_mounted,
             channels_enabled=gates.channels,

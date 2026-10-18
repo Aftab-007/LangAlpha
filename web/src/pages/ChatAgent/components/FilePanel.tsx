@@ -640,7 +640,8 @@ function FilePanel({
         <PreviewCrumbs
           entry={previews.byPort.get(activeTab.port) ?? { port: activeTab.port, url: '', loading: true, error: false, reloadToken: 0 }}
           onRefresh={() => previews.refresh(activeTab.port)}
-          workspaceId={readOnly ? null : workspaceId}
+          workspaceId={workspaceId}
+          readOnly={readOnly}
         />
       )}
 

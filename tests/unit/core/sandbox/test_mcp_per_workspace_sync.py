@@ -31,6 +31,7 @@ from ptc_agent.config.core import (
 )
 from ptc_agent.core.paths import SandboxLayout
 from ptc_agent.core.project_context import ProjectContext
+from ptc_agent.core.sandbox.providers._image_recipe import builtin_mcp_packages
 from ptc_agent.core.sandbox.runtime import ExecResult, SandboxProvider, SandboxRuntime
 from ptc_agent.core.sandbox.tool_overlay import (
     _SCRIPT,
@@ -1132,8 +1133,7 @@ class TestServerSplit:
                 _user("up", transport="stdio", command="npx", args=["-y", "user-pkg"]),
             ]
         )
-        sandbox = _make_sandbox(config)
-        assert sandbox._get_mcp_packages() == ["builtin-pkg"]
+        assert builtin_mcp_packages(config) == ["builtin-pkg"]
 
     def test_build_env_vars_excludes_user_env(self, monkeypatch):
         """User-server env is never injected into the sandbox os.environ."""

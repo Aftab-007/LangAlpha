@@ -13,13 +13,17 @@ Runs on the sandbox's bare python3 - stdlib + httpx only, no host packages.
 import collections
 import dataclasses
 import datetime
+import fcntl
 import hashlib
 import json
 import os
 import queue
 import re as _re
+import signal
+import struct
 import subprocess
 import sys
+import termios
 import threading
 from typing import Any
 import time
@@ -50,6 +54,13 @@ _MODERN_VERSIONS = ("2026-07-28",)
 # revision, so pre-2026 servers negotiate the newest era they support.
 _LEGACY_OFFER = "2025-11-25"
 _PROBE_TIMEOUT = 10.0
+# How long a freshly spawned server may take to start reading its first request.
+# A handshake reply clock (_PROBE_TIMEOUT) starts only once it has: an import on
+# a cold disk (a new E2B computer) or a uvx/npx fetch can keep a healthy server
+# from listening for tens of seconds, and that is slowness, not silence.
+_STARTUP_TIMEOUT = 60.0
+# How often a handshake read re-checks whether its request is still unread.
+_STARTUP_POLL_S = 0.5
 _CALL_TIMEOUT = 120.0
 
 # HTTP wall clocks, in seconds. An HTTP handshake is multi-phase, so each phase
@@ -775,13 +786,46 @@ def _legacy_init_request() -> dict:
 _STDIO_OVERSIZE = object()
 
 
-def _kill_server(server_name: str, proc: subprocess.Popen) -> None:
+class _StartupTimeout(RuntimeError):
+    """The server never started reading, so a restart would only wait again."""
+
+
+def _signal_group(proc: subprocess.Popen, sig: int) -> None:
+    """Signal the server's whole process group. The direct child is often a
+    launcher (uv run, uvx, npx), and signalling only that orphans the real
+    server, which then holds its memory until the computer stops."""
     try:
-        proc.kill()
+        os.killpg(proc.pid, sig)
     except OSError:
+        try:
+            proc.send_signal(sig)
+        except OSError:
+            pass
+
+
+def _kill_server(server_name: str, proc: subprocess.Popen) -> None:
+    _signal_group(proc, signal.SIGKILL)
+    # EOF for anything that left the group: our write end is the only one left.
+    try:
+        proc.stdin.close()
+    except (OSError, ValueError):
         pass
     _server_processes.pop(server_name, None)
     _PROTO.pop(server_name, None)
+
+
+def _request_unread(proc: subprocess.Popen) -> bool:
+    """Whether bytes we wrote still sit in the server's stdin pipe.
+
+    A server reads its first request once its loop is up, so unread bytes mean
+    it is still starting, not hung. FIONREAD on a pipe's write end answers on
+    Linux, where sandboxes run; elsewhere it reports 0 and this is False.
+    """
+    try:
+        raw = fcntl.ioctl(proc.stdin.fileno(), termios.FIONREAD, b"\0\0\0\0")
+    except (OSError, ValueError):
+        return False
+    return struct.unpack("i", raw)[0] > 0
 
 
 def _send_message(server_name: str, proc: subprocess.Popen, message: dict) -> None:
@@ -796,7 +840,11 @@ def _send_message(server_name: str, proc: subprocess.Popen, message: dict) -> No
 
 
 def _read_reply(
-    server_name: str, proc: subprocess.Popen, want_id: int, timeout: float
+    server_name: str,
+    proc: subprocess.Popen,
+    want_id: int,
+    timeout: float,
+    startup: float = 0.0,
 ) -> dict:
     """Read the reply matching ``want_id``.
 
@@ -806,18 +854,40 @@ def _read_reply(
     / invalid framing so the next call restarts cleanly. Lines come from the pump
     thread's queue, never select() — a burst of messages lands in Python's
     stdio buffer where select() on the fd would block forever.
+
+    With ``startup`` (a handshake on a process that may still be starting),
+    ``timeout`` runs from when the server is first seen reading, and a request
+    still unread after ``startup`` seconds raises ``_StartupTimeout``.
     """
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
+    listening = not startup
     refusals = 0
     while True:
-        remaining = deadline - time.monotonic()
+        now = time.monotonic()
+        if not listening:
+            if not _request_unread(proc):
+                listening = True
+            elif now - started >= startup:
+                _kill_server(server_name, proc)
+                error_msg = (
+                    f"MCP server {server_name} did not start within "
+                    f"{startup:.0f}s [startup_timeout]"
+                )
+                print(f"ERROR: {error_msg}", file=sys.stderr)  # noqa: T201
+                raise _StartupTimeout(error_msg)
+            else:
+                deadline = now + timeout
+        remaining = deadline - now
         if remaining <= 0:
             _kill_server(server_name, proc)
             error_msg = f"MCP server {server_name} timed out after {timeout:.0f}s"
             print(f"ERROR: {error_msg}", file=sys.stderr)  # noqa: T201
             raise RuntimeError(error_msg)
         try:
-            line = proc.mcp_stdout_queue.get(timeout=remaining)
+            line = proc.mcp_stdout_queue.get(
+                timeout=remaining if listening else min(remaining, _STARTUP_POLL_S)
+            )
         except queue.Empty:
             continue
         if isinstance(line, str):
@@ -903,6 +973,10 @@ def _spawn_mcp_process(server_name: str, discovery: bool = False) -> subprocess.
         env=proc_env,
         text=True,
         bufsize=1,  # Line buffered
+        # Its own group, so a kill reaches a server started behind a launcher.
+        # Not its own session: whoever bounds this client (the command check)
+        # stops its session, and that has to take the servers with it.
+        process_group=0,
     )
 
     # Drain stderr in background to prevent pipe buffer deadlock.
@@ -1003,7 +1077,9 @@ def _legacy_initialize(server_name: str, proc: subprocess.Popen) -> dict:
     """Pre-2026 handshake; offer the newest legacy revision, adopt the reply's."""
     request = _legacy_init_request()
     _send_message(server_name, proc, request)
-    response = _read_reply(server_name, proc, request["id"], _PROBE_TIMEOUT)
+    response = _read_reply(
+        server_name, proc, request["id"], _PROBE_TIMEOUT, startup=_STARTUP_TIMEOUT
+    )
     if "error" in response:
         _kill_server(server_name, proc)
         msg = f"MCP initialization failed: {response['error']}"
@@ -1035,8 +1111,9 @@ def _negotiate_stdio(
     Discover ok but only legacy versions advertised => legacy initialize on a
     FRESH stream (the v2 server era-latched this connection on first request).
     Timeout / EOF / invalid framing => the probe may have crashed the server:
-    restart once, then legacy initialize. -32022 with a mutual version in its
-    data => retry discover once with that version.
+    restart once, then legacy initialize. Never started reading => slow, not
+    legacy: fail without a restart. -32022 with a mutual version in its data =>
+    retry discover once with that version.
     """
     version = _MODERN_VERSIONS[0]
     error = None
@@ -1044,7 +1121,15 @@ def _negotiate_stdio(
         request = _modern_request("server/discover", {}, version)
         _send_message(server_name, proc, request)
         try:
-            response = _read_reply(server_name, proc, request["id"], _PROBE_TIMEOUT)
+            response = _read_reply(
+                server_name,
+                proc,
+                request["id"],
+                _PROBE_TIMEOUT,
+                startup=_STARTUP_TIMEOUT,
+            )
+        except _StartupTimeout:
+            raise
         except RuntimeError:
             proc = _spawn_mcp_process(server_name, discovery=discovery)
             return proc, _legacy_initialize(server_name, proc)
@@ -1085,6 +1170,9 @@ def _ensure_stdio_server(server_name: str, discovery: bool = False) -> tuple:
         proto = _PROTO.get(server_name)
         if proc is not None and proc.poll() is None and proto is not None:
             return proc, proto
+        if proc is not None:
+            # A launcher that exited can leave its server running.
+            _kill_server(server_name, proc)
         proc = _spawn_mcp_process(server_name, discovery=discovery)
         proc, proto = _negotiate_stdio(server_name, proc, discovery=discovery)
         _server_processes[server_name] = proc
@@ -2114,17 +2202,16 @@ def cleanup_mcp_servers():
     in-process fallback spawned.
     """
     for server_name, proc in list(_server_processes.items()):
+        _signal_group(proc, signal.SIGTERM)
         try:
-            proc.terminate()
             proc.wait(timeout=5)
         except (OSError, subprocess.SubprocessError) as e:
             # TimeoutExpired is a SubprocessError, not a TimeoutError; a server
             # that ignores SIGTERM must not leave the rest of the set running.
             print(f"Error cleaning up MCP server {server_name}: {e}", file=sys.stderr)  # noqa: T201
-            try:
-                proc.kill()
-            except OSError:
-                pass
+        # A launcher can exit on SIGTERM and leave what it started, so the
+        # group gets SIGKILL either way.
+        _signal_group(proc, signal.SIGKILL)
     _server_processes.clear()
     _PROTO.clear()
 

@@ -10,6 +10,7 @@ import type {
   Computer,
   ComputerActionResponse,
   ComputerCreate,
+  ComputerProvidersResponse,
   ComputerStorage,
   ComputersResponse,
   ResourceTier,
@@ -17,7 +18,7 @@ import type {
 } from '@/types/api';
 
 import { apiErrorDetail, apiErrorStatus } from './errors';
-import { streamStatusEvents } from './statusStream';
+import { streamStatusEvents, type StatusFrame } from './statusStream';
 
 // Matches the workspace module's bounds: starting a machine legitimately runs
 // tens of seconds, while a read that hangs should surface as a failure.
@@ -33,10 +34,21 @@ export async function getComputers(): Promise<ComputersResponse> {
 }
 
 /**
+ * The providers a new computer can go on, default first, each with whether
+ * the user's plan allows it. One entry means there is no choice to offer.
+ */
+export async function getComputerProviders(): Promise<ComputerProvidersResponse> {
+  const { data } = await api.get<ComputerProvidersResponse>('/api/v1/computers/providers');
+  return data;
+}
+
+/**
  * Create a computer. The tier is picked here because it is the machine's
- * property, not a project's. In platform mode this is the metered route: a
+ * property, not a workspace's. In platform mode this is the metered route: a
  * refusal arrives as a 429 whose `detail.message` is the platform's own
- * wording, which the shared API client puts on `err.rateLimitInfo`.
+ * wording, which the shared API client puts on `err.rateLimitInfo`, or as a
+ * 403 when the plan lacks the tier or the provider. With no name the server
+ * picks one from the provider.
  */
 export async function createComputer(body: ComputerCreate = {}): Promise<Computer> {
   const { data } = await api.post<Computer>(
@@ -44,6 +56,7 @@ export async function createComputer(body: ComputerCreate = {}): Promise<Compute
     {
       ...(body.name ? { name: body.name } : {}),
       resource_tier: body.resource_tier ?? 'standard',
+      ...(body.kind ? { kind: body.kind } : {}),
     },
     { timeout: COMPUTER_MUTATION_TIMEOUT_MS },
   );
@@ -120,6 +133,18 @@ export async function setComputerSpec(computerId: string, tier: ResourceTier): P
   return data;
 }
 
+/**
+ * Remove a computer: its sandbox and everything on its disk go with it. The
+ * server answers 204 and keeps a tombstone, which the list no longer returns.
+ * It refuses with a 409 whose `detail.code` says why: `primary`,
+ * `has_workspaces`, or `busy` (moving between states, being prepared,
+ * changing spec, or held by another action).
+ */
+export async function deleteComputer(computerId: string): Promise<void> {
+  if (!computerId) throw new Error('Computer ID is required');
+  await api.delete(`/api/v1/computers/${computerId}`, { timeout: COMPUTER_MUTATION_TIMEOUT_MS });
+}
+
 /** Keep the machine running (idle auto-stop off). Enabling on a stopped machine starts it. */
 export async function setComputerAlwaysOn(computerId: string, enabled: boolean): Promise<Computer> {
   if (!computerId) throw new Error('Computer ID is required');
@@ -152,17 +177,15 @@ export async function getComputerStorage(computerId: string): Promise<ComputerSt
  *
  * This is the authoritative channel for every workspace on the machine: one
  * subscription answers for all of them, where the workspace channel would open
- * one connection per project to report the same transition.
+ * one connection per workspace to report the same transition. While a new
+ * sandbox is built, frames also name its `stage`; a failed background start
+ * ends on an `error` frame that carries the reason.
  */
 export async function streamComputerEvents(
   computerId: string,
-  onStatus: (status: string, sandboxState?: string) => void,
+  onFrame: (frame: StatusFrame) => void,
   signal: AbortSignal,
 ): Promise<void> {
   if (!computerId) return;
-  await streamStatusEvents(
-    `/api/v1/computers/${computerId}/events`,
-    (frame) => onStatus(frame.status, frame.sandbox_state),
-    signal,
-  );
+  await streamStatusEvents(`/api/v1/computers/${computerId}/events`, onFrame, signal);
 }

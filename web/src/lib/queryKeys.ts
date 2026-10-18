@@ -81,6 +81,8 @@ export const queryKeys = {
     // The per-folder breakdown is a separate, expensive reading (a `du` on
     // the machine), not a projection of the row, so it keys apart from it.
     storage: (computerId: string) => [...queryKeys.computers.all, 'storage', computerId],
+    // What a new machine can run on, per user: the plan decides `allowed`.
+    providers: () => [...queryKeys.computers.all, 'providers'],
   },
   threads: {
     all:         ['threads'],

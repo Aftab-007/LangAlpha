@@ -18,10 +18,10 @@ from ptc_agent.config.core import CoreConfig
 from ptc_agent.core.sandbox._defaults import (
     DEFAULT_DEPENDENCIES,
     SANDBOX_IMAGE_ENV,
-    SNAPSHOT_PYTHON_VERSION,
 )
 from ptc_agent.core.sandbox.platform_secrets import build_platform_secret_bindings
 from ptc_agent.core.sandbox.providers import create_provider
+from ptc_agent.core.sandbox.providers._image_recipe import builtin_mcp_packages
 from ptc_agent.core.sandbox.livefs_mount import MountHandle
 from ptc_agent.core.sandbox.retry import RetryPolicy, async_retry_with_backoff
 from ptc_agent.core.sandbox.runtime import (
@@ -64,7 +64,6 @@ logger = structlog.get_logger(__name__)
 class PTCSandbox:
     """Manages sandbox for Programmatic Tool Calling (PTC) execution."""
 
-    SNAPSHOT_PYTHON_VERSION = SNAPSHOT_PYTHON_VERSION
     DEFAULT_DEPENDENCIES = DEFAULT_DEPENDENCIES
 
     # Fallback only, for a mint response that carries no expires_in. The live
@@ -335,26 +334,6 @@ class PTCSandbox:
             if self._ready_event:
                 self._ready_event.set()
 
-    def _get_mcp_packages(self) -> list[str]:
-        """Extract MCP package names from enabled stdio servers.
-
-        Returns:
-            List of MCP package names to install globally
-        """
-        # Built-ins only: user-server npx/uvx packages are fetched at call time
-        # inside the sandbox, never pre-installed globally on the host path.
-        mcp_packages = []
-        for server in self._builtin_servers():
-            if not server.enabled:
-                continue
-            if server.transport == "stdio" and server.command == "npx":
-                # Extract package name from npx arguments
-                # Format: ["npx", "-y", "package-name", ...]
-                if len(server.args) >= 2 and server.args[0] == "-y":
-                    mcp_packages.append(server.args[1])
-        return mcp_packages
-
-
     def _build_sandbox_env_vars(
         self,
         platform_secret_bindings: dict[str, str],
@@ -363,8 +342,8 @@ class PTCSandbox:
 
         Resolves MCP server env vars (${VAR} placeholders from host) and
         GitHub bot credentials so they're available to all sandbox processes.
-        Vars named in ``platform_secret_bindings`` are excluded — Daytona
-        mounts those as managed Secrets.
+        Vars named in ``platform_secret_bindings`` are excluded: the provider
+        delivers those as managed Secrets.
         """
         import os
 
@@ -390,9 +369,9 @@ class PTCSandbox:
                     if key == "INTERNAL_SERVICE_TOKEN":
                         continue  # Never inject platform token into sandbox
                     if key in platform_secret_bindings:
-                        # Daytona injects an opaque placeholder for managed
-                        # platform Secrets. Never put the real host value in
-                        # ordinary sandbox environment variables as fallback.
+                        # The provider puts an opaque placeholder there for a
+                        # managed platform Secret. Never put the real host
+                        # value in ordinary sandbox env as a fallback.
                         continue
                     if value.startswith("${") and value.endswith("}"):
                         var_name = value[2:-1]
@@ -425,7 +404,7 @@ class PTCSandbox:
         tier: str | None = None,
         auto_stop_minutes: int | None = None,
         dir_name: str | None = None,
-    ) -> str | None:
+    ) -> None:
         """Create sandbox and setup workspace directories.
 
         Can run concurrently with MCP registry connection since it doesn't
@@ -436,9 +415,6 @@ class PTCSandbox:
             auto_stop_minutes: Auto-stop interval override in minutes (0 for
                 always-on); ``None`` uses the provider default.
             dir_name: Folder the asking workspace owns on this computer.
-
-        Returns:
-            snapshot_name if used, None otherwise
         """
         logger.info("Setting up sandbox workspace")
 
@@ -448,7 +424,7 @@ class PTCSandbox:
         sandbox_env = self._build_sandbox_env_vars(platform_secret_bindings)
 
         # Create sandbox via provider (handles snapshot logic internally)
-        mcp_packages = self._get_mcp_packages()
+        mcp_packages = builtin_mcp_packages(self.config)
         self.runtime = await self._runtime_call(
             self.provider.create,
             env_vars=sandbox_env or None,
@@ -467,20 +443,19 @@ class PTCSandbox:
         # Set up workspace structure
         await self._setup_workspace(dir_name)
 
-        # Surface snapshot name from provider metadata for MCP server init
-        snapshot_name = getattr(self.runtime, "snapshot_name", None)
-
-        # When no snapshot is available (disabled, creation failed, etc.) the
-        # sandbox is a bare image without application packages — install them.
-        if not snapshot_name:
+        # A sandbox on a bare image (snapshots disabled, a failed snapshot
+        # build, an operator's Docker image) lacks the application packages.
+        if not self.runtime.image_prebuilt:
+            logger.warning(
+                "Sandbox image is not prebuilt; installing dependencies. The MCP "
+                "runtime packages may be missing and MCP tools may not work."
+            )
             await self._install_dependencies()
 
         logger.info("Sandbox workspace ready", sandbox_id=self.sandbox_id)
-        return snapshot_name
 
     async def setup_tools_and_mcp(
         self,
-        snapshot_name: str | None,
         *,
         tokens: dict | None = None,
         user_id: str | None = None,
@@ -491,7 +466,6 @@ class PTCSandbox:
         Requires MCP registry to be connected first.
 
         Args:
-            snapshot_name: Snapshot name from setup_sandbox_workspace(), or None
             tokens: Pre-minted OAuth tokens (written to initial manifest).
             user_id: User ID for token tracking in manifest.
             workspace_id: Workspace ID for token tracking in manifest.
@@ -500,15 +474,15 @@ class PTCSandbox:
 
         # Upload MCP server files, internal packages, and tokens in parallel (disjoint paths).
         # Tokens must be on disk before _start_internal_mcp_servers reads them.
-        parallel = [
+        # These run here rather than in the first sync so they overlap the
+        # registry connect; the manifest below records them, and that sync
+        # skips whatever it finds recorded at the same version.
+        _, _, token_entry = await asyncio.gather(
             self._upload_mcp_server_files_impl(),  # → mcp_servers/
             self._upload_internal_packages(),  # → _internal/src/
-        ]
-        if tokens:
-            parallel.append(
-                self.upload_token_file(tokens)
-            )  # → _internal/.mcp_tokens.json
-        await asyncio.gather(*parallel)
+            # → _internal/.mcp_tokens.json; None without tokens or on failure
+            self.upload_token_file(tokens, user_id=user_id, workspace_id=workspace_id),
+        )
 
         # No tool install and no supervisor start here. Which workspace folder
         # the overlay belongs to is not knowable on this path (a cold create
@@ -518,35 +492,43 @@ class PTCSandbox:
         # die on the import. ``sync_sandbox_assets`` always follows this, is
         # the caller that knows the folder, and starts the supervisor after
         # the install.
-        if not snapshot_name:
-            logger.warning(
-                "Not using a snapshot: the MCP runtime packages may be missing "
-                "and MCP tools may not work."
-            )
 
-        # Write initial unified manifest so subsequent syncs can diff against it
+        # The initial manifest records only what is now on disk, so the first
+        # sync diffs against it like any other. Tool modules are not: the sync
+        # installs them for the folder it knows. Nor is a token that failed to
+        # upload, which the next sync then sees as owed.
         try:
-            manifest = await self._compute_sandbox_manifest(
-                tokens=tokens, user_id=user_id, workspace_id=workspace_id
-            )
+            manifest = await self._compute_sandbox_manifest()
+            manifest["modules"].pop("tool_modules", None)
+            if token_entry is not None:
+                manifest["modules"]["tokens"] = token_entry
             await self._write_unified_manifest(manifest)
         except Exception as e:
             logger.warning("Failed to write initial unified manifest", error=str(e))
 
         logger.info("Tools and MCP servers ready", sandbox_id=self.sandbox_id)
 
-    async def upload_token_file(self, tokens: dict) -> None:
+    async def upload_token_file(
+        self,
+        tokens: dict | None,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Write scoped auth tokens to a file in the sandbox.
 
         Tokens are written as a JSON file (not env vars) because refresh tokens
         rotate on each use and the MCP server needs to update them in-place.
         Tokens carry deterministic prefixes (gxsa_, gxsr_) so the host-side
         LeakDetectionMiddleware can pattern-match them without knowing exact values.
+        A failure is logged rather than raised. Returns the manifest entry for
+        the file once it is written, stamped now, and None otherwise, so the
+        manifest records only a token that is on disk.
         """
         import os
 
         if not tokens or not self.runtime:
-            return
+            return None
 
         # Sandboxes are remote, so these must stay publicly reachable even when
         # the host reaches the same services over a private address.
@@ -572,6 +554,8 @@ class PTCSandbox:
             logger.debug("Uploaded sandbox token file", path=self._token_file_path)
         except Exception as e:
             logger.warning("Failed to upload sandbox token file", error=str(e))
+            return None
+        return _assets.token_manifest_entry(tokens, user_id, workspace_id)
 
     async def upload_egress_relay_credentials(self, payload: dict | None) -> bool:
         """Write (or remove) the egress-relay credential file in the sandbox.
@@ -685,8 +669,8 @@ class PTCSandbox:
         For async initialization, use setup_sandbox_workspace() and
         setup_tools_and_mcp() separately via Session.initialize().
         """
-        snapshot_name = await self.setup_sandbox_workspace()
-        await self.setup_tools_and_mcp(snapshot_name)
+        await self.setup_sandbox_workspace()
+        await self.setup_tools_and_mcp()
         logger.info("Sandbox setup complete", sandbox_id=self.sandbox_id)
 
     async def reconnect(
@@ -1357,8 +1341,9 @@ class PTCSandbox:
     # Bound concurrent discovery so a burst of servers can't exhaust the
     # sandbox; one hung server still can't starve others (each runs isolated).
     _DISCOVERY_CONCURRENCY = 4
-    # CLI exec ceiling — the in-sandbox client has its own 30s stdio cold-start
-    # select timeout; give a little headroom for npx/uvx fetch + JSON write.
+    # CLI exec ceiling: the in-sandbox client gives a stdio server 60s to start
+    # reading and 10s per handshake reply after that; the rest is headroom for
+    # tools/list and the JSON write.
     _DISCOVERY_EXEC_TIMEOUT_S = 90
 
 
@@ -1472,11 +1457,8 @@ class PTCSandbox:
         skill_roots: list[str] | None = None,
         managed_skill_root: str | None = None,
         disabled_skills: frozenset[str] = frozenset(),
-        tokens: dict | None = None,
-        user_id: str | None = None,
-        workspace_id: str | None = None,
     ) -> dict[str, Any]:
-        return await _assets._compute_sandbox_manifest(self, skill_roots=skill_roots, managed_skill_root=managed_skill_root, disabled_skills=disabled_skills, tokens=tokens, user_id=user_id, workspace_id=workspace_id)
+        return await _assets._compute_sandbox_manifest(self, skill_roots=skill_roots, managed_skill_root=managed_skill_root, disabled_skills=disabled_skills)
 
     async def _read_unified_manifest(self) -> dict[str, Any] | None:
         return await _assets._read_unified_manifest(self)
@@ -1663,8 +1645,8 @@ class PTCSandbox:
     async def get_preview_url(self, port: int, expires_in: int = 3600) -> PreviewInfo:
         return await _sessions.get_preview_url(self, port, expires_in)
 
-    async def get_preview_link(self, port: int) -> PreviewInfo:
-        return await _sessions.get_preview_link(self, port)
+    async def get_preview_link(self, port: int, *, wake: bool = True) -> PreviewInfo:
+        return await _sessions.get_preview_link(self, port, wake=wake)
 
     async def start_preview_server(
         self, command: str, port: int, *, owner: str | None = None

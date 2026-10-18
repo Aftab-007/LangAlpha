@@ -715,22 +715,13 @@ class SessionLifecycleMixin:
                     logger.debug(
                         f"Completing deferred sync for lazy-init workspace {workspace_id}"
                     )
-                    await self._sync_sandbox_assets(
+                    await self._sync_restore_and_reconcile(
                         binding,
                         workspace_user_id,
-                        session.sandbox,
-                        reusing_sandbox=True,
-                    )
-                    mark("asset_sync")
-                    await self._maybe_restore_files(binding, session.sandbox)
-                    mark("file_restore")
-                    await self._reconcile_skills(
-                        binding.workspace_id,
-                        workspace_user_id,
-                        session.sandbox,
+                        session,
                         source="lazy_phase2",
+                        mark=mark,
                     )
-                    mark("skill_reconcile")
                     # Defer interval writes until ready to avoid racing archived startup.
                     # An auto-stop hiccup must not revert an otherwise healthy start.
                     # Re-read the machine rather than the binding frozen at turn
@@ -1126,7 +1117,7 @@ class SessionLifecycleMixin:
 
                 # Resync above enables certification; certify before any row names this sandbox.
                 secret_version = await certify_platform_secrets(
-                    core_config, runtime=session.sandbox.runtime
+                    core_config, runtime=session.sandbox.runtime, kind=binding.kind
                 )
                 bound = await self._bind_machine_identity(
                     binding,
@@ -1442,14 +1433,9 @@ class SessionLifecycleMixin:
                 )
 
             if not lazy_init:
-                await self._sync_sandbox_assets(
-                    binding, user_id, session.sandbox, reusing_sandbox=True
+                await self._sync_restore_and_reconcile(
+                    binding, user_id, session, source="restart"
                 )
-                if session.sandbox:
-                    await self._maybe_restore_files(binding, session.sandbox)
-                    await self._reconcile_skills(
-                        binding.workspace_id, user_id, session.sandbox, source="restart"
-                    )
                 self._record_sync(computer_id, workspace_id)
 
                 migrated = await self._maybe_migrate_sandbox(
@@ -1670,11 +1656,8 @@ class SessionLifecycleMixin:
             async with computer_stop_heartbeat(computer_id):
                 try:
                     async with self._detached_runtime(sandbox_id, binding=binding) as runtime:
-                        if "archive" not in runtime.capabilities:
-                            raise RuntimeError(
-                                f"Provider does not support archiving "
-                                f"(capabilities: {runtime.capabilities})"
-                            )
+                        if not runtime.archives:
+                            raise RuntimeError("Provider does not support archiving")
                         await runtime.archive()
                     await self._settle_machine_stop(computer_id, ComputerStatus.STOPPED)
                 except Exception:

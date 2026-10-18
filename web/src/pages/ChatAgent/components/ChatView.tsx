@@ -1763,6 +1763,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
               url={previewData?.url ?? ''}
               port={previewData?.port ?? 0}
               title={previewData?.title}
+              path={previewData?.path}
+              workspaceId={previewData?.workspaceId}
               loading={previewData?.loading}
               error={previewData?.error}
               onClose={handleClosePreview}

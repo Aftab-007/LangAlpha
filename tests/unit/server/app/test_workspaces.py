@@ -200,6 +200,93 @@ async def test_creating_a_project_is_not_capacity_checked():
 
 
 @pytest.mark.asyncio
+async def test_create_without_a_computer_asks_for_none(client):
+    with patch("src.server.app.workspaces.WorkspaceManager") as MockWM:
+        mock_manager = AsyncMock()
+        mock_manager.create_workspace = AsyncMock(return_value=_ws())
+        MockWM.get_instance.return_value = mock_manager
+
+        resp = await client.post("/api/v1/workspaces", json={"name": "W"})
+
+    assert resp.status_code == 201
+    assert mock_manager.create_workspace.call_args.kwargs["computer_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_on_a_chosen_computer_passes_it_to_the_manager(client):
+    computer_id = str(uuid.uuid4())
+    with patch("src.server.app.workspaces.WorkspaceManager") as MockWM:
+        mock_manager = AsyncMock()
+        mock_manager.create_workspace = AsyncMock(
+            return_value=_ws(computer_id=computer_id)
+        )
+        MockWM.get_instance.return_value = mock_manager
+
+        resp = await client.post(
+            "/api/v1/workspaces", json={"name": "W", "computer_id": computer_id}
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["computer_id"] == computer_id
+    assert mock_manager.create_workspace.call_args.kwargs["computer_id"] == computer_id
+
+
+@pytest.mark.asyncio
+async def test_create_on_a_computer_the_caller_cannot_use_is_404(client):
+    """Another user's computer answers like a missing one, so an id probe
+    learns nothing."""
+    from src.server.services.computer_errors import ComputerNotFoundError
+
+    with patch("src.server.app.workspaces.WorkspaceManager") as MockWM:
+        mock_manager = AsyncMock()
+        mock_manager.create_workspace = AsyncMock(
+            side_effect=ComputerNotFoundError("Computer not found")
+        )
+        MockWM.get_instance.return_value = mock_manager
+
+        resp = await client.post(
+            "/api/v1/workspaces",
+            json={"name": "W", "computer_id": str(uuid.uuid4())},
+        )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Computer not found"
+
+
+@pytest.mark.asyncio
+async def test_create_on_a_computer_still_being_prepared_is_a_coded_409(client):
+    """Coded like the other 409s, so a client tells it apart without reading
+    the English sentence."""
+    from src.server.services.computer_errors import ComputerPreparingError
+
+    with patch("src.server.app.workspaces.WorkspaceManager") as MockWM:
+        mock_manager = AsyncMock()
+        mock_manager.create_workspace = AsyncMock(
+            side_effect=ComputerPreparingError("This computer is still being prepared.")
+        )
+        MockWM.get_instance.return_value = mock_manager
+
+        resp = await client.post(
+            "/api/v1/workspaces",
+            json={"name": "W", "computer_id": str(uuid.uuid4())},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "code": "computer_preparing",
+        "message": "This computer is still being prepared.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_on_a_malformed_computer_id_is_rejected_by_the_model(client):
+    resp = await client.post(
+        "/api/v1/workspaces", json={"name": "W", "computer_id": "not-a-uuid"}
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_workspace_value_error_returns_400(client):
     with patch(
         "src.server.app.workspaces.WorkspaceManager"

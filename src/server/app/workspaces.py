@@ -60,6 +60,10 @@ from src.server.models.workspace import (
     WorkspaceUpdate,
 )
 from src.server.models.computer import CLAIMABLE_FOR_START
+from src.server.services.computer_errors import (
+    ComputerNotFoundError,
+    ComputerPreparingError,
+)
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
 from src.server.utils.error_sanitization import sandbox_unreachable_detail
 from src.server.models.workspace_refresh import WorkspaceRefreshResponse
@@ -176,7 +180,9 @@ async def create_workspace(
     Returns as soon as the row is written: the workspace is bound to the
     user's computer and owns a folder on it, and the machine itself is brought
     up by the first turn (or an explicit start), so nothing here waits on a
-    sandbox. A user with no computer yet gets one.
+    sandbox. A user with no computer yet gets one. ``computer_id`` picks one
+    of the caller's computers instead of their primary; any other id answers
+    404, whoever owns it.
 
     Adding a folder is not capacity-checked. Allocating the first computer
     enforces the same machine limit as explicit computer creation.
@@ -195,6 +201,7 @@ async def create_workspace(
             name=request.name,
             description=request.description,
             config=request.config,
+            computer_id=str(request.computer_id) if request.computer_id else None,
         )
 
         logger.info(
@@ -206,6 +213,12 @@ async def create_workspace(
         raise
     except (WorkspaceNameTaken, WorkspaceNameInvalid) as e:
         raise _name_error(e) from None
+    except ComputerNotFoundError:
+        raise HTTPException(status_code=404, detail="Computer not found") from None
+    except ComputerPreparingError as e:
+        raise HTTPException(
+            status_code=409, detail={"code": "computer_preparing", "message": str(e)}
+        ) from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -337,13 +350,17 @@ async def workspace_status_events(workspace_id: str, x_user_id: CurrentUserId):
     )
 
     def _frame(
-        status: str, sandbox_state: str | None = None, error: str | None = None
+        status: str,
+        sandbox_state: str | None = None,
+        error: str | None = None,
+        stage: str | None = None,
     ) -> str:
         return sse_status_event(
             {"workspace_id": workspace_id, "computer_id": computer_id},
             status,
             sandbox_state,
             error,
+            stage,
         )
 
     async def _read_status() -> str | None:

@@ -35,7 +35,10 @@ from src.server.database.workspace import (
     get_live_workspace_folders_for_computer,
 )
 from src.server.dependencies.usage_limits import (
+    assert_provider_allowed,
     assert_spec_allowed,
+    enforce_computer_limit,
+    get_provider_allowances,
     platform_gating_active,
 )
 from src.server.models.computer import (
@@ -44,6 +47,8 @@ from src.server.models.computer import (
     ComputerAlwaysOnRequest,
     ComputerCreate,
     ComputerListResponse,
+    ComputerProviderOption,
+    ComputerProvidersResponse,
     ComputerRenameRequest,
     ComputerResponse,
     ComputerSessionResponse,
@@ -57,7 +62,10 @@ from src.server.services.computer_disk import (
 )
 from src.server.services.computer_errors import (
     ComputerBusyError,
+    ComputerRemovalRefused,
     MachineBusyError,
+    ProviderNotOffered,
+    UnknownResourceTier,
 )
 from src.server.services.spec_change import (
     SPEC_CHANGE_IN_PROGRESS,
@@ -99,6 +107,11 @@ def _computer_manager() -> Any:
     return ComputerManager.get_instance()
 
 
+def _sandbox_config() -> Any:
+    """The deployment's sandbox settings, the same the manager builds computers from."""
+    return _computer_manager().config.sandbox
+
+
 @contextlib.asynccontextmanager
 async def _computer_action_errors(action: str, computer_id: str, *, spec: bool = False):
     """Let sandbox failures reach the app-level handler that owns their wording.
@@ -124,6 +137,13 @@ async def _computer_action_errors(action: str, computer_id: str, *, spec: bool =
         ) from None
     except ComputerBusyError as e:
         raise HTTPException(status_code=409, detail=spec_refusal("busy", str(e))) from None
+    except ComputerRemovalRefused as e:
+        logger.warning("Refused to %s computer %s: %s", action, computer_id, e.code)
+        raise HTTPException(
+            status_code=409, detail={"code": e.code, "message": str(e)}
+        ) from None
+    except (ProviderNotOffered, UnknownResourceTier) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except BackupIncomplete as e:
@@ -163,7 +183,7 @@ def computer_to_response(
     return ComputerResponse(
         computer_id=str(computer["computer_id"]),
         user_id=computer["user_id"],
-        kind=computer.get("kind") or "daytona",
+        kind=computer["kind"],
         name=computer.get("name") or "",
         status=computer["status"],
         resource_tier=computer.get("resource_tier") or "standard",
@@ -268,15 +288,22 @@ async def create_computer(
     request: ComputerCreate,
     x_user_id: CurrentUserId,
 ):
-    """Prepare a stopped machine row; active capacity is checked when it starts.
+    """Create a computer and prepare its sandbox in the background.
 
-    Creating the row provisions nothing and incurs no machine cost until a project runs.
+    Building a sandbox takes long enough that whoever first used the computer
+    would wait through it, so it starts now and the client watches its events.
+    Preparing holds a running slot from the insert, so the limit is asked here.
     """
     async with _computer_action_errors("create", "new"):
+        sandbox = _sandbox_config()
+        kind = request.kind or sandbox.provider
+        await assert_provider_allowed(x_user_id, kind, default_kind=sandbox.provider)
         async with _computer_quota_decision(x_user_id):
             await assert_spec_allowed(x_user_id, request.resource_tier)
+            await enforce_computer_limit(x_user_id)
             computer = await _computer_manager().create_computer_for_user(
                 x_user_id,
+                kind=kind,
                 name=request.name,
                 resource_tier=request.resource_tier,
                 # The insert squashes this to FALSE when a live primary already
@@ -284,11 +311,15 @@ async def create_computer(
                 # user's first, named machine is not primary and their first project
                 # mints a second one.
                 is_primary=True,
+                prepare=True,
             )
+        computer_id = str(computer["computer_id"])
+        status = await _schedule_claimed_start(computer_id)
         logger.info(
-            "Created computer %s for user %s", computer["computer_id"], x_user_id
+            "Created computer %s for user %s, preparing it (%s)",
+            computer_id, x_user_id, status,
         )
-        return computer_to_response(computer)
+        return computer_to_response({**computer, "status": status})
 
 
 @router.get("", response_model=ComputerListResponse)
@@ -307,6 +338,31 @@ async def list_computers(x_user_id: CurrentUserId):
             for row in rows
         ],
         total=len(rows),
+    )
+
+
+# Registered ahead of /{computer_id}, which would otherwise read "providers" as an id.
+@router.get("/providers", response_model=ComputerProvidersResponse)
+async def list_computer_providers(x_user_id: CurrentUserId):
+    """The providers a new computer may be created on, and which the caller may pick."""
+    try:
+        sandbox = _sandbox_config()
+    except ComputerRuntimeUnavailable as e:
+        logger.warning("Computer runtime unavailable for providers: %s", e)
+        raise HTTPException(
+            status_code=503, detail="Computer runtime is not available"
+        ) from None
+    kinds = sandbox.creatable_providers()
+    allowed = await get_provider_allowances(
+        x_user_id, kinds, default_kind=sandbox.provider
+    )
+    return ComputerProvidersResponse(
+        providers=[
+            ComputerProviderOption(
+                kind=kind, is_default=kind == sandbox.provider, allowed=allowed[kind]
+            )
+            for kind in kinds
+        ]
     )
 
 
@@ -338,6 +394,21 @@ async def rename_computer(
     if updated is None:
         raise HTTPException(status_code=404, detail="Computer not found")
     return await _counted_response(updated)
+
+
+@router.delete("/{computer_id}", status_code=204)
+async def remove_computer(computer_id: str, x_user_id: CurrentUserId):
+    """Remove a computer and its sandbox for good.
+
+    Only an empty one other than the primary, which is where new workspaces
+    go, so a removal never takes a workspace with it. A refusal the user can
+    act on is a 409 whose ``code`` the client words.
+    """
+    async with _computer_action_errors("remove", computer_id):
+        await _owned_computer(computer_id, x_user_id)
+        await _computer_manager().remove_computer(computer_id)
+        logger.info("Removed computer %s for user %s", computer_id, x_user_id)
+    return Response(status_code=204)
 
 
 @router.get("/{computer_id}/storage", response_model=ComputerStorageResponse)
@@ -408,10 +479,13 @@ async def computer_status_events(computer_id: str, x_user_id: CurrentUserId):
     computer = await _owned_computer(computer_id, x_user_id)
 
     def _frame(
-        status: str, sandbox_state: str | None = None, error: str | None = None
+        status: str,
+        sandbox_state: str | None = None,
+        error: str | None = None,
+        stage: str | None = None,
     ) -> str:
         return sse_status_event(
-            {"computer_id": computer_id}, status, sandbox_state, error
+            {"computer_id": computer_id}, status, sandbox_state, error, stage
         )
 
     async def _read_status() -> str | None:

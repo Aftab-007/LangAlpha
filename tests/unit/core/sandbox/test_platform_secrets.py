@@ -10,6 +10,7 @@ from ptc_agent.config.core import (
     CoreConfig,
     DaytonaConfig,
     DockerConfig,
+    E2BConfig,
     FilesystemConfig,
     LoggingConfig,
     MCPConfig,
@@ -49,6 +50,7 @@ def _config(
                 api_key="daytona-key",
                 secret_namespace=namespace,
             ),
+            e2b=E2BConfig(api_key="e2b-key", secret_namespace=namespace),
             docker=DockerConfig(),
             platform_secrets=platform_secrets,
         ),
@@ -94,6 +96,49 @@ def test_resolve_hosted_configuration_fails_closed(
     monkeypatch.setattr("src.config.env.HOST_MODE", "platform")
     with pytest.raises(PlatformSecretConfigurationError, match=missing_name):
         resolve_platform_secrets(_config(namespace=namespace), environ=environ)
+
+
+def test_resolve_on_e2b_reads_its_namespace_and_lowercases_the_name():
+    # E2B stores Secret names lowercased, and a sandbox names the Secret it
+    # wants by that stored form.
+    resolved = resolve_platform_secrets(
+        _config(provider="e2b", namespace="Prod"),
+        environ={"FMP_API_KEY": "value"},
+        host_mode="oss",
+    )
+    assert resolved[0].name == "prod-platform-fmp-api-key"
+
+    with pytest.raises(PlatformSecretConfigurationError, match="E2B_SECRET_NAMESPACE"):
+        resolve_platform_secrets(
+            _config(provider="e2b", namespace=""),
+            environ={"FMP_API_KEY": "value"},
+            host_mode="oss",
+        )
+
+
+def test_resolve_for_a_kind_uses_that_providers_namespace_and_naming():
+    """A computer kept from before a provider switch still gets its own kind's
+    Secret names, whatever the deployment's provider is now."""
+    config = _config(provider="daytona")
+    config.sandbox.daytona.secret_namespace = "Dtn"
+    config.sandbox.e2b.secret_namespace = "E2b"
+    environ = {"FMP_API_KEY": "value"}
+
+    assert [s.name for s in resolve_platform_secrets(
+        config, kind="e2b", environ=environ, host_mode="oss"
+    )] == ["e2b-platform-fmp-api-key"]
+    assert [s.name for s in resolve_platform_secrets(
+        config, environ=environ, host_mode="oss"
+    )] == ["Dtn-platform-fmp-api-key"]
+    assert resolve_platform_secrets(
+        config, kind="docker", environ=environ, host_mode="oss"
+    ) == ()
+    assert platform_secrets_active(_config(provider="docker"), kind="e2b")
+    assert not platform_secrets_active(_config(), kind="docker")
+
+    config.sandbox.e2b.secret_namespace = ""
+    with pytest.raises(PlatformSecretConfigurationError, match="E2B_SECRET_NAMESPACE"):
+        resolve_platform_secrets(config, kind="e2b", environ=environ, host_mode="oss")
 
 
 def test_resolve_hosted_empty_catalog_fails_closed():
@@ -176,6 +221,8 @@ def _hash(value: str) -> str:
 
 class _FakeRuntime:
     """Emulates the in-sandbox hashing probe; env flips to the mount on restart."""
+
+    updates_env = True
 
     def __init__(self, *, env_value: str, post_scrub_value: str = "dtn_secret_new"):
         from ptc_agent.core.sandbox.runtime import RuntimeState
@@ -407,9 +454,9 @@ def test_hosted_daytona_env_excludes_plaintext_and_mounts_secret(monkeypatch):
 @pytest.mark.parametrize(
     ("host_mode", "provider", "platform_secrets"),
     [
-        # Incapable providers can't substitute placeholders — a catalog is inert.
-        ("platform", "docker", (_FMP_DEFINITION,)),
-        ("platform", "memory", (_FMP_DEFINITION,)),
+        # Self-hosted, a provider that cannot hold Secrets falls through to env.
+        ("oss", "docker", (_FMP_DEFINITION,)),
+        ("oss", "memory", (_FMP_DEFINITION,)),
         # Daytona with no catalog is the opt-out — stays on plaintext env.
         ("oss", "daytona", ()),
     ],
@@ -434,3 +481,79 @@ def test_ungated_modes_keep_current_plaintext_behavior(
 
     assert bindings == {}
     assert env_vars["FMP_API_KEY"] == "real-fmp-value"
+
+
+@pytest.mark.parametrize("provider", ["docker", "memory"])
+def test_hosted_catalog_refuses_a_provider_that_cannot_hold_secrets(
+    monkeypatch, provider
+):
+    # Falling through here would put the platform's own credentials into the
+    # sandbox's env as plaintext.
+    monkeypatch.setattr("src.config.env.HOST_MODE", "platform")
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    config = _config(provider=provider, namespace="", platform_secrets=(_FMP_DEFINITION,))
+
+    with pytest.raises(
+        PlatformSecretConfigurationError,
+        match=f"{provider} cannot hold platform Secrets",
+    ):
+        build_platform_secret_bindings(config)
+
+
+class _FixedEnvRuntime(_FakeRuntime):
+    """E2B's shape: the env is what create set, and nothing can update it."""
+
+    updates_env = False
+
+
+@pytest.mark.asyncio
+async def test_remount_on_a_fixed_env_runtime_sends_only_the_bindings():
+    from ptc_agent.core.sandbox.platform_secrets import (
+        remount_platform_secret_bindings,
+    )
+
+    runtime = _FixedEnvRuntime(env_value="e2b_secret_fmp_api_key")
+    await remount_platform_secret_bindings(
+        runtime,
+        expected={"FMP_API_KEY": _hash("e2b_secret_fmp_api_key")},
+        bindings={"FMP_API_KEY": "prod-platform-fmp-api-key"},
+    )
+
+    assert runtime.calls == [
+        ("update_secrets", {"FMP_API_KEY": "prod-platform-fmp-api-key"})
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("runtime_cls", "env_value", "passes"),
+    [
+        (_FixedEnvRuntime, "e2b_secret_fmp_api_key", True),
+        (_FixedEnvRuntime, "old-plaintext", False),
+        # A catalog entry added after create: a client that refuses an empty
+        # key never sends the request its egress rule would fill in.
+        (_FixedEnvRuntime, "", False),
+        # A runtime that remounts env has to show the placeholder.
+        (_FakeRuntime, "", False),
+    ],
+)
+async def test_verify_requires_the_marker_and_a_fixed_env_a_new_sandbox(
+    runtime_cls, env_value, passes
+):
+    from ptc_agent.core.sandbox.platform_secrets import (
+        PlatformSecretReplacementRequired,
+        PlatformSecretVerificationError,
+        verify_runtime_platform_secrets,
+    )
+
+    runtime = runtime_cls(env_value=env_value)
+    expected = {"FMP_API_KEY": _hash("e2b_secret_fmp_api_key")}
+    if passes:
+        await verify_runtime_platform_secrets(runtime, expected=expected)
+        return
+    with pytest.raises(PlatformSecretVerificationError) as raised:
+        await verify_runtime_platform_secrets(runtime, expected=expected)
+    # Only a fixed env asks for a new sandbox; Daytona's scrub can clear its own.
+    assert isinstance(raised.value, PlatformSecretReplacementRequired) is (
+        runtime_cls is _FixedEnvRuntime
+    )

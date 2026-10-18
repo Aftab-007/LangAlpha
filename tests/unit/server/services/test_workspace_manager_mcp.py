@@ -44,6 +44,8 @@ def _stub_sibling_restore_flags():
 def _make_config():
     config = MagicMock()
     config.to_core_config.return_value = MagicMock()
+    core_sandbox = config.to_core_config.return_value.sandbox
+    core_sandbox.settings_for.side_effect = lambda kind: getattr(core_sandbox, kind)
     config.daytona = MagicMock(api_key="k", base_url="https://daytona.test")
     config.sandbox = MagicMock(provider="daytona")
     config.filesystem = MagicMock(working_directory="/home/workspace")
@@ -78,6 +80,7 @@ def _make_computer(
     return {
         "computer_id": computer_id,
         "user_id": "user-1",
+        "kind": "daytona",
         "status": status,
         "resource_tier": resource_tier,
         "provider_ref": provider_ref,
@@ -91,6 +94,7 @@ def _make_binding(workspace_id, computer_id, *, provider_ref="sb-1", **kw):
     ``provider_ref`` defaults to _make_workspace's sandbox_id, so the machine
     and the project shadow agree unless a test says otherwise.
     """
+    kw.setdefault("kind", "daytona")
     return ComputerBinding(
         workspace_id=workspace_id,
         computer_id=computer_id,
