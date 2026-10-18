@@ -14,8 +14,8 @@ FROM ubuntu:24.04
 # Keep NODE_VERSION and PLAYWRIGHT_VERSION in sync with SANDBOX_NODE_VERSION and
 # SANDBOX_PLAYWRIGHT_VERSION in src/ptc_agent/core/sandbox/_defaults.py (the
 # Daytona snapshot uses those).
-ARG NODE_VERSION=24.14.1
-ARG PLAYWRIGHT_VERSION=1.63.0
+ARG NODE_VERSION=24.22.0
+ARG PLAYWRIGHT_VERSION=1.64.0
 
 # vCPU the container will actually be allowed to use. The BLAS/OpenMP caps below
 # are set from it; the Daytona snapshot takes the same number from its tier.
@@ -131,7 +131,7 @@ RUN echo 'curl_cffi>=0.14' > /tmp/overrides.txt \
     openpyxl xlrd python-docx pypdf \
     beautifulsoup4 lxml pyyaml \
     defusedxml pdfplumber reportlab python-pptx ironcalc firecrawl-anydoc "markitdown[docx,pptx,xlsx]" \
-    "scrapling[all]" html-to-markdown trafilatura youtube-transcript-api \
+    "scrapling[all]==0.4.15" html-to-markdown trafilatura youtube-transcript-api \
     "playwright==${PLAYWRIGHT_VERSION}" \
     tqdm tabulate \
     && rm /tmp/overrides.txt \
