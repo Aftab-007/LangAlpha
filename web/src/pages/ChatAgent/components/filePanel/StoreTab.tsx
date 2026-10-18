@@ -16,6 +16,7 @@ interface StoreTabProps {
   onTargetMemoHandled?: (seq?: number) => void;
   onOpenFile: OpenFileHandler | null;
   marketWatch: MarketWatchState | null;
+  onCancelMarketTarget: ((targetId: string) => Promise<void>) | null;
 }
 
 /**
@@ -24,7 +25,7 @@ interface StoreTabProps {
  * file's: the body selects the entry once the store's list resolves, and says
  * so then, naming the ask it had so a later one is not cleared with it.
  */
-export function StoreTab({ kind, workspaceId, target, onTargetMemoryHandled, onTargetMemoHandled, onOpenFile, marketWatch }: StoreTabProps): React.ReactElement {
+export function StoreTab({ kind, workspaceId, target, onTargetMemoryHandled, onTargetMemoHandled, onOpenFile, marketWatch, onCancelMarketTarget }: StoreTabProps): React.ReactElement {
   const onOpen = onOpenFile ?? undefined;
   // Stable per ask: the bodies keep these in effect deps.
   const seq = target?.seq;
@@ -51,7 +52,7 @@ export function StoreTab({ kind, workspaceId, target, onTargetMemoryHandled, onT
           />
         );
       case 'status':
-        return <StatusPanel marketWatch={marketWatch} />;
+        return <StatusPanel marketWatch={marketWatch} onCancelTarget={onCancelMarketTarget} />;
       default:
         return kind satisfies never;
     }

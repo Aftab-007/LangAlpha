@@ -71,6 +71,7 @@ import TodoDrawer from './TodoDrawer';
 import { ComposerTray, ReconnectingChip, TrayDock } from './chatView/ComposerTray';
 import { useTrayContents } from './chatView/useTrayContents';
 import { useTrayFold } from './chatView/useTrayFold';
+import { armedTargets } from '../session/marketWatchEvents';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { motion, AnimatePresence, type PanInfo } from '@/lib/framer';
 import { MobileBottomSheet } from '@/components/ui/mobile-bottom-sheet';
@@ -319,6 +320,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     threadId: currentThreadId,
     threadModels,
     marketWatch,
+    cancelMarketTarget,
     isShared: threadIsShared,
     insertNotification,
     handleThumbUp,
@@ -372,9 +374,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     return t('chat.placeholderDefault');
   }, [wasStopped, isLoading, pendingInterrupt, hasActiveSubagents, t]);
 
-  // A market watch is running, so a watch call's row opens the watch's live
-  // Status tab (useRightPanel). The tray reads the same snapshot for its chip.
-  const showWatchChip = (marketWatch?.symbols?.length ?? 0) > 0;
+  // A market watch is running or a target is armed, so a watch call's row
+  // opens the watch's live Status tab (useRightPanel). The tray reads the
+  // same snapshot for its chip.
+  const showWatchChip = (marketWatch?.symbols?.length ?? 0) > 0 || armedTargets(marketWatch?.targets).length > 0;
 
   // Steering the agent finished without reading comes back to the composer,
   // beside whatever was typed there since.
@@ -1514,6 +1517,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                             isLoadingHistory={isLoadingHistory}
                             feedbackByTurn={feedbackByTurn}
                             dispatcherContext={dispatcherContext}
+                            marketTargets={marketWatch?.targets}
                           />
                         </DispatchStatusProvider>
                       </MessageActionsProvider>
@@ -1820,6 +1824,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                   onOpenSubagentTask={openSubagentTaskFromPanel}
                   transcript={transcript}
                   marketWatch={marketWatch}
+                  onCancelMarketTarget={cancelMarketTarget}
                   onOpenFile={handleOpenFileFromChat}
                   getRecentWritePaths={getRecentWritePaths}
                   files={workspaceFiles}
@@ -1882,6 +1887,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       onOpenSubagentTask={openSubagentTaskFromPanel}
                       transcript={transcript}
                       marketWatch={marketWatch}
+                      onCancelMarketTarget={cancelMarketTarget}
                       onOpenFile={handleOpenFileFromChat}
                       getRecentWritePaths={getRecentWritePaths}
                       files={workspaceFiles}
