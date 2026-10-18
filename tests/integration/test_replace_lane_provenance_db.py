@@ -1,8 +1,7 @@
 """replace_lane_provenance against real Postgres.
 
 A subagent archive rewrites only its own lanes' provenance rows: the main
-lane is the finalize's to write, and the row's stored events are no longer
-written at all.
+lane is the finalize's to write.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ import pytest_asyncio
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="session")]
 
-MAIN = {"event": "message_chunk", "data": {"agent": "main", "content": "m"}}
 MAIN_PROVENANCE = {
     "event": "provenance",
     "data": {"agent": "main", "source_type": "web", "identifier": "https://a.example"},
@@ -48,7 +46,6 @@ async def response_row(seed_workspace, seed_response):
         conversation_response_id=response_id,
         conversation_thread_id=thread_id,
         turn_index=0,
-        sse_events=[MAIN],
     )
     return response_id
 
@@ -65,7 +62,7 @@ async def _lane_rows(conn, response_id: str) -> list[tuple]:
 
 async def _row(conn, response_id: str) -> dict:
     cur = await conn.execute(
-        "SELECT conversation_thread_id::text AS thread_id, sse_events "
+        "SELECT conversation_thread_id::text AS thread_id "
         "FROM conversation_responses WHERE conversation_response_id = %s",
         (response_id,),
     )
@@ -97,7 +94,6 @@ async def test_a_lane_write_replaces_its_lane_only(response_row, db_conn):
         ("main", "https://a.example", False),
         ("task:abc", "https://b.example", True),
     ]
-    assert (await _row(db_conn, response_row))["sse_events"] == [MAIN]
 
     # A later write with none of the lane's sources saved empties it.
     assert await replace_lane_provenance(response_row, [], LANES)

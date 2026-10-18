@@ -2,7 +2,7 @@
 /**
  * History replay of a stopped turn.
  *
- * A hard-stopped turn persists synthetic close events to sse_events:
+ * A hard-stopped turn replays with close events:
  *   reasoning_signal:"complete"  → closes the reasoning block
  *   finish_reason:"stopped"      → stamps the message stopped
  *

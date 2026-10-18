@@ -278,10 +278,7 @@ async def seed_response(patched_get_db_connection):
     The terminal-immutability trigger rejects INSERTs with a terminal
     status, so seeding inserts ``in_progress`` and finalizes with an
     UPDATE, the same shape production takes through the lifecycle API.
-    ``sse_events`` seeds an older row's stored events, which only servers
-    before the checkpoint-only replay wrote.
     """
-    from src.server.utils.pg_sanitize import SafeJson
 
     async def _seed(
         conversation_response_id: str,
@@ -289,7 +286,6 @@ async def seed_response(patched_get_db_connection):
         turn_index: int,
         status: str = "completed",
         execution_time=None,
-        sse_events=None,
     ):
         async with patched_get_db_connection() as conn:
             async with conn.cursor() as cur:
@@ -310,16 +306,10 @@ async def seed_response(patched_get_db_connection):
                     """
                     UPDATE conversation_responses
                     SET status = %s,
-                        execution_time = COALESCE(%s, execution_time),
-                        sse_events = COALESCE(%s::jsonb, sse_events)
+                        execution_time = COALESCE(%s, execution_time)
                     WHERE conversation_response_id = %s
                     """,
-                    (
-                        status,
-                        execution_time,
-                        SafeJson(sse_events) if sse_events is not None else None,
-                        conversation_response_id,
-                    ),
+                    (status, execution_time, conversation_response_id),
                 )
 
     return _seed
