@@ -20,6 +20,7 @@ from src.server.services.computer_manager._lifecycle import SessionLifecycleMixi
 from src.server.services.computer_manager._livefs import LivefsMixin
 from src.server.services.computer_manager._machines import MachineLifecycleMixin
 from src.server.services.computer_manager._mcp import McpSecretsMixin
+from src.server.services.computer_manager._move import WorkspaceMoveMixin
 from src.server.services.computer_manager._providers import ProviderMixin
 from src.server.services.computer_manager._provisioning import ProvisioningMixin
 from src.server.services.computer_manager._retirement import RetirementMixin
@@ -42,6 +43,7 @@ class ComputerManager(
     MachineLifecycleMixin,
     RetirementMixin,
     ComputerSpecMixin,
+    WorkspaceMoveMixin,
     WorkspaceEntitlementsMixin,
 ):
     _instance: Optional["ComputerManager"] = None

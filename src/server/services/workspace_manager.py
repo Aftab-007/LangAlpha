@@ -637,9 +637,11 @@ class WorkspaceManager(ComputerManager):
                 try:
                     await asyncio.sleep(self.cleanup_interval)
                     if not self._shutdown:
-                        # Remove tombstoned project folders before idle cleanup
-                        # can stop their computer and make the runtime unavailable.
+                        # Remove tombstoned project folders, and those moves
+                        # left, before idle cleanup can stop their computer and
+                        # make the runtime unavailable.
                         await self.reap_pending_workspace_folder_cleanups()
+                        await self.reap_workspace_moves()
                         await self.cleanup_idle_workspaces()
                         await self.reap_stuck_starting_workspaces()
                         await self.reap_retirement_pending_computers()

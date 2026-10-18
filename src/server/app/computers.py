@@ -30,9 +30,15 @@ from src.server.database.computer import (
     rename_computer as db_rename_computer,
     update_computer_status,
 )
+from src.server.database.home_workspace import get_home_workspace_id
 from src.server.database.workspace import (
     count_live_workspaces_by_computer,
     get_live_workspace_folders_for_computer,
+)
+from src.server.database.workspace_move import (
+    MoveRefused,
+    claim_workspace_move,
+    set_primary_computer,
 )
 from src.server.dependencies.usage_limits import (
     assert_provider_allowed,
@@ -55,6 +61,7 @@ from src.server.models.computer import (
     ComputerSpecRequest,
     ComputerStorageResponse,
 )
+from src.server.models.workspace_move import MakePrimaryResponse, WorkspaceMoveOut
 from src.server.services.computer_disk import (
     STORAGE_BREAKDOWN_MAX_AGE_SECONDS,
     disk_from_row,
@@ -72,6 +79,7 @@ from src.server.services.spec_change import (
     spec_change_from_row,
     spec_refusal,
 )
+from src.server.services.workspace_move import move_error_detail, move_from_row
 from src.server.services.workspace_status_pubsub import (
     publish_computer_status_change,
     subscribe_to_computer_status,
@@ -167,6 +175,51 @@ def require_computer_owner(computer: Optional[dict], *, user_id: str) -> None:
         raise HTTPException(status_code=404, detail="Computer not found")
     if computer.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+
+
+@contextlib.contextmanager
+def move_refusals():
+    """A move that cannot start answers in the shape its failure would be read in."""
+    try:
+        yield
+    except MoveRefused as e:
+        status = 404 if e.code == "not_found" else 409
+        raise HTTPException(status_code=status, detail=move_error_detail(e.code)) from None
+
+
+async def accept_workspace_move(
+    user_id: str, workspace_id: str, computer_id: str, *, make_primary: bool = False
+) -> WorkspaceMoveOut:
+    """Claim a move and run it after answering; its outcome is read back from the row.
+
+    Keyed by the move: the claim already refuses a second one for the user,
+    and a move whose runner dies is finished by the sweep, not rerun here.
+    """
+    try:
+        manager = _computer_manager()
+    except ComputerRuntimeUnavailable as e:
+        logger.warning("Computer runtime unavailable for a move: %s", e)
+        raise HTTPException(
+            status_code=503, detail="Computer runtime is not available"
+        ) from None
+    with move_refusals():
+        move = await claim_workspace_move(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            target_computer_id=computer_id,
+            make_primary=make_primary,
+        )
+    schedule_start(
+        f"workspace-move:{move['move_id']}", lambda: manager.run_accepted_move(move)
+    )
+    logger.info(
+        "Accepted move %s of workspace %s to computer %s for user %s",
+        move["move_id"],
+        workspace_id,
+        computer_id,
+        user_id,
+    )
+    return move_from_row(move)  # type: ignore[return-value]
 
 
 def _spec_in_progress() -> HTTPException:
@@ -651,6 +704,33 @@ async def set_computer_spec(
             x_user_id,
         )
         return await _counted_response(claimed)
+
+
+@router.post("/{computer_id}/make-primary", response_model=MakePrimaryResponse)
+async def make_primary_computer(
+    computer_id: str,
+    response: Response,
+    x_user_id: CurrentUserId,
+):
+    """Make this the computer new workspaces and Home land on.
+
+    Home lives on the primary. With Home on no computer yet, or already on
+    this one, the flip lands now (200). Otherwise Home's files move first,
+    which outlasts a request: the move is accepted (202), the flip lands
+    when it commits, and both are read back from Home's move.
+    """
+    async with _computer_action_errors("make primary", computer_id):
+        await _owned_computer(computer_id, x_user_id)
+        with move_refusals():
+            flipped = await set_primary_computer(x_user_id, computer_id)
+        if flipped:
+            logger.info("Made computer %s primary for user %s", computer_id, x_user_id)
+            return MakePrimaryResponse(computer_id=computer_id, is_primary=True)
+        move = await accept_workspace_move(
+            x_user_id, get_home_workspace_id(x_user_id), computer_id, make_primary=True
+        )
+        response.status_code = 202
+        return MakePrimaryResponse(computer_id=computer_id, is_primary=False, move=move)
 
 
 @router.post("/{computer_id}/always-on", response_model=ComputerResponse)
