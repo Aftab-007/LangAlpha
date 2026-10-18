@@ -298,6 +298,56 @@ export interface ComputerProvidersResponse {
   providers: ComputerProviderOption[];
 }
 
+// --- Workspace move ---
+
+/**
+ * Where a move to another computer is. The first four are a move still
+ * running (`preparing` and `backing_up` can still be cancelled); the last
+ * three are how it ended.
+ */
+export type WorkspaceMovePhase =
+  | 'preparing'
+  | 'backing_up'
+  | 'staged'
+  | 'committed'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
+/**
+ * Why a move was refused up front (the 409's `detail`) or failed later (the
+ * move's `error`): one shape for both. `message` is the server's sentence,
+ * written to be shown as is.
+ */
+export interface WorkspaceMoveError {
+  code: string;
+  message: string;
+  /** For `backup_incomplete`: the files the backup could not save. */
+  files?: UnsavedFile[];
+}
+
+/** `GET /workspaces/{id}/move`: the workspace's latest move. */
+export interface WorkspaceMove {
+  move_id: string;
+  workspace_id: string;
+  source_computer_id: string;
+  target_computer_id: string;
+  /** Home moving because its target is being made primary; the flip lands when the move commits. */
+  make_primary: boolean;
+  phase: WorkspaceMovePhase;
+  error?: WorkspaceMoveError | null;
+  created_at: string;
+  committed_at?: string | null;
+  finished_at?: string | null;
+}
+
+/** `POST /computers/{id}/make-primary`: flipped now, or Home moves first and `move` runs it. */
+export interface MakePrimaryResponse {
+  computer_id: string;
+  is_primary: boolean;
+  move: WorkspaceMove | null;
+}
+
 /** Request body for `POST /api/v1/computers`. Tier is the machine's, not a workspace's. */
 export interface ComputerCreate {
   name?: string;

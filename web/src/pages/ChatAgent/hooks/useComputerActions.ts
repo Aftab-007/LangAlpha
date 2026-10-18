@@ -1,6 +1,6 @@
 /**
  * The machine-level mutations: create, start and stop, rename, change spec,
- * turning always-on off, remove.
+ * make primary, turning always-on off, remove.
  *
  * These used to hang off a workspace's menu, but tier and always-on are the
  * computer's, and every workspace on it changes with them. They are addressed
@@ -18,6 +18,7 @@ import type { ComputerCreate, ComputersResponse, ResourceTier } from '@/types/ap
 import {
   createComputer,
   deleteComputer,
+  makeComputerPrimary,
   renameComputer,
   setComputerAlwaysOn,
   setComputerSpec,
@@ -35,6 +36,7 @@ import {
   patchComputerStatusInCaches,
   removeComputerRow,
 } from './useComputers';
+import { seedWorkspaceMove, watchMove } from './useWorkspaceMove';
 
 export type PowerAction = 'start' | 'stop';
 
@@ -94,6 +96,25 @@ export function useComputerActions() {
     onError: () => invalidateMachine(queryClient),
   });
 
+  // A 200 flipped the primary now. A 202 moves Home first and flips when that
+  // move commits, so the move is seeded for the row to follow and watched, so
+  // its ending is told wherever the user is by then. The name rides in the
+  // variables for that toast.
+  const makePrimary = useMutation({
+    mutationFn: ({ computerId }: { computerId: string; name: string }) => makeComputerPrimary(computerId),
+    onSuccess: async (res, { name }) => {
+      if (!res.move) {
+        invalidateMachine(queryClient);
+        return;
+      }
+      await seedWorkspaceMove(queryClient, res.move);
+      watchMove(res.move, name);
+    },
+    // A refusal can mean the rows moved under the dialog (a spec change began,
+    // the machine was removed), so the list re-reads to show why.
+    onError: () => invalidateMachine(queryClient),
+  });
+
   // Always-on is no longer offered, so turning it off is all that is left.
   const turnOffAlwaysOn = useMutation({
     mutationFn: ({ computerId }: { computerId: string }) => setComputerAlwaysOn(computerId, false),
@@ -149,5 +170,5 @@ export function useComputerActions() {
     [rename],
   );
 
-  return { power, rename, renameComputerTo, spec, turnOffAlwaysOn, create, remove };
+  return { power, rename, renameComputerTo, spec, makePrimary, turnOffAlwaysOn, create, remove };
 }

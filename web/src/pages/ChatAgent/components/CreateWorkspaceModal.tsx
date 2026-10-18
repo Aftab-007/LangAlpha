@@ -12,7 +12,7 @@ import { createWorkspaceDenialMessage, denialMessage } from '../utils/denialMess
 import { clampWorkspaceName } from '../utils/workspaceName';
 import type { NewWorkspace } from '../hooks/useCreateWorkspace';
 import { useComputers } from '../hooks/useComputers';
-import { isComputerPreparing } from '../utils/computerStatus';
+import { isComputerPreparing, liveComputers, takesWorkspaces } from '../utils/computerStatus';
 import './CreateWorkspaceModal.css';
 
 interface CreateWorkspaceModalProps {
@@ -60,14 +60,14 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
   // The list the gallery and the computer fan-out already hold, so opening
   // the modal usually reads the cache rather than the network.
   const { data: computerData } = useComputers({ enabled: isOpen });
-  const liveComputers = (computerData?.computers ?? []).filter((c) => c.status !== 'deleted');
-  const choosesComputer = liveComputers.length > 1;
+  const computers = liveComputers(computerData?.computers);
+  const choosesComputer = computers.length > 1;
   // The machine the workspace would land on, named or not. A pick that has
   // left the list (deleted elsewhere) falls back to the primary. The fan-out
   // moves its row to running when the preparation ends, which lifts the hold.
-  const target = liveComputers.find((c) => c.computer_id === pickedComputerId)
-    ?? liveComputers.find((c) => c.is_primary)
-    ?? liveComputers[0]
+  const target = computers.find((c) => c.computer_id === pickedComputerId)
+    ?? computers.find((c) => c.is_primary)
+    ?? computers[0]
     ?? null;
   const preparingTarget = isComputerPreparing(target) ? target : null;
 
@@ -417,10 +417,10 @@ function CreateWorkspaceModal({ isOpen, onClose, onCreate, onComplete }: CreateW
                 onChange={(e) => setPickedComputerId(e.target.value)}
                 disabled={submitting}
               >
-                {liveComputers.map((c) => {
+                {computers.map((c) => {
                   const preparing = isComputerPreparing(c);
                   return (
-                    <option key={c.computer_id} value={c.computer_id} disabled={preparing}>
+                    <option key={c.computer_id} value={c.computer_id} disabled={!takesWorkspaces(c)}>
                       {c.is_primary
                         ? preparing
                           ? t('computer.primaryPreparingOption', '{{name}} (Primary, Preparing)', { name: c.name })

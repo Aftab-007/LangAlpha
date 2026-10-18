@@ -131,6 +131,19 @@ export function isComputerPreparing(
     && !computer.provider_ref;
 }
 
+/** The user's machines, without a removed one the list may still carry for a moment. */
+export function liveComputers<C extends Pick<Computer, 'status'>>(computers: readonly C[] | null | undefined): C[] {
+  return (computers ?? []).filter((c) => c.status !== 'deleted');
+}
+
+/**
+ * Whether a workspace can be put on this machine now, by creating one there
+ * or moving one to it: still the user's, able to start, and past its first build.
+ */
+export function takesWorkspaces(computer: Pick<Computer, 'status' | 'provider_ref'>): boolean {
+  return computer.status !== 'deleted' && computer.status !== 'error' && !isComputerPreparing(computer);
+}
+
 export const PREPARING_UI: ComputerStatusUi = {
   labelKey: 'computer.statusPreparing',
   fallback: 'Preparing',

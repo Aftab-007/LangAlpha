@@ -45,6 +45,13 @@ export const queryKeys = {
     home:   () => [...queryKeys.workspaces.all, 'home'],
     quota:  () => [...queryKeys.workspaces.all, 'quota'],
   },
+  // A workspace's latest move to another computer, polled while it runs. Its
+  // own root, not under `workspaces`: the read that sees a move end refreshes
+  // every workspace query, which would cancel that read before it lands.
+  workspaceMoves: {
+    all:       ['workspaceMoves'],
+    workspace: (wsId: string) => [...queryKeys.workspaceMoves.all, wsId],
+  },
   // The signed prefix the owner's report iframes load under, one per workspace
   // because the grant covers the whole workspace and nothing narrower. Its own
   // root, not under `workspaces`: every workspace invalidation would re-mint
