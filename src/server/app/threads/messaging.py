@@ -240,6 +240,7 @@ _SERVER_ONLY_FIELDS = (
     "automation_delivery",
     "automation_earlier_runs",
     "disable_subagents",
+    "market_target",
     "surface_rules",
     "steer_job_id",
 )

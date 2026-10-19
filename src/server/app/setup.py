@@ -523,12 +523,14 @@ async def lifespan(app: FastAPI):
     from src.server.services.report_back.handoff import core as handoff_core
     from src.server.services import automation_settlement, thread_lifecycle_feed
     from src.server.services.hook_outbox import HookOutboxDrainer
+    from src.server.services.market_targets import delivery as market_target_delivery
 
     handoff_core.register_outbox_executors()
     subagent.register_outbox_executors()
     steer_executor.register_outbox_executors()
     thread_lifecycle_feed.register_outbox_executors()
     automation_settlement.register_outbox_executors()
+    market_target_delivery.register_outbox_executors()
     try:
         HookOutboxDrainer.get_instance().start()
         logger.info("HookOutboxDrainer started")
