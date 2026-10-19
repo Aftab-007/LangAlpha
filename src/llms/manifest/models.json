@@ -752,7 +752,7 @@
     "visible": true,
     "speed": 4,
     "intelligence": 2,
-    "context": 512000,
+    "context": 1000000,
     "parameters": {
       "max_tokens": 128000
     },
