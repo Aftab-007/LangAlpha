@@ -46,7 +46,7 @@ from data_client.ginlix_data import (
     get_ginlix_mcp_client,
 )
 from data_client.market_data_provider import symbol_market
-from data_client.normalize import minor_unit_scale, normalize_bars, scale_price
+from data_client.normalize import minor_unit_places, normalize_bars, scale_price
 from data_client.ginlix_data.cn_source import GinlixDataCnSource
 from data_client.ginlix_data.directory import NameDirectory
 from market_protocol import to_canonical, to_display, to_legacy_api
@@ -155,20 +155,20 @@ def _resolve_interval(
 
 
 def _display_rows(
-    rows: list[dict], symbol: str, *, intraday: bool, scale: float = 1.0
+    rows: list[dict], symbol: str, *, intraday: bool, places: int = 0
 ) -> list[dict]:
     """Raw provider rows → ascending ``{date, open, high, low, close, volume}``.
 
     Timestamps are localized to *symbol*'s exchange timezone; price fields are
-    scaled to major units (``scale`` = 0.01 for GBX/pence venues). Volume is a
+    shifted to major units (``places`` = 2 for GBX/pence venues). Volume is a
     share count and never scaled.
     """
     normalized = normalize_bars(rows, symbol, intraday=intraday)  # descending
     normalized.reverse()  # ascending, oldest-first (contract)
-    if scale != 1.0:
+    if places:
         for row in normalized:
             for field in ("open", "high", "low", "close"):
-                row[field] = scale_price(row[field], scale)
+                row[field] = scale_price(row[field], places)
     return normalized
 
 
@@ -299,7 +299,7 @@ async def _fetch_stock_bars(
             symbol=display,
         )
 
-    scale = minor_unit_scale(legacy)
+    places = minor_unit_places(legacy)
     window = None
     try:
         # A bound FMP would drop or a reversed window is refused here, as the
@@ -325,7 +325,7 @@ async def _fetch_stock_bars(
     if window is not None:
         rows = window.rows(rows or [])
 
-    data = _display_rows(rows or [], legacy, intraday=intraday, scale=scale)
+    data = _display_rows(rows or [], legacy, intraday=intraday, places=places)
     if refused and not data:
         return None, refused
     return {
