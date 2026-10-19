@@ -295,8 +295,14 @@ class GinlixMCPClient(GinlixDataV2Routes):
         interval: str,
         start_date: str | None = None,
         end_date: str | None = None,
+        *,
+        market: str = "stock",
     ) -> list[dict] | dict | None:
         """Fetch stock OHLCV from ginlix-data with auto-pagination.
+
+        ``market`` is the aggregates route's market segment: ``index`` takes
+        Massive's own index ticker (``I:SPX``), which the US-listing gate on
+        stock symbols would not recognize.
 
         Returns:
             ``list[dict]``: Normalized OHLCV bars on success.
@@ -305,7 +311,7 @@ class GinlixMCPClient(GinlixDataV2Routes):
             interval, a window it cannot read or one that ends before it
             starts, network error) — caller should fall back.
         """
-        if not is_us_symbol(symbol):
+        if market == "stock" and not is_us_symbol(symbol):
             return None
 
         if not await self.ensure():
@@ -344,7 +350,7 @@ class GinlixMCPClient(GinlixDataV2Routes):
 
         try:
             all_bars = await self._fetch_paginated_bars(
-                f"/api/v1/data/aggregates/stock/{path_segment(symbol)}", params,
+                f"/api/v1/data/aggregates/{path_segment(market)}/{path_segment(symbol)}", params,
             )
             normalized = normalize_bars(all_bars, symbol, intraday=intraday)
             if intraday:

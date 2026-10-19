@@ -100,6 +100,45 @@ class TestGetStockData:
         client.get_stock_price.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_an_index_spelling_asks_each_vendor_for_its_index_and_a_bare_ticker_for_the_listing(self):
+        """The legacy spelling of an index is bare (GSPC), which both vendors
+        read as a stock ticker, so the index went unanswered as one. An index
+        the protocol does not know is not taken for a US one."""
+        import httpx
+
+        import plugins.langalpha_market_data.price_data_mcp_server as mod
+        from src.data_client.ginlix_data.mcp_client import GinlixMCPClient
+
+        paths: list[str] = []
+
+        def tier(request: httpx.Request) -> httpx.Response:
+            paths.append(request.url.path)
+            return httpx.Response(503)  # no tier answer, so FMP is asked too
+
+        ginlix = GinlixMCPClient()
+        ginlix._http = httpx.AsyncClient(
+            base_url="http://ginlix-data.test", transport=httpx.MockTransport(tier)
+        )
+        client = _fmp_client()
+        try:
+            with patch.object(mod, "_ginlix", ginlix), \
+                 patch(f"{_MOD}.get_fmp_client", return_value=client):
+                index = await mod.get_stock_data("^GSPC", "1day", "2026-09-01", "2026-09-30")
+                listing = await mod.get_stock_data("COMP", "1day", "2026-09-01", "2026-09-30")
+                await mod.get_stock_data("^KS11", "1day", "2026-09-01", "2026-09-30")
+        finally:
+            await ginlix.close()
+
+        assert paths == [
+            "/api/v1/data/aggregates/index/I:SPX",
+            "/api/v1/data/aggregates/stock/COMP",
+        ]
+        assert [c.args[0] for c in client.get_stock_price.await_args_list] == [
+            "^GSPC", "COMP", "^KS11",
+        ]
+        assert (index["symbol"], listing["symbol"]) == ("SPX", "COMP")
+
+    @pytest.mark.asyncio
     async def test_intraday_fmp(self):
         import plugins.langalpha_market_data.price_data_mcp_server as mod
 
