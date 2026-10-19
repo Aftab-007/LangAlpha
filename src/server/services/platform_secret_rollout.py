@@ -575,9 +575,9 @@ async def reconcile_platform_secrets_at_boot(
 ) -> dict[str, PlatformSecretRolloutSet]:
     """Reconcile every served kind's Secret catalog before the application is ready.
 
-    A no-op when no catalog is configured. The deployment's own provider fails
-    closed on missing credentials, on configuration, and on an outage with
-    nothing registered before. An offered kind needs credentials too
+    A no-op when no catalog is configured, hosted or not. The deployment's own
+    provider fails closed on missing credentials, on configuration, and on an
+    outage with nothing registered before. An offered kind needs credentials too
     (``validate_api_keys``). Any other kind is served only because computers of
     it exist, and none blocks boot for want of credentials or of a provider:
     without credentials it is skipped, and on an outage with nothing registered
@@ -598,10 +598,6 @@ async def reconcile_platform_secrets_at_boot(
             ) from None
         raise
     if not core_config.sandbox.platform_secrets:
-        # Raises when hosted mode requires a catalog for any kind a computer
-        # may be created on; otherwise the opt-out.
-        for kind in core_config.sandbox.creatable_providers():
-            resolve_platform_secrets(core_config, kind=kind)
         return {}
     # Each create on such a kind would refuse anyway; boot says so first.
     require_platform_secret_capable(

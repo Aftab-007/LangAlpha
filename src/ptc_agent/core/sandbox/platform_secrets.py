@@ -28,6 +28,13 @@ logger = structlog.get_logger(__name__)
 _SECRET_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,62}$")
 _ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+# Env names that conventionally carry a credential. Deliberately narrower than
+# mcp_sanitize's redaction heuristic, which also flags long values: a match
+# here withholds a variable from the sandbox, so a non-secret must not match.
+_CREDENTIAL_ENV_RE = re.compile(
+    r"(?:^|_)(?:API_KEY|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|SECRET|TOKEN|PASSWORD)$",
+    re.IGNORECASE,
+)
 
 
 class PlatformSecretError(RuntimeError):
@@ -205,8 +212,10 @@ def platform_secrets_active(config: CoreConfig, *, kind: str | None = None) -> b
 
     Host-mode-agnostic: active whenever a capable provider has a configured
     catalog. Configuring ``sandbox.platform_secrets`` is the opt-in, so hosted
-    deployments and OSS + Daytona users alike get managed-secret injection; an
-    empty catalog leaves the sandbox on plaintext env (unchanged behavior).
+    deployments and OSS + Daytona users alike get managed-secret injection.
+    With an empty catalog nothing is managed: self-hosted, built-in env stays
+    plaintext; hosted, credential-named built-in env is withheld instead
+    (``platform_secrets_required``).
     ``kind`` asks for one computer's provider rather than the deployment's.
     """
 
@@ -232,10 +241,12 @@ def provider_credentials_configured(config: CoreConfig, kind: str) -> bool:
 def platform_secrets_required(
     config: CoreConfig, *, kind: str | None = None, host_mode: str | None = None
 ) -> bool:
-    """Whether managed secrets are mandatory (the hosted fail-closed guard).
+    """Whether a platform credential may reach this sandbox only as a managed Secret.
 
-    Hosted platform mode on a capable provider must inject managed secrets: an
-    empty catalog there is a deploy error, never a silent plaintext fallback.
+    Hosted mode on a capable provider: a built-in env var named like a
+    credential reaches the sandbox only through a catalog binding, and is
+    withheld otherwise. The catalog may be empty, which just means no built-in
+    needs one; the guard is the withholding, not the catalog's presence.
     ``kind`` asks for one computer's provider rather than the deployment's.
     """
 
@@ -280,25 +291,18 @@ def resolve_platform_secrets(
     """Resolve the catalog, failing closed once managed secrets are in play.
 
     Active when a capable provider has a configured catalog (hosted, or an
-    opt-in OSS + Daytona deployment). A hosted capable deployment that ships an
-    empty catalog fails closed rather than silently injecting plaintext, and
-    so does a hosted catalog on a kind that cannot hold Secrets.
+    opt-in OSS + Daytona deployment). An empty catalog resolves to nothing in
+    any mode. A hosted catalog on a kind that cannot hold Secrets fails closed.
     ``kind`` resolves names for that provider instead of the deployment's.
     """
 
     # The catalog lives in deployment config (sandbox.platform_secrets in
-    # agent_config.yaml), never code — the OSS repo ships the mechanism, each
-    # deployment declares its vendors. Empty is the opt-out (plaintext) except
-    # in hosted capable mode, where it is a deploy error.
+    # agent_config.yaml), never code: the OSS repo ships the mechanism, each
+    # deployment declares its vendors. Hosted mode does not need one; a
+    # credential no entry covers is withheld from the sandbox instead.
     catalog = tuple(config.sandbox.platform_secrets)
     provider = kind or config.sandbox.provider
     if not catalog:
-        if platform_secrets_required(config, kind=provider, host_mode=host_mode):
-            raise PlatformSecretConfigurationError(
-                "sandbox.platform_secrets is empty: hosted mode on "
-                f"{provider} requires the platform-secret catalog "
-                "in agent_config.yaml"
-            )
         return ()
     provider_cls = _provider_class(provider)
     namespace_var = provider_cls.platform_secret_namespace_env if provider_cls else None
@@ -347,6 +351,11 @@ def resolve_platform_secrets(
             )
         )
     return tuple(resolved)
+
+
+def is_credential_env_name(name: str) -> bool:
+    """Whether an env var's name says it holds a credential."""
+    return bool(_CREDENTIAL_ENV_RE.search(name))
 
 
 def build_platform_secret_bindings(
