@@ -47,6 +47,13 @@ _SOURCE = "fmp"
 _CLIENT_UNAVAILABLE = "FMP client is unavailable"
 _UPSTREAM_FAILED = "FMP request failed"
 
+# The tool documents these two names, but FMP serves the series under others and
+# answers the documented ones with a non-JSON error. Every other name is FMP's own.
+_FMP_INDICATOR_NAMES = {
+    "federalFundsRate": "federalFunds",
+    "nonFarmPayrolls": "totalNonfarmPayroll",
+}
+
 
 _OUT_GET_ECONOMIC_INDICATOR = output_model(
     "GetEconomicIndicatorOut",
@@ -87,7 +94,9 @@ async def get_economic_indicator(
         return make_error("client_unavailable", _CLIENT_UNAVAILABLE, indicator=name)
 
     try:
-        data = await client.get_economic_indicators(name, limit=limit)
+        data = await client.get_economic_indicators(
+            _FMP_INDICATOR_NAMES.get(name, name), limit=limit
+        )
 
         return make_response(
             data or [],

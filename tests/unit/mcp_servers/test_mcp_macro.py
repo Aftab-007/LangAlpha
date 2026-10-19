@@ -66,6 +66,40 @@ class TestGetEconomicIndicator:
         client.get_economic_indicators.assert_awaited_once_with("CPI", limit=10)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "documented, fmp",
+        [
+            ("federalFundsRate", "federalFunds"),
+            ("nonFarmPayrolls", "totalNonfarmPayroll"),
+        ],
+    )
+    async def test_documented_name_reaches_fmp_under_its_fmp_name(self, documented, fmp):
+        from plugins.langalpha_market_data.macro_mcp_server import get_economic_indicator
+
+        client = _make_fmp_client()
+        with patch(f"{_MOD}.get_fmp_client", return_value=client):
+            result = await get_economic_indicator(documented)
+
+        client.get_economic_indicators.assert_awaited_once_with(fmp, limit=50)
+        assert_ok_envelope(result, count=2, source="fmp")
+        assert result["indicator"] == documented
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "name",
+        ["GDP", "CPI", "unemploymentRate", "inflationRate", "retailSales", "consumerSentiment", "federalFunds"],
+    )
+    async def test_every_other_name_reaches_fmp_as_given(self, name):
+        from plugins.langalpha_market_data.macro_mcp_server import get_economic_indicator
+
+        client = _make_fmp_client()
+        with patch(f"{_MOD}.get_fmp_client", return_value=client):
+            result = await get_economic_indicator(name, limit=7)
+
+        client.get_economic_indicators.assert_awaited_once_with(name, limit=7)
+        assert result["indicator"] == name
+
+    @pytest.mark.asyncio
     async def test_fmp_init_error(self):
         from plugins.langalpha_market_data.macro_mcp_server import get_economic_indicator
 
