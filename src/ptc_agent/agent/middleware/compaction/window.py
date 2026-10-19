@@ -78,8 +78,8 @@ def trim(
 
     The recorded offloads shrink to the calls still in the list, as a
     compaction drops the ones it summarized. Ids are stamped on the kept
-    messages here, since an ``Overwrite`` skips the stamping a write through
-    the reducer gets.
+    messages here because langgraph 1.2.11 left an ``Overwrite``'s messages
+    unstamped; later releases stamp them too.
     """
     messages = state["messages"]
     trimmed, kept = messages[:cut], ensure_message_ids(list(messages[cut:]))

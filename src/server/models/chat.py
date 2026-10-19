@@ -36,8 +36,8 @@ RequestKey = Annotated[str, AfterValidator(_uuid_text)]
 #   2. langgraph's ``ensure_message_ids`` must STAMP it at ``put_writes`` (role in
 #      langgraph's ``_MESSAGE_ROLES``). An accepted-but-unstamped role persists
 #      id-less; the hard-stop checkpoint flush / offload write the full list back
-#      via ``aupdate_state`` (which does NOT re-run ``ensure_message_ids``), and the
-#      non-minting reducer can't dedup an id-less message, so it DUPLICATES.
+#      via ``aupdate_state``, and the non-minting reducer can't dedup an id-less
+#      message against that copy, so it DUPLICATES.
 #
 # ``developer`` clears bar 1 (``convert_to_messages`` maps it to SystemMessage) but
 # FAILS bar 2 (not in langgraph's ``_MESSAGE_ROLES``), so it is excluded — clients

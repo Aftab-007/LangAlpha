@@ -3,12 +3,13 @@ DeltaChannel the way production's did.
 
 A crossed thread starts with turns under a plain ``add_messages`` state, each
 fanning out to parallel tool nodes, which that reducer applied in node order.
-Its first turn under DeltaChannel loaded by replaying the stored writes from
-the root, which orders a checkpoint's writes by task id, so the tool results
-of each legacy turn came back in another order and stayed in it. Turn slices
-are cut from the legacy lists and keep the original order, so the window's
-coverage check never holds the head. Six parallel tools make a turn whose
-task ids happen to sort in node order one in 720, and there are two.
+Its first turns under DeltaChannel run on the saver production crossed on,
+which loaded by replaying the stored writes from the root and ordered a
+checkpoint's writes by task id, so the tool results of each legacy turn came
+back in another order, which the rollout then stored as a snapshot. Turn
+slices are cut from the legacy lists and keep the original order, so the
+window's coverage check never holds the head. Six parallel tools make a turn
+whose task ids happen to sort in node order one in 720, and there are two.
 
 Twin threads are built from the same script, one repaired and one left
 crossed, and run the same turns after it through compaction with the window
@@ -18,7 +19,8 @@ on: what the model and the summary model are sent must not tell them apart.
 from __future__ import annotations
 
 import uuid
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
+from contextlib import asynccontextmanager, contextmanager
 from types import SimpleNamespace
 from typing import Annotated, Any, TypedDict
 
@@ -32,7 +34,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from psycopg.rows import dict_row, tuple_row
 
-import src.server.utils.checkpointer  # noqa: F401  (installs the walk guard)
 from ptc_agent.agent.main_state import MainAgentState
 from ptc_agent.agent.middleware.compaction.compact import Summarizer
 from ptc_agent.agent.middleware.compaction.middleware import CompactionMiddleware
@@ -203,10 +204,61 @@ async def _project(thread_id: str) -> None:
     await project_turns(rows, tip, last_n_turns=10**6)
 
 
+@contextmanager
+def _saver_production_crossed_on() -> Iterator[None]:
+    """Delta loads as langgraph-checkpoint-postgres before 3.2.0 made them: a
+    walk stopped only where ``channel_values`` held the channel, so it passed
+    the legacy lists to the root, and a checkpoint's writes replayed by task id."""
+    from langgraph.checkpoint.postgres import base
+
+    saver = base.BasePostgresSaver
+    advance, sort_key = saver.__dict__["_try_advance_walks"], base.writes_sort_key
+
+    def flagged_only(target, channels, parent_of, versions, _blobs, inline, *rest):
+        flags = [{cid: value is not None for cid, value in inline[i].items()} for i in range(len(channels))]
+        return advance.__func__(target, channels, parent_of, versions, flags, inline, *rest)
+
+    saver._try_advance_walks = staticmethod(flagged_only)
+    base.writes_sort_key = lambda task_path, task_id="", idx=0: (task_id, idx)
+    try:
+        yield
+    finally:
+        saver._try_advance_walks, base.writes_sort_key = advance, sort_key
+
+
+async def _seed_the_crossing(test_db_uri: str, thread_id: str) -> None:
+    """What ``--keep all`` stored before langgraph-checkpoint-postgres 3.2.0:
+    the crossed load of the first checkpoint past the stored lists, as its
+    snapshot, so the crossing outlives the saver that made it."""
+    from langgraph.checkpoint.serde.types import _DeltaSnapshot
+
+    from scripts.ops._delta_loads import Loader, read_tree
+
+    async with await psycopg.AsyncConnection.connect(test_db_uri, autocommit=True) as conn:
+        tree, stored = await read_tree(conn, thread_id)
+        first = next(
+            cid for cid in tree.order if tree.nodes[cid].version not in (None, *stored)
+        )
+        loader = Loader(conn)
+        value, _ = await loader.channel_value(thread_id, first)
+        typed = loader.serde.dumps_typed(_DeltaSnapshot(value))
+        await conn.execute(
+            "INSERT INTO checkpoint_blobs (thread_id, checkpoint_ns, channel, version, type, blob)"
+            " VALUES (%s, '', 'messages', %s, %s, %s)",
+            (thread_id, tree.nodes[first].version, *typed),
+        )
+        await conn.execute(
+            "UPDATE checkpoints"
+            " SET checkpoint = jsonb_set(checkpoint, '{channel_values,messages}', 'true')"
+            " WHERE thread_id = %s AND checkpoint_ns = '' AND checkpoint_id = %s",
+            (thread_id, first),
+        )
+
+
 async def _crossed(saver, test_db_uri: str, workspace_id: str) -> str:
-    """Legacy turns, then turns under DeltaChannel compacting as they go, the
-    first of which crossed; then the rollout before the repair: the stored
-    lists kept as seeds, and every turn's slice stored."""
+    """Legacy turns, then turns under DeltaChannel compacting as they go on the
+    saver production crossed on; then the rollout before the repair: the
+    crossing seeded, the stored lists flagged, and every turn's slice stored."""
     from src.server.database.conversation import create_thread
 
     thread_id = str(uuid.uuid4())
@@ -220,10 +272,12 @@ async def _crossed(saver, test_db_uri: str, workspace_id: str) -> str:
     for n in range(1, LEGACY_TURNS + 1):
         await _turn(saver, thread_id, legacy, f"Question {n}")
     model, summary = h.RecordingModel(), h.SummaryModel()
-    for n in range(LEGACY_TURNS + 1, LEGACY_TURNS + DELTA_TURNS + 1):
-        model.script = [AIMessage(f"Answer {n}.", id=f"ai-{n}-end")]
-        graph = _agent(saver, thread_id, model, summary, threshold=THRESHOLD)
-        tip = await _turn(saver, thread_id, graph, f"Question {n}")
+    with _saver_production_crossed_on():
+        for n in range(LEGACY_TURNS + 1, LEGACY_TURNS + DELTA_TURNS + 1):
+            model.script = [AIMessage(f"Answer {n}.", id=f"ai-{n}-end")]
+            graph = _agent(saver, thread_id, model, summary, threshold=THRESHOLD)
+            tip = await _turn(saver, thread_id, graph, f"Question {n}")
+        await _seed_the_crossing(test_db_uri, thread_id)
     assert summary.requests, "the delta turns never compacted"
     thinned = await thinning.thin_thread(
         test_db_uri, thread_id, tip, Mode.APPLY, thinning.Options(keep_all=True, verify_all=True)
@@ -489,18 +543,20 @@ async def test_a_thread_is_refused_while_a_run_is_live_or_a_slice_is_missing(
 
 
 async def test_a_kept_message_stored_without_an_id_is_written_with_the_planned_one(
-    saver, test_db_uri, seed_workspace
+    saver, test_db_uri, seed_workspace, monkeypatch
 ):
-    """A message injected through ``aupdate_state`` is stored without an id,
-    and the trim stamps one on every kept message: the repair writes the id
-    its plan checked, not a second fresh one."""
+    """A message injected through ``aupdate_state`` before langgraph 1.2.16 was
+    stored without an id, and the trim stamps one on every kept message: the
+    repair writes the id its plan checked, not a second fresh one."""
     from src.server.services.history.reader import CheckpointHistoryReader
     from src.server.utils.checkpoint_helpers import update_at_commit
 
     thread_id = await _crossed(saver, test_db_uri, str(seed_workspace["workspace_id"]))
     graph = _agent(saver, thread_id, h.RecordingModel(), h.SummaryModel(), threshold=10**6)
     tip = await _newest(saver, thread_id)
-    assert await update_at_commit(graph, thread_id, tip, {"messages": [HumanMessage("A note.")]})
+    with monkeypatch.context() as m:
+        m.setattr("langgraph.pregel.main.ensure_message_ids", lambda channels, writes: None)
+        assert await update_at_commit(graph, thread_id, tip, {"messages": [HumanMessage("A note.")]})
     reader = CheckpointHistoryReader.get_instance()
     assert (await reader.aget_state(thread_id)).values["messages"][-1].id is None
 

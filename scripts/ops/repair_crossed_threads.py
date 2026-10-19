@@ -3,14 +3,15 @@
 The sliding window trims a thread's checkpoint only once the server's turn
 slices, read in branch order, hold exactly the messages it would drop
 (``compaction.window``, ``history.window.runs_held``). A thread stored before
-DeltaChannel whose first delta turn ran before ``thin_message_snapshots.py
---keep all`` seeded it "crossed": that turn's load replayed the old writes
-from the root, which orders parallel tool results by task id rather than the
-order they were applied and gives id-less user inputs new ids, and froze that
-order into the checkpoint. The slices, cut from the stored lists, keep the
-order the thread was written in. The same messages, in another order, hash to
-another digest, so the window refuses the thread at every summary and its
-checkpoint keeps growing.
+DeltaChannel whose first delta turn ran while walks stopped only at a flagged
+snapshot (before langgraph-checkpoint-postgres 3.2.0, and before
+``thin_message_snapshots.py --keep all`` flagged its lists) "crossed": that
+turn's load replayed the old writes from the root, which orders parallel tool
+results by task id rather than the order they were applied and gives id-less
+user inputs new ids, and froze that order into the checkpoint. The slices,
+cut from the stored lists, keep the order the thread was written in. The same
+messages, in another order, hash to another digest, so the window refuses the
+thread at every summary and its checkpoint keeps growing.
 
 The model never reads that order. A summary stands in for everything before
 its boundary, the turns there are numbered by how many there are, and the
@@ -65,7 +66,7 @@ summary's run to trim. Threads that are not crossed are reported and never
 written. Prints ids, counts and booleans, never message content.
 
 Usage (from the repo root, inside the backend container), after
-``thin_message_snapshots.py --keep all`` and ``backfill_turn_slices.py``:
+``backfill_turn_slices.py``:
     uv run python scripts/ops/repair_crossed_threads.py                  # detect, plan
     uv run python scripts/ops/repair_crossed_threads.py --rehearse       # write, verify, roll back
     uv run python scripts/ops/repair_crossed_threads.py --apply          # write, verify, commit

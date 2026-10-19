@@ -10,7 +10,6 @@ from __future__ import annotations
 import pytest
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-import src.server.utils.checkpointer  # noqa: F401  (installs the walk guard)
 from tests.unit.middleware.compaction import window_harness as h
 from tests.unit.server.services.history.replay_builders import SliceStore, _cache_probe
 from tests.unit.server.services.history.test_window import Thread, _page
