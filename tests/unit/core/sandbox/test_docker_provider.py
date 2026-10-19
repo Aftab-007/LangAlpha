@@ -24,6 +24,7 @@ import os
 import shlex
 import subprocess
 import tarfile
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -466,6 +467,24 @@ class TestDockerRuntimeTarUpload:
         # One lookup for the runtime's whole life, not one per upload.
         cmds = [" ".join(c.kwargs["cmd"]) for c in container.exec.call_args_list]
         assert sum("id -u" in c for c in cmds) == 1
+
+    @pytest.mark.asyncio
+    async def test_uploads_carry_the_upload_time(self, runtime, container):
+        """Extraction applies each entry's mtime, and ``TarInfo`` defaults it to 0.
+
+        At the epoch, a same-size rewrite keeps the (mtime, size) stamp the
+        sandbox detects changes by, so a rotated secret or a re-uploaded file
+        reads as unchanged. The PAX record keeps the sub-second part, which is
+        what separates two rewrites within one second."""
+        before = time.time()
+        await runtime.upload_file(b"x", "/home/workspace/a.txt")
+        await runtime.upload_files([(b"y", "/home/workspace/b.txt")])
+        after = time.time()
+        for call in container.put_archive.call_args_list:
+            with tarfile.open(fileobj=io.BytesIO(call[0][1]), mode="r") as tar:
+                for m in tar.getmembers():
+                    assert "mtime" in m.pax_headers
+                    assert before <= m.mtime <= after
 
     @pytest.mark.asyncio
     async def test_an_unreadable_uid_falls_back_to_root(self, runtime, container):

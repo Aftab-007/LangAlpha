@@ -17,6 +17,7 @@ import io
 import os
 import shlex
 import tarfile
+import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
@@ -347,20 +348,8 @@ class DockerRuntime(ExecSessionRuntime):
             )
             await self.exec(mkdir_cmd, timeout=30)
 
-        # Build one tar archive with full absolute paths.
-        buf = io.BytesIO()
         uid, gid = await self._owner_ids()
-        with tarfile.open(fileobj=buf, mode="w") as tar:
-            for data, dest_path in prepared:
-                tar_name = dest_path.lstrip("/")
-                info = tarfile.TarInfo(name=tar_name)
-                info.size = len(data)
-                info.mode = 0o644
-                info.uid, info.gid = uid, gid
-                tar.addfile(info, io.BytesIO(data))
-        buf.seek(0)
-
-        await self._container.put_archive("/", buf.read())
+        await self._container.put_archive("/", _upload_tar(prepared, uid, gid))
 
     async def download_file(self, path: str) -> bytes:
         if self._dev_mode and self._host_work_dir:
@@ -595,17 +584,9 @@ class DockerRuntime(ExecSessionRuntime):
             await self.exec(f"mkdir -p {shlex.quote(parent)}", timeout=10)
 
         uid, gid = await self._owner_ids()
-        buf = io.BytesIO()
-        tar_name = dest_path.lstrip("/")
-        with tarfile.open(fileobj=buf, mode="w") as tar:
-            info = tarfile.TarInfo(name=tar_name)
-            info.size = len(content)
-            info.mode = 0o644
-            info.uid, info.gid = uid, gid
-            tar.addfile(info, io.BytesIO(content))
-        buf.seek(0)
-
-        await self._container.put_archive("/", buf.read())
+        await self._container.put_archive(
+            "/", _upload_tar([(content, dest_path)], uid, gid)
+        )
 
     async def _exec_download(self, path: str) -> bytes:
         """Download a file via exec + base64 (avoids Docker archive API issues)."""
@@ -1137,6 +1118,27 @@ def _read_source(source: bytes | str) -> bytes:
         with open(source, "rb") as f:
             return f.read()
     return source
+
+
+def _upload_tar(entries: Sequence[tuple[bytes, str]], uid: int, gid: int) -> bytes:
+    """A ``put_archive`` tar of ``(content, absolute path)`` stamped with now.
+
+    Extraction applies each entry's mtime, which ``TarInfo`` leaves at 0, so
+    every upload landed at the epoch and a same-size rewrite changed neither
+    half of the ``(mtime, size)`` stamp the sandbox detects changes by. A float
+    mtime is written as a PAX record, which keeps its sub-second part.
+    """
+    now = time.time()
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for data, dest_path in entries:
+            info = tarfile.TarInfo(name=dest_path.lstrip("/"))
+            info.size = len(data)
+            info.mode = 0o644
+            info.uid, info.gid = uid, gid
+            info.mtime = now
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
 
 
 def _shell_escape(value: str) -> str:
