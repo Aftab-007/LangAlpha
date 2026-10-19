@@ -11,13 +11,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import date, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from ..market_data_provider import is_us_symbol
-from ..normalize import normalize_bars
+from ..normalize import normalize_bars, symbol_timezone
 from .pagination import follow_cursor, paginate_cursor, unique_by_time
 from .v2_routes import GinlixDataV2Routes, path_segment
 
@@ -64,28 +65,67 @@ def split_date_time(value: str | None) -> tuple[str | None, str | None]:
     return value, None
 
 
+_BAR_LABEL = "%Y-%m-%d %H:%M:%S"
+
+
+def _day(value: str | None) -> date | None:
+    # The day an FMP daily read takes from a bound: its first ten characters.
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _bound(value: str | None, zone: tzinfo) -> datetime | None:
+    # A bound that does not read is None, and the read falls back: this tier
+    # refuses nothing, the FMP read that follows does, in the hosted words.
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(zone).replace(tzinfo=None)
+    return moment
+
+
+def intraday_bounds(
+    start_date: str | None, end_date: str | None, zone: tzinfo
+) -> tuple[datetime | None, datetime | None]:
+    """An intraday window as wall-clock bounds in *zone*, start inclusive, stop exclusive.
+
+    Read as the FMP reads read it (``mcp_servers._dates.intraday_window``): a
+    bare day spans the whole day and a time counts to the second.
+    """
+    start = _bound(start_date, zone)
+    stop = _bound(end_date, zone)
+    if stop is not None:
+        bare = len(end_date.strip()) <= 10
+        stop += timedelta(days=1) if bare else timedelta(seconds=1)
+    return start, stop
+
+
 def filter_bars_by_time(
     bars: list[dict],
-    start_time: str | None,
-    end_time: str | None,
+    start: datetime | None,
+    stop: datetime | None,
 ) -> list[dict]:
-    """Filter normalized bars by time-of-day.  No-op if both times are None."""
-    if not start_time and not end_time:
+    """Keep the normalized bars that open in ``[start, stop)``. No-op if both are None."""
+    if start is None and stop is None:
         return bars
     filtered = []
     for bar in bars:
-        bar_date = bar.get("date", "")
-        bar_time = ""
-        if "T" in bar_date:
-            bar_time = bar_date.split("T", 1)[1][:5]
-        elif " " in bar_date:
-            bar_time = bar_date.split(" ", 1)[1][:5]
-        if not bar_time:
+        try:
+            opened = datetime.strptime(bar.get("date", ""), _BAR_LABEL)
+        except (TypeError, ValueError):
             filtered.append(bar)
             continue
-        if start_time and bar_time < start_time[:5]:
+        if start is not None and opened < start:
             continue
-        if end_time and bar_time > end_time[:5]:
+        if stop is not None and opened >= stop:
             continue
         filtered.append(bar)
     return filtered
@@ -262,7 +302,8 @@ class GinlixMCPClient(GinlixDataV2Routes):
             ``list[dict]``: Normalized OHLCV bars on success.
             ``dict``: Error dict on HTTP/validation error.
             ``None``: Not available (non-US symbol, no client, unsupported
-            interval, network error) — caller should fall back.
+            interval, a window it cannot read or one that ends before it
+            starts, network error) — caller should fall back.
         """
         if not is_us_symbol(symbol):
             return None
@@ -277,15 +318,21 @@ class GinlixMCPClient(GinlixDataV2Routes):
         if not ginlix_interval:
             return None
 
-        _, start_time = split_date_time(start_date)
-        _, end_time = split_date_time(end_date)
-        from_day, _ = split_date_time(start_date)
-        to_day, _ = split_date_time(end_date)
-
-        if not from_day or not to_day:
-            return None
-
         intraday = interval_lower not in DAILY_INTERVALS
+        if intraday:
+            start, stop = intraday_bounds(start_date, end_date, symbol_timezone(symbol))
+            if start is None or stop is None or start >= stop:
+                return None
+            # The route takes days in the bars' zone, which a bound with an
+            # offset need not share.
+            from_day = start.date().isoformat()
+            to_day = (stop - timedelta(microseconds=1)).date().isoformat()
+        else:
+            first, last = _day(start_date), _day(end_date)
+            if first is None or last is None or first > last:
+                return None
+            from_day, to_day = first.isoformat(), last.isoformat()
+
         multiplier, timespan = ginlix_interval.split("/")
         params: dict[str, Any] = {
             "multiplier": multiplier,
@@ -301,7 +348,7 @@ class GinlixMCPClient(GinlixDataV2Routes):
             )
             normalized = normalize_bars(all_bars, symbol, intraday=intraday)
             if intraday:
-                normalized = filter_bars_by_time(normalized, start_time, end_time)
+                normalized = filter_bars_by_time(normalized, start, stop)
             return normalized
         except httpx.HTTPStatusError as e:
             error = self._error_dict("Stock data fetch", e)

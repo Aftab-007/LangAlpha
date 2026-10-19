@@ -120,6 +120,34 @@ class TestGetEconomicCalendar:
         assert result["to_date"] is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool, fetch",
+    [
+        ("get_economic_calendar", "get_economic_calendar"),
+        ("get_treasury_rates", "get_treasury_rates"),
+        ("get_earnings_calendar", "get_earnings_calendar_by_date"),
+    ],
+)
+@pytest.mark.parametrize(
+    "lo, hi, detail",
+    [
+        ("2026-10-16", "2026-10-09", "from is after to"),
+        ("not-a-date", "2026-10-16", "from must be an ISO date, not 'not-a-date'"),
+    ],
+)
+async def test_calendar_bounds_refused_before_fmp(tool, fetch, lo, hi, detail):
+    import plugins.langalpha_market_data.macro_mcp_server as mod
+
+    client = _make_fmp_client()
+    with patch(f"{_MOD}.get_fmp_client", return_value=client):
+        result = await getattr(mod, tool)(from_date=lo, to_date=hi)
+
+    assert_error(result, "invalid_argument")
+    assert result["detail"] == detail
+    getattr(client, fetch).assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # get_treasury_rates
 # ---------------------------------------------------------------------------

@@ -69,6 +69,12 @@ except ModuleNotFoundError:  # imported as a package module (tests)
         normalize_interval,
     )
 
+from mcp_servers._dates import (
+    NEW_YORK,
+    commodity_daily_days,
+    daily_days,
+    intraday_window,
+)
 from mcp_servers._schemas import (
     OBJECT,
     RECORDS,
@@ -294,12 +300,18 @@ async def _fetch_stock_bars(
         )
 
     scale = minor_unit_scale(legacy)
+    window = None
     try:
+        # A bound FMP would drop or a reversed window is refused here, as the
+        # hosted tools refuse it (mcp_servers/_dates.py). The ginlix-data tier
+        # above sends both on to this read rather than answering them.
         if canonical in DAILY_INTERVALS:
-            rows = await client.get_stock_price(legacy, from_date=start_date, to_date=end_date)
+            lo, hi = daily_days(start_date, end_date)
+            rows = await client.get_stock_price(legacy, from_date=lo, to_date=hi)
         else:
+            window = intraday_window(start_date, end_date, timezone)
             rows = await client.get_intraday_chart(
-                legacy, canonical, from_date=start_date, to_date=end_date
+                legacy, canonical, from_date=window.from_day, to_date=window.to_day
             )
     except Exception as e:  # noqa: BLE001
         return None, refused or error_from_exception(
@@ -310,6 +322,8 @@ async def _fetch_stock_bars(
         return None, refused or make_error(
             "upstream_error", "FMP fetch failed.", symbol=display, interval=canonical
         )
+    if window is not None:
+        rows = window.rows(rows or [])
 
     data = _display_rows(rows or [], legacy, intraday=intraday, scale=scale)
     if refused and not data:
@@ -454,30 +468,44 @@ async def get_asset_data(
             symbol=display,
         )
 
+    window = None
     try:
+        # Bounds are read as the hosted tools read them (mcp_servers/_dates.py).
         if canonical in DAILY_INTERVALS:
             if at == "commodity":
-                rows = await client.get_commodity_price(symbol, from_date=from_date, to_date=to_date)
-            elif at == "crypto":
-                rows = await client.get_crypto_price(symbol, from_date=from_date, to_date=to_date)
+                lo, hi = commodity_daily_days(from_date, to_date)
+                rows = await client.get_commodity_price(symbol, from_date=lo, to_date=hi)
             else:
-                rows = await client.get_forex_price(symbol, from_date=from_date, to_date=to_date)
+                lo, hi = daily_days(from_date, to_date)
+                if at == "crypto":
+                    rows = await client.get_crypto_price(symbol, from_date=lo, to_date=hi)
+                else:
+                    rows = await client.get_forex_price(symbol, from_date=lo, to_date=hi)
         elif at == "commodity":
+            # FMP labels a commodity in New York time, the zone its envelope
+            # states, so its labels stand.
+            window = intraday_window(from_date, to_date, NEW_YORK)
             rows = await client.get_commodity_intraday_chart(
-                symbol, canonical, from_date=from_date, to_date=to_date
-            )
-        elif at == "crypto":
-            rows = await client.get_crypto_intraday_chart(
-                symbol, canonical, from_date=from_date, to_date=to_date
+                symbol, canonical, from_date=window.from_day, to_date=window.to_day
             )
         else:
-            rows = await client.get_forex_intraday_chart(
-                symbol, canonical, from_date=from_date, to_date=to_date
-            )
+            # FMP labels a pair in New York time too, but its envelope states
+            # UTC: the window is read there and the labels rewritten into it.
+            window = intraday_window(from_date, to_date, timezone, labels=NEW_YORK)
+            if at == "crypto":
+                rows = await client.get_crypto_intraday_chart(
+                    symbol, canonical, from_date=window.from_day, to_date=window.to_day
+                )
+            else:
+                rows = await client.get_forex_intraday_chart(
+                    symbol, canonical, from_date=window.from_day, to_date=window.to_day
+                )
     except Exception as e:  # noqa: BLE001
         return error_from_exception(
             e, "FMP fetch failed.", symbol=display, interval=canonical
         )
+    if window is not None and isinstance(rows, list):
+        rows = window.rows(rows)
 
     data = _display_rows(rows or [], symbol, intraday=intraday)
     return make_response(

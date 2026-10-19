@@ -29,6 +29,7 @@ from typing import Optional
 
 
 from data_client.fmp import get_fmp_client, fmp_lifespan
+from mcp_servers._dates import calendar_days
 from mcp_servers._envelope import error_from_exception, make_error, make_response
 from mcp_servers._schemas import (
     NULLABLE_STR,
@@ -139,7 +140,8 @@ async def get_economic_calendar(
         return make_error("client_unavailable", _CLIENT_UNAVAILABLE)
 
     try:
-        data = await client.get_economic_calendar(from_date=from_date, to_date=to_date)
+        lo, hi = calendar_days(from_date, to_date)
+        data = await client.get_economic_calendar(from_date=lo, to_date=hi)
 
         return make_response(
             data or [],
@@ -194,7 +196,8 @@ async def get_treasury_rates(
         return make_error("client_unavailable", _CLIENT_UNAVAILABLE)
 
     try:
-        data = await client.get_treasury_rates(from_date=from_date, to_date=to_date)
+        lo, hi = calendar_days(from_date, to_date)
+        data = await client.get_treasury_rates(from_date=lo, to_date=hi)
 
         return make_response(
             data or [],
@@ -280,7 +283,8 @@ async def get_earnings_calendar(
         return make_error("client_unavailable", _CLIENT_UNAVAILABLE)
 
     try:
-        data = await client.get_earnings_calendar_by_date(from_date=from_date, to_date=to_date)
+        lo, hi = calendar_days(from_date, to_date)
+        data = await client.get_earnings_calendar_by_date(from_date=lo, to_date=hi)
 
         return make_response(
             data or [],
