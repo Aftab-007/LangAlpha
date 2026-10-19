@@ -357,6 +357,12 @@ class PTCSandbox:
         for server in self._builtin_servers():
             if not server.enabled:
                 continue
+            # Only a stdio server has a process here to inherit its env. A
+            # remote one keeps a bundled base's env when config switches its
+            # transport, and injecting that would hand its vendor key to
+            # every sandbox the remote server exists to keep it out of.
+            if server.transport != "stdio":
+                continue
             if hasattr(server, "env") and server.env:
                 for key, value in server.env.items():
                     if key == "INTERNAL_SERVICE_TOKEN":

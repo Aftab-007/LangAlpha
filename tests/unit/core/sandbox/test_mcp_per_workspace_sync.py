@@ -361,6 +361,35 @@ class TestManifestRegression:
         assert "user_mcp_config" in source_versions
 
     @pytest.mark.asyncio
+    async def test_remote_builtin_edits_move_tool_modules_but_headers_do_not(self):
+        """A remote built-in ships no server file and can keep its tools, so
+        only its own digest tells a warm sandbox that the URL or ``auth`` its
+        generated client dials has changed. Its headers are host-side
+        discovery credentials the client never carries."""
+
+        async def tool_modules(**fields):
+            server = {
+                "transport": "http",
+                "url": "https://data.example/mcp",
+                "auth": "data_token",
+                "headers": {"Authorization": "Bearer one"},
+                **fields,
+            }
+            sandbox = _make_sandbox(_make_config(servers=[_builtin("price", **server)]))
+            sandbox.mcp_registry = MagicMock()
+            sandbox.mcp_registry.get_all_tools = MagicMock(return_value={})
+            manifest = await sandbox._compute_sandbox_manifest()
+            return manifest["modules"]["tool_modules"]
+
+        base = await tool_modules()
+        assert "builtin_remote_config" in base["source_versions"]
+        assert (await tool_modules(url="https://other.example/mcp"))["version"] != base["version"]
+        assert (await tool_modules(auth=None))["version"] != base["version"]
+        assert (
+            await tool_modules(headers={"Authorization": "Bearer two"})
+        )["version"] == base["version"]
+
+    @pytest.mark.asyncio
     async def test_manifest_ships_shared_runtime_siblings_with_server_files(self):
         """When a builtin ``uv run python`` server file ships, the shared
         runtime siblings (_bootstrap.py, _envelope.py) are hashed with it —
@@ -1148,6 +1177,25 @@ class TestServerSplit:
         env = sandbox._build_sandbox_env_vars({})
         assert env.get("BUILTIN_KEY") == "literal-val"
         assert "USER_KEY" not in env
+
+    def test_build_env_vars_skips_a_remote_builtins_env(self, monkeypatch):
+        """Config that switches a bundled stdio server to http keeps the base's
+        env; only a stdio server has a process here to inherit it."""
+        monkeypatch.setattr("src.config.env.HOST_MODE", "oss")
+        config = _make_config(
+            servers=[
+                _builtin("local", env={"LOCAL_KEY": "literal-val"}),
+                _builtin(
+                    "remote",
+                    transport="http",
+                    url="https://data.example/mcp",
+                    env={"VENDOR_KEY": "literal-val"},
+                ),
+            ]
+        )
+        env = _make_sandbox(config)._build_sandbox_env_vars({})
+        assert env.get("LOCAL_KEY") == "literal-val"
+        assert "VENDOR_KEY" not in env
 
 
 # ---------------------------------------------------------------------------

@@ -201,6 +201,33 @@ def _compute_tool_schema_hash(sandbox: "PTCSandbox") -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
+def _compute_builtin_remote_config_hash(sandbox: "PTCSandbox") -> str:
+    """Hash what a remote built-in's generated entry carries, never its headers.
+
+    A built-in reached by URL ships no server file and its tools can be
+    unchanged, so nothing else moves when its URL or ``auth`` is edited, and a
+    warm sandbox would keep dialing the old endpoint. Headers stay out: they are
+    host-side discovery credentials the entry never carries. Returns "" when
+    there are none, so a stdio-only workspace's manifest is unchanged.
+    """
+    parts = [
+        json.dumps(
+            {
+                "name": server.name,
+                "transport": server.transport,
+                "url": server.url or "",
+                "auth": getattr(server, "auth", None),
+            },
+            sort_keys=True,
+        )
+        for server in sorted(sandbox._builtin_servers(), key=lambda s: s.name)
+        if server.enabled and server.transport != "stdio"
+    ]
+    if not parts:
+        return ""
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
 def _compute_user_mcp_config_hash(sandbox: "PTCSandbox") -> str:
     """Hash untrusted (non-builtin) server CONFIG, never secrets.
 
@@ -445,6 +472,9 @@ async def _compute_sandbox_manifest(
     user_mcp_hash = sandbox._compute_user_mcp_config_hash()
     if user_mcp_hash:
         source_versions["user_mcp_config"] = user_mcp_hash
+    builtin_remote_hash = _compute_builtin_remote_config_hash(sandbox)
+    if builtin_remote_hash:
+        source_versions["builtin_remote_config"] = builtin_remote_hash
     tm_version = _hash_dict(source_versions)
     modules["tool_modules"] = {
         "version": tm_version,
