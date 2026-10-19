@@ -64,6 +64,39 @@ def spec_change_stale(qualifier: str = "") -> str:
     )
 
 
+# A workspace being moved to another computer starts no turn until the move is
+# done. The runner stamps heartbeat_at every MOVE_HEARTBEAT_SECONDS; one gone
+# quiet for MOVE_STALE_SECONDS lost its worker. Before its folder was set
+# aside nothing had changed, so a stale move stops fencing at once; from then
+# on it fences until recovery finishes it, since the folder is not where the
+# row says.
+MOVE_ACTIVE_PHASES = ("preparing", "backing_up", "staged", "committed")
+MOVE_EARLY_PHASES = ("preparing", "backing_up")
+MOVE_SET_ASIDE_PHASES = ("staged", "committed")
+MOVE_HEARTBEAT_SECONDS = 30
+MOVE_STALE_SECONDS = 3 * 60
+
+
+def move_stale(qualifier: str = "") -> str:
+    """Whether a move row's runner has missed the stale window, on the database clock."""
+    return (
+        f"{qualifier}heartbeat_at"
+        f" < NOW() - make_interval(secs => {MOVE_STALE_SECONDS})"
+    )
+
+
+def workspace_move_fences(workspace_column: str) -> str:
+    """Whether a move fences the workspace that ``workspace_column`` names."""
+    active = ", ".join(f"'{p}'" for p in MOVE_ACTIVE_PHASES)
+    early = ", ".join(f"'{p}'" for p in MOVE_EARLY_PHASES)
+    return (
+        "EXISTS (SELECT 1 FROM workspace_moves m"
+        f" WHERE m.workspace_id = {workspace_column}"
+        f" AND m.phase IN ({active})"
+        f" AND NOT (m.phase IN ({early}) AND {move_stale('m.')}))"
+    )
+
+
 _COMPUTER_COLUMNS = (
     "computer_id", "user_id", "kind", "provider_ref", "name", "is_primary",
     "status", "resource_tier", "is_always_on", "platform_secret_version",

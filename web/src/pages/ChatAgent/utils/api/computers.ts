@@ -13,6 +13,7 @@ import type {
   ComputerProvidersResponse,
   ComputerStorage,
   ComputersResponse,
+  MakePrimaryResponse,
   ResourceTier,
   UnsavedFile,
 } from '@/types/api';
@@ -143,6 +144,21 @@ export async function setComputerSpec(computerId: string, tier: ResourceTier): P
 export async function deleteComputer(computerId: string): Promise<void> {
   if (!computerId) throw new Error('Computer ID is required');
   await api.delete(`/api/v1/computers/${computerId}`, { timeout: COMPUTER_MUTATION_TIMEOUT_MS });
+}
+
+/**
+ * Make this the computer new workspaces and Home land on. A 200 means the
+ * flip landed now (Home was on no computer yet, or already on this one). A
+ * 202 means Home's files move first: `move` is that move, read back like any
+ * other, and the flip lands when it commits. Refusals are a 409 in the move's
+ * error shape (`moveRefusal`).
+ */
+export async function makeComputerPrimary(computerId: string): Promise<MakePrimaryResponse> {
+  if (!computerId) throw new Error('Computer ID is required');
+  const { data } = await api.post<MakePrimaryResponse>(`/api/v1/computers/${computerId}/make-primary`, null, {
+    timeout: COMPUTER_MUTATION_TIMEOUT_MS,
+  });
+  return data;
 }
 
 /** Keep the machine running (idle auto-stop off). Enabling on a stopped machine starts it. */

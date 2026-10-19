@@ -2060,3 +2060,149 @@ async def test_lazy_start_preserves_capacity_denial(client, sample_computer_dict
     assert response.status_code == 429
     assert response.json()["detail"] == "capacity exhausted"
     update.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Make primary: the flip lands now, or Home moves first and the flip with it
+# ---------------------------------------------------------------------------
+
+
+def _home_move(**overrides):
+    from datetime import datetime, timezone
+
+    from src.server.database.home_workspace import get_home_workspace_id
+
+    row = {
+        "move_id": "44444444-4444-4444-8444-444444444444",
+        "workspace_id": get_home_workspace_id(USER),
+        "source_computer_id": "55555555-5555-4555-8555-555555555555",
+        "target_computer_id": COMPUTER_ID,
+        "make_primary": True,
+        "phase": "preparing",
+        "error": None,
+        "stale": False,
+        "created_at": datetime.now(timezone.utc),
+        "committed_at": None,
+        "finished_at": None,
+    }
+    row.update(overrides)
+    return row
+
+
+@pytest.fixture
+def make_primary_patches(computer, mock_computer_manager):
+    """The owner's computer, the flip, the Home claim and the background runner."""
+    from types import SimpleNamespace
+
+    mock_computer_manager.run_accepted_move = AsyncMock()
+    with (
+        patch("src.server.app.computers.get_computer", AsyncMock(return_value=computer)),
+        patch(
+            "src.server.app.computers._computer_manager",
+            return_value=mock_computer_manager,
+        ),
+        patch(
+            "src.server.app.computers.set_primary_computer", AsyncMock(return_value=True)
+        ) as flip,
+        patch(
+            "src.server.app.computers.claim_workspace_move",
+            AsyncMock(return_value=_home_move()),
+        ) as claim,
+        patch("src.server.app.computers.schedule_start", MagicMock()) as schedule,
+    ):
+        yield SimpleNamespace(
+            flip=flip, claim=claim, schedule=schedule, manager=mock_computer_manager
+        )
+
+
+@pytest.mark.asyncio
+async def test_make_primary_flips_now_when_home_need_not_move(
+    client, make_primary_patches
+):
+    resp = await client.post(f"/api/v1/computers/{COMPUTER_ID}/make-primary")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"computer_id": COMPUTER_ID, "is_primary": True, "move": None}
+    make_primary_patches.flip.assert_awaited_once_with(USER, COMPUTER_ID)
+    make_primary_patches.claim.assert_not_awaited()
+    make_primary_patches.schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_make_primary_moves_home_first_and_answers_202_with_the_move(
+    client, make_primary_patches
+):
+    """Home lives on the primary, so a flip that would leave it behind becomes
+    Home's move, which commits the flip; the client reads both from the move."""
+    from src.server.database.home_workspace import get_home_workspace_id
+
+    make_primary_patches.flip.return_value = False
+    move = make_primary_patches.claim.return_value
+
+    resp = await client.post(f"/api/v1/computers/{COMPUTER_ID}/make-primary")
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["computer_id"] == COMPUTER_ID
+    assert body["is_primary"] is False
+    assert body["move"]["move_id"] == move["move_id"]
+    assert body["move"]["workspace_id"] == get_home_workspace_id(USER)
+    assert body["move"]["target_computer_id"] == COMPUTER_ID
+    assert body["move"]["make_primary"] is True
+    assert body["move"]["phase"] == "preparing"
+    make_primary_patches.claim.assert_awaited_once_with(
+        user_id=USER,
+        workspace_id=get_home_workspace_id(USER),
+        target_computer_id=COMPUTER_ID,
+        make_primary=True,
+    )
+    make_primary_patches.schedule.assert_called_once()
+    key, start = make_primary_patches.schedule.call_args.args
+    assert key == f"workspace-move:{move['move_id']}"
+    await start()
+    make_primary_patches.manager.run_accepted_move.assert_awaited_once_with(move)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("step", "code", "status"),
+    [
+        ("flip", "move_in_progress", 409),
+        ("flip", "target_unavailable", 409),
+        ("flip", "not_found", 404),
+        ("claim", "not_movable", 409),
+        ("claim", "turn_active", 409),
+        ("claim", "move_in_progress", 409),
+    ],
+)
+async def test_make_primary_refusals_answer_in_the_move_outcome_shape(
+    client, make_primary_patches, step, code, status
+):
+    from src.server.database.workspace_move import MoveRefused
+
+    make_primary_patches.flip.return_value = False
+    getattr(make_primary_patches, step).side_effect = MoveRefused(code)
+
+    resp = await client.post(f"/api/v1/computers/{COMPUTER_ID}/make-primary")
+
+    assert resp.status_code == status
+    detail = resp.json()["detail"]
+    assert detail["code"] == code
+    assert isinstance(detail["message"], str) and detail["message"]
+    assert detail["files"] == []
+    make_primary_patches.schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_make_primary_is_refused_on_another_users_computer(
+    client, make_primary_patches, sample_computer_dict
+):
+    with patch(
+        "src.server.app.computers.get_computer",
+        AsyncMock(return_value=sample_computer_dict(computer_id=COMPUTER_ID, user_id=OTHER_USER)),
+    ):
+        resp = await client.post(f"/api/v1/computers/{COMPUTER_ID}/make-primary")
+
+    assert resp.status_code == 403
+    make_primary_patches.flip.assert_not_awaited()
+    make_primary_patches.claim.assert_not_awaited()

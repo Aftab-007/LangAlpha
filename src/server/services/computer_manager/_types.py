@@ -67,7 +67,8 @@ class ComputerBinding:
     acquisition resolves the binding it hands out. None on a workspace binding
     means only that this read did not answer for the folder, so the layout
     resolves it from the row; a caller that builds a workspace binding out of a
-    machine row has to supply it."""
+    machine row has to supply it. files_epoch names the move that last brought
+    the project's files to this machine, None if none has."""
 
     workspace_id: str
     computer_id: str
@@ -78,6 +79,7 @@ class ComputerBinding:
     resource_tier: Optional[str] = None
     is_always_on: bool = False
     provider_config: Optional[Dict[str, Any]] = None
+    files_epoch: Optional[str] = None
 
     @property
     def provider_identity(self) -> Tuple[str, str]:

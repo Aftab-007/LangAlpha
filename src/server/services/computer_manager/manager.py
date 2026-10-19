@@ -20,6 +20,7 @@ from src.server.services.computer_manager._lifecycle import SessionLifecycleMixi
 from src.server.services.computer_manager._livefs import LivefsMixin
 from src.server.services.computer_manager._machines import MachineLifecycleMixin
 from src.server.services.computer_manager._mcp import McpSecretsMixin
+from src.server.services.computer_manager._move import WorkspaceMoveMixin
 from src.server.services.computer_manager._providers import ProviderMixin
 from src.server.services.computer_manager._provisioning import ProvisioningMixin
 from src.server.services.computer_manager._retirement import RetirementMixin
@@ -42,6 +43,7 @@ class ComputerManager(
     MachineLifecycleMixin,
     RetirementMixin,
     ComputerSpecMixin,
+    WorkspaceMoveMixin,
     WorkspaceEntitlementsMixin,
 ):
     _instance: Optional["ComputerManager"] = None
@@ -80,8 +82,9 @@ class ComputerManager(
 
         # Startup materialises only its initiating project. Check siblings
         # separately, keyed by sandbox so a rebuilt machine cannot reuse an old
-        # check.
-        self._projects_attached: set[tuple[str, str | None]] = set()
+        # check, and holding the project's files epoch so one that moved away
+        # and back to the same sandbox is attached again.
+        self._projects_attached: dict[tuple[str, str | None], str | None] = {}
 
         # asyncio holds weak task refs; retain publishes until PUBLISH completes.
         self._status_publish_tasks: set[asyncio.Task] = set()

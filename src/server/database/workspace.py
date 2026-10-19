@@ -32,6 +32,7 @@ from src.server.database.sql_fences import (
     FENCE_NOT_DELETED,
     FENCE_TAKES_WORKSPACES,
     shadowed_write,
+    workspace_move_fences,
 )
 from src.server.database.user_lock import lock_user_writes
 from src.server.database.workspace_folders import (
@@ -413,6 +414,7 @@ async def bind_workspace_to_computer(
     *,
     expected_computer_id: str | None,
     dir_name: str | None = None,
+    primary_only: bool = False,
     conn=None,
 ) -> Optional[Dict[str, Any]]:
     """Move a project onto a machine and take that machine's lifecycle with it.
@@ -423,7 +425,9 @@ async def bind_workspace_to_computer(
     machine, as create_workspace_on_computer's insert does: a row left naming
     the old machine's lifecycle is what wedges the idle reaper. An unbound
     Home passes the fence because this is how it joins a computer; the
-    callers decide which rows may be bound.
+    callers decide which rows may be bound. ``primary_only`` binds only to a
+    computer still primary when its row lock is granted, so a flip of the
+    primary that commits first sends the caller back to read the new one.
     """
     from psycopg.errors import UniqueViolation
 
@@ -450,6 +454,7 @@ async def bind_workspace_to_computer(
                     FROM computers
                     WHERE computer_id = %(computer_id)s AND {FENCE_NOT_DELETED}
                       AND {FENCE_TAKES_WORKSPACES}
+                      AND (is_primary OR NOT %(primary_only)s)
                       AND user_id = (
                           SELECT user_id FROM workspaces
                           WHERE workspace_id = %(workspace_id)s
@@ -479,6 +484,7 @@ async def bind_workspace_to_computer(
                     "dir_name": dir_name,
                     "workspace_id": workspace_id,
                     "expected": expected,
+                    "primary_only": primary_only,
                 },
             )
             row = await cur.fetchone()
@@ -587,28 +593,37 @@ async def computer_has_config_hash(computer_id: str, config_hash: str) -> bool:
         return bool(row and row["verified"])
 
 
-async def get_restore_owed_workspace_ids_for_computer(
+async def get_restore_owed_workspaces_for_computer(
     computer_id: str,
     *,
     conn=None,
-) -> List[str]:
-    """Live workspaces on a computer whose files a recreate has not restored yet."""
+) -> Dict[str, Optional[str]]:
+    """Live workspaces on a computer whose files a recreate has not restored
+    yet, each with the ``files_epoch`` its files are owed at.
+
+    Not one being moved off it: its folder there is set aside, and a restore
+    would lay it again under a name the move is about to free.
+    """
     computer_id = normalize_uuid(computer_id)
     if computer_id is None:
-        return []
+        return {}
 
     async with _ws_cursor(conn) as cur:
         await cur.execute(
-            """
-            SELECT workspace_id
+            f"""
+            SELECT workspace_id, files_epoch
             FROM workspaces
             WHERE computer_id = %s AND status <> 'deleted'
               AND files_restore_incomplete_at IS NOT NULL
+              AND NOT {workspace_move_fences("workspaces.workspace_id")}
             ORDER BY created_at
             """,
             (computer_id,),
         )
-        return [str(r["workspace_id"]) for r in await cur.fetchall()]
+        return {
+            str(r["workspace_id"]): str(r["files_epoch"]) if r["files_epoch"] else None
+            for r in await cur.fetchall()
+        }
 
 
 async def get_live_workspace_folders_for_computer(
@@ -1386,12 +1401,37 @@ class WorkspaceBusyError(RuntimeError):
     """Deletion must wait for the workspace's root and background runs."""
 
 
+MOVING_DELETE_REFUSAL = (
+    "This workspace is moving to another computer. Delete it once the move finishes."
+)
+
+
+class WorkspaceMovingError(SandboxTransientError):
+    """Nothing reaches a workspace's folder while it moves to another computer.
+
+    A transient sandbox error to every route, which answers it with a retry,
+    since the move ends on its own.
+    """
+
+    def __init__(self, workspace_id: str):
+        super().__init__(f"Workspace {workspace_id} is moving to another computer")
+        self.workspace_id = workspace_id
+
+
+async def workspace_is_moving(workspace_id: str, *, conn=None) -> bool:
+    async with _ws_cursor(conn) as cur:
+        await cur.execute(
+            f"SELECT {workspace_move_fences('%s')} AS moving", (workspace_id,)
+        )
+        return bool((await cur.fetchone())["moving"])
+
+
 async def lock_run_workspace(conn, thread_id: str) -> None:
-    """Serialize admission with deletion across workers until START commits."""
+    """Serialize admission with deletion and moves across workers until START commits."""
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
             """
-            SELECT w.status FROM workspaces w
+            SELECT w.workspace_id, w.status FROM workspaces w
             JOIN conversation_threads t ON t.workspace_id = w.workspace_id
             WHERE t.conversation_thread_id = %s
             FOR SHARE OF w
@@ -1399,8 +1439,14 @@ async def lock_run_workspace(conn, thread_id: str) -> None:
             (thread_id,),
         )
         workspace = await cur.fetchone()
-        if workspace and workspace["status"] == "deleted":
+        if not workspace:
+            return
+        if workspace["status"] == "deleted":
             raise ValueError("Cannot start work in a deleted workspace")
+    # Its own statement: one that waited on a move's claim for the row lock
+    # would still read the move table as it stood before the claim.
+    if await workspace_is_moving(workspace["workspace_id"], conn=conn):
+        raise WorkspaceMovingError(str(workspace["workspace_id"]))
 
 
 async def delete_workspace(
@@ -1439,6 +1485,10 @@ async def delete_workspace(
                     raise WorkspaceBusyError(
                         "This workspace has active work. Stop it or wait for it to finish before deleting."
                     )
+                # A move puts the folder back if it fails, after the delete
+                # would have cleared a folder it found missing.
+                if await workspace_is_moving(workspace_id, conn=owned):
+                    raise WorkspaceBusyError(MOVING_DELETE_REFUSAL)
                 await cur.execute(
                     """
                     UPDATE workspaces

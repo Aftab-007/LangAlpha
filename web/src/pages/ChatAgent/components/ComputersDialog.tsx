@@ -7,9 +7,9 @@
  * belong to the machine, so they live here rather than on any one workspace's
  * menu, where changing them would silently change its siblings.
  *
- * The dialogs it opens (New computer, Change spec, Remove) take its place
- * rather than piling on top: while one is open this panel steps back, and the
- * page stays dimmed exactly as much as with this panel alone.
+ * The dialogs it opens (New computer, Change spec, Make primary, Remove) take
+ * its place rather than piling on top: while one is open this panel steps
+ * back, and the page stays dimmed exactly as much as with this panel alone.
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -21,6 +21,7 @@ import { Disclosure } from '@/components/ui/Disclosure';
 import { ModalShell } from '@/components/ui/ModalShell';
 import { Loader } from '@/components/ui/loader';
 import { ToggleSwitch } from '@/components/ui/switch';
+import { useHomeWorkspaceId } from '@/hooks/useHomeWorkspace';
 import { useLocale } from '@/hooks/useLocale';
 import { formatBytes } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -30,13 +31,15 @@ import { useComputerProviders, useComputerStorage, useComputers } from '../hooks
 import { openComputerSpec } from '../hooks/computerPanelStore';
 import { useComputerActions, type PowerAction } from '../hooks/useComputerActions';
 import { usePrepareStage } from '../hooks/computerPreparation';
+import { isMoveActive, useWorkspaceMove } from '../hooks/useWorkspaceMove';
 import { ComputerStatusIndicator } from './computerStatusUi';
-import { isComputerPreparing, isComputerStatusTransitional, prepareStepLabel } from '../utils/computerStatus';
+import { isComputerPreparing, isComputerStatusTransitional, prepareStepLabel, takesWorkspaces } from '../utils/computerStatus';
 import { tierLabel } from './tierUi';
 import { DiskBar, diskLevelColor, diskUsageLabel } from './computerDiskUi';
 import { activeSpecChange, effectiveTier, specChangeLabel, SpecChangeProgress } from './specChangeUi';
 import CreateComputerDialog, { COMPUTER_NAME_MAX } from './CreateComputerDialog';
 import RemoveComputerDialog from './RemoveComputerDialog';
+import MakePrimaryDialog, { MakePrimaryButton } from './MakePrimaryDialog';
 import { providerLabel, rowsShowProvider } from './providerUi';
 import { apiErrorObject, apiErrorReason, apiErrorStatus } from '../utils/api';
 import { denialMessage } from '../utils/denialMessage';
@@ -69,15 +72,22 @@ function ComputersDialog({
   // a row the dialog was opened onto.
   const [createdId, setCreatedId] = useState<string | null>(null);
   const [removeTargetId, setRemoveTargetId] = useState<string | null>(null);
+  const [primaryTargetId, setPrimaryTargetId] = useState<string | null>(null);
 
   const { data, isLoading } = useComputers({ enabled: open });
   const computers = data?.computers ?? [];
   // Read off the live list, so a row that leaves it (removed elsewhere, or by
   // this dialog) closes its confirmation rather than leaving a stale copy.
   const removeTarget = removeTargetId ? computers.find((c) => c.computer_id === removeTargetId) ?? null : null;
+  const primaryTarget = primaryTargetId ? computers.find((c) => c.computer_id === primaryTargetId) ?? null : null;
   const { data: providerData } = useComputerProviders({ enabled: open });
   const showProvider = rowsShowProvider(providerData?.providers, computers);
-  const { power, renameComputerTo, turnOffAlwaysOn, create, remove } = useComputerActions();
+  const { power, renameComputerTo, turnOffAlwaysOn, create, remove, makePrimary } = useComputerActions();
+  // Home moves with the primary, so a make-primary that has to move it runs
+  // as Home's move: read here so it shows on its row, after a reopen too.
+  const homeId = useHomeWorkspaceId() ?? makePrimary.data?.move?.workspace_id;
+  const { data: homeMove } = useWorkspaceMove(homeId, { enabled: open });
+  const homeMoving = isMoveActive(homeMove) ? homeMove : null;
   // A refused start relays the quota service's own sentence (denialMessage).
   const error = power.error ? denialMessage(power.error, t) : null;
   const createError = create.error
@@ -90,9 +100,11 @@ function ComputersDialog({
     power.reset();
     create.reset();
     remove.reset();
+    makePrimary.reset();
     setCreateOpen(false);
     setCreatedId(null);
     setRemoveTargetId(null);
+    setPrimaryTargetId(null);
     onOpenChange(false);
   };
 
@@ -123,6 +135,14 @@ function ComputersDialog({
     );
   };
 
+  const confirmMakePrimary = () => {
+    if (!primaryTarget || makePrimary.isPending) return;
+    makePrimary.mutate(
+      { computerId: primaryTarget.computer_id, name: primaryTarget.name },
+      { onSuccess: () => setPrimaryTargetId(null) },
+    );
+  };
+
   return (
     <>
       <AnimatePresence>
@@ -134,7 +154,7 @@ function ComputersDialog({
             onClose={closeAndReset}
             width="standard"
             density="form"
-            covered={covered || createOpen || !!removeTarget}
+            covered={covered || createOpen || !!removeTarget || !!primaryTarget}
             footer={
               <Button variant="ghost" size="sm" className="gap-1.5" onClick={openCreate}>
                 <Plus className="h-3.5 w-3.5" />
@@ -172,6 +192,14 @@ function ComputersDialog({
                       if (!turnOffAlwaysOn.isPending) turnOffAlwaysOn.mutate({ computerId: computer.computer_id });
                     }}
                     onRemove={() => openRemove(computer.computer_id)}
+                    movingHome={homeMoving?.target_computer_id === computer.computer_id}
+                    // One move at a time per user, and Home's is the one this
+                    // button starts.
+                    makePrimaryHeld={!!homeMoving || makePrimary.isPending}
+                    onMakePrimary={() => {
+                      makePrimary.reset();
+                      setPrimaryTargetId(computer.computer_id);
+                    }}
                   />
                 ))}
               </div>
@@ -206,6 +234,18 @@ function ComputersDialog({
           />
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {open && primaryTarget && (
+          <MakePrimaryDialog
+            computerId={primaryTarget.computer_id}
+            name={primaryTarget.name}
+            onClose={() => { if (!makePrimary.isPending) setPrimaryTargetId(null); }}
+            onConfirm={confirmMakePrimary}
+            busy={makePrimary.isPending}
+            error={makePrimary.error}
+          />
+        )}
+      </AnimatePresence>
     </>
   );
 }
@@ -223,6 +263,10 @@ interface ComputerRowProps {
   onChangeSpec: () => void;
   onTurnOffAlwaysOn: () => void;
   onRemove: () => void;
+  /** Home is moving here because this computer is being made primary. */
+  movingHome: boolean;
+  makePrimaryHeld: boolean;
+  onMakePrimary: () => void;
 }
 
 function ComputerRow({
@@ -237,6 +281,9 @@ function ComputerRow({
   onChangeSpec,
   onTurnOffAlwaysOn,
   onRemove,
+  movingHome,
+  makePrimaryHeld,
+  onMakePrimary,
 }: ComputerRowProps) {
   const { t } = useTranslation();
   const locale = useLocale();
@@ -372,7 +419,7 @@ function ComputerRow({
             </label>
           )}
           {/* Wraps under the switch on a phone, still at the row's end. */}
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
             {specChange ? (
               // Opens the same dialog, which shows the change's progress, not a picker.
               <button
@@ -388,6 +435,13 @@ function ComputerRow({
                 <Cpu className="h-3.5 w-3.5" />
                 {t('workspace.changeSpec', 'Change spec')}
               </Button>
+            )}
+            {!computer.is_primary && (
+              <MakePrimaryButton
+                movingHome={movingHome}
+                disabled={makePrimaryHeld || !!specChange || !takesWorkspaces(computer)}
+                onClick={onMakePrimary}
+              />
             )}
             {!computer.is_primary && (
               <Button

@@ -35,7 +35,7 @@ from src.server.database.workspace import (
     get_workspace as db_get_workspace,
     get_workspace_dir_name as db_get_workspace_dir_name,
     get_workspace_identity as db_get_workspace_identity,
-    get_restore_owed_workspace_ids_for_computer,
+    get_restore_owed_workspaces_for_computer,
     SandboxIdentityLostError,
     stamp_computer_sandbox_config,
     update_workspace_activity,
@@ -70,6 +70,8 @@ logger = logging.getLogger(__name__)
 # Sibling folders one restore pass fills at once: a recreated sandbox is one
 # small machine, already busy with the turn that recreated it.
 _SIBLING_RESTORES_AT_ONCE = 3
+# An attach record this worker never made, which no files_epoch equals.
+_UNSEEN = object()
 
 
 class ProvisioningMixin:
@@ -131,7 +133,9 @@ class ProvisioningMixin:
         this drops this worker's copy now, which a link it has in flight does
         not bring back."""
         self._projects_attached = {
-            key for key in self._projects_attached if key[0] != workspace_id
+            key: epoch
+            for key, epoch in self._projects_attached.items()
+            if key[0] != workspace_id
         }
         self._session_computer.pop(workspace_id, None)
         for machine in self._machines.values():
@@ -977,9 +981,7 @@ class ProvisioningMixin:
             return
         try:
             binding = await self.resolve_binding(workspace_id)
-            owed = await get_restore_owed_workspace_ids_for_computer(
-                binding.computer_id
-            )
+            owed = await get_restore_owed_workspaces_for_computer(binding.computer_id)
         except Exception as e:
             logger.warning(f"Could not list sibling restores for {workspace_id}: {e}")
             return
@@ -1008,13 +1010,14 @@ class ProvisioningMixin:
                     )
 
         # Not recorded as attached: that would skip the sibling's own attach,
-        # which also reconciles its skills and tool overlay.
+        # which also reconciles its skills and tool overlay. One this worker
+        # attached before its files last arrived is owed them all the same.
         await asyncio.gather(
             *(
                 restore(sibling_id)
-                for sibling_id in owed
+                for sibling_id, epoch in owed.items()
                 if sibling_id != workspace_id
-                and (sibling_id, sandbox_id) not in self._projects_attached
+                and self._projects_attached.get((sibling_id, sandbox_id), _UNSEEN) != epoch
             )
         )
 
@@ -1033,12 +1036,16 @@ class ProvisioningMixin:
         None when it was already recorded and so is not this caller's.
         """
         key = (binding.workspace_id, self._session_sandbox_id(session))
-        if key in self._projects_attached:
+        if self._attached(binding, key):
             return None
         if len(self._projects_attached) >= _PROJECTS_ATTACHED_CAP:
             self._projects_attached.clear()
-        self._projects_attached.add(key)
+        self._projects_attached[key] = binding.files_epoch
         return key
+
+    def _attached(self, binding: ComputerBinding, key: tuple[str, str | None]) -> bool:
+        """Whether this worker attached the project to this sandbox since its files last arrived."""
+        return self._projects_attached.get(key, _UNSEEN) == binding.files_epoch
 
     async def _sync_restore_and_reconcile(
         self,
@@ -1091,7 +1098,7 @@ class ProvisioningMixin:
         workspace_id = binding.workspace_id
         key = (workspace_id, self._session_sandbox_id(session))
         recorded = False
-        if key not in self._projects_attached:
+        if not self._attached(binding, key):
             # Restore files before rebuilding the generated tool configuration.
             await self._ensure_workspace_dirs(workspace_id, sandbox, binding.dir_name)
             # Unrestored, the next acquisition retries before trusting this
@@ -1108,7 +1115,7 @@ class ProvisioningMixin:
         ):
             # Retry on the next acquire; MCP calls refuse an absent config.
             if recorded:
-                self._projects_attached.discard(key)
+                self._projects_attached.pop(key, None)
             return
         if recorded and not await self._reconcile_skills(
             workspace_id, user_id, sandbox, source="attach_project"
@@ -1119,7 +1126,7 @@ class ProvisioningMixin:
             # the pass has to link. A full pass, once per sandbox per process:
             # one that did not finish leaves the attachment unrecorded, so the
             # next acquisition retries it before trusting this project.
-            self._projects_attached.discard(key)
+            self._projects_attached.pop(key, None)
         if not self._livefs_owed(binding.computer_id, workspace_id, sandbox):
             return
         if not user_id:

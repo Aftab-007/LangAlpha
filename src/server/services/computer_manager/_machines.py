@@ -61,6 +61,10 @@ from src.server.services.computer_manager._types import (
 
 logger = logging.getLogger(__name__)
 
+# A first Home bind that lost to a flip of the primary reads the new one; a
+# second flip in that window is the user's own, and the next turn retries.
+_HOME_BIND_ATTEMPTS = 3
+
 def default_computer_name(kind: str) -> str:
     """A user reads the name before anything else about the machine, so it says
     where the machine runs: a remote cloud, or their own."""
@@ -207,18 +211,25 @@ class MachineLifecycleMixin:
             return computer
         home = await db_get_workspace(home_id)
         if home is not None:
-            primary = await self.ensure_primary_computer(user_id)
-            bound = await self._place_on_computer(
-                home_id,
-                primary,
-                held_folder=home.get("dir_name"),
-                name=HOME_FOLDER,
-                expected_computer_id=home.get("computer_id"),
-            )
-            if bound is not None:
-                await publish_workspace_binding_change(
-                    home_id, str(bound["status"]), str(primary["computer_id"])
+            # The bind takes only a computer still primary, so a primary
+            # flipped since it was read sends this round again for the new one.
+            for _ in range(_HOME_BIND_ATTEMPTS):
+                primary = await self.ensure_primary_computer(user_id)
+                bound = await self._place_on_computer(
+                    home_id,
+                    primary,
+                    held_folder=home.get("dir_name"),
+                    name=HOME_FOLDER,
+                    expected_computer_id=home.get("computer_id"),
+                    primary_only=True,
                 )
+                if bound is not None:
+                    await publish_workspace_binding_change(
+                        home_id, str(bound["status"]), str(primary["computer_id"])
+                    )
+                    break
+                if await get_computer_for_workspace(home_id) is not None:
+                    break
         # A losing bind re-reads the winner's.
         computer = await get_computer_for_workspace(home_id)
         if computer is None:
@@ -233,6 +244,7 @@ class MachineLifecycleMixin:
         held_folder: Optional[str],
         name: Optional[str],
         expected_computer_id: Optional[str],
+        primary_only: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Bind a project to the folder it holds, else the first free spelling of ``name``.
 
@@ -258,6 +270,7 @@ class MachineLifecycleMixin:
                         computer_id,
                         expected_computer_id=expected_computer_id,
                         dir_name=dir_name,
+                        primary_only=primary_only,
                         conn=conn,
                     )
                 except WorkspaceDirNameTaken:

@@ -31,6 +31,7 @@ import ComputersDialog from './ComputersDialog';
 import { useForgetRecoveredDismissals } from './DiskWarning';
 import { specErrorFiles, specErrorFrom, specErrorFromOutcome, type SpecError } from './specErrors';
 import { normalizeTier, tierLabel } from './tierUi';
+import { WorkspaceMoveOutcomes } from './WorkspaceMoveOutcomes';
 
 function ComputersDialogHost() {
   const { t } = useTranslation();
@@ -154,6 +155,10 @@ function ComputersDialogHost() {
         // Opened from a disk warning there is no Computers panel to dim the page.
         stacked={!!panel}
       />
+      {/* The workspace menu hosts tell how a move ended too; this one covers
+          a page with none of them mounted, such as a chat on a phone, which
+          is where make-primary's move of Home can end. */}
+      <WorkspaceMoveOutcomes />
     </>
   );
 }

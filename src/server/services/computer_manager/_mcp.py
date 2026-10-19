@@ -29,6 +29,7 @@ from src.server.database.session_lock import await_settled
 from src.server.database.workspace import (
     get_workspace as db_get_workspace,
     get_workspace_identity as db_get_workspace_identity,
+    workspace_is_moving,
 )
 from src.server.database.workspace_folders import WorkspaceFolderMoving
 from src.server.services.computer_manager._types import (
@@ -653,7 +654,7 @@ class McpSecretsMixin:
         if attach_key is not None and not (
             complete and stats is not None and not stats.restore_incomplete
         ):
-            self._projects_attached.discard(attach_key)
+            self._projects_attached.pop(attach_key, None)
         return complete
 
     # Strong refs prevent task GC; never consult this set as state.
@@ -719,6 +720,10 @@ class McpSecretsMixin:
                 str(computer["computer_id"]), workspace_id
             )
         try:
+            # An acquire would lay again the folder a move has set aside. This
+            # is the next-message fallback's to apply, wherever the move ends.
+            if await workspace_is_moving(workspace_id):
+                return
             await self._acquire_session(workspace_id, user_id=user_id)
         except Exception as e:
             logger.warning(
