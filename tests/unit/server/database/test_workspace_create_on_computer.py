@@ -401,6 +401,14 @@ class TestAdoptingTheMachinesSandbox:
         assert "w.status <> comp.status" in sql
 
     @pytest.mark.asyncio
+    async def test_a_repair_leaves_the_gallery_order_alone(self, db):
+        """The gallery orders by updated_at, and this reaches every sibling on
+        the machine; stamping them would give them all one moment."""
+        db.fetchall = AsyncMock(return_value=[])
+        await W.adopt_computer_sandbox_into_workspaces(COMPUTER_ID)
+        assert "updated_at" not in _sql(db)
+
+    @pytest.mark.asyncio
     async def test_an_unbound_home_is_out_of_reach_of_the_repair(self, db):
         """An unbound Home has no machine; handing it one of these shadows
         would invent a sandbox it never asked for."""

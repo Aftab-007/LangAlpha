@@ -549,8 +549,7 @@ async def stamp_computer_sandbox_config(computer_id: str, stamp: Dict[str, Any])
 
     The stamp describes the one sandbox the folders share, so a folder left on
     an older stamp would vouch for settings the machine no longer runs once a
-    deployment returns to them. A folder already carrying it is left alone:
-    any write moves it in the lists ``updated_at`` orders.
+    deployment returns to them. A folder already carrying it is left alone.
     """
     from psycopg.types.json import Json
 
@@ -887,8 +886,7 @@ async def adopt_computer_sandbox_into_workspaces(
             UPDATE workspaces w
             SET sandbox_id = comp.provider_ref,
                 status = comp.status,
-                platform_secret_version = comp.platform_secret_version,
-                updated_at = NOW()
+                platform_secret_version = comp.platform_secret_version
             FROM comp
             WHERE w.computer_id = comp.computer_id
               AND w.{FENCE_LIVE_WORKSPACE}
@@ -1357,7 +1355,7 @@ async def update_workspace_activity(
                 shadowed_write(
                     authority="workspace",
                     computer_set="last_activity_at = %(now)s",
-                    workspace_set="last_activity_at = %(now)s",
+                    workspace_set="last_activity_at = %(now)s, updated_at = %(now)s",
                     workspace_fence=FENCE_NOT_DELETED,
                     computer_guard=(
                         "\n                  AND (c.last_activity_at IS NULL"

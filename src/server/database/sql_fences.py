@@ -123,6 +123,11 @@ def shadowed_write(
     both writers to take the row locks in the same order. Guards are whole
     ``AND ...`` clauses; fences are the module's predicates, applied under the
     alias so PostgreSQL rechecks them inside the UPDATE.
+
+    Only the computer's ``updated_at`` is stamped. A workspace's orders the
+    gallery, and a machine write reaching every folder on the computer would
+    give them all one timestamp; a caller recording the workspace's own use
+    stamps it in ``workspace_set``.
     """
     comp_fence = f"\n                  AND c.{computer_fence}" if computer_fence else ""
     ws_fence = f"\n                  AND w.{workspace_fence}" if workspace_fence else ""
@@ -138,8 +143,7 @@ def shadowed_write(
             ),
             shadow AS (
                 UPDATE workspaces w
-                SET {workspace_set},
-                    updated_at = {now}
+                SET {workspace_set}
                 FROM comp
                 WHERE w.computer_id = comp.computer_id{ws_fence}{workspace_guard}
                 RETURNING {workspace_returning}
@@ -166,8 +170,7 @@ def shadowed_write(
             ),
             shadow AS (
                 UPDATE workspaces w
-                SET {workspace_set},
-                    updated_at = {now}
+                SET {workspace_set}
                 FROM (SELECT count(*) AS mirrored FROM comp) m{join}
                 WHERE (
                         {scope}
