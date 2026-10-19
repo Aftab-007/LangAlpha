@@ -120,6 +120,10 @@ def _make_session(*, version=None, summary=None, config_owner="ws"):
     session.sandbox.config.mcp = MagicMock(servers=[])
     session.mcp_registry = MagicMock()
     session._builtin_mcp_registry = session.mcp_registry
+    # No reconnect has replaced the global snapshot, so it is the borrowed one.
+    session.refresh_builtin_registry = MagicMock(
+        side_effect=lambda: session._builtin_mcp_registry
+    )
     session.mcp_tool_summary = summary
     session.mcp_config_version = version
     # Whose composite the version belongs to. A MagicMock default would read as

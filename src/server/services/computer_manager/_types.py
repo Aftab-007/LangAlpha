@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Set, Tuple
 
+from ptc_agent.core.mcp_composite import builtin_registry_of
+from ptc_agent.core.mcp_registry import get_global_registry
 from ptc_agent.core.session import Session
 from src.server.services.livefs.tracker import MountTracker
 
@@ -127,6 +129,15 @@ class WorkspaceToolView:
             ),
             trading_rule=getattr(session, "trading_rule", None),
         )
+
+    def builtins_superseded(self) -> bool:
+        """Whether a reconnected built-in server has replaced the snapshot this
+        view was built on, so its tools, its prompt summary and the wrappers
+        synced from it all still lack that server until the view is rebuilt."""
+        if self.mcp_registry is None or self.session._owns_mcp_registry:
+            return False
+        current = get_global_registry()
+        return current is not None and builtin_registry_of(self.mcp_registry) is not current
 
     @classmethod
     def builtin_only(cls, workspace_id: str, session: Session) -> "WorkspaceToolView":

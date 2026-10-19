@@ -352,6 +352,20 @@ class Session:
 
         return self.sandbox
 
+    def refresh_builtin_registry(self) -> MCPRegistry | None:
+        """Follow the global snapshot a background reconnect has replaced.
+
+        Called when a composite is about to be rebuilt, so the rebuild picks up
+        a healed built-in server along with the asset sync that follows it.
+        Between rebuilds the session keeps the snapshot its sandbox's wrappers
+        came from. An owned registry is never replaced.
+        """
+        if not self._owns_mcp_registry and self._builtin_mcp_registry is not None:
+            current = get_global_registry()
+            if current is not None:
+                self._builtin_mcp_registry = current
+        return self._builtin_mcp_registry
+
     async def cleanup(self) -> None:
         """Clean up session resources."""
         logger.info("Cleaning up session", session=self.session_label)

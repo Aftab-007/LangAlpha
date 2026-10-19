@@ -983,6 +983,24 @@ class TestStaleDocSweep:
         return sorted(p.name for p in (docs / "broker").iterdir()), gone
 
     @pytest.mark.asyncio
+    async def test_a_builtin_this_worker_never_reached_is_held(self):
+        tools = {"broker": [SimpleNamespace(name="get_quote", input_schema={})]}
+        sandbox = self._sandbox(tools)
+        sandbox.config.mcp.servers = [
+            *sandbox.config.mcp.servers,
+            _builtin("market", transport="http", url="https://market.test/mcp"),
+            _builtin("news", transport="http", url="https://news.test/mcp", enabled=False),
+        ]
+        sandbox.mcp_registry.failed_builtin_remote = {"market": "down", "news": "down"}
+
+        await install_tool_modules(sandbox, project=ProjectContext("ws-broker", self.DIR))
+
+        uploads = sandbox._runtime_call.await_args_list[0].args[1]
+        args = json.loads(next(body for body, path in uploads if ".union_args." in path))
+        assert args["held"] == ["market"]
+        assert set(args["servers"]) == {"broker"}
+
+    @pytest.mark.asyncio
     async def test_a_withdrawn_tools_doc_is_removed(self, tmp_path):
         tools = {"broker": [SimpleNamespace(name="get_quote", input_schema={})]}
         left, gone = await self._sweep(
