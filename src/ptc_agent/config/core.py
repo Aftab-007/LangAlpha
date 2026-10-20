@@ -301,6 +301,27 @@ class MCPServerConfig(BaseModel):
     # this server — the server is then bound through the egress relay and its
     # sandbox config carries a grant reference instead of the vendor URL.
     oauth_connection_id: str | None = None
+    # The credential the sandbox client presents to a built-in http server.
+    # ``data_token`` is the computer's own data token, read from the token file
+    # the server keeps current, so the server holds no key of its own. The
+    # client resends such a server's requests on a refused token, a rate limit
+    # or a gateway error, so it must be one whose tools only read.
+    auth: Literal["data_token"] | None = None
+
+    @model_validator(mode="after")
+    def _auth_is_builtin_http_only(self) -> Self:
+        # The token authorizes the whole computer's data access, so only a
+        # server the operator configured may receive it, and only over the
+        # one transport whose requests the client stamps.
+        if self.auth is None:
+            return self
+        if self.source != "builtin":
+            raise ValueError(f"MCP server {self.name!r}: auth is for built-in servers only")
+        if self.transport != "http":
+            raise ValueError(
+                f"MCP server {self.name!r}: auth {self.auth!r} requires transport 'http'"
+            )
+        return self
 
 
 class MCPConfig(BaseModel):
