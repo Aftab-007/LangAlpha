@@ -121,9 +121,12 @@ async def create_thread_endpoint(
     await route.bind(x_user_id, workspace)
     workspace_id = route.workspace_id
 
-    # Same stamp ensure_thread_exists would apply; also the CAS expectation
-    # the title generator swaps against.
-    stamped_title = request.first_query[:255]
+    # A title the caller named is the thread's own: nothing generates over it,
+    # since the first message may be no words of the user's at all. Else the
+    # same stamp ensure_thread_exists would apply, which is also the CAS
+    # expectation the title generator swaps against.
+    named_title = request.title
+    stamped_title = named_title if named_title is not None else request.first_query[:255]
 
     thread_id = str(uuid4())
     try:
@@ -140,7 +143,7 @@ async def create_thread_endpoint(
         logger.exception(f"Error pre-creating thread: {e}")
         raise HTTPException(status_code=500, detail="Failed to create thread")
 
-    title_task = schedule_title_generation(
+    title_task = None if named_title is not None else schedule_title_generation(
         thread_id=thread_id,
         user_id=x_user_id,
         first_query=request.first_query,

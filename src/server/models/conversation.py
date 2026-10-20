@@ -228,9 +228,17 @@ class ThreadCreateRequest(BaseModel):
         None, description="Target workspace; Home's id for the user's Home"
     )
     first_query: str = Field(
-        ..., min_length=1,
+        "",
         description="The user's first message; stamped as the initial title "
-        "and fed to title generation.",
+        "and fed to title generation. May be empty when `title` is given.",
+    )
+    title: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        description="The thread's title, stored as given, with no title "
+        "generated after it. For a first turn that opens with no message of "
+        "the user's to title it from.",
     )
 
     @field_validator("first_query")
@@ -262,12 +270,21 @@ class ThreadCreateRequest(BaseModel):
         "follows that default until a PATCH switches it.",
     )
 
+    @model_validator(mode="after")
+    def _something_titles_the_thread(self) -> "ThreadCreateRequest":
+        # The row is born with a title: the one named, else the stamp of the
+        # first message. With neither there is nothing to stamp or generate.
+        if self.title is None and not self.first_query:
+            raise ValueError("first_query or title is required")
+        return self
+
 
 class ThreadCreateResponse(BaseModel):
     """201 body of POST /api/v1/threads — the created row.
 
-    ``title`` is the creation-time stamp (the raw first query). The generated
-    title arrives later on the lifecycle feed; it is never awaited here.
+    ``title`` is the creation-time stamp: the title the request named, else
+    the raw first query, whose generated title arrives later on the lifecycle
+    feed; it is never awaited here.
     """
     thread_id: str
     workspace_id: str
