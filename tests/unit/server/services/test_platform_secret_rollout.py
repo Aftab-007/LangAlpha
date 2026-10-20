@@ -692,23 +692,24 @@ async def test_boot_serves_computers_of_a_capable_kind_under_an_incapable_deploy
 
 
 @pytest.mark.asyncio
-async def test_hosted_boot_requires_a_catalog_for_an_offered_capable_kind(
-    monkeypatch, live_kinds
+@pytest.mark.parametrize(
+    ("provider", "offered"), [("daytona", ("e2b",)), ("docker", ("daytona",))]
+)
+async def test_hosted_boot_with_an_empty_catalog_reconciles_nothing(
+    monkeypatch, live_kinds, provider, offered
 ):
-    # A Docker default needs none, but the first Daytona computer would refuse
-    # to prepare, so the deployment never comes up offering Daytona without one.
+    # An empty catalog is a valid hosted state: nothing to register, so no
+    # provider is built and no computer is read.
     monkeypatch.setattr("src.config.env.HOST_MODE", "platform")
     config = _config(
-        provider="docker", platform_secrets=(), offered_providers=("daytona",)
+        provider=provider, platform_secrets=(), offered_providers=offered
     )
 
-    with pytest.raises(
-        PlatformSecretConfigurationError, match="hosted mode on daytona requires"
-    ):
-        await reconcile_platform_secrets_at_boot(_agent_config(config))
+    with patch(_BUILD_PROVIDER) as build_provider:
+        assert await reconcile_platform_secrets_at_boot(_agent_config(config)) == {}
 
-    monkeypatch.setattr("src.config.env.HOST_MODE", "oss")
-    assert await reconcile_platform_secrets_at_boot(_agent_config(config)) == {}
+    build_provider.assert_not_called()
+    live_kinds.assert_not_called()
 
 
 @pytest.mark.asyncio

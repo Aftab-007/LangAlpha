@@ -65,7 +65,9 @@ sandbox:
   # (not code); an entry is the opt-in and works in OSS mode too. Uncomment the
   # FMP example to enable. Boot then fail-closes unless the provider's
   # namespace (DAYTONA_SECRET_NAMESPACE or E2B_SECRET_NAMESPACE) and the source
-  # env var are set.
+  # env var are set. With HOST_MODE=platform the catalog may be empty: a
+  # built-in server env var named like a credential (*_API_KEY, *_SECRET,
+  # *_TOKEN, ...) with no entry is withheld from sandboxes, never plaintext.
   # platform_secrets:
   #   - source_env_var: "FMP_API_KEY"        # read from the host .env
   #     sandbox_env_var: "FMP_API_KEY"       # placeholder-bearing var in the sandbox

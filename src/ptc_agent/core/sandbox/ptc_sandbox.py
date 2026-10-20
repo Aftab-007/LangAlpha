@@ -17,7 +17,11 @@ from ptc_agent.core.sandbox._defaults import (
     DEFAULT_DEPENDENCIES,
     SANDBOX_IMAGE_ENV,
 )
-from ptc_agent.core.sandbox.platform_secrets import build_platform_secret_bindings
+from ptc_agent.core.sandbox.platform_secrets import (
+    build_platform_secret_bindings,
+    is_credential_env_name,
+    platform_secrets_required,
+)
 from ptc_agent.core.sandbox.providers import create_provider
 from ptc_agent.core.sandbox.providers._image_recipe import builtin_mcp_packages
 from ptc_agent.core.sandbox.livefs_mount import MountHandle
@@ -337,8 +341,25 @@ class PTCSandbox:
         GitHub bot credentials so they're available to all sandbox processes.
         Vars named in ``platform_secret_bindings`` are excluded: the provider
         delivers those as managed Secrets.
+
+        Where platform secrets are required, a credential-named built-in var
+        with no binding is dropped with an error rather than failing the
+        build: dropping cannot leak the value, and a non-secret caught by the
+        name check costs one var instead of every sandbox create.
         """
         import os
+
+        withhold_credentials = platform_secrets_required(self.config)
+        # The host's credentials by value: config loading expands ${VAR}, so an
+        # override such as FMP_KEY: ${FMP_API_KEY} arrives here as the value
+        # alone, and only the value says it is the same credential.
+        host_credentials = (
+            {v for k, v in os.environ.items() if v and is_credential_env_name(k)}
+            if withhold_credentials
+            else set()
+        )
+        withheld: set[str] = set()
+        withheld_from: set[str] = set()
 
         env_vars: dict[str, str] = {
             # Paths baked into the sandbox image, repeated here so a sandbox born
@@ -366,13 +387,32 @@ class PTCSandbox:
                         # managed platform Secret. Never put the real host
                         # value in ordinary sandbox env as a fallback.
                         continue
+                    resolved_value = value
                     if value.startswith("${") and value.endswith("}"):
-                        var_name = value[2:-1]
-                        resolved_value = os.getenv(var_name)
-                        if resolved_value:
-                            env_vars[key] = resolved_value
-                    else:
-                        env_vars[key] = value
+                        resolved_value = os.getenv(value[2:-1]) or ""
+                        if not resolved_value:
+                            continue
+                    if (
+                        resolved_value
+                        and withhold_credentials
+                        and (
+                            is_credential_env_name(key)
+                            or resolved_value in host_credentials
+                        )
+                    ):
+                        withheld.add(key)
+                        withheld_from.add(server.name)
+                        continue
+                    env_vars[key] = resolved_value
+        if withheld:
+            # Names only: the values are the platform's credentials.
+            logger.error(
+                "Withheld credential env from the sandbox: no platform Secret "
+                "is bound to it, and hosted sandboxes never get one as "
+                "plaintext",
+                env_vars=sorted(withheld),
+                servers=sorted(withheld_from),
+            )
 
         # GitHub bot env vars
         from src.config.settings import get_nested_config

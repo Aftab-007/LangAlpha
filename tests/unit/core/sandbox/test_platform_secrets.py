@@ -141,17 +141,19 @@ def test_resolve_for_a_kind_uses_that_providers_namespace_and_naming():
         resolve_platform_secrets(config, kind="e2b", environ=environ, host_mode="oss")
 
 
-def test_resolve_hosted_empty_catalog_fails_closed():
-    # An empty catalog in hosted Daytona mode is a deploy error, never a
-    # silent gate-off.
-    with pytest.raises(
-        PlatformSecretConfigurationError, match="platform_secrets is empty"
-    ):
-        resolve_platform_secrets(
-            _config(platform_secrets=()),
-            environ={"FMP_API_KEY": "value"},
-            host_mode="platform",
-        )
+@pytest.mark.parametrize("provider", ["daytona", "e2b"])
+def test_resolve_hosted_empty_catalog_resolves_to_nothing(provider):
+    # Hosted mode needs no catalog once no built-in holds a vendor credential;
+    # a credential that is still configured is withheld at sandbox build.
+    config = _config(provider=provider, platform_secrets=())
+    environ = {"FMP_API_KEY": "value"}
+
+    assert resolve_platform_secrets(
+        config, environ=environ, host_mode="platform"
+    ) == ()
+    assert build_platform_secret_bindings(
+        config, environ=environ, host_mode="platform"
+    ) == {}
 
 def test_resolve_rejects_an_overlong_derived_name():
     # namespace + '-' + suffix must fit the provider/DB name bound; a suffix
@@ -452,12 +454,100 @@ def test_hosted_daytona_env_excludes_plaintext_and_mounts_secret(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("name", "credential"),
+    [
+        ("FMP_API_KEY", True),
+        ("CLIENT_SECRET", True),
+        ("AWS_SECRET_ACCESS_KEY", True),
+        ("GITHUB_TOKEN", True),
+        ("DB_PASSWORD", True),
+        ("GINLIX_DATA_URL", False),
+        ("GINLIX_TOKEN_FILE", False),
+        ("MAX_TOKENS", False),
+        ("PUBLIC_KEY_PATH", False),
+    ],
+)
+def test_credential_env_name(name, credential):
+    from ptc_agent.core.sandbox.platform_secrets import is_credential_env_name
+
+    assert is_credential_env_name(name) is credential
+
+
+def _hosted_sandbox(monkeypatch, config: CoreConfig):
+    from ptc_agent.core.sandbox.ptc_sandbox import PTCSandbox
+
+    monkeypatch.setattr("src.config.env.HOST_MODE", "platform")
+    with patch(
+        "ptc_agent.core.sandbox.ptc_sandbox.create_provider",
+        return_value=MagicMock(),
+    ):
+        return PTCSandbox(config)
+
+
+def test_hosted_env_withholds_an_unbound_credential(monkeypatch):
+    # With no catalog entry for it, a vendor key never reaches a hosted
+    # sandbox as plaintext; non-secret env is untouched.
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    monkeypatch.setenv("GINLIX_DATA_URL", "http://data.test")
+    config = _config(platform_secrets=())
+    config.mcp.servers[0].env["GINLIX_DATA_URL"] = "${GINLIX_DATA_URL}"
+    sandbox = _hosted_sandbox(monkeypatch, config)
+
+    bindings = build_platform_secret_bindings(sandbox.config)
+    env_vars = sandbox._build_sandbox_env_vars(bindings)
+
+    assert bindings == {}
+    assert "FMP_API_KEY" not in env_vars
+    assert "real-fmp-value" not in env_vars.values()
+    assert env_vars["GINLIX_DATA_URL"] == "http://data.test"
+
+
+def test_hosted_env_withholds_a_credential_the_catalog_does_not_cover(
+    monkeypatch,
+):
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    config = _config()
+    config.mcp.servers[0].env["OTHER_API_KEY"] = "literal-other-value"
+    sandbox = _hosted_sandbox(monkeypatch, config)
+
+    env_vars = sandbox._build_sandbox_env_vars(
+        build_platform_secret_bindings(sandbox.config)
+    )
+
+    assert "FMP_API_KEY" not in env_vars
+    assert "OTHER_API_KEY" not in env_vars
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # As config loading leaves it: ${FMP_API_KEY} already expanded.
+        "real-fmp-value",
+        # A reference the loader could not expand, resolved here instead.
+        "${FMP_API_KEY}",
+    ],
+)
+def test_hosted_env_withholds_a_credential_under_another_name(monkeypatch, value):
+    monkeypatch.setenv("FMP_API_KEY", "real-fmp-value")
+    config = _config(platform_secrets=())
+    config.mcp.servers[0].env = {"FMP_KEY": value}
+    sandbox = _hosted_sandbox(monkeypatch, config)
+
+    env_vars = sandbox._build_sandbox_env_vars(
+        build_platform_secret_bindings(sandbox.config)
+    )
+
+    assert "FMP_KEY" not in env_vars
+    assert "real-fmp-value" not in env_vars.values()
+
+
+@pytest.mark.parametrize(
     ("host_mode", "provider", "platform_secrets"),
     [
         # Self-hosted, a provider that cannot hold Secrets falls through to env.
         ("oss", "docker", (_FMP_DEFINITION,)),
         ("oss", "memory", (_FMP_DEFINITION,)),
-        # Daytona with no catalog is the opt-out — stays on plaintext env.
+        # Self-hosted Daytona with no catalog stays on plaintext env.
         ("oss", "daytona", ()),
     ],
 )
