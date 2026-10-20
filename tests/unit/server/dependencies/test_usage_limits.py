@@ -725,6 +725,65 @@ class TestEnforceCreditLimitByok:
             await enforce_credit_limit("user-1", byok=False)
 
 
+class TestEnforceCreditLimitSurface:
+    """Where the turn came from is relayed, never interpreted.
+
+    The auth service may apply its own policy to a surface; langalpha sends
+    the request's ``platform`` as it came and relays whatever verdict returns.
+    """
+
+    @staticmethod
+    async def _gate(response: httpx.Response, **kwargs):
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=response)
+        with _unreachable_service(mock_client):
+            from src.server.dependencies.usage_limits import enforce_credit_limit
+
+            await enforce_credit_limit("user-1", **kwargs)
+        return mock_client.post.await_args.kwargs["json"]
+
+    @pytest.mark.asyncio
+    async def test_a_named_surface_is_in_the_outgoing_body(self):
+        allowed = httpx.Response(200, json={"quota": {"allowed": True}})
+
+        body = await self._gate(allowed, byok=False, surface="slack")
+
+        assert body == {"check_quota": "chat", "surface": "slack"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", [None, ""])
+    async def test_no_surface_leaves_the_key_out(self, surface):
+        """Absent, not null: a body without the key is the one every turn sent
+        before, so a service that has not learned the key reads it the same."""
+        allowed = httpx.Response(200, json={"quota": {"allowed": True}})
+
+        body = await self._gate(allowed, byok=True, surface=surface)
+
+        assert body == {"check_quota": "chat", "byok": True}
+
+    @pytest.mark.asyncio
+    async def test_a_denial_of_an_unfamiliar_type_is_relayed_as_sent(self):
+        denied = httpx.Response(
+            200,
+            json={
+                "quota": {
+                    "allowed": False,
+                    "limit_type": "surface_not_included",
+                    "message": "Text from the auth service.",
+                    "retry_after": 60,
+                }
+            },
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._gate(denied, byok=False, surface="telegram")
+
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.detail["type"] == "surface_not_included"
+        assert exc_info.value.detail["message"] == "Text from the auth service."
+        assert exc_info.value.headers["Retry-After"] == "60"
+
+
 # ===================================================================
 # get_capacity_status (read-only count-quota status for the UI)
 # ===================================================================

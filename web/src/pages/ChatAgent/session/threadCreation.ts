@@ -16,6 +16,9 @@ export interface EnsureThreadIdArgs {
   workspaceId: string;
   /** First user message — becomes the row's first_query_content + title seed. */
   message: string;
+  /** The row's title, in place of one generated from `message`: a send that
+   *  opens with no message of the user's has nothing fit to title it from. */
+  title?: string;
   platform: string | null | undefined;
   /** The user's zone, which the title reads relative dates on. */
   timezone: string;
@@ -44,6 +47,7 @@ export async function ensureThreadId({
   threadId,
   workspaceId,
   message,
+  title,
   platform,
   timezone,
   subagentsAllowed,
@@ -54,12 +58,17 @@ export async function ensureThreadId({
   signal,
 }: EnsureThreadIdArgs): Promise<EnsureThreadIdResult> {
   if (threadId && threadId !== '__default__') return { threadId, aborted: false };
+  // A send with no words (attachments alone) and no title gives the row
+  // nothing to be titled by, which the server refuses: the legacy door makes
+  // that thread without the failed round-trip.
+  if (!message.trim() && !title) return { threadId, aborted: signal.aborted || wasStoppedRef.current };
 
   let effectiveThreadId = threadId;
   try {
     const created = await createThreadWithTitle({
       workspaceId,
       firstQuery: message,
+      title,
       platform,
       timezone,
       subagentsAllowed,

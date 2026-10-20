@@ -834,7 +834,8 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         // may leave state. One that produced something shows as a failed turn
         // with it; an empty one (the reconnect cleanup's test: no segments, no
         // content) settles without `error`, which the render-time orphan skip
-        // hides, as it does the 429 path's.
+        // hides, as it does the 429 path's, unless it is a hidden opener's
+        // (settleFailedBubble).
         // The headline alone, as a reload shows it: the frame's text is the
         // server's raw exception and stays on the wire for other readers.
         rt.setMessageError({ message: '', kind: 'internal' });

@@ -58,8 +58,12 @@ export interface ChatInputHandle {
   addWidgetSnapshot: (snapshot: WidgetContextSnapshot) => void;
   setValue: (text: string) => void;
   /** Puts back text the user wrote elsewhere without losing what is typed
-   *  here: into an empty box, else after it, a blank line between. */
-  giveBack: (text: string) => void;
+   *  here: into an empty box, else after it, a blank line between. Files a
+   *  send took come back beside what is attached now. */
+  giveBack: (text: string, files?: ReadyAttachment[]) => void;
+  /** Sends what is written, as Enter does. Returns whether there was
+   *  anything to send. */
+  send: () => boolean;
 }
 
 
@@ -183,7 +187,7 @@ function ChatInput({
   const { validModelNames, metadata: modelMetadata, isLoading: modelsLoading } = useAllModels();
   const otherPref = (preferences as Record<string, Record<string, unknown>> | null)?.other_preference;
   const [message, setMessage] = useState('');
-  const { attachedFiles, setAttachedFiles, isDragging, handleFiles, removeFile, onDragOver, onDragLeave, onDrop, handlePaste } = useFileAttachments();
+  const { attachedFiles, setAttachedFiles, isDragging, handleFiles, restoreFiles, removeFile, onDragOver, onDragLeave, onDrop, handlePaste } = useFileAttachments({ disabled });
   const [watchMode, setWatchMode] = useState(false);
   // The toggle state survives the feature going off (the pill just hides), so
   // every payload derives from this gated value.
@@ -302,6 +306,9 @@ function ChatInput({
   // Stop button state
   const [isStopping, setIsStopping] = useState(false);
 
+  // The handle is built before the send below, so it reaches it through here.
+  const sendRef = useRef<() => boolean>(() => false);
+
   // Expose addContext method for external callers (e.g. FilePanel, message selection)
   useImperativeHandle(ref, () => ({
     getModelOptions() {
@@ -310,6 +317,7 @@ function ChatInput({
         reasoningEffort: resolvedEffort,
         fastMode: resolvedFastMode,
         marketWatch: effectiveMarketWatch,
+        subagentsAllowed: draftSubagents,
       };
     },
     addContext({ path, snippet, label, locator, lineStart, lineEnd, lineCount, source }) {
@@ -346,16 +354,22 @@ function ChatInput({
       setMessage(text);
       setTimeout(() => textareaRef.current?.focus(), 0);
     },
-    giveBack(text) {
-      setMessage((prev) => {
-        const typed = prev.trimEnd();
-        if (!typed) return text;
-        if (typed === text || typed.endsWith(`\n\n${text}`)) return prev;
-        return `${typed}\n\n${text}`;
-      });
+    giveBack(text, files = []) {
+      if (text) {
+        setMessage((prev) => {
+          const typed = prev.trimEnd();
+          if (!typed) return text;
+          if (typed === text || typed.endsWith(`\n\n${text}`)) return prev;
+          return `${typed}\n\n${text}`;
+        });
+      }
+      restoreFiles(files);
       setTimeout(() => textareaRef.current?.focus(), 0);
     },
-  }), [pillModel, resolvedEffort, resolvedFastMode, effectiveMarketWatch, setMentionedFiles]);
+    send() {
+      return sendRef.current();
+    },
+  }), [pillModel, resolvedEffort, resolvedFastMode, effectiveMarketWatch, draftSubagents, setMentionedFiles, restoreFiles]);
 
   // Subscribe to ContextBus so this input mirrors the global widget-context
   // deck. Multiple chat inputs can be visible simultaneously (hero card +
@@ -579,6 +593,13 @@ function ChatInput({
   }, [hasContent, disabled, message, effectiveMarketWatch, draftSubagents, attachedFiles, setAttachedFiles, onSend, onAction,
     mentionedFiles, resetMentions, slashCommands, resetSlash,
     pillModel, resolvedEffort, resolvedFastMode, widgetSnapshots, t]);
+  useEffect(() => {
+    sendRef.current = () => {
+      if (!hasContent || disabled) return false;
+      handleSend();
+      return true;
+    };
+  }, [hasContent, disabled, handleSend]);
 
   // --- Keyboard & Language Detection ---
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -855,6 +876,7 @@ function ChatInput({
               {/* Attach Button */}
               <button
                 onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                disabled={disabled}
                 className="inline-flex flex-none items-center justify-center h-8 w-8 rounded-lg transition-colors text-(--color-icon-muted) hover:text-(--color-text-muted) hover:bg-foreground/5 active:scale-95"
                 type="button"
                 aria-label="Attach file"

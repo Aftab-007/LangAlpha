@@ -65,6 +65,7 @@ from ptc_agent.agent.middleware.runtime_context.harness_blocks import (
 from ptc_agent.agent.middleware.runtime_context.profile import (
     ProfileSnapshot,
     profile_read_answered,
+    render_user_profile,
 )
 from ptc_agent.agent.middleware.runtime_context.state import STATE_BASELINE, state_get
 from ptc_agent.agent.middleware.runtime_context.templates import render_template
@@ -652,13 +653,15 @@ class BaselineContextMiddleware(AgentMiddleware):
             return ""
         # A subagent's profile leaves out what only the main agent acts on:
         # the profile files, the delivery format and where settings live.
+        # The role words the research-depth guidance around the Chief of
+        # Staff's hand-offs.
         try:
-            content = render_template(
-                "components/user_profile.md.j2",
-                user_profile=snapshot.user_profile,
-                user_data_counts=snapshot.user_data_counts or None,
+            content = render_user_profile(
+                snapshot.user_profile,
+                snapshot.user_data_counts or None,
                 main_agent_steering=not self._subagent,
                 channels_enabled=bool(channels),
+                role=self._role,
             )
         except Exception:  # noqa: BLE001 - one component is not the whole block
             logger.warning("[Baseline] user_profile render failed", exc_info=True)

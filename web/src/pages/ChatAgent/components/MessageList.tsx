@@ -9,7 +9,7 @@ import { projectMessageContent, visibleProjection } from './messageList/contentP
 import { useMessageActions } from './messageList/MessageActionsContext';
 import { isReportRow, opensTurn } from './messageList/messagePredicates';
 import { UserBubble } from './messageList/UserBubble';
-import { computeTurnTails, hasTurn, projectTurns } from './messageList/turnProjection';
+import { computeTurnTails, hasTurn, hiddenOpenerTurns, projectTurns } from './messageList/turnProjection';
 import { useLiveMessages, type LiveMessages } from '../session/stream/liveMessages';
 import type { ChatMessage, MessageProvenance } from '@/types/chat';
 import type { MarketTarget } from '../utils/api';
@@ -62,9 +62,12 @@ interface MessageListProps {
   dispatcherContext?: { threadId: string; workspaceId: string } | null;
   /** The thread's market-watch targets, read by its price-alert rows. */
   marketTargets?: readonly MarketTarget[] | null;
+  /** A first turn is about to land (the welcome flow's), so an empty list is
+   *  not an empty chat and draws no prompt to type. */
+  starting?: boolean;
 }
 
-function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, readOnly, allowFiles, feedbackByTurn, dispatcherContext, marketTargets }: MessageListProps): React.ReactElement | null {
+function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, readOnly, allowFiles, feedbackByTurn, dispatcherContext, marketTargets, starting }: MessageListProps): React.ReactElement | null {
   const isMobile = useIsMobile();
   const { onOpenFile } = useMessageActions();
   // The deck keeps the workspace's own notes file out on every surface; its
@@ -95,6 +98,8 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
   // The bubbles of the server's turns. A send it never stored is painted
   // like any other but has no turn to time, fold, rate or list files under.
   const turned = React.useMemo(() => projected.filter(hasTurn), [projected]);
+  // A turn that opened hidden has no message a regenerate could run again.
+  const hiddenTurns = React.useMemo(() => hiddenOpenerTurns(turned), [turned]);
   // Retry re-runs the thread's latest attempt and replaces everything from
   // its reply on, so only a reply nothing was sent after offers it.
   const latestReplyId = React.useMemo(() => {
@@ -227,7 +232,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
 
   // Empty state - show when no messages exist (hidden in subagent view)
   if (messages.length === 0) {
-    if (isSubagentView) return null;
+    if (isSubagentView || starting) return null;
     if (isLoadingHistory) {
       return (
         <div className="space-y-6 py-4 animate-pulse">
@@ -311,6 +316,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
           contentProjection: projectMessageContent(message, isSubagentView),
           turnIndex,
           isTurnTail: turnTails[i],
+          canRegenerate: turnIndex === null || !hiddenTurns.has(turnIndex),
           isLatestReply: message.id === latestReplyId,
           // The fold already decided whether this turn is working, and that
           // decision now includes a background task outliving its stream.

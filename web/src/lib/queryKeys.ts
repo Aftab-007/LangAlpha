@@ -263,6 +263,11 @@ export const queryKeys = {
     all:    ['quote'],
     detail: (symbol: string) => [...queryKeys.quote.all, symbol],
   },
+  insights: {
+    all:         ['insights'],
+    // Today's market-wide brief, as markdown for the agent.
+    marketBrief: () => [...queryKeys.insights.all, 'market-brief'],
+  },
 };
 
 /**

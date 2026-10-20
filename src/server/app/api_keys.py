@@ -815,6 +815,7 @@ async def list_models():
     """
     from src.config.settings import get_prompt_guidance_default
     from src.llms.llm import get_configured_llm_models, LLM
+    from src.llms.task_costs import task_cost_baseline
     from src.server.app import setup
     from src.tools.web.manifest import (
         CAPABILITY_SEARCH,
@@ -873,6 +874,8 @@ async def list_models():
             "prompt_guidance": get_prompt_guidance_default(),
         },
         "compaction_profiles": COMPACTION_PROFILES,
+        # model_metadata's task_cost values are multiples of this model at this level.
+        "task_cost_baseline": task_cost_baseline(),
         "search_providers": search_providers,
         "provider_catalog": _build_provider_catalog(),
     }
