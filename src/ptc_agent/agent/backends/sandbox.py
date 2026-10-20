@@ -49,7 +49,7 @@ from ptc_agent.agent.backends.results import EditTextResult
 from ptc_agent.core.paths import resolve_agent_path
 from ptc_agent.core.sandbox import ExecutionResult, PTCSandbox
 from ptc_agent.core.sandbox.grep_render import GrepLine
-from ptc_agent.core.sandbox.livefs_mount import MountHandle
+from ptc_agent.core.sandbox.livefs_mount import MountHandle, TranscriptReach
 from ptc_agent.core.sandbox.runtime import PreviewInfo
 
 logger = structlog.get_logger(__name__)
@@ -105,6 +105,12 @@ class SandboxBackend(SandboxBackendProtocol):
     def livefs(self) -> MountHandle | None:
         """The file mount serving the sandbox, or None while none does."""
         return self.sandbox.livefs
+
+    @property
+    def transcripts(self) -> TranscriptReach | None:
+        """Where this agent's transcripts reach its tools, or None while
+        nothing serves them."""
+        return self.sandbox.transcripts
 
     async def settled_livefs(
         self, workspace_id: str | None = None
