@@ -1190,7 +1190,7 @@ class TestDockerRuntimeSessions:
         cmd = call_args[1].get("cmd", call_args[0][0] if call_args[0] else None)
         cmd_str = cmd[-1] if isinstance(cmd, list) else str(cmd)
         assert "base64" in cmd_str
-        assert "nohup setsid" in cmd_str
+        assert "L=setsid" in cmd_str and "nohup $L bash" in cmd_str
 
     @pytest.mark.asyncio
     async def test_session_command_logs_finished(self, runtime):

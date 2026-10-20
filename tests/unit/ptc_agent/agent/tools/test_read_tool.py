@@ -289,3 +289,43 @@ class TestReadToolPassthroughs:
         result = await read.ainvoke({"file_path": "/tmp/missing.txt"})
 
         assert result.startswith("ERROR: File not found")
+
+
+class TestReadToolTranscripts:
+    """A transcript line is one event, so a window cuts each long field and a
+    single-line Read is how the agent gets the event whole."""
+
+    SEGMENT = "/home/workspace/Home/.agents/transcripts/abcd1234/turn-0001.jsonl"
+    LONG = "w" * 5_000
+
+    def _line(self) -> str:
+        import json
+
+        return json.dumps({"role": "tool", "text": self.LONG})
+
+    @pytest.mark.asyncio
+    async def test_a_window_cuts_a_long_field_and_names_the_offset(self):
+        read = _get_read_tool(_make_backend(content=self._line() + "\n"))
+
+        result = await read.ainvoke({"file_path": self.SEGMENT, "offset": 4})
+
+        assert self.LONG not in result
+        assert "[cut: 5,000 chars" in result
+        assert "Read(offset=4, limit=1)" in result
+
+    @pytest.mark.asyncio
+    async def test_one_line_comes_whole(self):
+        read = _get_read_tool(_make_backend(content=self._line() + "\n"))
+
+        result = await read.ainvoke({"file_path": self.SEGMENT, "offset": 4, "limit": 1})
+
+        assert self.LONG in result
+        assert "[cut:" not in result
+
+    @pytest.mark.asyncio
+    async def test_the_same_content_elsewhere_is_not_cut(self):
+        read = _get_read_tool(_make_backend(content=self._line() + "\n"))
+
+        result = await read.ainvoke({"file_path": "/home/workspace/Home/notes.jsonl"})
+
+        assert self.LONG in result

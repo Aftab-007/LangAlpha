@@ -118,6 +118,25 @@ def test_leaves_non_workspace_links_alone(text):
     assert _qualify_file_paths(text, WID) == text
 
 
+def test_a_computer_root_of_its_own_strips_like_the_stock_one():
+    """A computer whose user cannot create the stock root keeps its workspaces
+    under another, and its analyst writes absolute links under that one."""
+    root = "/home/someone/langalpha"
+    text = f"[r]({root}/results/report.md) [s](file://{root}/notes.md)"
+    assert _qualify_file_paths(text, WID, root) == (
+        f"[r]({Q}/results/report.md) [s]({Q}/notes.md)"
+    )
+    # Without the root it is an absolute path outside every workspace.
+    assert _qualify_file_paths(text, WID) == text
+
+
+def test_a_root_that_travels_encoded_strips_in_that_spelling_too():
+    """A link is a URL, so a root with a space reaches the relay as ``%20``."""
+    root = "/Users/someone/My Data"
+    text = "[r](file:///Users/someone/My%20Data/results/Q3%20deck.pptx)"
+    assert _qualify_file_paths(text, WID, root) == f"[r]({Q}/results/Q3%20deck.pptx)"
+
+
 @pytest.mark.parametrize(
     ("fence", "closer"),
     [("```", "```"), ("```", "````"), ("````", "````"), ("~~~", "~~~"), ("~~~", "~~~~")],
