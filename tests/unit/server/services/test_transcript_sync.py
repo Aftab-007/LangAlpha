@@ -42,6 +42,7 @@ from src.server.services.transcripts import (
     _render,
     _Target,
 )
+from tests.unit.restored_overlay import archive, python3_on_path
 
 ROOT = "/home/workspace"
 LAYOUT = SandboxLayout.for_root(ROOT).for_workspace("research")
@@ -662,6 +663,34 @@ async def test_the_set_aside_and_the_removal_run_in_a_real_shell(monkeypatch, tm
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text("x")
 
+    _thread_reads(monkeypatch, _prefixes(T1[:8]))
+
+    _, pruned = await _thread_dirs.prune_dead_thread_dirs(_Shell(), layout, "ws-1")
+
+    assert pruned
+    assert Path(layout.join(D, T1[:8], "keep.txt")).exists()
+    assert not Path(layout.join(D, "33333333")).exists()
+    assert not Path(layout.join(R, "33333333")).exists()
+    assert not list(Path(layout.agents).glob(".pruned.*"))
+
+
+@pytest.mark.asyncio
+async def test_dead_dirs_a_restored_sandbox_cannot_rename_are_deleted_where_they_are(
+    monkeypatch, tmp_path
+):
+    """Restored from its archive, the sandbox refuses to rename them aside
+    (EXDEV), and ``mv`` would copy them while admission waits."""
+    from pathlib import Path
+
+    layout = SandboxLayout.for_root(str(tmp_path)).for_workspace("My Workspace")
+    for path in (
+        layout.join(D, T1[:8], "keep.txt"),
+        layout.join(D, "33333333", "deep", "a.txt"),
+        layout.join(R, "33333333", "b.txt"),
+    ):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text("x")
+    python3_on_path(monkeypatch, tmp_path / "bin", archive(Path(layout.root)))
     _thread_reads(monkeypatch, _prefixes(T1[:8]))
 
     _, pruned = await _thread_dirs.prune_dead_thread_dirs(_Shell(), layout, "ws-1")
