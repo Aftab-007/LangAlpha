@@ -18,6 +18,7 @@ export interface TurnLike extends MessageLike {
   id?: unknown;
   turnIndex?: unknown;
   unadmitted?: unknown;
+  hiddenOpener?: unknown;
 }
 
 export interface ProjectedMessage<M extends TurnLike = MessageRecord> {
@@ -89,6 +90,21 @@ export function projectTurns<M extends TurnLike>(messages: readonly M[]): Projec
 /** Whether the bubble belongs to one of the server's turns. */
 export function hasTurn<M extends TurnLike>(entry: ProjectedMessage<M>): entry is ProjectedMessage<M> & { turnIndex: number } {
   return entry.turnIndex !== null;
+}
+
+/**
+ * The turns that opened with no message of their own (a hidden opener), by
+ * the flag their replies carry. Such a turn's words rode its send's context,
+ * which a regenerate's replay of the turn drops, so none of its bubbles
+ * offers one. Read per turn, not per bubble: a steer splits the turn, and the
+ * regenerate on its tail would rerun the opener all the same.
+ */
+export function hiddenOpenerTurns(projected: readonly ProjectedMessage<TurnLike>[]): Set<number> {
+  const turns = new Set<number>();
+  for (const { message, turnIndex } of projected) {
+    if (turnIndex !== null && message.role === 'assistant' && message.hiddenOpener === true) turns.add(turnIndex);
+  }
+  return turns;
 }
 
 /**

@@ -89,6 +89,34 @@ function dropLiveCopy(
       break;
     }
   }
+  return dropTurnFrom(prev, opener, pairIndex, insertIndex);
+}
+
+/**
+ * The same for a turn that opened with no message of its own (a hidden
+ * opener), whose replayed query is empty and draws no row: its copy starts at
+ * the reply its send flagged. A reply the server refused before admission is
+ * no copy, for the reason a refused send is none.
+ */
+function dropHiddenOpenerCopy(
+  prev: MessageRecord[],
+  pairIndex: number,
+  insertIndex: number,
+): { rest: MessageRecord[]; removedAbove: number } {
+  const opener = prev.findLastIndex((m) => (
+    m.role === 'assistant' && m.hiddenOpener === true && !m.isHistory && !m.unadmitted && m.turnIndex === pairIndex
+  ));
+  return dropTurnFrom(prev, opener, pairIndex, insertIndex);
+}
+
+/** Drops the live copy of turn `pairIndex` that opens at `opener` (-1 for
+ *  none): the opener, and the replies and delivered steers under it. */
+function dropTurnFrom(
+  prev: MessageRecord[],
+  opener: number,
+  pairIndex: number,
+  insertIndex: number,
+): { rest: MessageRecord[]; removedAbove: number } {
   if (opener === -1) return { rest: prev, removedAbove: 0 };
   const drop = new Set<number>([opener]);
   for (let i = opener + 1; i < prev.length; i++) {
@@ -188,6 +216,19 @@ export function handleHistoryUserMessage({
   });
 
   const messageContent = (event.content || '').trim();
+  // A user's turn with no words whose stored context names the `onboarding`
+  // skill opened hidden: the welcome flow's kickoff, the one send of that
+  // hidden skill. Its words were the skill's instruction, which no row keeps,
+  // so its reply carries the flag the live one did and the turn still offers
+  // no Regenerate. Other skills ride turns the user sent: attachments alone
+  // with Watch on name `market-watch`, and keep their Regenerate, since their
+  // input checkpoint holds the files.
+  const storedContext = event.metadata?.additional_context;
+  const opensHidden = !messageContent && !event.query_type && Array.isArray(storedContext)
+    && storedContext.some((ctx) => {
+      const entry = ctx as { type?: unknown; name?: unknown } | null;
+      return entry?.type === 'skills' && entry.name === 'onboarding';
+    });
 
   // Check if this message was recently sent (to avoid duplicates)
   const isDuplicate = messageContent && recentlySentTracker.isRecentlySent(messageContent);
@@ -278,6 +319,14 @@ export function handleHistoryUserMessage({
         newMessagesStartIndexRef.current = insertIndex + 1;
         return newMessages;
       });
+    } else if (!messageContent && event.query_type !== 'system' && !currentMessageRef.current) {
+      // No row, so nothing above took the turn's live copy away, and the
+      // placeholder below would draw the reply a second time beside it.
+      setMessages((prev: MessageRecord[]) => {
+        const { rest, removedAbove } = dropHiddenOpenerCopy(prev, pairIndex, newMessagesStartIndexRef.current);
+        newMessagesStartIndexRef.current -= removedAbove;
+        return rest;
+      });
     }
   }
 
@@ -310,6 +359,7 @@ export function handleHistoryUserMessage({
       contentSegments: [],
       reasoningProcesses: {},
       toolCallProcesses: {},
+      ...(opensHidden ? { hiddenOpener: true } : {}),
     };
 
     setMessages((prev: MessageRecord[]) => {

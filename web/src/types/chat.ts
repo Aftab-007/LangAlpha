@@ -550,6 +550,12 @@ export type AssistantMessage = {
   /** The reply to a send the server refused before admitting it (see
    *  UserMessage.unadmitted). */
   unadmitted?: boolean;
+  /** The reply to a send that drew no message of its own (a hidden opener),
+   *  so it opens its turn on screen. A replay of the turn has no opener row
+   *  to find this live copy by, and finds it by this instead. The replay
+   *  flags its own copy too, and a turn with it offers no Regenerate
+   *  (`hiddenOpenerTurns`). */
+  hiddenOpener?: boolean;
   /** Monotonic counter bumped by every landed reply text chunk or context
    *  notice (`nextArrivalSeq`). The streaming indicator reads it to tell
    *  arriving text from a pause. */

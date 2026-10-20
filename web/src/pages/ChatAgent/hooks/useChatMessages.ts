@@ -31,7 +31,7 @@ import { getStoredThreadId, setStoredThreadId } from './utils/threadStorage';
 import { type SubagentTokenUsage, ZERO_USAGE } from '../utils/tokenUsage';
 import { computeSteeringBoundary } from '../session/stream/steeringRollback';
 import { isSteeringUserMessage, opensTurn } from '../components/messageList/messagePredicates';
-import { hasTurn, newestTurn, projectTurns, turnOf } from '../components/messageList/turnProjection';
+import { hasTurn, hiddenOpenerTurns, newestTurn, projectTurns, turnOf } from '../components/messageList/turnProjection';
 import { isSubagentEvent } from '../session/subagents/liveEventHandlers';
 import { bumpThreadNavOrder } from './useNavigationData';
 import { invalidateNewWorkspace } from './workspaceRowActions';
@@ -58,7 +58,7 @@ import { refreshComputersAfterTurn } from './useComputers';
 // --- Module scope extracted to session/types + utils (W1) ---
 import type {
   TokenUsage, PendingInterrupt,
-  SSEEvent, ModelOptions, OffloadBatch, TaskRefs,
+  SSEEvent, ModelOptions, SendOptions, OffloadBatch, TaskRefs,
   HistoryInterruptInfo, StreamProcessorRefs,
   ModelStatus, FallbackSuggestion,
 } from '../session/types';
@@ -90,9 +90,10 @@ import { collectRenderedInterruptIds, finalizeTodoListProcessesInMessages } from
 export { finalizeTodoListProcessesInMessages, mapToolCallIdToAgentId } from './utils/messageFinalizers';
 
 /** A send the server started no run of. Its automatic resends carry it, so
- * the one that ends the chain can mark it never kept and give its turn back. */
+ * the one that ends the chain can mark it never kept and give its turn back.
+ * A hidden opener drew no message, so it has no user bubble to carry. */
 interface UnstartedSend {
-  userId: string;
+  userId: string | null;
   watermarkBefore: number | null;
 }
 
@@ -2165,13 +2166,14 @@ export function useChatMessages(
    * key in case a copy arrived.
    */
   const trackPlainSend = (send: {
-    userId: string;
+    /** Null for a hidden opener, whose reply is its only bubble. */
+    userId: string | null;
     assistantId: string;
     turnIndex: number;
     request: TurnRequest & { requestKey: string };
     watermarkBefore: number | null;
   }) => {
-    const ids = new Set([send.userId, send.assistantId]);
+    const ids = new Set(send.userId === null ? [send.assistantId] : [send.userId, send.assistantId]);
     let started = false;
     let refused = false;
     return {
@@ -2207,7 +2209,20 @@ export function useChatMessages(
     };
   };
 
-  const handleSendMessage = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed }: ModelOptions = {}, resendKey: string | null = null) => {
+  /**
+   * Gives a hidden opener's reply, from the moment it opens, a Retry that
+   * brings the turn's context again. Its words ride that context alone, which
+   * no row keeps, and no message of it is on screen to send again: a run that
+   * failed before its graph took the input reruns it, which the server
+   * refuses without the context (`resend_required`). A recovery the stream
+   * names, or a refusal of the send, holds its own Retry in this one's place.
+   */
+  const holdHiddenOpenerRetry = (bubbleId: string, additionalContext: Record<string, unknown>[] | null) => {
+    if (!additionalContext) return;
+    heldRetriesRef.current.set(bubbleId, { bubbleId, request: retryRequest(null, additionalContext), cut: null });
+  };
+
+  const handleSendMessage = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, hiddenOpener = false, threadTitle }: SendOptions = {}, resendKey: string | null = null) => {
     const hasContent = message.trim() || (additionalContext && additionalContext.length > 0);
     if (!workspaceId || !hasContent) {
       return;
@@ -2216,6 +2231,10 @@ export function useChatMessages(
     // Chat activity bumps the thread to the top of the nav panel's list
     // (clicking around never reorders; new threads surface via the new-id rule).
     bumpThreadNavOrder(workspaceId, threadIdRef.current);
+
+    // The three branches below park or steer a send in a chat that is busy. A
+    // hidden opener only ever opens a new chat, which is never busy, so they
+    // carry neither of its options.
 
     // If the agent is compacting its context, hold this message and auto-send
     // it once compaction finishes (mirrors the backend admission gate, which
@@ -2271,16 +2290,18 @@ export function useChatMessages(
     // Store model options so HITL resume can forward them
     lastModelOptionsRef.current = { model: model || null, reasoningEffort: reasoningEffort || null, fastMode: fastMode ?? null };
 
-    // Create and add user message
+    // Create and add user message. A hidden opener has none, and its reply is
+    // the first bubble of its turn: the replay knows that reply by the flag
+    // it carries, since the empty query it stores draws no row to match.
     const turnIndex = newestKnownTurn() + 1;
-    const userMessage = createUserMessage(
+    const userMessage = hiddenOpener ? null : createUserMessage(
       message,
       turnIndex,
       attachmentMeta as AttachmentMeta[] | null,
       widgetSnapshots ?? null,
       chartSelections ?? null,
     );
-    recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
+    if (userMessage) recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
 
     // Check if this is a new conversation
     // Only consider it a new conversation if:
@@ -2298,14 +2319,16 @@ export function useChatMessages(
     }
 
     // Add user message after history messages
-    setMessages((prev) => {
-      const newMessages = appendMessage(prev,userMessage);
-      // Update new messages start index if this is the first new message
-      if (newMessagesStartIndexRef.current === prev.length) {
-        newMessagesStartIndexRef.current = newMessages.length;
-      }
-      return newMessages;
-    });
+    if (userMessage) {
+      setMessages((prev) => {
+        const newMessages = appendMessage(prev,userMessage);
+        // Update new messages start index if this is the first new message
+        if (newMessagesStartIndexRef.current === prev.length) {
+          newMessagesStartIndexRef.current = newMessages.length;
+        }
+        return newMessages;
+      });
+    }
 
     setIsLoading(true);
     setMessageError(null);
@@ -2338,7 +2361,10 @@ export function useChatMessages(
     const abortController = new AbortController();
     mainStreamAbortRef.current = abortController;
 
-    const assistantMessage = createAssistantMessage(assistantMessageId, turnIndex);
+    const assistantMessage: AssistantMessage = {
+      ...createAssistantMessage(assistantMessageId, turnIndex),
+      ...(hiddenOpener ? { hiddenOpener: true } : {}),
+    };
 
     // Add assistant message after history messages
     setMessages((prev) => {
@@ -2353,6 +2379,7 @@ export function useChatMessages(
       threadId,
       workspaceId,
       message,
+      title: threadTitle,
       platform,
       timezone: userTimezone,
       subagentsAllowed,
@@ -2375,12 +2402,13 @@ export function useChatMessages(
     let wasDisconnected = false;
     const wasInterruptedRef = { current: false };
     const admission = trackPlainSend({
-      userId: userMessage.id as string,
+      userId: userMessage?.id ?? null,
       assistantId: assistantMessageId,
       turnIndex,
       request: { ...sendRequest(message, additionalContext, subagentsAllowed), requestKey },
       watermarkBefore,
     });
+    if (hiddenOpener) holdHiddenOpenerRetry(assistantMessageId, additionalContext);
     try {
       // Prepare refs for event handlers — use persistent subagent state
       const refs = buildStreamRefs({ isNewConversation: isNewConversationRef.current });
@@ -2464,7 +2492,9 @@ export function useChatMessages(
           if ((err as Error)?.name === 'AbortError' || wasStoppedRef.current) {
             return;
           }
-          if (settleSteeredSend(err, { userId: userMessage.id as string, assistantId: assistantMessageId, turnIndex, watermarkBefore, requestKey })) return;
+          // A copy steered into another turn needs a turn running, which a
+          // hidden opener's new chat has none of.
+          if (userMessage && settleSteeredSend(err, { userId: userMessage.id, assistantId: assistantMessageId, turnIndex, watermarkBefore, requestKey })) return;
           // 409 duplicate_request: an earlier copy of this send was already
           // accepted (its response was lost) — adopt that run instead of
           // erroring; the reconnect owns finalization from here.
@@ -2479,7 +2509,10 @@ export function useChatMessages(
           if ((err as Record<string, unknown>).status !== 429) console.error('Error sending message:', err);
           const { banner, answered } = refusalBanner(err);
           if (banner !== null) setMessageError(banner);
-          if (answered) {
+          // A hidden opener keeps its reply either way: the user has no
+          // message on screen to send again, so the failed reply is the one
+          // place the turn's Retry can live, beside the banner's reason.
+          if (answered && userMessage) {
             // When a banner with a CTA renders, drop the optimistic assistant
             // bubble so the transcript stays clean, as the `internal` SSE
             // error does. A content-less "Failed to send message" bubble
@@ -2921,7 +2954,17 @@ export function useChatMessages(
       ?? (plainSend && (replaced !== undefined || !rerun) ? newestKnownTurn() + 1 : null)
       ?? newestTurn(snapshot)
       ?? newestKnownTurn() + 1;
-    const assistantMessage = createAssistantMessage(assistantMessageId, turnIndex);
+    // Another attempt at a hidden opener's turn, a resend or a Retry, draws its
+    // reply as the opener did, with no message above it, flagged so a replay
+    // can still find it and the turn still offers no Regenerate. Its Retry
+    // brings the context again, as the opener's did.
+    const rerunsHidden = forkFromTurn === null && (replaced?.message as Partial<AssistantMessage> | undefined)?.hiddenOpener === true;
+    const reopensHidden = plainSend && rerunsHidden;
+    const assistantMessage: AssistantMessage = {
+      ...createAssistantMessage(assistantMessageId, turnIndex),
+      ...(rerunsHidden ? { hiddenOpener: true } : {}),
+    };
+    if (rerunsHidden) holdHiddenOpenerRetry(assistantMessageId, request.additionalContext);
     const userMessage = message && !rerun ? createUserMessage(message, turnIndex) : null;
     // Another attempt at a send the server never stored keeps its message,
     // which takes the send's turn as it goes again.
@@ -2930,10 +2973,14 @@ export function useChatMessages(
     const resentUserId = resent?.userId
       ?? (rerun && plainSend && replaced?.turnIndex === null && before?.role === 'user' && before.unadmitted ? before.id : null);
     const sendUserId = userMessage?.id ?? resentUserId;
+    // Another attempt at a hidden opener is a send still, with no message of
+    // it on screen: the opener never drew one, and its reply is the bubble
+    // the server's verdict on it settles.
+    const opensSend = sendUserId !== null || reopensHidden;
     // A resend's send already counted its turn, so the count goes back to
     // where it stood before the send.
     const watermarkBefore = resent ? resent.watermarkBefore : lastRenderedTurnIndexRef.current;
-    if (sendUserId !== null && turnIndex > (watermarkBefore ?? -1)) lastRenderedTurnIndexRef.current = turnIndex;
+    if (opensSend && turnIndex > (watermarkBefore ?? -1)) lastRenderedTurnIndexRef.current = turnIndex;
 
     if (userMessage) {
       recentlySentTrackerRef.current.track(message!.trim(), userMessage.timestamp, userMessage.id);
@@ -3007,7 +3054,7 @@ export function useChatMessages(
       if (viaRetryEndpoint) return isRecoverableRetryRefusal(source) && forkRefusal.recover(source, { kind: 'retry', transcript: snapshot, draft: null, asked });
       return isStaleForkRefusal(source) && forkRefusal.recover(source, { kind: 'regenerate', transcript: snapshot, draft: null });
     };
-    const admission = sendUserId === null ? null : trackPlainSend({
+    const admission = !opensSend ? null : trackPlainSend({
       userId: sendUserId,
       assistantId: assistantMessageId,
       turnIndex,
@@ -3298,6 +3345,11 @@ export function useChatMessages(
     // A reply the server never stored has no turn to run again; its Retry
     // sends its message.
     if (turnIndex === null) return;
+    // Nor does a turn that opened hidden: its words rode its send's context,
+    // which neither its stored row nor the input checkpoint a regenerate
+    // replays holds, so the rerun would answer an empty turn. The list offers
+    // it no Regenerate; this guards every other caller.
+    if (hiddenOpenerTurns(projected).has(turnIndex)) return;
 
     // A turn can render as several bubbles (a steered turn's pre-steering half
     // and continuations, the halves of a stream a reconnect resumed) but has

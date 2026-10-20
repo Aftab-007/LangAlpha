@@ -155,6 +155,19 @@ interface ModelOptions {
   subagentsAllowed?: boolean;
 }
 
+/** What a fresh send takes beyond the model options an edit or regenerate does. */
+interface SendOptions extends ModelOptions {
+  /**
+   * The send opens its turn with no message of its own: the model reads only
+   * its additionalContext, and the reply is the first bubble the turn shows.
+   * A reload draws none for it either, since its stored query is empty.
+   */
+  hiddenOpener?: boolean;
+  /** The title of the thread this send creates, in place of one generated
+   *  from its message. A send on a live thread leaves the title alone. */
+  threadTitle?: string;
+}
+
 /** Offload batch ref state. */
 interface OffloadBatch {
   args: number;
@@ -293,7 +306,7 @@ interface PairState {
 
 export type {
   SetMessages, TokenUsage, PendingInterrupt,
-  SSEEvent, ModelOptions, OffloadBatch, ContextWindowCallbacks,
+  SSEEvent, ModelOptions, SendOptions, OffloadBatch, ContextWindowCallbacks,
   SubagentHistoryEntry, TaskRefs, HistoryInterruptInfo, SubagentHistoryData,
   StreamProcessorRefs, PairState,
 };

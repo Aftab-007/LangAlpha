@@ -9,7 +9,7 @@ import { projectMessageContent, visibleProjection } from './messageList/contentP
 import { useMessageActions } from './messageList/MessageActionsContext';
 import { isReportRow, opensTurn } from './messageList/messagePredicates';
 import { UserBubble } from './messageList/UserBubble';
-import { computeTurnTails, hasTurn, projectTurns } from './messageList/turnProjection';
+import { computeTurnTails, hasTurn, hiddenOpenerTurns, projectTurns } from './messageList/turnProjection';
 import { useLiveMessages, type LiveMessages } from '../session/stream/liveMessages';
 import type { ChatMessage, MessageProvenance } from '@/types/chat';
 import type { MarketTarget } from '../utils/api';
@@ -95,6 +95,8 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
   // The bubbles of the server's turns. A send it never stored is painted
   // like any other but has no turn to time, fold, rate or list files under.
   const turned = React.useMemo(() => projected.filter(hasTurn), [projected]);
+  // A turn that opened hidden has no message a regenerate could run again.
+  const hiddenTurns = React.useMemo(() => hiddenOpenerTurns(turned), [turned]);
   // Retry re-runs the thread's latest attempt and replaces everything from
   // its reply on, so only a reply nothing was sent after offers it.
   const latestReplyId = React.useMemo(() => {
@@ -311,6 +313,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
           contentProjection: projectMessageContent(message, isSubagentView),
           turnIndex,
           isTurnTail: turnTails[i],
+          canRegenerate: turnIndex === null || !hiddenTurns.has(turnIndex),
           isLatestReply: message.id === latestReplyId,
           // The fold already decided whether this turn is working, and that
           // decision now includes a background task outliving its stream.

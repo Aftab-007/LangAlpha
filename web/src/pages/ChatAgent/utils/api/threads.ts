@@ -18,12 +18,16 @@ export interface ThreadCreatedInfo {
  * Resolves with the created row so the caller can navigate and paint the
  * sidebar row immediately. The generated title is NOT awaited here: it lands
  * on the lifecycle feed's `thread_title` event (and on the next list refetch),
- * which is the single delivery path for it. Rejects on HTTP failure or
- * timeout — callers fall back to the legacy `__default__` send path.
+ * which is the single delivery path for it. A `title` the caller names is
+ * stored as given and none is generated. Rejects on HTTP failure or timeout —
+ * callers fall back to the legacy `__default__` send path.
  */
 export async function createThreadWithTitle(opts: {
   workspaceId?: string | null;
+  /** May be empty when `title` is given. */
   firstQuery: string;
+  /** The thread's title, in place of one generated from `firstQuery`. */
+  title?: string;
   platform?: string | null;
   /** Lets title generation resolve relative dates ("today") on the user's
    *  wall clock; the server reads UTC without it. */
@@ -32,9 +36,10 @@ export async function createThreadWithTitle(opts: {
   subagentsAllowed?: boolean;
   timeoutMs?: number;
 }): Promise<ThreadCreatedInfo> {
-  const { workspaceId, firstQuery, platform, timezone, subagentsAllowed, timeoutMs = 8000 } = opts;
+  const { workspaceId, firstQuery, title, platform, timezone, subagentsAllowed, timeoutMs = 8000 } = opts;
 
   const body: Record<string, unknown> = { first_query: firstQuery };
+  if (title) body.title = title;
   if (workspaceId) body.workspace_id = workspaceId;
   if (platform) body.platform = platform;
   if (timezone) body.timezone = timezone;
