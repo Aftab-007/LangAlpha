@@ -4206,7 +4206,7 @@
         "neverAvailable": "始终不可用",
         "neverAvailableNote": "已刻意保留。无论授权什么都会被拒绝。"
       },
-      "exclusiveNote": "会断开你的 {{broker}} 账户已关联的其他 AI 应用",
+      "exclusiveNote": "会断开此账户已关联的其他 AI 应用",
       "exclusiveWarning": "该账户只允许连接一个 AI 平台，因此在此连接会取代当前已连接的那一个。",
       "grantedNone": "未授予任何操作",
       "intro": "连接之前不会向券商发送任何数据，每次连接前都会先询问 Agent 可以在其中做什么。",

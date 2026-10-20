@@ -4259,7 +4259,7 @@
         "neverAvailable": "Never available",
         "neverAvailableNote": "Held back deliberately. Refused whatever you grant."
       },
-      "exclusiveNote": "Disconnects any other AI app linked to your {{broker}} account",
+      "exclusiveNote": "Disconnects other AI apps linked to this account",
       "exclusiveWarning": "This account allows one connected AI platform, so connecting here replaces whichever one is connected now.",
       "grantedNone": "Granted nothing",
       "intro": "Nothing reaches a broker until you connect it, and each connection asks first what the agent may do there.",
