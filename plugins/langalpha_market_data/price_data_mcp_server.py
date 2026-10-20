@@ -46,10 +46,18 @@ from data_client.ginlix_data import (
     get_ginlix_mcp_client,
 )
 from data_client.market_data_provider import symbol_market
-from data_client.normalize import minor_unit_scale, normalize_bars, scale_price
+from data_client.normalize import minor_unit_places, normalize_bars, scale_price
 from data_client.ginlix_data.cn_source import GinlixDataCnSource
 from data_client.ginlix_data.directory import NameDirectory
-from market_protocol import to_canonical, to_display, to_legacy_api
+from market_protocol import (
+    InstrumentRef,
+    index_families,
+    is_family_index,
+    market_of,
+    to_canonical,
+    to_display,
+    to_legacy_api,
+)
 from market_protocol.enums import AssetClass
 
 try:
@@ -69,6 +77,12 @@ except ModuleNotFoundError:  # imported as a package module (tests)
         normalize_interval,
     )
 
+from mcp_servers._dates import (
+    NEW_YORK,
+    commodity_daily_days,
+    daily_days,
+    intraday_window,
+)
 from mcp_servers._schemas import (
     OBJECT,
     RECORDS,
@@ -103,6 +117,11 @@ _ASSET_INTERVALS = _ASSET_INTRADAY | {"1day"}
 #: other listings about as short.
 _CN_DEFAULT_DAILY_DAYS = 90
 
+#: Family indexes the US tier serves: the known families homed on a US venue.
+_US_INDEX_FAMILIES = frozenset(
+    ref.index_family for ref in index_families() if market_of(ref) == "us"
+)
+
 
 _lifespan = closing_lifespan(close_ginlix_mcp_client, close_fmp_client)
 
@@ -112,20 +131,22 @@ _lifespan = closing_lifespan(close_ginlix_mcp_client, close_fmp_client)
 # ---------------------------------------------------------------------------
 
 
-def _resolve(
-    symbol: str, asset_class: Optional[AssetClass] = None
-) -> tuple[str, str, Optional[str], Optional[str]]:
+_Resolved = tuple[str, str, Optional[str], Optional[str], Optional[InstrumentRef]]
+
+
+def _resolve(symbol: str, asset_class: Optional[AssetClass] = None) -> _Resolved:
     """Resolve a caller symbol via the protocol registry.
 
-    Returns ``(display, legacy, currency, timezone)`` — the canonical display
-    spelling, the legacy provider spelling, ISO-4217 price currency, and IANA
-    timezone. Falls back to the raw symbol with unknown currency/tz.
+    Returns ``(display, legacy, currency, timezone, ref)``: the canonical display
+    spelling, the legacy provider spelling, ISO-4217 price currency, IANA
+    timezone, and the ref itself. Falls back to the raw symbol with unknown
+    currency/tz and no ref.
     """
     try:
         ref = to_canonical(symbol, asset_class=asset_class)
-        return to_display(ref), to_legacy_api(ref), ref.price_currency, ref.tz
+        return to_display(ref), to_legacy_api(ref), ref.price_currency, ref.tz, ref
     except Exception:  # noqa: BLE001
-        return symbol, symbol, None, None
+        return symbol, symbol, None, None, None
 
 
 def _resolve_interval(
@@ -149,20 +170,20 @@ def _resolve_interval(
 
 
 def _display_rows(
-    rows: list[dict], symbol: str, *, intraday: bool, scale: float = 1.0
+    rows: list[dict], symbol: str, *, intraday: bool, places: int = 0
 ) -> list[dict]:
     """Raw provider rows → ascending ``{date, open, high, low, close, volume}``.
 
     Timestamps are localized to *symbol*'s exchange timezone; price fields are
-    scaled to major units (``scale`` = 0.01 for GBX/pence venues). Volume is a
+    shifted to major units (``places`` = 2 for GBX/pence venues). Volume is a
     share count and never scaled.
     """
     normalized = normalize_bars(rows, symbol, intraday=intraday)  # descending
     normalized.reverse()  # ascending, oldest-first (contract)
-    if scale != 1.0:
+    if places:
         for row in normalized:
             for field in ("open", "high", "low", "close"):
-                row[field] = scale_price(row[field], scale)
+                row[field] = scale_price(row[field], places)
     return normalized
 
 
@@ -191,7 +212,9 @@ async def _fetch_stock_series(
     CN and HK listings the local-language ``name``, whichever source served
     the bars.
     """
-    resolved = _resolve(symbol)
+    # A bare ticker is the listing (COMP the stock, not the Nasdaq Composite);
+    # only an index spelling (^GSPC, I:SPX, SPX.INDEX) asks for index bars.
+    resolved = _resolve(symbol, asset_class=AssetClass.EQUITY)
     (name, _), (ok, err) = await asyncio.gather(
         _names.display_names(resolved[1]),
         _fetch_stock_bars(resolved, interval, start_date, end_date),
@@ -202,12 +225,12 @@ async def _fetch_stock_series(
 
 
 async def _fetch_stock_bars(
-    resolved: tuple[str, str, Optional[str], Optional[str]],
+    resolved: _Resolved,
     interval: str,
     start_date: Optional[str],
     end_date: Optional[str],
 ) -> tuple[Optional[dict], Optional[dict]]:
-    display, legacy, currency, timezone = resolved
+    display, legacy, currency, timezone, ref = resolved
     canonical, err = _resolve_interval(interval, _STOCK_INTERVALS, symbol=display)
     if err is not None:
         return None, err
@@ -254,8 +277,23 @@ async def _fetch_stock_bars(
                 "timezone": timezone,
             }, None
 
-    # ginlix-data's US tier (US equities only; returns None for anything else).
-    ginlix_result = await _ginlix.fetch_stock_data(legacy, canonical, start_date, end_date)
+    # The legacy spelling of a family index is bare (GSPC), which every vendor
+    # reads as a stock ticker: FMP needs ^GSPC, Massive its I:SPX index ticker.
+    family = ref is not None and is_family_index(ref)
+    fmp_symbol = f"^{legacy}" if family else legacy
+
+    # ginlix-data's US tier: US equities, and US family indexes on the index
+    # market. A foreign family index has no tier and goes straight to FMP, as
+    # does one the protocol does not know, which it homes on a US venue only
+    # by default.
+    if not family:
+        ginlix_result = await _ginlix.fetch_stock_data(legacy, canonical, start_date, end_date)
+    elif ref.index_family in _US_INDEX_FAMILIES:
+        ginlix_result = await _ginlix.fetch_stock_data(
+            f"I:{ref.index_family}", canonical, start_date, end_date, market="index"
+        )
+    else:
+        ginlix_result = None
     refused: Optional[dict] = None
     if isinstance(ginlix_result, dict):
         status = ginlix_result.get("status")
@@ -293,13 +331,19 @@ async def _fetch_stock_bars(
             symbol=display,
         )
 
-    scale = minor_unit_scale(legacy)
+    places = minor_unit_places(legacy)
+    window = None
     try:
+        # A bound FMP would drop or a reversed window is refused here, as the
+        # hosted tools refuse it (mcp_servers/_dates.py). The ginlix-data tier
+        # above sends both on to this read rather than answering them.
         if canonical in DAILY_INTERVALS:
-            rows = await client.get_stock_price(legacy, from_date=start_date, to_date=end_date)
+            lo, hi = daily_days(start_date, end_date)
+            rows = await client.get_stock_price(fmp_symbol, from_date=lo, to_date=hi)
         else:
+            window = intraday_window(start_date, end_date, timezone)
             rows = await client.get_intraday_chart(
-                legacy, canonical, from_date=start_date, to_date=end_date
+                fmp_symbol, canonical, from_date=window.from_day, to_date=window.to_day
             )
     except Exception as e:  # noqa: BLE001
         return None, refused or error_from_exception(
@@ -310,8 +354,10 @@ async def _fetch_stock_bars(
         return None, refused or make_error(
             "upstream_error", "FMP fetch failed.", symbol=display, interval=canonical
         )
+    if window is not None:
+        rows = window.rows(rows or [])
 
-    data = _display_rows(rows or [], legacy, intraday=intraday, scale=scale)
+    data = _display_rows(rows or [], legacy, intraday=intraday, places=places)
     if refused and not data:
         return None, refused
     return {
@@ -430,7 +476,7 @@ async def get_asset_data(
     # commodity / crypto / forex — FMP direct (the provider chain and ginlix
     # cover equities/indexes only). Currency + timezone from canonical identity.
     hint = {"crypto": AssetClass.CRYPTO, "forex": AssetClass.FX}.get(at)
-    display, _legacy, currency, timezone = _resolve(symbol, asset_class=hint)
+    display, _legacy, currency, timezone, _ref = _resolve(symbol, asset_class=hint)
     canonical, err = _resolve_interval(interval, _ASSET_INTERVALS, symbol=display)
     if err is not None:
         return err
@@ -454,30 +500,44 @@ async def get_asset_data(
             symbol=display,
         )
 
+    window = None
     try:
+        # Bounds are read as the hosted tools read them (mcp_servers/_dates.py).
         if canonical in DAILY_INTERVALS:
             if at == "commodity":
-                rows = await client.get_commodity_price(symbol, from_date=from_date, to_date=to_date)
-            elif at == "crypto":
-                rows = await client.get_crypto_price(symbol, from_date=from_date, to_date=to_date)
+                lo, hi = commodity_daily_days(from_date, to_date)
+                rows = await client.get_commodity_price(symbol, from_date=lo, to_date=hi)
             else:
-                rows = await client.get_forex_price(symbol, from_date=from_date, to_date=to_date)
+                lo, hi = daily_days(from_date, to_date)
+                if at == "crypto":
+                    rows = await client.get_crypto_price(symbol, from_date=lo, to_date=hi)
+                else:
+                    rows = await client.get_forex_price(symbol, from_date=lo, to_date=hi)
         elif at == "commodity":
+            # FMP labels a commodity in New York time, the zone its envelope
+            # states, so its labels stand.
+            window = intraday_window(from_date, to_date, NEW_YORK)
             rows = await client.get_commodity_intraday_chart(
-                symbol, canonical, from_date=from_date, to_date=to_date
-            )
-        elif at == "crypto":
-            rows = await client.get_crypto_intraday_chart(
-                symbol, canonical, from_date=from_date, to_date=to_date
+                symbol, canonical, from_date=window.from_day, to_date=window.to_day
             )
         else:
-            rows = await client.get_forex_intraday_chart(
-                symbol, canonical, from_date=from_date, to_date=to_date
-            )
+            # FMP labels a pair in New York time too, but its envelope states
+            # UTC: the window is read there and the labels rewritten into it.
+            window = intraday_window(from_date, to_date, timezone, labels=NEW_YORK)
+            if at == "crypto":
+                rows = await client.get_crypto_intraday_chart(
+                    symbol, canonical, from_date=window.from_day, to_date=window.to_day
+                )
+            else:
+                rows = await client.get_forex_intraday_chart(
+                    symbol, canonical, from_date=window.from_day, to_date=window.to_day
+                )
     except Exception as e:  # noqa: BLE001
         return error_from_exception(
             e, "FMP fetch failed.", symbol=display, interval=canonical
         )
+    if window is not None and isinstance(rows, list):
+        rows = window.rows(rows)
 
     data = _display_rows(rows or [], symbol, intraday=intraday)
     return make_response(
@@ -533,7 +593,7 @@ async def get_short_data(
         short_volume_ratio). Partial failures appear in an `errors` map. On
         error: {error: <code>, detail}.
     """
-    display, legacy, _currency, timezone = _resolve(symbol)
+    display, legacy, _currency, timezone, _ref = _resolve(symbol)
 
     if not await _ginlix.ensure():
         return make_error(

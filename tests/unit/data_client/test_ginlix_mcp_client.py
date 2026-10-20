@@ -215,3 +215,106 @@ class TestFetchStockDataStatus:
             assert result == {"error": f"ginlix-data error ({status}): nope", "status": status}
         else:
             assert result is None
+
+
+class TestFetchStockDataWindow:
+    @pytest.mark.parametrize(
+        ("start", "end", "kept"),
+        [
+            # A window across days keeps the evening of the first and the
+            # morning of the last, not the times of day both share.
+            ("2026-10-15 15:00", "2026-10-16 10:00", ["15:00", "09:30", "10:00"]),
+            # A bare end spans its whole day.
+            ("2026-10-16", "2026-10-16", ["09:30", "10:00", "15:30"]),
+            # Midnight is a time, not a bare day.
+            ("2026-10-16 00:00", "2026-10-16 09:30", ["09:30"]),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_intraday_bounds_are_instants(self, start, end, kept):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        new_york = ZoneInfo("America/New_York")
+        opens = ["2026-10-15 13:00", "2026-10-15 15:00", "2026-10-16 09:30",
+                 "2026-10-16 10:00", "2026-10-16 15:30"]
+        bars = [
+            {"time": int(datetime.fromisoformat(o).replace(tzinfo=new_york).timestamp() * 1000),
+             "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+            for o in opens
+        ]
+        client = GinlixMCPClient()
+        client._http = httpx.AsyncClient(
+            base_url="http://ginlix-data.test",
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"results": bars})
+            ),
+        )
+        try:
+            rows = await client.fetch_stock_data("AAPL", "5min", start, end)
+        finally:
+            await client.close()
+
+        assert [r["date"][11:16] for r in reversed(rows)] == kept
+
+    @pytest.mark.asyncio
+    async def test_offset_bounds_ask_for_the_exchange_day(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        # 02:00 to 04:00 in UTC+8 is 14:00 to 16:00 the day before in New York.
+        new_york = ZoneInfo("America/New_York")
+        opens = ["2026-10-15 13:00", "2026-10-15 14:00", "2026-10-15 16:00",
+                 "2026-10-15 16:30"]
+        bars = [
+            {"time": int(datetime.fromisoformat(o).replace(tzinfo=new_york).timestamp() * 1000),
+             "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+            for o in opens
+        ]
+        asked = []
+
+        def answer(request):
+            asked.append(dict(request.url.params))
+            return httpx.Response(200, json={"results": bars})
+
+        client = GinlixMCPClient()
+        client._http = httpx.AsyncClient(
+            base_url="http://ginlix-data.test", transport=httpx.MockTransport(answer)
+        )
+        try:
+            rows = await client.fetch_stock_data(
+                "AAPL", "5min", "2026-10-16 02:00+08:00", "2026-10-16T04:00+08:00"
+            )
+        finally:
+            await client.close()
+
+        assert (asked[0]["from"], asked[0]["to"]) == ("2026-10-15", "2026-10-15")
+        assert [r["date"] for r in reversed(rows)] == [
+            "2026-10-15 14:00:00", "2026-10-15 16:00:00"
+        ]
+
+    @pytest.mark.parametrize(
+        ("interval", "start", "end"),
+        [
+            ("1day", "2026-10-16", "2026-10-15"),
+            ("1day", "2026/10/15", "2026-10-16"),
+            ("5min", "2026-10-16 15:00", "2026-10-16 10:00"),
+            ("5min", "2026-10-16 9:30", "2026-10-16 10:00"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_a_window_it_cannot_read_falls_back(self, interval, start, end):
+        # The FMP read that follows refuses it in the hosted words.
+        asked = []
+        client = GinlixMCPClient()
+        client._http = httpx.AsyncClient(
+            base_url="http://ginlix-data.test",
+            transport=httpx.MockTransport(
+                lambda request: asked.append(request) or httpx.Response(200, json={"results": []})
+            ),
+        )
+        try:
+            assert await client.fetch_stock_data("AAPL", interval, start, end) is None
+        finally:
+            await client.close()
+        assert asked == []
