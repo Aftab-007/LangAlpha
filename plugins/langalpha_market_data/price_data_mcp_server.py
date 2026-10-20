@@ -46,7 +46,7 @@ from data_client.ginlix_data import (
     get_ginlix_mcp_client,
 )
 from data_client.market_data_provider import symbol_market
-from data_client.normalize import minor_unit_places, normalize_bars, scale_price
+from data_client.normalize import minor_unit_places, normalize_bars, populated, scale_price
 from data_client.ginlix_data.cn_source import GinlixDataCnSource
 from data_client.ginlix_data.directory import NameDirectory
 from market_protocol import (
@@ -294,7 +294,8 @@ async def _fetch_stock_bars(
         )
     else:
         ginlix_result = None
-    refused: Optional[dict] = None
+    # What this read answers when FMP has no rows for it.
+    miss: Optional[tuple[Optional[dict], Optional[dict]]] = None
     if isinstance(ginlix_result, dict):
         status = ginlix_result.get("status")
         err = error_from_upstream(
@@ -308,28 +309,33 @@ async def _fetch_stock_bars(
         # A refused credential says nothing about the request, so FMP may still
         # answer it. The refusal stays the error unless FMP returns rows.
         logger.warning("ginlix-data refused the credential for %s: %s", display, err["detail"])
-        refused = err
+        miss = None, err
     elif ginlix_result is not None:
         # Already-normalized display rows, descending → flip to ascending.
-        data = list(reversed(ginlix_result))
-        return {
-            "data": data,
+        tier = {
+            "data": list(reversed(ginlix_result)),
             "source": "ginlix-data",
             "symbol": display,
             "interval": canonical,
             "currency": currency,
             "timezone": timezone,
-        }, None
+        }
+        if populated(ginlix_result):
+            return tier, None
+        # No bars is a miss too: Massive answers a range older than its history
+        # with none (AAPL in 1995), which FMP still holds. The empty answer
+        # stands unless FMP returns rows.
+        miss = tier, None
 
     # FMP fallback (all markets; converts GBX/pence to pounds).
     try:
         client = await get_fmp_client()
     except Exception:  # noqa: BLE001
-        return None, refused or make_error(
+        return miss or (None, make_error(
             "client_unavailable",
             "FMP client unavailable (FMP_API_KEY not configured).",
             symbol=display,
-        )
+        ))
 
     places = minor_unit_places(legacy)
     window = None
@@ -346,20 +352,20 @@ async def _fetch_stock_bars(
                 fmp_symbol, canonical, from_date=window.from_day, to_date=window.to_day
             )
     except Exception as e:  # noqa: BLE001
-        return None, refused or error_from_exception(
+        return miss or (None, error_from_exception(
             e, "FMP fetch failed.", symbol=display, interval=canonical
-        )
+        ))
     if not isinstance(rows or [], list):
         # FMP answers some failures with a 200 and an error object, not rows.
-        return None, refused or make_error(
+        return miss or (None, make_error(
             "upstream_error", "FMP fetch failed.", symbol=display, interval=canonical
-        )
+        ))
     if window is not None:
         rows = window.rows(rows or [])
 
     data = _display_rows(rows or [], legacy, intraday=intraday, places=places)
-    if refused and not data:
-        return None, refused
+    if miss and not data:
+        return miss
     return {
         "data": data,
         "source": "fmp",
