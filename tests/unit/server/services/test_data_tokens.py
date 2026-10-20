@@ -30,7 +30,7 @@ ISSUED_AT_MS = 1_792_310_400_123
 
 async def _push(saved: db.Saved, *, written: bool = True):
     write = AsyncMock(return_value=written)
-    revoke = AsyncMock(return_value=True)
+    revoke = AsyncMock(return_value="revoked")
     save = AsyncMock(return_value=saved)
     mark_held = AsyncMock(return_value=True)
     minted = data_tokens.Minted("tok", ISSUED_AT_MS, EXPIRES_AT)
@@ -276,6 +276,7 @@ class TestSweepPass:
         patches = (
             patch.object(db, "claim_due", claim),
             patch.object(sweeper, "_sweep_one", AsyncMock(return_value=True)),
+            patch.object(db, "claim_revocations", AsyncMock(return_value=[])),
         )
         return sweeper, claim, patches
 
@@ -284,7 +285,7 @@ class TestSweepPass:
         full = [_row()] * data_token_sweep.SWEEP_BATCH_LIMIT
         sweeper, claim, patches = self._sweeper_with([full, [_row()] * 3])
 
-        with patches[0], patches[1]:
+        with patches[0], patches[1], patches[2]:
             assert await sweeper.sweep_once() == data_token_sweep.SWEEP_BATCH_LIMIT + 3
 
         assert claim.await_count == 2
@@ -297,10 +298,305 @@ class TestSweepPass:
             [full] * (data_token_sweep.SWEEP_MAX_PAGES + 1)
         )
 
-        with patches[0], patches[1]:
+        with patches[0], patches[1], patches[2]:
             await sweeper.sweep_once()
 
         assert claim.await_count == data_token_sweep.SWEEP_MAX_PAGES
+
+
+def _revocation(*users: str) -> db.Revocation:
+    return db.Revocation(COMPUTER_ID, users or (USER_ID,), 7)
+
+
+async def _settle(
+    revocation: db.Revocation,
+    *,
+    answers: list[str],
+    in_service: bool = False,
+    rewrite: AsyncMock | None = None,
+):
+    upstream = AsyncMock(side_effect=answers)
+    revoked = AsyncMock(return_value=in_service)
+    rewrite = rewrite or AsyncMock(return_value=True)
+    with (
+        patch.object(data_tokens, "_revoke_upstream", upstream),
+        patch.object(db, "revoked", revoked),
+        patch.object(
+            DataTokenSweeper,
+            "get_instance",
+            return_value=SimpleNamespace(rewrite=rewrite),
+        ),
+    ):
+        settled = await data_tokens.settle(revocation)
+    return settled, upstream, revoked, rewrite
+
+
+class TestSettle:
+    """A revocation stays owed until the platform confirms it, and once it
+    does, the platform refuses any token minted before it handled the request,
+    including one a start minted after the stop recorded it."""
+
+    @pytest.mark.asyncio
+    async def test_one_the_platform_does_not_confirm_stays_owed(self):
+        settled, _, revoked, rewrite = await _settle(
+            _revocation(), answers=["unreachable"]
+        )
+
+        assert settled == "unreachable"
+        revoked.assert_not_awaited()
+        rewrite.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_partial_confirmation_settles_that_user_and_replaces_the_token(
+        self,
+    ):
+        """The platform keys a revocation by user and computer, so the user it
+        did not confirm stays owed; the one it did may own the sandbox's token,
+        which the platform now refuses."""
+        revocation = _revocation(USER_ID, "user-2")
+
+        settled, upstream, revoked, rewrite = await _settle(
+            revocation, answers=["revoked", "unreachable"], in_service=True
+        )
+
+        assert settled == "unreachable"
+        assert [c.args for c in upstream.await_args_list] == [
+            (USER_ID, COMPUTER_ID),
+            ("user-2", COMPUTER_ID),
+        ]
+        revoked.assert_awaited_once_with(revocation, (USER_ID,))
+        rewrite.assert_awaited_once_with(COMPUTER_ID)
+
+    @pytest.mark.asyncio
+    async def test_a_user_the_platform_refuses_does_not_stop_the_next(self):
+        """The token's user and the computer's user are revoked on their own,
+        so a request refused for one still sends the other's."""
+        revocation = _revocation("user-old", USER_ID)
+
+        settled, upstream, revoked, _ = await _settle(
+            revocation, answers=["refused", "revoked"]
+        )
+
+        assert settled == "refused"
+        assert upstream.await_count == 2
+        revoked.assert_awaited_once_with(revocation, (USER_ID,))
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_platform_is_not_asked_for_the_next_user(self):
+        settled, upstream, revoked, _ = await _settle(
+            _revocation("user-old", USER_ID), answers=["unreachable", "revoked"]
+        )
+
+        assert settled == "unreachable"
+        assert upstream.await_count == 1
+        revoked.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_computer_in_service_is_given_a_fresh_token(self):
+        revocation = _revocation()
+
+        settled, _, revoked, rewrite = await _settle(
+            revocation, answers=["revoked"], in_service=True
+        )
+
+        assert settled == "revoked"
+        revoked.assert_awaited_once_with(revocation, (USER_ID,))
+        rewrite.assert_awaited_once_with(COMPUTER_ID)
+
+    @pytest.mark.asyncio
+    async def test_a_stopped_computer_is_not_written(self):
+        settled, _, revoked, rewrite = await _settle(_revocation(), answers=["revoked"])
+
+        assert settled == "revoked"
+        revoked.assert_awaited_once()
+        rewrite.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_rewrite_still_settles_it(self):
+        """The confirmation is recorded first and leaves the row due, so the
+        sweep writes the sandbox if the rewrite does not."""
+        settled, _, _, _ = await _settle(
+            _revocation(),
+            answers=["revoked"],
+            in_service=True,
+            rewrite=AsyncMock(side_effect=RuntimeError("sandbox unreachable")),
+        )
+
+        assert settled == "revoked"
+
+    @pytest.mark.asyncio
+    async def test_a_stop_records_the_revocation_before_sending_it(self):
+        recorded = AsyncMock(return_value=_revocation())
+        settle = AsyncMock(return_value="unreachable")
+
+        with (
+            patch.object(data_tokens, "configured", return_value=True),
+            patch.object(db, "revoke", recorded),
+            patch.object(data_tokens, "settle", settle),
+        ):
+            await data_tokens.revoke(COMPUTER_ID)
+
+        recorded.assert_awaited_once_with(COMPUTER_ID)
+        settle.assert_awaited_once_with(_revocation())
+
+
+class TestSweepSettlesRevocations:
+    @pytest.mark.asyncio
+    async def test_an_unreachable_platform_ends_this_part_of_the_pass(self):
+        """The rest would wait on the same unreachable platform."""
+        sweeper = DataTokenSweeper()
+        owed = [_revocation(), _revocation(), _revocation()]
+        claim = AsyncMock(return_value=owed)
+        settle = AsyncMock(side_effect=["revoked", "unreachable", "revoked"])
+
+        with (
+            patch.object(db, "claim_revocations", claim),
+            patch.object(data_tokens, "settle", settle),
+        ):
+            await sweeper._settle_revocations()
+
+        assert settle.await_count == 2
+        assert claim.await_args.kwargs["retry_after"] == data_token_sweep.REVOKE_RETRY_AFTER
+
+    @pytest.mark.asyncio
+    async def test_a_refused_revocation_does_not_hold_up_the_rest(self):
+        """Claimed together, they share one stamp, so a refusal that ended the
+        pass would come first again on every pass and starve the others."""
+        sweeper = DataTokenSweeper()
+        owed = [_revocation(), _revocation(), _revocation()]
+        settle = AsyncMock(side_effect=["refused", "revoked", "revoked"])
+
+        with (
+            patch.object(db, "claim_revocations", AsyncMock(return_value=owed)),
+            patch.object(data_tokens, "settle", settle),
+        ):
+            await sweeper._settle_revocations()
+
+        assert settle.await_count == 3
+
+
+def _session_lock(results: list[bool]):
+    held = iter(results)
+
+    @asynccontextmanager
+    async def try_session_lock(_key):
+        yield next(held)
+
+    return patch("src.server.database.session_lock.try_session_lock", try_session_lock)
+
+
+class TestRewriteAfterRevocation:
+    @pytest.mark.asyncio
+    async def test_a_computer_out_of_service_is_not_written(self):
+        sweeper = DataTokenSweeper()
+        locked = AsyncMock()
+
+        with (
+            patch.object(db, "load_in_service", AsyncMock(return_value=None)),
+            patch.object(sweeper, "_write_locked", locked),
+        ):
+            assert await sweeper.rewrite(COMPUTER_ID) is False
+
+        locked.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_computer_still_starting_is_written_whatever_its_activity(self):
+        sweeper = DataTokenSweeper()
+        row = {**_row(), "status": "starting", "is_always_on": False}
+        locked = AsyncMock(return_value=True)
+        keeps = AsyncMock(return_value=False)
+
+        with (
+            patch.object(db, "load_in_service", AsyncMock(return_value=row)),
+            patch.object(sweeper, "_keeps_running", keeps),
+            patch.object(sweeper, "_write_locked", locked),
+            _session_lock([True]),
+        ):
+            assert await sweeper.rewrite(COMPUTER_ID) is True
+
+        keeps.assert_not_awaited()
+        locked.assert_awaited_once_with(COMPUTER_ID, row)
+
+    @pytest.mark.asyncio
+    async def test_an_idle_running_computer_is_left_to_lapse(self):
+        sweeper = DataTokenSweeper()
+        row = {**_row(), "status": "running", "is_always_on": False}
+        locked = AsyncMock()
+
+        with (
+            patch.object(db, "load_in_service", AsyncMock(return_value=row)),
+            patch.object(sweeper, "_keeps_running", AsyncMock(return_value=False)),
+            patch.object(sweeper, "_write_locked", locked),
+        ):
+            assert await sweeper.rewrite(COMPUTER_ID) is False
+
+        locked.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_it_waits_out_a_siblings_write(self):
+        """That write read the row before the revocation was recorded, so its
+        token may be refused already and its hold misses the row."""
+        sweeper = DataTokenSweeper()
+        row = {**_row(), "status": "running"}
+        locked = AsyncMock(return_value=True)
+
+        with (
+            patch.object(data_token_sweep, "_LOCK_POLL_S", 0.0),
+            patch.object(db, "load_in_service", AsyncMock(return_value=row)),
+            patch.object(sweeper, "_keeps_running", AsyncMock(return_value=True)),
+            patch.object(sweeper, "_write_locked", locked),
+            _session_lock([False, False, True]),
+        ):
+            assert await sweeper.rewrite(COMPUTER_ID) is True
+
+        locked.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_the_wait_is_bounded(self):
+        sweeper = DataTokenSweeper()
+        locked = AsyncMock()
+
+        with (
+            patch.object(data_token_sweep, "_LOCK_POLL_S", 0.01),
+            patch.object(sweeper, "_write_locked", locked),
+            _session_lock([False] * 1000),
+        ):
+            assert await sweeper._write_when_free(COMPUTER_ID, _row(), wait_s=0.05) is False
+
+        locked.assert_not_awaited()
+
+
+class TestRevokeUpstream:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status", "answer", "tries"),
+        [
+            (204, "revoked", 1),
+            (422, "refused", 1),
+            (403, "unreachable", 1),
+            (401, "unreachable", 1),
+            (503, "unreachable", 3),
+            (429, "unreachable", 3),
+        ],
+    )
+    async def test_only_a_request_specific_refusal_reads_as_refused(
+        self, status, answer, tries
+    ):
+        """A refused service token refuses every revocation, as an outage does."""
+        resp = SimpleNamespace(is_success=status < 300, status_code=status)
+        client = SimpleNamespace(post=AsyncMock(return_value=resp))
+
+        with (
+            patch(
+                "src.server.dependencies.usage_limits.get_http_client",
+                AsyncMock(return_value=client),
+            ),
+            patch("src.server.dependencies.usage_limits.service_headers", return_value={}),
+            patch.object(data_tokens.asyncio, "sleep", AsyncMock()),
+        ):
+            assert await data_tokens._revoke_upstream(USER_ID, COMPUTER_ID) == answer
+
+        assert client.post.await_count == tries
 
 
 class TestSweepSparesIdleComputers:

@@ -5,7 +5,8 @@ with no way to refresh it, and writes it into the sandbox, whose data client
 only reads it. A turn's start and a background sweep each write a fresh one
 once less than ``REFRESH_BELOW`` is left, and a stop or delete revokes every
 token the computer was given, so one taken out of the sandbox stops working
-within the hour, or as soon as the computer stops.
+within the hour, or as soon as the computer stops. A revocation the platform
+does not confirm stays owed in Postgres, and the sweep sends it again.
 
 Nothing here raises: without a token the market-data tools answer that they
 are not configured, which costs data, never a turn or a start.
@@ -19,7 +20,7 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from src.config.env import AUTH_SERVICE_URL, GINLIX_DATA_URL, PUBLIC_API_BASE_URL
 from src.server.database import computer_data_tokens as db
@@ -33,6 +34,11 @@ REFRESH_BELOW = timedelta(minutes=30)
 
 _TIMEOUT_S = 5.0
 _REVOKE_ATTEMPTS = 3
+
+#: How the platform answered a revocation. ``refused`` is a 4xx a retry will
+#: not change, for that request alone; ``unreachable`` would fail every other
+#: revocation as well: no connection, a 5xx or 429, or the service token refused.
+RevokeAnswer = Literal["revoked", "refused", "unreachable"]
 
 #: Writes the token file into a sandbox; True only once the write is confirmed.
 Write = Callable[[dict[str, Any]], Awaitable[bool]]
@@ -117,12 +123,12 @@ async def push(
 async def revoke(computer_id: Any) -> None:
     """End every token the computer was given, at a stop or delete, rather
     than when the last one would have run out. Best effort: never fails the
-    stop."""
+    stop, and one the platform does not confirm stays owed for the sweep."""
     if not configured():
         return
     computer_id = str(computer_id)
     try:
-        users = await db.revoke(computer_id)
+        revocation = await db.revoke(computer_id)
     except Exception as e:
         logger.warning(
             "Market-data token row not revoked for computer %s (%s)",
@@ -130,8 +136,62 @@ async def revoke(computer_id: Any) -> None:
             type(e).__name__,
         )
         return
-    for user_id in users:
-        await _revoke_upstream(user_id, computer_id)
+    if revocation is not None:
+        await settle(revocation)
+
+
+async def settle(revocation: db.Revocation) -> RevokeAnswer:
+    """Send ``revocation`` to the platform and record what it confirms, then
+    put a fresh token in a sandbox the computer is still running on;
+    ``revoked`` once every user is confirmed. Never raises.
+
+    The platform refuses every token issued before it handled the request,
+    and a start that read the tombstone may have minted one in between: a
+    revert's revoke lands after the start it let in, a retry lands whenever
+    the platform is back. Nothing else would replace that token until it
+    runs low, so it is replaced here, after any user's confirmation, since
+    the sandbox's token may be that user's.
+
+    Each user's tokens are revoked on their own, so one the platform refuses
+    does not stop the next being sent, and only the users it has not
+    confirmed stay owed.
+    """
+    computer_id = revocation.computer_id
+    confirmed: list[str] = []
+    answer: RevokeAnswer = "revoked"
+    try:
+        for user_id in revocation.users:
+            sent = await _revoke_upstream(user_id, computer_id)
+            if sent == "revoked":
+                confirmed.append(user_id)
+                continue
+            answer = sent
+            if sent == "unreachable":
+                break
+        if not confirmed:
+            return answer
+        in_service = await db.revoked(revocation, tuple(confirmed))
+    except Exception as e:
+        logger.warning(
+            "Market-data token revocation not settled for computer %s (%s)",
+            computer_id,
+            type(e).__name__,
+        )
+        # Postgres failing here fails every other settle too.
+        return "unreachable"
+    if in_service:
+        from src.server.services.data_token_sweep import DataTokenSweeper
+
+        try:
+            await DataTokenSweeper.get_instance().rewrite(computer_id)
+        except Exception as e:
+            logger.warning(
+                "Market-data token not rewritten for computer %s after its "
+                "revocation (%s)",
+                computer_id,
+                type(e).__name__,
+            )
+    return answer
 
 
 def _payload(minted: Minted) -> dict[str, Any]:
@@ -192,10 +252,11 @@ async def _mint(user_id: str, computer_id: str) -> Minted | None:
         return None
 
 
-async def _revoke_upstream(user_id: str, computer_id: str) -> bool:
+async def _revoke_upstream(user_id: str, computer_id: str) -> RevokeAnswer:
     from src.server.dependencies.usage_limits import get_http_client, service_headers
 
     outcome = ""
+    answer: RevokeAnswer = "unreachable"
     for attempt in range(_REVOKE_ATTEMPTS):
         if attempt:
             await asyncio.sleep(0.5 * attempt)
@@ -211,14 +272,17 @@ async def _revoke_upstream(user_id: str, computer_id: str) -> bool:
             outcome = type(e).__name__
             continue
         if resp.is_success:
-            return True
+            return "revoked"
         outcome = f"HTTP {resp.status_code}"
         if resp.status_code < 500 and resp.status_code != 429:
+            # A refused service token refuses every revocation alike.
+            if resp.status_code not in (401, 403):
+                answer = "refused"
             break
     logger.warning(
-        "Market-data tokens not revoked for computer %s (%s); they lapse "
-        "within the hour",
+        "Market-data tokens not revoked for computer %s (%s); the revocation "
+        "stays owed",
         computer_id,
         outcome,
     )
-    return False
+    return answer
