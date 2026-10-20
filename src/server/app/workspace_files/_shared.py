@@ -56,6 +56,7 @@ from src.server.services.persistence.resolve import (
 )
 from src.server.utils.api import require_workspace_owner
 from src.server.utils.error_sanitization import (
+    sandbox_failure_http,
     sandbox_unreachable_detail,
     single_line,
 )
@@ -351,7 +352,8 @@ async def owned_workspace_on_computer(workspace_id: str, user_id: str) -> dict[s
 async def _acquire_sandbox(
     workspace_id: str, user_id: str
 ) -> tuple[Any, dict[str, Any]]:
-    """A ready sandbox and the workspace row as the acquisition left it, or 503.
+    """A ready sandbox and the workspace row as the acquisition left it, or the
+    failure's answer: 503, or 422 when an owner's SSH machine refused.
 
     Acquiring is where a renamed workspace's folder moves, so a row read before
     it can name a folder that is gone: a route builds every sandbox path from
@@ -363,16 +365,13 @@ async def _acquire_sandbox(
     try:
         session = await manager.get_session_for_workspace(workspace_id, user_id=user_id)
     except Exception as e:
-        # Same wording as the app-level SandboxGoneError/SandboxTransientError
-        # handler: the file panel categorizes on this string, and the "starting"
-        # sub-case has to survive the boundary — which is exactly what
-        # sandbox_unreachable_detail preserves while dropping the raw text.
+        # The app-level handler's answer, status and wording: the file panel
+        # categorizes on the 503's detail, whose "starting" sub-case has to
+        # survive the boundary, and a refusal is the 422 every route gives it.
         logger.warning(
             f"Sandbox unreachable for workspace {workspace_id}: {single_line(str(e))}"
         )
-        raise HTTPException(
-            status_code=503, detail=sandbox_unreachable_detail(e)
-        ) from None
+        raise sandbox_failure_http(e) from None
 
     sandbox = getattr(session, "sandbox", None)
     if sandbox is None:

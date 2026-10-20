@@ -25,13 +25,14 @@ from ptc_agent.core.paths import logged_path
 from src.server.utils.uploads import read_capped
 from src.utils.storage import is_storage_enabled
 from src.server.utils.error_sanitization import (
-    sandbox_unreachable_detail,
+    sandbox_failure_http,
     single_line,
 )
 from src.server.utils.http_headers import content_disposition
 from fastapi.responses import Response, StreamingResponse
 
 from src.server.database.home_workspace import is_unbound
+from src.server.database.computer import get_computer
 from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services.workspace_manager import WorkspaceManager
 from src.server.services.persistence.file import FilePersistenceService
@@ -1014,6 +1015,21 @@ async def upload_workspace_file(
     }
 
 
+async def _computer_backs_up_files(workspace: dict[str, Any] | None) -> bool:
+    """The switch of the computer the workspace is on; on where it has none."""
+    computer_id = (workspace or {}).get("computer_id")
+    if not computer_id:
+        return True
+    computer = await get_computer(str(computer_id))
+    return (computer or {}).get("files_backup", True) is not False
+
+
+_RESTORE_OFFER_STANDS = (
+    "This workspace's folder is missing on its computer. Restore it "
+    "from the backup or keep it as it is first."
+)
+
+
 @router.post("/{workspace_id}/files/backup")
 async def backup_workspace_files(
     workspace_id: str,
@@ -1028,6 +1044,12 @@ async def backup_workspace_files(
             status_code=409,
             detail=f"Cannot backup files — workspace is {workspace.get('status')}.",
         )
+    if workspace.get("files_restore_offered_at"):
+        raise HTTPException(status_code=409, detail=_RESTORE_OFFER_STANDS)
+    if not await _computer_backs_up_files(workspace):
+        raise HTTPException(
+            status_code=409, detail="File backup is off for this computer."
+        )
 
     # Held like a file change: a folder moved mid-scan reads as missing, and
     # the sync reports that as a clean pass.
@@ -1037,16 +1059,16 @@ async def backup_workspace_files(
                 workspace_id, sandbox, layout=owner_layout(workspace)
             )
         except RuntimeError as e:
-            # Same wording as every other producer: the file panel keys its error
-            # card off this string, so a fourth variant here would render a
+            # Same answer as every other producer: the file panel keys its error
+            # card off the 503's detail, so a fourth variant here would render a
             # different card for the same condition.
             logger.warning(
                 f"Sandbox unreachable syncing {workspace_id}: {single_line(str(e))}"
             )
-            raise HTTPException(
-                status_code=503,
-                detail=sandbox_unreachable_detail(e),
-            )
+            raise sandbox_failure_http(e) from None
+    if result.held:
+        # The pass found the folder gone and offered its restore instead.
+        raise HTTPException(status_code=409, detail=_RESTORE_OFFER_STANDS)
     return {
         "workspace_id": workspace_id,
         "synced": result.synced,
@@ -1078,6 +1100,13 @@ async def get_backup_status(
     workspace = await db_get_workspace(workspace_id)
     require_workspace_owner(workspace, user_id=x_user_id)
     restore_incomplete = bool((workspace or {}).get("files_restore_incomplete"))
+    # Ride along like the flag: off, nothing reported unsaved will be saved,
+    # and with an offer standing nothing is saved until the owner chooses.
+    choice = {
+        "files_restore_incomplete": restore_incomplete,
+        "files_backup": await _computer_backs_up_files(workspace),
+        "files_restore_offered_at": (workspace or {}).get("files_restore_offered_at"),
+    }
 
     empty = {
         "workspace_id": workspace_id,
@@ -1085,7 +1114,7 @@ async def get_backup_status(
         "modified": [],
         "untracked": [],
         "total_backed_up_size": 0,
-        "files_restore_incomplete": restore_incomplete,
+        **choice,
     }
 
     if is_unbound(workspace):
@@ -1113,7 +1142,7 @@ async def get_backup_status(
             "modified": [],
             "untracked": [],
             "total_backed_up_size": total_size,
-            "files_restore_incomplete": restore_incomplete,
+            **choice,
         }
 
     # Sandbox is running: compare sandbox files against DB. Not ready, folder
@@ -1131,7 +1160,7 @@ async def get_backup_status(
             "modified": [],
             "untracked": [],
             "total_backed_up_size": total_size,
-            "files_restore_incomplete": restore_incomplete,
+            **choice,
         }
 
     backed_up: list[str] = []
@@ -1162,7 +1191,7 @@ async def get_backup_status(
         "modified": modified,
         "untracked": untracked,
         "total_backed_up_size": total_size,
-        "files_restore_incomplete": restore_incomplete,
+        **choice,
     }
 
 
