@@ -355,7 +355,7 @@ async def lifespan(app: FastAPI):
         try:
             core_config = agent_config.to_core_config()
             mcp_registry = MCPRegistry(core_config)
-            await mcp_registry.connect_all()
+            await mcp_registry.connect_all(retry_builtin_remote=True)
             await mcp_registry.freeze()
             set_global_registry(mcp_registry)
             logger.info(
@@ -699,6 +699,23 @@ async def lifespan(app: FastAPI):
             name="warm-brokerage-marks",
         )
 
+    # A built-in remote server still down after boot's retry budget is retried
+    # in the background, so this worker heals when it answers instead of
+    # serving without its tools until a restart. Last, so nothing above can
+    # fail startup with the task running.
+    from ptc_agent.core.mcp_registry import get_global_registry, reconnect_builtin_remote
+
+    mcp_reconnect: asyncio.Task[None] | None = None
+    booted_registry = get_global_registry()
+    if booted_registry is not None and booted_registry.failed_builtin_remote:
+        mcp_reconnect = asyncio.create_task(
+            reconnect_builtin_remote(), name="mcp-builtin-reconnect"
+        )
+        logger.info(
+            "Reconnecting built-in MCP servers in the background: %s",
+            ", ".join(sorted(booted_registry.failed_builtin_remote)),
+        )
+
     # Startup leaves ~700k import-time objects (pydantic schemas, routes,
     # module state) that never die, and every full collection re-walks them
     # while the loop is frozen. Freezing moves them out of the collector for
@@ -717,6 +734,11 @@ async def lifespan(app: FastAPI):
     if mark_warmup is not None:
         mark_warmup.cancel()
         await asyncio.gather(mark_warmup, return_exceptions=True)
+    # Before the registry is cleared below, which would end it anyway, so an
+    # attempt in flight closes its connection while the loop still runs.
+    if mcp_reconnect is not None:
+        mcp_reconnect.cancel()
+        await asyncio.gather(mcp_reconnect, return_exceptions=True)
     from src.server.services.brand_icons import stop_refreshes
 
     await stop_refreshes()

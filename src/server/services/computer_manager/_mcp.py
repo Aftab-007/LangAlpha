@@ -256,13 +256,15 @@ class McpSecretsMixin:
             prior = self._freeze_tool_view(binding.computer_id, workspace_id, session)
 
         # An unchanged workspace entry adds no resolution reads. Config versions
-        # are per workspace, so a sibling's matching number says nothing here.
+        # are per workspace, so a sibling's matching number says nothing here,
+        # and a built-in server reconnected since changes what one number means.
         if (
             prior is not None
             and prior.mcp_config_version is not None
             and ws_version is not None
             and prior.mcp_config_version == ws_version
             and prior.mcp_tool_summary is not None
+            and not prior.builtins_superseded()
         ):
             # The relay JWT ages independently of the config version.
             relay_session = SimpleNamespace(
@@ -402,8 +404,10 @@ class McpSecretsMixin:
         else:
             direct_mcp_tools = {}
 
-        # Rebuild from built-ins, never from an earlier composite.
-        builtin_registry = session._builtin_mcp_registry or session.mcp_registry
+        # Rebuild from built-ins, never from an earlier composite, and from the
+        # current snapshot of them: this rebuild and the asset sync after it are
+        # where a reconnected built-in server reaches the workspace.
+        builtin_registry = session.refresh_builtin_registry() or session.mcp_registry
         composite = build_composite_registry(
             builtin_registry,
             untrusted_servers,

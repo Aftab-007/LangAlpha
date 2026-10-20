@@ -220,6 +220,9 @@ class SessionLifecycleMixin:
                         or needs_deferred_sync
                         or skills_stale
                         or superseded_resolve
+                        # The rebuild must go with an asset sync, which this
+                        # cooldown path skips.
+                        or workspace_view.builtins_superseded()
                     )
                     if not needs_sync:
                         # JWT age is an in-memory check unless near expiry, about once per 1.5h.
