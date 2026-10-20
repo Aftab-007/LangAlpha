@@ -448,10 +448,11 @@ function shellArgs({ chromeHidden }) {
     // editions install side by side, and an email link marked for the wrong one
     // opens the other build, or nothing.
     `--langalpha-shell-scheme=${config.scheme}`,
-    // Whether this build has a console to finish an integration login or
-    // install on. An edition with no platform origin drops those links, so it
-    // must not say it can.
-    `--langalpha-integration-returns=${origins.platformOrigin() ? '1' : ''}`,
+    // Whether this build has a console to finish a return from the browser on:
+    // an integration login or install, or a console page asked to be shown
+    // again. An edition with no platform origin drops those links, so it must
+    // not say it can.
+    `--langalpha-console-returns=${origins.platformOrigin() ? '1' : ''}`,
   ]
 }
 
@@ -685,12 +686,14 @@ function openDeepLink(win, raw, base) {
 }
 
 /**
- * An integration login or install handed back from the browser, already mapped
- * onto the console's callback page. It goes back to the page that started it:
- * the console window that sent the user to the browser, or else any window
- * showing the console. Either can be the one, and both can show it at once: an
- * account window opened before the console reserved the strip stays open after
- * the main window starts showing the console too.
+ * A return from the browser, already mapped onto a console page: an
+ * integration login or install landing on the console's callback page, or a
+ * console page asked to be shown again after a trip to a third party's page.
+ * It goes back to the page that started it: the console window that sent the
+ * user to the browser, or else any window showing the console. Either can be
+ * the one, and both can show it at once: an account window opened before the
+ * console reserved the strip stays open after the main window starts showing
+ * the console too.
  *
  * With no window showing the console, it goes wherever a navigation to the
  * console goes, decided here and before the load: `navigate` is loadURL and
@@ -699,10 +702,9 @@ function openDeepLink(win, raw, base) {
  * its own when the main one cannot show it.
  *
  * Restored as well as raised: the window may have been minimized while the
- * browser had the login or install, and show() does not bring a minimized
- * window back.
+ * browser had the user, and show() does not bring a minimized window back.
  */
-function openIntegrationReturn(url) {
+function openConsoleReturn(url) {
   const showsConsole = (w) => Boolean(w) && !w.isDestroyed()
     && (w === platformWindow || (w === mainWindow && origins.isPlatform(w.webContents.getURL())))
   let win = [lastSentOutWindow, mainWindow, platformWindow].find(showsConsole)
@@ -720,16 +722,26 @@ function openIntegrationReturn(url) {
   return win
 }
 
+// What the log says about a link addressed to the console that this build
+// refuses, by the kind `deeplink.toConsole` read it as. Never any of the link:
+// its values are the provider's or the third party's answer.
+const REFUSED_CONSOLE_LINK = {
+  integration: '[shell] ignoring an integration link this build cannot finish',
+  console: '[shell] ignoring a console link this build cannot open',
+}
+
 /** Where a link the OS handed us goes: every arrival path ends here. */
 function onDeepLink(raw) {
   // Settled before any window is picked, because the answer picks it, and never
   // left to fall through: the app's /callback would try to redeem the
-  // provider's answer as a sign-in. That includes an edition with no console,
-  // which has nowhere to finish one.
-  if (deeplink.isIntegrationReturn(raw)) {
-    const target = deeplink.toIntegrationUrl(raw)
-    if (target) openIntegrationReturn(target)
-    else console.warn('[shell] ignoring an integration link this build cannot finish')
+  // provider's answer as a sign-in. That covers an integration login or
+  // install and any link under the console host, so a console page this build
+  // does not know is dropped rather than redeemed, and it includes an edition
+  // with no console, which has nowhere to finish one.
+  const link = deeplink.toConsole(raw)
+  if (link) {
+    if (link.url) openConsoleReturn(link.url)
+    else console.warn(REFUSED_CONSOLE_LINK[link.kind])
     return
   }
 
