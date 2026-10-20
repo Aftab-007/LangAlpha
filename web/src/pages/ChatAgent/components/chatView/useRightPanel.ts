@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { appendPathSuffix, getPreviewUrl } from '../../utils/api';
@@ -358,9 +358,15 @@ export function useRightPanel({
   // siblings does not remake the log.
   const dirName = folders?.dirName;
   const previousDirNames = folders?.previousDirNames;
+  const rootDir = folders?.rootDir;
+  const otherRoots = folders?.otherRoots;
+  const writeScope = useMemo(
+    () => ({ dirName, previousDirNames, rootDir, otherRoots }),
+    [dirName, previousDirNames, rootDir, otherRoots],
+  );
   const collectWrites = useCallback(
-    (msgs: readonly TranscriptMessage[]) => collectWriteLog(msgs, dirName, previousDirNames),
-    [dirName, previousDirNames],
+    (msgs: readonly TranscriptMessage[]) => collectWriteLog(msgs, writeScope),
+    [writeScope],
   );
   const transcript = useTranscriptReader(messages, subagentTranscripts, collectWrites);
 
@@ -373,7 +379,7 @@ export function useRightPanel({
   // needs this thread's Write/Edit paths when it resolves a reference, and a
   // memo over `messages` would rebuild on every streamed chunk.
   const getRecentWritePaths = useStableHandler(
-    () => collectRecentWritePaths(messages, dirName, previousDirNames),
+    () => collectRecentWritePaths(messages, writeScope),
   );
 
   // One-shot ?file= deep link: opens the file panel targeting that file. Gated

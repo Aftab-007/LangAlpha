@@ -46,6 +46,7 @@ import { useTreeFilter } from './filePanel/useTreeFilter';
 import { useTreeInteraction, useTreeOpen } from './filePanel/useTreeInteraction';
 import { useFileRefOpen } from './filePanel/useFileRefOpen';
 import { PanelNotices } from './filePanel/PanelNotices';
+import { RestoreOffer } from './RestoreOffer';
 import { FileContextMenu, type FileMenuAction } from './filePanel/FileContextMenu';
 import { useFileDownloads } from './filePanel/useFileDownloads';
 import { useFileBodyCache, useFileBody } from './filePanel/useFileBody';
@@ -361,7 +362,15 @@ function FilePanel({
     tabs.forgetPaths(paths);
   }, [tabs, forgetTab, forgetChanged, cache]);
   const selection = useFileSelection({ workspaceId, filteredSortedFiles: filter.filteredSortedFiles, targetDirectory: scopeDir, onRefreshFiles, onDeleted: forgetDeleted });
-  const backup = useFileBackup({ workspaceId, files, readOnly });
+  // A restore offer holds the folder's backup until the reader answers it.
+  const restoreOffered = !!wsData?.files_restore_offered_at;
+  const backup = useFileBackup({
+    workspaceId,
+    files,
+    readOnly,
+    computerId: wsData?.computer_id ?? null,
+    restoreOffered,
+  });
   // The notices' dismiss handlers close over these alone, not over the whole
   // selection and backup, which change with every file list.
   const { setDeleteError } = selection;
@@ -406,6 +415,7 @@ function FilePanel({
     clearSearch,
     onLandOnSearch: landOnSearch,
     refetch,
+    root: folders?.rootDir,
   });
 
   // Stable, so a change mark moving, which makes a new `openFileAt`, does not
@@ -604,12 +614,12 @@ function FilePanel({
     const path = folder?.path ?? href;
     const rooted = !!opts?.rooted || !!folder;
     const otherWorkspace = !!linkWorkspaceId && linkWorkspaceId !== workspaceId;
-    const kind = classifyAgentPath(path).kind;
-    const directory = parseAgentPath(path).directory;
+    const kind = classifyAgentPath(path, folders?.rootDir).kind;
+    const directory = parseAgentPath(path, folders?.rootDir).directory;
     // A folder inside a viewed file is written relative to it, the same as a
     // file link, but the router takes the path as given, so the join happens here.
     const linkTarget = directory && kind === 'file' && !otherWorkspace
-      ? linkCandidates(path, rooted ? null : selectedFile)[0]
+      ? linkCandidates(path, rooted ? null : selectedFile, folders?.rootDir)[0]
       : path;
     if (otherWorkspace || kind !== 'file' || directory) {
       onOpenFile?.(linkTarget, linkWorkspaceId, location);
@@ -765,7 +775,12 @@ function FilePanel({
         filesRestoreIncomplete={treeShown || !listingTab ? false : filesRestoreIncomplete}
         onRefreshFiles={onRefreshFiles}
         busy={selection.deleteLoading || backup.backingUp}
-        backupResult={backup.backupResult}
+        backupResult={backup.backupOff ? null : backup.backupResult}
+        // Said where the files are listed, and only to the folder's owner,
+        // who is the one able to answer it.
+        restoreOffer={restoreOffered && listingTab && !readOnly && workspaceId
+          ? <RestoreOffer workspaceId={workspaceId} variant="notice" />
+          : null}
         onDismissBackupResult={() => setBackupResult(null)}
         editing={edit.isEditing}
       />

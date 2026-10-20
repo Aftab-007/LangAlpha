@@ -21,10 +21,12 @@ import {
   makeComputerPrimary,
   renameComputer,
   setComputerAlwaysOn,
+  setComputerFilesBackup,
   setComputerSpec,
   startComputer,
   stopComputer,
 } from '../utils/api';
+import { apiErrorReason } from '../utils/api/errors';
 import { entitlementErrorMessage } from '../utils/entitlementErrors';
 import { tierLabel } from '../components/tierUi';
 import { closeComputerSpec } from './computerPanelStore';
@@ -134,6 +136,29 @@ export function useComputerActions() {
     onSettled: () => invalidateMachine(queryClient),
   });
 
+  // The switch moves at once; a refusal puts it back and says why.
+  const setFilesBackup = useMutation({
+    mutationFn: ({ computerId, enabled }: { computerId: string; enabled: boolean }) =>
+      setComputerFilesBackup(computerId, enabled),
+    onMutate: ({ computerId, enabled }) => {
+      const snapshot = queryClient.getQueriesData<ComputersResponse | undefined>({ queryKey: queryKeys.computers.lists() });
+      patchComputerRow(queryClient, computerId, { files_backup: enabled });
+      return { snapshot };
+    },
+    onSuccess: (row) => {
+      if (typeof row.files_backup === 'boolean') patchComputerRow(queryClient, row.computer_id, { files_backup: row.files_backup });
+    },
+    onError: (err, _vars, ctx) => {
+      for (const [key, data] of ctx?.snapshot ?? []) queryClient.setQueryData(key, data);
+      toast({
+        variant: 'destructive',
+        title: t('computer.filesBackup.failed', "Couldn't change file backup"),
+        description: apiErrorReason(err) ?? undefined,
+      });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.computers.lists() }),
+  });
+
   // The new row goes on the list straight away so the dialog can scroll to it;
   // the refetch then brings the server's count and status. A refusal can mean
   // the plan or the offered providers moved under the form, so both re-read.
@@ -170,5 +195,5 @@ export function useComputerActions() {
     [rename],
   );
 
-  return { power, rename, renameComputerTo, spec, makePrimary, turnOffAlwaysOn, create, remove };
+  return { power, rename, renameComputerTo, spec, makePrimary, turnOffAlwaysOn, setFilesBackup, create, remove };
 }

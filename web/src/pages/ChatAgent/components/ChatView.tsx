@@ -92,6 +92,7 @@ import { TranscriptStatus } from './chatView/TranscriptStatus';
 import { FallbackSuggestionPill } from './chatView/FallbackSuggestionPill';
 import { ThreadOffers } from './chatView/ThreadNotices';
 import { ChatDiskWarning } from './chatView/ChatDiskWarning';
+import { ChatRestoreOffer } from './chatView/ChatRestoreOffer';
 import { useToolCallAnnouncer } from './chatView/useToolCallAnnouncer';
 import { useNavPanel } from './chatView/useNavPanel';
 import { MobileNavDrawer } from './chatView/MobileNavDrawer';
@@ -244,6 +245,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const chatFolders = useComputerFolders(workspaceId);
   const otherPanelFolders = useComputerFolders(panelWorkspaceId === workspaceId ? null : panelWorkspaceId);
   const panelFolders = panelWorkspaceId === workspaceId ? chatFolders : otherPanelFolders;
+  const chatRootDir = chatFolders?.rootDir;
 
   // Set when the agent writes the user's profile (onboarding saves it there,
   // `user.json` included), and read at turn end.
@@ -257,7 +259,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     refreshOwnFiles();
     const filePath = fileArtifactPath(event?.payload as FileOperationArtifactPayload | undefined);
     if (!filePath) return;
-    const info = classifyAgentPath(filePath);
+    const info = classifyAgentPath(filePath, chatRootDir);
     // The agent writes its own memory, whichever workspace the panel shows.
     if (info.kind === 'memory') {
       if (info.tier === 'user') {
@@ -276,8 +278,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     }
     // The Subagents pane is a page away, so this only marks its list stale
     // for the way back.
-    if (isSubagentFilePath(filePath)) invalidateSubagents(queryClient);
-  }, [refreshOwnFiles, queryClient, workspaceId]);
+    if (isSubagentFilePath(filePath, chatRootDir)) invalidateSubagents(queryClient);
+  }, [refreshOwnFiles, queryClient, workspaceId, chatRootDir]);
 
   // Stable ref-based callback for opening preview URLs from SSE events.
   // Defined here so it can be passed to useChatMessages; assigned after
@@ -1291,7 +1293,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
 
   // Screen-reader announcements for tool-call completions (polite live region).
-  const recentlyCompletedAnnouncement = useToolCallAnnouncer(messages);
+  const recentlyCompletedAnnouncement = useToolCallAnnouncer(messages, chatRootDir);
 
   // Auto-scroll subagent view when active subagent's messages change
   // Uses the same smart-scroll logic: only scroll if user is near the bottom
@@ -1720,6 +1722,13 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                     {/* A notice is not about the running turn, so it need not wait for it to end. */}
                     {messageError && (!isLoading || (typeof messageError === 'object' && messageError.kind === 'notice')) && (
                       <ErrorBanner error={messageError} />
+                    )}
+                    {workspaceRecord?.computer_id && (
+                      <ChatRestoreOffer
+                        workspaceId={workspaceId}
+                        computerId={workspaceRecord.computer_id}
+                        listed={!filesLoading}
+                      />
                     )}
                     {workspaceRecord?.computer_id && (
                       <ChatDiskWarning computerId={workspaceRecord.computer_id} />
