@@ -101,8 +101,8 @@ async def create_thread_endpoint(
 
     # Same credit gate the follow-up /messages call enforces — a quota-blocked
     # client must not mint durable rows + platform title calls through this
-    # door. byok is reported the same way the message path reports it, so both
-    # doors get the same verdict for the same user.
+    # door. byok and the surface are reported the same way the message path
+    # reports them, so both doors get the same verdict for the same user.
     if HOST_MODE != "oss":
         from src.server.database.api_keys import is_byok_active
         from src.server.database.oauth_tokens import has_any_oauth_token
@@ -111,7 +111,9 @@ async def create_thread_endpoint(
         is_byok, has_oauth = await asyncio.gather(
             is_byok_active(x_user_id), has_any_oauth_token(x_user_id)
         )
-        await enforce_credit_limit(x_user_id, byok=is_byok or has_oauth)
+        await enforce_credit_limit(
+            x_user_id, byok=is_byok or has_oauth, surface=request.platform
+        )
 
     # Decided where the message path decides it, so the thread is born in the
     # workspace its runs will actually use.

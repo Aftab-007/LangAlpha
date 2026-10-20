@@ -281,12 +281,18 @@ async def enforce_chat_limit(
     )
 
 
-async def enforce_credit_limit(user_id: str, *, byok: bool = False) -> None:
+async def enforce_credit_limit(
+    user_id: str, *, byok: bool = False, surface: str | None = None
+) -> None:
     """Check credit quota via the auth/quota service. Raises 429 if denied.
 
     No-op in OSS mode. ``byok`` is forwarded, not branched on: which pools apply
     to a key the user pays for themselves is the platform's rule to state, and
-    this service only relays the verdict it gets back.
+    this service only relays the verdict it gets back. ``surface`` is the same:
+    where the turn came from (the request's ``platform``, e.g. ``web`` or
+    ``slack``), sent only when the turn names one. The auth service may apply
+    its own policy to it, and its refusal comes back as any other does, its
+    message and type relayed as sent.
 
     This is the one gate that fails **closed** (503). The others admit on an
     unanswered check because the worst case is bounded and self-correcting; here
@@ -298,7 +304,7 @@ async def enforce_credit_limit(user_id: str, *, byok: bool = False) -> None:
 
     try:
         result = await _call_validate_for_user(
-            user_id, check_quota="chat", byok=byok, strict=True
+            user_id, check_quota="chat", byok=byok, surface=surface, strict=True
         )
     except QuotaServiceUnavailable as e:
         logger.error("Credit gate closed — quota service gave no verdict (%s)", e)
@@ -346,6 +352,7 @@ async def _call_validate_for_user(
     check_quota: Optional[str] = None,
     byok: bool = False,
     strict: bool = False,
+    surface: str | None = None,
 ) -> Optional[dict]:
     """POST to the auth/quota service at /api/auth/validate.
 
@@ -366,6 +373,8 @@ async def _call_validate_for_user(
         body["check_quota"] = check_quota
     if byok:
         body["byok"] = True
+    if surface:
+        body["surface"] = surface
 
     url = f"{AUTH_SERVICE_URL.rstrip('/')}/api/auth/validate"
     reason = "unknown"
