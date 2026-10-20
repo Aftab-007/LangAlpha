@@ -224,12 +224,15 @@ def _hash_dict(d: dict[str, str]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _internal_package_files(src_dir: Path) -> list[tuple[Path, Path]]:
+def _internal_package_files(
+    src_dir: Path, *, livefs: bool = True
+) -> list[tuple[Path, Path]]:
     """``(local_path, path relative to src/)`` for every internal-package file.
 
     Walks ``_SANDBOX_INTERNAL_PACKAGES`` with ``rglob("*")`` — every regular
     file except ``__pycache__`` ships, so data seeds can never silently drop
-    out of the sync. Empty when ``src/__init__.py`` is missing.
+    out of the sync. Empty when ``src/__init__.py`` is missing. ``livefs``
+    False leaves out the file mount's daemon, for a computer that never mounts.
     """
     src_init = src_dir / "__init__.py"
     if not src_init.exists():
@@ -244,7 +247,7 @@ def _internal_package_files(src_dir: Path) -> list[tuple[Path, Path]]:
             supervisor_file,
             Path(SUPERVISOR_SANDBOX_PACKAGE) / supervisor_file.name,
         ))
-    for livefs_file in sorted(_LIVEFS_SOURCE_DIR.glob("*.py")):
+    for livefs_file in sorted(_LIVEFS_SOURCE_DIR.glob("*.py")) if livefs else ():
         files.append((livefs_file, Path(LIVEFS_SANDBOX_PACKAGE) / livefs_file.name))
     for pkg, module in _SANDBOX_INTERNAL_PACKAGES.items():
         pkg_dir = _internal_package_dir(module)

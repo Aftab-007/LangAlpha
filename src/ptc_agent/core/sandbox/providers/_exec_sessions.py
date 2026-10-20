@@ -1,9 +1,10 @@
 """Background sessions built from plain exec, for runtimes with no session API.
 
-Daytona has a session API; Docker and E2B do not, so both keep each session as
-a directory of files under ``/tmp/.sessions`` that small shell scripts launch,
-poll, list and kill through ``exec``. A runtime subclasses this and supplies
-``exec`` and the shell expression naming its current boot.
+Daytona has a session API; Docker, E2B and SSH do not, so each keeps a session
+as a directory of files that small shell scripts launch, poll, list and kill
+through ``exec``. A runtime subclasses this and supplies ``exec``, the shell
+expression naming its current boot, and, where ``/tmp`` is shared with other
+people, its own sessions root.
 """
 
 from __future__ import annotations
@@ -30,10 +31,21 @@ _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 # stat, counted after the command name, which may hold spaces. A process later
 # given the same pid starts later, so a command's .pid holds its wrapper's pid
 # and start time, and ``live`` checks that the wrapper is still the process
-# behind that pid before the command reads as running or is signalled.
+# behind that pid before the command reads as running or is signalled. With
+# no /proc (macOS) it is ps's start time instead, its words run together so
+# the record stays two fields: to the second, which tells a reused pid apart.
 _SESSIONS_ROOT = "/tmp/.sessions"
-_SESSION_FUNCTIONS_SH = (
-    'st() { local s; { read -r s < "/proc/$1/stat"; } 2>/dev/null || return 1; '
+
+
+def ps_start_sh(pid: str) -> str:
+    """Shell printing ``pid``'s start time as one word, where there is no /proc."""
+    return f'set -- $(LC_ALL=C ps -o lstart= -p {pid} 2>/dev/null); echo "$1$2$3$4$5"'
+
+
+SESSION_FUNCTIONS_SH = (
+    "st() { local s; if [ ! -d /proc/1 ]; then s=$(" + ps_start_sh('"$1"') + "); "
+    '[ -n "$s" ] && echo "$s"; return; fi; '
+    '{ read -r s < "/proc/$1/stat"; } 2>/dev/null || return 1; '
     's=${s##*) }; set -- $s; echo "${20}"; }; '
     'live() { local p t; { read -r p t < "$1"; } 2>/dev/null; '
     'case $p in ""|*[!0-9]*) return 1;; esac; '
@@ -67,11 +79,22 @@ class ExecSessionRuntime(SandboxRuntime):
     session_boot_key_sh: ClassVar[str] = "$(st 1)"
 
     @property
+    def _sessions_root(self) -> str:
+        """Shell text naming the directory every run's sessions live under.
+
+        ``/tmp`` is the sandbox's own on Docker and E2B. A machine shared with
+        other people overrides it with a directory only its own user can write.
+        The scripts expand it inside double quotes, so it may name a variable,
+        whose value then never splits on a space a home folder may hold.
+        """
+        return _SESSIONS_ROOT
+
+    @property
     def _session_sh(self) -> str:
         """Every session script starts with this."""
         return (
-            f"{_SESSION_FUNCTIONS_SH}"
-            f"R={_SESSIONS_ROOT}/run-{self.session_boot_key_sh}; "
+            f"{SESSION_FUNCTIONS_SH}"
+            f'R="{self._sessions_root}/run-{self.session_boot_key_sh}"; '
         )
 
     async def create_session(self, session_id: str) -> None:
@@ -80,9 +103,10 @@ class ExecSessionRuntime(SandboxRuntime):
         # Exit 3 marks an existing session. An earlier run's directory names
         # nothing that is still running, so it goes.
         result = await self.exec(
-            f"{self._session_sh}[ -e $R/{session_id} ] && exit 3; "
-            f"mkdir -p $R/{session_id} || exit 1; "
-            f"for d in {_SESSIONS_ROOT}/run-*; do [ $d = $R ] || rm -rf $d; done; true",
+            f'{self._session_sh}[ -e "$R/{session_id}" ] && exit 3; '
+            f'mkdir -p "$R/{session_id}" || exit 1; '
+            f'for d in "{self._sessions_root}"/run-*; do '
+            '[ "$d" = "$R" ] || rm -rf -- "$d"; done; true',
             timeout=10,
         )
         if result.exit_code == 3:
@@ -99,23 +123,27 @@ class ExecSessionRuntime(SandboxRuntime):
         cmd_id = uuid.uuid4().hex[:8]
         encoded = base64.b64encode(command.encode()).decode("ascii")
         # Use setsid to create a new process group so delete_session
-        # can kill the entire tree (not just the wrapper). The command
-        # runs in a subshell so its own `exit` still reaches the .exit
-        # write, and with no arguments, so the session directory the
+        # can kill the entire tree (not just the wrapper); where there is
+        # no setsid (macOS), job control gives it a group of its own. The
+        # command runs in a subshell so its own `exit` still reaches the
+        # .exit write, and with no arguments, so the session directory the
         # wrapper takes as $1 stays out of its view.
-        # The wrapper is bash, so field 22 of its stat is its start time.
+        # The wrapper is bash, so field 22 of its stat is its start time;
+        # with no stat to read, it is the one ``st`` reads from ps.
         # Its .pid is written aside and renamed in, so no reader sees half
         # of it. A stop can land before then: delete_session moves the
         # session aside before reading PIDs, so the rename fails and a
         # command the stop missed never runs.
         wrapped = (
-            f"{self._session_sh}D=$R/{session_id}; "
-            "nohup setsid bash -c '"
-            f"echo \"$$ $(cut -d\" \" -f22 /proc/$$/stat 2>/dev/null)\" > $1/{cmd_id}.new "
-            f"&& mv $1/{cmd_id}.new $1/{cmd_id}.pid || exit; "
+            f'{self._session_sh}D="$R/{session_id}"; '
+            "L=; if command -v setsid >/dev/null 2>&1; then L=setsid; else set -m; fi; "
+            "nohup $L bash -c '"
+            "echo \"$$ $(cut -d\" \" -f22 /proc/$$/stat 2>/dev/null || "
+            f"{{ {ps_start_sh('$$')}; }})\" > \"$1/{cmd_id}.new\" "
+            f"&& mv \"$1/{cmd_id}.new\" \"$1/{cmd_id}.pid\" || exit; "
             f"( set --; eval \"$(echo {encoded} | base64 -d)\" ); "
-            f"echo $? > $1/{cmd_id}.exit"
-            f"' bash $D > $D/{cmd_id}.stdout 2> $D/{cmd_id}.stderr &"
+            f"echo $? > \"$1/{cmd_id}.exit\""
+            f"' bash \"$D\" > \"$D/{cmd_id}.stdout\" 2> \"$D/{cmd_id}.stderr\" &"
         )
         await self.exec(wrapped, timeout=10)
         return cmd_id
@@ -133,7 +161,7 @@ class ExecSessionRuntime(SandboxRuntime):
         # missing session.
         _SEP = "\\x00"
         result = await self.exec(
-            f"{self._session_sh}cd $R/{session_id} 2>/dev/null || exit 3; "
+            f'{self._session_sh}cd "$R/{session_id}" 2>/dev/null || exit 3; '
             f"{_status_sh(command_id)}"
             f"cat {command_id}.stdout 2>/dev/null; "
             f"printf '{_SEP}'; "
@@ -163,7 +191,7 @@ class ExecSessionRuntime(SandboxRuntime):
         # Exit 3 marks a missing session; the newest .pid names its command.
         # Its exit code is read before its output, as in session_command_logs.
         result = await self.exec(
-            f"{self._session_sh}cd $R/{session_id} 2>/dev/null || exit 3; "
+            f'{self._session_sh}cd "$R/{session_id}" 2>/dev/null || exit 3; '
             "id=$(ls -t -- *.pid 2>/dev/null | head -1); id=${id%.pid}; "
             f"{latest}"
             f"printf '%s{_SEP}' \"$id\"; "
@@ -187,7 +215,7 @@ class ExecSessionRuntime(SandboxRuntime):
         # .exit, or while it has no .pid at all: a launch is about to use it,
         # so eviction leaves it alone.
         result = await self.exec(
-            f"{self._session_sh}cd $R 2>/dev/null || exit 0; "
+            f'{self._session_sh}cd "$R" 2>/dev/null || exit 0; '
             "for d in */; do [ -d \"$d\" ] || continue; n=0; r=0; "
             "for p in \"$d\"*.pid; do [ -e \"$p\" ] || continue; n=1; "
             "live \"$p\" && [ ! -e \"${p%.pid}.exit\" ] && r=1; done; "
@@ -217,15 +245,15 @@ class ExecSessionRuntime(SandboxRuntime):
         # space, what the command left behind. A pid that names another
         # process now is not this command's to signal.
         result = await self.exec(
-            f"{self._session_sh}D=$R/{session_id}; X=$R/.{session_id}.$$; "
-            "mv $D $X || { [ -e $D ] || exit 3; exit 1; }; "
-            "for f in $X/*.pid; do "
+            f'{self._session_sh}D="$R/{session_id}"; X="$R/.{session_id}.$$"; '
+            'mv "$D" "$X" || { [ -e "$D" ] || exit 3; exit 1; }; '
+            'for f in "$X"/*.pid; do '
             "  { read -r pid start < \"$f\"; } 2>/dev/null; "
             "  case $pid in \"\"|*[!0-9]*) continue;; esac; "
             "  now=$(st $pid); "
             "  if [ \"$now\" = \"$start\" ]; then kill -- -$pid; kill $pid; "
             "  elif [ -z \"$now\" ]; then kill -- -$pid; fi; "
-            "done 2>/dev/null; rm -rf $X",
+            'done 2>/dev/null; rm -rf -- "$X"',
             timeout=10,
         )
         if result.exit_code == 3:
