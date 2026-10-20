@@ -19,6 +19,9 @@ const FORKS_FILES = [
   'src/pages/Plugins/__tests__/McpServers.test.tsx',
   'src/pages/Plugins/__tests__/brokerageSurface.test.tsx',
   'src/pages/ChatAgent/components/mcp/__tests__/McpTab.test.tsx',
+  'src/lib/__tests__/setupReturn.test.ts',
+  'src/pages/Setup/__tests__/SetupWizard.return.test.tsx',
+  'src/pages/Setup/steps/__tests__/connectReturn.test.tsx',
   // Replaces `window` itself to install the desktop bridge.
   'src/lib/__tests__/desktop.test.ts',
   // Need ReadableStream: two load jsdom themselves (its undici reads it at
