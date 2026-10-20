@@ -628,6 +628,14 @@ class TestNormalization:
         assert result[0]["date"] == "2025-01-03"
         assert result[1]["date"] == "2025-01-01"
 
+    def test_a_zero_field_stays_zero(self):
+        from data_client.normalize import normalize_bars
+
+        long = {"date": "2025-01-02", "open": 0, "high": 1, "low": 0, "close": 1, "volume": 0}
+        short = {"t": 1735833600000, "o": 0, "h": 1, "l": 0, "c": 1, "v": 0}
+        for bar in normalize_bars([long, short], "^VIX"):
+            assert (bar["open"], bar["low"], bar["volume"]) == (0.0, 0.0, 0.0)
+
     def test_as_float_handles_edge_cases(self):
         from data_client.normalize import _as_float
 

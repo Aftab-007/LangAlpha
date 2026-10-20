@@ -255,6 +255,12 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _field(bar: dict, name: str, short: str) -> Any:
+    """*name*, or its one-letter form when *name* is absent; a zero is a value, not a gap."""
+    value = bar.get(name)
+    return bar.get(short) if value is None else value
+
+
 def populated(data: Any) -> bool:
     """Whether a provider answer is worth serving; ``{"results": []}`` is a miss.
 
@@ -299,11 +305,11 @@ def normalize_bars(
             date_str = bar.get("date", "")
         normalized.append({
             "date": date_str,
-            "open": _as_float(bar.get("open") or bar.get("o")),
-            "high": _as_float(bar.get("high") or bar.get("h")),
-            "low": _as_float(bar.get("low") or bar.get("l")),
-            "close": _as_float(bar.get("close") or bar.get("c")),
-            "volume": _as_float(bar.get("volume") or bar.get("v")),
+            "open": _as_float(_field(bar, "open", "o")),
+            "high": _as_float(_field(bar, "high", "h")),
+            "low": _as_float(_field(bar, "low", "l")),
+            "close": _as_float(_field(bar, "close", "c")),
+            "volume": _as_float(_field(bar, "volume", "v")),
         })
     normalized.sort(key=lambda r: r["date"], reverse=True)
     return normalized
