@@ -237,7 +237,7 @@
     "logoutConfirmMsg": "确定要退出登录吗？",
     "timezone": "时区",
     "selectTimezone": "选择时区...",
-    "preferencesDesc": "偏好设置通过与 Agent 对话来管理。点击下方按钮进行更新。",
+    "preferencesDesc": "也可以在任意对话中让 Agent 修改这些设置。",
     "noPreferencesYet": "暂无偏好设置。点击下方按钮进行设置。",
     "riskTolerance": "风险偏好",
     "investmentStyle": "投资风格",
@@ -252,10 +252,8 @@
     "resetPreferences": "重置偏好",
     "resetConfirmMsg": "这将清除您所有的偏好设置：风险偏好、投资风格、Agent 设置、默认模型及其他模型设置（自定义模型与服务商、快速切换模型、按模型设置），以及仪表盘布局。已有对话会继续使用各自的模型。您可以随时在设置中或通过 Agent 重新设置。确定吗？",
     "resetting": "重置中...",
-    "modifyWithAgent": "通过 Agent 修改",
-    "completeProfile": "完善个人资料",
-    "completeProfileDesc": "通过简短对话设置您的股票、风险偏好和其他偏好。",
-    "startOnboarding": "开始设置",
+    "completeProfile": "设置投资画像",
+    "completeProfileDesc": "回答几个问题，让 Agent 更了解你的投资习惯，提供更适合你的研究。",
     "defaultModel": "默认模型",
     "defaultModelDesc": "用于工作区对话（代码执行、沙箱）。",
     "defaultModelChange": {
@@ -467,12 +465,7 @@
     "prefIncompleteMsg": "您的偏好信息尚未完善。请完善偏好设置以获得最佳体验。",
     "ignoreFor24h": "24小时内忽略",
     "proceed": "继续",
-    "failedOnboarding": "设置失败，请重试。",
-    "failedPrefUpdate": "启动偏好更新失败，请重试。",
     "watchlist": "自选",
-    "personalizeTitle": "个性化您的体验",
-    "personalizeDesc": "与我们的 AI 助手交流，自定义您的关注列表、风险偏好和提醒",
-    "personalize": "个性化",
     "layoutToggle": {
       "groupAria": "仪表板布局",
       "classic": "经典",
@@ -3561,13 +3554,9 @@
           "title": "查看实时行情",
           "desc": "实时数据流驱动的行情图表。"
         },
-        "stocks": {
-          "title": "告诉 Agent 你的自选股与持仓",
-          "desc": "与 Agent 简单聊聊你关注和持有的股票。"
-        },
-        "preferences": {
-          "title": "设置投资偏好",
-          "desc": "设定风险承受度、投资风格与回答方式。"
+        "profile": {
+          "title": "设置投资画像",
+          "desc": "风险、市场、风格，以及 Agent 怎么配合你。"
         },
         "createWorkspace": {
           "title": "创建第一个工作区"
@@ -3584,12 +3573,6 @@
           "title": "在其他平台使用 LangAlpha",
           "desc": "通过平台集成，在 Slack、邮件等平台使用 LangAlpha。"
         }
-      },
-      "interview": {
-        "title": "聊几句，让 Agent 更懂你",
-        "body": "即将打开一段对话，Agent 会简单了解你的持仓、自选股、风险承受度与投资偏好，让之后的回答更贴合你的情况。这些信息可在设置中修改，也可以直接让它更新。",
-        "cancel": "暂不",
-        "confirm": "开始对话"
       }
     },
     "announce": {
@@ -3611,20 +3594,281 @@
       "reset": "重置新手引导",
       "resetDone": "新手引导已重置，提示与指南将重新开始。"
     },
-    "connect": {
-      "title": "连接你的券商账户",
-      "description": "Chief of Staff Agent 会从中读取你的持仓和自选股，再问你几个关于所关注市场的问题。",
-      "continue": "继续",
-      "turnOn": "开启",
-      "skip": "不连接券商，直接继续",
-      "footnote": "下一步由你决定它可以对你的账户做什么。",
-      "waiting": "正在加载 {{brokerage}}…",
-      "failed": "无法连接 {{brokerage}}。请重试，或不连接直接继续。"
-    },
     "kickoff": {
-      "connected": "我已连接 {{brokerage}}，帮我设置个人资料吧。",
-      "noBrokerage": "帮我设置个人资料吧。",
-      "modifyPreferences": "我想查看并更新我的偏好设置。"
+      "threadTitle": "开始使用"
+    },
+    "welcome": {
+      "progressLabel": "进度",
+      "skip": "跳过",
+      "cancel": "取消",
+      "continue": "继续",
+      "save": "保存",
+      "optional": "可选",
+      "saveFailed": "投资画像保存失败，请重试。",
+      "loadFailed": "投资画像加载失败。",
+      "entry": "设置投资画像",
+      "edit": "编辑投资画像",
+      "chat": {
+        "greeting": "你好，{{name}}。",
+        "greetingNoName": "你好。",
+        "intro": "我是你在 LangAlpha 的 Chief of Staff Agent，帮你协调 AI 分析师、管理各个工作区。",
+        "introNext": "先问你几个问题，了解一下你的投资组合和投资习惯。",
+        "editIntro": "这是你的投资画像。修改任意一项后保存即可。",
+        "lead": {
+          "brokerage": "连接券商账户后，我就能结合你的实际持仓做研究。也可以先跳过，以后再连。",
+          "elsewhere": "你的账户开在哪些券商？选好后，再挑一种方式添加持仓。",
+          "experience": "下面哪一项最符合你的情况？这样我讲解时能把握好深浅。",
+          "risk": "你能接受多大的风险？我会按你的风险偏好，权衡潜在收益和亏损。",
+          "markets": "你主要投资哪些市场？研究时我会重点关注。",
+          "style": "你做投资决策时主要看什么？我会优先给你这类分析。",
+          "agent": "最后，你希望我通常怎么回答问题？是快速作答、看问题决定研究深度，还是每次都先充分研究？"
+        },
+        "composer": {
+          "waiting": "设置完成后，你就可以给我发消息了",
+          "start": "想先问什么，或有什么背景要补充，可以写在这里（选填）"
+        },
+        "edit": "修改回答",
+        "summary": {
+          "connected": "已连接 {{brokerage}}",
+          "screenshots_one": "{{count}} 张截图",
+          "screenshots_other": "{{count}} 张截图",
+          "search": "搜索添加持仓",
+          "skipped": "已跳过"
+        }
+      },
+      "banner": {
+        "title": "设置投资画像",
+        "desc": "回答几个问题，让 Agent 更了解你的投资习惯，提供更适合你的研究。",
+        "start": "去设置",
+        "resume": "继续设置"
+      },
+      "brokerage": {
+        "none": "暂时没有可连接的券商。",
+        "failed": "连接 {{brokerage}} 失败。请重试，或先跳过这一步。",
+        "desktopOnly": "{{brokerages}} 只能在桌面应用中连接。<download>下载桌面应用</download>",
+        "desktopOutdated": "更新桌面应用后才能连接券商。<download>下载最新版本</download>",
+        "permissionHelper": "选择 Agent 如何处理已连接的券商账户中的订单，之后也可以在设置中修改。",
+        "elsewhereTitle": "找不到你的券商？",
+        "elsewhereBody": "也可以用截图或搜索添加持仓。",
+        "elsewhereAction": "不连接，继续"
+      },
+      "elsewhere": {
+        "brokerages": {
+          "fidelity": "富达",
+          "schwab": "嘉信理财",
+          "vanguard": "先锋领航",
+          "etrade": "E*TRADE",
+          "robinhood": "Robinhood",
+          "ibkr": "盈透证券",
+          "webull": "微牛",
+          "moomoo": "moomoo",
+          "futu": "富途牛牛",
+          "tiger": "老虎证券",
+          "longbridge": "长桥证券",
+          "tastytrade": "tastytrade",
+          "other": "其他",
+          "none": "还没有账户"
+        },
+        "otherLabel": "券商名称",
+        "otherPlaceholder": "券商名称",
+        "connectable": "连接 {{brokerages}} 后，Agent 可以直接读取你的持仓。<connect>去连接</connect>",
+        "holdingsTitle": "添加持仓",
+        "methods": {
+          "screenshot": {
+            "title": "上传截图",
+            "desc": "截取券商 App 中的持仓和自选页面。Agent 会先和你确认要添加的内容。"
+          },
+          "search": {
+            "title": "搜索添加",
+            "desc": "按名称或代码逐个添加。"
+          }
+        }
+      },
+      "experience": {
+        "types": {
+          "individual": {
+            "title": "个人投资者",
+            "desc": "用自己的资金投资或交易。"
+          },
+          "professional": {
+            "title": "金融从业者",
+            "desc": "分析师、交易员、基金经理或投资顾问。"
+          },
+          "student": {
+            "title": "学生",
+            "desc": "正在学习市场知识。"
+          }
+        },
+        "yearsTitle": "你做投资或交易有多久了？",
+        "years": {
+          "under_1y": "不到 1 年",
+          "1_3y": "1–3 年",
+          "3_10y": "3–10 年",
+          "over_10y": "10 年以上"
+        },
+        "instrumentsTitle": "你对哪些投资品种感兴趣？"
+      },
+      "risk": {
+        "levels": {
+          "conservative": {
+            "title": "保守",
+            "desc": "优先保护本金，追求适度收益。"
+          },
+          "moderate": {
+            "title": "稳健",
+            "desc": "接受一定波动，追求资产长期增值。"
+          },
+          "growth": {
+            "title": "进取",
+            "desc": "承受较大波动，追求更高回报。"
+          },
+          "aggressive": {
+            "title": "激进",
+            "desc": "集中持仓，可接受大幅回撤。"
+          }
+        },
+        "horizonTitle": "你通常持仓多久？",
+        "horizons": {
+          "intraday": "日内",
+          "days": "几天到几周",
+          "months": "几个月",
+          "years": "数年"
+        }
+      },
+      "instruments": {
+        "stock": "股票",
+        "etf": "ETF",
+        "index": "指数",
+        "option": "期权",
+        "future": "期货",
+        "bond": "债券",
+        "fund": "基金",
+        "forex": "外汇",
+        "crypto": "加密货币",
+        "commodity": "大宗商品"
+      },
+      "markets": {
+        "names": {
+          "us": "美国",
+          "hk": "香港",
+          "cn": "A 股",
+          "jp": "日本",
+          "eu": "欧洲"
+        },
+        "helpTitle": "你希望我在哪些方面帮你？",
+        "help": {
+          "ideas": "发掘投资机会",
+          "research": "研究公司",
+          "portfolio": "跟踪我的持仓",
+          "news": "关注市场动态",
+          "trading": "制定交易计划",
+          "learning": "学习投资基础"
+        }
+      },
+      "style": {
+        "approaches": {
+          "fundamental": "基本面分析",
+          "macro": "宏观趋势",
+          "quantitative": "系统化策略与量化信号",
+          "technical": "技术分析",
+          "event_driven": "财报与事件"
+        },
+        "stylesTitle": "你偏向哪些投资风格？",
+        "styles": {
+          "growth": "成长",
+          "value": "价值",
+          "income": "股息收益",
+          "trading": "短线交易",
+          "index": "被动与指数投资"
+        },
+        "sectorsTitle": "你关注哪些行业？",
+        "sectors": {
+          "technology": "科技",
+          "semiconductors": "半导体",
+          "healthcare": "医疗健康",
+          "financials": "金融",
+          "energy": "能源",
+          "consumer": "消费",
+          "industrials": "工业",
+          "real_estate": "房地产",
+          "utilities": "公用事业",
+          "materials": "原材料"
+        }
+      },
+      "agent": {
+        "depth": {
+          "light": {
+            "title": "快速作答",
+            "desc": "快速查证后简要回答，只有在你要求时才深入研究。"
+          },
+          "adaptive": {
+            "title": "看问题而定",
+            "desc": "简单问题快速回答，需要深入时充分研究。"
+          },
+          "thorough": {
+            "title": "充分研究",
+            "desc": "每次回答前都核实数据和证据，耗时更长，消耗更多 credits。"
+          }
+        },
+        "deliverableTitle": "你通常希望回答以什么形式呈现？",
+        "deliverable": {
+          "text": {
+            "title": "文字回复",
+            "desc": "在对话中用文字回答，必要时配表格。"
+          },
+          "visual": {
+            "title": "图表和看板",
+            "desc": "在对话中通过交互式图表和看板探索数据。"
+          },
+          "report": {
+            "title": "完整报告",
+            "desc": "排版好的 HTML 报告，可分享或保存为 PDF，准备时间更长，消耗更多 credits。"
+          }
+        },
+        "proactivityTitle": "你希望我什么时候主动提供简报或提醒？",
+        "proactivity": {
+          "proactive": {
+            "title": "定期更新",
+            "desc": "不等你提问，主动提供简报、投资思路和持仓动态。"
+          },
+          "when_needed": {
+            "title": "重要变动时",
+            "desc": "只在需要你留意时提醒，比如持仓大幅波动。"
+          },
+          "on_request": {
+            "title": "仅在你要求时",
+            "desc": "不主动安排简报或提醒，你提出时再安排。"
+          }
+        }
+      },
+      "start": {
+        "submit": "开始",
+        "waiting": "正在加载 {{brokerage}}…",
+        "failed": "无法打开对话，请重试。"
+      },
+      "holdings": {
+        "ticker": "代码",
+        "quantity": "数量",
+        "remove": "移除 {{symbol}}",
+        "failed": "无法添加 {{symbol}}。",
+        "search": "按名称或代码搜索",
+        "noResults": "没有找到与“{{query}}”相关的结果",
+        "toHoldings": "加入持仓",
+        "toWatchlist": "加入自选",
+        "holdingsTitle": "持仓",
+        "watchlistTitle": "自选",
+        "watchlistRemove": "从自选中移除 {{symbol}}",
+        "watchlistFailed": "无法将 {{symbol}} 加入自选。"
+      },
+      "shots": {
+        "prompt": "添加持仓或自选列表的截图",
+        "hint": "拖入、粘贴或选择图片，最多 {{max}} 张",
+        "add": "添加截图",
+        "remove": "移除 {{name}}",
+        "tooMany": "最多只能添加 {{max}} 张截图，其余的已忽略。",
+        "notImage": "{{name}} 不是 PNG、JPEG、WebP 或 GIF 图片。",
+        "unreadable": "无法读取 {{name}}。"
+      }
     }
   },
   "mcp": {

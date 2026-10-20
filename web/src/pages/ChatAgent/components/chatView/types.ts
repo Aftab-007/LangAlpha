@@ -22,12 +22,21 @@ export interface LocationState {
    * subagent that ". Ignored alongside `initialMessage`, which is sent.
    */
   draftMessage?: string;
-  /** Open with the onboarding interview's first turn (from the connect sheet). */
-  isOnboarding?: boolean;
-  /** The brokerages connected on the way in, by label, for that first turn. */
-  onboardingBrokerages?: string[];
-  /** Open with a request to revisit the saved preferences (from Settings). */
-  isModifyingPreferences?: boolean;
+  /**
+   * The first send opens its turn with no message of its own, its
+   * `initialMessage` empty (`SendOptions.hiddenOpener`): the welcome flow
+   * asking the agent where to start (pages/Onboarding/welcome/kickoff.ts).
+   */
+  hiddenOpener?: boolean;
+  /** The title of the thread the first send creates (`SendOptions.threadTitle`). */
+  threadTitle?: string;
+  /**
+   * Opened by the welcome flow's hand-off, a view transition that holds the
+   * page until this view draws the first send (pages/Onboarding/welcome/
+   * handoff.ts). The send goes out at once, and no empty chat is drawn while
+   * it does.
+   */
+  handoff?: boolean;
   workspaceId?: string;
   workspaceName?: string;
   fromThreadId?: string;

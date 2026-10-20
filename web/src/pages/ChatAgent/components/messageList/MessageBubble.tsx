@@ -487,6 +487,9 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
             exit={{ height: 0, paddingTop: 0, opacity: 0, transition: EXIT_TWEEN }}
             aria-hidden={!quiet}
             data-testid="streaming-indicator"
+            // What the welcome flow's pending mark becomes in its hand-off
+            // (welcome/handoff.css), named only while that runs.
+            data-handoff="agent"
             data-quiet={quiet ? 'true' : 'false'}
           >
             <FigureEightLoading active={quiet} className={`${isMobile ? 'h-[20px]' : 'h-[24px]'} text-(--color-accent-primary)`} />

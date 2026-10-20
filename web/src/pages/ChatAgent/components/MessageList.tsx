@@ -62,9 +62,12 @@ interface MessageListProps {
   dispatcherContext?: { threadId: string; workspaceId: string } | null;
   /** The thread's market-watch targets, read by its price-alert rows. */
   marketTargets?: readonly MarketTarget[] | null;
+  /** A first turn is about to land (the welcome flow's), so an empty list is
+   *  not an empty chat and draws no prompt to type. */
+  starting?: boolean;
 }
 
-function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, readOnly, allowFiles, feedbackByTurn, dispatcherContext, marketTargets }: MessageListProps): React.ReactElement | null {
+function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, readOnly, allowFiles, feedbackByTurn, dispatcherContext, marketTargets, starting }: MessageListProps): React.ReactElement | null {
   const isMobile = useIsMobile();
   const { onOpenFile } = useMessageActions();
   // The deck keeps the workspace's own notes file out on every surface; its
@@ -229,7 +232,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
 
   // Empty state - show when no messages exist (hidden in subagent view)
   if (messages.length === 0) {
-    if (isSubagentView) return null;
+    if (isSubagentView || starting) return null;
     if (isLoadingHistory) {
       return (
         <div className="space-y-6 py-4 animate-pulse">

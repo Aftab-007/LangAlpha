@@ -17,7 +17,9 @@ import { isPlatformMode, APP_ENTRY_PATH } from './config/hostMode';
 import { PRIVACY_URL } from './config/supportLinks';
 import { AUTH_BROADCAST_CHANNEL, type AuthBroadcastMessage } from './lib/oauthPopup';
 import { inAppPath } from './lib/inAppPath';
-import { OnboardingProvider, OnboardingHostGate, OnboardingConnectHost } from './pages/Onboarding';
+import { OnboardingProvider, OnboardingHostGate } from './pages/Onboarding';
+import { WELCOME_PATH } from './pages/Onboarding/welcome/paths';
+import { StaleBuildBoundary } from './components/StaleBuildBoundary';
 import { ConnectConsentHost } from './pages/Plugins/components/ConnectConsentHost';
 import { ConnectLandingHost } from './pages/Plugins/components/ConnectLandingHost';
 import { ThreadLifecycleFeed } from './lib/threadLifecycle/ThreadLifecycleFeed';
@@ -37,6 +39,9 @@ const LoginPage = React.lazy(() => import('./pages/Login/LoginPage'));
 // — into the entry chunk that every visitor loads before login.
 const SharePage = lazyWithMotion(() => import('./pages/SharedChat/SharePage'));
 const SetupWizard = lazyWithMotion(() => import('./pages/Setup/SetupWizard'));
+// The welcome flow renders in place of the whole app layout, so it is the
+// shell's to load rather than one of Main's routes.
+const Welcome = lazyWithMotion(() => import('./pages/Onboarding/welcome/Welcome'));
 const Legal = React.lazy(() => import('./pages/Legal/Legal'));
 const ResetPassword = React.lazy(() => import('./pages/Login/ResetPassword'));
 
@@ -208,6 +213,7 @@ const SIDEBAR_WIDTH_KEY = 'app-sidebar-width';
 function AuthenticatedShell() {
   const isMobile = useIsMobile();
   const location = useLocation();
+  const onWelcome = location.pathname === WELCOME_PATH;
   const hideTabBar = isMobile && location.pathname.startsWith('/chat/t/');
   const { isLoading, needsSetup } = useSetupGate();
 
@@ -217,7 +223,8 @@ function AuthenticatedShell() {
   // this is free when the gate is already settled. Mount-only: later
   // navigations mount their lazy component directly.
   useEffect(() => {
-    preloadRouteChunk(window.location.pathname);
+    if (window.location.pathname === WELCOME_PATH) void Welcome.preload().catch(() => {});
+    else preloadRouteChunk(window.location.pathname);
   }, []);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -298,23 +305,34 @@ function AuthenticatedShell() {
     <OnboardingProvider>
       <ThreadLifecycleFeed />
       <WarmHome />
-      <div className="app-layout">
-        {!isMobile && (
-          <AppSidebar
-            collapsed={sidebarCollapsed}
-            onToggleCollapse={toggleSidebar}
-            width={sidebarWidth}
-            onWidthChange={handleSidebarWidthChange}
-          />
-        )}
-        {isMobile && !hideTabBar && <BottomTabBar />}
-        <main ref={mainRef} className={`app-main${hideTabBar ? ' app-main--no-tab' : ''}`}>
-          <Main />
-        </main>
-      </div>
-      <OnboardingHostGate />
-      <OnboardingConnectHost />
-      {/* After the onboarding sheet, so a connect it starts asks above it. */}
+      {onWelcome ? (
+        // Full screen and none of the app's chrome: the flow is the page.
+        // The hosts below stay, since a brokerage connect it starts asks for
+        // consent and comes back through them.
+        <Suspense fallback={<PageLoading />}>
+          <StaleBuildBoundary>
+            <Welcome />
+          </StaleBuildBoundary>
+        </Suspense>
+      ) : (
+        <>
+          <div className="app-layout">
+            {!isMobile && (
+              <AppSidebar
+                collapsed={sidebarCollapsed}
+                onToggleCollapse={toggleSidebar}
+                width={sidebarWidth}
+                onWidthChange={handleSidebarWidthChange}
+              />
+            )}
+            {isMobile && !hideTabBar && <BottomTabBar />}
+            <main ref={mainRef} className={`app-main${hideTabBar ? ' app-main--no-tab' : ''}`}>
+              <Main />
+            </main>
+          </div>
+          <OnboardingHostGate />
+        </>
+      )}
       <ConnectConsentHost />
       <ConnectLandingHost />
     </OnboardingProvider>

@@ -19,8 +19,7 @@ import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { invalidateSubagents } from '@/hooks/useSubagents';
-import { useLocale } from '@/hooks/useLocale';
-import { onboardingKickoff } from '@/pages/Onboarding/connect/kickoff';
+import { markHandoffReady } from '@/pages/Onboarding/welcome/handoff';
 import { cardDownloadKey, trackPending } from '../utils/downloadNotice';
 import { summarizeThread, offloadThread, cancelSubagentTask, triggerFileDownload, resolveWorkspaceFile } from '../utils/api';
 import { downloadTarget } from '../utils/fileRefResolver';
@@ -114,7 +113,6 @@ import { useMessageActionBundles } from './chatView/useMessageActionBundles';
 const TRANSCRIPT_BOTTOM_PAD = 'pb-[calc(var(--composer-h,0px)+0.5rem)] *:[--composer-h:initial]';
 function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName: initialWorkspaceName, isActive = true, onThreadResolved, warmingState = false }: ChatViewProps): React.ReactElement | null {
   const { t } = useTranslation();
-  const locale = useLocale();
   const isMobile = useIsMobile();
   const containerRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputHandle>(null);
@@ -148,9 +146,15 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // The navigation bringing a new thread's first message, with the landing
   // composer's Subagents pick. Read per navigation rather than frozen: a new
   // chat's view stays cached while unsent, and the next one takes it up.
-  const subagentsLanding = isActive && threadId === '__default__' && state?.initialMessage
-    ? { key: location.key, allowed: typeof state.subagentsAllowed === 'boolean' ? state.subagentsAllowed : null }
-    : null;
+  const subagentsLanding =
+    isActive && threadId === '__default__' && (state?.initialMessage || state?.hiddenOpener)
+      ? { key: location.key, allowed: typeof state.subagentsAllowed === 'boolean' ? state.subagentsAllowed : null }
+      : null;
+  // The thread the welcome flow opens, captured at mount for the same reason.
+  // The flow hands its conversation over as a view transition
+  // (welcome/handoff.ts), which lands on this view's parts and waits for it to
+  // draw the agent at work.
+  const [kickoffView] = useState(() => isActive && state?.handoff === true);
 
 
 
@@ -1139,17 +1143,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     }
   }, [currentThreadId, threadId, workspaceId, navigate, queryClient, isActive, onThreadResolved, activeAgentIdRef]);
 
-  // The opening turn of a profile conversation, worded in the language in
-  // force when it goes out. Revisiting preferences sends the message alone.
-  const sendProfileKickoff = useEffectEvent((kind: 'onboarding' | 'modify', brokerages: string[]) => {
-    if (kind === 'modify') {
-      handleSendMessage(t('onboarding.kickoff.modifyPreferences'));
-      return;
-    }
-    const { message, additionalContext } = onboardingKickoff(t, locale, brokerages);
-    handleSendMessage(message, additionalContext);
-  });
-
   // Auto-send initial message from navigation state (e.g., from Dashboard)
   useEffect(() => {
     // Hidden views must not send initial messages (R7 — all views share useLocation)
@@ -1159,34 +1152,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       return;
     }
 
-    // Onboarding, from the connect sheet, and its revisit from Settings. The
-    // wording is built when the message goes out (sendProfileKickoff).
-    if (
-      (location.state?.isOnboarding || location.state?.isModifyingPreferences) &&
-      !initialMessageSentRef.current &&
-      !isLoading &&
-      !isLoadingHistory
-    ) {
-      initialMessageSentRef.current = true;
-      const kickoff = location.state.isOnboarding
-        ? {
-            kind: 'onboarding' as const,
-            // Router state survives a reload and is the user's to edit, so
-            // only names that are names reach the message.
-            brokerages: ((location.state as LocationState).onboardingBrokerages ?? []).filter(
-              (name: unknown): name is string => typeof name === 'string' && name !== '',
-            ),
-          }
-        : { kind: 'modify' as const, brokerages: [] };
-      // Clear navigation state to prevent re-sending on re-renders
-      navigate(location.pathname, { replace: true, state: {} });
-      // Small delay to ensure component is fully mounted
-      setTimeout(() => sendProfileKickoff(kickoff.kind, kickoff.brokerages), 100);
-      return;
-    }
-
-    // Handle regular message flow
-    if (location.state?.initialMessage && !initialMessageSentRef.current) {
+    // Handle regular message flow. The welcome flow's opening turn goes this
+    // way too, and when it asks the agent where to start it has no message of
+    // its own: a hidden opener, sent with an empty one.
+    if ((location.state?.initialMessage || location.state?.hiddenOpener) && !initialMessageSentRef.current) {
       // Merge state.skills (names) into additionalContext as skill entries,
       // so hidden skills preloaded upstream (e.g. chart-annotation from
       // MarketView) stay active on the PTC side.
@@ -1207,34 +1176,55 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
       // For new threads (__default__), send immediately without waiting for history
       // For existing threads, wait for history to finish loading
-      if (threadId === '__default__') {
-        // New thread - send immediately
-        initialMessageSentRef.current = true;
-        // Capture state values before clearing (navigate may update location ref)
-        const { initialMessage, additionalContext, attachmentMeta, model, reasoningEffort, widgetSnapshots, chartSelections, skills } = location.state;
-        const mergedContext = mergeSkills(additionalContext, skills);
-        // Clear navigation state to prevent re-sending on re-renders
-        navigate(location.pathname, { replace: true, state: {} });
-        // Small delay to ensure component is fully mounted
-        setTimeout(() => {
-          handleSendMessage(initialMessage, mergedContext, attachmentMeta || null, { model, reasoningEffort, widgetSnapshots, chartSelections, subagentsAllowed: subagentsToSend });
-        }, 100);
-      } else if (!isLoadingHistory && !isLoading) {
-        // Existing thread - wait for history to load, then send
-        // This ensures we don't send duplicate messages
-        initialMessageSentRef.current = true;
-        // Capture state values before clearing (navigate may update location ref)
-        const { initialMessage, additionalContext, attachmentMeta, model, reasoningEffort, widgetSnapshots, chartSelections, skills } = location.state;
-        const mergedContext = mergeSkills(additionalContext, skills);
-        // Clear navigation state to prevent re-sending on re-renders
-        navigate(location.pathname, { replace: true, state: {} });
-        // Small delay to ensure component is fully mounted
-        setTimeout(() => {
-          handleSendMessage(initialMessage, mergedContext, attachmentMeta || null, { model, reasoningEffort, widgetSnapshots, chartSelections, subagentsAllowed: subagentsToSend });
-        }, 100);
-      }
+      // This ensures we don't send duplicate messages
+      if (threadId !== '__default__' && (isLoadingHistory || isLoading)) return;
+      initialMessageSentRef.current = true;
+      // Capture state values before clearing (navigate may update location ref)
+      const {
+        initialMessage,
+        additionalContext,
+        attachmentMeta,
+        model,
+        reasoningEffort,
+        widgetSnapshots,
+        chartSelections,
+        skills,
+        hiddenOpener,
+        threadTitle,
+        handoff,
+      } = location.state;
+      const mergedContext = mergeSkills(additionalContext, skills);
+      // Clear navigation state to prevent re-sending on re-renders
+      navigate(location.pathname, { replace: true, state: {} });
+      const send = () => {
+        handleSendMessage(initialMessage ?? '', mergedContext, attachmentMeta || null, {
+          model,
+          reasoningEffort,
+          widgetSnapshots,
+          chartSelections,
+          subagentsAllowed: subagentsToSend,
+          hiddenOpener,
+          threadTitle,
+        });
+      };
+      // The welcome flow's hand-off is sent at once: the view is mounted by
+      // the time its effects run, and the hand-off into it holds the page
+      // still until the turn is drawn. Anything else waits a small delay to
+      // ensure the component is fully mounted.
+      if (handoff) send();
+      else setTimeout(send, 100);
     }
   }, [location.state, workspaceId, threadId, isLoading, isLoadingHistory, handleSendMessage, navigate, location.pathname, isActive, subagentsToSend]);
+
+  // The welcome's thread is never an empty chat: until its opening turn goes
+  // out it draws nothing where the prompt to type would be. The route state
+  // carrying the turn is cleared as it goes, so one that could not go out
+  // leaves the prompt. Drawn, the turn tells the hand-off it can land.
+  const awaitingKickoff = kickoffView && messages.length === 0 && state?.handoff === true;
+  const kickoffShown = kickoffView && messages.length > 0;
+  useLayoutEffect(() => {
+    if (kickoffShown) markHandoffReady();
+  }, [kickoffShown]);
 
   // Re-seed the composer from navigation state when there's no
   // initialMessage (the auto-send branch above already consumes them inline).
@@ -1356,6 +1346,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
         fade in Main.tsx already covers the transition. */}
     <div
       ref={containerRef}
+      data-handoff-scope={kickoffView ? '' : undefined}
       className="flex w-full overflow-hidden h-full"
       style={{
         backgroundColor: 'var(--color-bg-page)',
@@ -1373,7 +1364,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             It already spans the titlebar and is mostly empty, so the shell gets
             a full-width band at no layout cost; the buttons in it opt out
             through the global no-drag rule. */}
-        <div data-chrome="drag" className="flex items-center justify-between px-4 py-2 border-b min-w-0 shrink-0" style={{ borderColor: 'var(--color-border-muted)', cursor: isMobile ? 'pointer' : undefined }} onClick={handleTopBarTap}>
+        <div data-chrome="drag" data-handoff="header" className="flex items-center justify-between px-4 py-2 border-b min-w-0 shrink-0" style={{ borderColor: 'var(--color-border-muted)', cursor: isMobile ? 'pointer' : undefined }} onClick={handleTopBarTap}>
           <div className="flex items-center gap-4 min-w-0 shrink">
             <button
               onClick={() => {
@@ -1515,6 +1506,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                             store={liveMessages}
                             isLoading={isLoading}
                             isLoadingHistory={isLoadingHistory}
+                            starting={awaitingKickoff}
                             feedbackByTurn={feedbackByTurn}
                             dispatcherContext={dispatcherContext}
                             marketTargets={marketWatch?.targets}
@@ -1690,7 +1682,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                     {/* One row: the drawer is a tab tucked under the composer's top
                         edge, so no status row may come between them, and the
                         parent's sibling gap must not either. */}
-                    <div>
+                    <div data-handoff="composer">
                       <TodoDrawer
                         todoData={cards['todo-list-card']?.todoData ?? null}
                         historyLoading={isLoadingHistory}
