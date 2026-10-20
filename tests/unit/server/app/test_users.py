@@ -1221,3 +1221,200 @@ async def test_a_non_boolean_subagents_default_is_rejected(client, value):
     assert resp.status_code == 400
     assert "subagents_default" in resp.json()["detail"]
     upsert.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# PUT /users/me/preferences: the structured profile
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _profile_endpoint(stored=None, read_before_lock=None):
+    """The preferences PUT with ``stored`` as the row read under the profile
+    lock (the one the structured keys are checked against) and
+    ``read_before_lock`` as the earlier unlocked read, yielding the upsert,
+    the completion check, and the unlocked read."""
+    upsert = AsyncMock(return_value=_prefs())
+    read = AsyncMock(return_value=read_before_lock)
+    with (
+        patch(f"{DB}.db_get_user", new_callable=AsyncMock, return_value=_user()),
+        patch(f"{DB}.db_get_user_preferences", new=read),
+        patch(f"{DB}.db_lock_user_preferences", new_callable=AsyncMock, return_value=stored),
+        patch(f"{DB}.upsert_user_preferences", new=upsert),
+        patch(f"{DB}.maybe_complete_onboarding", new_callable=AsyncMock) as complete,
+    ):
+        yield upsert, complete, read
+
+
+@pytest.mark.asyncio
+async def test_the_profile_form_is_saved_in_its_stored_spelling_and_completes_onboarding(client):
+    """What is saved is what the check hands back, not what was sent. The
+    rules themselves are pinned in ``tests/unit/server/models/
+    test_structured_preferences.py``."""
+    async with _profile_endpoint() as (upsert, complete, _read):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={
+                "risk_preference": {"risk_level": "Moderate"},
+                "investment_preference": {"markets": ["us", "HK", "us"], "sectors": ["Real Estate"]},
+                "agent_preference": {"research_depth": "Light", "output_format": "HTML", "tone": "terse"},
+            },
+        )
+
+    assert resp.status_code == 200
+    assert upsert.await_args.kwargs["risk_preference"] == {"risk_level": "moderate"}
+    assert upsert.await_args.kwargs["investment_preference"] == {
+        "markets": ["us", "hk"],
+        "sectors": ["real_estate"],
+    }
+    assert upsert.await_args.kwargs["agent_preference"] == {
+        "research_depth": "light",
+        "output_format": "html",
+        "tone": "terse",
+    }
+    complete.assert_awaited_once_with("test-user-123")
+
+
+@pytest.mark.asyncio
+async def test_every_bad_value_is_named_in_one_422(client):
+    async with _profile_endpoint() as (upsert, complete, _read):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={
+                "risk_preference": {"risk_level": "yolo"},
+                "investment_preference": {"markets": ["uk"], "horizon": "decades"},
+                "agent_preference": {"proactivity": "always"},
+            },
+        )
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail.startswith("risk_preference.risk_level: ")
+    for path in (
+        "risk_preference.risk_level",
+        "investment_preference.markets[0]",
+        "investment_preference.horizon",
+        "agent_preference.proactivity",
+    ):
+        assert path in detail
+    upsert.assert_not_awaited()
+    complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_null_reaches_the_merge_as_a_deletion(client):
+    async with _profile_endpoint() as (upsert, _complete, _read):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={
+                "risk_preference": {"risk_level": None},
+                "investment_preference": {"markets": None, "sectors": None},
+                "agent_preference": {"deliverable": None, "proactivity": None},
+            },
+        )
+
+    assert resp.status_code == 200
+    assert upsert.await_args.kwargs["risk_preference"] == {"risk_level": None}
+    assert upsert.await_args.kwargs["investment_preference"] == {"markets": None, "sectors": None}
+    assert upsert.await_args.kwargs["agent_preference"] == {"deliverable": None, "proactivity": None}
+
+
+@pytest.mark.asyncio
+async def test_output_format_is_checked_with_the_structured_keys(client):
+    """Settings' switch sends ``html``, or null to go back to markdown; any
+    other value is a 422 like every structured key's."""
+    async with _profile_endpoint() as (upsert, _complete, _read):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={"agent_preference": {"research_depth": "thorough", "output_format": "pdf"}},
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"].startswith("agent_preference.output_format: 'pdf' is not one of")
+    upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_value_the_row_already_holds_passes_whatever_it_is(client):
+    """``horizon`` was free text before it had a vocabulary; a form that sends
+    the stored value back unchanged must not be refused for it."""
+    stored = {"investment_preference": {"horizon": "long_term", "sectors": ["Tech & AI"]}}
+    async with _profile_endpoint(stored) as (upsert, _complete, _read):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={
+                "investment_preference": {
+                    "horizon": "long_term",
+                    "sectors": ["Tech & AI"],
+                    "markets": ["us"],
+                }
+            },
+        )
+
+    assert resp.status_code == 200
+    assert upsert.await_args.kwargs["investment_preference"] == {
+        "horizon": "long_term",
+        "sectors": ["Tech & AI"],
+        "markets": ["us"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_value_the_row_held_only_before_the_lock_is_checked_again(client):
+    """Another write can replace the row between the unlocked read and the
+    lock. The unchanged-value exemption holds against the locked row only, so
+    the stale ``long_term`` must not be written back over a newer valid one."""
+    before_lock = {"investment_preference": {"horizon": "long_term"}}
+    under_lock = {"investment_preference": {"horizon": "years"}}
+    async with _profile_endpoint(under_lock, read_before_lock=before_lock) as (upsert, complete, _read):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={"investment_preference": {"horizon": "long_term"}},
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"].startswith("investment_preference.horizon: ")
+    upsert.assert_not_awaited()
+    complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_free_text_keys_pass_untouched_without_a_read(client):
+    async with _profile_endpoint() as (upsert, _complete, read):
+        resp = await client.put(
+            "/api/v1/users/me/preferences",
+            json={
+                "risk_preference": {"risk_level": None, "risk_tolerance": "Whatever I like", "tolerance": 7},
+                "investment_preference": {"holding_period": "a few years"},
+                "agent_preference": {"output_format": None, "tone": "terse"},
+            },
+        )
+
+    assert resp.status_code == 200
+    assert upsert.await_args.kwargs["risk_preference"] == {
+        "risk_level": None,
+        "risk_tolerance": "Whatever I like",
+        "tolerance": 7,
+    }
+    assert upsert.await_args.kwargs["agent_preference"] == {"output_format": None, "tone": "terse"}
+    # A null sets no structured key, so there is nothing to check it against.
+    read.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_users_me_reports_when_the_account_was_created(client):
+    """The web's new-user rule reads it."""
+    created = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    result = {"user": _user(created_at=created), "preferences": None}
+    with (
+        patch(f"{DB}.get_user_with_preferences", new_callable=AsyncMock, return_value=result),
+        patch(
+            "src.server.dependencies.usage_limits._fetch_platform_membership",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+    ):
+        resp = await client.get("/api/v1/users/me")
+
+    assert resp.status_code == 200
+    assert resp.json()["user"]["created_at"] == "2026-10-01T12:00:00Z"
