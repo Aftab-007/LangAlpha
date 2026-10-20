@@ -17,6 +17,7 @@ import { isPlatformMode, APP_ENTRY_PATH } from './config/hostMode';
 import { PRIVACY_URL } from './config/supportLinks';
 import { AUTH_BROADCAST_CHANNEL, type AuthBroadcastMessage } from './lib/oauthPopup';
 import { inAppPath } from './lib/inAppPath';
+import { clearSetupReturn } from './lib/setupReturn';
 import { OnboardingProvider, OnboardingHostGate } from './pages/Onboarding';
 import { WELCOME_PATH } from './pages/Onboarding/welcome/paths';
 import { StaleBuildBoundary } from './components/StaleBuildBoundary';
@@ -216,6 +217,12 @@ function AuthenticatedShell() {
   const onWelcome = location.pathname === WELCOME_PATH;
   const hideTabBar = isMobile && location.pathname.startsWith('/chat/t/');
   const { isLoading, needsSetup } = useSetupGate();
+
+  // Reaching any page outside setup ends a visit another page sent here, so
+  // its return can't catch a later setup opened from inside the app.
+  useEffect(() => {
+    clearSetupReturn();
+  }, []);
 
   // Warm the target route's chunk while /users/me resolves — the gate below
   // otherwise serializes two network legs (profile fetch, then the lazy
