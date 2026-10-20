@@ -207,12 +207,18 @@ testable from Playwright**: its mouse events are CDP synthesized and never reach
 hit test that owns `-webkit-app-region`, and posting real CoreGraphics events needs
 macOS Accessibility permission. Changes here are checked by dragging the window.
 
-**So the frame is feature-detected, not assumed.** After each app load the shell asks the
-page whether anything under the buttons is a drag region (`DRAG_PROBE`, hit-testing three
-points along the strip) and remembers the answer in `appChrome`; window creation reads it.
-An unmounted page returns `null`, which is not "no" and is not recorded. `titleBarStyle`
-is fixed at construction, so a changed answer applies on the next launch rather than
-recreating a window that may have a turn streaming in it.
+**So the frame is feature-detected, not assumed.** After each app load the shell reads the
+page's own declaration, `<meta name="langalpha-window-chrome" content="reserves">` in
+`index.html` (`CHROME_DECLARATION` in `main.js`), and remembers the answer in `appChrome`;
+window creation reads it. A declaration rather than a hit-test, because the strip is only
+painted once the shell says the titlebar is hidden, so measuring it would read back the
+shell's own last answer. A page with no meta is a "no" only when the server really served
+it (a 2xx); an error document declares nothing either and is not recorded. The status is
+the document's, so it carries across the SPA's own `replaceState` moves while it boots.
+A load that failed has none: Chromium's own error page commits at the URL that failed,
+so a failed reload would otherwise be credited with the 200 of the page it replaced.
+`titleBarStyle` is fixed at construction, so a changed answer applies on the next launch
+rather than recreating a window that may have a turn streaming in it.
 
 This is the same rule as the bridge: **feature-detected, never version-detected**. The
 shell releases on a slow cadence and the app deploys continuously, so a shell that only

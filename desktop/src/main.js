@@ -360,6 +360,33 @@ function watchLoads(win) {
   win.webContents.on('did-navigate', (_event, url, httpResponseCode) => {
     lastNav = { url, status: httpResponseCode }
   })
+  // A same-document navigation moves the URL and keeps the document, and the
+  // status is the document's. Both SPAs move their own URL as they boot: the
+  // app's first run goes / → /dashboard → /welcome by replaceState, and when
+  // that lands before the load event the URL read at `did-finish-load` is no
+  // longer the one `did-navigate` reported. Matched on the old URL alone, that
+  // load was credited with no status at all, and the first run that went
+  // straight into the welcome flow never recorded reaching the app. Main frame
+  // only: a subframe's in-page move is not this document changing its address.
+  win.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+    if (isMainFrame === false || lastNav.url === null) return
+    lastNav = { url, status: lastNav.status }
+  })
+  // A load that fails still finishes: Chromium commits its own error document
+  // at the URL that failed and reports it with `did-fail-load`, never with
+  // `did-navigate`. A reload fails at the URL the window is already on, so the
+  // page it replaced was still paired with that URL, and the error document,
+  // which declares nothing, was credited with that page's 200 and revoked the
+  // flag on a server that was only unreachable. Forgotten here, the error
+  // document finishes with no status, and the next real load sets one again.
+  //
+  // ERR_ABORTED is left alone, as the outage screen leaves it. It commits no
+  // document, and it is how a load cut short by a newer one is reported. When
+  // the newer one is on another site, that report arrives after the newer
+  // one's `did-navigate`, so forgetting then would take that load's status.
+  win.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
+    if (outage.shouldShow({ code, isMainFrame })) lastNav = { url: null, status: 0 }
+  })
 
   win.webContents.on('did-finish-load', async () => {
     const url = win.webContents.getURL()
