@@ -16,6 +16,7 @@ answer 503 rather than guess.
 import asyncio
 import logging
 import os
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Optional
@@ -39,16 +40,21 @@ class QuotaServiceUnavailable(Exception):
     """
 
 
-# One retry covers the common outage: the quota service deploys in place, so it
-# is unreachable for seconds, not minutes. Deterministic 4xx answers (a rejected
-# service token, a malformed request) are not retried — they will not change.
+# The quota service deploys in place and refuses connections while it restarts,
+# for about five seconds. Strict callers retry on this schedule, 7.5 s of waiting
+# in all, so a check that lands in that gap waits it out; an outage that outlasts
+# it is real, and they fail closed. Deterministic 4xx answers (a rejected service
+# token, a malformed request) are not retried: they will not change.
 #
 # Only ``strict`` callers retry. For everyone else an unanswered check already
-# means "carry on", so a second attempt buys a slightly better answer at the
-# cost of a second per call — including inside the always-on reconciler, which
-# probes once per owner. The caller that pays for accuracy is the one that
-# blocks on it.
-_VALIDATE_RETRY_BACKOFF = 1.0  # seconds
+# means "carry on", so more attempts buy a slightly better answer at the cost of
+# seconds per call, including inside the always-on reconciler, which probes once
+# per owner. The caller that pays for accuracy is the one that blocks on it.
+_VALIDATE_RETRY_DELAYS = (0.5, 1.0, 2.0, 2.0, 2.0)  # seconds before each retry
+# The schedule assumes a refused connection, which fails at once. A service that
+# accepts and then hangs costs the client timeout per attempt, so no wait starts
+# that would end past this, and only the attempt already under way runs over.
+_VALIDATE_RETRY_WINDOW = 8.0  # seconds from the first attempt
 
 # Long enough that a retry lands after an in-place restart, short enough that a
 # client which honours it does not look hung.
@@ -371,10 +377,10 @@ async def _call_validate_for_user(
     """POST to the auth/quota service at /api/auth/validate.
 
     Returns None in OSS mode. When the service cannot be reached, ``strict``
-    callers get :class:`QuotaServiceUnavailable` (after one retry) and everyone
-    else gets None on the first failure, which each of them reads as "carry on"
-    — see the fail-open notes at those call sites for why that is safe there and
-    not at the credit gate.
+    callers get :class:`QuotaServiceUnavailable` once the retry schedule runs
+    out, and everyone else gets None on the first failure, which most of them
+    read as "carry on". See the fail-open notes at those call sites for why that
+    is safe there and not at the credit gate.
     """
     if not platform_gating_active():
         return None
@@ -392,10 +398,15 @@ async def _call_validate_for_user(
 
     url = f"{AUTH_SERVICE_URL.rstrip('/')}/api/auth/validate"
     reason = "unknown"
+    delays = _VALIDATE_RETRY_DELAYS if strict else ()
+    give_up_at = time.monotonic() + _VALIDATE_RETRY_WINDOW
 
-    for attempt in range(2 if strict else 1):
+    for attempt in range(len(delays) + 1):
         if attempt:
-            await asyncio.sleep(_VALIDATE_RETRY_BACKOFF)
+            delay = delays[attempt - 1]
+            if time.monotonic() + delay > give_up_at:
+                break
+            await asyncio.sleep(delay)
         try:
             resp = await client.post(url, json=body if body else None, headers=headers)
         except Exception as e:

@@ -351,14 +351,20 @@ def _unreachable_service(mock_client):
     stack.enter_context(patch(f"{MODULE}.HOST_MODE", "platform"))
     stack.enter_context(patch(f"{MODULE}.AUTH_SERVICE_URL", "http://localhost:8003"))
     stack.enter_context(patch(f"{MODULE}.get_http_client", return_value=mock_client))
-    stack.enter_context(patch(f"{MODULE}._VALIDATE_RETRY_BACKOFF", 0))
+    stack.enter_context(patch(f"{MODULE}._VALIDATE_RETRY_DELAYS", (0,) * _retries()))
     stack.enter_context(patch("os.getenv", return_value="token"))
     return stack
 
 
+def _retries():
+    from src.server.dependencies.usage_limits import _VALIDATE_RETRY_DELAYS
+
+    return len(_VALIDATE_RETRY_DELAYS)
+
+
 @pytest.mark.asyncio
-async def test_transport_failure_is_retried_once_for_strict_callers():
-    """The quota service restarts in place, so the first failure means little."""
+async def test_transport_failure_is_retried_for_strict_callers():
+    """The quota service restarts in place, so the first failures mean little."""
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
 
@@ -371,7 +377,7 @@ async def test_transport_failure_is_retried_once_for_strict_callers():
         with pytest.raises(QuotaServiceUnavailable):
             await _call_validate_for_user("user-1", strict=True)
 
-    assert mock_client.post.await_count == 2
+    assert mock_client.post.await_count == 1 + _retries()
 
 
 @pytest.mark.asyncio
@@ -463,7 +469,7 @@ async def test_an_unreadable_200_is_no_verdict_and_still_retried():
         with pytest.raises(QuotaServiceUnavailable):
             await _call_validate_for_user("user-1", strict=True)
 
-    assert mock_client.post.await_count == 2
+    assert mock_client.post.await_count == 1 + _retries()
 
 
 @pytest.mark.asyncio
@@ -477,6 +483,91 @@ async def test_an_unreadable_200_still_fails_open_for_everyone_else():
         from src.server.dependencies.usage_limits import _call_validate_for_user
 
         assert await _call_validate_for_user("user-1") is None
+
+
+def _restarting_service(refused_for: float, *, attempt_takes: float = 0.0):
+    """A quota service that refuses connections for ``refused_for`` seconds of a
+    fake clock, then answers. The real retry schedule runs against that clock."""
+    from contextlib import ExitStack
+
+    clock = [0.0]
+
+    async def sleep(seconds):
+        clock[0] += seconds
+
+    async def post(*_args, **_kwargs):
+        started = clock[0]
+        clock[0] += attempt_takes
+        if started < refused_for:
+            raise httpx.ConnectError("connection refused")
+        return httpx.Response(200, json={"valid": True, "allowed": True})
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=post)
+    stack = ExitStack()
+    stack.enter_context(patch(f"{MODULE}.HOST_MODE", "platform"))
+    stack.enter_context(patch(f"{MODULE}.AUTH_SERVICE_URL", "http://localhost:8003"))
+    stack.enter_context(patch(f"{MODULE}.get_http_client", return_value=mock_client))
+    stack.enter_context(patch("os.getenv", return_value="token"))
+    stack.enter_context(patch("asyncio.sleep", new=AsyncMock(side_effect=sleep)))
+    stack.enter_context(patch(f"{MODULE}.time.monotonic", side_effect=lambda: clock[0]))
+    return stack, mock_client, clock
+
+
+@pytest.mark.asyncio
+async def test_strict_callers_wait_out_an_in_place_restart():
+    """A deploy refuses connections for about five seconds; a check that lands
+    in that gap gets its verdict once the service is back, not a 503."""
+    stack, mock_client, clock = _restarting_service(refused_for=5.0)
+    with stack:
+        from src.server.dependencies.usage_limits import _call_validate_for_user
+
+        assert await _call_validate_for_user("user-1", strict=True) == {
+            "valid": True, "allowed": True,
+        }
+
+    assert clock[0] >= 5.0
+    assert mock_client.post.await_count > 2
+
+
+@pytest.mark.asyncio
+async def test_strict_callers_give_up_within_the_window():
+    """An outage that outlasts the window is real: the wait ends and the caller
+    hears there was no verdict, rather than holding the turn indefinitely."""
+    stack, _mock_client, clock = _restarting_service(refused_for=float("inf"))
+    with stack:
+        from src.server.dependencies.usage_limits import (
+            _VALIDATE_RETRY_WINDOW,
+            QuotaServiceUnavailable,
+            _call_validate_for_user,
+        )
+
+        with pytest.raises(QuotaServiceUnavailable):
+            await _call_validate_for_user("user-1", strict=True)
+
+    assert clock[0] <= _VALIDATE_RETRY_WINDOW
+
+
+@pytest.mark.asyncio
+async def test_slow_attempts_do_not_stretch_the_window():
+    """The window is time, not a count: when each attempt hangs before it fails,
+    no wait starts that would end past the window, so only the attempt already
+    under way runs over it."""
+    stack, mock_client, clock = _restarting_service(
+        refused_for=float("inf"), attempt_takes=3.0
+    )
+    with stack:
+        from src.server.dependencies.usage_limits import (
+            _VALIDATE_RETRY_WINDOW,
+            QuotaServiceUnavailable,
+            _call_validate_for_user,
+        )
+
+        with pytest.raises(QuotaServiceUnavailable):
+            await _call_validate_for_user("user-1", strict=True)
+
+    assert clock[0] <= _VALIDATE_RETRY_WINDOW + 3.0
+    assert mock_client.post.await_count < 1 + _retries()
 
 
 # ===================================================================
@@ -507,6 +598,14 @@ class TestCreditGateFailsClosed:
         assert exc_info.value.detail["type"] == "service_unavailable"
         # Not 429: nothing says this user is over anything.
         assert exc_info.value.headers["Retry-After"] == "15"
+
+    @pytest.mark.asyncio
+    async def test_a_restart_gap_does_not_block_the_turn(self):
+        stack, _mock_client, _clock = _restarting_service(refused_for=5.0)
+        with stack:
+            from src.server.dependencies.usage_limits import enforce_credit_limit
+
+            await enforce_credit_limit("user-1", byok=False)
 
     @pytest.mark.asyncio
     async def test_an_unreadable_200_blocks_the_turn_as_a_503(self):
