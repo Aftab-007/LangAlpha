@@ -3,10 +3,11 @@ fence and generation, and the sweep writes each computer from one worker."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -566,6 +567,126 @@ class TestRewriteAfterRevocation:
         locked.assert_not_awaited()
 
 
+MINTED = data_tokens.Minted("tok", ISSUED_AT_MS, EXPIRES_AT)
+DOWN = (None, "ConnectError", True)
+
+
+class TestMintPatience:
+    """A sandbox holding no live token fails every market-data call, so its
+    mint waits out a platform restart; a refresh never holds up a turn."""
+
+    @staticmethod
+    @contextmanager
+    def _tries(*outcomes, always=None, known_down=False):
+        once = (
+            AsyncMock(side_effect=list(outcomes))
+            if outcomes
+            else AsyncMock(return_value=always)
+        )
+        cache = SimpleNamespace(
+            get=AsyncMock(return_value=True if known_down else None),
+            set=AsyncMock(return_value=True),
+        )
+        with (
+            patch.object(data_tokens, "_mint_once", once),
+            patch.object(data_tokens, "MINT_PATIENCE", timedelta(seconds=0.3)),
+            patch.object(data_tokens, "_MINT_BACKOFF_S", (0.02, 0.05)),
+            patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
+        ):
+            yield once, cache
+
+    @pytest.mark.asyncio
+    async def test_a_patient_mint_tries_until_the_platform_answers(self):
+        with self._tries(DOWN, DOWN, (MINTED, "", False)) as (once, cache):
+            assert await data_tokens._mint(USER_ID, COMPUTER_ID, patient=True) is MINTED
+
+        assert once.await_count == 3
+        cache.set.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_refresh_takes_one_try(self):
+        with self._tries(always=DOWN) as (once, cache):
+            assert await data_tokens._mint(USER_ID, COMPUTER_ID) is None
+
+        assert once.await_count == 1
+        cache.set.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_is_not_tried_again(self):
+        with self._tries(always=(None, "HTTP 403", False)) as (once, cache):
+            assert await data_tokens._mint(USER_ID, COMPUTER_ID, patient=True) is None
+
+        assert once.await_count == 1
+        cache.set.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_patience_is_bounded(self):
+        loop = asyncio.get_running_loop()
+        began = loop.time()
+
+        with self._tries(always=DOWN) as (once, _):
+            assert await data_tokens._mint(USER_ID, COMPUTER_ID, patient=True) is None
+
+        assert loop.time() - began < 0.3
+        assert once.await_count > 2
+        assert all(c.args[2] <= data_tokens._TIMEOUT_S for c in once.await_args_list)
+
+    @pytest.mark.asyncio
+    async def test_a_mint_that_waited_in_vain_spares_the_next_ones_the_wait(self):
+        """The platform is down rather than restarting, and a start keeps the
+        token up to three times."""
+        with self._tries(always=DOWN) as (_, cache):
+            await data_tokens._mint(USER_ID, COMPUTER_ID, patient=True)
+
+        cache.set.assert_awaited_once_with(
+            data_tokens.platform_down_key(), True, ttl=data_tokens._PLATFORM_DOWN_TTL_S
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_platform_known_down_gets_one_try(self):
+        with self._tries(always=DOWN, known_down=True) as (once, cache):
+            assert await data_tokens._mint(USER_ID, COMPUTER_ID, patient=True) is None
+
+        assert once.await_count == 1
+        cache.set.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status", "retryable"), [(503, True), (429, True), (403, False), (400, False)]
+    )
+    async def test_only_an_unavailable_platform_is_tried_again(self, status, retryable):
+        resp = SimpleNamespace(is_success=False, status_code=status)
+        client = SimpleNamespace(post=AsyncMock(return_value=resp))
+
+        with (
+            patch(
+                "src.server.dependencies.usage_limits.get_http_client",
+                AsyncMock(return_value=client),
+            ),
+            patch("src.server.dependencies.usage_limits.service_headers", return_value={}),
+        ):
+            minted, _, again = await data_tokens._mint_once(USER_ID, COMPUTER_ID, 5.0)
+
+        assert minted is None
+        assert again is retryable
+
+    @pytest.mark.asyncio
+    async def test_a_refused_connection_is_tried_again(self):
+        client = SimpleNamespace(post=AsyncMock(side_effect=ConnectionRefusedError()))
+
+        with (
+            patch(
+                "src.server.dependencies.usage_limits.get_http_client",
+                AsyncMock(return_value=client),
+            ),
+            patch("src.server.dependencies.usage_limits.service_headers", return_value={}),
+        ):
+            minted, _, again = await data_tokens._mint_once(USER_ID, COMPUTER_ID, 5.0)
+
+        assert minted is None
+        assert again is True
+
+
 class TestRevokeUpstream:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -597,6 +718,31 @@ class TestRevokeUpstream:
             assert await data_tokens._revoke_upstream(USER_ID, COMPUTER_ID) == answer
 
         assert client.post.await_count == tries
+
+
+class TestKeepIsPatientOnlyWithoutALiveToken:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("row", "patient"),
+        [
+            (db.DataTokenRow(), True),
+            (db.DataTokenRow(datetime.now(UTC) + timedelta(minutes=50), "other", 3), True),
+            (db.DataTokenRow(datetime.now(UTC) - timedelta(minutes=1), SANDBOX_ID, 3), True),
+            (db.DataTokenRow(datetime.now(UTC) + timedelta(minutes=10), SANDBOX_ID, 3), False),
+        ],
+        ids=["none", "another-sandbox", "run-out", "refresh"],
+    )
+    async def test_patience_follows_what_the_sandbox_holds(self, row, patient):
+        push = AsyncMock(return_value=True)
+
+        with (
+            patch.object(data_tokens, "configured", return_value=True),
+            patch.object(db, "load", AsyncMock(return_value=row)),
+            patch.object(data_tokens, "push", push),
+        ):
+            await data_tokens.keep(COMPUTER_ID, USER_ID, SANDBOX_ID, AsyncMock())
+
+        assert push.await_args.kwargs["patient"] is patient
 
 
 class TestSweepSparesIdleComputers:

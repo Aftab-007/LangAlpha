@@ -35,6 +35,17 @@ REFRESH_BELOW = timedelta(minutes=30)
 _TIMEOUT_S = 5.0
 _REVOKE_ATTEMPTS = 3
 
+# A sandbox holding no live token fails every market-data call until one
+# arrives, so its mint keeps trying this long: the platform deploys in place
+# and refuses connections for a few seconds. A refresh of a token with time
+# left takes one try, so a healthy turn never waits on the platform.
+MINT_PATIENCE = timedelta(seconds=10)
+_MINT_BACKOFF_S = (0.25, 0.5, 1.0, 2.0)
+# A patient mint that waited all of that found the platform down, not
+# restarting, so for this long every worker's mints take one try: a start
+# keeps the token up to three times, and each would wait again.
+_PLATFORM_DOWN_TTL_S = 15
+
 #: How the platform answered a revocation. ``refused`` is a 4xx a retry will
 #: not change, for that request alone; ``unreachable`` would fail every other
 #: revocation as well: no connection, a 5xx or 429, or the service token refused.
@@ -42,6 +53,10 @@ RevokeAnswer = Literal["revoked", "refused", "unreachable"]
 
 #: Writes the token file into a sandbox; True only once the write is confirmed.
 Write = Callable[[dict[str, Any]], Awaitable[bool]]
+
+
+def platform_down_key() -> str:
+    return "data_tokens:platform_down"
 
 
 @dataclass(frozen=True)
@@ -70,6 +85,16 @@ def due(row: db.DataTokenRow, sandbox_id: str | None) -> bool:
     return row.expires_at - datetime.now(UTC) < REFRESH_BELOW
 
 
+def holds(row: db.DataTokenRow, sandbox_id: str | None) -> bool:
+    """Whether ``sandbox_id`` holds a token with any time left."""
+    return (
+        row.held_by is not None
+        and row.held_by == sandbox_id
+        and row.expires_at is not None
+        and row.expires_at > datetime.now(UTC)
+    )
+
+
 async def keep(
     computer_id: str, user_id: str | None, sandbox_id: str | None, write: Write
 ) -> None:
@@ -81,7 +106,12 @@ async def keep(
         row = await db.load(str(computer_id))
         if due(row, sandbox_id):
             await push(
-                str(computer_id), user_id, sandbox_id, write, generation=row.generation
+                str(computer_id),
+                user_id,
+                sandbox_id,
+                write,
+                generation=row.generation,
+                patient=not holds(row, sandbox_id),
             )
     except Exception as e:
         logger.warning(
@@ -98,10 +128,12 @@ async def push(
     write: Write,
     *,
     generation: int,
+    patient: bool = False,
 ) -> bool:
     """Mint a token, record it over the row read at ``generation``, and write
-    it into the sandbox; True once the sandbox holds it."""
-    minted = await _mint(user_id, computer_id)
+    it into the sandbox; True once the sandbox holds it. A ``patient`` mint
+    retries for up to ``MINT_PATIENCE``."""
+    minted = await _mint(user_id, computer_id, patient=patient)
     if minted is None:
         return False
     saved = await db.save(
@@ -223,7 +255,44 @@ def _expires_at(body: dict[str, Any]) -> datetime:
     return datetime.now(UTC) + timedelta(seconds=int(body.get("expires_in") or 0))
 
 
-async def _mint(user_id: str, computer_id: str) -> Minted | None:
+async def _mint(
+    user_id: str, computer_id: str, *, patient: bool = False
+) -> Minted | None:
+    from src.utils.cache.redis_cache import get_cache_client
+
+    cache = get_cache_client()
+    if patient and await cache.get(platform_down_key()):
+        patient = False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + (MINT_PATIENCE.total_seconds() if patient else 0.0)
+    timeout = _TIMEOUT_S
+    tries = 0
+    while True:
+        minted, outcome, retryable = await _mint_once(user_id, computer_id, timeout)
+        if minted is not None:
+            return minted
+        delay = _MINT_BACKOFF_S[min(tries, len(_MINT_BACKOFF_S) - 1)]
+        tries += 1
+        if not retryable or loop.time() + delay >= deadline:
+            break
+        await asyncio.sleep(delay)
+        # The last try ends near the deadline rather than a full timeout past it.
+        timeout = max(1.0, min(_TIMEOUT_S, deadline - loop.time()))
+    if patient and retryable:
+        await cache.set(platform_down_key(), True, ttl=_PLATFORM_DOWN_TTL_S)
+    logger.warning(
+        "Market-data token not minted for computer %s (%s%s)",
+        computer_id,
+        outcome,
+        f", {tries} tries" if tries > 1 else "",
+    )
+    return None
+
+
+async def _mint_once(
+    user_id: str, computer_id: str, timeout: float
+) -> tuple[Minted | None, str, bool]:
+    """One mint: the token, or why not and whether another try may succeed."""
     from src.server.dependencies.usage_limits import get_http_client, service_headers
 
     try:
@@ -232,24 +301,19 @@ async def _mint(user_id: str, computer_id: str) -> Minted | None:
             _url(),
             json={"user_id": user_id, "computer_id": computer_id},
             headers=service_headers(),
-            timeout=_TIMEOUT_S,
+            timeout=timeout,
         )
-        if not resp.is_success:
-            logger.warning(
-                "Market-data token not minted for computer %s: HTTP %s",
-                computer_id,
-                resp.status_code,
-            )
-            return None
-        body = resp.json()
-        return Minted(body["access_token"], int(body["iat_ms"]), _expires_at(body))
     except Exception as e:
-        logger.warning(
-            "Market-data token not minted for computer %s (%s)",
-            computer_id,
-            type(e).__name__,
-        )
-        return None
+        return None, type(e).__name__, True
+    if not resp.is_success:
+        status = resp.status_code
+        return None, f"HTTP {status}", status >= 500 or status == 429
+    try:
+        body = resp.json()
+        minted = Minted(body["access_token"], int(body["iat_ms"]), _expires_at(body))
+    except Exception as e:
+        return None, type(e).__name__, False
+    return minted, "", False
 
 
 async def _revoke_upstream(user_id: str, computer_id: str) -> RevokeAnswer:
