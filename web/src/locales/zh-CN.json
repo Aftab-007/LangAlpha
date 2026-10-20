@@ -30,6 +30,8 @@
     "back": "返回",
     "done": "完成",
     "failed": "失败",
+    "language": "语言",
+    "languageCurrent": "语言：{{language}}",
     "optional": "（可选）"
   },
   "auth": {

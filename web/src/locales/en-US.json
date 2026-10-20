@@ -30,6 +30,8 @@
     "back": "Back",
     "done": "Done",
     "failed": "Failed",
+    "language": "Language",
+    "languageCurrent": "Language: {{language}}",
     "optional": "(Optional)"
   },
   "auth": {
