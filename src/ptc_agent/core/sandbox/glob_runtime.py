@@ -31,6 +31,105 @@ def agent_glob_pattern(pattern: str) -> str:
     return pattern
 
 
+# Each pattern a Glob's braces expand to is walked on its own, and a few
+# groups multiply past any search a person means.
+MAX_BRACE_PATTERNS = 64
+
+
+class TooManyPatterns(ValueError):
+    """A pattern whose brace groups expand past ``MAX_BRACE_PATTERNS``."""
+
+
+def _next(pattern: str, char: str, start: int) -> int:
+    at = pattern.find(char, start)
+    return len(pattern) if at < 0 else at
+
+
+def _brace_syntax(pattern: str) -> Iterator[tuple[int, str]]:
+    """Each ``{``, ``,`` and ``}`` brace expansion reads in ``pattern``, and
+    each backslash escaping one. Inside a ``[...]`` class they are the
+    class's own, as ripgrep reads them, so ``[{]`` is a literal brace."""
+    # The first `]` and `/` past where the last class could start: each only
+    # moves forward, so a run of open `[` costs one pass, not one each.
+    close = slash = -1
+    at = 0
+    while at < len(pattern):
+        char = pattern[at]
+        if char == "\\" and pattern[at + 1 : at + 2] in ("{", "}", ","):
+            yield at, char
+            at += 2
+            continue
+        if char == "[":
+            # As fnmatch reads a class: a leading `!` and then a leading `]`
+            # are its own, and with no `]` before the name ends the `[` is a
+            # plain character.
+            start = at + 1
+            if pattern[start : start + 1] == "!":
+                start += 1
+            if pattern[start : start + 1] == "]":
+                start += 1
+            if close < start:
+                close = _next(pattern, "]", start)
+            if slash < start:
+                slash = _next(pattern, "/", start)
+            if close < slash:
+                at = close + 1
+                continue
+        if char in "{},":
+            yield at, char
+        at += 1
+
+
+def _first_brace_group(pattern: str) -> list[int] | None:
+    """The first group in ``pattern``: its ``{``, each comma of its own, and
+    its ``}``. As in a shell, a ``{`` nothing closes, or whose braces hold
+    no comma of their own, is a plain character."""
+    open_groups: list[list[int]] = []
+    first: list[int] | None = None
+    for at, char in _brace_syntax(pattern):
+        if char == "{":
+            open_groups.append([at])
+        elif char == "," and open_groups:
+            open_groups[-1].append(at)
+        elif char == "}" and open_groups:
+            bounds = open_groups.pop()
+            if len(bounds) > 1 and (first is None or bounds[0] < first[0]):
+                first = [*bounds, at]
+    return first
+
+
+def _expand(pattern: str) -> list[str]:
+    bounds = _first_brace_group(pattern)
+    if bounds is None:
+        return [pattern]
+    head = pattern[: bounds[0]]
+    tails = _expand(pattern[bounds[-1] + 1 :])
+    out: list[str] = []
+    for start, end in zip(bounds, bounds[1:]):
+        for middle in _expand(pattern[start + 1 : end]):
+            for tail in tails:
+                out.append(head + middle + tail)
+                if len(out) > MAX_BRACE_PATTERNS:
+                    raise TooManyPatterns(
+                        f"pattern expands to more than {MAX_BRACE_PATTERNS} patterns"
+                    )
+    return out
+
+
+def expand_braces(pattern: str) -> list[str]:
+    """The patterns ``pattern``'s ``{a,b}`` groups expand to, in order and
+    each once, as a shell expands them: groups nest, and a backslash before
+    a ``{``, ``,`` or ``}`` makes it literal. Raises ``TooManyPatterns`` past
+    ``MAX_BRACE_PATTERNS``."""
+    expanded = []
+    for each in _expand(pattern):
+        escapes = {at for at, char in _brace_syntax(each) if char == "\\"}
+        expanded.append("".join(c for at, c in enumerate(each) if at not in escapes))
+    # A shell drops an alternative that leaves nothing, as in `{a.md,}`;
+    # kept, it would walk the whole tree to match no file.
+    return list(dict.fromkeys(each for each in expanded if each or not pattern))
+
+
 def find(
     pattern: str,
     search_path: str,
@@ -40,12 +139,49 @@ def find(
 ) -> list[str]:
     """Files matching ``pattern`` below ``search_path``, newest first.
 
+    Each pattern its brace groups expand to is matched on its own, as a shell
+    globs each word a brace expands to, and a file several of them find is
+    listed once. Their walks share each folder's listing.
+    """
+    patterns = list(dict.fromkeys(agent_glob_pattern(p) for p in expand_braces(pattern)))
+    listings: dict[str, list[os.DirEntry]] | None = {} if len(patterns) > 1 else None
+    # Two patterns can spell one file two ways, as `{a.md,./a.md}` does, so
+    # a file is known by its normalized path and listed at its first spelling.
+    files: dict[str, str] = {}
+    for each in patterns:
+        for path in _find(
+            each, search_path, excluded_dirs, history_children, mount, listings
+        ):
+            files.setdefault(os.path.normpath(path), path)
+    return sorted(files.values(), key=_mtime, reverse=True)
+
+
+def _mtime(path: str) -> float:
+    # A file removed since the walk found it sorts last, not the rest unsorted.
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def _find(
+    pattern: str,
+    search_path: str,
+    excluded_dirs: list[str],
+    history_children: dict[str, list[str]],
+    mount: str,
+    listings: dict[str, list[os.DirEntry]] | None,
+) -> list[str]:
+    """Files matching ``pattern``, which holds no brace group, below
+    ``search_path``.
+
     Matches as ``glob.glob(recursive=True, include_hidden=True)`` does, with
     one walker of its own so that nothing a wildcard reaches below the
     pattern's literal prefix is a link into ``mount``, directly or through
     other links: those are server-held files, where every stat is a request,
     so a walk skips them unread (a readlink is local). A literal prefix that
-    names one is still followed.
+    names one is still followed. ``listings`` keeps each folder's listing
+    for the next pattern's walk.
     """
     excluded = set(excluded_dirs)
     history = {parent: set(names) for parent, names in history_children.items()}
@@ -70,7 +206,11 @@ def find(
         return False
 
     def listing(dirpath: str) -> list[os.DirEntry]:
+        if listings is not None and dirpath in listings:
+            return listings[dirpath]
         entries: list[os.DirEntry] = []
+        if listings is not None:
+            listings[dirpath] = entries
         try:
             with os.scandir(dirpath or ".") as it:
                 for entry in it:
@@ -204,11 +344,7 @@ def find(
 
         candidates = walk(root, root_chain, below_root)
 
-    files = [path for path in candidates if kept(path)]
-    try:
-        return sorted(files, key=os.path.getmtime, reverse=True)
-    except OSError:
-        return files
+    return [path for path in candidates if kept(path)]
 
 
 if __name__ == "__main__":

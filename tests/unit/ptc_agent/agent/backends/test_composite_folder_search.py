@@ -901,7 +901,7 @@ class TestGlobInsideARoute:
             ("*/*.md", ["notes/q3.md"]),
             ("notes/*", ["notes/q3.md"]),
             ("n*", []),
-            ("*.{md,json}", []),
+            ("*.{md,json}", ["memory.md", "notes/q3.md"]),
         ],
     )
     async def test_a_star_stays_within_one_name(self, files, nested, pattern, found):
@@ -1797,6 +1797,14 @@ GLOB_PATTERNS = (
     "{root}/.agents/user/*/*.md",
     "{folder}/.agents/memory/*.md",
     "{root}/.agents/user/memory/vendor/*",
+    "{sub,user}/*.md",
+    "{*.md,sub/*.json}",
+    "**/{a,c}.json",
+    "{a,b{,s}}.json",
+    ".agents/{memory,user/profile}/*",
+    "{.agents/user/memory,sub}/*.json",
+    "{{root}/.agents/user/memory/*.md,*.json}",
+    "[{]a,b}*",
 )
 
 
