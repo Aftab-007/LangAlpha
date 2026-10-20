@@ -2,14 +2,16 @@
 
 It is the one piece that renames user files, so each case runs the actual
 script in a subprocess over a temporary root rather than asserting on its
-text: the moves land, the tool ledger follows them, and nothing is ever
-deleted, only moved aside under ``_internal``.
+text: the moves land, the tool ledger follows them, and nothing is deleted
+but a deleted workspace's folder that a rename could not move aside under
+``_internal``.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -474,13 +476,14 @@ def _run_locked_out(root: Path, **plan) -> dict:
 
     args_path = _args(root, **plan)
     (root / "_internal").mkdir(parents=True, exist_ok=True)
+    # Each wait between tries passes a minute.
     later = (
         "import time\n"
-        "_now, _calls = time.time, []\n"
-        "def _later():\n"
-        "    _calls.append(None)\n"
-        "    return _now() + (60 if len(_calls) > 1 else 0)\n"
-        "time.time = _later\n"
+        "_now, _skew = time.time, [0]\n"
+        "def _sleep(_s):\n"
+        "    _skew[0] += 60\n"
+        "time.time = lambda: _now() + _skew[0]\n"
+        "time.sleep = _sleep\n"
     )
     with open(root / "_internal" / "ledger.lock", "a+") as ledger_lock:
         fcntl.flock(ledger_lock, fcntl.LOCK_EX)
@@ -804,7 +807,8 @@ async def test_a_plan_longer_than_one_shell_argument_still_runs(root):
         runtime, str(root), moves=[], tombstones=tombstones, prune=True
     )
     assert report["tombstones"] == {t["id"]: None for t in tombstones}
-    assert max(map(len, runtime.commands)) < 32 * 1024
+    # The script itself, base64'd, is about 35 KiB; the plan adds nothing.
+    assert max(map(len, runtime.commands)) < 64 * 1024
     assert list((root / "_internal").glob(".folders_args.*")) == []
 
 
