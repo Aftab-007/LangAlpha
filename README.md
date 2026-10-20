@@ -353,7 +353,7 @@ Skills follow the [Agent Skills](https://agentskills.io/specification) specifica
 | --- | --- |
 | Research | DCF model, comps analysis, 3-statement model, model update and check, initiating coverage, earnings preview and analysis, thesis tracker, trade pitch, company profile, competitive analysis, sector overview, impact analysis, catalyst calendar, idea generation, morning note, market watch, deck check |
 | Deliverables | Excel, Word, PowerPoint, PDF, HTML report, interactive dashboard, inline widget, chart annotation, UI design |
-| Service | Automations, onboarding, user profile and portfolio, secretary, workflows, product help, self-improvement |
+| Service | Automations, onboarding, user profile and portfolio, secretary, workflows, product help |
 | Alternative data | X research, web scraping |
 
 Acknowledgement: some research skills are adapted from [anthropics/financial-services-plugins](https://github.com/anthropics/financial-services-plugins).

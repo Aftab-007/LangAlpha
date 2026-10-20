@@ -692,9 +692,6 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   }, [returnedEdit, clearReturnedEdit]);
   const stableThumbUp = useStableHandler(handleThumbUp);
   const stableThumbDown = useStableHandler(handleThumbDown);
-  const stableReportWithAgent = useStableHandler((instruction: string) => {
-    handleSendMessage(`/self-improve ${instruction}`, null, null, {});
-  });
   const stableWidgetSendPrompt = useStableHandler((text: string) => {
     handleSendMessage(text, null, null, {});
   });
@@ -721,7 +718,6 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     editDrafts,
     onThumbUp: stableThumbUp,
     onThumbDown: stableThumbDown,
-    onReportWithAgent: stableReportWithAgent,
     onWidgetSendPrompt: stableWidgetSendPrompt,
   }), [
     stableOpenSubagentTask, stableToolCallDetail,
@@ -730,7 +726,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     stableApprovePTCAgent, stableRejectPTCAgent, stableApproveSecretaryAction,
     stableRejectSecretaryAction, stableResumeCreditPause, stableApproveToolCall, stableRejectToolCall,
     stableEditMessage, stableRegenerate, stableRetry, editDrafts,
-    stableThumbUp, stableThumbDown, stableReportWithAgent, stableWidgetSendPrompt,
+    stableThumbUp, stableThumbDown, stableWidgetSendPrompt,
   ]);
 
   // In All workspaces, carry the source thread/workspace into a PTC-agent

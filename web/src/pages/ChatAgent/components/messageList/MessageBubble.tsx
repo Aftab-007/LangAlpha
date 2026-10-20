@@ -88,7 +88,7 @@ interface MessageBubbleProps {
  * chunk never re-renders settled bubbles through a handler identity.
  */
 export const MessageBubble = memo(function MessageBubble({ message, contentProjection, turnIndex, isTurnTail, canRegenerate = true, isLatestReply = true, isTurnLive, turnFiles, completedAt, feedback, isLoading, fold = 'unfolded', isSubagentView, readOnly, allowFiles, isMobile, dispatcherContext }: MessageBubbleProps): React.ReactElement | null {
-  const { onOpenFile, onDownloadFile, onRevealFiles, onOpenSources, onEditMessage, editDrafts, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
+  const { onOpenFile, onDownloadFile, onRevealFiles, onOpenSources, onEditMessage, editDrafts, onRegenerate, onRetry, onThumbUp, onThumbDown } = useMessageActions();
   const { t } = useTranslation();
   const root = useWorkspaceFolders()?.rootDir;
   const projection = contentProjection ?? projectMessageContent(message, isSubagentView, root);
@@ -713,10 +713,6 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
             isOpen={showThumbDownModal}
             onSubmit={handleThumbDownSubmit}
             onCancel={() => setShowThumbDownModal(false)}
-            onReportWithAgent={onReportWithAgent ? (instruction: string) => {
-              setShowThumbDownModal(false);
-              onReportWithAgent(instruction);
-            } : undefined}
           />
         )}
       </div>
