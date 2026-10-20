@@ -29,7 +29,10 @@ from src.server.database.conversation import (
 )
 from src.server.database.pool import DATABASE_UNAVAILABLE
 from src.server.services.report_back.handoff.keys import ORIGIN_THREAD_META
-from src.server.dependencies.usage_limits import ChatRateLimited
+from src.server.dependencies.usage_limits import (
+    ChatRateLimited,
+    quota_service_unavailable,
+)
 
 from src.observability import (
     observe_background_chat_turn,
@@ -403,8 +406,13 @@ async def _handle_send_message(
 
         # 403 guard: require BYOK, OAuth, or platform access (tier >= 0).
         # All flags are pre-checked by enforce_chat_limit — no DB calls here.
+        # A tier nobody could read is an outage, not a missing provider: telling
+        # a paying user to set one up sends them to the setup wizard for it.
         from src.config.settings import HOST_MODE
-        if HOST_MODE == "platform" and not auth.is_byok and not auth.has_oauth and auth.access_tier < 0:
+        needs_plan = HOST_MODE == "platform" and not auth.is_byok and not auth.has_oauth
+        if needs_plan and auth.access_tier is None:
+            raise quota_service_unavailable()
+        if needs_plan and auth.access_tier < 0:
             raise HTTPException(
                 status_code=403,
                 detail={

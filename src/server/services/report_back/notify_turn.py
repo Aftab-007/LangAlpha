@@ -321,9 +321,10 @@ async def _lasting_refusal(resp) -> bool:
     """A refusal no wait under one claim outlives: payment required, or a
     429 for the user's usage limit rather than this server's capacity.
 
-    A 403 is not one. No provider for the user is also the answer while the
-    access-tier lookup fails for a moment, and a wrong dispatch token is the
-    operator's to fix; both still reach the caller once the wait runs out.
+    A 403 is not one. A missing provider is the user's to set up and a wrong
+    dispatch token the operator's to fix, either of which can happen while this
+    waits; both still reach the caller once the wait runs out. An access tier
+    the platform cannot be asked for answers 503, which defers like any 5xx.
     """
     if resp.status == 402:
         return True
