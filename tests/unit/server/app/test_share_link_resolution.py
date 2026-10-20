@@ -312,6 +312,8 @@ async def test_metadata_thread_token_answers_the_thread():
         "workspace_id": WS_ID,
         "share_permissions": {"allow_files": True},
         "title": "T",
+        "root_dir": "/home/dev/langalpha",
+        "dir_name": "NVDA",
     }
     with (
         patch(_ACCESS_LINK, AsyncMock()) as link,
@@ -324,6 +326,9 @@ async def test_metadata_thread_token_answers_the_thread():
     assert body["kind"] == "thread"
     assert body["thread_id"] == "thread-fake-1"
     assert body["permissions"] == {"allow_files": True, "allow_download": False}
+    assert body["root_dir"] == "/home/dev/langalpha"
+    assert body["dir_name"] == "NVDA"
+    assert "previous_dir_names" not in body
     link.assert_not_awaited()
 
 
