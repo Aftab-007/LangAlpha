@@ -100,6 +100,35 @@ class TestGetStockData:
         client.get_stock_price.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_no_bars_from_the_tier_asks_fmp(self):
+        """Massive answers a range older than its history with no bars."""
+        import plugins.langalpha_market_data.price_data_mcp_server as mod
+
+        client = _fmp_client()
+        with patch.object(mod._ginlix, "fetch_stock_data", new=AsyncMock(return_value=[])), \
+             patch(f"{_MOD}.get_fmp_client", return_value=client):
+            result = await mod.get_stock_data(
+                "AAPL", interval="1day", start_date="1995-01-03", end_date="1995-01-31",
+            )
+
+        assert_ok_envelope(result, source="fmp", count=2)
+        client.get_stock_price.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_an_empty_tier_answer_stands_when_fmp_fails(self):
+        import plugins.langalpha_market_data.price_data_mcp_server as mod
+
+        client = _fmp_client()
+        client.get_stock_price = AsyncMock(side_effect=RuntimeError("429"))
+        with patch.object(mod._ginlix, "fetch_stock_data", new=AsyncMock(return_value=[])), \
+             patch(f"{_MOD}.get_fmp_client", return_value=client):
+            result = await mod.get_stock_data(
+                "AAPL", interval="1day", start_date="2026-10-17", end_date="2026-10-18",
+            )
+
+        assert_ok_envelope(result, source="ginlix-data", count=0)
+
+    @pytest.mark.asyncio
     async def test_an_index_spelling_asks_each_vendor_for_its_index_and_a_bare_ticker_for_the_listing(self):
         """The legacy spelling of an index is bare (GSPC), which both vendors
         read as a stock ticker, so the index went unanswered as one. An index
