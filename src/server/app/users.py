@@ -206,6 +206,8 @@ async def get_current_user(
 
     Set ``refresh_tier=true`` to bust the cached platform tier (e.g. after
     invitation redemption). Access tier and plan display name are cached 5 min.
+    While the platform is unreachable they are its last answer, and 503 when
+    it has given none.
     """
     result = await get_user_with_preferences(user_id)
 
@@ -219,13 +221,13 @@ async def get_current_user(
     # costs more than one platform-service round-trip per user per 5 minutes.
     from src.server.dependencies.usage_limits import (
         _fetch_platform_membership,
-        platform_membership_cache_key,
+        quota_service_unavailable,
     )
-    if refresh_tier:
-        from src.utils.cache.redis_cache import get_cache_client
-        cache = get_cache_client()
-        await cache.delete(platform_membership_cache_key(user_id))
-    membership = await _fetch_platform_membership(user_id)
+    membership = await _fetch_platform_membership(user_id, refresh=refresh_tier)
+    if membership is None:
+        # Any tier written here is one the web acts on, and -1 sends the user
+        # to the setup wizard. A 503 leaves a client on what it already holds.
+        raise quota_service_unavailable()
     user_response.access_tier = int(membership.get("access_tier", -1))
     user_response.plan_display_name = membership.get("plan_display_name")
 
