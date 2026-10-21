@@ -1,7 +1,7 @@
 import React, { Suspense, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, FolderOpen, TextSelect, Menu } from 'lucide-react';
+import { ArrowLeft, PanelRight, TextSelect, Menu } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { useLatestRef } from '@/hooks/useLatestRef';
@@ -18,6 +18,7 @@ import { useFeatureEnabled } from '@/hooks/useFeatures';
 import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
+import { cn } from '@/lib/utils';
 import { invalidateSubagents } from '@/hooks/useSubagents';
 import { markHandoffReady } from '@/pages/Onboarding/welcome/handoff';
 import { cardDownloadKey, trackPending } from '../utils/downloadNotice';
@@ -77,7 +78,8 @@ import { MobileBottomSheet } from '@/components/ui/mobile-bottom-sheet';
 
 
 
-const FilePanel = React.lazy(() => import('./FilePanel'));
+const loadFilePanel = () => import('./FilePanel');
+const FilePanel = React.lazy(loadFilePanel);
 const DetailPanel = React.lazy(() => import('./DetailPanel'));
 const PreviewViewer = React.lazy(() => import('./viewers/PreviewViewer'));
 
@@ -99,6 +101,8 @@ import { isTurnOpen, useTranscriptFollow } from './chatView/useTranscriptFollow'
 import { useSubagentTabs } from './chatView/useSubagentTabs';
 import { publishSidebarAgents, clearSidebarAgents } from './sidebarAgentsBridge';
 import { useRightPanel } from './chatView/useRightPanel';
+import { handOffToggleFocus } from './filePanel/panelToggleFocus';
+import { PanelLoadingStrip } from './filePanel/PanelLoadingStrip';
 import { usePanelFiles } from './chatView/usePanelFiles';
 import { usePanelChartSelections } from './chatView/usePanelChartSelections';
 import { SelectionChips } from '@/pages/MarketView/components/SelectionChips';
@@ -860,6 +864,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     rightPanelType,
     setRightPanelType,
     rightPanelWidth,
+    panelExpanded,
+    handleTogglePanelExpanded,
     previewData,
     panelWrapperRef,
     isDragging,
@@ -898,6 +904,16 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     subagentTranscripts,
     watching: showWatchChip,
   });
+
+  // On desktop the header's files toggle gives way to the panel's own the
+  // moment it is pressed, so a panel still fetching its code would leave
+  // neither on screen. Fetched once the view settles, or as the pointer
+  // nears the toggle, it is there before the click.
+  useEffect(() => {
+    if (isMobile) return;
+    const timer = setTimeout(() => { void loadFilePanel(); }, 1500);
+    return () => clearTimeout(timer);
+  }, [isMobile]);
   // The file panel's props are one compiled scope, so this handler's per-chunk
   // identity would re-create every inline prop beside it and re-render the panel.
   const openSubagentTaskFromPanel = useStableHandler(handleOpenSubagentTask);
@@ -1373,7 +1389,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     <div
       ref={containerRef}
       data-handoff-scope={kickoffView ? '' : undefined}
-      className="flex w-full overflow-hidden h-full"
+      className="relative flex w-full overflow-hidden h-full"
       style={{
         backgroundColor: 'var(--color-bg-page)',
       }}
@@ -1383,8 +1399,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       <div aria-live="polite" aria-atomic="false" className="sr-only">
         {recentlyCompletedAnnouncement}
       </div>
-      {/* Left Side: Topbar + Sidebar + Chat Window */}
-      <div className="flex flex-col flex-1 min-w-0">
+      {/* Left Side: Topbar + Sidebar + Chat Window. Inert under an expanded
+          panel, so focus and a screen reader stay on what is shown, and
+          isolated, so the chat's own raised layers (the jump-to-latest pill)
+          stay under it rather than stacking against it. */}
+      <div className={cn('flex flex-col flex-1 min-w-0', panelExpanded && 'isolate')} inert={panelExpanded}>
         {/* Top bar */}
         {/* `drag` makes this the window's drag band inside the desktop shell.
             It already spans the titlebar and is mostly empty, so the shell gets
@@ -1446,16 +1465,25 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             {currentThreadId && currentThreadId !== '__default__' && (
               <ShareButton threadId={currentThreadId} initialIsShared={threadIsShared} workspaceId={workspaceId} />
             )}
-            <button
-              onClick={handleToggleFilePanel}
-              className="p-2 rounded-md transition-colors"
-              style={{ color: 'var(--color-text-primary)', backgroundColor: rightPanelType === 'file' ? 'var(--color-border-muted)' : undefined }}
-              title={t('chat.workspaceFiles')}
-              onMouseEnter={(e) => { if (rightPanelType !== 'file') e.currentTarget.style.backgroundColor = 'var(--color-border-muted)'; }}
-              onMouseLeave={(e) => { if (rightPanelType !== 'file') e.currentTarget.style.backgroundColor = ''; }}
-            >
-              <FolderOpen className="h-5 w-5" />
-            </button>
+            {/* On desktop the open panel carries this toggle in the same
+                corner, so it is sized and placed as the panel's own buttons
+                are and the icon does not move when the panel opens. */}
+            {(isMobile || rightPanelType !== 'file') && (
+              <button
+                type="button"
+                data-panel-toggle="header"
+                onClick={(event) => { handleToggleFilePanel(); if (!isMobile) handOffToggleFocus(event, 'panel'); }}
+                onPointerEnter={() => { void loadFilePanel(); }}
+                onFocus={() => { void loadFilePanel(); }}
+                aria-pressed={rightPanelType === 'file'}
+                className={cn('transition-colors hover:bg-(--color-border-muted)', isMobile ? 'p-2 rounded-md' : 'p-1.5 -mr-2 rounded-[4px]')}
+                style={{ color: 'var(--color-text-primary)' }}
+                title={t('chat.workspaceFiles')}
+                aria-label={t('chat.workspaceFiles')}
+              >
+                <PanelRight className={isMobile ? 'h-5 w-5' : 'h-4 w-4'} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -1869,7 +1897,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       ) : (
         <>
         {/* Resize divider — outside overflow-hidden panel so its wide hover zone isn't clipped */}
-        {rightPanelType && (
+        {rightPanelType && !panelExpanded && (
           <div
             className={`chat-split-divider${isDragging ? ' dragging' : ''}`}
             onMouseDown={handleDividerMouseDown}
@@ -1888,8 +1916,16 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
               }
               className="flex shrink-0 overflow-hidden"
             >
-              <div data-panel-inner className="shrink-0 h-full" style={{ width: rightPanelWidth }}>
-                <Suspense fallback={null}>
+              {/* Expanded, the panel lies over the whole view while the
+                  wrapper keeps its width in the row: the chat underneath
+                  keeps its layout and scroll, and the panel stays the same
+                  element, so a running app's iframe does not reload. */}
+              <div
+                data-panel-inner
+                className={panelExpanded ? 'absolute inset-0 z-10' : 'shrink-0 h-full'}
+                style={panelExpanded ? undefined : { width: rightPanelWidth }}
+              >
+                <Suspense fallback={rightPanelType === 'file' ? <PanelLoadingStrip onClose={() => { setRightPanelType(null); popPanelHistory(); }} /> : null}>
                   {rightPanelType === 'file' ? (
                     <WorkspaceProvider workspaceId={panelWorkspaceId} downloadFile={null} folders={panelFolders}>
                     <FilePanel
@@ -1897,6 +1933,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       threadId={panelThreadId}
                       isActive={isActive}
                       onClose={() => { setRightPanelType(null); popPanelHistory(); }}
+                      expanded={panelExpanded}
+                      onToggleExpanded={handleTogglePanelExpanded}
+                      panelToggle
                       onLeaveGuardChange={handleFilesLeaveGuardChange}
                       onActiveTabKindChange={handleActiveTabKindChange}
                       target={panelTarget}

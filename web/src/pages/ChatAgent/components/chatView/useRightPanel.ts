@@ -98,6 +98,15 @@ export function useRightPanel({
   // shows a tool result or a running app as a tab of the file view.
   const [rightPanelType, setRightPanelType] = useState<'file' | 'detail' | 'preview' | null>(null);
 
+  // Expanded, the file panel lies over the whole view, for what wants the
+  // width: a spreadsheet, a deck, a long report. Closing the panel ends it, so
+  // a file opened from the chat later opens beside the chat. Mobile shows the
+  // panel over the chat already and offers no toggle.
+  const [expanded, setExpanded] = useState(false);
+  if (expanded && rightPanelType !== 'file') setExpanded(false);
+  const panelExpanded = expanded && !isMobile;
+  const handleTogglePanelExpanded = useCallback(() => setExpanded((v) => !v), []);
+
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
   // What the file panel has in front, reported by the panel as it changes. A
   // chart is the one tab with a width of its own: below the surface's floor
@@ -723,6 +732,8 @@ export function useRightPanel({
     rightPanelType,
     setRightPanelType,
     rightPanelWidth,
+    panelExpanded,
+    handleTogglePanelExpanded,
     previewData,
     panelWrapperRef,
     isDragging,
