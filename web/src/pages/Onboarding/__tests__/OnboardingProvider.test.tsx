@@ -133,6 +133,7 @@ describe('OnboardingProvider', () => {
     mockIsMobile = false;
     vi.clearAllMocks();
     localStorage.clear();
+    sessionStorage.clear();
   });
 
   it('opens the chat intro for a fresh user on /chat and stamps first-run once', () => {
@@ -243,6 +244,29 @@ describe('OnboardingProvider', () => {
     // must show the intro — only the interview's own thread stays suppressed.
     fireEvent.click(screen.getByText('go-thread'));
     expect(intro()).toBe('thread');
+  });
+
+  it('keeps the getting-started list out of the welcome flow conversation', () => {
+    mockPrefs = { ...emptyOnboardingPrefs(), pageIntrosSeen: { chat: 1 } };
+    renderAt('/chat/t/__default__');
+    expect(card()).toBe('hidden');
+    fireEvent.click(screen.getByText('go-resolved'));
+    expect(card()).toBe('hidden');
+    // Back on any other page, the list returns.
+    fireEvent.click(screen.getByText('go-dashboard'));
+    expect(card()).toBe('visible');
+  });
+
+  it('still knows the welcome flow conversation after a reload', () => {
+    mockPrefs = { ...emptyOnboardingPrefs(), pageIntrosSeen: { chat: 1 } };
+    const first = renderAt('/chat/t/__default__');
+    fireEvent.click(screen.getByText('go-resolved'));
+    first.unmount();
+
+    // A fresh provider on the renamed thread, as a reload mounts it.
+    renderAt('/chat/t/resolved-guid');
+    expect(phase()).toBe('idle');
+    expect(card()).toBe('hidden');
   });
 
   it('an open intro closes unseen when navigation leaves its page, and re-offers later', () => {

@@ -47,6 +47,25 @@ interface GettingStartedState {
 /** Tasks offered in this deployment — channel integrations are platform-hosted. */
 const DEPLOYED_TASKS = GETTING_STARTED_TASKS.filter((t) => !t.platformOnly || isPlatformMode);
 
+/** The tab's note of which thread the welcome flow's conversation became. */
+const INTERVIEW_THREAD_KEY = 'onboarding.interviewThread';
+
+function readInterviewThread(): string | null {
+  try {
+    return sessionStorage.getItem(INTERVIEW_THREAD_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeInterviewThread(threadId: string): void {
+  try {
+    sessionStorage.setItem(INTERVIEW_THREAD_KEY, threadId);
+  } catch {
+    // Storage refused: the note lasts as long as this page, as it used to.
+  }
+}
+
 interface OnboardingContextValue {
   phase: OnboardingPhase;
   unseen: AnnouncementDef[];
@@ -271,8 +290,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   // renamed to a real thread id on the first message — and that navigate drops
   // the kickoff route state. Remember WHICH thread it became and suppress
   // intros only there: the thread intro can't pop over the first answer, but a
-  // different thread opened later the same session shows it normally.
-  const interviewThreadRef = useRef<string | null>(null);
+  // different thread opened later the same session shows it normally. Kept in
+  // the tab's session too, so a reload in the middle of that first turn does
+  // not bring the guidance up over it.
+  const interviewThreadRef = useRef<string | null | undefined>(undefined);
+  if (interviewThreadRef.current === undefined) interviewThreadRef.current = readInterviewThread();
   const wasInInterviewRef = useRef(false);
   const threadId = pathname.match(/^\/chat\/t\/([^/]+)/)?.[1] ?? null;
   if (threadId === '__default__') {
@@ -281,6 +303,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     // First route after the interview: the rename lands on the real thread id
     // (null when the user left the thread view without sending a message).
     interviewThreadRef.current = threadId;
+    if (threadId !== null) writeInterviewThread(threadId);
     wasInInterviewRef.current = false;
   }
   const inInterview =
@@ -345,14 +368,19 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     }));
     const doneCount = tasks.filter((t) => t.done).length;
     return {
+      // Out of the way while the welcome flow's conversation runs: the user is
+      // answering the agent there, and the list comes back on the next page.
       visible:
-        !isLoading && prefs.gettingStartedDismissedAt === null && doneCount < tasks.length,
+        !isLoading &&
+        !inInterview &&
+        prefs.gettingStartedDismissedAt === null &&
+        doneCount < tasks.length,
       tasks,
       doneCount,
       dismiss: dismissGettingStarted,
       completeTask: markTaskDone,
     };
-  }, [prefs, onboardingCompleted, hasWorkspace, isLoading, dismissGettingStarted, markTaskDone]);
+  }, [prefs, onboardingCompleted, hasWorkspace, isLoading, inInterview, dismissGettingStarted, markTaskDone]);
 
   useOnboardingOrchestrator({
     isLoading,
