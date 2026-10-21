@@ -6,6 +6,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { isPlatformMode, APP_ENTRY_PATH } from '../../config/hostMode';
 import { AUTH_BROADCAST_CHANNEL, type AuthBroadcastMessage } from '../../lib/oauthPopup';
 import { authErrorMessage } from '../../lib/authErrors';
+import { landAfterSignIn } from '../../lib/hostedSignIn';
 import { useShellHandoff } from './useShellHandoff';
 import ShellHandoff from './ShellHandoff';
 import EdgeGrain from './EdgeGrain';
@@ -114,7 +115,7 @@ function AuthConfirm() {
         // Confirmed signup / magic link.
         broadcastAuthComplete();
         setStatus('confirmed');
-        redirectTimer = setTimeout(() => navigate('/dashboard', { replace: true }), 1500);
+        redirectTimer = setTimeout(() => landAfterSignIn(navigate), 1500);
       } catch (err: unknown) {
         setErrorMessage(authErrorMessage(err, t).message);
         setStatus('error');
@@ -139,7 +140,7 @@ function AuthConfirm() {
     }
     broadcastAuthComplete();
     setStatus('confirmed');
-    const timer = setTimeout(() => navigate('/dashboard', { replace: true }), 1500);
+    const timer = setTimeout(() => landAfterSignIn(navigate), 1500);
     return () => clearTimeout(timer);
   }, [pkceFallback, isLoggedIn, navigate]);
 

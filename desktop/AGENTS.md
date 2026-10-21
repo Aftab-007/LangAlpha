@@ -119,6 +119,12 @@ there: to the app for an account that is set up, into the wizard for one that is
 `reachedApp` is per-install state and only ever a shortcut past that round trip; reading
 account state off it gets a returning user the wrong first screen,
 being offered a downgrade from the plan they already pay for.
+Every later sign-in passes through that same page. Inside the SaaS edition (read off the
+shell's capabilities), the app sends a signed-out window there instead of showing its own
+sign-in, and a sign-in that still finishes on the app's pages, such as an emailed link opened
+while the app was closed, continues there before the dashboard (`web/src/lib/hostedSignIn.ts`).
+Without that, signing out and registering a new account on an install that has reached the app
+skips the wizard. The OSS edition keeps the app's own sign-in, whatever server it points at.
 
 **The two editions are installable side by side, and all three identity strings
 carry that.** The name is the load-bearing one: `app.getName()` is what
