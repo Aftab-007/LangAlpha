@@ -205,7 +205,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   // would serve the stale pre-dismiss intro and re-open it.
   // Page intros are a desktop surface: the visual half is hidden on small
   // screens (copy would read as captions for invisible mockups), matching the
-  // desktop-only getting-started card. Suppressed — never marked seen — so a
+  // desktop-only getting-started list. Suppressed — never marked seen — so a
   // later desktop session still offers them.
   const isMobile = useIsMobile();
   const mirror = mirrorRef.current ?? null;
@@ -258,7 +258,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     if (phase === 'whatsNew' && unseen.length === 0) setPhase('idle');
   }, [phase, unseen.length]);
 
-  /** Re-show every page tip + the getting-started card (Settings affordance). */
+  /** Re-show every page tip + the getting-started list (Settings affordance). */
   const replayGuides = useCallback((): boolean => {
     // Persist first: a refused write (cold cache) makes this a no-op rather
     // than clearing local state for a change the server never recorded — the
@@ -341,9 +341,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     }
   }, [isLoading, pathname, search, prefs, markTaskDone]);
 
-  // "Create your first workspace": any workspace other than Home exists. An
+  // "Create a workspace": any workspace other than Home exists. An
   // independent lightweight probe (limit:1 keys its own cache entry, distinct
-  // from the gallery's limit:20); only fetched while the card needs it, and
+  // from the gallery's limit:20); only fetched while the list needs it, and
   // stamped once true so later sessions skip the lookup.
   const workspaceStamped = prefs.gettingStartedDoneAt['createWorkspace'] != null;
   const { data: workspacesData } = useWorkspaces({

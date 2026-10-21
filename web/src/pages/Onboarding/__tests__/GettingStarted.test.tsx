@@ -20,16 +20,18 @@ vi.mock('../OnboardingProvider', () => ({
   }),
 }));
 
-import { GettingStartedCard } from '../engine/GettingStartedCard';
+import { GettingStartedLauncher } from '../engine/GettingStarted';
+
+const TOTAL = GETTING_STARTED_TASKS.length;
 
 function LocationProbe() {
   return <span data-testid="loc">{useLocation().pathname}</span>;
 }
 
-function renderCard() {
+function renderLauncher(variant: 'row' | 'rail' = 'row') {
   return render(
     <MemoryRouter initialEntries={['/settings']}>
-      <GettingStartedCard />
+      <GettingStartedLauncher variant={variant} />
       <Routes>
         <Route path="*" element={<LocationProbe />} />
       </Routes>
@@ -37,7 +39,13 @@ function renderCard() {
   );
 }
 
-describe('GettingStartedCard', () => {
+/** Opens the list from the sidebar entry. */
+function openList(variant: 'row' | 'rail' = 'row') {
+  renderLauncher(variant);
+  fireEvent.click(screen.getByRole('button', { name: /^Get started/ }));
+}
+
+describe('GettingStartedLauncher', () => {
   beforeEach(() => {
     dismiss.mockClear();
     completeTask.mockClear();
@@ -46,49 +54,61 @@ describe('GettingStartedCard', () => {
   });
 
   afterEach(() => {
-    vi.resetAllMocks();
     vi.restoreAllMocks();
   });
 
   it('renders nothing when not visible', () => {
     mockVisible = false;
-    const { container } = renderCard();
-    expect(container.querySelector('aside')).toBeNull();
+    const { container } = renderLauncher();
+    expect(container.querySelector('button')).toBeNull();
   });
 
-  it('shows progress and strikes through completed tasks', () => {
-    renderCard();
-    expect(screen.getByText(`1 / ${GETTING_STARTED_TASKS.length}`)).toBeInTheDocument();
-    const bar = screen.getByRole('progressbar');
-    expect(bar).toHaveAttribute('aria-valuenow', '1');
-    // done task is disabled and struck through; pending ones show descriptions
-    const doneBtn = screen.getByRole('button', {
-      name: /Explore the dashboard/,
+  it('shows progress in the sidebar row and keeps the list closed until asked', () => {
+    renderLauncher();
+    const entry = screen.getByRole('button', {
+      name: `Get started, 1 of ${TOTAL} done`,
     });
-    expect(doneBtn).toBeDisabled();
-    expect(screen.getByText('Explore the dashboard')).toHaveClass('line-through');
-    expect(screen.getByText(/Risk, markets, style, and how the agent works with you/)).toBeInTheDocument();
+    expect(entry).toHaveTextContent(`1/${TOTAL}`);
+    expect(screen.queryByRole('progressbar')).toBeNull();
   });
 
-  it('clicking a pending task navigates to its target', () => {
-    renderCard();
+  it('the rail draws the same entry as an icon', () => {
+    openList('rail');
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1');
+  });
+
+  it('lists every task, marks the done ones, and describes only the next one', () => {
+    openList();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1');
+    expect(screen.getByText(`1 of ${TOTAL} done`)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Explore the dashboard/ })).toBeDisabled();
+    // The next task carries its line and holds focus, so Enter starts it.
+    const next = screen.getByRole('button', { name: /Check live markets/ });
+    expect(next).toHaveTextContent('Streaming charts for any symbol.');
+    expect(next).toHaveFocus();
+    expect(screen.queryByText(/Risk, markets, style, and how the agent works with you/)).toBeNull();
+  });
+
+  it('clicking a pending task navigates to its target and closes the list', () => {
+    openList();
     fireEvent.click(screen.getByRole('button', { name: /Run your first analysis/ }));
     expect(screen.getByTestId('loc').textContent).toBe('/chat');
+    expect(screen.queryByRole('progressbar')).toBeNull();
   });
 
   it('the profile task opens the welcome flow', () => {
-    renderCard();
+    openList();
     fireEvent.click(screen.getByRole('button', { name: /Set up your investing profile/ }));
     expect(screen.getByTestId('loc').textContent).toBe('/welcome');
     expect(completeTask).not.toHaveBeenCalled();
   });
 
-  it('clicking an external task stamps it done and opens a new tab, no in-app navigation', () => {
+  it('in the browser an external task stamps it done and opens a new tab, no in-app navigation', () => {
     // No 'noopener' feature string — that would make open() return null even
     // on success (reading as "blocked"). The opener is severed on the handle.
     const handle = { opener: window } as unknown as Window;
     const open = vi.spyOn(window, 'open').mockReturnValue(handle);
-    renderCard();
+    openList();
     fireEvent.click(screen.getByRole('button', { name: /Connect a chat app/ }));
     expect(completeTask).toHaveBeenCalledWith('integrations');
     expect(open).toHaveBeenCalledWith(expect.stringMatching(/\/integrations$/), '_blank');
@@ -98,13 +118,20 @@ describe('GettingStartedCard', () => {
 
   it('a blocked popup leaves the external task pending so the user can retry', () => {
     vi.spyOn(window, 'open').mockReturnValue(null);
-    renderCard();
+    openList();
     fireEvent.click(screen.getByRole('button', { name: /Connect a chat app/ }));
     expect(completeTask).not.toHaveBeenCalled();
   });
 
-  it('the X dismisses the card', () => {
-    renderCard();
+  it('the X closes the list and keeps the guide', () => {
+    openList();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(dismiss).not.toHaveBeenCalled();
+  });
+
+  it('"Hide guide" dismisses it for good', () => {
+    openList();
     fireEvent.click(screen.getByRole('button', { name: 'Hide guide' }));
     expect(dismiss).toHaveBeenCalledTimes(1);
   });

@@ -3714,6 +3714,7 @@
     "gettingStarted": {
       "title": "快速上手",
       "dismiss": "隐藏引导",
+      "progress": "已完成 {{done}}/{{total}}",
       "tasks": {
         "dashboard": {
           "title": "探索仪表盘",

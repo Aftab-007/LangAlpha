@@ -7,10 +7,11 @@ import '@/index.css';
 import { ANNOUNCEMENTS, PAGE_INTROS } from '@/pages/Onboarding/registry';
 import { PageIntroModal } from '@/pages/Onboarding/engine/PageIntroModal';
 import { WhatsNewModal } from '@/pages/Onboarding/engine/WhatsNewModal';
+import { GuidePreview } from './guide';
 
 /**
- * Dev-only harness rendering the REAL PageIntroModal and WhatsNewModal for
- * design iteration. Open /intro-preview.html on the dev server. Not bundled
+ * Dev-only harness rendering the REAL PageIntroModal, WhatsNewModal and the
+ * sidebar's getting-started entry for design iteration. Open /intro-preview.html on the dev server. Not bundled
  * in production (vite builds index.html only) and not mounted anywhere in
  * the app.
  *
@@ -46,6 +47,7 @@ function Btn({
       style={{
         font: 'inherit',
         fontSize: '0.75rem',
+        whiteSpace: 'nowrap',
         cursor: 'pointer',
         padding: '5px 12px',
         borderRadius: 999,
@@ -60,7 +62,8 @@ function Btn({
 }
 
 function Preview() {
-  const [surface, setSurface] = useState<'intro' | 'whatsNew'>('intro');
+  const [surface, setSurface] = useState<'intro' | 'whatsNew' | 'guide'>('intro');
+  const [guideVariant, setGuideVariant] = useState<'row' | 'rail'>('row');
   const [twoReleases, setTwoReleases] = useState(false);
   const [introId, setIntroId] = useState(PAGE_INTROS[0].id);
   const [theme, setTheme] = useState<(typeof THEMES)[number]>('light');
@@ -120,6 +123,17 @@ function Preview() {
             +2nd release
           </Btn>
         )}
+        <Btn on={surface === 'guide'} onClick={() => setSurface('guide')}>
+          guide
+        </Btn>
+        {surface === 'guide' && (
+          <Btn
+            on={guideVariant === 'rail'}
+            onClick={() => setGuideVariant((v) => (v === 'row' ? 'rail' : 'row'))}
+          >
+            rail
+          </Btn>
+        )}
         <span style={{ width: 1, height: 18, background: 'var(--color-border-default)' }} />
         {THEMES.map((t) => (
           <Btn key={t} on={t === theme} onClick={() => setTheme(t)}>
@@ -133,7 +147,9 @@ function Preview() {
           </Btn>
         ))}
       </div>
-      {surface === 'intro' ? (
+      {surface === 'guide' ? (
+        <GuidePreview key={`${guideVariant}-${locale}-${run}`} variant={guideVariant} done={2} />
+      ) : surface === 'intro' ? (
         <PageIntroModal
           key={`${intro.id}-${locale}-${run}`}
           intro={intro}

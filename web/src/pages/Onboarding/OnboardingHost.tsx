@@ -1,12 +1,11 @@
 import { useOnboarding } from './OnboardingProvider';
 import { PageIntroModal } from './engine/PageIntroModal';
 import { WhatsNewModal } from './engine/WhatsNewModal';
-import { GettingStartedCard } from './engine/GettingStartedCard';
 
 /**
- * Renders the active onboarding surfaces: the contextual page intro or the
- * versioned What's-New modal (one popup at a time), plus the persistent
- * getting-started checklist card. Mounted once inside the authenticated shell.
+ * Renders the active onboarding popup: the contextual page intro or the
+ * versioned What's-New modal, one at a time. Mounted once inside the
+ * authenticated shell. The getting-started list lives in the sidebar.
  */
 export function OnboardingHost() {
   const { phase, activeIntro, unseen, dismissPageIntro, acknowledgeWhatsNew } = useOnboarding();
@@ -20,7 +19,6 @@ export function OnboardingHost() {
       {phase === 'whatsNew' && (
         <WhatsNewModal announcements={unseen} onAcknowledge={acknowledgeWhatsNew} />
       )}
-      <GettingStartedCard />
     </>
   );
 }

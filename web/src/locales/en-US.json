@@ -3750,6 +3750,7 @@
     "gettingStarted": {
       "title": "Get started",
       "dismiss": "Hide guide",
+      "progress": "{{done}} of {{total}} done",
       "tasks": {
         "dashboard": {
           "title": "Explore the dashboard",
