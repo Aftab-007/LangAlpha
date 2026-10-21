@@ -7,7 +7,10 @@ import '@/index.css';
 import { ANNOUNCEMENTS, PAGE_INTROS } from '@/pages/Onboarding/registry';
 import { PageIntroModal } from '@/pages/Onboarding/engine/PageIntroModal';
 import { WhatsNewModal } from '@/pages/Onboarding/engine/WhatsNewModal';
+import { INTRO_SCENES } from '@/pages/Onboarding/engine/introScenes';
+import type { IntroVisualId } from '@/pages/Onboarding/registry';
 import { GuidePreview } from './guide';
+import { ScenePreview } from './scenes';
 
 /**
  * Dev-only harness rendering the REAL PageIntroModal, WhatsNewModal and the
@@ -18,6 +21,12 @@ import { GuidePreview } from './guide';
  * Note: the dialogs are modal, so clicking the toolbar counts as an
  * outside-click and re-mounts the modal at step 1 — which conveniently
  * replays the entrance animations after every control change.
+ *
+ * URL parameters, for screenshots without clicking: `theme`, `locale` and
+ * `surface` (intro, whatsNew, guide; `rail` for the guide's rail) set the
+ * starting toggles; `scene=<visual id>` shows that one scene alone, live,
+ * or with `frames=0,800,1600` (or `frames=8` for that many evenly spaced) as
+ * a contact sheet of frozen frames.
  */
 
 // Synthetic newer release (copy reused from the real entry) so the modal's
@@ -30,6 +39,26 @@ const SECOND_RELEASE = ANNOUNCEMENTS.map((a) => ({
 
 const THEMES = ['light', 'dark'] as const;
 const LOCALES = ['en-US', 'zh-CN'] as const;
+
+const params = new URLSearchParams(window.location.search);
+const initialTheme = THEMES.find((t) => t === params.get('theme')) ?? 'light';
+const initialLocale = LOCALES.find((l) => l === params.get('locale')) ?? 'en-US';
+const SURFACES = ['intro', 'whatsNew', 'guide'] as const;
+const initialSurface = SURFACES.find((v) => v === params.get('surface')) ?? 'intro';
+const sceneParam = params.get('scene');
+const scene = sceneParam && sceneParam in INTRO_SCENES ? (sceneParam as IntroVisualId) : null;
+
+/** `frames=8` = eight evenly spaced through the script; a list = those times. */
+function readFrames(visual: IntroVisualId): number[] | null {
+  const raw = params.get('frames');
+  if (!raw) return null;
+  if (!raw.includes(',')) {
+    const n = Math.max(Number(raw) || 8, 2);
+    const { length } = INTRO_SCENES[visual];
+    return Array.from({ length: n }, (_, i) => Math.round((length * i) / (n - 1)));
+  }
+  return raw.split(',').map(Number).filter(Number.isFinite);
+}
 
 function Btn({
   on,
@@ -62,12 +91,14 @@ function Btn({
 }
 
 function Preview() {
-  const [surface, setSurface] = useState<'intro' | 'whatsNew' | 'guide'>('intro');
-  const [guideVariant, setGuideVariant] = useState<'row' | 'rail'>('row');
+  const [surface, setSurface] = useState<(typeof SURFACES)[number]>(initialSurface);
+  const [guideVariant, setGuideVariant] = useState<'row' | 'rail'>(
+    params.has('rail') ? 'rail' : 'row'
+  );
   const [twoReleases, setTwoReleases] = useState(false);
   const [introId, setIntroId] = useState(PAGE_INTROS[0].id);
-  const [theme, setTheme] = useState<(typeof THEMES)[number]>('light');
-  const [locale, setLocale] = useState<(typeof LOCALES)[number]>('en-US');
+  const [theme, setTheme] = useState<(typeof THEMES)[number]>(initialTheme);
+  const [locale, setLocale] = useState<(typeof LOCALES)[number]>(initialLocale);
   const [run, setRun] = useState(0); // bump = remount modal at step 1
 
   useEffect(() => {
@@ -79,6 +110,8 @@ function Preview() {
   }, [locale]);
 
   const intro = PAGE_INTROS.find((i) => i.id === introId) ?? PAGE_INTROS[0];
+
+  if (scene) return <ScenePreview key={locale} visual={scene} frames={readFrames(scene)} />;
 
   return (
     <>

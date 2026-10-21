@@ -9,7 +9,8 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { INTRO_VISUALS, INTRO_VISUAL_ANCHOR } from './introVisuals';
+import { INTRO_SCENES } from './introScenes';
+import { SceneStage } from './introScenes/SceneStage';
 import type { PageIntroDef } from '../registry';
 import './pageIntro.css';
 
@@ -55,13 +56,11 @@ export function PageIntroModal({
   };
   const step = intro.steps[Math.min(stepIdx, intro.steps.length - 1)];
   const isLast = stepIdx >= intro.steps.length - 1;
-  const Visual = INTRO_VISUALS[step.visual];
-  const anchor = INTRO_VISUAL_ANCHOR[step.visual];
   // When every step's mockup anchors right (e.g. the thread intro), the
   // visual takes the LEFT half: the anchored hot region then sits beside the
   // copy and the wireframe bleeds off the modal's outer edge. Per-intro, not
   // per-step, so the panel never jumps sides mid-intro.
-  const visualFirst = intro.steps.every((s) => INTRO_VISUAL_ANCHOR[s.visual] === 'right');
+  const visualFirst = intro.steps.every((s) => INTRO_SCENES[s.visual].anchor === 'right');
 
   return (
     <Dialog
@@ -178,13 +177,10 @@ export function PageIntroModal({
           </div>
 
           {/* Blueprint mockup panel — hidden on small screens where the copy
-              needs the room. The mockup keeps its 400px design size and is
-              scaled up on a static wrapper (intro-rv animates `transform`,
-              so the scale cannot live on an animated element), sized to sit
-              inside the panel beside its anchor. Keyed by step:
-              the outgoing scene crossfades out, then the incoming one fades
-              in and its CSS stagger replays. The motion wrapper only animates
-              opacity, so the scale transform stays on the static inner div. */}
+              needs the room. Keyed by step: the outgoing scene crossfades
+              out, then the incoming one fades in and its script starts from
+              the top. The motion wrapper only animates opacity, so the
+              stage's scale transform is left alone. */}
           <div
             className={cn('intro-visual hidden items-center sm:flex', visualFirst && 'sm:order-1')}
             aria-hidden
@@ -204,20 +200,7 @@ export function PageIntroModal({
                   transition: { duration: reduceMotion ? 0 : 0.15, ease: 'easeIn' },
                 }}
               >
-                <div
-                  className={cn(
-                    'intro-scene w-[400px] shrink-0',
-                    anchor === 'left' && 'ml-8',
-                    anchor === 'right' && 'ml-auto mr-8',
-                    anchor === 'center' && 'mx-auto'
-                  )}
-                  style={{
-                    transformOrigin:
-                      anchor === 'center' ? 'center center' : `${anchor} center`,
-                  }}
-                >
-                  <Visual />
-                </div>
+                <SceneStage visual={step.visual} />
               </motion.div>
             </AnimatePresence>
           </div>

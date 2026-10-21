@@ -21,7 +21,7 @@ export interface AnnouncementDef {
 
 /**
  * Illustration scene rendered in the intro modal's visual panel. Implemented
- * in `engine/introVisuals.tsx` — the Record there is typed against this union,
+ * in `engine/introScenes/index.ts` — the Record there is typed against this union,
  * so adding an id without a scene is a compile error.
  */
 export type IntroVisualId =

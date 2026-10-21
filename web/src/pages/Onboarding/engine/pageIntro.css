@@ -1,6 +1,7 @@
 /*
- * Page-intro modal visual panel — blueprint style: accent radial glow, faint
- * drafting grid, teal pulse accents, mono-labelled product mockups. The panel
+ * Page-intro modal visual panel — blueprint style: a faint wash of the accent,
+ * a faint drafting grid, mono-labelled product mockups. Deliberately quiet: no
+ * glows or halos, so the mockups read like the app rather than a light show. The panel
  * follows the app theme: near-black blueprint in dark mode, paper-light in
  * light mode. All surface/line colors below are tokens so the scenes render
  * in both.
@@ -31,15 +32,14 @@
   --iv-grid: rgba(232, 238, 248, 0.05);
   --iv-mk-bg: rgba(10, 11, 14, 0.82);
   --iv-mk-border: rgba(255, 255, 255, 0.12);
-  --iv-mk-shadow: 0 16px 44px rgba(0, 0, 0, 0.5), 0 0 0 1px hsl(var(--primary) / 0.07);
+  --iv-mk-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   --iv-region-bg: rgba(255, 255, 255, 0.03);
   --iv-ease: cubic-bezier(0.16, 1, 0.3, 1);
 
   position: relative;
   overflow: hidden;
   background:
-    radial-gradient(ellipse 95% 70% at 78% 12%, hsl(var(--primary) / 0.24), transparent 70%),
-    radial-gradient(ellipse 70% 55% at 18% 112%, rgba(15, 237, 190, 0.1), transparent 70%),
+    radial-gradient(ellipse 95% 70% at 78% 12%, hsl(var(--primary) / 0.08), transparent 70%),
     #060709;
   color: var(--iv-text);
 }
@@ -59,12 +59,11 @@
   --iv-grid: rgba(18, 22, 30, 0.05);
   --iv-mk-bg: rgba(255, 255, 255, 0.9);
   --iv-mk-border: rgba(18, 22, 30, 0.12);
-  --iv-mk-shadow: 0 16px 44px rgba(18, 22, 30, 0.14), 0 0 0 1px hsl(var(--primary) / 0.08);
+  --iv-mk-shadow: 0 12px 32px rgba(18, 22, 30, 0.1);
   --iv-region-bg: rgba(18, 22, 30, 0.03);
 
   background:
-    radial-gradient(ellipse 95% 70% at 78% 12%, hsl(var(--primary) / 0.16), transparent 70%),
-    radial-gradient(ellipse 70% 55% at 18% 112%, rgba(10, 159, 124, 0.08), transparent 70%),
+    radial-gradient(ellipse 95% 70% at 78% 12%, hsl(var(--primary) / 0.06), transparent 70%),
     #f4f1ea;
 }
 
@@ -121,7 +120,6 @@
 
 .intro-mk--accent {
   border-color: hsl(var(--primary) / 0.55);
-  box-shadow: var(--iv-mk-shadow), 0 0 18px hsl(var(--primary) / 0.28);
 }
 
 /* A region inside the zoomed-out page wireframe. Dim by default; `--hot`
@@ -133,9 +131,8 @@
 }
 
 .intro-region--hot {
-  border-color: hsl(var(--primary) / 0.6);
-  background: hsl(var(--primary) / 0.07);
-  box-shadow: 0 0 14px hsl(var(--primary) / 0.22);
+  border-color: hsl(var(--primary) / 0.5);
+  background: hsl(var(--primary) / 0.05);
 }
 
 .intro-region--dashed {
@@ -192,43 +189,22 @@
   }
 }
 
-/* Teal attention dot — landing `la-pulse`. */
+/* A live dot: breathes in place, no ring. */
 .intro-pulse {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--iv-teal);
-  box-shadow: 0 0 0 0 rgba(15, 237, 190, 0.55);
-  animation: intro-pulse 2s var(--iv-ease) infinite;
+  animation: intro-pulse 2s ease-in-out infinite;
 }
 
 .intro-pulse--blue {
   background: var(--iv-accent);
-  box-shadow: 0 0 0 0 hsl(var(--primary) / 0.6);
-  animation-name: intro-pulse-blue;
 }
 
 @keyframes intro-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(15, 237, 190, 0.55);
-  }
-  70% {
-    box-shadow: 0 0 0 10px rgba(15, 237, 190, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(15, 237, 190, 0);
-  }
-}
-
-@keyframes intro-pulse-blue {
-  0% {
-    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.6);
-  }
-  70% {
-    box-shadow: 0 0 0 10px hsl(var(--primary) / 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+  50% {
+    opacity: 0.35;
   }
 }
 
@@ -243,14 +219,14 @@
 
 @keyframes intro-click {
   0% {
-    transform: scale(0.3);
+    transform: scale(0.4);
     opacity: 0;
   }
   25% {
-    opacity: 0.9;
+    opacity: 0.5;
   }
   100% {
-    transform: scale(1.7);
+    transform: scale(1.2);
     opacity: 0;
   }
 }
@@ -272,14 +248,89 @@
   }
 }
 
+/* ── parts that move on the scene clock (introScenes/kit.tsx) ── */
+
+/* Typing caret. */
+.intro-caret {
+  display: inline-block;
+  width: 1px;
+  height: 0.85em;
+  margin-left: 1px;
+  vertical-align: -0.1em;
+  background: var(--iv-accent);
+  animation: intro-caret 0.9s steps(1) infinite;
+}
+
+@keyframes intro-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* A streaming skeleton line: the clock steps its width at 30fps, the
+   transition fills in between. */
+.intro-stream {
+  transition: width 90ms linear;
+}
+
+/* A running step's spinner. */
+.intro-spin {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1.2px solid var(--iv-line-2);
+  border-top-color: var(--iv-accent);
+  animation: intro-spin 0.7s linear infinite;
+}
+
+@keyframes intro-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A label the agent is still working on, like the app's TextShimmer. */
+.intro-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--iv-text-3) 0%,
+    var(--iv-text-3) 35%,
+    var(--iv-text) 50%,
+    var(--iv-text-3) 65%,
+    var(--iv-text-3) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: intro-shimmer 2s linear infinite;
+}
+
+@keyframes intro-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .intro-rv,
   .intro-bar,
   .intro-wire,
   .intro-pulse,
   .intro-click,
-  .intro-pop {
+  .intro-pop,
+  .intro-caret,
+  .intro-spin,
+  .intro-shimmer {
     animation: none;
+  }
+  .intro-stream {
+    transition: none;
   }
   .intro-wire {
     stroke-dashoffset: 0;
