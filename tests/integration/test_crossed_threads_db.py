@@ -1,5 +1,5 @@
-"""scripts/ops/repair_crossed_threads.py on threads that crossed into
-DeltaChannel the way production's did.
+"""A thread that crossed into DeltaChannel the way production's did is trimmed
+by the window itself.
 
 A crossed thread starts with turns under a plain ``add_messages`` state, each
 fanning out to parallel tool nodes, which that reducer applied in node order.
@@ -7,19 +7,23 @@ Its first turns under DeltaChannel run on the saver production crossed on,
 which loaded by replaying the stored writes from the root and ordered a
 checkpoint's writes by task id, so the tool results of each legacy turn came
 back in another order, which the rollout then stored as a snapshot. Turn
-slices are cut from the legacy lists and keep the original order, so the
-window's coverage check never holds the head. Six parallel tools make a turn
-whose task ids happen to sort in node order one in 720, and there are two.
+slices are cut from the legacy lists and keep the original order. Six
+parallel tools make a turn whose task ids happen to sort in node order one in
+720, and there are two.
 
-Twin threads are built from the same script, one repaired and one left
-crossed, and run the same turns after it through compaction with the window
-on: what the model and the summary model are sent must not tell them apart.
+The window's digest takes each batch of tool answers in call-id order, so the
+slices hold the checkpoint's head in either order and the window trims the
+thread at its next turn. Twin threads are built from the same script and run
+the same turns, a summary among them, with the window on for one and off for
+the other: what the model and the summary model are sent must not tell them
+apart.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from types import SimpleNamespace
 from typing import Annotated, Any, TypedDict
@@ -42,9 +46,8 @@ from ptc_agent.agent.middleware.compaction.types import OffloadSettings
 from ptc_agent.agent.middleware.compaction.window import window_cut
 from ptc_agent.agent.middleware.subagent_switch import subagents_window_carry
 from ptc_agent.agent.transcript import Window
-from scripts.ops import repair_crossed_threads as repair
 from scripts.ops import thin_message_snapshots as thinning
-from scripts.ops._delta_loads import Mode, Status
+from scripts.ops._delta_loads import Mode
 from tests.unit.middleware.compaction import window_harness as h
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="session")]
@@ -56,8 +59,6 @@ DELTA_TURNS = 5
 THRESHOLD = 28
 KEEP = 4
 OFFLOAD = OffloadSettings(keep_messages=KEEP, max_length=200, idle_seconds=0.0)
-SETTINGS = repair.Settings(keep_messages=KEEP, offload=OFFLOAD)
-VERIFY_ALL = repair.Options(verify_all=True)
 
 
 class _Legacy(TypedDict):
@@ -113,10 +114,10 @@ def _agent(saver, thread_id: str, model, summary, *, threshold: int, asked: list
     if asked is not None:
         from src.server.services.history.window import runs_held
 
-        async def coverage(head: Window) -> bool:
-            held = await runs_held(thread_id, head)
-            asked.append((head.runs, held))
-            return held
+        async def coverage(window: Window, trimmed: Sequence[AnyMessage]) -> Window | None:
+            head = await runs_held(thread_id, window, trimmed)
+            asked.append((window.extend(trimmed).runs, head is not None))
+            return head
 
         compaction = compaction.with_window(
             coverage, [notes_window_carry(thread_id), subagents_window_carry]
@@ -257,8 +258,8 @@ async def _seed_the_crossing(test_db_uri: str, thread_id: str) -> None:
 
 async def _crossed(saver, test_db_uri: str, workspace_id: str) -> str:
     """Legacy turns, then turns under DeltaChannel compacting as they go on the
-    saver production crossed on; then the rollout before the repair: the
-    crossing seeded, the stored lists flagged, and every turn's slice stored."""
+    saver production crossed on; then the rollout: the crossing seeded, the
+    stored lists flagged, and every turn's slice stored."""
     from src.server.database.conversation import create_thread
 
     thread_id = str(uuid.uuid4())
@@ -304,40 +305,21 @@ async def _head(thread_id: str) -> tuple[Window, list[AnyMessage], list[AnyMessa
 
 
 def _keys(messages) -> list[str]:
-    return [repair._key(m) for m in messages]
-
-
-async def _repair(test_db_uri: str, thread_id: str, mode: Mode = Mode.APPLY):
-    return await repair.repair_thread(test_db_uri, thread_id, mode, VERIFY_ALL, SETTINGS)
-
-
-async def _rows(test_db_uri: str, thread_id: str) -> list[tuple]:
-    """Every row of the thread, with its row version."""
-    async with await psycopg.AsyncConnection.connect(test_db_uri, autocommit=True) as conn:
-        out = []
-        for table, key in (
-            ("checkpoints", "thread_id"),
-            ("checkpoint_blobs", "thread_id"),
-            ("checkpoint_writes", "thread_id"),
-            ("conversation_threads", "conversation_thread_id::text"),
-            ("turn_slices", "conversation_thread_id::text"),
-        ):
-            cur = await conn.execute(
-                f"SELECT md5(t::text), xmin::text FROM {table} t WHERE {key} = %s ORDER BY 1",
-                (thread_id,),
-            )
-            out.append((table, await cur.fetchall()))
-        return out
-
-
-async def _pointer(test_db_uri: str, thread_id: str) -> str:
-    async with await psycopg.AsyncConnection.connect(test_db_uri, autocommit=True) as conn:
-        cur = await conn.execute(
-            "SELECT latest_checkpoint_id FROM conversation_threads"
-            " WHERE conversation_thread_id = %s",
-            (thread_id,),
+    """Each message as the window's digest reads it: what it says and the
+    calls it makes or answers, never its id."""
+    return [
+        json.dumps(
+            [
+                m.type,
+                m.content,
+                getattr(m, "tool_call_id", None),
+                [call["id"] for call in getattr(m, "tool_calls", None) or ()],
+            ],
+            sort_keys=True,
+            default=str,
         )
-        return (await cur.fetchone())[0]
+        for m in messages
+    ]
 
 
 @pytest_asyncio.fixture(loop_scope="session")
@@ -364,204 +346,80 @@ async def saver(test_db_pool, patched_get_db_connection, monkeypatch):
     CheckpointHistoryReader.reset_instance()
 
 
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def twins(saver, test_db_uri, seed_workspace):
-    """Two threads from one script: ``repaired`` is repaired, ``crossed`` is not."""
+    """Two crossed threads from one script."""
     workspace_id = str(seed_workspace["workspace_id"])
-    repaired = await _crossed(saver, test_db_uri, workspace_id)
-    crossed = await _crossed(saver, test_db_uri, workspace_id)
-    yield repaired, crossed
-    for thread_id in (repaired, crossed):
+    first = await _crossed(saver, test_db_uri, workspace_id)
+    second = await _crossed(saver, test_db_uri, workspace_id)
+    yield first, second
+    for thread_id in (first, second):
         await saver.adelete_thread(thread_id)
 
 
-async def test_a_crossed_thread_is_refused_until_repaired(saver, test_db_uri, twins):
+async def test_a_crossed_thread_is_held_as_it_loads(saver, twins):
+    from src.server.services.history.window import earlier_runs, runs_held
+
     thread_id, _ = twins
     head, tip_head, stored = await _head(thread_id)
-    from src.server.services.history.window import runs_held
 
     # The crossing as production's: the slices hold the tip's head messages in
-    # another order, so the window's coverage check refuses every trim.
+    # another order within the legacy turns, and in the same order past them.
     legacy = LEGACY_TURNS * (len(TOOLS) + 3)
     assert head.runs > LEGACY_TURNS and head.messages > legacy
     assert sorted(_keys(tip_head)) == sorted(_keys(stored))
     assert _keys(tip_head[:legacy]) != _keys(stored[:legacy])
     assert _keys(tip_head[legacy:]) == _keys(stored[legacy:])
-    assert not await runs_held(thread_id, head)
+    assert head.messages == len(tip_head)
 
-    before = await _rows(test_db_uri, thread_id)
-    planned = await _repair(test_db_uri, thread_id, Mode.DRY_RUN)
-    assert planned.status is Status.PLANNED, planned.reason
-    report = planned.report
-    assert (report.crossed, report.refused, report.cut) == ("yes", "", head.messages)
-    assert report.requests_match and report.requests == 4
-    assert report.span[1] < report.replayed
-    rehearsed = await _repair(test_db_uri, thread_id, Mode.REHEARSE)
-    assert rehearsed.status is Status.REHEARSED and not rehearsed.failed
-    assert await _rows(test_db_uri, thread_id) == before
+    # Either order hashes the same, so the window holds the head as the tip
+    # loads it, and reads its messages back as the slices hold them.
+    held = await runs_held(thread_id, Window(), tip_head)
+    assert held == Window().extend(tip_head) == Window().extend(stored)
+    read = await earlier_runs(thread_id, await _newest(saver, thread_id), held)
+    assert read is not None and _keys(read) == _keys(stored)
 
-    tip = await _newest(saver, thread_id)
-    applied = await _repair(test_db_uri, thread_id)
-    assert applied.status is Status.WRITTEN and not applied.failed, applied.reason
-    assert applied.committed_match and all(check.match for check in applied.checks)
-    assert applied.report.requests_match
-    assert applied.report.reprojected_same
-    # The trim's own writes are not left on the old tip, where a load of any
-    # other child of it would replay them.
-    assert dict(await _rows(test_db_uri, thread_id))["checkpoint_writes"] == dict(before)[
-        "checkpoint_writes"
-    ]
 
-    # The window a trim of an uncrossed thread would leave: the slices' head.
+async def test_a_crossed_thread_trims_and_the_models_are_sent_the_same(saver, twins):
+    """The same turns on both twins, a summary among them, with the window on
+    for one: it trims where the other keeps every message, and the model and
+    the summary model are sent the same on both."""
     from src.server.services.history.reader import CheckpointHistoryReader
 
+    on, off = twins
+    head, _, _ = await _head(on)
     reader = CheckpointHistoryReader.get_instance()
-    values = (await reader.aget_state(thread_id)).values
-    window = Window.of(values)
-    canonical = Window().extend(stored)
-    assert (window.runs, window.messages, window.digest, dict(window.earlier)) == (
-        canonical.runs,
-        canonical.messages,
-        canonical.digest,
-        dict(canonical.earlier),
-    )
-    assert await runs_held(thread_id, window)
-    kept = (await reader.aget_state(thread_id, tip)).values["messages"][head.messages :]
-    assert [m.id for m in values["messages"]] == [m.id for m in kept]
-    assert _keys(values["messages"]) == _keys(kept)
 
-    # A rerun finds nothing to do and writes nothing.
-    after = await _rows(test_db_uri, thread_id)
-    for mode in (Mode.DRY_RUN, Mode.APPLY):
-        again = await _repair(test_db_uri, thread_id, mode)
-        assert again.status is Status.NOTHING and again.report.crossed == "no"
-    assert await _rows(test_db_uri, thread_id) == after
-
-
-async def test_a_last_turn_that_fails_to_store_is_reported(
-    saver, test_db_uri, seed_workspace, monkeypatch
-):
-    """The repair commits, but the turn it moved is not stored again, so the
-    old row, with the messages it held, is no proof the turn projects."""
-
-    async def refused(rows):
-        raise RuntimeError("store refused")
-
-    thread_id = await _crossed(saver, test_db_uri, str(seed_workspace["workspace_id"]))
-    monkeypatch.setattr(
-        "src.server.database.conversation.turn_slices.upsert_turn_slices", refused
-    )
-    applied = await _repair(test_db_uri, thread_id)
-    assert applied.status is Status.WRITTEN and applied.committed_match, applied.reason
-    assert applied.report.reprojected
-    assert applied.report.reprojected_same is False
-    await saver.adelete_thread(thread_id)
-
-
-async def test_the_repair_changes_nothing_the_models_are_sent(saver, test_db_uri, twins):
-    """The same turns after the repair on both twins, a summary among them:
-    the repaired one trims where the crossed one is refused, and the model
-    and the summary model are sent the same on both."""
-    from src.server.services.history.reader import CheckpointHistoryReader
-
-    repaired, crossed = twins
-    result = await _repair(test_db_uri, repaired)
-    assert result.status is Status.WRITTEN and not result.failed, result.reason
-    reader = CheckpointHistoryReader.get_instance()
-    runs = Window.of((await reader.aget_state(repaired)).values).runs
-
-    sent: dict[str, tuple[list, list, list]] = {}
+    sent: dict[str, tuple[list, list]] = {}
     windows: dict[str, list[int]] = {}
+    asked: dict[str, list | None] = {on: [], off: None}
     start = LEGACY_TURNS + DELTA_TURNS + 1
-    for thread_id in (repaired, crossed):
-        model, summary, asked = h.RecordingModel(), h.SummaryModel(), []
+    for thread_id in (on, off):
+        model, summary = h.RecordingModel(), h.SummaryModel()
         windows[thread_id] = []
         # A plain turn, one that summarizes, and one that trims to that summary.
         for offset, threshold in enumerate((10**6, 0, 10**6)):
             n = start + offset
             model.script = [AIMessage(f"Answer {n}.", id=f"ai-{n}-end")]
-            graph = _agent(saver, thread_id, model, summary, threshold=threshold, asked=asked)
+            graph = _agent(
+                saver, thread_id, model, summary, threshold=threshold, asked=asked[thread_id]
+            )
             await _turn(saver, thread_id, graph, f"Question {n}")
             await _project(thread_id)
             values = (await reader.aget_state(thread_id)).values
             windows[thread_id].append(Window.of(values).runs)
-        sent[thread_id] = (
-            _sent(model.requests, thread_id), _sent(summary.requests, thread_id), asked
-        )
+        sent[thread_id] = (_sent(model.requests, thread_id), _sent(summary.requests, thread_id))
 
-    assert sent[repaired][:2] == sent[crossed][:2]
-    assert len(sent[repaired][0]) == 3 and len(sent[repaired][1]) == 1
-    # The summary cites the transcript, which the repaired thread renders
-    # with its trimmed turns read back from their slices.
-    assert "<transcript_citations>" in sent[repaired][1][0]
-    # Only the trim after the summary asks of the repaired thread, and is held;
-    # every trim the crossed one would make is refused.
-    assert [held for _, held in sent[repaired][2]] == [True]
-    assert sent[crossed][2] and not any(held for _, held in sent[crossed][2])
-    assert windows[repaired][:2] == [runs, runs] and windows[repaired][2] > runs
-    assert windows[crossed] == [0, 0, 0]
-
-
-async def test_a_thread_is_refused_while_a_run_is_live_or_a_slice_is_missing(
-    saver, test_db_uri, seed_workspace
-):
-    from src.server.database.runs.lifecycle import QuerySpec, RunOutcome, finalize_run, start_run
-
-    thread_id = await _crossed(saver, test_db_uri, str(seed_workspace["workspace_id"]))
-    before = await _rows(test_db_uri, thread_id)
-    pointer = await _pointer(test_db_uri, thread_id)
-
-    run_id = str(uuid.uuid4())
-    await start_run(
-        run_id=run_id,
-        thread_id=thread_id,
-        request_key=str(uuid.uuid4()),
-        query=QuerySpec(query_id=str(uuid.uuid4()), content="live", query_type="initial"),
-    )
-    live = await _repair(test_db_uri, thread_id)
-    assert live.report.refused == "a run is in progress"
-    await finalize_run(run_id=run_id, thread_id=thread_id, outcome=RunOutcome(status="cancelled"))
-
-    async with await psycopg.AsyncConnection.connect(test_db_uri, autocommit=True) as conn:
-        await conn.execute(
-            "DELETE FROM turn_slices s USING conversation_responses r"
-            " WHERE s.conversation_response_id = r.conversation_response_id"
-            " AND s.conversation_thread_id = %s AND r.turn_index = 0",
-            (thread_id,),
-        )
-    missing = await _repair(test_db_uri, thread_id)
-    assert missing.report.refused.startswith("a turn before the cut has no stored slice")
-
-    # Neither wrote a checkpoint or moved the pointer; the run and the slice
-    # are the test's own changes to the other rows.
-    after = dict(await _rows(test_db_uri, thread_id))
-    for table, rows in before:
-        if table.startswith("checkpoint"):
-            assert after[table] == rows, table
-    assert await _pointer(test_db_uri, thread_id) == pointer
-    await saver.adelete_thread(thread_id)
-
-
-async def test_a_kept_message_stored_without_an_id_is_written_with_the_planned_one(
-    saver, test_db_uri, seed_workspace, monkeypatch
-):
-    """A message injected through ``aupdate_state`` before langgraph 1.2.16 was
-    stored without an id, and the trim stamps one on every kept message: the
-    repair writes the id its plan checked, not a second fresh one."""
-    from src.server.services.history.reader import CheckpointHistoryReader
-    from src.server.utils.checkpoint_helpers import update_at_commit
-
-    thread_id = await _crossed(saver, test_db_uri, str(seed_workspace["workspace_id"]))
-    graph = _agent(saver, thread_id, h.RecordingModel(), h.SummaryModel(), threshold=10**6)
-    tip = await _newest(saver, thread_id)
-    with monkeypatch.context() as m:
-        m.setattr("langgraph.pregel.main.ensure_message_ids", lambda channels, writes: None)
-        assert await update_at_commit(graph, thread_id, tip, {"messages": [HumanMessage("A note.")]})
-    reader = CheckpointHistoryReader.get_instance()
-    assert (await reader.aget_state(thread_id)).values["messages"][-1].id is None
-
-    applied = await _repair(test_db_uri, thread_id)
-    assert applied.status is Status.WRITTEN and not applied.failed, applied.reason
-    note = (await reader.aget_state(thread_id)).values["messages"][-1]
-    assert note.content == "A note." and note.id is not None
-    await saver.adelete_thread(thread_id)
+    assert sent[on] == sent[off]
+    assert len(sent[on][0]) == 3 and len(sent[on][1]) == 1
+    # The summary cites the transcript, which the trimmed twin renders with
+    # its trimmed turns read back from their slices.
+    assert "<transcript_citations>" in sent[on][1][0]
+    # The delta turns' summary kept the view from Answer 5, so the first turn
+    # trims turns 1-4. Its anchor's run then opens the list, which leaves
+    # nothing to cut until the second turn's summary, kept from Answer 7: the
+    # third trims turns 5 and 6.
+    assert head.runs == 4
+    assert asked[on] == [(4, True), (6, True)]
+    assert windows == {on: [4, 4, 6], off: [0, 0, 0]}
