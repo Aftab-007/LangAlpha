@@ -1,7 +1,7 @@
 import React, { Suspense, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, FolderOpen, TextSelect, Menu } from 'lucide-react';
+import { ArrowLeft, PanelRight, TextSelect, Menu } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { useLatestRef } from '@/hooks/useLatestRef';
@@ -78,7 +78,8 @@ import { MobileBottomSheet } from '@/components/ui/mobile-bottom-sheet';
 
 
 
-const FilePanel = React.lazy(() => import('./FilePanel'));
+const loadFilePanel = () => import('./FilePanel');
+const FilePanel = React.lazy(loadFilePanel);
 const DetailPanel = React.lazy(() => import('./DetailPanel'));
 const PreviewViewer = React.lazy(() => import('./viewers/PreviewViewer'));
 
@@ -100,6 +101,8 @@ import { isTurnOpen, useTranscriptFollow } from './chatView/useTranscriptFollow'
 import { useSubagentTabs } from './chatView/useSubagentTabs';
 import { publishSidebarAgents, clearSidebarAgents } from './sidebarAgentsBridge';
 import { useRightPanel } from './chatView/useRightPanel';
+import { handOffToggleFocus } from './filePanel/panelToggleFocus';
+import { PanelLoadingStrip } from './filePanel/PanelLoadingStrip';
 import { usePanelFiles } from './chatView/usePanelFiles';
 import { usePanelChartSelections } from './chatView/usePanelChartSelections';
 import { SelectionChips } from '@/pages/MarketView/components/SelectionChips';
@@ -901,6 +904,16 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     subagentTranscripts,
     watching: showWatchChip,
   });
+
+  // On desktop the header's files toggle gives way to the panel's own the
+  // moment it is pressed, so a panel still fetching its code would leave
+  // neither on screen. Fetched once the view settles, or as the pointer
+  // nears the toggle, it is there before the click.
+  useEffect(() => {
+    if (isMobile) return;
+    const timer = setTimeout(() => { void loadFilePanel(); }, 1500);
+    return () => clearTimeout(timer);
+  }, [isMobile]);
   // The file panel's props are one compiled scope, so this handler's per-chunk
   // identity would re-create every inline prop beside it and re-render the panel.
   const openSubagentTaskFromPanel = useStableHandler(handleOpenSubagentTask);
@@ -1452,16 +1465,25 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             {currentThreadId && currentThreadId !== '__default__' && (
               <ShareButton threadId={currentThreadId} initialIsShared={threadIsShared} workspaceId={workspaceId} />
             )}
-            <button
-              onClick={handleToggleFilePanel}
-              className="p-2 rounded-md transition-colors"
-              style={{ color: 'var(--color-text-primary)', backgroundColor: rightPanelType === 'file' ? 'var(--color-border-muted)' : undefined }}
-              title={t('chat.workspaceFiles')}
-              onMouseEnter={(e) => { if (rightPanelType !== 'file') e.currentTarget.style.backgroundColor = 'var(--color-border-muted)'; }}
-              onMouseLeave={(e) => { if (rightPanelType !== 'file') e.currentTarget.style.backgroundColor = ''; }}
-            >
-              <FolderOpen className="h-5 w-5" />
-            </button>
+            {/* On desktop the open panel carries this toggle in the same
+                corner, so it is sized and placed as the panel's own buttons
+                are and the icon does not move when the panel opens. */}
+            {(isMobile || rightPanelType !== 'file') && (
+              <button
+                type="button"
+                data-panel-toggle="header"
+                onClick={(event) => { handleToggleFilePanel(); if (!isMobile) handOffToggleFocus(event, 'panel'); }}
+                onPointerEnter={() => { void loadFilePanel(); }}
+                onFocus={() => { void loadFilePanel(); }}
+                aria-pressed={rightPanelType === 'file'}
+                className={cn('transition-colors hover:bg-(--color-border-muted)', isMobile ? 'p-2 rounded-md' : 'p-1.5 -mr-2 rounded-[4px]')}
+                style={{ color: 'var(--color-text-primary)' }}
+                title={t('chat.workspaceFiles')}
+                aria-label={t('chat.workspaceFiles')}
+              >
+                <PanelRight className={isMobile ? 'h-5 w-5' : 'h-4 w-4'} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -1903,7 +1925,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                 className={panelExpanded ? 'absolute inset-0 z-10' : 'shrink-0 h-full'}
                 style={panelExpanded ? undefined : { width: rightPanelWidth }}
               >
-                <Suspense fallback={null}>
+                <Suspense fallback={rightPanelType === 'file' ? <PanelLoadingStrip onClose={() => { setRightPanelType(null); popPanelHistory(); }} /> : null}>
                   {rightPanelType === 'file' ? (
                     <WorkspaceProvider workspaceId={panelWorkspaceId} downloadFile={null} folders={panelFolders}>
                     <FilePanel
@@ -1913,6 +1935,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       onClose={() => { setRightPanelType(null); popPanelHistory(); }}
                       expanded={panelExpanded}
                       onToggleExpanded={handleTogglePanelExpanded}
+                      panelToggle
                       onLeaveGuardChange={handleFilesLeaveGuardChange}
                       onActiveTabKindChange={handleActiveTabKindChange}
                       target={panelTarget}

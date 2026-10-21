@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, FolderOpen } from 'lucide-react';
+import { ArrowLeft, PanelRight } from 'lucide-react';
 import { motion, type PanInfo } from '@/lib/framer';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader } from '@/components/ui/loader';
@@ -14,6 +14,7 @@ import {
 import FilePanel, { type PanelTarget } from '../ChatAgent/components/FilePanel';
 import { dirTarget, fileTarget, stampTarget, type ChartTabSpec } from '../ChatAgent/components/filePanel/types';
 import type { FileTab } from '../ChatAgent/components/filePanel/useFileTabs';
+import { handOffToggleFocus } from '../ChatAgent/components/filePanel/panelToggleFocus';
 import { CHART_SURFACE_MIN_WIDTH } from '@/pages/MarketView/components/chartSurfaceLayout';
 import { WorkspaceProvider } from '../ChatAgent/contexts/WorkspaceContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -558,6 +559,9 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
       expanded={panelExpanded}
       onToggleExpanded={isMobile ? null : handleTogglePanelExpanded}
       onClose={() => setShowFilePanel(false)}
+      // A panel the header did not open (a file link, with nothing to
+      // browse) has no toggle to stand in for, so it keeps its close.
+      panelToggle={canBrowseFiles}
       files={files}
       filesLoading={filesLoading}
       target={filePanelTarget}
@@ -604,16 +608,19 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
           </div>
 
           <div className="flex items-center gap-2">
-            {canBrowseFiles && (
+            {/* Covered by the open panel on desktop, whose corner carries it. */}
+            {canBrowseFiles && (isMobile || !showFilePanel) && (
               <button
-                onClick={handleToggleFilePanel}
-                className="p-2 rounded-md transition-colors"
-                style={{ color: 'var(--color-text-primary)', backgroundColor: showFilePanel ? 'var(--color-border-muted)' : undefined }}
+                type="button"
+                data-panel-toggle="header"
+                onClick={(event) => { handleToggleFilePanel(); if (!isMobile) handOffToggleFocus(event, 'panel'); }}
+                aria-pressed={showFilePanel}
+                className={cn('transition-colors hover:bg-(--color-border-muted)', isMobile ? 'p-2 rounded-md' : 'p-1.5 -mr-2 rounded-[4px]')}
+                style={{ color: 'var(--color-text-primary)' }}
                 title="Workspace Files"
-                onMouseEnter={(e) => { if (!showFilePanel) e.currentTarget.style.backgroundColor = 'var(--color-border-muted)'; }}
-                onMouseLeave={(e) => { if (!showFilePanel) e.currentTarget.style.backgroundColor = ''; }}
+                aria-label="Workspace Files"
               >
-                <FolderOpen className="h-5 w-5" />
+                <PanelRight className={isMobile ? 'h-5 w-5' : 'h-4 w-4'} />
               </button>
             )}
           </div>

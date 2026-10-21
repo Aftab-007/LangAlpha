@@ -99,6 +99,9 @@ export function useFileRefOpen({
     if (!primary) return;
     clearSearch();
     const tried = new Set<string>();
+    // A probe that missed replaced the tab in place, so whatever lands next
+    // would keep it as a Back step onto a read error nobody asked for.
+    const missed = new Set<string>();
     // A probe lands in the loaned tab whatever the caller asked: a pinned probe
     // that misses would leave a pinned "not found" behind for every path
     // tried. Only the attempt that lands is pinned.
@@ -115,46 +118,52 @@ export function useFileRefOpen({
       // a name the listing still remembers. Only the lookup settles it.
       if (resolveFileFn && DOWNLOAD_ONLY_EXTENSIONS.has(getFileExtension(path))) return false;
       const category = (await attempt(path))?.category;
-      return category !== 'not_found' && category !== 'not_backed_up';
+      if (category !== 'not_found' && category !== 'not_backed_up') return true;
+      missed.add(path);
+      return false;
     };
-    const writes = getRecentWritePaths?.() ?? [];
+    const search = async () => {
+      const writes = getRecentWritePaths?.() ?? [];
 
-    // A known path can still be stale (the agent moved it), so a miss falls through.
-    const exact = resolveExact(candidates, files, writes);
-    if (exact && await landed(exact)) return;
-    if (!current()) return;
-    // Absolute and system paths are not in the default listing and the agent
-    // names them exactly, so read them before asking.
-    const direct = candidates.find((c) => c.startsWith('/') || isSystemPath(c));
-    if (direct && !tried.has(direct) && await landed(direct)) return;
-    if (!current()) return;
-    if (!resolveFileFn) {
-      if (!tried.has(primary)) void attempt(primary);
-      return;
-    }
+      // A known path can still be stale (the agent moved it), so a miss falls through.
+      const exact = resolveExact(candidates, files, writes);
+      if (exact && await landed(exact)) return;
+      if (!current()) return;
+      // Absolute and system paths are not in the default listing and the agent
+      // names them exactly, so read them before asking.
+      const direct = candidates.find((c) => c.startsWith('/') || isSystemPath(c));
+      if (direct && !tried.has(direct) && await landed(direct)) return;
+      if (!current()) return;
+      if (!resolveFileFn) {
+        if (!tried.has(primary)) void attempt(primary);
+        return;
+      }
 
-    let result: FileRefResolution | null = null;
-    lookupSeq.current = seq;
-    try {
-      result = await resolveFileFn(candidates, writes);
-    } catch (err) {
-      console.error('[FilePanel] File reference lookup failed:', err);
-    }
-    if (lookupSeq.current === seq) lookupSeq.current = 0;
-    if (!current()) return;
+      let result: FileRefResolution | null = null;
+      lookupSeq.current = seq;
+      try {
+        result = await resolveFileFn(candidates, writes);
+      } catch (err) {
+        console.error('[FilePanel] File reference lookup failed:', err);
+      }
+      if (lookupSeq.current === seq) lookupSeq.current = 0;
+      if (!current()) return;
 
-    if (!result || result.status === 'unavailable') {
-      // Retrying the path alone asks the same unanswerable question: the lookup
-      // is the only thing that knows where the file is, and the lookup is what
-      // was unavailable. Keeping the reference is what lets a retry resolve.
-      await attempt(primary);
-      if (current()) unresolved.current = { path: primary, rawRef, fromFile, location };
-      return;
-    }
-    if (result.status === 'resolved' && result.path) return void attempt(result.path);
-    // Name the reference as written; the joined reading is only our guess.
-    const named = candidates[candidates.length - 1];
-    onLandOnSearch(named, basename(named), result.matches);
+      if (!result || result.status === 'unavailable') {
+        // Retrying the path alone asks the same unanswerable question: the lookup
+        // is the only thing that knows where the file is, and the lookup is what
+        // was unavailable. Keeping the reference is what lets a retry resolve.
+        await attempt(primary);
+        if (current()) unresolved.current = { path: primary, rawRef, fromFile, location };
+        return;
+      }
+      if (result.status === 'resolved' && result.path) return void attempt(result.path);
+      // Name the reference as written; the joined reading is only our guess.
+      const named = candidates[candidates.length - 1];
+      onLandOnSearch(named, basename(named), result.matches);
+    };
+    await search();
+    if (missed.size) tabs.forgetPaths([...missed]);
   }, [openAt, tabs, clearSearch, onLandOnSearch, resolveFileFn, getRecentWritePaths, files]);
 
   /** The error card's retry: re-ask the lookup where this tab was owed one, else re-read. */

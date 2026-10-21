@@ -2187,6 +2187,8 @@
     "metaPages_one": "1 page",
     "metaPages_other": "{{count}} pages",
     "newTab": "New tab",
+    "back": "Back",
+    "forward": "Forward",
     "noFilesYet": "No files yet",
     "noTypeMatches": "No {{type}} files",
     "openFile": "Open a file",

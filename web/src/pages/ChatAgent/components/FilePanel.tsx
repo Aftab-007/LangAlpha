@@ -41,7 +41,7 @@ import { useFileSelection } from './filePanel/useFileSelection';
 import { useFileBackup } from './filePanel/useFileBackup';
 import { useFileFocus } from './filePanel/useFileFocus';
 import { FocusChip } from './filePanel/FocusChip';
-import { useFileTabs, isListingTab, lastChartSymbol, type FileTab } from './filePanel/useFileTabs';
+import { useFileTabs, isListingTab, lastChartSymbol, type FileTab, type HistoryDirection } from './filePanel/useFileTabs';
 import { useTreeFilter } from './filePanel/useTreeFilter';
 import { useTreeInteraction, useTreeOpen } from './filePanel/useTreeInteraction';
 import { useFileRefOpen } from './filePanel/useFileRefOpen';
@@ -82,6 +82,9 @@ interface FilePanelProps {
    *  already. */
   onToggleExpanded?: (() => void) | null;
   expanded?: boolean;
+  /** The host's header opens the panel with a toggle that the panel covers
+   *  once open, so its close is that same toggle, pressed, in the same corner. */
+  panelToggle?: boolean;
   /** What the chat asked the panel to show. A `file` target's `dir` stays on
    *  as the tree's scope until `onTargetHandled` clears it; a memory or memo
    *  target stays until its tab has selected the entry. Each handled callback
@@ -150,6 +153,7 @@ function FilePanel({
   onClose,
   onToggleExpanded = null,
   expanded = false,
+  panelToggle = false,
   target = null,
   onTargetHandled,
   onTargetMemoryHandled,
@@ -319,11 +323,16 @@ function FilePanel({
 
   // Replay the tab's own location whenever it comes back to the front. A
   // location the tab has already been to is a replay; a new one is an ask.
+  // A history step lands under a new tab id, so the step itself says it is a
+  // revisit.
   const tabLocationSeq = activeTab.kind === 'file' ? activeTab.locationSeq : 0;
   const visitedLocations = useRef(new Map<string, number>());
+  const steppedInHistory = useRef(false);
   useEffect(() => {
+    const stepped = steppedInHistory.current;
+    steppedInHistory.current = false;
     if (activeTab.kind !== 'file' || !activeTab.location) return;
-    const replay = visitedLocations.current.get(activeTab.id) === tabLocationSeq;
+    const replay = stepped || visitedLocations.current.get(activeTab.id) === tabLocationSeq;
     visitedLocations.current.set(activeTab.id, tabLocationSeq);
     focus.focusAt(activeTab.path, activeTab.location, replay);
   }, [activeTab.id, tabLocationSeq]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -349,6 +358,7 @@ function FilePanel({
       cache.invalidate(tab.path);
       tabs.closeTab(tab.id);
     }
+    tabs.forgetPaths(paths);
   }, [tabs, forgetTab, forgetChanged, cache]);
   const selection = useFileSelection({ workspaceId, filteredSortedFiles: filter.filteredSortedFiles, targetDirectory: scopeDir, onRefreshFiles, onDeleted: forgetDeleted });
   const backup = useFileBackup({ workspaceId, files, readOnly });
@@ -528,7 +538,9 @@ function FilePanel({
 
   // Always offered: on mobile the panel covers the chat, and a close that went
   // away with the draft left no way back.
-  const closePanel = useCallback(() => { guardLeave(onClose); }, [guardLeave, onClose]);
+  const closePanel = useCallback((afterClose?: () => void) => {
+    guardLeave(() => { onClose(); afterClose?.(); });
+  }, [guardLeave, onClose]);
 
   // Reads the strip as it is when the close runs, which the discard question
   // can put off while tabs come and go underneath it.
@@ -559,6 +571,25 @@ function FilePanel({
     if (tabHasUnsavedChanges(id)) askDiscard(() => closeTabNow(id));
     else closeTabNow(id);
   }, [tabHasUnsavedChanges, askDiscard, closeTabNow]);
+
+  // A step replaces what the tab shows, so it asks what closing the tab would.
+  // Read at the moment it runs: the question can put it off while the strip
+  // moves on, and a tab no longer in front is not the one the reader stepped.
+  const stepHistoryNow = useStableHandler((id: string, dir: HistoryDirection) => {
+    const target = tabs.activeId === id ? tabs.historyTarget(id, dir) : null;
+    if (!target) return;
+    forgetTab(id);
+    if (target.kind === 'file' && hasChanged(target.path)) cache.invalidate(target.path);
+    cancelPending();
+    steppedInHistory.current = true;
+    tabs.stepHistory(id, dir);
+  });
+
+  const stepHistory = (dir: HistoryDirection) => {
+    const id = activeTab.id;
+    if (tabHasUnsavedChanges(id)) askDiscard(() => stepHistoryNow(id, dir));
+    else stepHistoryNow(id, dir);
+  };
 
   const handleViewerLink = useStableHandler((href: string, linkWorkspaceId?: string, location?: FileLocation, opts?: { rooted?: boolean; pin?: boolean }) => {
     // A relative link can climb into a workspace's folder, read from the
@@ -647,6 +678,12 @@ function FilePanel({
         onPin={tabs.pinTab}
         transcript={transcript}
         onNewTab={singleFileMode || readOnly ? null : newTab}
+        // A panel locked to one file still replaces it in place, and a step
+        // only revisits what this panel already showed.
+        history={{
+          onBack: tabs.historyTarget(activeTab.id, 'back') ? () => stepHistory('back') : null,
+          onForward: tabs.historyTarget(activeTab.id, 'forward') ? () => stepHistory('forward') : null,
+        }}
         hasChanged={hasChanged}
         treeOpen={treeShown}
         // On the empty tab the tree is the tab, not a column to fold.
@@ -659,6 +696,7 @@ function FilePanel({
         onToggleExpanded={onToggleExpanded}
         onPanelClose={closePanel}
         backArrow={isMobile}
+        panelToggle={panelToggle}
       />
 
       {onReturnHome && (
