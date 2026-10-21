@@ -48,6 +48,7 @@ import { BUSY_REFUSAL_KEYS, createForkRefusalRecovery, forkRefusalMessage, isBus
 import { createEditDraftStore, sameDraftMessage, type EditDraft } from './utils/editDrafts';
 import { settleStoppedBubble } from '../session/stream/stopBubble';
 import { useMarketWatch } from './useMarketWatch';
+import { invalidateThreadWakeups } from './useWakeups';
 import { refreshComputersAfterTurn } from './useComputers';
 // Chart-annotation live bridge: writes agent-drawn annotations into the
 // shared MarketView store so the desktop MarketView chat panel (which uses
@@ -543,7 +544,14 @@ export function useChatMessages(
   // completion. Live mid-turn overwrites arrive via `market_watch_update` SSE
   // events, which forward `setMarketWatch` (see processEvent below), and a
   // delivered price alert refetches through `refreshMarketWatch`.
-  const { marketWatch, setMarketWatch, refreshMarketWatch, cancelMarketTarget } = useMarketWatch(threadId, isLoading, threadIdRef);
+  const { marketWatch, setMarketWatch, refreshMarketWatch } = useMarketWatch(threadId, isLoading, threadIdRef);
+  // The wakeups list is a query its readers own; the stream and a reload
+  // only say it may have moved. Every change a watched turn makes arrives as
+  // an event, so a turn's end needs no read of its own.
+  const refreshWakeups = useCallback(
+    () => invalidateThreadWakeups(queryClient, threadIdRef.current),
+    [queryClient, threadIdRef],
+  );
 
   // Track if this is a new conversation (for todo list card management)
   const isNewConversationRef = useRef(false);
@@ -1385,6 +1393,10 @@ export function useChatMessages(
       // eventual real load that supersedes it.
       if (loadOk) {
         historyLoadedKeyRef.current = loadKey;
+        // A reload catches up on turns this view missed, a wake among them,
+        // and the wakeups those turns fired or set; a first load is the
+        // list's own seed.
+        if (reloadAsked) refreshWakeups();
         const refused = refusalAfterReloadRef.current;
         refusalAfterReloadRef.current = null;
         // Only while a steer still holds it: one the replay delivered is gone.
@@ -3468,6 +3480,7 @@ export function useChatMessages(
     attachSubagentMux,
     setMarketWatch,
     refreshMarketWatch,
+    refreshWakeups,
     refreshWorkspaceFolder,
     armReportBack: () => armReportBackWatch(threadIdRef.current, null, null),
     refreshWorkspaces: () => invalidateNewWorkspace(queryClient),
@@ -3508,7 +3521,6 @@ export function useChatMessages(
     threadModels,
     isLoading,
     marketWatch,
-    cancelMarketTarget,
     hasActiveSubagents,
     awaitingReportBack,
     reportBackOwed,

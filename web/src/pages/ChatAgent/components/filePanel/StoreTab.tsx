@@ -16,16 +16,18 @@ interface StoreTabProps {
   onTargetMemoHandled?: (seq?: number) => void;
   onOpenFile: OpenFileHandler | null;
   marketWatch: MarketWatchState | null;
-  onCancelMarketTarget: ((targetId: string) => Promise<void>) | null;
+  /** The thread whose wakeups the status tab lists, and whether its chat is in front. */
+  threadId: string | null;
+  isActive: boolean;
 }
 
 /**
  * The body of a memory, memo or status tab: the store's own panel, or the
- * live watch. A memory or memo target is not consumed on arrival like a
+ * live watch and the thread's wakeups. A memory or memo target is not consumed on arrival like a
  * file's: the body selects the entry once the store's list resolves, and says
  * so then, naming the ask it had so a later one is not cleared with it.
  */
-export function StoreTab({ kind, workspaceId, target, onTargetMemoryHandled, onTargetMemoHandled, onOpenFile, marketWatch, onCancelMarketTarget }: StoreTabProps): React.ReactElement {
+export function StoreTab({ kind, workspaceId, target, onTargetMemoryHandled, onTargetMemoHandled, onOpenFile, marketWatch, threadId, isActive }: StoreTabProps): React.ReactElement {
   const onOpen = onOpenFile ?? undefined;
   // Stable per ask: the bodies keep these in effect deps.
   const seq = target?.seq;
@@ -52,7 +54,7 @@ export function StoreTab({ kind, workspaceId, target, onTargetMemoryHandled, onT
           />
         );
       case 'status':
-        return <StatusPanel marketWatch={marketWatch} onCancelTarget={onCancelMarketTarget} />;
+        return <StatusPanel marketWatch={marketWatch} threadId={threadId} active={isActive} />;
       default:
         return kind satisfies never;
     }

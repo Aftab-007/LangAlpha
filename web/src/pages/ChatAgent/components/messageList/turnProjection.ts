@@ -158,3 +158,42 @@ export function computeTurnTails(visible: readonly ProjectedMessage<TurnLike>[])
   }
   return tail;
 }
+
+/**
+ * A bubble's time as epoch ms. It arrives as a Date from the chat session and
+ * as an ISO string from the market-chat reducer. Reading only the Date dropped
+ * the clock for the market transcript, and a turn with no start gets no fold
+ * at all, so the whole panel silently kept the pre-fold layout.
+ */
+export function messageTimeMs(value: unknown): number | undefined {
+  const ms = value instanceof Date ? value.getTime()
+    : typeof value === 'number' ? value
+      : typeof value === 'string' ? Date.parse(value)
+        : NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/**
+ * The turns still working, which the fold rows and the quiet fold both read.
+ * The newest turn while the session streams: a bubble's own `isStreaming` is
+ * per model call, and the session's `isLoading` spans the whole turn, tool
+ * execution included. Any turn with a bubble streaming. And any turn with a
+ * call pinned live past the stream that launched it (a background task),
+ * whose process row is the only sign the work is still going. Read from the
+ * raw projection, as the newest turn is: between two model calls a running
+ * turn may paint no bubble at all.
+ */
+export function liveTurns<M extends TurnLike & { isStreaming?: unknown }>(
+  projected: readonly ProjectedMessage<M>[],
+  newest: number | null,
+  isLoading: boolean,
+  pinnedLive: (message: M) => boolean,
+): Set<number> {
+  const live = new Set<number>();
+  if (isLoading && newest !== null) live.add(newest);
+  for (const { message, turnIndex } of projected) {
+    if (message.role !== 'assistant' || turnIndex === null || live.has(turnIndex)) continue;
+    if (message.isStreaming || pinnedLive(message)) live.add(turnIndex);
+  }
+  return live;
+}
