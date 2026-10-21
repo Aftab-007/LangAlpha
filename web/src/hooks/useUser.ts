@@ -20,11 +20,14 @@ function retryAfterMs(error: unknown): number {
  * Shared hook for current user profile data.
  * Replaces manual useEffect+useState fetching of /api/v1/users/me.
  * All consumers share a single cached entry — updates propagate automatically.
+ * With `enabled: false` it only reads what the app already holds, for a
+ * surface a signed-out reader can open, where asking would only be refused.
  */
-export function useUser() {
+export function useUser({ enabled = true }: { enabled?: boolean } = {}) {
   // Named fields, not a spread: see usePreferences.
   const { data, isLoading, isError } = useQuery({
     queryKey: queryKeys.user.me(),
+    enabled,
     queryFn: async (): Promise<User> => {
       const res = await getCurrentUser() as Record<string, unknown> & { user?: User };
       return (res.user ?? res) as User;

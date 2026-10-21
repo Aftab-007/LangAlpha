@@ -27,6 +27,7 @@ from src.server.database.conversation import (
     lookup_thread_by_external_id,
     get_replay_thread_data,
 )
+from src.server.contracts.turn_kinds import ANNOUNCED_KEYS
 from src.server.database.pool import DATABASE_UNAVAILABLE
 from src.server.services.report_back.handoff.keys import ORIGIN_THREAD_META
 from src.server.dependencies.usage_limits import (
@@ -230,20 +231,19 @@ def _is_service_request(raw_request: Request | None) -> bool:
 
 
 # Fields only the server's own requests set. A user's copy would post a system
-# message, label their message as a report-back, forge a report-back watch's
-# cleanup, or settle a parked steer as its own turn; ``surface_rules`` is a
-# channel gateway's, whose text rides the operator role on providers with a
-# native channel.
+# message, label their message as a report-back or a wakeup (whose turn may end
+# without a reply), forge a report-back watch's cleanup, or settle a parked
+# steer as its own turn; ``surface_rules`` is a channel gateway's, whose text
+# rides the operator role on providers with a native channel.
 _SERVER_ONLY_FIELDS = (
     "query_type",
+    *ANNOUNCED_KEYS,
     "report_back_ptc_thread_id",
-    "report_source",
     ORIGIN_THREAD_META,
     "origin_dispatch_gen",
     "automation_delivery",
     "automation_earlier_runs",
     "disable_subagents",
-    "market_target",
     "surface_rules",
     "steer_job_id",
 )
@@ -1279,6 +1279,7 @@ async def retry_thread(
     from src.server.services.runs.pending_input import (
         input_rerun_request,
         read_pending_input,
+        retried_wake_fields,
     )
 
     scope = RunScope(user_id=auth.user_id, burst_slot_id=auth.burst_slot_id)
@@ -1367,6 +1368,7 @@ async def retry_thread(
                 llm_model=(body.llm_model if body else None),
                 reasoning_effort=(body.reasoning_effort if body else None),
                 fast_mode=(body.fast_mode if body else None),
+                **await retried_wake_fields(thread_id, latest["turn_index"]),
             )
     except BaseException:
         # ChatRateLimited acquired a burst slot at the dependency; every

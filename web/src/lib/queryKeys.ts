@@ -107,6 +107,9 @@ export const queryKeys = {
     recentAll:   () => [...queryKeys.threads.all, 'recent'],
     recent:      (limit: number) => [...queryKeys.threads.recentAll(), limit],
     status:      (threadId: string) => [...queryKeys.threads.all, 'status', threadId],
+    // The wakeups the agent set in the thread, and its price targets from
+    // before them. Under the prefix, so a feed reconnect's resync re-reads it.
+    wakeups:     (threadId: string) => [...queryKeys.threads.all, 'wakeups', threadId],
     // Batched dispatch-liveness read for a turn's PTC cards. The base key
     // targets every id-set variant for invalidation; the concrete key is stable
     // on the SORTED id set so registration order never churns the cache entry.

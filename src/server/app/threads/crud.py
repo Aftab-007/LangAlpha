@@ -13,6 +13,7 @@ from src.server.services.features import user_feature_enabled
 from src.server.models.automation import MarketType
 from src.server.services.market_targets.changes import targets_changed
 from src.server.services.market_targets.listing import watch_spelling
+from src.server.services.wakeups import cancel as wakeups_cancel
 from src.server.services.llm.thread_model import require_selectable_model
 from src.server.services.thread_lifecycle import project_lifecycle
 from src.server.services.thread_lifecycle_feed import (
@@ -412,21 +413,6 @@ def _thread_list_item(row: dict) -> WorkspaceThreadListItem:
     )
 
 
-async def _cancel_targets_on_archive(thread_id: str) -> None:
-    """End an archived thread's armed targets: a hit there would start a turn
-    nobody sees. Best effort after the archive committed; one that survives
-    a failure here is dropped at delivery, as the thread reads archived."""
-    try:
-        if await cancel_targets(thread_id):
-            await targets_changed(thread_id)
-    except Exception:
-        logger.warning(
-            "[MarketWatch] cancelling targets on archive failed thread_id=%s",
-            thread_id,
-            exc_info=True,
-        )
-
-
 @router.patch("/{thread_id}", response_model=WorkspaceThreadListItem)
 async def update_thread_endpoint(
     thread_id: str, request: ThreadUpdateRequest, x_user_id: CurrentUserId
@@ -526,7 +512,7 @@ async def update_thread_endpoint(
             if updates["archived"]:
                 # Archiving ends the thread's scratchpad.
                 prune_thread_dirs_soon(str(updated_thread["workspace_id"]))
-                await _cancel_targets_on_archive(thread_id)
+                await wakeups_cancel.cancel_on_archive(thread_id)
         return _thread_list_item(updated_thread)
 
     except HTTPException:
