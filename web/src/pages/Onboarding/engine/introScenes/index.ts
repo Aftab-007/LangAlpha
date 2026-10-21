@@ -3,6 +3,7 @@ import { chatScenes } from './chat';
 import { dashboardScenes } from './dashboard';
 import { dashboardAttachScenes } from './dashboardAttach';
 import { threadScenes } from './thread';
+import { threadFileScenes } from './threadFiles';
 import { workspaceScenes } from './workspaces';
 import type { IntroScene } from './types';
 
@@ -11,6 +12,7 @@ export type { IntroScene } from './types';
 export const INTRO_SCENES: Record<IntroVisualId, IntroScene> = {
   ...chatScenes,
   ...workspaceScenes,
+  ...threadFileScenes,
   ...threadScenes,
   ...dashboardScenes,
   ...dashboardAttachScenes,

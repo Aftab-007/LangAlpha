@@ -12,7 +12,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import type { IntroVisualId } from '../../registry';
 import { ease, useSceneTime } from './clock';
-import { Appear, Cursor, Frame, Ln, pointAt, type Waypoint } from './kit';
+import { Appear, Cursor, Frame, pointAt, type Waypoint } from './kit';
 import type { IntroScene } from './types';
 import {
   upColor,
@@ -26,7 +26,17 @@ import {
   Composer,
   Widget,
 } from './dashboardParts';
-import { WatchRow, NEWS, NewsRow, ClassicBody } from './dashboardClassic';
+import {
+  WatchRow,
+  NEWS,
+  NewsRow,
+  ClassicBody,
+  INSIGHT,
+  BriefEyebrow,
+  BriefHeadline,
+  BriefSummary,
+  TopicPill,
+} from './dashboardClassic';
 
 /* Scenes for the dashboard intro: the live page, and customizing it. Each
    part is drawn after its real counterpart under pages/Dashboard, in
@@ -34,8 +44,9 @@ import { WatchRow, NEWS, NewsRow, ClassicBody } from './dashboardClassic';
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
-/** The page live: the brief writes itself, the index lines trace in and keep
-    taking new points, quotes tick (their times are in INDICES and WATCH). */
+/** The page live: the brief comes in part by part, the index lines trace in
+    and keep taking new points, quotes tick (their times are in INDICES and
+    WATCH). */
 export const GRID = {
   brief: 600,
   briefPer: 260,
@@ -275,13 +286,15 @@ function CustomGrid({ edit }: { edit: boolean }) {
     <Appear at={CUSTOM.toggle + 80} className="grid min-h-0 flex-1 grid-cols-3 grid-rows-2 gap-1.5">
       <div style={{ gridColumn: 1, gridRow: 1 }}>
         <Widget icon={Sparkles} title={tr('dashboard.widgets.insightBrief.title')} edit={edit}>
-          <Ln w="88%" h={4} c="var(--iv-line-2)" />
-          <Ln w="56%" h={4} c="var(--iv-line-2)" />
-          <span className="h-0.5" />
-          <Ln w="94%" />
-          <Ln w="80%" />
-          <Ln w="86%" />
-          <Ln w="48%" />
+          {/* the brief card itself, in a third of the page */}
+          <BriefEyebrow />
+          <BriefHeadline className="line-clamp-3 shrink-0 text-[0.4375rem]" />
+          <BriefSummary className="line-clamp-2 shrink-0 text-[0.3125rem]" />
+          <span className="flex shrink-0 flex-wrap gap-[3px]">
+            {INSIGHT.topics.slice(0, 2).map((topic) => (
+              <TopicPill key={topic.text} {...topic} />
+            ))}
+          </span>
         </Widget>
       </div>
       {/* where the held widget will land, as the grid marks it */}

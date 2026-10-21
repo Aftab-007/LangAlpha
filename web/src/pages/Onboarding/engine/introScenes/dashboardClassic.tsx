@@ -1,8 +1,21 @@
-import type { ReactNode } from 'react';
-import { Briefcase, Clock, Eye, Plus, Sparkles, TrendingUp, type LucideIcon } from 'lucide-react';
+import type { CSSProperties, ReactNode } from 'react';
+import {
+  ArrowRight,
+  Briefcase,
+  ChevronRight,
+  Clock,
+  Eye,
+  Newspaper,
+  Plus,
+  Sparkles,
+  TrendingUp,
+  type LucideIcon,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useLocale } from '@/hooks/useLocale';
+import { relativeTime, shortMonthDay } from '@/lib/format';
 import { ease, useSceneTime } from './clock';
-import { Ln, Region, StreamBlock, StreamLn, rv } from './kit';
+import { Appear, Region, rv } from './kit';
 import { changeAt, upColor, signed, money, INDICES, WATCH, Spark } from './dashboardParts';
 import { GRID } from './dashboard';
 
@@ -133,17 +146,227 @@ export function AddSymbol() {
   );
 }
 
-const BRIEF = ['92%', '84%', '88%', '58%', '76%', '90%', '68%', '82%', '40%'];
+/* ── the AI brief ──────────────────────────────────────────────────────── */
 
+/** The insight the brief card leads with, as the insight service writes one:
+    a headline, a summary and its topics, each moving up or down. It agrees
+    with the quotes (INDICES, WATCH) and the lead headline in NEWS. */
+export const INSIGHT = {
+  headline: 'Chipmakers lead a broad rally as NVDA guides above estimates',
+  summary:
+    'The Nasdaq 100 rose 0.7% and the S&P 500 0.4%. NVDA gained 1.6% after guiding ' +
+    'data-center revenue above estimates, lifting AVGO and TSM, while Treasury yields ' +
+    "slipped ahead of Friday's jobs report.",
+  topics: [
+    { text: 'Semiconductors', up: true },
+    { text: 'AI Capex', up: true },
+    { text: 'Bond Yields', up: false },
+  ],
+  /** How long ago it was written, in minutes. */
+  age: 23,
+};
+
+/** The brief's eyebrow chip (`AIDailyBriefCard`): sparkles and the label on
+    the accent's soft fill. */
+export function BriefEyebrow() {
+  const { t } = useTranslation();
+  return (
+    <span
+      className={
+        'flex w-fit shrink-0 items-center gap-[3px] rounded-full border px-1 py-[2px] ' +
+        'text-[0.3125rem] font-semibold uppercase leading-none tracking-wider'
+      }
+      style={{
+        background: 'var(--color-accent-soft)',
+        borderColor: 'var(--color-accent-overlay)',
+        color: 'var(--color-accent-light)',
+      }}
+    >
+      <Sparkles className="h-[6px] w-[6px]" />
+      {t('dashboard.brief.eyebrow')}
+    </span>
+  );
+}
+
+/** A topic under the brief (`TopicBadge`): its name on the soft fill of the
+    way it moved. */
+export function TopicPill({ text, up }: { text: string; up: boolean }) {
+  const soft = up ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)';
+  return (
+    <span
+      className="rounded-[2px] border px-[3px] py-[2px] text-[0.3125rem] font-medium leading-none"
+      style={{
+        background: soft,
+        borderColor: soft,
+        color: up ? 'var(--color-profit)' : 'var(--color-loss)',
+      }}
+    >
+      #{text}
+    </span>
+  );
+}
+
+/** The brief's headline, at the card's display weight. */
+export function BriefHeadline({ className = '' }: { className?: string }) {
+  return (
+    <span className={`font-bold leading-tight ${className}`} style={{ color: 'var(--iv-text)' }}>
+      {INSIGHT.headline}
+    </span>
+  );
+}
+
+/** The brief's summary, in the card's secondary text. */
+export function BriefSummary({ className = '' }: { className?: string }) {
+  return (
+    <span
+      className={`leading-relaxed ${className}`}
+      style={{ color: 'var(--color-text-secondary)' }}
+    >
+      {INSIGHT.summary}
+    </span>
+  );
+}
+
+/**
+ * The brief card on the Classic page (`AIDailyBriefCard`): the eyebrow and
+ * when it was written, the headline, the summary, its topics, then the two
+ * buttons at the foot, with the card's newspaper mark in the corner. On the
+ * live page each part enters in turn from `at`, as the card's parts do.
+ */
+function BriefCard({ at }: { at: number }) {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const btn =
+    'flex items-center gap-[3px] rounded-[4px] px-1.5 py-[3px] text-[0.3125rem] ' +
+    'font-semibold leading-none';
+  return (
+    <Region delay={0.22} className="relative flex min-w-0 flex-col gap-[5px] overflow-hidden p-2">
+      <Newspaper
+        className="pointer-events-none absolute right-1.5 top-1.5 h-7 w-7"
+        strokeWidth={1.5}
+        style={{ color: 'var(--color-text-tertiary)', opacity: 0.2 }}
+        aria-hidden
+      />
+      <span className="flex items-center gap-1">
+        <BriefEyebrow />
+        <span
+          className="truncate text-[0.3125rem] leading-none"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {t('dashboard.brief.updatedWhen', {
+            when: relativeTime(-INSIGHT.age * 60_000, locale, 0),
+          })}
+        </span>
+      </span>
+      <Appear at={at}>
+        <BriefHeadline className="block pr-7 text-[0.5625rem]" />
+      </Appear>
+      <Appear at={at + GRID.briefPer}>
+        <BriefSummary className="block text-[0.375rem]" />
+      </Appear>
+      <Appear at={at + 2 * GRID.briefPer} className="flex flex-wrap gap-[3px]">
+        {INSIGHT.topics.map((topic) => (
+          <TopicPill key={topic.text} {...topic} />
+        ))}
+      </Appear>
+      <Appear at={at + 3 * GRID.briefPer} className="mt-auto flex justify-end gap-1">
+        <span
+          className={`${btn} border`}
+          style={{
+            borderColor: 'var(--color-border-default)',
+            color: 'var(--color-text-secondary)',
+          }}
+        >
+          <Sparkles className="h-[6px] w-[6px]" />
+          {t('dashboard.brief.generatePersonalized')}
+        </span>
+        <span
+          className={btn}
+          style={{
+            background: 'var(--color-btn-primary-bg)',
+            color: 'var(--color-btn-primary-text)',
+          }}
+        >
+          {t('dashboard.brief.readFullBrief')}
+          <ArrowRight className="h-[6px] w-[6px]" />
+        </span>
+      </Appear>
+    </Region>
+  );
+}
+
+/* ── news ──────────────────────────────────────────────────────────────── */
+
+/** The market feed. `thumb` is the story's picture, drawn as the chart
+    image market news usually runs with: its line and that line's color. */
 export const NEWS = [
-  { title: 'Chipmakers rally after earnings beat', age: '2h', hot: true },
-  { title: 'Treasury yields slip ahead of jobs data', age: '4h', hot: false },
-  { title: 'Oil steadies as supply worries ease', age: '5h', hot: false },
-  { title: 'Small caps lag as rate bets shift', age: '6h', hot: false },
-  { title: 'Dollar firms ahead of central bank minutes', age: '8h', hot: false },
+  {
+    title: 'Chipmakers rally after earnings beat',
+    source: 'Benzinga',
+    hours: 2,
+    hot: true,
+    tickers: ['NVDA', 'AVGO', 'TSM'],
+    thumb: { line: [16, 15, 13, 14, 10, 8, 5], color: '#3FB950' },
+  },
+  {
+    title: 'Treasury yields slip ahead of jobs data',
+    source: 'Investing.com',
+    hours: 4,
+    hot: false,
+    tickers: [],
+    thumb: { line: [6, 7, 6, 9, 10, 12, 13], color: '#F85149' },
+  },
+  {
+    title: 'Oil steadies as supply worries ease',
+    source: 'MarketWatch',
+    hours: 5,
+    hot: false,
+    tickers: [],
+    thumb: { line: [12, 8, 11, 9, 10, 9, 10], color: '#E3B341' },
+  },
+  {
+    title: 'Small caps lag as rate bets shift',
+    source: 'Zacks',
+    hours: 6,
+    hot: false,
+    tickers: [],
+    thumb: { line: [8, 9, 8, 11, 10, 13, 14], color: '#F85149' },
+  },
+  {
+    title: 'Dollar firms ahead of central bank minutes',
+    source: "Barron's",
+    hours: 8,
+    hot: false,
+    tickers: [],
+    thumb: { line: [13, 12, 12, 10, 11, 9, 8], color: '#58A6FF' },
+  },
 ];
 
-/** A news row: thumbnail, sentiment dot, source and age, headline. */
+/** A story's picture: a market chart, as the feed's images usually are. A
+    picture keeps its own colors in either theme. */
+function NewsThumb({ thumb }: { thumb: (typeof NEWS)[number]['thumb'] }) {
+  const points = thumb.line.map((y, i) => `${2 + i * 3.33},${y}`).join(' ');
+  return (
+    <svg viewBox="0 0 24 18" className="h-[18px] w-6 shrink-0 rounded-[3px]" aria-hidden>
+      <rect width="24" height="18" fill="#161B22" />
+      {[6, 12].map((y) => (
+        <line key={y} x1="0" x2="24" y1={y} y2={y} stroke="#2A313C" strokeWidth="0.5" />
+      ))}
+      <polyline
+        points={points}
+        fill="none"
+        stroke={thumb.color}
+        strokeWidth="1"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/** A news row (`NewsFeedWidget`'s row): the story's picture, then the
+    sentiment dot, the source in the accent and how long ago, the headline,
+    and the tickers it names. */
 export function NewsRow({
   item,
   hovered = false,
@@ -153,28 +376,31 @@ export function NewsRow({
   hovered?: boolean;
   children?: ReactNode;
 }) {
+  const locale = useLocale();
   return (
     <div
       className="relative flex items-start gap-1.5 rounded px-1 py-1 transition-colors duration-150"
       style={{ background: hovered ? 'var(--color-bg-card-hover)' : 'transparent' }}
     >
-      <span
-        className="h-[18px] w-6 shrink-0 rounded-[3px]"
-        style={{ background: 'var(--color-bg-tag)' }}
-      />
+      <NewsThumb thumb={item.thumb} />
       <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
         <span className="flex items-center gap-[3px]">
           <span
             className="h-[3px] w-[3px] shrink-0 rounded-full"
             style={{ background: item.hot ? 'var(--color-profit)' : 'var(--iv-text-2)' }}
           />
-          <Ln w="20px" h={2} />
           <span
-            className="flex items-center gap-[2px] text-[0.3125rem] leading-none"
+            className="truncate text-[0.28125rem] font-semibold uppercase leading-none tracking-wide"
+            style={{ color: 'var(--color-accent-light)' }}
+          >
+            {item.source}
+          </span>
+          <span
+            className="flex shrink-0 items-center gap-[2px] text-[0.3125rem] leading-none"
             style={{ color: 'var(--iv-text-3)' }}
           >
             <Clock className="h-[5px] w-[5px]" />
-            {item.age}
+            {relativeTime(-item.hours * 3_600_000, locale, 0)}
           </span>
         </span>
         <span
@@ -183,9 +409,66 @@ export function NewsRow({
         >
           {item.title}
         </span>
+        {item.tickers.length > 0 && (
+          <span className="flex gap-[2px]">
+            {item.tickers.map((sym) => (
+              <span
+                key={sym}
+                className="rounded-[2px] px-[3px] py-[1.5px] text-[0.28125rem] font-bold leading-none"
+                style={{
+                  background: 'var(--color-accent-soft)',
+                  color: 'var(--color-accent-light)',
+                }}
+              >
+                {sym}
+              </span>
+            ))}
+          </span>
+        )}
       </span>
       {children}
     </div>
+  );
+}
+
+/* ── earnings ──────────────────────────────────────────────────────────── */
+
+/** Who reports next, from the watchlist. */
+const EARNINGS = [
+  { sym: 'MSFT', name: 'Microsoft Corp.', date: new Date(2026, 9, 28) },
+  { sym: 'AMZN', name: 'Amazon.com Inc.', date: new Date(2026, 9, 30) },
+];
+
+/** An upcoming report (`EarningsCalendarCard`'s row): the logo tile with the
+    symbol's first letters, symbol over company, and the date. */
+function EarningsRow({ row }: { row: (typeof EARNINGS)[number] }) {
+  const locale = useLocale();
+  const strong: CSSProperties = { color: 'var(--iv-text)' };
+  return (
+    <span className="flex items-center gap-1 px-0.5">
+      <span
+        className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border"
+        style={{ background: 'var(--color-bg-tag)', borderColor: 'var(--color-border-muted)' }}
+      >
+        <span className="text-[0.28125rem] font-bold leading-none" style={strong}>
+          {row.sym.slice(0, 2)}
+        </span>
+      </span>
+      <span className="flex min-w-0 flex-col gap-[2px]">
+        <span className="text-[0.375rem] font-bold leading-none" style={strong}>
+          {row.sym}
+        </span>
+        <span
+          className="truncate text-[0.3125rem] leading-none"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {row.name}
+        </span>
+      </span>
+      <span className="ml-auto shrink-0 text-[0.375rem] font-medium leading-none" style={strong}>
+        {shortMonthDay(row.date, locale)}
+      </span>
+    </span>
   );
 }
 
@@ -198,8 +481,8 @@ const NEWS_TABS: { icon: LucideIcon; label: string }[] = [
 /**
  * The Classic page under the header: title, index cards, then the brief and
  * news on the left and the watchlist and earnings on the right. `live` plays
- * the script (the brief writes itself, the index lines trace in and keep
- * taking points, quotes tick); otherwise it sits on the finished frame.
+ * the script (the brief comes in part by part, the index lines trace in and
+ * keep taking points, quotes tick); otherwise it sits on the finished frame.
  */
 export function ClassicBody({ live = false }: { live?: boolean }) {
   const { t: tr } = useTranslation();
@@ -227,56 +510,8 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
       </div>
       {/* brief and watchlist side by side, then news and earnings under them */}
       <div className="mt-1.5 grid min-h-0 grid-cols-[3fr_2fr] content-start gap-1.5">
-        {/* the AI brief, written in */}
-        <Region delay={0.22} className="flex min-w-0 flex-col gap-[5px] p-2">
-          <span
-            className={
-              'flex w-fit items-center gap-[3px] rounded-full border px-1 py-[2px] ' +
-              'text-[0.3125rem] font-semibold uppercase leading-none tracking-wider'
-            }
-            style={{
-              background: 'var(--color-accent-soft)',
-              borderColor: 'var(--color-accent-overlay)',
-              color: 'var(--color-accent-light)',
-            }}
-          >
-            <Sparkles className="h-[6px] w-[6px]" />
-            {tr('dashboard.brief.eyebrow')}
-          </span>
-          {/* written in on the live page; elsewhere already there */}
-          <div className="flex h-[17px] flex-col gap-[5px]">
-            {live ? (
-              <>
-                <StreamLn w="86%" h={5} c="var(--iv-line-2)" at={GRID.brief} dur={240} />
-                <StreamLn w="54%" h={5} c="var(--iv-line-2)" at={GRID.brief + 120} dur={240} />
-              </>
-            ) : (
-              <>
-                <Ln w="86%" h={5} c="var(--iv-line-2)" />
-                <Ln w="54%" h={5} c="var(--iv-line-2)" />
-              </>
-            )}
-          </div>
-          <div className="flex h-[51px] flex-col gap-[3px]">
-            {live ? (
-              <StreamBlock widths={BRIEF} at={GRID.brief + 300} per={GRID.briefPer} />
-            ) : (
-              BRIEF.map((w, i) => <Ln key={i} w={w} />)
-            )}
-          </div>
-          <span
-            className={
-              'mt-auto flex w-fit items-center rounded-[4px] px-1.5 py-[3px] text-[0.375rem] ' +
-              'font-semibold leading-none'
-            }
-            style={{
-              background: 'var(--color-btn-primary-bg)',
-              color: 'var(--color-btn-primary-text)',
-            }}
-          >
-            {tr('dashboard.brief.readFullBrief')}
-          </span>
-        </Region>
+        {/* the AI brief; on the live page its parts enter in turn */}
+        <BriefCard at={live ? GRID.brief : Number.NEGATIVE_INFINITY} />
         <Region delay={0.32} className="flex min-w-0 flex-col p-2">
           <div className="mb-1 flex items-center justify-between gap-1">
             <span
@@ -333,14 +568,30 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
           <NewsRow item={NEWS[0]} />
         </Region>
         <Region delay={0.4} className="flex min-w-0 flex-col gap-1.5 p-2">
-          <span
-            className="text-[0.5rem] font-bold leading-none"
-            style={{ color: 'var(--iv-text)' }}
-          >
-            {tr('dashboard.widgets.earningsCalendar.title')}
+          <span className="flex items-center justify-between gap-1">
+            <span
+              className="text-[0.5rem] font-bold leading-none"
+              style={{ color: 'var(--iv-text)' }}
+            >
+              {tr('dashboard.widgets.earningsCalendar.title')}
+            </span>
+            <span
+              className="flex items-center text-[0.3125rem] leading-none"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              {tr('dashboard.earningsCalendarCard.viewAll')}
+              <ChevronRight className="h-[6px] w-[6px]" />
+            </span>
           </span>
-          <Ln w="80%" />
-          <Ln w="64%" />
+          <span
+            className="px-0.5 text-[0.28125rem] font-bold uppercase leading-none tracking-wider"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
+            {tr('dashboard.earningsCalendarCard.sectionUpcoming')}
+          </span>
+          {EARNINGS.map((row) => (
+            <EarningsRow key={row.sym} row={row} />
+          ))}
         </Region>
       </div>
     </div>

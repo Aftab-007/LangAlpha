@@ -1,9 +1,11 @@
 import type { CSSProperties } from 'react';
 import { Eye, Newspaper, Paperclip, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useLocale } from '@/hooks/useLocale';
+import { relativeTime } from '@/lib/format';
 import type { IntroVisualId } from '../../registry';
 import { ease, useSceneTime } from './clock';
-import { Cursor, Frame, Ln, Typed, type Waypoint } from './kit';
+import { Cursor, Frame, Typed, type Waypoint } from './kit';
 import type { IntroScene } from './types';
 import { WATCH, DashTopbar, PAGE, Floating, Composer, Widget } from './dashboardParts';
 import { WatchRow, NEWS, NewsRow, AddSymbol } from './dashboardClassic';
@@ -45,8 +47,11 @@ const ATTACH_PATH: Waypoint[] = [
   { at: 4300, ...SEND },
 ];
 
-/** The context card a clipped row becomes in the composer. */
+/** The context card a clipped row becomes in the composer: the story's
+    title, then its source and when it ran, as the row's snapshot labels
+    it. */
 function ContextCard({ style }: { style?: CSSProperties }) {
+  const locale = useLocale();
   return (
     <div
       className="flex items-center gap-1.5 rounded-md border p-1"
@@ -65,7 +70,12 @@ function ContextCard({ style }: { style?: CSSProperties }) {
         >
           News: {NEWS[0].title}
         </span>
-        <Ln w="42%" h={2} />
+        <span
+          className="truncate text-[0.3125rem] leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
+        >
+          {NEWS[0].source} · {relativeTime(-NEWS[0].hours * 3_600_000, locale, 0)}
+        </span>
       </span>
       <X className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
     </div>

@@ -1,7 +1,9 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, GripVertical, Plus, Search, Server, Upload, X } from 'lucide-react';
+import { FileText, GripVertical, Pin, Plus, Search, Server, Upload, X } from 'lucide-react';
 import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
+import { useLocale } from '@/hooks/useLocale';
+import { shortMonthDay } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
 import { progress, useSceneTime } from './clock';
@@ -87,40 +89,16 @@ function GalleryHeader({
   );
 }
 
-/** A desk's last-updated line. With `run`, an agent works in the desk over
-    `[from, to)` (the app's running glyph), then it reads as just updated. */
-function DeskStatus({ run }: { run?: [number, number] }) {
-  const { t } = useTranslation();
-  const now = useSceneTime();
-  const text = 'text-[0.4375rem] leading-none';
-  if (!run || now < run[0]) return <Ln w="34%" h={2} c="var(--iv-line-3)" />;
-  if (now < run[1]) {
-    return (
-      <span className={cn('flex items-center gap-1', text)} style={{ color: 'var(--iv-text-3)' }}>
-        <Loader color="var(--color-accent-primary)" className="text-[0.4375rem]" />
-        {t('chat.ptcCard.statusWorking')}
-      </span>
-    );
-  }
-  return (
-    <span className={cn('intro-rv block', text)} style={{ ...rv(0), color: 'var(--iv-text-3)' }}>
-      {t('workspace.updated', { time: t('workspace.recently') })}
-    </span>
-  );
-}
-
-/** A workspace card (`WorkspaceCard`): name, a one-line description, and
-    when it was updated. All workspaces is the flat elevated card with the
-    home glyph, the way the gallery sets it apart. */
+/** A workspace card as the new-workspace modal's backdrop draws it: the
+    name and description as skeleton lines, All workspaces as the flat
+    elevated card with the home glyph, the way the gallery sets it apart. */
 function WsCard({
   home = false,
   delay,
-  run,
   className = '',
 }: {
   home?: boolean;
   delay?: number;
-  run?: [number, number];
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -162,29 +140,175 @@ function WsCard({
         </>
       )}
       <div className="mt-auto">
-        <DeskStatus run={run} />
+        <Ln w="34%" h={2} c="var(--iv-line-3)" />
       </div>
     </Region>
   );
 }
 
-/** The gallery, kept calm: the desks come in, then agents at work in two of
-    them, so it reads as desks that keep running, not folders. */
+/** The machine every workspace in the gallery runs on, and the moments it
+    goes from stopped to starting to running. */
+type MachineState = 'stopped' | 'starting' | 'running';
+
+/** A machine's state as `ComputerStatusIndicator` draws it: a hollow ring,
+    the loader, or a filled dot, then the state's name. */
+function MachineStatus({ state }: { state: MachineState }) {
+  const { t } = useTranslation();
+  const glyph =
+    state === 'starting' ? (
+      <Loader color="var(--color-accent-primary)" className="text-[0.375rem]" />
+    ) : (
+      <span
+        className="h-[4px] w-[4px] shrink-0 rounded-full"
+        style={
+          state === 'running'
+            ? { background: 'var(--color-profit)' }
+            : { border: '1px solid var(--color-text-tertiary)' }
+        }
+      />
+    );
+  const label = {
+    stopped: t('computer.statusStopped'),
+    starting: t('computer.statusStarting'),
+    running: t('computer.statusRunning'),
+  }[state];
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1">
+      {glyph}
+      {label}
+    </span>
+  );
+}
+
+/** One workspace in the gallery: its name, what it is for, and when it last
+    changed. `ran` is when an agent finishes work in it, from which it reads
+    as updated today. */
+interface Desk {
+  name: string;
+  description: string;
+  updated: Date;
+  pinned?: boolean;
+  ran?: number;
+}
+
+/**
+ * A card in the gallery (`WorkspaceCard`): name, one line of description,
+ * the machine it runs on with that machine's state, and when it was updated.
+ * All workspaces is the flat elevated card with the home glyph and no
+ * machine line; every other card sits on the card fill.
+ */
+function GalleryCard({
+  desk,
+  home = false,
+  machine,
+}: {
+  desk: Desk;
+  home?: boolean;
+  machine: MachineState;
+}) {
+  const { t } = useTranslation();
+  const locale = useLocale();
+  const now = useSceneTime();
+  const fresh = desk.ran != null && now >= desk.ran;
+  const tertiary = { color: 'var(--iv-text-3)' };
+  return (
+    <div
+      className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-lg border py-2 pl-2.5 pr-2"
+      style={
+        home
+          ? { background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-default)' }
+          : {
+              background: 'var(--color-bg-card-gradient)',
+              borderColor: 'var(--color-bg-card-border)',
+            }
+      }
+    >
+      <div className="flex min-w-0 items-center gap-1">
+        {home && (
+          <HomeRowIcon
+            className="h-2.5 w-2.5 shrink-0"
+            style={{ color: 'var(--color-accent-primary)' }}
+          />
+        )}
+        {desk.pinned && <Pin className="h-2 w-2 shrink-0 rotate-45" style={tertiary} />}
+        <span
+          className="truncate text-[0.5625rem] font-medium leading-none"
+          style={{ color: 'var(--iv-text)' }}
+        >
+          {desk.name}
+        </span>
+      </div>
+      <span className="line-clamp-1 text-[0.4375rem] leading-[1.3]" style={tertiary}>
+        {desk.description}
+      </span>
+      {!home && (
+        <span
+          className="flex min-w-0 items-center gap-1 text-[0.375rem] leading-none"
+          style={tertiary}
+        >
+          <Server className="h-[7px] w-[7px] shrink-0" />
+          <span className="truncate">Cloud computer</span>
+          <MachineStatus state={machine} />
+        </span>
+      )}
+      <span
+        key={fresh ? 'fresh' : 'old'}
+        className={cn('mt-auto block text-[0.375rem] leading-none', fresh && 'intro-rv')}
+        style={{ ...rv(0), ...tertiary }}
+      >
+        {t('workspace.updated', {
+          time: shortMonthDay(fresh ? GRID.today : desk.updated, locale),
+        })}
+      </span>
+    </div>
+  );
+}
+
+/** The gallery, kept calm: the cards come in, the one machine they share
+    starts (each card's machine line turns at once), then two of them read
+    as updated today as agents finish work in them. Sorted by activity:
+    All workspaces, the pinned card, then the most recently updated. */
 const GRID = {
   cards: [150, 270, 390, 510],
-  runs: [
-    [1300, 3300],
-    [2000, 4200],
-  ] as [number, number][],
+  starting: 1500,
+  running: 2500,
+  today: new Date(2026, 9, 21),
+  desks: [
+    {
+      name: 'NVDA deep dive',
+      description: 'Q3 print vs guidance, data-center demand and a reverse DCF.',
+      updated: new Date(2026, 9, 20),
+      pinned: true,
+      ran: 3300,
+    },
+    {
+      name: 'Portfolio monitoring',
+      description: 'Daily risk check on current holdings and earnings dates.',
+      updated: new Date(2026, 9, 19),
+      ran: 4200,
+    },
+    {
+      name: 'AI semis comps',
+      description: 'Nine-name comps table on NTM multiples, refreshed weekly.',
+      updated: new Date(2026, 9, 17),
+    },
+  ] satisfies Desk[],
   length: 4800,
 };
 
 function WorkspaceGrid() {
   const { t } = useTranslation();
-  const [home, desk1, desk2, desk3] = GRID.cards;
-  const [run1, run2] = GRID.runs;
+  const now = useSceneTime();
+  const machine: MachineState =
+    now >= GRID.running ? 'running' : now >= GRID.starting ? 'starting' : 'stopped';
+  const home: Desk = {
+    name: t('agents.allWorkspaces'),
+    description: t('agents.widgets.allWorkspacesDesc'),
+    updated: GRID.today,
+  };
   return (
-    <Frame topbar={<Ln w="20%" />}>
+    // the gallery page has no title bar of its own, only the window's strip
+    <Frame topbar={<span />}>
       <div className="flex flex-1 flex-col gap-2">
         <GalleryHeader className="intro-rv" style={rv(0.08)} />
         {/* search */}
@@ -203,18 +327,11 @@ function WorkspaceGrid() {
           <OutlineButton icon={GripVertical}>{t('workspace.reorder')}</OutlineButton>
         </div>
         <div className="grid flex-1 auto-rows-fr grid-cols-2 gap-2">
-          <Appear at={home} reserve className="flex min-w-0">
-            <WsCard home className="flex-1" />
-          </Appear>
-          <Appear at={desk1} reserve className="flex min-w-0">
-            <WsCard run={run1} className="flex-1" />
-          </Appear>
-          <Appear at={desk2} reserve className="flex min-w-0">
-            <WsCard className="flex-1" />
-          </Appear>
-          <Appear at={desk3} reserve className="flex min-w-0">
-            <WsCard run={run2} className="flex-1" />
-          </Appear>
+          {[home, ...GRID.desks].map((desk, i) => (
+            <Appear key={i} at={GRID.cards[i]} reserve className="flex min-w-0">
+              <GalleryCard desk={desk} home={i === 0} machine={machine} />
+            </Appear>
+          ))}
         </div>
       </div>
     </Frame>

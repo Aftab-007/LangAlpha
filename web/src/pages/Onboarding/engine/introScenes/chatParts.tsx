@@ -9,11 +9,13 @@ import {
   type LucideProps,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { progress, useSceneTime } from './clock';
-import { Appear, Ln, Loader, rv } from './kit';
+import type { Bar } from './charts';
+import { ease, progress, useSceneTime } from './clock';
+import { Appear, Loader, rv } from './kit';
 
-/* The chat transcript's parts, shared by the chat scenes: activity rows,
-   the workspace line, hand-off and subagent cards, and a produced file's card.
+/* The chat transcript's parts, shared by the chat scenes: the agent's reply,
+   activity rows, the workspace line, hand-off and subagent cards, a chart in
+   the reply, and a produced file's card.
    Each is a small copy of the component the app draws it with (named on each). */
 /* eslint-disable react-refresh/only-export-components -- shared parts:
    scene components plus the style helper */
@@ -27,6 +29,54 @@ export const toolCard: CSSProperties = {
 };
 
 /* ── the chat transcript ───────────────────────────────────────────────── */
+
+/**
+ * The agent's reply streaming in from `at`, `cps` characters a second, in
+ * the transcript's body text; `**bold**` spans render bold, as the app's
+ * markdown does. Takes no room until its first character lands.
+ */
+export function Reply({
+  text,
+  at,
+  cps = 150,
+  className,
+}: {
+  text: string;
+  at: number;
+  cps?: number;
+  className?: string;
+}) {
+  const t = useSceneTime();
+  const typed = Math.floor(((t - at) * cps) / 1000);
+  if (typed <= 0) return null;
+  // each span with where its first character falls in the plain text
+  const spans: { bold: boolean; body: string; from: number }[] = [];
+  let from = 0;
+  for (const span of text.split(/(\*\*[^*]+\*\*)/).filter(Boolean)) {
+    const bold = span.startsWith('**');
+    const body = bold ? span.slice(2, -2) : span;
+    spans.push({ bold, body, from });
+    from += body.length;
+  }
+  return (
+    <p
+      className={cn('text-[0.5rem] leading-[1.45]', className)}
+      style={{ color: 'var(--iv-text)' }}
+    >
+      {spans.map(({ bold, body, from }, i) => {
+        if (typed <= from) return null;
+        const shown = body.slice(0, typed - from);
+        return bold ? (
+          <b key={i} className="font-semibold">
+            {shown}
+          </b>
+        ) : (
+          <span key={i}>{shown}</span>
+        );
+      })}
+    </p>
+  );
+}
 
 /** What a settled activity row acted on: the app's mono `.obj` pill. */
 export function Pill({ children }: { children: ReactNode }) {
@@ -114,15 +164,17 @@ export function WorkspaceLine({ name, at, done }: { name: string; at: number; do
 }
 
 /** A hand-off to the Analyst (`PTCAgentCard`): the workspace in small mono
-    caps, what was handed off, and the run's status: starting, working from
-    `started`, completed from `finished`. */
+    caps, what was handed off, the brief under it in one line, and the run's
+    status: starting, working from `started`, completed from `finished`. */
 export function HandoffCard({
   heading,
+  brief,
   at,
   started,
   finished = Number.POSITIVE_INFINITY,
 }: {
   heading: string;
+  brief: string;
   at: number;
   started: number;
   finished?: number;
@@ -180,7 +232,12 @@ export function HandoffCard({
         >
           {heading}
         </span>
-        <Ln w="72%" h={2} c="var(--iv-line-3)" />
+        <span
+          className="truncate text-[0.4375rem] leading-none"
+          style={{ color: 'var(--iv-text-3)' }}
+        >
+          {brief}
+        </span>
       </div>
     </Appear>
   );
@@ -261,6 +318,122 @@ export function SubagentCard({
         </div>
       </div>
     </Appear>
+  );
+}
+
+/** A chart the agent drew into its reply: a solid card with the chart's
+    title and, across from it, its legend for the dashed rule, then the
+    chart. */
+export function ChartCard({
+  title,
+  legend,
+  children,
+}: {
+  title: string;
+  legend: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1 rounded-md border px-2 py-1.5" style={toolCard}>
+      <span className="flex items-baseline gap-1 leading-none">
+        <span
+          className="truncate text-[0.4375rem] font-semibold"
+          style={{ color: 'var(--iv-text)' }}
+        >
+          {title}
+        </span>
+        <span
+          className="ml-auto flex shrink-0 items-center gap-0.5 text-[0.3125rem]"
+          style={{ color: 'var(--iv-text-3)' }}
+        >
+          <span className="w-1.5 border-t border-dashed" style={{ borderColor: 'currentColor' }} />
+          {legend}
+        </span>
+      </span>
+      {children}
+    </div>
+  );
+}
+
+/** The plot's height (px) in a `ColumnChart`, and the headroom over the
+    tallest column for the marked column's value. */
+const COLUMN_H = 29;
+const COLUMN_HEAD = 7;
+
+/**
+ * A column chart as an agent draws one into a reply: a column per name, the
+ * subject in the accent with its value over it, the rest in grey, a dashed
+ * rule at the median, and the names under the baseline. Columns rise one
+ * after another from `at`, `per` ms apart.
+ */
+export function ColumnChart({
+  bars,
+  max,
+  median,
+  at,
+  per = 50,
+}: {
+  bars: Bar[];
+  max: number;
+  median: number;
+  at: number;
+  per?: number;
+}) {
+  const t = useSceneTime();
+  const plot = COLUMN_H - COLUMN_HEAD;
+  return (
+    <div className="flex flex-col gap-[3px]">
+      <div
+        className="relative flex items-end gap-[3px] border-b"
+        style={{ height: COLUMN_H, borderColor: 'var(--color-border-default)' }}
+      >
+        {bars.map((bar, i) => {
+          const p = ease(t, at + i * per, 520);
+          return (
+            <span key={bar.label} className="flex flex-1 flex-col items-center justify-end">
+              {bar.mark && (
+                <span
+                  className="mb-[2px] text-[0.3125rem] font-semibold tabular-nums leading-none"
+                  style={{ color: 'var(--iv-text)', opacity: p > 0.6 ? 1 : 0 }}
+                >
+                  {bar.shown}
+                </span>
+              )}
+              <span
+                className="w-full rounded-t-[1px]"
+                style={{
+                  height: (bar.value / max) * plot * p,
+                  background: bar.mark ? 'var(--color-accent-primary)' : 'var(--iv-line-2)',
+                }}
+              />
+            </span>
+          );
+        })}
+        <span
+          className="pointer-events-none absolute inset-x-0 border-t border-dashed"
+          style={{
+            bottom: (median / max) * plot,
+            borderColor: 'var(--color-text-tertiary)',
+            opacity: ease(t, at + bars.length * per, 300),
+          }}
+          aria-hidden
+        />
+      </div>
+      <div className="flex gap-[3px]">
+        {bars.map((bar) => (
+          <span
+            key={bar.label}
+            className="flex-1 text-center text-[0.28125rem] leading-none tracking-[-0.01em]"
+            style={{
+              color: bar.mark ? 'var(--iv-text)' : 'var(--iv-text-3)',
+              fontWeight: bar.mark ? 600 : 400,
+            }}
+          >
+            {bar.label}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
