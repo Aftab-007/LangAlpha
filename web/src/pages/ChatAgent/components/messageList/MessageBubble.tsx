@@ -25,6 +25,7 @@ import { useStableHandler } from '@/hooks/useStableHandler';
 import { useEditDraft, useEditDraftStore } from '../../hooks/utils/editDrafts';
 import { isSteeringUserMessage } from './messagePredicates';
 import { UserBubble } from './UserBubble';
+import { MessageSentAt } from './MessageSentAt';
 import { assistantText } from './messageText';
 import { TurnFileCards } from './TurnFileCards';
 import type { TurnFile } from '../../utils/turnFiles';
@@ -694,6 +695,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
         </>
         )}
 
+        {isUser && !isSteering && !isEditing && <MessageSentAt value={message.timestamp} />}
         {isUser && actionsRow}
 
         {/* ThumbDown feedback modal */}
