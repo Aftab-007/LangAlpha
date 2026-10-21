@@ -28,6 +28,7 @@ import { mergeWarmingDisplay } from '../utils/warmWorkspace';
 import { useChatMessages } from '../hooks/useChatMessages';
 import { useThreadModel } from '../hooks/useThreadModel';
 import { useThreadSubagents } from '../hooks/useThreadSubagents';
+import { useThreadTuning } from '../hooks/useThreadTuning';
 import { useForeignRunCatchUp } from '../hooks/useForeignRunCatchUp';
 import { useComputerFolders } from '../hooks/useComputerFolders';
 import { saveChatSession, getChatSession, clearChatSession } from '../hooks/utils/chatSessionRestore';
@@ -144,12 +145,21 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // auto-send below clears the route state.
   const [navModel] = useState(() => (typeof state?.model === 'string' && state.model ? state.model : null));
   // The navigation bringing a new thread's first message, with the landing
-  // composer's Subagents pick. Read per navigation rather than frozen: a new
-  // chat's view stays cached while unsent, and the next one takes it up.
-  const subagentsLanding =
-    isActive && threadId === '__default__' && (state?.initialMessage || state?.hiddenOpener)
-      ? { key: location.key, allowed: typeof state.subagentsAllowed === 'boolean' ? state.subagentsAllowed : null }
-      : null;
+  // composer's Subagents, effort and fast-mode picks. Read per navigation
+  // rather than frozen: a new chat's view stays cached while unsent, and the
+  // next one takes it up.
+  const landingNav =
+    isActive && threadId === '__default__' && (state?.initialMessage || state?.hiddenOpener) ? state : null;
+  const subagentsLanding = landingNav
+    ? { key: location.key, allowed: typeof landingNav.subagentsAllowed === 'boolean' ? landingNav.subagentsAllowed : null }
+    : null;
+  const tuningLanding = landingNav
+    ? {
+      key: location.key,
+      reasoningEffort: typeof landingNav.reasoningEffortOverride === 'string' ? landingNav.reasoningEffortOverride : null,
+      fastMode: typeof landingNav.fastModeOverride === 'boolean' ? landingNav.fastModeOverride : null,
+    }
+    : null;
   // The thread the welcome flow opens, captured at mount for the same reason.
   // The flow hands its conversation over as a view transition
   // (welcome/handoff.ts), which lands on this view's parts and waits for it to
@@ -276,7 +286,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
   // Chat messages management - receives updateTodoListCard and updateSubagentCard from floating cards hook.
   // Send, edit, regenerate and retry come from useTranscriptFollow below.
-  const chat = useChatMessages(workspaceId, threadId, updateTodoListCard as (todoData: Record<string, unknown>) => void, updateSubagentCard, finalizePendingTodos, handleFileArtifact, handleOpenPreviewFromStream, clearSubagentCards, handleWorkspaceCreated, 'web');
+  const readComposerOptions = useCallback(() => chatInputRef.current?.getModelOptions?.(), []);
+  const chat = useChatMessages(workspaceId, threadId, updateTodoListCard as (todoData: Record<string, unknown>) => void, updateSubagentCard, finalizePendingTodos, handleFileArtifact, handleOpenPreviewFromStream, clearSubagentCards, handleWorkspaceCreated, 'web', readComposerOptions);
   const {
     messages,
     liveMessages,
@@ -350,6 +361,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     landing: subagentsLanding,
   });
   const { toSend: subagentsToSend } = threadSubagents;
+  const threadTuning = useThreadTuning({
+    threadId: currentThreadId,
+    landing: tuningLanding,
+  });
+  const { toSend: tuningToSend } = threadTuning;
 
   // Fallback-suggestion pill action: adopt the model that actually answered,
   // for this thread only. Making it the default is the banner's offer, which
@@ -566,6 +582,13 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // wrappers re-point post-commit; the callbacks only fire from user events,
   // which always run after commit, so they never see a stale function.
   const stableSendMessage = useStableHandler(handleSendMessage);
+  // A rerun carries what the composer shows, as a send does, so a pick whose
+  // save has not landed is not lost to the row the server would read.
+  const stableEditMessage = useStableHandler((id: string, content: string) =>
+    handleEditMessage(id, content, chatInputRef.current?.getModelOptions?.()));
+  const stableRegenerate = useStableHandler((id: string) =>
+    handleRegenerate(id, chatInputRef.current?.getModelOptions?.()));
+  const stableRetry = useStableHandler(() => handleRetry(chatInputRef.current?.getModelOptions?.()));
   const stableStopWorkflow = useStableHandler(stopWorkflow);
   const stableStopCompaction = useStableHandler(stopCompaction);
 
@@ -671,9 +694,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
         ...modelOptions,
         ...(picked ? { chartSelections: picked.snapshots } : {}),
         subagentsAllowed: subagentsToSend,
+        ...tuningToSend,
       },
     );
-  }, [marketWatchEnabled, stableSendMessage, takeChartSelections, subagentsToSend]);
+  }, [marketWatchEnabled, stableSendMessage, takeChartSelections, subagentsToSend, tuningToSend]);
 
   // Handle action-type slash commands (e.g. /compact, /compaction, /offload)
   const handleAction = useCallback((cmd: ActionCommand) => {
@@ -998,9 +1022,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     onThumbUp: handleThumbUp,
     onThumbDown: handleThumbDown,
     onWidgetSendPrompt: stableSendMessage,
-    onEditMessage: handleEditMessage,
-    onRegenerate: handleRegenerate,
-    onRetry: handleRetry,
+    onEditMessage: stableEditMessage,
+    onRegenerate: stableRegenerate,
+    onRetry: stableRetry,
     editDrafts,
     onSendMessage: handleSendMessage,
     chatInputRef,
@@ -1186,6 +1210,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
         attachmentMeta,
         model,
         reasoningEffort,
+        fastMode,
         widgetSnapshots,
         chartSelections,
         skills,
@@ -1200,9 +1225,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
         handleSendMessage(initialMessage ?? '', mergedContext, attachmentMeta || null, {
           model,
           reasoningEffort,
+          fastMode,
           widgetSnapshots,
           chartSelections,
           subagentsAllowed: subagentsToSend,
+          ...tuningToSend,
           hiddenOpener,
           threadTitle,
         });
@@ -1214,7 +1241,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       if (handoff) send();
       else setTimeout(send, 100);
     }
-  }, [location.state, workspaceId, threadId, isLoading, isLoadingHistory, handleSendMessage, navigate, location.pathname, isActive, subagentsToSend]);
+  }, [location.state, workspaceId, threadId, isLoading, isLoadingHistory, handleSendMessage, navigate, location.pathname, isActive, subagentsToSend, tuningToSend]);
 
   // The welcome's thread is never an empty chat: until its opening turn goes
   // out it draws nothing where the prompt to type would be. The route state
@@ -1704,6 +1731,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                         threadModels={threadModels}
                         subagentsAllowed={threadSubagents.allowed}
                         onToggleSubagents={threadSubagents.setAllowed}
+                        tuning={threadTuning.tuning}
+                        onPickReasoningEffort={threadTuning.setReasoningEffort}
+                        onPickFastMode={threadTuning.setFastMode}
                         selectedWorkspaceId={workspaceId}
                         toolbarStatus={trayContents && (
                           <TrayDock ref={trayDockRef} phase={trayPhase} contents={trayContents} onOpen={peekTray} />

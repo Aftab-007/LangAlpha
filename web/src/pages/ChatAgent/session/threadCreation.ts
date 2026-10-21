@@ -25,6 +25,11 @@ export interface EnsureThreadIdArgs {
   /** The composer's subagents pick for the new thread; absent leaves the
    *  owner's default to the server. */
   subagentsAllowed?: boolean;
+  /** The thread's own effort and fast mode, picked before it existed; absent
+   *  leaves the thread following Settings. Not the turn's level, which the
+   *  send carries on its own. */
+  reasoningEffortOverride?: string;
+  fastModeOverride?: boolean;
   queryClient: QueryClient;
   /** Kept in sync so in-flight closures see the real id immediately. */
   threadIdRef: { current: string };
@@ -51,6 +56,8 @@ export async function ensureThreadId({
   platform,
   timezone,
   subagentsAllowed,
+  reasoningEffortOverride,
+  fastModeOverride,
   queryClient,
   threadIdRef,
   setThreadId,
@@ -72,6 +79,8 @@ export async function ensureThreadId({
       platform,
       timezone,
       subagentsAllowed,
+      reasoningEffort: reasoningEffortOverride,
+      fastMode: fastModeOverride,
     });
     // Stop landed during the round-trip: adopting the id now (navigate,
     // optimistic row, nav bump) would resurrect the UI the stop finalized.

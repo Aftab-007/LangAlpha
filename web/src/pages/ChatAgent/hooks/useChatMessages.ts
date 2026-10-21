@@ -108,6 +108,7 @@ export function useChatMessages(
   clearSubagentCards: (() => void) | null = null,
   onWorkspaceCreated: ((info: { workspaceId: string; question: string }) => void) | null = null,
   platform: string | null = null,
+  readComposerOptions: (() => ModelOptions | undefined) | null = null,
 ) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -2222,7 +2223,7 @@ export function useChatMessages(
     heldRetriesRef.current.set(bubbleId, { bubbleId, request: retryRequest(null, additionalContext), cut: null });
   };
 
-  const handleSendMessage = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, hiddenOpener = false, threadTitle }: SendOptions = {}, resendKey: string | null = null) => {
+  const handleSendMessage = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, reasoningEffortOverride, fastModeOverride, hiddenOpener = false, threadTitle }: SendOptions = {}, resendKey: string | null = null) => {
     const hasContent = message.trim() || (additionalContext && additionalContext.length > 0);
     if (!workspaceId || !hasContent) {
       return;
@@ -2278,13 +2279,13 @@ export function useChatMessages(
 
     // The resend of a refused steer is the queue's own; anything else waits behind it.
     if (resendKey === null && notRunningSendsRef.current.length > 0) {
-      queueBehindRefused(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed });
+      queueBehindRefused(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, reasoningEffortOverride, fastModeOverride });
       return;
     }
 
     // If agent is already streaming, send as steering message
     if (isLoading) {
-      return handleSendSteering(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed }, resendKey);
+      return handleSendSteering(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, reasoningEffortOverride, fastModeOverride }, resendKey);
     }
 
     // Store model options so HITL resume can forward them
@@ -2383,6 +2384,8 @@ export function useChatMessages(
       platform,
       timezone: userTimezone,
       subagentsAllowed,
+      reasoningEffortOverride,
+      fastModeOverride,
       queryClient,
       threadIdRef,
       setThreadId,
@@ -2675,7 +2678,10 @@ export function useChatMessages(
       `hitl|${threadId}|${JSON.stringify(hitlResponse)}`,
     );
     let wasDisconnected = false;
-    const { model, reasoningEffort, fastMode } = lastModelOptionsRef.current;
+    // An answer runs what the composer shows now: the model, effort and speed
+    // are the thread's own picks, which may have changed since the send that
+    // asked. With no composer mounted, the last send's.
+    const { model, reasoningEffort, fastMode } = readComposerOptions?.() ?? lastModelOptionsRef.current;
     try {
       const result = await sendHitlResponse(hitlResponse, workspaceId, threadId, {
         onEvent: processEvent,

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useImperativeHandle } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useImperativeHandle, useMemo } from 'react';
 import {
   Plus, ArrowUp, X, FileText, Archive, Square, ClipboardList,
   ChartCandlestick, TextSelect, MoreHorizontal, Mic, MicOff,
@@ -22,9 +22,9 @@ import { useSeededModel } from '@/hooks/useSeededModel';
 import { ChatInputRegistry, ContextBus } from '@/lib/contextBus';
 import type { WidgetContextSnapshot } from '@/pages/Dashboard/widgets/framework/contextSnapshot';
 import './chat-input.css';
-import type { ComposerScope, ModelOptions, ReadyAttachment, SlashCommand, Workspace } from './chat-input.types';
+import type { ComposerScope, ModelOptions, ReadyAttachment, SlashCommand, ThreadTuning, Workspace } from './chat-input.types';
 import { getSlashCommandIcon, isLargePaste, getModelDisplayName } from './chat-input.helpers';
-import { effortLabelFor } from '@/lib/modelTuning';
+import { effortLabelFor, resolveEffort } from '@/lib/modelTuning';
 import type { ModelProfile } from '@/lib/modelTuning';
 import {
   ChatInputWidgetDeck, FilePreviewCard, MentionAutocompleteList, SlashCommandList,
@@ -44,6 +44,9 @@ import { formatContextBlock } from './chat-input.contextBlocks';
 
 /** Autosize cap for the composer textarea; past this the box scrolls. */
 const MAX_TEXTAREA_HEIGHT = 200;
+
+/** A thread that follows Settings for both. */
+const FOLLOWS_SETTINGS = { reasoningEffort: null, fastMode: null } as const;
 
 export interface ChatInputHandle {
   getModelOptions: () => ModelOptions;
@@ -122,6 +125,17 @@ export interface ChatInputProps {
    */
   model?: string | null;
   onPickModel?: ((model: string) => void) | null;
+  /**
+   * The thread's own reasoning effort and fast mode, over what Settings gives
+   * its model, owned by a thread host (`useThreadTuning`), which also receives
+   * each pick: the level, or null to follow Settings again. A composer with no
+   * thread behind it leaves all three unset: it then holds the picks itself,
+   * and a send hands them to the thread it starts. Either way a pick never
+   * writes Settings, which is the only place a default is set.
+   */
+  tuning?: ThreadTuning;
+  onPickReasoningEffort?: ((effort: string | null) => void) | null;
+  onPickFastMode?: ((fast: boolean | null) => void) | null;
   threadModels?: string[];
   dropdownDirection?: 'up' | 'down';
   minRows?: number;
@@ -171,6 +185,10 @@ function ChatInput({
   // Model selector
   model: hostModel,
   onPickModel = null,
+  // Thread effort and fast mode
+  tuning: hostTuning,
+  onPickReasoningEffort = null,
+  onPickFastMode = null,
   // All models used in this thread (shown in primary menu)
   threadModels: threadModelsProp = [],
   // Dropdown direction: 'up' (default, for bottom-positioned inputs) or 'down' (for mid-page inputs like ThreadGallery)
@@ -203,29 +221,51 @@ function ChatInput({
 
   // Per-model tuning is an account preference, not a device one: the server
   // resolves ``profiles[<model>]`` for turns this input never starts (schedules,
-  // automations, subagent role models). ``null`` clears a field; the server
-  // merges per model, so siblings and this model's other fields survive.
+  // automations, subagent role models). Only the device lift below writes it
+  // from here; a pick in the menu is the thread's own.
   const { writeProfile: writeModelProfile } = useModelProfileWriter();
 
-  // Both controls read the account profile straight through, with no local
-  // copy: a failed write rolls the cache back and the pill follows it, instead
-  // of naming a level the next scheduled turn will not run.
-  const { profile: modelTuningProfile, efforts: reasoningEfforts, inherited, effective } =
-    useEffectiveTuning(pillModel);
-  // The raw override, which is what the effort menu needs: it renders "Default"
-  // from the absence of one. The fast-mode toggle has no such state, so it
-  // reads the resolved value below.
-  const reasoningEffort = modelTuningProfile.reasoning_effort ?? null;
-  const inheritedEffort = inherited.reasoning_effort;
-  // The resolved value, which is what a send carries. Tuning writes are
-  // optimistic and not awaited, so between picking Default and the PUT landing
-  // the composer already reads as cleared while the row still holds the old
-  // level. Sending the raw override omits a cleared level and lets the server
-  // resolve against the row the write is still replacing, so the turn runs a
-  // setting the screen no longer shows. Sending what is displayed cannot
-  // disagree with it.
-  const resolvedEffort = effective.reasoning_effort;
-  const resolvedFastMode = effective.fast_mode;
+  // What Settings gives this model: its profile, else the account default,
+  // else what the model declares. The level is clamped onto the model's
+  // ladder, as the server runs it, so the menu's Default names one it lists.
+  const { efforts: reasoningEfforts, effective: settingsTuning } = useEffectiveTuning(pillModel);
+  const settingsEffort = settingsTuning.reasoning_effort && reasoningEfforts.length > 0
+    ? resolveEffort(settingsTuning.reasoning_effort, reasoningEfforts)
+    : settingsTuning.reasoning_effort;
+  const settingsFast = settingsTuning.fast_mode;
+
+  // The thread's own picks over Settings. A thread host owns them. Without
+  // one the composer holds them, following Settings until touched.
+  const [ownTuning, setOwnTuning] = useState<{ reasoningEffort: string | null; fastMode: boolean | null }>(FOLLOWS_SETTINGS);
+  const tuning = hostTuning === undefined ? ownTuning : hostTuning;
+  // What a send carries as the turn's level, and what the pill shows of it.
+  // Saves and Settings writes are optimistic and not awaited, so between a
+  // pick and its write landing the composer already shows the pick while the
+  // row the server reads still holds the old level. Sending nothing would let
+  // the server resolve against the row the write is still replacing, so the
+  // turn runs a setting the screen no longer shows. Sending what is displayed
+  // cannot disagree with it. The level goes out unclamped, as the row holds
+  // it: every client of the turn, a fallback model included, clamps it onto
+  // its own ladder, and a turn no composer started reads the same level from
+  // the row. Only the pill clamps, onto this model's ladder, which names none
+  // until the ladder is known. A thread whose row is unread shows and sends
+  // none, since Settings may not be what it runs, and the server runs the
+  // thread's own.
+  const sentEffort = tuning.reasoningEffort === undefined
+    ? null
+    : tuning.reasoningEffort ?? settingsTuning.reasoning_effort;
+  const resolvedEffort = tuning.reasoningEffort === undefined
+    ? null
+    : tuning.reasoningEffort === null
+      ? settingsEffort
+      : resolveEffort(tuning.reasoningEffort, reasoningEfforts);
+  const resolvedFastMode = tuning.fastMode === undefined ? null : tuning.fastMode ?? settingsFast;
+  // A composer with no thread behind it hands its picks to the thread its
+  // send starts, which keeps them as its own.
+  const ownOverrides = useMemo(() => (hostTuning === undefined ? {
+    ...(ownTuning.reasoningEffort !== null ? { reasoningEffortOverride: ownTuning.reasoningEffort } : {}),
+    ...(ownTuning.fastMode !== null ? { fastModeOverride: ownTuning.fastMode } : {}),
+  } : {}), [hostTuning, ownTuning]);
 
   // The Subagents switch a send names. A thread host owns it. Without one the
   // composer holds a pick, null until touched so the toggle shows the user's
@@ -314,10 +354,11 @@ function ChatInput({
     getModelOptions() {
       return {
         model: pillModel,
-        reasoningEffort: resolvedEffort,
+        reasoningEffort: sentEffort,
         fastMode: resolvedFastMode,
         marketWatch: effectiveMarketWatch,
         subagentsAllowed: draftSubagents,
+        ...ownOverrides,
       };
     },
     addContext({ path, snippet, label, locator, lineStart, lineEnd, lineCount, source }) {
@@ -369,7 +410,7 @@ function ChatInput({
     send() {
       return sendRef.current();
     },
-  }), [pillModel, resolvedEffort, resolvedFastMode, effectiveMarketWatch, draftSubagents, setMentionedFiles, restoreFiles]);
+  }), [pillModel, sentEffort, resolvedFastMode, effectiveMarketWatch, draftSubagents, ownOverrides, setMentionedFiles, restoreFiles]);
 
   // Subscribe to ContextBus so this input mirrors the global widget-context
   // deck. Multiple chat inputs can be visible simultaneously (hero card +
@@ -454,17 +495,22 @@ function ChatInput({
     }
   }, [pillModel, preferences, writeModelProfile, modelMetadata, reasoningEfforts]);
 
+  // The menu names null for the level Settings gives, which returns the
+  // thread to following Settings rather than pinning today's value.
   const handleReasoningEffortChange = useCallback((effort: string | null) => {
-    if (pillModel) writeModelProfile(pillModel, { reasoning_effort: effort });
-  }, [pillModel, writeModelProfile]);
+    if (effort === tuning.reasoningEffort) return;
+    if (hostTuning === undefined) setOwnTuning((prev) => ({ ...prev, reasoningEffort: effort }));
+    else onPickReasoningEffort?.(effort);
+  }, [tuning.reasoningEffort, hostTuning, onPickReasoningEffort]);
 
+  // Speed has no Default of its own in the menu, so the side Settings is on
+  // stands for it: flipping there follows Settings again.
   const handleFastModeChange = useCallback((fast: boolean) => {
-    // Both states are explicit. `null` here would mean "inherit", which this
-    // toggle cannot express — and on an account defaulting to fast it would
-    // delete the override and snap straight back to fast. Clearing is the
-    // per-model matrix's job, where Default is its own option.
-    if (pillModel) writeModelProfile(pillModel, { fast_mode: fast });
-  }, [pillModel, writeModelProfile]);
+    const next = fast === settingsFast ? null : fast;
+    if (next === tuning.fastMode) return;
+    if (hostTuning === undefined) setOwnTuning((prev) => ({ ...prev, fastMode: next }));
+    else onPickFastMode?.(next);
+  }, [settingsFast, tuning.fastMode, hostTuning, onPickFastMode]);
 
   // Reset isStopping once both a running turn and a compaction have finished,
   // in the render that sees them finish.
@@ -569,10 +615,11 @@ function ChatInput({
     }
     onSend(finalMessage, readyAttachments, slashCommands, {
       model: pillModel,
-      reasoningEffort: resolvedEffort,
+      reasoningEffort: sentEffort,
       fastMode: resolvedFastMode,
       marketWatch: effectiveMarketWatch,
       subagentsAllowed: draftSubagents,
+      ...ownOverrides,
       widgetSnapshots: widgetSnapshots.length ? widgetSnapshots : undefined,
     });
     setMessage('');
@@ -592,7 +639,7 @@ function ChatInput({
     }
   }, [hasContent, disabled, message, effectiveMarketWatch, draftSubagents, attachedFiles, setAttachedFiles, onSend, onAction,
     mentionedFiles, resetMentions, slashCommands, resetSlash,
-    pillModel, resolvedEffort, resolvedFastMode, widgetSnapshots, t]);
+    pillModel, sentEffort, resolvedFastMode, ownOverrides, widgetSnapshots, t]);
   useEffect(() => {
     sendRef.current = () => {
       if (!hasContent || disabled) return false;
@@ -958,7 +1005,7 @@ function ChatInput({
                   <span key={item.id} data-measure={item.id}>{item.inline({ measureOnly: true })}</span>
                 ))}
                 <span data-measure="model">
-                  <ModelTriggerMeasure selectedModel={pillModel} metadata={modelMetadata} effortLabel={effortLabelFor(t, resolvedEffort)} fastMode={resolvedFastMode} isCodexModel={isCodexModel} />
+                  <ModelTriggerMeasure selectedModel={pillModel} metadata={modelMetadata} effortLabel={effortLabelFor(t, resolvedEffort)} fastMode={resolvedFastMode === true} isCodexModel={isCodexModel} />
                 </span>
               </div>
             </div>
@@ -973,8 +1020,8 @@ function ChatInput({
                 validModelNames={validModelNames}
                 moreModelsItems={moreModelsItems}
                 hasStarredModels={starredModels.length > 0}
-                reasoningEffort={reasoningEffort}
-                inheritedEffort={inheritedEffort}
+                reasoningEffort={resolvedEffort}
+                defaultEffort={settingsEffort}
                 onReasoningEffortChange={handleReasoningEffortChange}
                 fastMode={resolvedFastMode}
                 onFastModeChange={handleFastModeChange}
