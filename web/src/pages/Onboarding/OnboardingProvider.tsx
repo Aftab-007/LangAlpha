@@ -48,6 +48,15 @@ interface GettingStartedState {
 /** Tasks offered in this deployment — channel integrations are platform-hosted. */
 const DEPLOYED_TASKS = GETTING_STARTED_TASKS.filter((t) => !t.platformOnly || isPlatformMode);
 
+/** Intros as this deployment shows them: platform-only steps drop off a
+ *  self-hosted build. A first step is never platform-only, so none empties. */
+const DEPLOYED_INTROS: PageIntroDef[] = PAGE_INTROS.map(
+  ({ steps: [first, ...rest], ...intro }) => ({
+    ...intro,
+    steps: [first, ...rest.filter((s) => !s.platformOnly || isPlatformMode)],
+  })
+);
+
 /** The tab's note of which thread the welcome flow's conversation became. */
 const INTERVIEW_THREAD_KEY = 'onboarding.interviewThread';
 
@@ -212,7 +221,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const mirror = mirrorRef.current ?? null;
   const mirrorReady = mirrorRef.current !== undefined;
   const eligibleIntro = mirrorReady && !isMobile
-    ? (PAGE_INTROS.find(
+    ? (DEPLOYED_INTROS.find(
         (intro) =>
           intro.matchRoute(pathname) &&
           prefs.pageIntrosSeen[intro.id] == null &&
@@ -222,7 +231,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     : null;
 
   const activeIntro = useMemo(
-    () => PAGE_INTROS.find((intro) => intro.id === activeIntroId) ?? null,
+    () => DEPLOYED_INTROS.find((intro) => intro.id === activeIntroId) ?? null,
     [activeIntroId]
   );
 

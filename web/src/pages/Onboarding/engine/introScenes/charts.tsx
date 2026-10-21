@@ -149,7 +149,11 @@ export function StockPriceCard({
         </span>
       </div>
       <PriceArea series={series} color={color} at={at} height={30} />
-      <div className="flex gap-2 text-[0.375rem] leading-none" style={label}>
+      {/* wraps whole stats in a narrow column, never a label from its value */}
+      <div
+        className="flex flex-wrap gap-x-2 gap-y-0.5 whitespace-nowrap text-[0.375rem] leading-none"
+        style={label}
+      >
         <span>
           {t('toolArtifact.high')}: {high}
         </span>

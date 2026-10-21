@@ -31,11 +31,18 @@ export type IntroVisualId =
   | 'ptcSandbox'
   | 'createWorkspace'
   | 'filePanel'
+  | 'chartPanel'
   | 'memory'
   | 'memo'
   | 'dashboardGrid'
   | 'dashboardCustomize'
-  | 'dashboardAttach';
+  | 'dashboardAttach'
+  | 'marketLive'
+  | 'marketAsk'
+  | 'marketDraw'
+  | 'automationTrigger'
+  | 'automationFeed'
+  | 'automationDelivery';
 
 /** One stage of a page intro. Copy is i18n keys under `onboarding.intros.*`. */
 export interface PageIntroStepDef {
@@ -44,6 +51,11 @@ export interface PageIntroStepDef {
   titleKey: string;
   bodyKey: string;
   visual: IntroVisualId;
+  /**
+   * Only on the hosted platform, where the step's feature exists (chat app
+   * delivery, say); a self-hosted build skips it. Never on a first step.
+   */
+  platformOnly?: boolean;
 }
 
 /**

@@ -73,6 +73,7 @@ function Harness() {
     <div>
       <span data-testid="phase">{phase}</span>
       <span data-testid="intro">{activeIntro?.id ?? 'none'}</span>
+      <span data-testid="introSteps">{activeIntro?.steps.map((s) => s.id).join(',')}</span>
       <span data-testid="card">{gettingStarted.visible ? 'visible' : 'hidden'}</span>
       <span data-testid="done">{gettingStarted.doneCount}</span>
       <span data-testid="taskIds">{gettingStarted.tasks.map((t) => t.def.id).join(',')}</span>
@@ -153,6 +154,13 @@ describe('OnboardingProvider', () => {
     renderAt('/dashboard');
     expect(phase()).toBe('pageIntro');
     expect(intro()).toBe('dashboard');
+  });
+
+  it('drops platform-only intro steps from a self-hosted build', () => {
+    renderAt('/automations');
+    expect(intro()).toBe('automations');
+    // Delivery goes to chat apps, which link through the hosted platform.
+    expect(screen.getByTestId('introSteps').textContent).toBe('trigger,feed');
   });
 
   it('shows nothing on pages with no matching intro', () => {
