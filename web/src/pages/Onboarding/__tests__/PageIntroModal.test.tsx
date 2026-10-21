@@ -18,10 +18,12 @@ describe('PageIntroModal', () => {
     render(<PageIntroModal intro={intro} onClose={vi.fn()} />);
     expect(screen.getByText('title-1')).toBeInTheDocument();
     expect(screen.getByText('body-1')).toBeInTheDocument();
-    expect(screen.getByText('1 / 3')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Step 1' })).toHaveAttribute('aria-current', 'step');
     expect(screen.getByTestId('intro-illustration')).toBeInTheDocument();
     // no Back on the first step
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+    // Opening focus sits on Continue, so Enter walks the tour.
+    expect(screen.getByRole('button', { name: 'Continue' })).toHaveFocus();
   });
 
   // step copy swaps behind an exit animation — await the incoming title
@@ -29,7 +31,7 @@ describe('PageIntroModal', () => {
     render(<PageIntroModal intro={intro} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     expect(await screen.findByText('title-2')).toBeInTheDocument();
-    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Step 2' })).toHaveAttribute('aria-current', 'step');
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(await screen.findByText('title-1')).toBeInTheDocument();
   });

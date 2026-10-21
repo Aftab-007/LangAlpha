@@ -68,6 +68,18 @@
     #f4f1ea;
 }
 
+/* Every scene is drawn at 400 x 330. Scaled to sit whole inside the wider
+   panel: 1.3 fills it at the full 980px dialog, and narrower windows step
+   down so a centered comparison never loses its outer column. */
+.intro-scene {
+  transform: scale(1.05);
+}
+@media (min-width: 1024px) {
+  .intro-scene {
+    transform: scale(1.3);
+  }
+}
+
 /* Radix's built-in close button sits over the visual panel — follow the
    panel's theme rather than the default dialog foreground. */
 .intro-dialog > button {
