@@ -40,8 +40,9 @@ interface GettingStartedState {
   tasks: GettingStartedTaskState[];
   doneCount: number;
   dismiss: () => void;
-  /** Stamp a task done (external tasks complete on click — no route to observe). */
-  completeTask: (id: string) => void;
+  /** Stamp a task done (external tasks complete on click — no route to
+   *  observe). `onSettled` runs once the stamp has landed or failed. */
+  completeTask: (id: string, onSettled?: () => void) => void;
 }
 
 /** Tasks offered in this deployment — channel integrations are platform-hosted. */

@@ -61,24 +61,35 @@ export function useOnboardingPrefs() {
   // count, so the loop the guard exists for stays closed.
   const taskAttemptsRef = useRef({ gen: remoteUpdateGen.current, ids: new Set<string>() });
 
-  /** Stamp a getting-started task complete. */
+  /**
+   * Stamp a getting-started task complete. `onSettled` runs once the write
+   * lands or fails, or at once when there is nothing to send, for a caller
+   * about to leave the page that would otherwise cut the write off.
+   */
   const markTaskDone = useCallback(
-    (id: string) => {
-      if (isLoading) return;
+    (id: string, onSettled?: () => void) => {
+      if (isLoading) {
+        onSettled?.();
+        return;
+      }
       const attempts = taskAttemptsRef.current;
       if (attempts.gen !== remoteUpdateGen.current) {
         attempts.gen = remoteUpdateGen.current;
         attempts.ids.clear();
       }
-      if (attempts.ids.has(id)) return;
+      if (attempts.ids.has(id)) {
+        onSettled?.();
+        return;
+      }
       const accepted = writeOnboardingPrefs(
         (cur) =>
           cur.gettingStartedDoneAt[id] != null
             ? null
             : { ...cur, gettingStartedDoneAt: { ...cur.gettingStartedDoneAt, [id]: Date.now() } },
-        { fallbackOther }
+        { fallbackOther, onSuccess: onSettled, onError: onSettled }
       );
       if (accepted) attempts.ids.add(id);
+      else onSettled?.();
     },
     [writeOnboardingPrefs, remoteUpdateGen, fallbackOther, isLoading]
   );

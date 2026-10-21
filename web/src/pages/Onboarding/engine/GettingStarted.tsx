@@ -4,9 +4,13 @@ import { useNavigate } from 'react-router';
 import { ArrowUpRight, Check, ChevronRight, X } from 'lucide-react';
 import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { isDesktopShell } from '@/lib/desktop';
 import { cn } from '@/lib/utils';
 import { useOnboarding, type GettingStartedTaskState } from '../OnboardingProvider';
 import type { GettingStartedTaskDef } from '../registry';
+
+/** The longest a hand-off to the account portal waits for its task's stamp. */
+const STAMP_WAIT_MS = 1500;
 
 /** Progress as a ring, drawn in the sidebar where an icon would be. */
 function ProgressRing({
@@ -100,6 +104,8 @@ export function GettingStartedPanel({
 }) {
   const { t } = useTranslation();
   const next = tasks.findIndex((task) => !task.done);
+  // Only the browser takes a cross-app task to a tab of its own.
+  const newTab = !isDesktopShell();
 
   return (
     <div className="flex flex-col">
@@ -177,7 +183,7 @@ export function GettingStartedPanel({
                   )}
                 </span>
                 {!done &&
-                  (def.external ? (
+                  (def.external && newTab ? (
                     <ArrowUpRight
                       className="mt-0.5 h-4 w-4 shrink-0"
                       style={{ color: 'var(--color-text-tertiary)' }}
@@ -330,6 +336,20 @@ export function GettingStartedLauncher({ variant }: { variant: 'row' | 'rail' })
   const select = (def: GettingStartedTaskDef) => {
     if (!def.external) {
       navigate(def.to);
+      return;
+    }
+    if (isDesktopShell()) {
+      // The portal shares this window in the desktop app, as Usage & Plan
+      // does, and the shell answers a window.open with a window of its own or
+      // the browser. Leaving unloads the page, so the stamp goes first.
+      let left = false;
+      const leave = () => {
+        if (left) return;
+        left = true;
+        window.location.assign(def.to);
+      };
+      setTimeout(leave, STAMP_WAIT_MS);
+      completeTask(def.id, leave);
       return;
     }
     // Cross-app page — no route of ours to observe, so a successful open is
