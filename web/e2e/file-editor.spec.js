@@ -206,4 +206,28 @@ test.describe('file editor', () => {
     await expect(page.locator('.file-panel-crumb')).toHaveCount(0);
     expect(native).toEqual([]);
   });
+
+  test('a keyboard close held by the discard question still hands focus to the header toggle', async ({ page }) => {
+    await serveMonacoLocally(page);
+    await mockFile(page);
+    await openEditor(page);
+
+    const lines = page.locator('.monaco-editor .view-lines');
+    await lines.waitFor({ timeout: 30000 });
+    await lines.click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.type('x');
+
+    await page.locator('[data-panel-toggle="panel"]').focus();
+    await page.keyboard.press('Enter');
+    const ask = page.getByRole('dialog', { name: 'Discard changes' });
+    await expect(ask).toBeVisible();
+    // Longer than the hand-off waits for a toggle to render, so a hand-off
+    // started by the press rather than the close would have given up.
+    await page.waitForTimeout(2500);
+    await ask.getByRole('button', { name: 'Discard' }).focus();
+    await page.keyboard.press('Enter');
+
+    await expect(page.locator('[data-panel-toggle="header"]')).toBeFocused();
+  });
 });

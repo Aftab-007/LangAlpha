@@ -686,6 +686,30 @@ test.describe('Chat View -- SSE Streaming', () => {
     await expect(page.getByRole('button', { name: 'Toggle file tree' })).toHaveCount(0);
   });
 
+  test('a keyboard open waits on the loading strip for as long as the panel takes', async ({ page }) => {
+    await mockAPI(page, {
+      ...chatViewOverrides(),
+      'GET /workspaces/a0000001-0000-4000-8000-000000000001/files': { files: ['report.pdf'] },
+    });
+    await configureEmptyReplay();
+    // Holds the panel's code back until the test lets it through.
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route(/\/components\/FilePanel\.tsx(\?|$)/, async (route) => { await held; await route.continue(); });
+
+    await page.goto('/chat/t/b0000001-0000-4000-8000-000000000001');
+    await page.waitForSelector('textarea', { timeout: 10000 });
+    await page.locator('[data-panel-toggle="header"]').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('[data-panel-toggle-stand-in]')).toBeFocused();
+    // Longer than the hand-off waits for a toggle that is not drawn at all.
+    await page.waitForTimeout(2500);
+    release();
+
+    await expect(page.getByText('report.pdf')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-panel-toggle="panel"]:not([data-panel-toggle-stand-in])')).toBeFocused();
+  });
+
   test('workspace starting shows warm-up indicator', async ({ page }) => {
     await mockAPI(page, chatViewOverrides());
 
