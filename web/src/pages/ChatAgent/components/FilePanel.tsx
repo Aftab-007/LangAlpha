@@ -21,6 +21,7 @@ import { folderLinkTarget, linkCandidates } from '../utils/fileRefResolver';
 import { useWorkspaceFolders } from '../contexts/WorkspaceContext';
 import { classifyAgentPath, parseAgentPath } from '../utils/agentPaths';
 import { useStableHandler } from '@/hooks/useStableHandler';
+import { useHtmlViewMode } from './viewers/html/useHtmlViewMode';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { cn } from '@/lib/utils';
 import { parseFragment, type FileLocation, type OpenFileHandler } from '../utils/fileLocation';
@@ -312,10 +313,19 @@ function FilePanel({
     containerRef: contentWrapperRef,
   });
 
-  // Replay the tab's own location whenever it comes back to the front.
+  // A replay restores the reader's place and leaves their choice of view be.
+  const htmlView = useHtmlViewMode(focus.replayed ? null : focus.htmlAnchor, focus.seq);
+  const { setSource: setHtmlSource } = htmlView;
+
+  // Replay the tab's own location whenever it comes back to the front. A
+  // location the tab has already been to is a replay; a new one is an ask.
   const tabLocationSeq = activeTab.kind === 'file' ? activeTab.locationSeq : 0;
+  const visitedLocations = useRef(new Map<string, number>());
   useEffect(() => {
-    if (activeTab.kind === 'file' && activeTab.location) focus.focusAt(activeTab.path, activeTab.location);
+    if (activeTab.kind !== 'file' || !activeTab.location) return;
+    const replay = visitedLocations.current.get(activeTab.id) === tabLocationSeq;
+    visitedLocations.current.set(activeTab.id, tabLocationSeq);
+    focus.focusAt(activeTab.path, activeTab.location, replay);
   }, [activeTab.id, tabLocationSeq]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The folder a chat link pointed the tree at; it filters until the back
@@ -688,6 +698,9 @@ function FilePanel({
               readFileFullFn={readFileFullFn}
               servePrefix={apiAdapter?.servePrefix}
               canShare={canShare}
+              htmlSource={htmlView.source}
+              // Only where the viewer is up to switch: not while loading, nor on an error card.
+              onToggleHtmlSource={viewer === 'html' && !fileLoading && !fileError ? () => setHtmlSource((v) => !v) : null}
               editorRef={edit.editorRef}
               canUndo={edit.canUndo}
               canRedo={edit.canRedo}
@@ -813,6 +826,7 @@ function FilePanel({
                   onContentMouseUp: handleContentMouseUp,
                   onViewerLink: handleViewerLink,
                   onAnchorLink: handleAnchorLink,
+                  htmlSource: htmlView.source,
                 }}
                 onPageCount={onPageCount}
                 canUpload={!readOnly}

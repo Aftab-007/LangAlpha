@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Download, FileDown, Link2, Pencil, Settings2, X, Undo2, Redo2, FileDiff, FileText, Check, Clipboard } from 'lucide-react';
+import { Code2, Download, Eye, ExternalLink, FileDown, Link2, Pencil, Settings2, X, Undo2, Redo2, FileDiff, FileText, Check, Clipboard } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -67,6 +67,9 @@ interface FileHeaderActionsProps {
   servePrefix?: string;
   /** Offer the selected file's share dialog: the owner's own panel only. */
   canShare?: boolean;
+  /** An HTML file's view: its markup rather than its page, and the switch between them. */
+  htmlSource?: boolean;
+  onToggleHtmlSource?: (() => void) | null;
   // Edit mode callbacks
   editorRef: React.RefObject<any>;
   canUndo: boolean;
@@ -96,6 +99,8 @@ function FileHeaderActions({
   readFileFullFn,
   servePrefix,
   canShare = false,
+  htmlSource = false,
+  onToggleHtmlSource = null,
   editorRef,
   canUndo,
   canRedo,
@@ -232,6 +237,7 @@ function FileHeaderActions({
   const isMd = isMarkdownFile(selectedFile, fileMime);
   const isHtml = isHtmlFile(selectedFile);
   const isText = isTextMime(fileMime);
+  const openUrl = isHtml ? served.openUrl : undefined;
 
   const renderDropdownItems = () => {
     if (isMd) {
@@ -251,8 +257,8 @@ function FileHeaderActions({
     }
 
     if (isHtml) {
-      // HTML file: this menu owns Download + Save-as-PDF; the HtmlViewer
-      // toolbar keeps only view actions (link/fullscreen/new tab).
+      // HTML file: this menu owns Download + Save-as-PDF; the view actions
+      // (source, open in new tab) sit beside it in the header.
       // PDF options toggle component state via preventDefault so the menu
       // stays open while the user composes the export.
       return (
@@ -342,6 +348,17 @@ function FileHeaderActions({
 
   return (
     <>
+      {/* One switch for the two views, showing where it goes. */}
+      {isHtml && onToggleHtmlSource && (
+        <button
+          onClick={onToggleHtmlSource}
+          className="file-panel-icon-btn"
+          title={htmlSource ? t('filePanel.viewPreview') : t('filePanel.viewSource')}
+          aria-label={htmlSource ? t('filePanel.viewPreview') : t('filePanel.viewSource')}
+        >
+          {htmlSource ? <Eye className="h-4 w-4" /> : <Code2 className="h-4 w-4" />}
+        </button>
+      )}
       {canShare && (
         <>
           <button
@@ -362,6 +379,18 @@ function FileHeaderActions({
             onClose={() => setShareOpen(false)}
           />
         </>
+      )}
+      {/* The file's own page in a new tab: its /a/ link for the owner, the
+          share's served bytes on a share. Never the grant URL, which expires. */}
+      {openUrl && (
+        <button
+          onClick={() => window.open(openUrl, '_blank', 'noopener,noreferrer')}
+          className="file-panel-icon-btn"
+          title={t('filePanel.openInNewTab')}
+          aria-label={t('filePanel.openInNewTab')}
+        >
+          <ExternalLink className="h-4 w-4" />
+        </button>
       )}
       {canDownload && (
         <DropdownMenu modal={false}>
