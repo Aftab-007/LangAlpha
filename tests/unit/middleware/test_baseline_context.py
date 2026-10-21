@@ -57,7 +57,7 @@ from ptc_agent.agent.middleware.runtime_context.epoch import OTHER_COMPUTERS, Wo
 from ptc_agent.agent.middleware.runtime_context.harness_blocks import (
     harness_update_kind,
 )
-from ptc_agent.agent.middleware.runtime_context.profile import ProfileSnapshot
+from ptc_agent.agent.middleware.runtime_context.profile import ProfileSnapshot, ProfileSwitches
 from ptc_agent.core.paths import (
     MEMORY_INDEX_FILENAME,
     MEMORY_USER_DIR,
@@ -1835,7 +1835,7 @@ class TestTheChannelsParagraph:
             _session("# Notes"),
             user_profile=self.PROFILE,
             user_data_counts={"portfolio_count": 2},
-            channels_enabled=channels,
+            switches=ProfileSwitches(channels=channels),
         )
 
     async def _block(self, mw, state: dict) -> tuple[dict, str]:

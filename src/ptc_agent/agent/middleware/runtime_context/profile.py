@@ -68,12 +68,22 @@ def investment_lines(investment: Any) -> list[tuple[str, str]]:
     ]
 
 
+@dataclass(frozen=True, slots=True)
+class ProfileSwitches:
+    """What the build has that the profile block's steering points to: the
+    chat-app settings folder (``channels``, None for a build whose block says
+    nothing of it) and ``schedule_wakeup`` (``wakeups``)."""
+
+    channels: bool | None = None
+    wakeups: bool = False
+
+
 def render_user_profile(
     user_profile: dict[str, Any],
     user_data_counts: dict[str, Any] | None = None,
     *,
     main_agent_steering: bool,
-    channels_enabled: bool = False,
+    switches: ProfileSwitches = ProfileSwitches(),
     role: str = "analyst",
 ) -> str:
     """The ``components/user_profile.md.j2`` block for one profile.
@@ -95,7 +105,8 @@ def render_user_profile(
         investment_lines=investment_lines(user_profile.get("investment_profile")),
         user_data_counts=user_data_counts,
         main_agent_steering=main_agent_steering,
-        channels_enabled=channels_enabled,
+        channels_enabled=bool(switches.channels),
+        wakeups_enabled=switches.wakeups,
         role=role,
     )
 
