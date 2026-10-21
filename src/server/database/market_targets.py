@@ -438,28 +438,6 @@ async def expire_due_targets() -> int:
 # ---------------------------------------------------------------------------
 
 
-async def held_alerts(job_ids: List[str], run_id: str) -> List[Dict[str, str]]:
-    """The notices among ``job_ids`` that ``run_id`` holds for its live turn,
-    each as its target and notice."""
-    if not job_ids:
-        return []
-    async with get_db_connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                """
-                SELECT payload->>'target_id' AS target_id,
-                       payload->>'notice' AS notice
-                FROM hook_outbox
-                WHERE hook_outbox_id = ANY(%s::uuid[])
-                  AND hook_type = %s
-                  AND status = 'pending'
-                  AND payload->>'steered_run_id' = %s::text
-                """,
-                (job_ids, HOOK_TYPE, run_id),
-            )
-            return [dict(row) for row in await cur.fetchall()]
-
-
 async def mark_delivered(target_id: str, notice: Notice, run_id: Optional[str]) -> bool:
     """Stamp a notice delivered to ``run_id``; False when it already was.
 

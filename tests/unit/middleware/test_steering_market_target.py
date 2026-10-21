@@ -31,12 +31,12 @@ _NOTICE = {"target_id": "tg-1", "notice": "hit", "symbol": "AAPL"}
 _ALERT = SteeredReport(
     job_id="job-alert",
     content="<market-alert>\nAAPL crossed 230.00\n</market-alert>",
-    market_alert=_NOTICE,
+    shown={"market_alert": _NOTICE},
 )
 _REPORT = SteeredReport(
     job_id="job-report",
     content="REPORT",
-    report_source={"kind": "task", "task_id": "a"},
+    shown={"report_source": {"kind": "task", "task_id": "a"}},
 )
 _STEER = SteeredReport(
     job_id="job-steer",
@@ -80,7 +80,7 @@ async def test_alert_rides_the_steering_message_ahead_of_the_users_words():
     # The user's messages only: a chat gateway retires this many.
     assert delivered["count"] == 1
     report, alert, user = delivered["messages"]
-    assert report["report_source"] == _REPORT.report_source
+    assert report["report_source"] == _REPORT.shown["report_source"]
     assert "market_alert" not in report
     assert alert["content"] == "" and alert["market_alert"] == _NOTICE
     assert "report_source" not in alert
