@@ -477,7 +477,7 @@ export function WelcomeFlow({
       i18n.resolvedLanguage ?? i18n.language,
       t('onboarding.kickoff.threadTitle'),
     );
-    const { model, reasoningEffort, subagentsAllowed } = written.options;
+    const { model, reasoningEffort, fastMode, reasoningEffortOverride, fastModeOverride, subagentsAllowed } = written.options;
     clearWelcomeDraft(userId);
     // Replacing the flow's entry, so Back from the chat goes to the page
     // before it rather than into a finished flow. Inside the hand-off, which
@@ -493,6 +493,10 @@ export function WelcomeFlow({
           ...(subagentsAllowed !== undefined ? { subagentsAllowed } : {}),
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(typeof fastMode === 'boolean' ? { fastMode } : {}),
+          // The composer's own picks, which the thread it opens keeps.
+          ...(reasoningEffortOverride ? { reasoningEffortOverride } : {}),
+          ...(typeof fastModeOverride === 'boolean' ? { fastModeOverride } : {}),
           handoff: true,
         },
       }),

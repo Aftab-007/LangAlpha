@@ -153,6 +153,13 @@ interface ModelOptions {
    * thread carries none: the row's PATCH is its only writer.
    */
   subagentsAllowed?: boolean;
+  /**
+   * The effort and fast mode the thread this send creates keeps as its own
+   * (`useThreadTuning`), apart from `reasoningEffort`/`fastMode`, which are
+   * this turn's. A send on a live thread carries none, for the same reason.
+   */
+  reasoningEffortOverride?: string;
+  fastModeOverride?: boolean;
 }
 
 /** What a fresh send takes beyond the model options an edit or regenerate does. */

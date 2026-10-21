@@ -1580,6 +1580,8 @@
       "subagentsOn": "Subagents on",
       "subagentsOff": "Subagents off",
       "subagentsFailed": "Couldn't change this thread's subagents setting",
+      "effortFailed": "Couldn't change this thread's reasoning effort",
+      "fastModeFailed": "Couldn't change this thread's speed",
       "watch": "Market watch",
       "watchOn": "Market watch on",
       "watchOff": "Market watch off",

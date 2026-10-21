@@ -142,6 +142,7 @@ describe('WelcomeFlow: the questions and their save', () => {
         },
       ],
       attachmentMeta: null,
+      fastMode: false,
       hiddenOpener: true,
       threadTitle: 'Getting started',
       handoff: true,

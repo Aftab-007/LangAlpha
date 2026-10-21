@@ -1578,6 +1578,8 @@
       "subagentsOn": "子 Agent 已开启",
       "subagentsOff": "子 Agent 已关闭",
       "subagentsFailed": "无法更改此对话的子 Agent 设置",
+      "effortFailed": "无法更改此对话的推理强度",
+      "fastModeFailed": "无法更改此对话的速度",
       "watch": "盯盘",
       "watchOn": "盯盘已开启",
       "watchOff": "盯盘已关闭",

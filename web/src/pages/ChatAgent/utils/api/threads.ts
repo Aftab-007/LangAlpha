@@ -10,6 +10,9 @@ export interface ThreadCreatedInfo {
   thread_index: number;
   title: string;
   msg_type: string;
+  /** The tuning overrides the create stored, echoed back; null follows Settings. */
+  reasoning_effort?: string | null;
+  fast_mode?: boolean | null;
 }
 
 /**
@@ -34,9 +37,15 @@ export async function createThreadWithTitle(opts: {
   timezone?: string;
   /** Left out, the thread stores no value and follows the owner's default. */
   subagentsAllowed?: boolean;
+  /** The thread's own effort and fast mode, picked before it existed. Left
+   *  out, the thread follows Settings. */
+  reasoningEffort?: string;
+  fastMode?: boolean;
   timeoutMs?: number;
 }): Promise<ThreadCreatedInfo> {
-  const { workspaceId, firstQuery, title, platform, timezone, subagentsAllowed, timeoutMs = 8000 } = opts;
+  const {
+    workspaceId, firstQuery, title, platform, timezone, subagentsAllowed, reasoningEffort, fastMode, timeoutMs = 8000,
+  } = opts;
 
   const body: Record<string, unknown> = { first_query: firstQuery };
   if (title) body.title = title;
@@ -44,6 +53,8 @@ export async function createThreadWithTitle(opts: {
   if (platform) body.platform = platform;
   if (timezone) body.timezone = timezone;
   if (subagentsAllowed !== undefined) body.subagents_allowed = subagentsAllowed;
+  if (reasoningEffort !== undefined) body.reasoning_effort = reasoningEffort;
+  if (fastMode !== undefined) body.fast_mode = fastMode;
 
   const { data } = await api.post<ThreadCreatedInfo>('/api/v1/threads', body, { timeout: timeoutMs });
   return data;
@@ -165,10 +176,17 @@ export interface ThreadUpdates {
   /** Whether the agent may hand work to subagents on this thread. `null`
    *  returns it to following the user's default. */
   subagents_allowed?: boolean | null;
+  /** The thread's own reasoning effort, stored as sent. `null` returns it to
+   *  following Settings. */
+  reasoning_effort?: string | null;
+  /** The thread's own fast mode, stored as sent. `null` returns it to
+   *  following Settings. */
+  fast_mode?: boolean | null;
 }
 
 /**
- * Update user-editable thread fields (title, pin, archive, model, subagents) via PATCH.
+ * Update user-editable thread fields (title, pin, archive, model, subagents,
+ * effort, fast mode) via PATCH.
  * Only the keys present in `updates` are applied server-side.
  */
 export async function updateThread(threadId: string, updates: ThreadUpdates): Promise<Thread> {

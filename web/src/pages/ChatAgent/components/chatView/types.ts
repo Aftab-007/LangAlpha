@@ -11,7 +11,16 @@ export interface LocationState {
   additionalContext?: Record<string, unknown>[] | null;
   attachmentMeta?: Record<string, unknown>[] | null;
   model?: string;
+  /** The level `initialMessage` runs at, as the sending composer showed it. */
   reasoningEffort?: string;
+  fastMode?: boolean;
+  /**
+   * The effort and fast-mode picks of the composer that sent `initialMessage`,
+   * which the thread that send starts keeps as its own. Absent follows
+   * Settings.
+   */
+  reasoningEffortOverride?: string;
+  fastModeOverride?: boolean;
   /**
    * The Subagents toggle of the PTC composer that sent `initialMessage`, for
    * the thread that send starts. Absent leaves it to the user's default.
@@ -138,6 +147,7 @@ export interface SlashCommand {
 export interface ModelOptions {
   model?: string | null;
   reasoningEffort?: string | null;
+  fastMode?: boolean | null;
   /**
    * Per-message Watch-toggle state. When on, `handleSendWithAttachments`
    * appends a `market-watch` skills item to `additional_context`.
@@ -156,6 +166,10 @@ export interface ModelOptions {
    * thread (`useThreadSubagents`).
    */
   subagentsAllowed?: boolean;
+  /** The thread's own effort and fast mode, carried only by the send that
+   *  creates the thread (`useThreadTuning`). */
+  reasoningEffortOverride?: string;
+  fastModeOverride?: boolean;
 }
 
 export interface ActionCommand {
