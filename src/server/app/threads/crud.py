@@ -20,6 +20,7 @@ from src.server.services.thread_lifecycle_feed import (
     publish_thread_deleted,
     publish_thread_pinned,
     publish_thread_subagents,
+    publish_thread_tuning,
     publish_thread_title,
     publish_thread_unarchived,
 )
@@ -144,6 +145,8 @@ async def list_threads(
                 archived_at=thread.get("archived_at"),
                 llm_model=thread.get("llm_model"),
                 subagents_allowed=thread["subagents_allowed"],
+                reasoning_effort=thread.get("reasoning_effort"),
+                fast_mode=thread.get("fast_mode"),
                 turn_count=thread.get("turn_count"),
                 created_at=thread["created_at"],
                 updated_at=thread["updated_at"],
@@ -402,6 +405,8 @@ def _thread_list_item(row: dict) -> WorkspaceThreadListItem:
         archived_at=row.get("archived_at"),
         llm_model=row.get("llm_model"),
         subagents_allowed=row["subagents_allowed"],
+        reasoning_effort=row.get("reasoning_effort"),
+        fast_mode=row.get("fast_mode"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -427,7 +432,7 @@ async def update_thread_endpoint(
     thread_id: str, request: ThreadUpdateRequest, x_user_id: CurrentUserId
 ):
     """Update user-editable thread fields: title, pin, archive, model,
-    subagent switch.
+    subagent switch, effort, fast mode.
 
     Applies only the fields explicitly present in the request body
     (``model_fields_set``) — a pin toggle can't clear the title.
@@ -458,6 +463,13 @@ async def update_thread_endpoint(
             # running turn on its next model call and at every subagent
             # launch, so a flip mid-turn takes effect without one.
             updates["subagents_allowed"] = request.subagents_allowed
+        # Stored as sent, null returning the field to the user's Settings.
+        # Read when the next turn resolves its model, so a running turn keeps
+        # the level it started on.
+        if "reasoning_effort" in provided:
+            updates["reasoning_effort"] = request.reasoning_effort
+        if "fast_mode" in provided:
+            updates["fast_mode"] = request.fast_mode
         if not updates:
             raise HTTPException(
                 status_code=400, detail="No updatable fields provided"
@@ -488,6 +500,14 @@ async def update_thread_endpoint(
                 thread_id=thread_id,
                 workspace_id=str(updated_thread["workspace_id"]),
                 allowed=updated_thread["subagents_allowed"],
+            )
+        if "reasoning_effort" in updates or "fast_mode" in updates:
+            await publish_thread_tuning(
+                user_id=x_user_id,
+                thread_id=thread_id,
+                workspace_id=str(updated_thread["workspace_id"]),
+                reasoning_effort=updated_thread["reasoning_effort"],
+                fast_mode=updated_thread["fast_mode"],
             )
         if "archived" in updates:
             # Post-commit only: the archive statement already stamped the

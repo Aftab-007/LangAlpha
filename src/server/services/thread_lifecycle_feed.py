@@ -189,6 +189,27 @@ async def publish_thread_subagents(
     await publish_user_event(user_id, event)
 
 
+async def publish_thread_tuning(
+    *,
+    user_id: Optional[str],
+    thread_id: str,
+    workspace_id: Optional[str],
+    reasoning_effort: Optional[str],
+    fast_mode: Optional[bool],
+) -> None:
+    """Tuning hint: a thread's effort and fast mode live only on its row, so a
+    tab with the thread open learns of a pick made in another one only from
+    this event or its next read of the thread. A stale tab would otherwise
+    send the level it still shows."""
+    event = build_lifecycle_event(
+        type="thread_tuning", thread_id=thread_id, workspace_id=workspace_id
+    )
+    # Always present: null is the thread following the user's Settings.
+    event["reasoning_effort"] = reasoning_effort
+    event["fast_mode"] = fast_mode
+    await publish_user_event(user_id, event)
+
+
 async def publish_thread_deleted(
     *,
     user_id: Optional[str],

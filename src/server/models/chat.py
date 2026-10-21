@@ -455,12 +455,16 @@ class ChatRequest(BaseModel):
     # into a 422 the caller cannot act on.
     reasoning_effort: Optional[ReasoningLevel] = Field(
         default=None,
-        description="Override reasoning effort for this request.",
+        description="Reasoning effort for this turn only. Omitted, the turn "
+        "runs the thread's own (PATCH /threads/{id}), else the user's "
+        "Settings. Never stored on the thread.",
     )
 
     fast_mode: Optional[bool] = Field(
         default=None,
-        description="When True, enables priority service tier for faster responses (Codex OAuth models only)",
+        description="When True, enables priority service tier for faster "
+        "responses (Codex OAuth models only), for this turn only. Omitted, the "
+        "turn runs the thread's own, else the user's Settings.",
     )
 
     # Internal: query type override (e.g., "system" for report-back invocations)

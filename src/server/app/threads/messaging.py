@@ -517,14 +517,25 @@ async def _handle_send_message(
             else None
         )
 
+        # Likewise a turn naming no effort or fast mode runs the thread's own,
+        # picked in its composer, and with none of those the user's Settings.
+        # A client sends what its composer shows, so the row decides only for
+        # a turn no composer started: a report-back, a resume after a reload.
+        reasoning_effort = getattr(request, "reasoning_effort", None) or (
+            thread_meta.get("reasoning_effort") if thread_meta else None
+        )
+        fast_mode = getattr(request, "fast_mode", None)
+        if fast_mode is None and thread_meta:
+            fast_mode = thread_meta.get("fast_mode")
+
         async def resolve(model: str | None):
             return await resolve_llm_config(
                 setup.agent_config,
                 user_id,
                 model,
                 is_byok,
-                reasoning_effort=getattr(request, "reasoning_effort", None),
-                fast_mode=getattr(request, "fast_mode", None),
+                reasoning_effort=reasoning_effort,
+                fast_mode=fast_mode,
                 thread_id=thread_id,
                 enabled_subagents=request.subagents_enabled,
                 workspace_id=workspace_id,
