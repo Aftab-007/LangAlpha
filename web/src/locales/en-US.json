@@ -3717,16 +3717,16 @@
       "thread": {
         "steps": {
           "filePanel": {
-            "title": "Every artifact lands in the file panel",
-            "body": "Word docs, Excel models, PDFs, charts — whatever the agent produces is saved to the workspace. Open the folder icon up top to browse, preview, and download."
+            "title": "Every file lands in the file panel",
+            "body": "Word docs, Excel models, PDFs, charts: whatever the agent makes is saved to the workspace. Open the folder icon at the top to browse, preview, and download."
           },
           "memory": {
             "title": "The agent remembers how you work",
-            "body": "The agent keeps long-term memory across threads: your preferences, conventions, and conclusions worth reusing. Say \"remember this\" and it persists."
+            "body": "It keeps a long-term memory across threads: your preferences, conventions, and conclusions worth reusing. Say “remember this” to add to it."
           },
           "memo": {
-            "title": "Ground it with your memos",
-            "body": "Upload PDFs, notes, or spreadsheets as memos. The agent reads them on demand — your private research becomes part of its context."
+            "title": "Ground it in your own research",
+            "body": "Upload PDFs, notes, or spreadsheets as memos. The agent reads them when they matter, so your own research becomes part of its context."
           }
         }
       },
@@ -3734,15 +3734,15 @@
         "steps": {
           "overview": {
             "title": "Your market homepage",
-            "body": "Watchlist, portfolio, news, and live charts in one place — a real-time overview that's ready before you ask anything."
+            "body": "Watchlist, portfolio, news, and live charts in one place, up to date before you ask anything."
           },
           "customize": {
             "title": "Make it yours",
-            "body": "Switch to Custom mode to add, remove, resize, and rearrange widgets. Build the exact monitor you want to wake up to."
+            "body": "Switch to Custom mode to add, remove, resize, and rearrange widgets."
           },
           "attach": {
             "title": "Clip any widget into chat",
-            "body": "See something worth digging into? Hit the paperclip on a row to attach it to chat as context — the agent picks up exactly what you're looking at."
+            "body": "See something worth digging into? Click the paperclip on a row to attach it to the chat, and the agent sees exactly what you're looking at."
           }
         }
       }
@@ -3753,30 +3753,30 @@
       "tasks": {
         "dashboard": {
           "title": "Explore the dashboard",
-          "desc": "Watchlist, portfolio, news, and live widgets in one place."
+          "desc": "Watchlist, portfolio, and news on one live page."
         },
         "market": {
           "title": "Check live markets",
-          "desc": "Real-time charts with streaming market data."
+          "desc": "Streaming charts for any symbol."
         },
         "profile": {
           "title": "Set up your investing profile",
           "desc": "Risk, markets, style, and how the agent works with you."
         },
         "createWorkspace": {
-          "title": "Create your first workspace"
+          "title": "Create a workspace"
         },
         "firstChat": {
           "title": "Run your first analysis",
-          "desc": "Open a chat and ask about any ticker, sector, or filing."
+          "desc": "Ask about any ticker, sector, or filing."
         },
         "models": {
-          "title": "Visit the model configuration",
-          "desc": "Choose default models and connect providers in Settings."
+          "title": "Choose your models",
+          "desc": "Pick default models and connect providers."
         },
         "integrations": {
-          "title": "Use LangAlpha on other platforms",
-          "desc": "Reach the agent from Slack, email, and more via platform integrations."
+          "title": "Connect a chat app",
+          "desc": "Talk to LangAlpha from Slack, Telegram, iMessage, and more."
         }
       }
     },
@@ -5884,24 +5884,24 @@
     "tour": {
       "modes": {
         "title": "Two ways to work",
-        "body": "Pick a workspace and its Analyst does the work there, with that workspace's files. Pick All workspaces and your Chief of Staff takes it: it answers quick questions itself and hands deep work to the right Analyst. The next steps show each one."
+        "body": "Pick a workspace and its Analyst does the work there, with that workspace's files. Pick All workspaces and your Chief of Staff takes it: it answers quick questions itself and hands deep work to the right Analyst."
       },
       "chiefOfStaff": {
         "title": "All workspaces: your Chief of Staff",
-        "body": "Just say what you need. Your Chief of Staff answers quick questions, creates and manages workspaces, hands deep work to each workspace's Analyst and reports back, and manages your automations. Its conversations are collected in the All workspaces card, and its own files live in a folder called Home."
+        "body": "Just say what you need. Your Chief of Staff answers quick questions, creates workspaces, hands deep work to their Analysts and reports back, and manages your automations. Its threads sit under All workspaces, and its own files live in Home."
       },
       "analyst": {
         "title": "A workspace: its Analyst does the work",
-        "body": "Each workspace has its own Analyst. Every thread in the workspace shares the same files, data and prior work, so research compounds. It processes large datasets, coordinates teams of subagents, and produces any deliverable: Excel models, Word docs, PDFs, dashboards."
+        "body": "Each workspace has its own Analyst, and every thread in it shares the same files, data and past work, so research builds on itself. It works through large datasets, runs teams of subagents, and produces the deliverable: Excel models, Word docs, PDFs, dashboards."
       },
       "workspace": {
-        "body": "Every workspace is a project desk: the conversations about one task live there together, sharing the same files, data and results, separate from other workspaces. All your workspaces and Home live on one computer, which starts as soon as you start typing."
+        "body": "A workspace is a desk for one project: its threads share the same files, data and results, kept apart from your other work. Your workspaces and Home all run on one computer, which starts when you start typing."
       },
       "create": {
         "title": "Give real tasks their own workspace",
         "body": "If it involves data work or ends in a deliverable, give it a workspace: hit \"New workspace\" and name it after the task, or ask your Chief of Staff to set one up."
       },
-      "createWorkspaceTask": "Spin up a dedicated workspace; its Analyst gets a full sandbox for real research."
+      "createWorkspaceTask": "A desk for one project, with its own Analyst and files."
     },
     "intro": {
       "chiefOfStaffRun": "chief of staff",
