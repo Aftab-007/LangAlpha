@@ -25,6 +25,8 @@ import { ConnectConsentHost } from './pages/Plugins/components/ConnectConsentHos
 import { ConnectLandingHost } from './pages/Plugins/components/ConnectLandingHost';
 import { ThreadLifecycleFeed } from './lib/threadLifecycle/ThreadLifecycleFeed';
 import { WarmHome } from './components/WarmHome';
+import { HostedSignInGate } from './components/HostedSignInGate';
+import { forgetHostedSignIn, hostedSignInReturn, landAfterSignIn } from './lib/hostedSignIn';
 import { markBooted, watchStaleBuild } from './lib/staleBuild';
 import { lazyWithMotion } from './lib/lazyWithMotion';
 import './App.css';
@@ -123,7 +125,7 @@ function AuthCallback() {
       window.location.href = redirectTo;
       return;
     }
-    navigate('/dashboard', { replace: true });
+    landAfterSignIn(navigate);
   }, [stated, isPopup, isLoggedIn, navigate]);
 
   if (failure) {
@@ -182,9 +184,15 @@ function CallbackRoute() {
   return <AuthCallback />;
 }
 
-/** Redirects to dashboard or a ?redirect= target after login. */
+/**
+ * Redirects to dashboard or a ?redirect= target after login. A desktop window
+ * that signed in on the portal comes back here without the query, so the target
+ * it left with stands in. Read once: `App` clears that note once signed in.
+ */
 function RootRedirect() {
-  const redirectTo = inAppPath(new URLSearchParams(window.location.search).get('redirect'));
+  const [redirectTo] = useState(() =>
+    inAppPath(new URLSearchParams(window.location.search).get('redirect') ?? hostedSignInReturn())
+  );
   if (redirectTo) {
     window.location.href = redirectTo;
     return null;
@@ -367,6 +375,12 @@ function App() {
     return watchStaleBuild();
   }, []);
 
+  // Once initialized, so `RootRedirect` has read the page the trip was for: a
+  // session can land while the page is still loading.
+  useEffect(() => {
+    if (isInitialized && isLoggedIn) forgetHostedSignIn();
+  }, [isInitialized, isLoggedIn]);
+
   if (!isInitialized) {
     return <PageLoading />;
   }
@@ -374,9 +388,11 @@ function App() {
   const appEntryElement = isLoggedIn ? (
     <RootRedirect />
   ) : (
-    <Suspense fallback={<PageLoading />}>
-      <LoginPage />
-    </Suspense>
+    <HostedSignInGate>
+      <Suspense fallback={<PageLoading />}>
+        <LoginPage />
+      </Suspense>
+    </HostedSignInGate>
   );
 
   return (
