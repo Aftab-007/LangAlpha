@@ -1,5 +1,5 @@
 import React, { useCallback, useRef } from 'react';
-import { Activity, ArrowLeft, BookMarked, BookOpen, CandlestickChart, FolderOpen, LayoutDashboard, PanelRight, Plus, ScrollText, Settings, X, XCircle, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowLeft, BookMarked, BookOpen, CandlestickChart, FolderOpen, LayoutDashboard, Maximize2, Minimize2, PanelRight, Plus, ScrollText, Settings, X, XCircle, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -33,6 +33,9 @@ interface TabStripProps {
    *  never renders: a panel locked to one file has no other way to them. */
   onOpenMemory?: (() => void) | null;
   onOpenMemo?: (() => void) | null;
+  /** Null where the host cannot lay the panel over what it sits beside. */
+  onToggleExpanded?: (() => void) | null;
+  expanded?: boolean;
   /** The panel's own close, where the surface around it does not own one. */
   onPanelClose: (() => void) | null;
   /** Mobile leaves the panel by a back arrow rather than an X. */
@@ -157,6 +160,8 @@ export function TabStrip({
   onToggleTree,
   onOpenMemory = null,
   onOpenMemo = null,
+  onToggleExpanded = null,
+  expanded = false,
   onPanelClose,
   backArrow = false,
 }: TabStripProps): React.ReactElement {
@@ -280,6 +285,19 @@ export function TabStrip({
             aria-label={t('filePanel.toggleTree')}
           >
             <PanelRight className="h-4 w-4" />
+          </button>
+        )}
+        {/* Beside the close, so it holds its place as the tree's toggle comes
+            and goes with the tab in front. */}
+        {onToggleExpanded && (
+          <button
+            type="button"
+            onClick={onToggleExpanded}
+            className="file-panel-icon-btn"
+            title={expanded ? t('filePanel.collapsePanel') : t('filePanel.expandPanel')}
+            aria-label={expanded ? t('filePanel.collapsePanel') : t('filePanel.expandPanel')}
+          >
+            {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </button>
         )}
         {onPanelClose && (

@@ -663,10 +663,10 @@ test.describe('Chat View -- SSE Streaming', () => {
     await expect(page.getByText('report.pdf')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('analysis.py')).toBeVisible();
     await expect(page.getByText('chart.png')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Show file tree' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Toggle file tree' })).toHaveCount(0);
   });
 
-  test('a narrow file panel opens with the tree closed and lists files on request', async ({ page }) => {
+  test('a narrow file panel opens on the full file tree', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
     await mockAPI(page, {
       ...chatViewOverrides(),
@@ -678,13 +678,12 @@ test.describe('Chat View -- SSE Streaming', () => {
     await page.waitForSelector('textarea', { timeout: 10000 });
     await page.locator('button[title="Workspace Files"]').click();
 
-    const showTree = page.getByRole('button', { name: 'Show file tree' });
-    await expect(showTree).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText('report.pdf')).toHaveCount(0);
-    await showTree.click();
-    await expect(page.getByText('report.pdf')).toBeVisible();
+    // An empty tab lays the tree across the whole panel at any width, so
+    // there is no tree toggle to press until a file takes the body.
+    await expect(page.getByText('report.pdf')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('analysis.py')).toBeVisible();
     await expect(page.getByText('chart.png')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Toggle file tree' })).toHaveCount(0);
   });
 
   test('workspace starting shows warm-up indicator', async ({ page }) => {

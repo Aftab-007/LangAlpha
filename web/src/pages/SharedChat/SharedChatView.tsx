@@ -4,6 +4,7 @@ import { ArrowLeft, FolderOpen } from 'lucide-react';
 import { motion, type PanInfo } from '@/lib/framer';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Loader } from '@/components/ui/loader';
+import { cn } from '@/lib/utils';
 import MessageList from '../ChatAgent/components/MessageList';
 import {
   MessageActionsProvider,
@@ -92,6 +93,13 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
   // What the panel has in front: a chart holds the divider at its floor.
   const [panelTabKind, setPanelTabKind] = useState<FileTab['kind'] | null>(null);
+  // Expanded, the panel lies over the whole view, as it does in the owner's.
+  // Closing the panel ends it, so the next open starts beside the chat, and
+  // so does the mobile layout, which offers no toggle.
+  const [expanded, setExpanded] = useState(false);
+  if (expanded && (!showFilePanel || isMobile)) setExpanded(false);
+  const panelExpanded = expanded && !isMobile;
+  const handleTogglePanelExpanded = useCallback(() => setExpanded((v) => !v), []);
   const panelMinWidth = panelTabKind === 'chart' ? CHART_SURFACE_MIN_WIDTH : PANEL_MIN_WIDTH;
   const panelMaxRatio = panelTabKind === 'chart' ? CHART_MAX_RATIO : PANEL_MAX_RATIO;
   useEffect(() => {
@@ -547,6 +555,8 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
       // No files to browse means no tree.
       singleFileMode={!canBrowseFiles}
       onActiveTabKindChange={setPanelTabKind}
+      expanded={panelExpanded}
+      onToggleExpanded={isMobile ? null : handleTogglePanelExpanded}
       onClose={() => setShowFilePanel(false)}
       files={files}
       filesLoading={filesLoading}
@@ -567,8 +577,9 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
       className="relative flex h-screen w-full overflow-hidden"
       style={{ backgroundColor: 'var(--color-bg-page)' }}
     >
-      {/* Left Side: Topbar + Chat Window — identical structure to ChatView */}
-      <div className="flex flex-col flex-1 min-w-0">
+      {/* Left Side: Topbar + Chat Window — identical structure to ChatView,
+          inert and isolated under an expanded panel as there. */}
+      <div className={cn('flex flex-col flex-1 min-w-0', panelExpanded && 'isolate')} inert={panelExpanded}>
         {/* Top bar — matches ChatView's top bar exactly */}
         <div className="flex items-center justify-between px-4 py-2 border-b min-w-0 shrink-0" style={{ borderColor: 'var(--color-border-muted)' }}>
           <div className="flex items-center gap-4 min-w-0 shrink">
@@ -716,8 +727,11 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
         </motion.div>
       ) : (
         <>
-          <div className="chat-split-divider" onMouseDown={handleDividerMouseDown} />
-          <div className="shrink-0" style={{ width: rightPanelWidth }}>
+          {!panelExpanded && <div className="chat-split-divider" onMouseDown={handleDividerMouseDown} />}
+          <div
+            className={panelExpanded ? 'absolute inset-0 z-10' : 'shrink-0'}
+            style={panelExpanded ? undefined : { width: rightPanelWidth }}
+          >
             {filePanel}
           </div>
         </>

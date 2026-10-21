@@ -22,6 +22,7 @@ import { useWorkspaceFolders } from '../contexts/WorkspaceContext';
 import { classifyAgentPath, parseAgentPath } from '../utils/agentPaths';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { useLatestRef } from '@/hooks/useLatestRef';
+import { cn } from '@/lib/utils';
 import { parseFragment, type FileLocation, type OpenFileHandler } from '../utils/fileLocation';
 import FileHeaderActions from './FileHeaderActions';
 import { useDownloadState, workspaceDownloadKey } from '../utils/downloadNotice';
@@ -75,6 +76,11 @@ interface FilePanelProps {
    *  follows; absent for a chat that has not sent its first message, or a share. */
   threadId?: string | null;
   onClose: () => void;
+  /** Lays the panel over what it sits beside, for a file that wants the
+   *  width. Null where the host cannot: on mobile the panel covers the chat
+   *  already. */
+  onToggleExpanded?: (() => void) | null;
+  expanded?: boolean;
   /** What the chat asked the panel to show. A `file` target's `dir` stays on
    *  as the tree's scope until `onTargetHandled` clears it; a memory or memo
    *  target stays until its tab has selected the entry. Each handled callback
@@ -141,6 +147,8 @@ function FilePanel({
   workspaceId,
   threadId = null,
   onClose,
+  onToggleExpanded = null,
+  expanded = false,
   target = null,
   onTargetHandled,
   onTargetMemoryHandled,
@@ -340,7 +348,11 @@ function FilePanel({
   const { setBackupResult } = backup;
 
   const { open: treeOpen, setOpen: setTreeOpen } = useTreeOpen(workspaceId, narrow);
-  const treeShown = treeOpen && !singleFileMode && listingTab;
+  // The empty tab is the listing itself, laid across the whole body whatever
+  // the column's own state; a file opened from it narrows it to the column,
+  // or folds it away for a reader who keeps the column folded.
+  const treeFull = activeTab.kind === 'empty' && !singleFileMode;
+  const treeShown = !singleFileMode && listingTab && (treeOpen || treeFull);
 
   /** A breadcrumb segment points the tree at that directory. */
   const revealInTree = useCallback((dir: string) => {
@@ -606,7 +618,8 @@ function FilePanel({
   }, [previews, tabs, cancelPending]);
 
   // Only a tab the tree sits beside takes a drop; every other kind shows
-  // something that is not a folder.
+  // something that is not a folder. The tree takes it too, which on the
+  // empty tab is all there is to drop on.
   const canDropHere = !readOnly && listingTab;
 
   const onPageCount = useCallback((path: string, pages: number) => {
@@ -615,7 +628,7 @@ function FilePanel({
 
   return (
     <RouteLeaveGuardContext value={guardLeave}>
-    <div className="file-panel" ref={panelRef} onKeyDown={tree.onEscape}>
+    <div className={cn('file-panel', expanded && 'is-expanded')} ref={panelRef} onKeyDown={tree.onEscape}>
       <TabStrip
         tabs={tabs.tabs}
         activeId={tabs.activeId}
@@ -626,11 +639,14 @@ function FilePanel({
         onNewTab={singleFileMode || readOnly ? null : newTab}
         hasChanged={hasChanged}
         treeOpen={treeShown}
-        onToggleTree={singleFileMode || !listingTab ? null : () => setTreeOpen((v) => !v)}
+        // On the empty tab the tree is the tab, not a column to fold.
+        onToggleTree={singleFileMode || activeTab.kind !== 'file' ? null : () => setTreeOpen((v) => !v)}
         // Locked to one file, the panel has no tree to pin the stores in, so
         // the strip offers them instead.
         onOpenMemory={singleFileMode && stores ? openMemory : null}
         onOpenMemo={singleFileMode ? viewInMemo : null}
+        expanded={expanded}
+        onToggleExpanded={onToggleExpanded}
         onPanelClose={closePanel}
         backArrow={isMobile}
       />
@@ -712,20 +728,22 @@ function FilePanel({
         />
       )}
 
-        <div className="file-panel-body">
-          <div
-            className="file-panel-viewer"
-            onDragEnter={canDropHere ? handleDragEnter : undefined}
-            onDragLeave={canDropHere ? handleDragLeave : undefined}
-            onDragOver={canDropHere ? handleDragOver : undefined}
-            onDrop={canDropHere ? handleDrop : undefined}
-          >
-            {canDropHere && isDragOver && (
-              <div className="file-panel-drag-overlay">
-                <Upload className="h-8 w-8" style={{ color: 'var(--color-accent-primary)' }} />
-                <span>{t('filePanel.dropToUpload')}</span>
-              </div>
-            )}
+        <div
+          className="file-panel-body"
+          onDragEnter={canDropHere ? handleDragEnter : undefined}
+          onDragLeave={canDropHere ? handleDragLeave : undefined}
+          onDragOver={canDropHere ? handleDragOver : undefined}
+          onDrop={canDropHere ? handleDrop : undefined}
+        >
+          {canDropHere && isDragOver && (
+            <div className="file-panel-drag-overlay">
+              <Upload className="h-8 w-8" style={{ color: 'var(--color-accent-primary)' }} />
+              <span>{t('filePanel.dropToUpload')}</span>
+            </div>
+          )}
+          {/* Still mounted under a full tree, at no width: the running apps'
+              frames live in it, and a frame moved or dropped reloads. */}
+          <div className="file-panel-viewer">
             {/* font-content only while reading a file: the tree stays on the UI font. */}
             <div className={`file-panel-content${selectedFile ? ' font-content' : ''}`} ref={contentWrapperRef}>
               {selectionTooltip && onAddContext && (
@@ -756,6 +774,7 @@ function FilePanel({
                 </button>
               )}
               <PreviewPanes tabs={tabs.tabs} activeId={activeTab.id} previews={previews} />
+              {!treeFull && (
               <ActiveTabBody
                 activeTab={activeTab}
                 tabs={tabs}
@@ -797,14 +816,14 @@ function FilePanel({
                 }}
                 onPageCount={onPageCount}
                 canUpload={!readOnly}
-                treeOpen={treeOpen}
-                onShowTree={singleFileMode ? null : () => setTreeOpen(true)}
-                onOpenChart={readOnly || singleFileMode ? null : () => { cancelPending(); tabs.openChart({ symbol: lastChartSymbol(workspaceId, { persist: persistStrip }) }); }}
               />
+              )}
             </div>
           </div>
 
-          {narrowOrUnmeasured !== null && (
+          {/* A full tree is the same at any width, so it need not wait for
+              the measurement the column's placement does. */}
+          {(narrowOrUnmeasured !== null || treeFull) && (
           <AnimatePresence initial={false}>
           {treeShown && (
             <TreeColumn
@@ -837,10 +856,12 @@ function FilePanel({
               onOpenPreview={openPreviewTab}
               onOpenMemory={stores ? openMemory : null}
               onOpenMemo={viewInMemo}
+              onOpenChart={readOnly ? null : () => { cancelPending(); tabs.openChart({ symbol: lastChartSymbol(workspaceId, { persist: persistStrip }) }); }}
               onOpenSettings={!readOnly && !isHome ? openSettings : null}
               workspaceName={wsData?.name}
               filesRestoreIncomplete={filesRestoreIncomplete}
               overlay={narrow}
+              full={treeFull}
               onDismissOverlay={() => setTreeOpen(false)}
             />
           )}

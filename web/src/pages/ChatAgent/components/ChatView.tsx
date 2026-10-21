@@ -18,6 +18,7 @@ import { useFeatureEnabled } from '@/hooks/useFeatures';
 import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
+import { cn } from '@/lib/utils';
 import { invalidateSubagents } from '@/hooks/useSubagents';
 import { markHandoffReady } from '@/pages/Onboarding/welcome/handoff';
 import { cardDownloadKey, trackPending } from '../utils/downloadNotice';
@@ -860,6 +861,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     rightPanelType,
     setRightPanelType,
     rightPanelWidth,
+    panelExpanded,
+    handleTogglePanelExpanded,
     previewData,
     panelWrapperRef,
     isDragging,
@@ -1373,7 +1376,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     <div
       ref={containerRef}
       data-handoff-scope={kickoffView ? '' : undefined}
-      className="flex w-full overflow-hidden h-full"
+      className="relative flex w-full overflow-hidden h-full"
       style={{
         backgroundColor: 'var(--color-bg-page)',
       }}
@@ -1383,8 +1386,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       <div aria-live="polite" aria-atomic="false" className="sr-only">
         {recentlyCompletedAnnouncement}
       </div>
-      {/* Left Side: Topbar + Sidebar + Chat Window */}
-      <div className="flex flex-col flex-1 min-w-0">
+      {/* Left Side: Topbar + Sidebar + Chat Window. Inert under an expanded
+          panel, so focus and a screen reader stay on what is shown, and
+          isolated, so the chat's own raised layers (the jump-to-latest pill)
+          stay under it rather than stacking against it. */}
+      <div className={cn('flex flex-col flex-1 min-w-0', panelExpanded && 'isolate')} inert={panelExpanded}>
         {/* Top bar */}
         {/* `drag` makes this the window's drag band inside the desktop shell.
             It already spans the titlebar and is mostly empty, so the shell gets
@@ -1869,7 +1875,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       ) : (
         <>
         {/* Resize divider — outside overflow-hidden panel so its wide hover zone isn't clipped */}
-        {rightPanelType && (
+        {rightPanelType && !panelExpanded && (
           <div
             className={`chat-split-divider${isDragging ? ' dragging' : ''}`}
             onMouseDown={handleDividerMouseDown}
@@ -1888,7 +1894,15 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
               }
               className="flex shrink-0 overflow-hidden"
             >
-              <div data-panel-inner className="shrink-0 h-full" style={{ width: rightPanelWidth }}>
+              {/* Expanded, the panel lies over the whole view while the
+                  wrapper keeps its width in the row: the chat underneath
+                  keeps its layout and scroll, and the panel stays the same
+                  element, so a running app's iframe does not reload. */}
+              <div
+                data-panel-inner
+                className={panelExpanded ? 'absolute inset-0 z-10' : 'shrink-0 h-full'}
+                style={panelExpanded ? undefined : { width: rightPanelWidth }}
+              >
                 <Suspense fallback={null}>
                   {rightPanelType === 'file' ? (
                     <WorkspaceProvider workspaceId={panelWorkspaceId} downloadFile={null} folders={panelFolders}>
@@ -1897,6 +1911,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       threadId={panelThreadId}
                       isActive={isActive}
                       onClose={() => { setRightPanelType(null); popPanelHistory(); }}
+                      expanded={panelExpanded}
+                      onToggleExpanded={handleTogglePanelExpanded}
                       onLeaveGuardChange={handleFilesLeaveGuardChange}
                       onActiveTabKindChange={handleActiveTabKindChange}
                       target={panelTarget}

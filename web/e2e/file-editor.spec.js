@@ -63,7 +63,6 @@ async function openEditor(page) {
   await page.goto(`/chat/t/${TH}`);
   await page.waitForSelector('textarea', { timeout: 10000 });
   await page.locator('button[title="Workspace Files"]').click();
-  await page.getByRole('button', { name: 'Show file tree' }).click();
   // Dispatched rather than clicked: on a cold load the tree column's entry
   // animation can stall with the row still off screen, and the tree is not
   // what this spec is about.
