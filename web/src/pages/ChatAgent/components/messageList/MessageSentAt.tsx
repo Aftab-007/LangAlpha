@@ -3,6 +3,8 @@ import React from 'react';
 /** A bubble's time arrives as a Date from the chat session, or as an ISO
  *  string or epoch from replayed history. */
 function toDate(value: unknown): Date | null {
+  // `new Date(null)` is the 1970 epoch, a valid date: a missing time must not read as one.
+  if (value == null || value === '') return null;
   const d = value instanceof Date ? value : new Date(value as string | number);
   return Number.isNaN(d.getTime()) ? null : d;
 }
