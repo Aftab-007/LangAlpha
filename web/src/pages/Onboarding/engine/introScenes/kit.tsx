@@ -1,19 +1,20 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { ArrowUp, MousePointer2, Plus } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { ArrowUp, Mic, MousePointer2, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { progress, useSceneTime } from './clock';
 import '../pageIntro.css';
 
 /*
- * The parts every scene is drawn with: zoomed-out wireframes of the WHOLE
- * page (app rail + topbar + skeleton regions), landing-page blueprint style,
- * plus the pieces that move on the scene clock (typing, streaming lines,
- * running steps, a scripted pointer). All data is invented placeholder.
+ * The parts every scene is drawn with: a zoomed-out copy of the WHOLE page
+ * (app rail + topbar + cards) in the app's own surfaces and type, plus the
+ * pieces that move on the scene clock (typing, streaming lines, running
+ * steps, a scripted pointer). All data is invented placeholder.
  */
 /* eslint-disable react-refresh/only-export-components -- scene kit: small
    components plus the `rv` style helper */
 
-export const rv = (s: number): CSSProperties => ({ '--rv': `${s}s` } as CSSProperties);
+export const rv = (s: number): CSSProperties => ({ '--rv': `${s}s` }) as CSSProperties;
 
 /** Grey skeleton bar standing in for text. */
 export function Ln({ w, h = 3, c }: { w: string; h?: number; c?: string }) {
@@ -25,27 +26,34 @@ export function Ln({ w, h = 3, c }: { w: string; h?: number; c?: string }) {
   );
 }
 
-export function Tag({ children, color = 'var(--iv-accent)' }: { children: ReactNode; color?: string }) {
+/** A small label chip, as the app draws tags: a solid chip, colored text. */
+export function Tag({
+  children,
+  color = 'var(--iv-text-2)',
+}: {
+  children: ReactNode;
+  color?: string;
+}) {
   return (
     <span
-      className="w-fit shrink-0 rounded px-1 py-0.5 font-mono text-[0.5rem] leading-none"
-      style={{ background: `color-mix(in srgb, ${color} 18%, transparent)`, color }}
+      className="w-fit shrink-0 rounded px-1 py-0.5 text-[0.5rem] font-medium leading-none"
+      style={{ background: 'var(--color-bg-tag)', color }}
     >
       {children}
     </span>
   );
 }
 
-/** One region of the page wireframe; `hot` = what this step is about. */
+/** A card on the page; `active` = in use (held, say). */
 export function Region({
-  hot = false,
+  active = false,
   dashed = false,
   delay,
   className = '',
   style,
   children,
 }: {
-  hot?: boolean;
+  active?: boolean;
   dashed?: boolean;
   delay?: number;
   className?: string;
@@ -54,7 +62,7 @@ export function Region({
 }) {
   return (
     <div
-      className={`intro-region ${hot ? 'intro-region--hot' : ''} ${
+      className={`intro-region ${active ? 'intro-region--active' : ''} ${
         dashed ? 'intro-region--dashed' : ''
       } ${delay != null ? 'intro-rv' : ''} ${className}`}
       style={{ ...(delay != null ? rv(delay) : null), ...style }}
@@ -74,9 +82,13 @@ export function Frame({ children, topbar }: { children: ReactNode; topbar?: Reac
           className="flex w-7 shrink-0 flex-col items-center gap-2 border-r py-2.5"
           style={{ borderColor: 'var(--iv-border)' }}
         >
-          <span className="h-2.5 w-2.5 rounded" style={{ background: 'var(--iv-accent)' }} />
+          <span className="h-2.5 w-2.5 rounded" style={{ background: 'var(--iv-line-2)' }} />
           {[0, 1, 2].map((i) => (
-            <span key={i} className="h-2.5 w-2.5 rounded" style={{ background: 'var(--iv-fill)' }} />
+            <span
+              key={i}
+              className="h-2.5 w-2.5 rounded"
+              style={{ background: 'var(--iv-fill)' }}
+            />
           ))}
         </div>
         <div className="min-w-0 flex-1">
@@ -94,56 +106,76 @@ export function Frame({ children, topbar }: { children: ReactNode; topbar?: Reac
 }
 
 /**
- * The chat input dock: composer line + plus / plan / model / send row.
- * `text` replaces the composer's placeholder line (a `Typed` while the user
- * writes); the send button presses at each time in `sendAt`.
+ * The chat composer, as the app draws it: a rounded card with the text on
+ * top and attach / model / mic / send below. `text` replaces the placeholder
+ * (a `Typed` while the user writes); `focused` gives it the accent edge
+ * the real one takes on focus; the send button fills once there is text and
+ * presses at each time in `sendAt`.
  */
 export function InputDock({
-  hot = false,
+  focused = false,
   delay,
   chip,
   text,
   sendAt,
 }: {
-  hot?: boolean;
+  focused?: boolean;
   delay?: number;
   chip?: ReactNode;
   text?: ReactNode;
   sendAt?: number[];
 }) {
+  const { t: tr } = useTranslation();
   const t = useSceneTime();
   const pressed = sendAt?.some((at) => t >= at && t < at + 260) ?? false;
+  const filled = text != null;
   return (
-    <Region hot={hot} delay={delay} className="mt-auto flex flex-col gap-1.5 p-1.5">
+    <div
+      className={cn(
+        'mt-auto flex flex-col gap-1.5 rounded-[11px] border p-1.5',
+        delay != null && 'intro-rv'
+      )}
+      style={{
+        ...(delay != null ? rv(delay) : null),
+        background: 'var(--color-bg-card)',
+        borderColor: focused ? 'var(--color-accent-primary)' : 'var(--color-border-input)',
+      }}
+    >
       {chip}
-      <div className="flex h-2 items-center">
+      <div className="flex h-2 items-center px-0.5">
         {text == null ? (
-          <Ln w="46%" c="var(--iv-line-3)" />
-        ) : (
           <span
-            className="truncate font-mono text-[0.5rem] leading-none"
-            style={{ color: 'var(--iv-text)' }}
+            className="truncate text-[0.5rem] leading-none"
+            style={{ color: 'var(--iv-text-3)' }}
           >
+            {tr('chat.placeholderDefault')}
+          </span>
+        ) : (
+          <span className="truncate text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
             {text}
           </span>
         )}
       </div>
       <div className="flex items-center gap-1.5">
-        <Plus className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-        <span className="font-mono text-[0.5rem]" style={{ color: 'var(--iv-text-3)' }}>
-          plan
-        </span>
+        <Plus className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-icon-muted)' }} />
         <span className="ml-auto">
-          <Ln w="30px" h={3} c="var(--iv-line-3)" />
+          <Ln w="30px" h={3} c="var(--iv-line-2)" />
         </span>
+        <Mic className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-icon-muted)' }} />
         <span
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-transform duration-150"
-          style={{ background: 'var(--iv-accent-deep)', transform: pressed ? 'scale(0.8)' : undefined }}
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md transition-transform duration-150"
+          style={{
+            background: filled ? 'var(--color-btn-primary-bg)' : 'var(--color-bg-elevated)',
+            transform: pressed ? 'scale(0.85)' : undefined,
+          }}
         >
-          <ArrowUp className="h-2 w-2 text-white" />
+          <ArrowUp
+            className="h-2 w-2"
+            style={{ color: filled ? 'var(--color-btn-primary-text)' : 'var(--color-icon-muted)' }}
+          />
         </span>
       </div>
-    </Region>
+    </div>
   );
 }
 
@@ -243,17 +275,26 @@ export function StreamBlock({
   );
 }
 
-/** A step's status: nothing before `at`, a spinner while it runs, a check from `done`. */
-export function Working({ at, done }: { at: number; done: number }) {
+const LOADER_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+
+/** The app's `Loader`: a braille glyph stepping every 80ms on the scene
+    clock, at the surrounding text size. */
+export function Loader({
+  color = 'currentColor',
+  className,
+}: {
+  color?: string;
+  className?: string;
+}) {
   const t = useSceneTime();
-  if (t < at) return null;
-  if (t < done) return <span className="intro-spin" aria-hidden />;
+  const frame = Number.isFinite(t) ? Math.floor(t / 80) % LOADER_FRAMES.length : 0;
   return (
     <span
-      className="intro-pop font-mono text-[0.4375rem] leading-none"
-      style={{ ...rv(0), color: 'var(--iv-teal)' }}
+      className={cn('shrink-0 font-mono leading-none', className)}
+      style={{ color }}
+      aria-hidden
     >
-      ✓
+      {LOADER_FRAMES[frame]}
     </span>
   );
 }
@@ -270,14 +311,8 @@ export function UserBubble({
 }) {
   return (
     <Appear at={at} className={cn('flex justify-end', className)}>
-      <div
-        className="rounded-md rounded-br-sm px-1.5 py-1"
-        style={{ background: 'hsl(var(--primary) / 0.22)' }}
-      >
-        <span
-          className="block font-mono text-[0.5rem] leading-none"
-          style={{ color: 'var(--iv-text)' }}
-        >
+      <div className="rounded-md px-1.5 py-1" style={{ background: 'var(--color-bg-elevated)' }}>
+        <span className="block text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
           {children}
         </span>
       </div>
@@ -308,8 +343,10 @@ export function pointAt(path: Waypoint[], t: number): { x: number; y: number } {
 }
 
 /**
- * A pointer gliding between waypoints, with a ripple at each click. Place it
- * inside a `relative` box whose origin the waypoints are measured from.
+ * A pointer gliding between waypoints, pressing at each click. Outlined in
+ * the page color, as a system pointer is, so it stays visible over a button
+ * of its own color. Place it inside a `relative` box whose origin the
+ * waypoints are measured from.
  */
 export function Cursor({ path, clicks = [] }: { path: Waypoint[]; clicks?: number[] }) {
   const t = useSceneTime();
@@ -318,18 +355,14 @@ export function Cursor({ path, clicks = [] }: { path: Waypoint[]; clicks?: numbe
   const pressed = clicks.some((c) => t >= c && t < c + 160);
   return (
     <div className="pointer-events-none absolute z-10" style={{ left: x, top: y }}>
-      {clicks
-        .filter((c) => t >= c && t < c + 600)
-        .map((c) => (
-          <span key={c} className="intro-click absolute -left-3 -top-3 h-6 w-6" style={rv(0)} />
-        ))}
       <span
         className="block transition-transform duration-100"
         style={{ transform: pressed ? 'scale(0.82)' : undefined, transformOrigin: 'top left' }}
       >
         <MousePointer2
           className="intro-rv h-3 w-3"
-          style={{ ...rv(0), color: 'var(--iv-text)', fill: 'currentColor' }}
+          strokeWidth={1.5}
+          style={{ ...rv(0), color: 'var(--color-bg-page)', fill: 'var(--iv-text)' }}
         />
       </span>
     </div>

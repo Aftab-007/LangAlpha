@@ -5905,10 +5905,8 @@
       "createWorkspaceTask": "A desk for one project, with its own Analyst and files."
     },
     "intro": {
-      "chiefOfStaffRun": "chief of staff",
       "handoff": "handed to an analyst",
-      "taskHandoff": "task handed to an analyst",
-      "footer": "two ways to work"
+      "taskHandoff": "task handed to an analyst"
     }
   }
 }

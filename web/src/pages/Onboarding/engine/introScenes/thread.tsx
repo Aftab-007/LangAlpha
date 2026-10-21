@@ -1,5 +1,33 @@
 import type { ReactNode } from 'react';
-import { ArrowLeft, BookMarked, ChevronRight, FileText, Folder, Upload } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import {
+  ArrowLeft,
+  ArrowUpDown,
+  BookMarked,
+  CandlestickChart,
+  CheckSquare,
+  ChevronDown,
+  ChevronRight,
+  FilePlus,
+  FileSpreadsheet,
+  FileText,
+  Folder,
+  FolderOpen,
+  HardDrive,
+  Info,
+  PanelRight,
+  Plus,
+  RefreshCw,
+  ScrollText,
+  Search,
+  Settings,
+  Upload,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { formatBytes, paddedClockTime, shortMonthDay } from '@/lib/format';
+import { useLocale } from '@/hooks/useLocale';
 import { useAgentNames } from '../introAgents';
 import type { IntroVisualId } from '../../registry';
 import { useSceneTime, useTween } from './clock';
@@ -9,130 +37,71 @@ import {
   Frame,
   InputDock,
   Ln,
-  Region,
+  Loader,
   StreamLn,
   Tag,
   Typed,
   UserBubble,
-  Working,
   pointAt,
   type Waypoint,
 } from './kit';
 import type { IntroScene } from './types';
 
-/* Scenes for the thread intro: the chat column beside the tabbed right panel
-   (files, memory, memos). */
+/* Scenes for the thread intro: the chat column beside the file panel, drawn
+   the way the thread page draws them. The panel is a full-height column with
+   its own tab strip, the tree beside a file or empty tab, and Memory and Memo
+   opening as tabs of their own. Labels are the app's own strings. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
-/* ── thread page base: chat column + tabbed right panel ────────────────── */
+/* ── thread page base: chat column + file panel ────────────────────────── */
 
-function PanelTabs({ active }: { active: 'files' | 'memory' | 'memos' }) {
-  const tabs = ['files', 'memory', 'memos'] as const;
-  return (
-    <div className="flex items-center gap-1">
-      {tabs.map((t) => (
-        <span
-          key={t}
-          className="rounded px-1.5 py-0.5 font-mono text-[0.5rem] leading-none"
-          style={
-            t === active
-              ? { background: 'var(--iv-accent-deep)', color: '#fff' }
-              : { color: 'var(--iv-text-3)' }
-          }
-        >
-          {t}
-        </span>
-      ))}
-    </div>
-  );
-}
+/** The file panel's width in the 400px scene; the chat column takes the rest. */
+const PANEL_W = 212;
 
-/** Small mono text in a scene row. */
-function Mono({ children, dim = false }: { children: ReactNode; dim?: boolean }) {
+const iconStyle = { color: 'var(--iv-text-3)' };
+
+/** A tab in the panel's strip: the open one sits on a raised pill. */
+function PanelTab({
+  icon: Icon,
+  label,
+  active = false,
+}: {
+  icon: LucideIcon;
+  label: string;
+  active?: boolean;
+}) {
   return (
     <span
-      className="whitespace-nowrap font-mono text-[0.4375rem] leading-none"
-      style={{ color: dim ? 'var(--iv-text-3)' : 'var(--iv-text-2)' }}
+      className={cn(
+        'flex h-[15px] min-w-0 shrink items-center gap-1 rounded border pl-1 pr-2',
+        'text-[0.4375rem] leading-none'
+      )}
+      style={
+        active
+          ? {
+              background: 'var(--color-bg-elevated)',
+              borderColor: 'var(--color-border-muted)',
+              color: 'var(--iv-text)',
+            }
+          : { borderColor: 'transparent', color: 'var(--iv-text-3)' }
+      }
     >
-      {children}
+      <Icon className="h-2 w-2 shrink-0" />
+      <span className="truncate">{label}</span>
     </span>
   );
 }
 
-/** A row in the workspace file tree, shown from `at`. A folder opens at
-    `openAt`; a new file carries the teal changed dot. */
-function TreeRow({
-  depth = 0,
-  name,
-  folder = false,
-  openAt,
-  at = 0,
-  isNew = false,
-}: {
-  depth?: number;
-  name: string;
-  folder?: boolean;
-  openAt?: number;
-  at?: number;
-  isNew?: boolean;
-}) {
-  const turn = useTween(openAt ?? 0, 220);
-  const angle = openAt == null ? 0 : turn * 90;
+/** An icon button in the panel or tree chrome. */
+function ChromeIcon({ icon: Icon, on = false }: { icon: LucideIcon; on?: boolean }) {
   return (
-    <Appear at={at} className="flex items-center gap-1" style={{ paddingLeft: depth * 8 }}>
-      {folder ? (
-        <>
-          <ChevronRight
-            className="h-2 w-2 shrink-0"
-            style={{ color: 'var(--iv-text-3)', transform: `rotate(${angle}deg)` }}
-          />
-          <Folder className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-        </>
-      ) : (
-        <FileText className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-      )}
-      <Mono>{name}</Mono>
-      {isNew && (
-        <span
-          className="ml-auto h-1 w-1 shrink-0 rounded-full"
-          style={{ background: 'var(--iv-teal)' }}
-        />
-      )}
-    </Appear>
+    <Icon
+      className="h-2 w-2 shrink-0"
+      style={{ color: on ? 'var(--iv-text)' : 'var(--iv-text-3)' }}
+    />
   );
 }
-
-/** One tool call in the agent's turn: icon · what it is doing · spinner,
-    then the done label and ✓. */
-function ToolRow({
-  icon,
-  label,
-  doneLabel,
-  at,
-  done,
-}: {
-  icon: ReactNode;
-  label: string;
-  doneLabel: string;
-  at: number;
-  done: number;
-}) {
-  const t = useSceneTime();
-  return (
-    <Appear at={at} className="flex items-center gap-1">
-      {icon}
-      <Mono>{t < done ? label : doneLabel}</Mono>
-      <span className="ml-auto flex">
-        <Working at={at} done={done} />
-      </span>
-    </Appear>
-  );
-}
-
-const toolIcon = (Icon: typeof FileText) => (
-  <Icon className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-);
 
 /** Earlier turns in the thread, above whatever the scene plays out. */
 function History() {
@@ -145,14 +114,21 @@ function History() {
   );
 }
 
+/**
+ * The thread page: the chat column with its header, and the file panel
+ * beside it, its tab strip level with the chat header. `tabs` and `actions`
+ * fill the strip; `panel` is everything under it.
+ */
 function ThreadFrame({
-  tab,
+  tabs,
+  actions,
   chat,
   panel,
   composer,
   sendAt,
 }: {
-  tab: 'files' | 'memory' | 'memos';
+  tabs: ReactNode;
+  actions: ReactNode;
   chat: ReactNode;
   panel: ReactNode;
   composer?: ReactNode;
@@ -162,31 +138,121 @@ function ThreadFrame({
   return (
     <Frame
       topbar={
-        <>
-          <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-          <Ln w="24%" />
-          <span className="ml-auto">
-            <Tag>{worker}</Tag>
-          </span>
-        </>
+        <div className="-mx-2.5 flex h-full flex-1 items-stretch">
+          <div className="flex min-w-0 flex-1 items-center gap-2 px-2.5">
+            <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={iconStyle} />
+            <Ln w="30%" />
+            <span className="ml-auto flex items-center gap-1.5">
+              <Tag>{worker}</Tag>
+              {/* the folder button that opens the panel, held while it is open */}
+              <span
+                className="flex h-3.5 w-3.5 items-center justify-center rounded"
+                style={{ background: 'var(--color-border-muted)' }}
+              >
+                <FolderOpen className="h-2.5 w-2.5" style={{ color: 'var(--iv-text)' }} />
+              </span>
+            </span>
+          </div>
+          <div
+            className="flex shrink-0 items-center gap-1 border-l px-1"
+            style={{ width: PANEL_W, borderColor: 'var(--iv-border)' }}
+          >
+            {tabs}
+            <ChromeIcon icon={Plus} />
+            <span className="ml-auto flex items-center gap-1.5 pr-0.5">
+              {actions}
+              <ChromeIcon icon={X} />
+            </span>
+          </div>
+        </div>
       }
     >
-      <div className="flex flex-1 gap-2">
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+      <div className="-m-2.5 flex flex-1">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5 p-2.5">
           {chat}
           <InputDock text={composer} sendAt={sendAt} />
         </div>
-        {/* the panel is the subject — give it the wider column (the chat
-            side bleeds off the left edge anyway) */}
-        <Region hot delay={0.15} className="flex flex-[1.25] flex-col gap-1.5 p-1.5">
-          <div className="flex items-center justify-between gap-1">
-            <PanelTabs active={tab} />
-            <span className="intro-pulse" style={{ width: 5, height: 5 }} />
-          </div>
+        <div
+          className="flex shrink-0 flex-col border-l"
+          style={{ width: PANEL_W, borderColor: 'var(--iv-border)' }}
+        >
           {panel}
-        </Region>
+        </div>
       </div>
     </Frame>
+  );
+}
+
+/** A turn's tool calls, threaded on the timeline's rule through their icons. */
+function Timeline({ children }: { children: ReactNode }) {
+  return (
+    <div className="relative flex flex-col">
+      <span
+        aria-hidden
+        className="absolute bottom-[8.5px] left-[6.5px] top-[8.5px] w-px"
+        style={{ background: 'var(--color-border-default)' }}
+      />
+      {children}
+    </div>
+  );
+}
+
+/** What a tool row says at one stage: its label, and the mono pill naming
+    the file when there is one. */
+interface RowLine {
+  label: string;
+  pill?: string;
+}
+
+/**
+ * One tool call on the timeline: its icon on the rule, then what it says.
+ * While it runs the label shimmers, then it settles. A file call keeps one
+ * pill throughout ("Writing" then "Write", beside `notes.md`); a memory call
+ * runs as one phrase and settles with its topic as the pill. The app draws
+ * no spinner and no check on these rows.
+ */
+function ToolRow({
+  icon: Icon,
+  running,
+  settled,
+  at,
+  done,
+}: {
+  icon: LucideIcon;
+  running: RowLine;
+  settled: RowLine;
+  at: number;
+  done: number;
+}) {
+  const live = useSceneTime() < done;
+  const { label, pill } = live ? running : settled;
+  return (
+    <Appear at={at} className="flex min-w-0 items-center gap-1.5 py-[3px]">
+      {/* page-colored behind the icon, so the rule breaks around it */}
+      <span
+        className="flex h-[11px] w-3.5 shrink-0 items-center justify-center"
+        style={{ background: 'var(--iv-mk-bg)' }}
+      >
+        <Icon className="h-2 w-2" style={{ color: 'var(--Labels-Secondary)' }} />
+      </span>
+      {/* label and pill share a baseline, as the app's row line does */}
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span
+          className={cn('truncate text-[0.5rem] leading-none', live && 'intro-shimmer')}
+          style={live ? undefined : { color: 'var(--iv-text)' }}
+        >
+          {label}
+        </span>
+        {pill && (
+          <span
+            className="whitespace-nowrap font-mono text-[0.4375rem] leading-none"
+            style={{ color: 'var(--Labels-Secondary)' }}
+          >
+            {pill}
+          </span>
+        )}
+      </span>
+    </Appear>
   );
 }
 
@@ -194,8 +260,8 @@ function ThreadFrame({
 
 /** The Analyst's turn: a line of narration, then each file it writes lands
     in the tree as its write finishes (notes at the root, then data/ opens on
-    two more), and results/ is named as where deliverables go. Folders sort
-    before files, as in the real tree. */
+    two more). The tree sorts as the app's does: root files first, then
+    results/ and data/ ahead of other folders, names A to Z within. */
 const FILES = {
   lead: [
     { w: '78%', at: 400 },
@@ -212,47 +278,177 @@ const FILES = {
     { w: '84%', at: 3750 },
     { w: '40%', at: 4100 },
   ],
-  tag: 4650,
   length: 5400,
 };
 
+/** What an empty tab shows beside the tree: where a file comes from, and that
+    the tab can be a chart instead. Its dotted ground is the app's. */
+function EmptyTab() {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-2 text-center"
+      style={{
+        backgroundImage: 'radial-gradient(var(--color-border-muted) 1px, transparent 0)',
+        backgroundSize: '10px 10px',
+      }}
+    >
+      <FolderOpen className="h-4 w-4" style={iconStyle} />
+      <span
+        className="text-[0.5rem] font-medium leading-none"
+        style={{ color: 'var(--iv-text-2)' }}
+      >
+        {t('filePanel.openFile')}
+      </span>
+      <span
+        className={cn(
+          'mt-0.5 flex items-center gap-1 rounded border px-1.5 py-1',
+          'text-[0.4375rem] font-medium leading-none'
+        )}
+        style={{
+          background: 'var(--color-bg-card)',
+          borderColor: 'var(--color-border-default)',
+          color: 'var(--iv-text)',
+        }}
+      >
+        <CandlestickChart className="h-[7px] w-[7px] shrink-0" />
+        {t('filePanel.openChart')}
+      </span>
+      <span className="mt-0.5 flex w-full flex-col items-center gap-[3px]">
+        <Ln w="84%" h={2.5} />
+        <Ln w="58%" h={2.5} />
+      </span>
+    </div>
+  );
+}
+
+/** The tree column: its toolbar, the search field, Memory and Memo pinned
+    above the listing, then the listing. */
+function TreeColumn({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      className="flex w-[116px] shrink-0 flex-col border-l"
+      style={{ borderColor: 'var(--iv-border)' }}
+    >
+      <div className="flex items-center gap-[5px] px-1.5 pb-1 pt-1.5">
+        {[CheckSquare, Upload, HardDrive, RefreshCw, ArrowUpDown].map((icon, i) => (
+          <ChromeIcon key={i} icon={icon} />
+        ))}
+        <span className="ml-auto flex">
+          <ChromeIcon icon={Settings} />
+        </span>
+      </div>
+      <div className="px-1 pb-1">
+        <div
+          className="flex h-3.5 items-center gap-1 rounded border px-1"
+          style={{ background: 'var(--color-bg-input)', borderColor: 'var(--color-border-muted)' }}
+        >
+          <Search className="h-[7px] w-[7px] shrink-0" style={iconStyle} />
+          <span className="truncate text-[0.375rem] leading-none" style={iconStyle}>
+            {t('filePanel.searchFiles')}
+          </span>
+        </div>
+      </div>
+      <div className="border-b pb-0.5" style={{ borderColor: 'var(--iv-border)' }}>
+        <TreeFile icon={BookMarked} name={t('filePanel.tabs.memory')} />
+        <TreeFile icon={ScrollText} name={t('filePanel.tabs.memo')} />
+      </div>
+      <div className="flex flex-col pt-0.5">{children}</div>
+    </div>
+  );
+}
+
+/** A file in the tree, listed from `at`: its type's icon, then the name. */
+function TreeFile({
+  icon: Icon = FileText,
+  name,
+  nested = false,
+  at = 0,
+}: {
+  icon?: LucideIcon;
+  name: string;
+  nested?: boolean;
+  at?: number;
+}) {
+  return (
+    <Appear
+      at={at}
+      className="flex min-w-0 items-center gap-1 py-[3px] pr-1.5"
+      style={{ paddingLeft: nested ? 10 : 6 }}
+    >
+      <Icon className="h-[7px] w-[7px] shrink-0" style={iconStyle} />
+      <span className="truncate text-[0.4375rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+        {name}
+      </span>
+    </Appear>
+  );
+}
+
+/** A folder in the tree: chevron, folder, `name/` and how many files it
+    holds; it opens at `openAt`. */
+function TreeFolder({ name, count, openAt }: { name: string; count: number; openAt?: number }) {
+  const t = useSceneTime();
+  const Chevron = openAt != null && t >= openAt ? ChevronDown : ChevronRight;
+  return (
+    <div className="flex min-w-0 items-center gap-[3px] py-[3px] pl-[9px] pr-1.5">
+      <Chevron className="h-[7px] w-[7px] shrink-0" style={iconStyle} />
+      <Folder className="h-[7px] w-[7px] shrink-0" style={iconStyle} />
+      <span className="truncate text-[0.4375rem] font-medium leading-none" style={iconStyle}>
+        {name}/
+      </span>
+      <span className="text-[0.4375rem] leading-none" style={{ color: 'var(--color-icon-muted)' }}>
+        {count}
+      </span>
+    </div>
+  );
+}
+
 function FilePanel() {
+  const t = useSceneTime();
+  const { t: tr } = useTranslation();
   const [notes, prices, model] = FILES.writes.map((w) => w.at + FILES.write);
+  // data/ already holds one file; the two written into it count as they land
+  const inData = 1 + Number(t >= prices) + Number(t >= model);
   return (
     <ThreadFrame
-      tab="files"
+      tabs={<PanelTab icon={FolderOpen} label={tr('filePanel.openFile')} active />}
+      actions={<ChromeIcon icon={PanelRight} on />}
       chat={
         <>
           <History />
           {FILES.lead.map((l) => (
             <StreamLn key={l.at} w={l.w} at={l.at} />
           ))}
-          {FILES.writes.map((w) => (
-            <ToolRow
-              key={w.name}
-              icon={toolIcon(FileText)}
-              label={`writing ${w.name}…`}
-              doneLabel={w.name}
-              at={w.at}
-              done={w.at + FILES.write}
-            />
-          ))}
+          <Timeline>
+            {FILES.writes.map((w) => (
+              <ToolRow
+                key={w.name}
+                icon={FilePlus}
+                running={{ label: tr('toolArtifact.running.write'), pill: w.name }}
+                settled={{ label: tr('toolArtifact.tool.write'), pill: w.name }}
+                at={w.at}
+                done={w.at + FILES.write}
+              />
+            ))}
+          </Timeline>
           {FILES.tail.map((l) => (
             <StreamLn key={l.at} w={l.w} at={l.at} />
           ))}
         </>
       }
       panel={
-        <>
-          <TreeRow name="results/" folder />
-          <TreeRow name="data/" folder openAt={FILES.open} />
-          <TreeRow depth={1} name="prices.csv" at={prices} isNew />
-          <TreeRow depth={1} name="model.py" at={model} isNew />
-          <TreeRow name="notes.md" at={notes} isNew />
-          <Appear at={FILES.tag}>
-            <Tag color="var(--iv-teal)">deliverables → results/</Tag>
-          </Appear>
-        </>
+        <div className="flex flex-1">
+          <EmptyTab />
+          <TreeColumn>
+            <TreeFile name="notes.md" at={notes} />
+            <TreeFolder name="results" count={2} />
+            <TreeFolder name="data" count={inData} openAt={FILES.open} />
+            <TreeFile nested name="model.py" at={model} />
+            <TreeFile nested icon={FileSpreadsheet} name="prices.csv" at={prices} />
+            <TreeFile nested icon={FileSpreadsheet} name="universe.csv" at={FILES.open} />
+          </TreeColumn>
+        </div>
       }
     />
   );
@@ -260,96 +456,166 @@ function FilePanel() {
 
 /* ── thread · step 2: long-term memory ─────────────────────────────────── */
 
-/** A preference typed and sent, the agent adding it to memory, and the
-    memory list gaining it as an entry every thread reads. */
+/** A preference typed and sent, the agent adding it to memory as a topic
+    file, and the Memory tab's list gaining that file. */
 const MEM = {
   ask: "remember: I'm long NVDA",
   typeAsk: 450,
   sendAsk: 1500,
   save: 1950,
   saved: 2650,
+  topic: 'positions',
   lines: [
     { w: '78%', at: 2900 },
     { w: '84%', at: 3220 },
     { w: '60%', at: 3540 },
   ],
-  tag: 4200,
   length: 5000,
 };
 
-/** One entry in the memory list: teal bullet, then the remembered line. */
-function MemoryEntry({ at = 0, children }: { at?: number; children: ReactNode }) {
+/** One file in the memory list: its name, then size and when it changed
+    (the time of day when that was today). */
+function MemoryFile({
+  name,
+  bytes,
+  modified,
+  today = false,
+  at = 0,
+}: {
+  name: string;
+  bytes: number;
+  modified: Date;
+  today?: boolean;
+  at?: number;
+}) {
+  const locale = useLocale();
+  const when = today ? paddedClockTime(modified, locale) : shortMonthDay(modified, locale);
   return (
-    <Appear at={at} className="flex items-center gap-1.5">
-      <span className="h-1 w-1 shrink-0 rounded-full" style={{ background: 'var(--iv-teal)' }} />
-      {children}
+    <Appear at={at} className="flex min-w-0 items-center gap-1.5 px-1.5 py-1">
+      <FileText className="h-[9px] w-[9px] shrink-0" style={iconStyle} />
+      <span className="flex min-w-0 flex-col gap-[3px]">
+        <span className="truncate text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+          {name}
+        </span>
+        <span className="text-[0.375rem] leading-none" style={iconStyle}>
+          {formatBytes(bytes, locale)} · {when}
+        </span>
+      </span>
     </Appear>
+  );
+}
+
+/** The Memory tab: the User / Workspace switch, the folder it lists, and the
+    files in it, memory.md first. */
+function MemoryTab() {
+  const { t } = useTranslation();
+  const tiers = [t('memoryPanel.tierUser'), t('memoryPanel.tierWorkspace')];
+  return (
+    <>
+      <div
+        className="flex items-center justify-between border-b px-1.5 py-1"
+        style={{ borderColor: 'var(--iv-border)' }}
+      >
+        <span
+          className="flex gap-0.5 rounded p-[1.5px]"
+          style={{ background: 'var(--color-border-muted)' }}
+        >
+          {tiers.map((tier, i) => (
+            <span
+              key={tier}
+              className="rounded-[3px] px-1.5 py-[3px] text-[0.4375rem] font-medium leading-none"
+              style={
+                i === 0
+                  ? { background: 'var(--color-bg-page)', color: 'var(--iv-text)' }
+                  : { color: 'var(--iv-text-3)' }
+              }
+            >
+              {tier}
+            </span>
+          ))}
+        </span>
+        <ChromeIcon icon={RefreshCw} />
+      </div>
+      <span className="px-1.5 pb-0.5 pt-1.5 text-[0.375rem] leading-none" style={iconStyle}>
+        .agents/user/memory/
+      </span>
+      <MemoryFile name="memory.md" bytes={1260} modified={new Date(2026, 9, 18)} />
+      <MemoryFile
+        name={`${MEM.topic}.md`}
+        bytes={184}
+        modified={new Date(2026, 9, 21, 14, 5)}
+        today
+        at={MEM.saved}
+      />
+      <MemoryFile name="risk-preferences.md" bytes={640} modified={new Date(2026, 9, 12)} />
+      <MemoryFile name="watchlist.md" bytes={412} modified={new Date(2026, 9, 9)} />
+    </>
   );
 }
 
 function Memory() {
   const t = useSceneTime();
+  const { t: tr } = useTranslation();
   const composer =
     t >= MEM.typeAsk && t < MEM.sendAsk ? <Typed text={MEM.ask} at={MEM.typeAsk} /> : undefined;
   return (
     <ThreadFrame
-      tab="memory"
+      tabs={
+        <>
+          <PanelTab icon={FileText} label="notes.md" />
+          <PanelTab icon={BookMarked} label={tr('filePanel.tabs.memory')} active />
+        </>
+      }
+      actions={
+        <>
+          <ChromeIcon icon={BookMarked} />
+          <ChromeIcon icon={ScrollText} />
+        </>
+      }
       composer={composer}
       sendAt={[MEM.sendAsk]}
       chat={
         <>
           <History />
           <UserBubble at={MEM.sendAsk + 80}>{MEM.ask}</UserBubble>
-          <ToolRow
-            icon={toolIcon(BookMarked)}
-            label="adding memory…"
-            doneLabel="added memory"
-            at={MEM.save}
-            done={MEM.saved}
-          />
+          <Timeline>
+            <ToolRow
+              icon={BookMarked}
+              running={{
+                label: tr('toolArtifact.inProgress.addingMemoryTopic', { topic: MEM.topic }),
+              }}
+              settled={{ label: tr('toolArtifact.completed.addedMemory'), pill: MEM.topic }}
+              at={MEM.save}
+              done={MEM.saved}
+            />
+          </Timeline>
           {MEM.lines.map((l) => (
             <StreamLn key={l.at} w={l.w} at={l.at} />
           ))}
         </>
       }
-      panel={
-        <>
-          <MemoryEntry>
-            <Ln w="82%" />
-          </MemoryEntry>
-          <MemoryEntry>
-            <Ln w="68%" />
-          </MemoryEntry>
-          {/* the new entry, stamped like the real list's modified time */}
-          <MemoryEntry at={MEM.saved}>
-            <Mono>user is long NVDA</Mono>
-            <span className="ml-auto flex">
-              <Mono dim>just now</Mono>
-            </span>
-          </MemoryEntry>
-          <Appear at={MEM.tag}>
-            <Tag color="var(--iv-teal)">applies to every thread</Tag>
-          </Appear>
-        </>
-      }
+      panel={<MemoryTab />}
     />
   );
 }
 
 /* ── thread · step 3: memos ────────────────────────────────────────────── */
 
-/** Two documents dragged in from the chat side and dropped on the memo drop
-    zone: it uploads them, each memo generates its summary, then reads ready. */
+/** Two documents dragged in from the chat side and dropped on the Memo tab:
+    the drop overlay takes the drag, Upload reads "Uploading…", then each memo
+    is listed generating its summary and turns Ready with its description. */
 const MEMO = {
-  // pointer in px of the 400px scene; the drop zone spans x 200–382, y 64–88
+  // pointer in px of the 400px scene; the panel spans x 188–399, and the
+  // drop overlay over its listing x 192–395, y 55–325. The overlay shows from
+  // the moment the pointer crosses into the panel (x 188 at about 1370ms).
   path: [
     { at: 350, x: 74, y: 236 },
     { at: 650, x: 74, y: 236 },
-    { at: 1850, x: 236, y: 70 },
-    { at: 2150, x: 236, y: 70 },
-    { at: 2750, x: 318, y: 172 },
+    { at: 1850, x: 228, y: 112 },
+    { at: 2150, x: 228, y: 112 },
+    { at: 2750, x: 330, y: 262 },
   ] satisfies Waypoint[],
-  over: 1550,
+  over: 1400,
   drop: 2050,
   uploaded: 2650,
   leave: 2550,
@@ -360,8 +626,8 @@ const MEMO = {
   length: 5000,
 };
 
-/** The file chip under the pointer while it drags, with the count badge
-    the OS draws for a multi-file drag; it fades into the zone on drop. */
+/** What the OS drags out of Finder: the file's icon and its name, with the
+    count badge a multi-file drag carries. It shrinks into the drop. */
 function DragChip() {
   const t = useSceneTime();
   const sink = useTween(MEMO.drop, 240);
@@ -369,66 +635,213 @@ function DragChip() {
   const { x, y } = pointAt(MEMO.path, t);
   return (
     <div
-      className="pointer-events-none absolute z-[9]"
+      className="pointer-events-none absolute z-[9] flex flex-col items-center gap-[3px]"
       style={{
-        left: x + 2,
-        top: y + 9,
+        left: x + 9,
+        top: y + 10,
         opacity: 1 - sink,
-        transform: `scale(${1 - 0.25 * sink})`,
+        transform: `translateX(-50%) scale(${1 - 0.25 * sink})`,
       }}
     >
-      <div
-        className="flex items-center gap-1 rounded border px-1.5 py-1"
-        style={{ background: 'var(--iv-mk-bg)', borderColor: 'var(--iv-mk-border)' }}
-      >
-        <FileText className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-        <Mono>{MEMO.rows[0].name}</Mono>
-      </div>
       <span
-        className="absolute -right-1.5 -top-1.5 flex h-2.5 w-2.5 items-center justify-center rounded-full font-mono text-[0.375rem] leading-none text-white"
-        style={{ background: 'var(--iv-accent-deep)' }}
+        className={cn(
+          'relative flex h-[18px] w-[14px] items-end justify-center',
+          'rounded-[1.5px] border pb-[2px]'
+        )}
+        style={{ background: '#fff', borderColor: 'rgba(0, 0, 0, 0.2)' }}
       >
-        2
+        <span className="text-[0.25rem] font-semibold leading-none" style={{ color: '#8a8a8a' }}>
+          PDF
+        </span>
+        <span
+          className={cn(
+            'absolute -right-1.5 -top-1.5 flex h-2.5 min-w-2.5 items-center justify-center',
+            'rounded-full px-[2px] text-[0.375rem] font-semibold leading-none text-white'
+          )}
+          style={{ background: '#ff3b30' }}
+        >
+          {MEMO.rows.length}
+        </span>
+      </span>
+      <span
+        className={cn(
+          'whitespace-nowrap rounded-[2px] px-[3px] py-[1.5px]',
+          'text-[0.375rem] leading-none text-white'
+        )}
+        style={{ background: '#0a64d8' }}
+      >
+        {MEMO.rows[0].name}
       </span>
     </div>
   );
 }
 
-/** One memo: icon square and name, "generating" with a spinner while its
-    summary is written, then ready. */
-function MemoRow({ name, at, ready }: { name: string; at: number; ready: number }) {
+/** A memo's status pill: generating with the loader, then Ready. */
+function MemoStatus({ ready }: { ready: number }) {
   const t = useSceneTime();
+  const { t: tr } = useTranslation();
+  const pill = 'inline-flex rounded-full px-1 py-[2px] text-[0.375rem] font-medium leading-none';
+  if (t < ready) {
+    return (
+      <span
+        className={cn(pill, 'items-center gap-0.5')}
+        style={{ background: 'var(--color-border-muted)', color: 'var(--iv-text-3)' }}
+      >
+        <Loader />
+        {tr('memoPanel.status.pending')}
+      </span>
+    );
+  }
   return (
-    <Appear at={at} className="flex items-center gap-1.5">
-      <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: 'var(--iv-accent)' }} />
-      <Mono>{name}</Mono>
-      {/* fixed height: the ready tag stands taller than the spinner */}
-      <span className="ml-auto flex h-3 items-center gap-1">
-        {t < ready ? (
-          <>
-            <Mono dim>generating</Mono>
-            <span className="intro-spin" aria-hidden />
-          </>
-        ) : (
-          <Appear at={ready} pop>
-            <Tag color="var(--iv-teal)">ready</Tag>
-          </Appear>
-        )}
+    <Appear at={ready} pop className="flex">
+      <span
+        className={pill}
+        style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
+      >
+        {tr('memoPanel.status.ready')}
       </span>
     </Appear>
   );
 }
 
-function Memo() {
+/* the columns a narrow Memo tab keeps: name, status, description */
+const COL_NAME = 'flex w-[80px] min-w-0 shrink-0 items-center gap-1 pl-1.5';
+const COL_STATUS = 'flex w-[56px] shrink-0 px-1';
+
+/** One memo in the table, listed from `at`; its description fills in once
+    it is ready. */
+function MemoRow({ name, at, ready }: { name: string; at: number; ready: number }) {
+  return (
+    <Appear at={at} className="flex items-center py-1">
+      <span className={COL_NAME}>
+        <FileText className="h-2 w-2 shrink-0" style={iconStyle} />
+        <span
+          className="truncate text-[0.4375rem] leading-none"
+          style={{ color: 'var(--iv-text)' }}
+        >
+          {name}
+        </span>
+      </span>
+      <span className={COL_STATUS}>
+        <MemoStatus ready={ready} />
+      </span>
+      <Appear at={ready} className="flex flex-1 flex-col gap-[3px] pr-1.5">
+        <Ln w="92%" h={2.5} />
+        <Ln w="62%" h={2.5} />
+      </Appear>
+    </Appear>
+  );
+}
+
+/** The Memo tab: its title bar with Upload, the table (or the empty state
+    before anything is in it), and the drop overlay while a drag is over it. */
+function MemoTab() {
   const t = useSceneTime();
-  // the zone lights up while the chip is over it, then uploads
+  const { t: tr } = useTranslation();
   const over = t >= MEMO.over && t < MEMO.drop;
   const uploading = t >= MEMO.drop && t < MEMO.uploaded;
+  const listed = t >= MEMO.rows[0].at;
+  return (
+    <>
+      <div
+        className="flex items-center justify-between border-b px-1.5 py-1"
+        style={{ borderColor: 'var(--iv-border)' }}
+      >
+        <span className="flex items-center gap-1">
+          <span
+            className="text-[0.5rem] font-semibold leading-none"
+            style={{ color: 'var(--iv-text)' }}
+          >
+            {tr('memoPanel.title')}
+          </span>
+          <Info className="h-[7px] w-[7px]" style={iconStyle} />
+        </span>
+        <span className="flex items-center gap-1.5">
+          <ChromeIcon icon={RefreshCw} />
+          <ChromeIcon icon={CheckSquare} />
+          <span
+            className={cn(
+              'flex items-center gap-1 rounded px-1.5 py-[3px]',
+              'text-[0.4375rem] font-medium leading-none'
+            )}
+            style={{
+              background: 'var(--color-btn-primary-bg)',
+              color: 'var(--color-btn-primary-text)',
+            }}
+          >
+            {uploading ? <Loader /> : <Upload className="h-[7px] w-[7px] shrink-0" />}
+            {uploading ? tr('memoPanel.uploading') : tr('memoPanel.uploadButton')}
+          </span>
+        </span>
+      </div>
+      <div className="relative flex flex-1 flex-col">
+        {listed ? (
+          <>
+            <div className="flex py-1 text-[0.4375rem] font-medium leading-none" style={iconStyle}>
+              <span className={COL_NAME}>{tr('memoPanel.columns.name')}</span>
+              <span className={COL_STATUS}>{tr('memoPanel.columns.status')}</span>
+              <span>{tr('memoPanel.columns.description')}</span>
+            </div>
+            {MEMO.rows.map((r) => (
+              <MemoRow key={r.name} {...r} />
+            ))}
+          </>
+        ) : (
+          <div
+            className="flex flex-col items-center gap-1.5 px-2 py-5 text-center"
+            style={iconStyle}
+          >
+            <ScrollText className="h-5 w-5 opacity-40" />
+            <span
+              className="text-[0.5rem] font-medium leading-none"
+              style={{ color: 'var(--iv-text)' }}
+            >
+              {tr('memoPanel.empty.title')}
+            </span>
+            <span className="max-w-[150px] text-[0.4375rem] leading-snug">
+              {tr('memoPanel.empty.hint')}
+            </span>
+          </div>
+        )}
+        {over && (
+          <div
+            className={cn(
+              'absolute inset-1 z-[5] flex flex-col items-center justify-center gap-1',
+              'rounded-[5px] border-[1.5px] border-dashed text-[0.5rem] font-medium leading-none'
+            )}
+            style={{
+              background: 'var(--color-bg-overlay-strong)',
+              borderColor: 'var(--color-accent-overlay)',
+              color: 'var(--iv-text-3)',
+            }}
+          >
+            <Upload className="h-4 w-4" style={{ color: 'var(--color-accent-primary)' }} />
+            {tr('memoPanel.dragOverlayText')}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function Memo() {
+  const { t } = useTranslation();
   const away = useTween(MEMO.leave, 600);
   return (
     <div className="relative w-full max-w-[400px]">
       <ThreadFrame
-        tab="memos"
+        tabs={
+          <>
+            <PanelTab icon={BookMarked} label={t('filePanel.tabs.memory')} />
+            <PanelTab icon={ScrollText} label={t('filePanel.tabs.memo')} active />
+          </>
+        }
+        actions={
+          <>
+            <ChromeIcon icon={BookMarked} />
+            <ChromeIcon icon={ScrollText} />
+          </>
+        }
         chat={
           <>
             <History />
@@ -439,41 +852,7 @@ function Memo() {
             <Ln w="40%" />
           </>
         }
-        panel={
-          <>
-            <Region
-              dashed
-              className="flex h-6 items-center justify-center gap-1 px-1.5"
-              style={
-                over
-                  ? {
-                      borderColor: 'hsl(var(--primary) / 0.7)',
-                      background: 'hsl(var(--primary) / 0.08)',
-                    }
-                  : undefined
-              }
-            >
-              {uploading ? (
-                <span className="intro-spin" aria-hidden />
-              ) : (
-                <Upload
-                  className="h-2.5 w-2.5"
-                  style={{ color: over ? 'var(--iv-accent)' : 'var(--iv-text-3)' }}
-                />
-              )}
-              {/* the dragged chip covers the zone, so over it the zone only
-                  changes color */}
-              {uploading ? (
-                <Mono dim>uploading…</Mono>
-              ) : (
-                <Ln w="42%" c={over ? 'hsl(var(--primary) / 0.45)' : undefined} />
-              )}
-            </Region>
-            {MEMO.rows.map((r) => (
-              <MemoRow key={r.name} {...r} />
-            ))}
-          </>
-        }
+        panel={<MemoTab />}
       />
       <DragChip />
       {/* the pointer drifts off once the files are in, then fades */}

@@ -5798,10 +5798,8 @@
       "createWorkspaceTask": "为一个项目单独开辟空间，配有专属分析师和文件。"
     },
     "intro": {
-      "chiefOfStaffRun": "CoS Agent",
       "handoff": "已交给分析师",
-      "taskHandoff": "任务已交给分析师",
-      "footer": "两种工作方式"
+      "taskHandoff": "任务已交给分析师"
     }
   }
 }

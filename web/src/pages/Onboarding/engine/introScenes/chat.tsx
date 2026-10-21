@@ -1,129 +1,49 @@
 import type { ReactNode } from 'react';
-import {
-  ChevronRight,
-  Clock,
-  FileText,
-  Folder,
-  Plus,
-  Search,
-  Upload,
-  X,
-} from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Brain, ChevronRight, FileSpreadsheet, FileText, Folder, X, Zap } from 'lucide-react';
 import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
 import { cn } from '@/lib/utils';
 import { useAgentNames } from '../introAgents';
 import type { IntroVisualId } from '../../registry';
-import { progress, useSceneTime, useTween } from './clock';
-import {
-  Appear,
-  Caret,
-  Cursor,
-  Frame,
-  InputDock,
-  Ln,
-  Region,
-  StreamLn,
-  Tag,
-  Typed,
-  UserBubble,
-  Working,
-  rv,
-} from './kit';
+import { useSceneTime, useTween } from './clock';
+import { Appear, Frame, InputDock, Ln, Region, StreamLn, Tag, Typed, UserBubble } from './kit';
 import type { IntroScene } from './types';
+import {
+  type Icon,
+  toolCard,
+  Pill,
+  ActivityRow,
+  WorkspaceLine,
+  HandoffCard,
+  SubagentCard,
+  FileCard,
+} from './chatParts';
 
-/* Scenes for the chat intro: the two agents, the Chief of Staff's turn, the
-   Analyst's run, the workspace gallery, and creating a workspace. */
+/* Scenes for the chat intro: the two agents, the Chief of Staff's turn, and
+   the Analyst's run. Each part is a small copy of the component the app
+   draws it with (named on each), in the same tokens and labels. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
-/** Whether `t` falls in `[from, to)`. */
-const during = (t: number, from: number, to: number) => t >= from && t < to;
-
-/** A running label: a spinner and plain status text, as the app shows it. */
-function Running({ label, color }: { label: string; color?: string }) {
-  return (
-    <span className="flex items-center gap-1">
-      <span
-        className="intro-spin"
-        style={color ? { borderTopColor: color } : undefined}
-        aria-hidden
-      />
-      <span
-        className="font-mono text-[0.4375rem] leading-none"
-        style={{ color: 'var(--iv-text-3)' }}
-      >
-        {label}
-      </span>
-    </span>
-  );
-}
-
-/** A desk's last-updated line. With `run`, an agent works in the desk over
-    `[from, to)` (spinner, status), then it reads as just updated. */
-function DeskStatus({ run }: { run?: [number, number] }) {
-  const t = useSceneTime();
-  if (!run || t < run[0]) return <Ln w="32%" h={2} c="var(--iv-line-3)" />;
-  if (t < run[1]) return <Running label="agent running" />;
-  return (
-    <span
-      className="intro-rv block w-fit font-mono text-[0.4375rem] leading-none"
-      style={{ ...rv(0), color: 'var(--iv-text-3)' }}
-    >
-      <span style={{ color: 'var(--iv-teal)' }}>✓</span> updated just now
-    </span>
-  );
-}
-
-/** A workspace card in the gallery wireframe: title, blurb, updated-at.
-    The All workspaces card is fully color-filled, which is how users tell it
-    apart from regular (unfilled) workspace cards in the real gallery. */
-function WsCard({
-  hot = false,
-  home = false,
-  delay,
-  run,
-  className = '',
-}: {
-  hot?: boolean;
-  home?: boolean;
-  delay?: number;
-  run?: [number, number];
-  className?: string;
-}) {
-  return (
-    <Region
-      hot={hot}
-      delay={delay}
-      className={`flex flex-col gap-1 p-2 ${className}`}
-      style={
-        home
-          ? {
-              background:
-                'linear-gradient(135deg, hsl(var(--primary) / 0.22), hsl(var(--primary) / 0.08))',
-              borderColor: 'hsl(var(--primary) / 0.3)',
-            }
-          : undefined
-      }
-    >
-      <div className="flex items-center gap-1">
-        {home && <HomeRowIcon className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
-        <Ln w="52%" h={4} c="var(--iv-line-2)" />
-      </div>
-      <Ln w="88%" />
-      <Ln w="64%" />
-      <div className="mt-auto pt-0.5">
-        <DeskStatus run={run} />
-      </div>
-    </Region>
-  );
-}
-
 /* ── chat · step 1: the agent's two roles, side by side ────────────────── */
+
+/** A pane's heading, as the sidebar names a desk: its glyph, then its name. */
+function PaneHeader({ icon: Glyph, name }: { icon: Icon; name: string }) {
+  return (
+    <div className="flex items-center gap-1">
+      <Glyph className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
+      <span className="text-[0.5rem] font-medium leading-none" style={{ color: 'var(--iv-text)' }}>
+        {name}
+      </span>
+    </div>
+  );
+}
 
 /** Split scene: the Chief of Staff (coordination) vs a workspace's Analyst
     (subagents → deliverable), both at work at once. The Chief of Staff's
     steps land quickly, one after another, then a quick answer; the Analyst's
-    subagents grind through their tools for longer and end in a file. */
+    subagents grind through their tools for longer and end in a file, which
+    is when the hand-off on the left reads completed. */
 const MODES = {
   rows: [300, 1100],
   rowRun: 700,
@@ -144,124 +64,41 @@ function TwoModes() {
     <Frame topbar={<Ln w="26%" />}>
       <div className="flex flex-1 gap-2">
         {/* Chief of Staff half: coordinating the desk, with quick answers on the side */}
-        <Region hot delay={0.12} className="flex flex-1 flex-col gap-1.5 p-2">
-          <div className="flex items-center gap-1.5" style={{ color: 'var(--iv-accent)' }}>
-            <HomeRowIcon className="h-2.5 w-2.5" />
-            <span className="font-mono text-[0.5rem]">{names.home}</span>
-          </div>
-          <OrchRow
-            icon={<Folder className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
-            label="workspace created"
-            at={row1}
-            done={row1 + MODES.rowRun}
-          />
-          <OrchRow
-            icon={<ChevronRight className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
-            label={names.handoff}
+        <Region delay={0.12} className="flex min-w-0 flex-1 flex-col gap-2 p-2">
+          <PaneHeader icon={HomeRowIcon} name={names.home} />
+          <WorkspaceLine name="NVDA" at={row1} done={row1 + MODES.rowRun} />
+          <HandoffCard
+            heading={names.handoff}
             at={row2}
-            done={row2 + MODES.rowRun}
+            started={row2 + MODES.rowRun}
+            finished={MODES.file}
           />
-          <div className="grid grid-cols-2 gap-1.5 pt-0.5">
-            <StreamLn w="90%" at={MODES.quick} h={2} c="var(--iv-line-3)" />
-            <StreamLn w="74%" at={MODES.quick + 160} h={2} c="var(--iv-line-3)" />
+          <div className="flex flex-col gap-1">
+            <StreamLn w="90%" at={MODES.quick} />
+            <StreamLn w="62%" at={MODES.quick + 160} />
           </div>
-          <span className="mt-auto font-mono text-[0.4375rem]" style={{ color: 'var(--iv-text-3)' }}>
-            coordination · quick answers
-          </span>
         </Region>
-        {/* Analyst half: subagents fanning out toward a deliverable. Plain
-            region + teal tag, since the blue accent belongs to the Chief of Staff
-            in this comparison */}
-        <Region delay={0.28} className="flex flex-1 flex-col gap-1.5 p-2">
-          <div className="flex items-center">
-            <Tag color="var(--iv-teal)">{names.worker}</Tag>
-          </div>
+        {/* Analyst half: subagents fanning out toward a deliverable */}
+        <Region delay={0.28} className="flex min-w-0 flex-1 flex-col gap-2 p-2">
+          <PaneHeader icon={Folder} name={names.worker} />
           <SubagentCard
             name="data-prep"
+            task="Clean the filings and estimates"
             tools={23}
             at={card1}
             done={card1Done}
-            tone="var(--iv-teal)"
           />
           <SubagentCard
             name="valuation"
+            task="Build the DCF and comps"
             tools={17}
             at={card2}
             done={card2Done}
-            tone="var(--iv-teal)"
           />
-          <Appear at={MODES.file} pop className="flex items-center gap-1">
-            <FileText className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-teal)' }} />
-            <StreamLn w="48%" at={MODES.file + 120} h={2} c="var(--iv-line-3)" />
+          <Appear at={MODES.file} pop>
+            <FileCard name="valuation.xlsx" kind="spreadsheet" icon={FileSpreadsheet} />
           </Appear>
-          <span className="mt-auto font-mono text-[0.4375rem]" style={{ color: 'var(--iv-text-3)' }}>
-            deep analysis &amp; deliverables
-          </span>
         </Region>
-      </div>
-      <div className="mt-2.5 flex items-center gap-1.5 font-mono text-[0.5rem]" style={{ color: 'var(--iv-text-3)' }}>
-        <span className="intro-pulse" style={{ width: 5, height: 5 }} />
-        {names.footer}
-      </div>
-    </Frame>
-  );
-}
-
-/* ── chat · step 4: the workspace gallery page ─────────────────────────── */
-
-/** The gallery, kept calm: the desks come in, then agents at work in two of
-    them, so it reads as desks that keep running, not folders. */
-const GRID = {
-  cards: [150, 270, 390, 510],
-  runs: [
-    [1300, 3300],
-    [2000, 4200],
-  ] as [number, number][],
-  length: 4800,
-};
-
-function WorkspaceGrid() {
-  const [home, desk1, desk2, desk3] = GRID.cards;
-  const [run1, run2] = GRID.runs;
-  return (
-    <Frame topbar={<Ln w="20%" />}>
-      <div className="flex flex-1 flex-col gap-2">
-        {/* page title + new-workspace button */}
-        <div className="intro-rv flex items-center justify-between" style={rv(0.08)}>
-          <Ln w="22%" h={5} c="var(--iv-line-2)" />
-          <span
-            className="flex items-center gap-1 rounded px-1.5 py-1"
-            style={{ background: 'var(--iv-accent-deep)' }}
-          >
-            <Plus className="h-2 w-2 text-white" />
-            <Ln w="30px" h={3} c="rgba(255,255,255,0.8)" />
-          </span>
-        </div>
-        {/* search */}
-        <Region delay={0.16} className="flex items-center gap-1.5 p-1.5">
-          <Search className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-          <Ln w="30%" c="var(--iv-line-3)" />
-        </Region>
-        {/* no hot card here — the step is about the gallery as a whole, and a
-            highlighted card would read as a second All workspaces card */}
-        <div className="grid flex-1 auto-rows-fr grid-cols-2 gap-2">
-          <Appear at={home} reserve className="flex">
-            <WsCard home className="flex-1" />
-          </Appear>
-          <Appear at={desk1} reserve className="flex">
-            <WsCard run={run1} className="flex-1" />
-          </Appear>
-          <Appear at={desk2} reserve className="flex">
-            <WsCard className="flex-1" />
-          </Appear>
-          <Appear at={desk3} reserve className="flex">
-            <WsCard run={run2} className="flex-1" />
-          </Appear>
-        </div>
-      </div>
-      <div className="mt-2.5 flex items-center gap-1.5 font-mono text-[0.5rem]" style={{ color: 'var(--iv-text-3)' }}>
-        <span className="intro-pulse" style={{ width: 5, height: 5 }} />
-        one desk per company, sector, or strategy
       </div>
     </Frame>
   );
@@ -269,88 +106,60 @@ function WorkspaceGrid() {
 
 /* ── chat · step 2: a Chief of Staff chat page ─────────────────────────── */
 
-/** Compact live-quote card, echoing the real quote tool-result card. */
-function QuoteCard({
-  ticker,
-  price,
-  change,
-  up,
-}: {
-  ticker: string;
-  price: string;
-  change: string;
-  up: boolean;
-}) {
+/** A live quote for one symbol (`InlineQuoteCard`, its hero layout): symbol
+    and name, price and change, the day's low and high either side of the
+    range strip with the price marked on it, then open and previous close. */
+function QuoteCard() {
+  const { t } = useTranslation();
+  const label = { color: 'var(--iv-text-3)' };
+  const value = { color: 'var(--iv-text-2)', fontWeight: 500 };
   return (
-    <Region className="flex flex-col gap-1 p-1.5">
-      <div className="flex items-center gap-1">
-        <span className="font-mono text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
-          {ticker}
-        </span>
-        <Ln w="26%" h={2} c="var(--iv-line-3)" />
-      </div>
+    <div
+      className="flex flex-col gap-1.5 rounded-md border px-2 py-1.5 tabular-nums"
+      style={toolCard}
+    >
       <div className="flex items-baseline gap-1">
+        <span className="text-[0.5rem] font-bold leading-none" style={{ color: 'var(--iv-text)' }}>
+          NVDA
+        </span>
+        <Ln w="30%" h={2} c="var(--iv-line-3)" />
+      </div>
+      <div className="flex items-baseline gap-1.5">
         <span
-          className="font-mono text-[0.5625rem] font-semibold leading-none"
+          className="text-[0.6875rem] font-bold leading-none"
           style={{ color: 'var(--iv-text)' }}
         >
-          {price}
+          $142.10
         </span>
         <span
-          className="font-mono text-[0.4375rem] leading-none"
-          style={{ color: up ? 'var(--iv-teal)' : 'var(--iv-red)' }}
+          className="text-[0.4375rem] font-medium leading-none"
+          style={{ color: 'var(--color-profit)' }}
         >
-          {change}
+          +2.51 (+1.80%)
         </span>
       </div>
-      {/* open / range / volume stat grid stays skeleton */}
-      <div className="grid grid-cols-2 gap-x-2 gap-y-1 pt-0.5">
-        <Ln w="80%" h={2} c="var(--iv-line-3)" />
-        <Ln w="64%" h={2} c="var(--iv-line-3)" />
-        <Ln w="56%" h={2} c="var(--iv-line-3)" />
-        <Ln w="72%" h={2} c="var(--iv-line-3)" />
+      {/* the day's range: low · the price on the strip · high */}
+      <div className="flex items-center gap-1 text-[0.375rem] leading-none" style={label}>
+        <span>{t('toolArtifact.low')} $139.20</span>
+        <span
+          className="relative h-0.5 flex-1 rounded-full"
+          style={{ background: 'var(--color-border-muted)' }}
+        >
+          <span
+            className="absolute top-1/2 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full"
+            style={{ left: '76%', background: 'var(--color-profit)' }}
+          />
+        </span>
+        <span>{t('toolArtifact.high')} $143.05</span>
       </div>
-    </Region>
-  );
-}
-
-/** One line of the Chief of Staff's orchestration run: icon · action ·
-    spinner, then ✓. Shows up at `at`, finishes at `done`. */
-function OrchRow({
-  icon,
-  label,
-  at,
-  done,
-}: {
-  icon: ReactNode;
-  label: string;
-  at: number;
-  done: number;
-}) {
-  return (
-    <Appear at={at} className="flex items-center gap-1.5">
-      {icon}
-      <span className="font-mono text-[0.5rem] leading-none" style={{ color: 'var(--iv-text-2)' }}>
-        {label}
-      </span>
-      <span className="ml-auto flex">
-        <Working at={at} done={done} />
-      </span>
-    </Appear>
-  );
-}
-
-/** A turn's header: the agent, then what it is doing. `busy` shimmers the
-    status the way the app marks work in progress; otherwise it reads plain. */
-function TurnHeader({ status, busy }: { status: string; busy: boolean }) {
-  const names = useAgentNames();
-  return (
-    <div className="flex items-center gap-1.5" style={{ color: 'var(--iv-accent)' }}>
-      <HomeRowIcon className="h-2.5 w-2.5" />
-      <span className="font-mono text-[0.5rem]">{names.homeRun} ·</span>
-      <span className={cn('-ml-0.5 font-mono text-[0.5rem]', busy && 'intro-shimmer')}>
-        {status}
-      </span>
+      <div className="flex gap-2 text-[0.375rem] leading-none" style={label}>
+        <span>
+          {t('toolArtifact.open')} <b style={value}>$140.02</b>
+        </span>
+        <span>
+          {t('toolArtifact.prevClose')} <b style={value}>$139.59</b>
+        </span>
+      </div>
     </div>
   );
 }
@@ -370,66 +179,83 @@ const COS = {
   typeQuick: 4950,
   sendQuick: 5550,
   answer: 5800,
-  cards: 6300,
+  card: 6300,
   length: 7000,
 };
 
 function ChiefOfStaffAnswer() {
+  const { t } = useTranslation();
   const names = useAgentNames();
-  const t = useSceneTime();
+  const now = useSceneTime();
   const [row1, row2, row3] = COS.rows;
   const orchestrated = row3 + COS.rowRun;
   const composer =
-    t >= COS.typeAsk && t < COS.sendAsk ? (
+    now >= COS.typeAsk && now < COS.sendAsk ? (
       <Typed text={COS.ask} at={COS.typeAsk} />
-    ) : t >= COS.typeQuick && t < COS.sendQuick ? (
+    ) : now >= COS.typeQuick && now < COS.sendQuick ? (
       <Typed text={COS.quick} at={COS.typeQuick} />
     ) : undefined;
   return (
-    <Frame topbar={<><Ln w="22%" /><Tag>{names.home}</Tag></>}>
+    <Frame
+      topbar={
+        <>
+          <Ln w="22%" />
+          <Tag>{names.home}</Tag>
+        </>
+      }
+    >
       <div className="flex flex-1 flex-col gap-2">
-        <UserBubble at={COS.sendAsk + 80} className="mr-24">{COS.ask}</UserBubble>
-        <Appear at={COS.think}>
-          <Region hot className="flex flex-col gap-1.5 p-2">
-            <TurnHeader
-              status={t < row1 ? 'thinking' : 'orchestrating'}
-              busy={t < orchestrated}
+        <UserBubble at={COS.sendAsk + 80} className="mr-24">
+          {COS.ask}
+        </UserBubble>
+        {/* the turn sits on the page, as the app writes replies: reasoning,
+            the workspace, the hand-off card, the automation */}
+        {now >= COS.think && (
+          <div className="mr-24 flex flex-col gap-1.5">
+            <ActivityRow
+              icon={Brain}
+              verb={t('toolArtifact.thinkingFor', { duration: '1s' })}
+              title={t('toolArtifact.thoughtFor', { duration: '1s' })}
+              after={
+                <ChevronRight
+                  className="h-2 w-2 shrink-0"
+                  style={{ color: 'var(--color-icon-muted)' }}
+                />
+              }
+              at={COS.think}
+              done={row1}
             />
-            <OrchRow
-              icon={<Folder className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
-              label="workspace created · NVDA deep dive"
-              at={row1}
-              done={row1 + COS.rowRun}
-            />
-            <OrchRow
-              icon={<ChevronRight className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
-              label={names.taskHandoff}
-              at={row2}
-              done={row2 + COS.rowRun}
-            />
-            <OrchRow
-              icon={<Clock className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-accent)' }} />}
-              label="automation · daily earnings brief"
+            <WorkspaceLine name="NVDA deep dive" at={row1} done={row1 + COS.rowRun} />
+            <HandoffCard heading={names.taskHandoff} at={row2} started={row2 + COS.rowRun} />
+            <ActivityRow
+              icon={Zap}
+              verb={t('toolArtifact.inProgress.creatingName', { name: 'daily earnings brief' })}
+              title={t('toolArtifact.tool.createAutomation')}
+              after={<Pill>daily earnings brief</Pill>}
               at={row3}
               done={orchestrated}
             />
-          </Region>
-        </Appear>
+          </div>
+        )}
         {/* quick QA rides along below */}
-        <UserBubble at={COS.sendQuick + 80} className="mr-24">{COS.quick}</UserBubble>
-        <Appear at={COS.answer}>
-          <Region className="flex flex-col gap-1.5 p-2">
-            <TurnHeader status={t < COS.cards ? 'fetching quote' : '0.9s'} busy={t < COS.cards} />
-            <div className="grid grid-cols-2 gap-1.5">
-              <Appear at={COS.cards} pop>
-                <QuoteCard ticker="NVDA" price="$142.10" change="+1.8%" up />
-              </Appear>
-              <Appear at={COS.cards + 140} pop>
-                <QuoteCard ticker="AVGO" price="$310.51" change="-0.4%" up={false} />
-              </Appear>
-            </div>
-          </Region>
-        </Appear>
+        <UserBubble at={COS.sendQuick + 80} className="mr-24">
+          {COS.quick}
+        </UserBubble>
+        {now >= COS.answer && (
+          <div className="mr-24 flex flex-col gap-1.5">
+            <ActivityRow
+              icon={Zap}
+              verb={t('toolArtifact.inProgress.fetchingQuotes')}
+              title={t('toolArtifact.tool.liveQuotes')}
+              after={<Pill>NVDA</Pill>}
+              at={COS.answer}
+              done={COS.card}
+            />
+            <Appear at={COS.card} pop>
+              <QuoteCard />
+            </Appear>
+          </div>
+        )}
         <InputDock text={composer} sendAt={[COS.sendAsk, COS.sendQuick]} />
       </div>
     </Frame>
@@ -437,62 +263,6 @@ function ChiefOfStaffAnswer() {
 }
 
 /* ── chat · step 3: an Analyst thread page running code ────────────────── */
-
-/** A subagent task card, echoing the real run cards (name · status · n
-    tools). Shows up at `at` running, its tool count ticking up to `tools`,
-    and lands on ✓ completed at `done`. `tone` colors the spinner. */
-function SubagentCard({
-  name,
-  tools,
-  at,
-  done,
-  tone,
-}: {
-  name: string;
-  tools: number;
-  at: number;
-  done: number;
-  tone?: string;
-}) {
-  const t = useSceneTime();
-  const used = Math.floor(tools * progress(t, at, done - at));
-  return (
-    <Appear at={at}>
-      <Region className="flex flex-col gap-1 p-1.5">
-        <div className="flex items-center">
-          <span
-            className="font-mono text-[0.5rem] leading-none"
-            style={{ color: 'var(--iv-text-2)' }}
-          >
-            {name}
-          </span>
-          <span className="ml-auto flex">
-            {t < done ? (
-              <Running label="running" color={tone} />
-            ) : (
-              <span
-                className="intro-pop font-mono text-[0.4375rem] leading-none"
-                style={{ ...rv(0), color: 'var(--iv-teal)' }}
-              >
-                ✓ completed
-              </span>
-            )}
-          </span>
-        </div>
-        {/* the task line, held at its height while it streams in */}
-        <div className="h-0.5">
-          <StreamLn w="72%" at={at + 120} h={2} c="var(--iv-line-3)" />
-        </div>
-        <span
-          className="font-mono text-[0.4375rem] leading-none"
-          style={{ color: 'var(--iv-text-3)' }}
-        >
-          {used} {used === 1 ? 'tool' : 'tools'}
-        </span>
-      </Region>
-    </Appear>
-  );
-}
 
 /** One bar of an inline chart, growing from the baseline from `at`. */
 function GrowBar({ h, at, color }: { h: number; at: number; color: string }) {
@@ -505,18 +275,13 @@ function GrowBar({ h, at, color }: { h: number; at: number; color: string }) {
   );
 }
 
-/** A deliverable chip: file name and a ✓. */
-function FileChip({ name }: { name: string }) {
-  return (
-    <Region className="flex items-center gap-1 px-1.5 py-1">
-      <FileText className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-      <span className="font-mono text-[0.4375rem] leading-none" style={{ color: 'var(--iv-text-2)' }}>
-        {name}
-      </span>
-      <Tag color="var(--iv-teal)">✓</Tag>
-    </Region>
-  );
-}
+/** EPS by quarter, estimate then actual, as the earnings chart pairs them. */
+const QUARTERS = [
+  [40, 46],
+  [52, 58],
+  [62, 70],
+  [74, 86],
+];
 
 /** The Analyst mid-run, played out: two subagents in parallel, their tool
     counts ticking, while the file panel shows comps.xlsx being written row
@@ -526,9 +291,7 @@ const PTC = {
   cards: [200, 450],
   cardsDone: [2600, 3600],
   panel: 500,
-  sheet: 1000,
-  rowEvery: 330,
-  written: 3400,
+  sheet: 900,
   say: 3700,
   chart: 4100,
   bars: 4250,
@@ -536,305 +299,362 @@ const PTC = {
   length: 6000,
 };
 
-/** One spreadsheet cell, its value written in at `at`. */
-function SheetCell({ head, w, at }: { head: boolean; w: string; at: number }) {
+/** The spreadsheet viewer's paper and ink (`ExcelViewer.css`): a white sheet
+    in either theme, every shade on it mixed from the two. */
+const SHEET = {
+  paper: 'var(--color-sheet-paper)',
+  ink: 'var(--color-sheet-ink)',
+  rule: 'color-mix(in srgb, var(--color-sheet-ink) 12%, var(--color-sheet-paper))',
+  ruleStrong: 'color-mix(in srgb, var(--color-sheet-ink) 22%, var(--color-sheet-paper))',
+  chrome: 'color-mix(in srgb, var(--color-sheet-ink) 4%, var(--color-sheet-paper))',
+  chromeStrong: 'color-mix(in srgb, var(--color-sheet-ink) 7%, var(--color-sheet-paper))',
+  inkMuted: 'color-mix(in srgb, var(--color-sheet-ink) 55%, var(--color-sheet-paper))',
+};
+
+/** A cell the workbook holds: a typed value, or a formula with the value it
+    caches. */
+type SheetValue = string | { f: string; v: string };
+
+/** The comps sheet report-builder writes: nine names, then the peers'
+    median and mean and NVDA's premium to the median, computed in the
+    sheet (their cached values are the real results of those formulas over
+    these rows). Figures are invented. */
+const COMPS: (SheetValue | null)[][] = [
+  ['Ticker', 'Price', 'Mkt cap', 'EV/S', 'P/E', 'Growth'],
+  ['NVDA', '182.42', '4,452', '24.1x', '38.2x', '62%'],
+  ['AVGO', '349.80', '1,646', '22.6x', '36.9x', '24%'],
+  ['TSM', '292.15', '1,515', '10.4x', '22.8x', '31%'],
+  ['AMD', '236.10', '383', '9.8x', '31.5x', '27%'],
+  ['ARM', '151.60', '160', '30.2x', '72.4x', '21%'],
+  ['QCOM', '168.25', '184', '4.3x', '15.6x', '9%'],
+  ['MU', '201.30', '225', '4.2x', '11.9x', '38%'],
+  ['MRVL', '88.40', '76', '9.1x', '29.7x', '34%'],
+  ['INTC', '37.85', '166', '2.9x', '34.1x', '-2%'],
+  [],
+  [
+    'Median',
+    null,
+    { f: '=MEDIAN(C2:C10)', v: '225' },
+    { f: '=MEDIAN(D2:D10)', v: '9.8x' },
+    { f: '=MEDIAN(E2:E10)', v: '31.5x' },
+    { f: '=MEDIAN(F2:F10)', v: '27%' },
+  ],
+  [
+    'Mean',
+    null,
+    { f: '=AVERAGE(C2:C10)', v: '979' },
+    { f: '=AVERAGE(D2:D10)', v: '13.1x' },
+    { f: '=AVERAGE(E2:E10)', v: '32.6x' },
+    { f: '=AVERAGE(F2:F10)', v: '27%' },
+  ],
+  [],
+  ['NVDA vs median', null, null, { f: '=D2/D12-1', v: '146%' }, { f: '=E2/E12-1', v: '21%' }],
+];
+
+const SHEET_COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+/** Column widths (px). The empty columns run off the panel's edge, as a
+    sheet does. */
+const SHEET_COL_W = [20, 24, 23, 20, 20, 21, 24, 24, 24, 24];
+/** Rows drawn: the data, then empty rows to the panel's foot. */
+const SHEET_ROWS = 26;
+
+/** When each written cell lands: rows a beat apart, each row left to right;
+    the computed rows take a little longer, as their formulas do. */
+const SHEET_WRITES: { r: number; c: number; at: number }[] = (() => {
+  const writes: { r: number; c: number; at: number }[] = [];
+  let at = PTC.sheet;
+  COMPS.forEach((row, r) => {
+    if (row.length === 0) return;
+    row.forEach((cell, c) => {
+      if (cell != null) writes.push({ r, c, at: at + c * 30 });
+    });
+    at += typeof row[2] === 'object' && row[2] !== null ? 230 : 170;
+  });
+  return writes;
+})();
+
+/** A row or column heading in the sheet's margin; `active` = it holds the
+    focused cell. */
+function SheetHeading({ active = false, children }: { active?: boolean; children?: ReactNode }) {
   return (
     <span
-      className="flex items-center px-1"
-      style={{ background: head ? 'var(--iv-fill)' : 'var(--iv-mk-bg)' }}
+      className="flex items-center justify-center font-mono text-[0.25rem] leading-none"
+      style={{
+        background: active ? SHEET.chromeStrong : SHEET.chrome,
+        color: active ? SHEET.ink : SHEET.inkMuted,
+      }}
     >
-      <StreamLn w={w} at={at} dur={180} h={2} c="var(--iv-line-3)" />
+      {children}
     </span>
+  );
+}
+
+/** One cell as the grid prints it: text in the content font from the left,
+    numbers in mono from the right, a formula's value with its dotted rule,
+    the focused cell outlined in ink. Text runs on into an empty neighbour. */
+function SheetCell({
+  value,
+  r,
+  c,
+  focus,
+}: {
+  value: SheetValue | null;
+  r: number;
+  c: number;
+  focus: boolean;
+}) {
+  const text = typeof value === 'string' && (c === 0 || r === 0);
+  const formula = value != null && typeof value === 'object';
+  const strong = r === 0 || (c === 0 && r > 10);
+  return (
+    <span
+      className={cn(
+        'relative flex items-center whitespace-nowrap px-[2px] text-[0.3125rem] leading-none',
+        text && c === 0 ? 'justify-start' : 'justify-end',
+        text && c === 0 && 'z-[1]'
+      )}
+      style={{
+        background: SHEET.paper,
+        color: SHEET.ink,
+        fontFamily: text ? 'var(--font-content)' : 'var(--font-mono)',
+        fontWeight: strong ? 600 : 400,
+        boxShadow: focus
+          ? `inset 0 0 0 1px ${SHEET.ink}`
+          : r === 0
+            ? `inset 0 -1px 0 ${SHEET.ruleStrong}`
+            : undefined,
+      }}
+    >
+      {value != null && (
+        <span
+          style={
+            formula
+              ? {
+                  textDecoration: `underline dotted ${SHEET.inkMuted}`,
+                  textUnderlineOffset: 1,
+                }
+              : undefined
+          }
+        >
+          {typeof value === 'string' ? value : value.v}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** A sheet's tab under the grid. */
+function SheetTab({ active = false, children }: { active?: boolean; children: ReactNode }) {
+  return (
+    <span
+      className="rounded-[3px] border px-1 py-0.5 text-[0.375rem] leading-none"
+      style={
+        active
+          ? {
+              background: 'var(--color-bg-elevated)',
+              borderColor: 'var(--color-border-default)',
+              color: 'var(--iv-text)',
+            }
+          : { borderColor: 'var(--color-border-muted)', color: 'var(--iv-text-3)' }
+      }
+    >
+      {children}
+    </span>
+  );
+}
+
+/** The file panel open on the workbook (`FilePanel`, `ExcelViewer`): the
+    file's tab, the formula bar, the sheet, and the sheet tabs. The cells
+    fill in as report-builder writes them, the focus following the last
+    write, and the formula bar reading the focused cell: its formula and
+    cached value, or the value typed there. */
+function SheetPanel() {
+  const t = useSceneTime();
+  const written = SHEET_WRITES.filter((w) => w.at <= t);
+  const shown = new Set(written.map((w) => `${w.r}:${w.c}`));
+  const focus = written.at(-1);
+  const focused = focus ? COMPS[focus.r][focus.c] : null;
+  const ref = focus ? `${SHEET_COLS[focus.c]}${focus.r + 1}` : 'A1';
+  return (
+    <div className="flex h-full min-w-0 flex-1 flex-col">
+      {/* tab strip */}
+      <div
+        className="flex h-[18px] shrink-0 items-center border-b px-1"
+        style={{ borderColor: 'var(--color-border-muted)' }}
+      >
+        <span
+          className="flex h-3 min-w-0 items-center gap-0.5 rounded-[3px] border px-1"
+          style={{
+            background: 'var(--color-bg-elevated)',
+            borderColor: 'var(--color-border-muted)',
+            color: 'var(--iv-text)',
+          }}
+        >
+          <FileSpreadsheet className="h-2 w-2 shrink-0" />
+          <span className="truncate text-[0.4375rem] leading-none">comps.xlsx</span>
+        </span>
+        <X className="ml-auto h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
+      </div>
+      {/* formula bar: the focused cell's reference, formula and cached value */}
+      <div
+        className="flex h-3 shrink-0 items-stretch border-b font-mono text-[0.3125rem] leading-none"
+        style={{ background: 'var(--color-bg-card)', borderColor: 'var(--color-border-muted)' }}
+      >
+        <span
+          className="flex w-5 items-center border-r px-1 font-medium"
+          style={{ borderColor: 'var(--color-border-muted)', color: 'var(--iv-text)' }}
+        >
+          {ref}
+        </span>
+        <span className="flex min-w-0 flex-1 items-center gap-1 px-1">
+          <span className="shrink-0 italic" style={{ color: 'var(--iv-text-3)' }}>
+            fx
+          </span>
+          {focused != null && (
+            <span className="truncate" style={{ color: 'var(--iv-text-2)' }}>
+              {typeof focused === 'string' ? focused : focused.f}
+            </span>
+          )}
+          {focused != null && typeof focused === 'object' && (
+            <span className="ml-auto shrink-0 font-medium" style={{ color: 'var(--iv-text)' }}>
+              {focused.v}
+            </span>
+          )}
+        </span>
+      </div>
+      {/* the sheet: lettered columns, numbered rows, hairline rules */}
+      <div className="relative min-h-0 flex-1 overflow-hidden" style={{ background: SHEET.rule }}>
+        <div
+          className="absolute left-0 top-0 grid gap-px"
+          style={{
+            gridTemplateColumns: `9px ${SHEET_COL_W.map((w) => `${w}px`).join(' ')}`,
+            gridTemplateRows: `7px repeat(${SHEET_ROWS}, 9px)`,
+          }}
+        >
+          <span style={{ background: SHEET.chromeStrong }} />
+          {SHEET_COLS.map((col, c) => (
+            <SheetHeading key={col} active={focus?.c === c}>
+              {col}
+            </SheetHeading>
+          ))}
+          {Array.from({ length: SHEET_ROWS }, (_, r) => [
+            <SheetHeading key={`n${r}`} active={focus?.r === r}>
+              {r + 1}
+            </SheetHeading>,
+            ...SHEET_COLS.map((col, c) => (
+              <SheetCell
+                key={`${r}${col}`}
+                value={shown.has(`${r}:${c}`) ? (COMPS[r]?.[c] ?? null) : null}
+                r={r}
+                c={c}
+                focus={focus?.r === r && focus.c === c}
+              />
+            )),
+          ])}
+        </div>
+      </div>
+      {/* sheet tabs */}
+      <div
+        className="flex shrink-0 items-center gap-0.5 border-t px-1 py-1"
+        style={{ borderColor: 'var(--color-border-muted)' }}
+      >
+        <SheetTab active>AI Semi Comps</SheetTab>
+        <SheetTab>Mega-Cap</SheetTab>
+      </div>
+    </div>
   );
 }
 
 /** No user bubble here — the scene is the agent mid-run: parallel subagents,
     an inline chart, deliverables, and the file panel previewing the Excel
-    they produced (the panel bleeds off the cropped right edge). */
+    they produced, docked at the window's right edge as the app docks it and
+    at the share of the window a file preview opens to (wider than the chat). */
 function PtcSandbox() {
-  const bars = [38, 56, 46, 86, 60, 70];
-  const accent = 3;
   const { worker } = useAgentNames();
+  const now = useSceneTime();
   const [card1, card2] = PTC.cards;
   const [card1Done, card2Done] = PTC.cardsDone;
+  const stacked = now >= PTC.chips[1];
   return (
-    <Frame topbar={<><Ln w="22%" /><Tag>{worker}</Tag></>}>
-      <div className="flex flex-1 gap-2">
+    <Frame
+      topbar={
+        <>
+          <Ln w="22%" />
+          <Tag>{worker}</Tag>
+        </>
+      }
+    >
+      <div className="flex flex-1 gap-2.5">
         {/* chat column */}
-        <div className="flex min-w-0 flex-[1.5] flex-col gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
           {/* parallel subagents */}
-          <SubagentCard name="data-prep" tools={23} at={card1} done={card1Done} />
-          <SubagentCard name="report-builder" tools={10} at={card2} done={card2Done} />
+          <SubagentCard
+            name="data-prep"
+            task="Pull NTM estimates for 9 AI semis"
+            tools={23}
+            at={card1}
+            done={card1Done}
+          />
+          <SubagentCard
+            name="report-builder"
+            task="Write comps.xlsx and the report"
+            tools={10}
+            at={card2}
+            done={card2Done}
+          />
           {/* narration, blurred */}
           <StreamLn w="58%" at={PTC.say} dur={500} />
-          {/* inline visualization in the reply */}
+          {/* inline chart in the reply: EPS estimate vs actual by quarter */}
           <Appear at={PTC.chart}>
-            <Region hot className="flex flex-col gap-1 p-2">
-              <Ln w="34%" h={2} c="var(--iv-line-3)" />
-              <div className="mt-0.5 flex h-9 items-end gap-1">
-                {bars.map((h, i) => (
-                  <GrowBar
-                    key={i}
-                    h={h}
-                    at={PTC.bars + i * 70}
-                    color={i === accent ? 'var(--iv-teal)' : 'hsl(var(--primary) / 0.7)'}
-                  />
+            <div className="flex flex-col gap-1.5 rounded-md border p-2" style={toolCard}>
+              <Ln w="34%" h={3} c="var(--iv-line-2)" />
+              <div
+                className="flex h-9 items-end gap-2.5 border-b px-1.5"
+                style={{ borderColor: 'var(--color-border-default)' }}
+              >
+                {QUARTERS.map(([estimate, actual], i) => (
+                  <div key={i} className="flex h-full flex-1 items-end gap-0.5">
+                    <GrowBar h={estimate} at={PTC.bars + i * 100} color="var(--color-icon-muted)" />
+                    <GrowBar h={actual} at={PTC.bars + i * 100 + 40} color="var(--color-profit)" />
+                  </div>
                 ))}
               </div>
-            </Region>
+            </div>
           </Appear>
-          {/* the deliverables */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Appear at={PTC.chips[0]} pop>
-              <FileChip name="comps.xlsx" />
-            </Appear>
-            <Appear at={PTC.chips[1]} pop>
-              <FileChip name="report.pdf" />
-            </Appear>
-          </div>
+          {/* the deliverables, stacked as the app stacks a turn's files */}
+          <Appear at={PTC.chips[0]}>
+            <div className="relative" style={{ height: stacked ? 27 : 24 }}>
+              {stacked && (
+                <div
+                  className="absolute inset-x-0 top-0"
+                  style={{ transform: 'translateY(3px) scale(0.98)' }}
+                >
+                  <FileCard name="report.pdf" kind="document" icon={FileText} />
+                </div>
+              )}
+              <div className="absolute inset-x-0 top-0">
+                <FileCard
+                  name="comps.xlsx"
+                  kind="spreadsheet"
+                  icon={FileSpreadsheet}
+                  count={stacked ? 2 : 1}
+                />
+              </div>
+            </div>
+          </Appear>
           <InputDock delay={0.6} />
         </div>
         {/* file panel previewing the Excel deliverable, written as it runs */}
-        <Appear at={PTC.panel} reserve className="flex flex-1">
-          <Region className="flex flex-1 flex-col gap-1.5 p-1.5">
-            <div className="flex items-center gap-1">
-              <FileText className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-              <span
-                className="font-mono text-[0.4375rem] leading-none"
-                style={{ color: 'var(--iv-text-2)' }}
-              >
-                comps.xlsx
-              </span>
-              <span className="ml-auto flex">
-                <Working at={PTC.panel} done={PTC.written} />
-              </span>
-            </div>
-            {/* sheet tabs */}
-            <div className="flex gap-1">
-              <Tag>AI Semi Comps</Tag>
-              <Tag color="var(--iv-text-3)">Mega-Cap</Tag>
-            </div>
-            {/* spreadsheet grid: hairline-divided cells, filled a row at a time */}
-            <div
-              className="grid flex-1 auto-rows-fr grid-cols-3 gap-px overflow-hidden rounded border"
-              style={{ background: 'var(--iv-border)', borderColor: 'var(--iv-border)' }}
-            >
-              {Array.from({ length: 21 }, (_, i) => (
-                <SheetCell
-                  key={i}
-                  head={i < 3}
-                  w={i < 3 ? '80%' : `${[64, 40, 52][i % 3]}%`}
-                  at={PTC.sheet + Math.floor(i / 3) * PTC.rowEvery + (i % 3) * 70}
-                />
-              ))}
-            </div>
-          </Region>
+        <Appear
+          at={PTC.panel}
+          reserve
+          className="-my-2.5 -mr-2.5 flex min-w-0 flex-[1.3] border-l"
+          style={{ background: 'var(--color-bg-page)', borderColor: 'var(--color-border-muted)' }}
+        >
+          <SheetPanel />
         </Appear>
       </div>
     </Frame>
-  );
-}
-
-/* ── chat · step 5: the new-workspace modal over the gallery ───────────── */
-
-/** Creating a workspace, played out: the pointer clicks + New, the modal
-    opens, the name and description type in, a click on the drop zone
-    uploads two files, and the pointer clicks create. Pointer positions are
-    px in the 400px scene, matched to the fixed-size mockup below. */
-const NEW_WS = {
-  name: 'NVDA earnings deep-dive',
-  desc: 'Q1 print vs. guidance, data-center demand…',
-  clickNew: 1000,
-  modal: 1150,
-  typeName: 1550,
-  clickDesc: 2650,
-  typeDesc: 2800,
-  clickDrop: 4500,
-  files: [4650, 4850],
-  upload: 700,
-  clickCreate: 6100,
-  length: 6800,
-};
-
-/** + New, then the description's free space past its text, the drop
-    zone, and create. */
-const NEW_WS_PATH = [
-  { at: 200, x: 232, y: 236 },
-  { at: 950, x: 298, y: 47 },
-  { at: 1800, x: 298, y: 47 },
-  { at: 2600, x: 300, y: 152 },
-  { at: 4000, x: 300, y: 152 },
-  { at: 4450, x: 236, y: 196 },
-  { at: 5500, x: 236, y: 196 },
-  { at: 6050, x: 324, y: 259 },
-];
-
-/** A field's text typed in place: an invisible copy of the finished text
-    holds the line's size, so nothing around it moves while it types. A
-    focused field that has not started typing shows the caret. */
-function TypedInPlace({ text, at, focus }: { text: string; at: number; focus: boolean }) {
-  const t = useSceneTime();
-  return (
-    <span className="grid">
-      <span className="invisible [grid-area:1/1]">{text}</span>
-      <span className="[grid-area:1/1]">
-        <Typed text={text} at={at} />
-        {focus && t < at && <Caret />}
-      </span>
-    </span>
-  );
-}
-
-/** A file queued for the new workspace: its upload bar fills from `at`,
-    then it reads ready. Its space is held so the modal does not grow. */
-function UploadRow({ w, at }: { w: string; at: number }) {
-  const t = useSceneTime();
-  const p = progress(t, at, NEW_WS.upload);
-  return (
-    <Appear at={at} reserve className="flex items-center gap-1.5">
-      <FileText className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-      <Ln w={w} c="var(--iv-line-2)" />
-      <span className="ml-auto flex h-3 items-center">
-        {p < 1 ? (
-          <span
-            className="block h-0.5 w-8 overflow-hidden rounded-full"
-            style={{ background: 'var(--iv-line-3)' }}
-          >
-            <span
-              className="block h-full rounded-full"
-              style={{
-                width: `${p * 100}%`,
-                background: 'var(--iv-teal)',
-                transition: 'width 90ms linear',
-              }}
-            />
-          </span>
-        ) : (
-          <Appear at={at + NEW_WS.upload} pop>
-            <Tag color="var(--iv-teal)">ready</Tag>
-          </Appear>
-        )}
-      </span>
-    </Appear>
-  );
-}
-
-function CreateWorkspace() {
-  const t = useSceneTime();
-  const open = t >= NEW_WS.modal;
-  const press = (at: number) => (during(t, at, at + 160) ? 'scale(0.92)' : undefined);
-  const nameFocus = during(t, NEW_WS.modal, NEW_WS.clickDesc);
-  const descFocus = during(t, NEW_WS.clickDesc, NEW_WS.clickDrop);
-  const overDrop = during(t, NEW_WS_PATH[5].at, NEW_WS_PATH[6].at);
-  return (
-    <div className="relative w-full max-w-[400px]">
-      {/* this scene is center-anchored: the gallery fades into the panel at
-          both edges instead of hard-cropping on one side, and dims behind
-          the modal once it opens */}
-      <div
-        style={{
-          opacity: open ? 0.45 : 1,
-          transition: 'opacity 300ms ease',
-          WebkitMaskImage:
-            'linear-gradient(90deg, transparent 0, black 18%, black 82%, transparent 100%)',
-          maskImage:
-            'linear-gradient(90deg, transparent 0, black 18%, black 82%, transparent 100%)',
-        }}
-      >
-        <Frame>
-          <div className="flex flex-col gap-2">
-            {/* the new-workspace button the pointer clicks */}
-            <div className="flex items-center">
-              <Ln w="22%" h={5} c="var(--iv-line-2)" />
-              <span
-                className={
-                  'ml-auto mr-16 flex items-center gap-1 rounded px-1.5 py-1 ' +
-                  'transition-transform duration-150'
-                }
-                style={{ background: 'var(--iv-accent-deep)', transform: press(NEW_WS.clickNew) }}
-              >
-                <Plus className="h-2 w-2 text-white" />
-                <Ln w="30px" h={3} c="rgba(255,255,255,0.8)" />
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <WsCard home delay={0} />
-              <WsCard delay={0} />
-              <WsCard delay={0} />
-              <WsCard delay={0} />
-            </div>
-          </div>
-        </Frame>
-      </div>
-      {/* the modal the click opens: name, description, drop-zone, create.
-          Centering transform lives on a static wrapper — the pop animates
-          `transform` and would clobber translate utilities on itself. */}
-      <div className="absolute left-1/2 top-1/2 w-[72%] -translate-x-1/2 -translate-y-1/2">
-        <Appear at={NEW_WS.modal} pop className="intro-mk intro-mk--accent p-2.5">
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-[0.5625rem]">New workspace</span>
-            <X className="h-2.5 w-2.5" style={{ color: 'var(--iv-text-3)' }} />
-          </div>
-          <div className="mt-2 flex flex-col gap-1.5">
-            {/* name field, focused when the modal opens */}
-            <span className="font-mono text-[0.5rem]" style={{ color: 'var(--iv-text-3)' }}>
-              name
-            </span>
-            <Region
-              className="flex items-center px-1.5 py-1"
-              style={{
-                borderRadius: 5,
-                ...(nameFocus ? { borderColor: 'hsl(var(--primary) / 0.6)' } : null),
-              }}
-            >
-              <span className="font-mono text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
-                <TypedInPlace text={NEW_WS.name} at={NEW_WS.typeName} focus={nameFocus} />
-              </span>
-            </Region>
-            {/* description */}
-            <span className="font-mono text-[0.5rem]" style={{ color: 'var(--iv-text-3)' }}>
-              description
-            </span>
-            <span className="font-mono text-[0.5rem]" style={{ color: 'var(--iv-text-2)' }}>
-              <TypedInPlace text={NEW_WS.desc} at={NEW_WS.typeDesc} focus={descFocus} />
-            </span>
-            {/* files queued for the new workspace */}
-            <span className="font-mono text-[0.5rem]" style={{ color: 'var(--iv-text-3)' }}>
-              files
-            </span>
-            <Region
-              dashed
-              className="flex items-center justify-center gap-1.5 p-1.5"
-              style={overDrop ? { borderColor: 'hsl(var(--primary) / 0.6)' } : undefined}
-            >
-              <Upload className="h-2.5 w-2.5" style={{ color: 'var(--iv-text-3)' }} />
-              <Ln w="38%" />
-            </Region>
-            <UploadRow w="34%" at={NEW_WS.files[0]} />
-            <UploadRow w="26%" at={NEW_WS.files[1]} />
-            <div className="flex items-center justify-end gap-2">
-              <span className="font-mono text-[0.5rem]" style={{ color: 'var(--iv-text-3)' }}>
-                cancel
-              </span>
-              <span
-                className="flex items-center px-2 py-1 transition-transform duration-150"
-                style={{
-                  background: 'var(--iv-accent-deep)',
-                  borderRadius: 5,
-                  transform: press(NEW_WS.clickCreate),
-                }}
-              >
-                <span className="font-mono text-[0.5rem] leading-none text-white">create</span>
-              </span>
-            </div>
-          </div>
-        </Appear>
-      </div>
-      <Cursor
-        path={NEW_WS_PATH}
-        clicks={[NEW_WS.clickNew, NEW_WS.clickDesc, NEW_WS.clickDrop, NEW_WS.clickCreate]}
-      />
-    </div>
   );
 }
 
@@ -843,7 +663,4 @@ export const chatScenes = {
   twoModes: { Scene: TwoModes, length: MODES.length, anchor: 'center' },
   chiefOfStaffAnswer: { Scene: ChiefOfStaffAnswer, length: COS.length, anchor: 'left' },
   ptcSandbox: { Scene: PtcSandbox, length: PTC.length, anchor: 'left' },
-  workspaceGrid: { Scene: WorkspaceGrid, length: GRID.length, anchor: 'left' },
-  // centered: the scene fades its own edges instead of bleeding one side
-  createWorkspace: { Scene: CreateWorkspace, length: NEW_WS.length, anchor: 'center' },
 } satisfies Partial<Record<IntroVisualId, IntroScene>>;

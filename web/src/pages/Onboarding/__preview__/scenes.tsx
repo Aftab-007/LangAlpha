@@ -28,14 +28,18 @@ export function ScenePreview({ visual, frames }: { visual: IntroVisualId; frames
         gridTemplateColumns: `repeat(2, ${PANEL.width}px)`,
         gap: 16,
         padding: 16,
-        fontFamily: 'ui-monospace, monospace',
-        fontSize: 12,
-        color: 'var(--color-text-tertiary)',
       }}
     >
       {frames.map((t) => (
         <div key={t}>
-          <div style={{ marginBottom: 4 }}>
+          <div
+            style={{
+              marginBottom: 4,
+              fontFamily: 'ui-monospace, monospace',
+              fontSize: 12,
+              color: 'var(--color-text-tertiary)',
+            }}
+          >
             {visual} · {t}ms / {INTRO_SCENES[visual].length}ms
           </div>
           <FrozenSceneTime.Provider value={t}>{panel}</FrozenSceneTime.Provider>
