@@ -1,8 +1,7 @@
-import { useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
-import { ArrowUpRight, Check, ChevronRight, X } from 'lucide-react';
-import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { ArrowUpRight, Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { isDesktopShell } from '@/lib/desktop';
 import { cn } from '@/lib/utils';
@@ -11,6 +10,32 @@ import type { GettingStartedTaskDef } from '../registry';
 
 /** The longest a hand-off to the account portal waits for its task's stamp. */
 const STAMP_WAIT_MS = 1500;
+
+/** Whether the list is folded open; a per-browser convenience, open by default. */
+const OPEN_KEY = 'onboarding.guideOpen';
+
+function readOpen(): boolean {
+  try {
+    return localStorage.getItem(OPEN_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function writeOpen(open: boolean): void {
+  try {
+    localStorage.setItem(OPEN_KEY, open ? '1' : '0');
+  } catch {
+    // Storage blocked: the list still folds, it just forgets on reload.
+  }
+}
+
+/**
+ * Set when the rail's ring expands the sidebar. The ring unmounts with the
+ * rail, so the section that replaces it takes focus to the next task rather
+ * than leaving it on the page body.
+ */
+let focusNextOnMount = false;
 
 /** Progress as a ring, drawn in the sidebar where an icon would be. */
 function ProgressRing({
@@ -46,10 +71,8 @@ function ProgressRing({
           strokeDasharray={length}
           strokeDashoffset={length * (1 - done / total)}
           transform="rotate(-90 9 9)"
-          style={{
-            stroke: 'var(--color-accent-primary)',
-            transition: 'stroke-dashoffset 300ms ease-out',
-          }}
+          className="sidebar-guide-ring-arc"
+          style={{ stroke: 'var(--color-accent-primary)' }}
         />
       )}
     </svg>
@@ -60,13 +83,13 @@ function TaskMark({ done, next }: { done: boolean; next: boolean }) {
   if (done) {
     return (
       <span
-        className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full"
+        className="sidebar-guide-mark flex items-center justify-center"
         style={{ backgroundColor: 'var(--color-accent-primary)' }}
         aria-hidden
       >
         <Check
-          className="h-3 w-3"
-          strokeWidth={3}
+          className="h-2.5 w-2.5"
+          strokeWidth={3.5}
           style={{ color: 'var(--color-text-on-accent)' }}
         />
       </span>
@@ -74,7 +97,7 @@ function TaskMark({ done, next }: { done: boolean; next: boolean }) {
   }
   return (
     <span
-      className="mt-px h-[18px] w-[18px] shrink-0 rounded-full border-[1.5px]"
+      className="sidebar-guide-mark border-[1.5px]"
       style={{
         borderColor: next ? 'var(--color-accent-primary)' : 'var(--color-border-strong)',
       }}
@@ -84,254 +107,186 @@ function TaskMark({ done, next }: { done: boolean; next: boolean }) {
 }
 
 /**
- * The list the sidebar's "Get started" entry opens: what is done, what comes
- * next with a line on it, and the rest by name. Presentational, so the dev
- * preview draws it without the provider.
+ * The checklist inside the sidebar, above the account: a header with the
+ * progress that folds the list away, then what is done, what comes next with
+ * a line on it, and the rest by name. It lives in the sidebar so it never
+ * covers the page. Presentational, so the dev preview draws it without the
+ * provider.
  */
-export function GettingStartedPanel({
+export function GettingStartedSection({
   tasks,
   doneCount,
   onSelect,
   onDismiss,
-  focusRef,
+  defaultOpen,
 }: {
   tasks: GettingStartedTaskState[];
   doneCount: number;
   onSelect: (def: GettingStartedTaskDef) => void;
   onDismiss: () => void;
-  /** Receives the next task's button, for the opening focus. */
-  focusRef?: RefObject<HTMLButtonElement | null>;
-}) {
-  const { t } = useTranslation();
-  const next = tasks.findIndex((task) => !task.done);
-  // Only the browser takes a cross-app task to a tab of its own.
-  const newTab = !isDesktopShell();
-
-  return (
-    <div className="flex flex-col">
-      <div className="flex items-start justify-between gap-3 px-4 pt-4">
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            {t('onboarding.gettingStarted.title')}
-          </h2>
-          <p
-            className="mt-0.5 text-xs tabular-nums"
-            style={{ color: 'var(--color-text-tertiary)' }}
-          >
-            {t('onboarding.gettingStarted.progress', {
-              done: doneCount,
-              total: tasks.length,
-            })}
-          </p>
-        </div>
-        <PopoverClose
-          aria-label={t('common.close')}
-          className="-mr-1.5 -mt-1 rounded-md p-1.5 transition-colors hover:bg-(--color-bg-subtle) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-          style={{ color: 'var(--color-text-tertiary)' }}
-        >
-          <X className="h-3.5 w-3.5" />
-        </PopoverClose>
-      </div>
-
-      <div
-        className="mx-4 mt-3 h-1 overflow-hidden rounded-full"
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={tasks.length}
-        aria-valuenow={doneCount}
-        style={{ backgroundColor: 'var(--color-bg-elevated)' }}
-      >
-        <div
-          className="h-full rounded-full transition-[width] duration-300"
-          style={{
-            width: `${(doneCount / tasks.length) * 100}%`,
-            backgroundColor: 'var(--color-accent-primary)',
-          }}
-        />
-      </div>
-
-      <ul className="flex flex-col gap-0.5 p-2">
-        {tasks.map(({ def, done }, i) => {
-          const isNext = i === next;
-          return (
-            <li key={def.id}>
-              <button
-                ref={isNext ? focusRef : undefined}
-                type="button"
-                disabled={done}
-                onClick={() => onSelect(def)}
-                className="group flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left transition-colors enabled:hover:bg-(--color-bg-subtle) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <TaskMark done={done} next={isNext} />
-                <span className="min-w-0 flex-1">
-                  <span
-                    className="block text-sm"
-                    style={{
-                      color: done ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
-                      fontWeight: isNext ? 600 : 500,
-                    }}
-                  >
-                    {t(def.titleKey)}
-                  </span>
-                  {isNext && (
-                    <span
-                      className="mt-0.5 block text-xs leading-relaxed"
-                      style={{ color: 'var(--color-text-secondary)' }}
-                    >
-                      {t(def.descKey)}
-                    </span>
-                  )}
-                </span>
-                {!done &&
-                  (def.external && newTab ? (
-                    <ArrowUpRight
-                      className="mt-0.5 h-4 w-4 shrink-0"
-                      style={{ color: 'var(--color-text-tertiary)' }}
-                      aria-hidden
-                    />
-                  ) : (
-                    <ChevronRight
-                      className={cn(
-                        'mt-0.5 h-4 w-4 shrink-0 transition-opacity',
-                        !isNext &&
-                          'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
-                      )}
-                      style={{ color: 'var(--color-text-tertiary)' }}
-                      aria-hidden
-                    />
-                  ))}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-
-      <div className="border-t px-4 py-2.5" style={{ borderColor: 'var(--color-border-muted)' }}>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="rounded text-xs transition-colors hover:text-(--color-text-secondary) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-          style={{ color: 'var(--color-text-tertiary)' }}
-        >
-          {t('onboarding.gettingStarted.dismiss')}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The sidebar's "Get started" entry: a row above the account in the panel, a
- * ring above the avatar in the rail. It opens the checklist beside the
- * sidebar, so the list never sits over a page. Presentational, like the panel.
- */
-export function GettingStartedEntry({
-  variant,
-  tasks,
-  doneCount,
-  onSelect,
-  onDismiss,
-  defaultOpen = false,
-}: {
-  variant: 'row' | 'rail';
-  tasks: GettingStartedTaskState[];
-  doneCount: number;
-  onSelect: (def: GettingStartedTaskDef) => void;
-  onDismiss: () => void;
+  /** Overrides the remembered fold, for the dev preview. */
   defaultOpen?: boolean;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(defaultOpen);
-  // The list opens on the task that comes next, so Enter starts it.
+  const [open, setOpen] = useState(() => defaultOpen ?? readOpen());
+  const listId = useId();
   const nextRef = useRef<HTMLButtonElement>(null);
+  const next = tasks.findIndex((task) => !task.done);
+  // Only the browser takes a cross-app task to a tab of its own.
+  const newTab = !isDesktopShell();
   const title = t('onboarding.gettingStarted.title');
   const progress = t('onboarding.gettingStarted.progress', {
     done: doneCount,
     total: tasks.length,
   });
-  const ring = (
-    <ProgressRing
-      done={doneCount}
-      total={tasks.length}
-      className={variant === 'row' ? 'sidebar-panel-item-icon' : 'sidebar-nav-icon'}
-    />
-  );
+
+  useEffect(() => {
+    if (!focusNextOnMount) return;
+    focusNextOnMount = false;
+    nextRef.current?.focus();
+  }, []);
+
+  const toggle = () => {
+    setOpen(!open);
+    writeOpen(!open);
+  };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      {variant === 'row' ? (
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="sidebar-panel-item sidebar-guide"
-            aria-label={`${title}, ${progress}`}
-          >
-            {ring}
-            <span className="min-w-0 flex-1 truncate text-left">{title}</span>
-            <span className="text-xs tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>
-              {doneCount}/{tasks.length}
-            </span>
-          </button>
-        </PopoverTrigger>
-      ) : (
-        <TooltipProvider delayDuration={300}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  className="sidebar-nav-item sidebar-guide"
-                  aria-label={`${title}, ${progress}`}
-                >
-                  {ring}
-                </button>
-              </PopoverTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="right" sideOffset={8}>
-              {title} · {doneCount}/{tasks.length}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      )}
-      <PopoverContent
-        side="right"
-        align="end"
-        sideOffset={variant === 'row' ? 18 : 16}
-        className="w-80 rounded-xl p-0"
-        onOpenAutoFocus={(e) => {
-          if (!nextRef.current) return;
-          e.preventDefault();
-          nextRef.current.focus();
-        }}
+    <section className="sidebar-guide" aria-label={title}>
+      <button
+        type="button"
+        className="sidebar-guide-head"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-label={`${title}, ${progress}`}
+        onClick={toggle}
       >
-        <GettingStartedPanel
-          tasks={tasks}
-          doneCount={doneCount}
-          focusRef={nextRef}
-          onSelect={(def) => {
-            setOpen(false);
-            onSelect(def);
-          }}
-          onDismiss={onDismiss}
-        />
-      </PopoverContent>
-    </Popover>
+        <ProgressRing done={doneCount} total={tasks.length} className="sidebar-panel-item-icon" />
+        <span className="min-w-0 flex-1 truncate text-left">{title}</span>
+        <span className="sidebar-guide-count">
+          {doneCount}/{tasks.length}
+        </span>
+        <ChevronDown className="sidebar-guide-chevron" aria-hidden />
+      </button>
+
+      <div
+        id={listId}
+        className="sidebar-guide-body"
+        data-open={open}
+        inert={!open}
+        aria-hidden={!open}
+      >
+        <div className="sidebar-guide-scroll">
+          <ul className="flex flex-col gap-px">
+            {tasks.map(({ def, done }, i) => {
+              const isNext = i === next;
+              return (
+                <li key={def.id}>
+                  <button
+                    ref={isNext ? nextRef : undefined}
+                    type="button"
+                    disabled={done}
+                    onClick={() => onSelect(def)}
+                    className="sidebar-guide-task group"
+                    data-next={isNext || undefined}
+                  >
+                    <TaskMark done={done} next={isNext} />
+                    <span className="min-w-0 flex-1">
+                      <span className="sidebar-guide-task-title">{t(def.titleKey)}</span>
+                      {isNext && <span className="sidebar-guide-task-desc">{t(def.descKey)}</span>}
+                    </span>
+                    {!done &&
+                      (def.external && newTab ? (
+                        <ArrowUpRight className="sidebar-guide-go" aria-hidden />
+                      ) : (
+                        <ChevronRight
+                          className={cn(
+                            'sidebar-guide-go',
+                            !isNext &&
+                              'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
+                          )}
+                          aria-hidden
+                        />
+                      ))}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <button type="button" className="sidebar-guide-hide" onClick={onDismiss}>
+            {t('onboarding.gettingStarted.dismiss')}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
 /**
- * The entry, wired to the onboarding state. Absent once every task is done,
- * the guide is hidden, or the welcome flow's conversation has the screen.
+ * The rail's version: just the ring above the avatar. There is no room for
+ * the list beside an icon rail, and a list floating over the page would cover
+ * it, so the ring opens the sidebar with the list unfolded.
+ */
+export function GettingStartedRail({
+  doneCount,
+  total,
+  onOpen,
+}: {
+  doneCount: number;
+  total: number;
+  onOpen: () => void;
+}) {
+  const { t } = useTranslation();
+  const title = t('onboarding.gettingStarted.title');
+  return (
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="sidebar-nav-item sidebar-guide-rail"
+            aria-label={`${title}, ${t('onboarding.gettingStarted.progress', {
+              done: doneCount,
+              total,
+            })}`}
+            onClick={() => {
+              writeOpen(true);
+              focusNextOnMount = true;
+              onOpen();
+            }}
+          >
+            <ProgressRing done={doneCount} total={total} className="sidebar-nav-icon" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right" sideOffset={8}>
+          {title} · {doneCount}/{total}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+/**
+ * The checklist, wired to the onboarding state: the section in the expanded
+ * sidebar, the ring in the rail (`onExpand` opens the sidebar). Absent once
+ * every task is done, the guide is hidden, or the welcome flow's
+ * conversation has the screen.
  *
  * Tasks complete via route visits or a derived signal (the saved investing
  * profile, a workspace); picking a pending one goes to it.
  */
-export function GettingStartedLauncher({ variant }: { variant: 'row' | 'rail' }) {
+export function GettingStartedLauncher(
+  props: { variant: 'row' } | { variant: 'rail'; onExpand: () => void }
+) {
   const { gettingStarted } = useOnboarding();
   const navigate = useNavigate();
 
   if (!gettingStarted.visible) return null;
   const { tasks, doneCount, dismiss, completeTask } = gettingStarted;
+
+  if (props.variant === 'rail') {
+    return <GettingStartedRail doneCount={doneCount} total={tasks.length} onOpen={props.onExpand} />;
+  }
 
   const select = (def: GettingStartedTaskDef) => {
     if (!def.external) {
@@ -366,8 +321,7 @@ export function GettingStartedLauncher({ variant }: { variant: 'row' | 'rail' })
   };
 
   return (
-    <GettingStartedEntry
-      variant={variant}
+    <GettingStartedSection
       tasks={tasks}
       doneCount={doneCount}
       onSelect={select}

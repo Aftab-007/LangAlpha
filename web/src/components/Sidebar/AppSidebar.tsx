@@ -233,7 +233,7 @@ function AppSidebar({ collapsed, onToggleCollapse, width, onWidthChange }: AppSi
           </TooltipProvider>
         </nav>
         <div className="sidebar-bottom">
-          <GettingStartedLauncher variant="rail" />
+          <GettingStartedLauncher variant="rail" onExpand={onToggleCollapse} />
           <AccountMenu />
         </div>
         </React.Fragment>
@@ -319,8 +319,9 @@ function AppSidebar({ collapsed, onToggleCollapse, width, onWidthChange }: AppSi
         <NavigationPanel {...navTreeProps} />
       </div>
 
+      <GettingStartedLauncher variant="row" />
+
       <div className="sidebar-panel-bottom">
-        <GettingStartedLauncher variant="row" />
         <AccountMenu variant="row" />
       </div>
 

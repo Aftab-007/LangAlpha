@@ -4,11 +4,15 @@ import { SquarePen } from 'lucide-react';
 import '@/components/Sidebar/Sidebar.css';
 import { NAV_ITEMS } from '@/components/nav/navItems';
 import { GETTING_STARTED_TASKS } from '@/pages/Onboarding/registry';
-import { GettingStartedEntry } from '@/pages/Onboarding/engine/GettingStarted';
+import {
+  GettingStartedRail,
+  GettingStartedSection,
+} from '@/pages/Onboarding/engine/GettingStarted';
 
 /**
- * The sidebar's getting-started entry with its list open, drawn in a stand-in
- * sidebar that uses the real classes. The first `done` tasks read as done.
+ * The sidebar's getting-started checklist, drawn in a stand-in sidebar that
+ * uses the real classes: unfolded in the panel under a new user's short
+ * workspace list, or as the rail's ring. The first `done` tasks read as done.
  */
 export function GuidePreview({ variant, done }: { variant: 'row' | 'rail'; done: number }) {
   const { t } = useTranslation();
@@ -28,16 +32,6 @@ export function GuidePreview({ variant, done }: { variant: 'row' | 'rail'; done:
     };
   }, [variant]);
 
-  const entry = (
-    <GettingStartedEntry
-      variant={variant}
-      tasks={tasks}
-      doneCount={done}
-      onSelect={() => {}}
-      onDismiss={() => {}}
-      defaultOpen
-    />
-  );
 
   return (
     <>
@@ -56,8 +50,24 @@ export function GuidePreview({ variant, done }: { variant: 'row' | 'rail'; done:
               </button>
             ))}
           </nav>
+          <div className="sidebar-section-header">
+            <span className="sidebar-section-title">{t('sidebar.workspaces')}</span>
+          </div>
+          <div className="sidebar-tree" style={{ padding: '2px 10px' }}>
+            {['Home', 'NVDA deep dive'].map((name) => (
+              <span key={name} className="sidebar-panel-item">
+                <span className="truncate">{name}</span>
+              </span>
+            ))}
+          </div>
+          <GettingStartedSection
+            tasks={tasks}
+            doneCount={done}
+            onSelect={() => {}}
+            onDismiss={() => {}}
+            defaultOpen
+          />
           <div className="sidebar-panel-bottom">
-            {entry}
             <button type="button" className="sidebar-account-row">
               <span className="sidebar-account-row-avatar" aria-hidden="true">
                 <span className="sidebar-account-initials">D</span>
@@ -82,7 +92,7 @@ export function GuidePreview({ variant, done }: { variant: 'row' | 'rail'; done:
             ))}
           </nav>
           <div className="sidebar-bottom">
-            {entry}
+            <GettingStartedRail doneCount={done} total={tasks.length} onOpen={() => {}} />
             <button type="button" className="sidebar-account-trigger" aria-label="Demo user">
               <span className="sidebar-account-initials">D</span>
             </button>

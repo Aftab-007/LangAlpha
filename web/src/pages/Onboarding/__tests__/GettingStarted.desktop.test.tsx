@@ -54,12 +54,12 @@ function pickChatApps() {
       <GettingStartedLauncher variant="row" />
     </MemoryRouter>
   );
-  fireEvent.click(screen.getByRole('button', { name: /^Get started/ }));
   fireEvent.click(screen.getByRole('button', { name: /Connect a chat app/ }));
 }
 
 describe('GettingStartedLauncher in the desktop app', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.useFakeTimers();
     h.assign.mockClear();
     h.completeTask.mockClear();
@@ -101,7 +101,6 @@ describe('GettingStartedLauncher in the desktop app', () => {
         <GettingStartedLauncher variant="row" />
       </MemoryRouter>
     );
-    fireEvent.click(screen.getByRole('button', { name: /^Get started/ }));
     const task = screen.getByRole('button', { name: /Connect a chat app/ });
     expect(task.querySelector('.lucide-arrow-up-right')).toBeNull();
   });
