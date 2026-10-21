@@ -1189,30 +1189,6 @@ async def list_steerable_report_jobs(
             return [dict(row) for row in await cur.fetchall()]
 
 
-async def has_steerable_market_alert(thread_id: str) -> bool:
-    """Whether a market-target alert waits for the thread's live turn to take
-    it in; a run waiting on its background tasks asks this between polls.
-
-    Only a parked one counts: nothing makes it claimable while the turn
-    lives, so the trigger this answer injects finds it at the next model
-    call. A due one may be claimed by the drainer before that call, leaving
-    the trigger with no alert; its executor parks it behind the live turn,
-    and a later poll counts it."""
-    async with pool.get_db_connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                f"""
-                SELECT 1 FROM hook_outbox
-                WHERE ordering_key = %s AND hook_type = 'market_target'
-                  AND {_STEERABLE_REPORT_SQL}
-                  AND next_retry_at = 'infinity'::timestamptz
-                LIMIT 1
-                """,
-                (market_target_key(str(thread_id)),),
-            )
-            return await cur.fetchone() is not None
-
-
 async def steerable_alert_senders(
     thread_id: str, senders: Mapping[str, str]
 ) -> Set[str]:

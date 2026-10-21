@@ -555,6 +555,14 @@ class ChatRequest(BaseModel):
         "Internal use only.",
     )
 
+    # Server-set: the notices a wakeup's wake turn delivers ({"v": 1, "notices":
+    # [...]}), kept on the turn's query metadata as ``market_target`` is, so
+    # history can name what fired without reading the model-facing block.
+    wakeup: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Wakeup notices this wake turn delivers. Server use only.",
+    )
+
     # Server-stamped: the burst-guard ZSET member held by this request's
     # admission. The route overwrites whatever a client sent (a forged value
     # could only orphan the caller's own slot until reap, but stamping keeps

@@ -54,6 +54,7 @@ from ptc_agent.agent.middleware.background_subagent import (
     SubagentEventCaptureMiddleware,
     SubagentToolResultCaptureMiddleware,
 )
+from ptc_agent.agent.transcript.classify import MARKET_ALERT_SENDER
 from ptc_agent.agent.middleware.compaction.notes import (
     NotesDueMiddleware,
     NotesOffMiddleware,
@@ -1014,5 +1015,9 @@ class PTCAgent:
             agent=agent,
             middleware=background_middleware,
             auto_wait=self.config.background_auto_wait,
-            market_alerts=self.config.feature_enabled("market_watch"),
+            alert_senders=(
+                frozenset({MARKET_ALERT_SENDER})
+                if self.config.feature_enabled("market_watch")
+                else frozenset()
+            ),
         )
