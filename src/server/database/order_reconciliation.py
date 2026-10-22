@@ -285,8 +285,9 @@ async def reconcile_group_lock(user_id: str, server: str) -> AsyncIterator[bool]
     """Hold one account's read lock, or False when a sibling worker has it.
 
     A group another worker is already reading is skipped rather than waited on,
-    the same way a pass is. Its rows keep their ``swept_at`` stamp, so the next
-    pass finds them at the head of the queue rather than losing them.
+    the same way a pass is. Its rows keep the ``swept_at`` stamp they were taken
+    with, so they come round once the poll interval has passed, the same as a
+    row a read left open, rather than being lost.
     """
     async with try_session_lock(group_lock_key(user_id, server)) as held:
         yield held
@@ -296,6 +297,7 @@ async def list_stale_attempts(
     *,
     submitting_grace_seconds: float,
     open_after_seconds: float,
+    resweep_after_seconds: float,
     limit: int,
 ) -> list[dict[str, Any]]:
     """The next batch of attempts a vendor read could still settle.
@@ -306,6 +308,19 @@ async def list_stale_attempts(
     answered, and is stale once it has gone longer than a poll interval without
     anyone asking the vendor what happened next -- which is how a working order
     becomes filled with no user in the loop.
+
+    That asking is dated by ``swept_at``, not ``updated_at``, and it holds both
+    populations to one read a poll interval. A pass that takes a row and
+    settles nothing writes only that stamp: the order is missing from a list
+    that cannot fail it, the read errored or was cut short, or the match is
+    left for a person. Gated on the last write alone, such a row was due on
+    every pass of every worker, a vendor call each time for an answer that had
+    not changed. An unanswered call past its grace window keeps the same
+    cadence, because the vendor's list is all it is waiting on too. The
+    ``updated_at`` windows still apply on top, since they are what hold off a
+    row its own turn has just written. ``resweep_after_seconds`` is the caller's
+    to set a little under the interval: a pass that came early would otherwise
+    find the row the pass before it took still held off, and skip it.
 
     An ``unknown`` row with no vendor order id joins the first population: the
     call was answered with nothing this build could read, or its answer was
@@ -346,6 +361,15 @@ async def list_stale_attempts(
                                   AND updated_at < NOW() - make_interval(secs => %s)
                                 )
                            )
+                       -- And not taken within the poll interval, by this worker
+                       -- or any other. A read that settles nothing writes only
+                       -- swept_at, so a row past the updated_at windows above
+                       -- stays past them, and on those alone every pass in the
+                       -- fleet read it again.
+                       AND (
+                             swept_at IS NULL
+                             OR swept_at < NOW() - make_interval(secs => %s)
+                           )
                      -- Least recently swept first, stamped as taken. A row no
                      -- read can settle is skipped without a write, so ordered
                      -- by updated_at alone it held the head of every pass, and
@@ -366,6 +390,7 @@ async def list_stale_attempts(
                     float(submitting_grace_seconds),
                     [str(s) for s in OPEN_STATUSES],
                     float(open_after_seconds),
+                    float(resweep_after_seconds),
                     int(limit),
                 ),
             )

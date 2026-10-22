@@ -85,6 +85,10 @@ MAX_LISTING_PAGES = 20
 
 STOP_GRACE = 30.0
 
+# How far either side of the interval a worker's pass may land, so sibling
+# workers' advisory-lock probes don't fall in lockstep every cycle.
+PASS_JITTER = 0.2
+
 # How far a vendor's clock may run behind ours. ``executed_at`` is stamped
 # before the call leaves, so this attempt's own order can predate it only by
 # skew; an identical order listed earlier than that was placed by something
@@ -310,12 +314,11 @@ class OrderReconciler:
     async def _loop(self) -> None:
         while not self._stop_event.is_set():
             interval = float(self._settings().interval_seconds)
-            # Jitter desynchronizes sibling workers so their advisory-lock
-            # probes don't land in lockstep every cycle.
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(),
-                    timeout=interval * (0.8 + 0.4 * random.random()),
+                    timeout=interval
+                    * (1 - PASS_JITTER + 2 * PASS_JITTER * random.random()),
                 )
                 return
             except TimeoutError:
@@ -374,6 +377,21 @@ class OrderReconciler:
             rows = await list_stale_attempts(
                 submitting_grace_seconds=config.submitting_grace_seconds,
                 open_after_seconds=config.open_after_seconds,
+                # Less however early a pass may come: held to the full interval,
+                # a pass landing early skipped every row the one before it took,
+                # and a lone worker read each row only every other pass. Never
+                # by more than the jitter's share of the window itself, though:
+                # a loop interval five times the window took the gate to zero,
+                # and a sibling could then re-read a row seconds after another
+                # took it, putting the two lists a hand-off waits for that close.
+                resweep_after_seconds=(
+                    float(config.open_after_seconds)
+                    - PASS_JITTER
+                    * min(
+                        float(config.interval_seconds),
+                        float(config.open_after_seconds),
+                    )
+                ),
                 limit=config.batch_limit,
             )
             report = PassReport(
@@ -663,8 +681,8 @@ class OrderReconciler:
             claimed.add(observation.vendor_order_id)
         if observation.status == current:
             # The read named the state the row was already in: the fill grew or
-            # the instrument got a name, and ``updated_at`` moved so the next
-            # pass does not immediately re-read a row that has not changed.
+            # the instrument got a name. That enriches the row without moving
+            # it, so it is not counted or logged as a move.
             return
         report.moved += 1
         logger.info(
