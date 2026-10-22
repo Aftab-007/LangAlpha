@@ -81,7 +81,7 @@ export function Pin({ n, left, top }: { n: number; left?: number; top?: number }
 /** The comment box beside a fresh selection (`SelectionCommentOverlay`): its
     pin, the note's pill with Add (Plus) while it is new, and the discard X.
     Its width, for placing it. */
-export const COMMENT_W = 100;
+const COMMENT_W = 100;
 
 export function CommentBox({
   left,

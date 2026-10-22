@@ -13,9 +13,9 @@ import {
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
-import { CLOSE, Camera, REST, VIEW, look, type Shot } from './camera';
+import { CLOSE, Camera, REST, VIEW, shot, type Shot } from './camera';
 import { ease, useSceneTime } from './clock';
-import { Appear, pointAt, type Waypoint } from './kit';
+import { Appear, pointAt, pointerScript } from './kit';
 import type { IntroScene } from './types';
 import { attachScene } from './dashboardAttach';
 import {
@@ -77,19 +77,19 @@ const WIDE = 0.85;
     whole, the news under the brief. */
 const GRID_SHOTS: [Shot, ...Shot[]] = [
   // the title, the index cards and the brief, out to the watchlist's symbols
-  { at: 0, ...look(0, 0, VIEW.width / WATCH_NAMES_END, GRID_PAGE) },
+  shot(0, 0, 0, VIEW.width / WATCH_NAMES_END),
   // the brief, a little higher than its center so the index cards' changes
   // stay in at the top
-  { at: 2600, ...look(BRIEF_MID.x, BRIEF_MID.y - 8, CLOSE, GRID_PAGE), dur: 1000 },
+  shot(2600, BRIEF_MID.x, BRIEF_MID.y - 8, CLOSE, 1000),
   // the watchlist and the index cards over it, from under the page's title
   // (the left edge falls in the gutter after the first index card)
-  { at: 3800, ...look(PAGE_W, 155, REST, GRID_PAGE), dur: 1000 },
-  { at: 6400, ...look(PAGE_W / 2, 0, WIDE, GRID_PAGE), dur: 1000 },
+  shot(3800, PAGE_W, 155, REST, 1000),
+  shot(6400, PAGE_W / 2, 0, WIDE, 1000),
 ];
 
 function DashboardGrid() {
   return (
-    <Camera shots={GRID_SHOTS}>
+    <Camera shots={GRID_SHOTS} page={GRID_PAGE}>
       <DashPage>
         <ClassicBody live />
       </DashPage>
@@ -268,38 +268,40 @@ const GROWN = { width: PAGE_W, height: CUSTOM_H + GROW };
 const ROW1_FOOT = GRID_TOP + ROW;
 /** Past halfway, the watchlist gives up its slot. */
 const SWAP = (CUSTOM.carry + CUSTOM.drop) / 2;
-const CUSTOM_PATH: Waypoint[] = [
+/** The switch, the pencil, the price chart's header grabbed and carried
+    a column right, the toolbar's add button; then down with the toolbar as
+    the page grows under it. */
+const CUSTOM_POINTER = pointerScript(
   { at: 300, x: 300, y: 110 },
-  { at: 1000, ...TOGGLE },
-  { at: 1250, ...TOGGLE },
-  { at: 1500, ...PENCIL },
-  { at: 1800, ...PENCIL },
-  { at: 2850, ...GRAB },
-  { at: CUSTOM.carry, ...GRAB },
-  { at: CUSTOM.drop, ...DROP },
-  { at: 4300, ...DROP },
-  { at: 4850, ...ADD },
-  { at: ADDED, ...ADD },
-  { at: ADDED + GROW_DUR, x: ADD.x, y: ADD.y + GROW },
-];
+  {
+    toggle: { ...TOGGLE, arrive: 1000, click: CUSTOM.toggle, leave: 1250 },
+    pencil: { ...PENCIL, arrive: 1500, click: CUSTOM.edit, leave: 1800 },
+    grab: { ...GRAB, arrive: 2850, leave: CUSTOM.carry },
+    drop: { ...DROP, arrive: CUSTOM.drop, leave: 4300 },
+    add: { ...ADD, arrive: 4850, click: CUSTOM.add, leave: ADDED },
+    ride: { x: ADD.x, y: ADD.y + GROW, arrive: ADDED + GROW_DUR },
+  }
+);
 /** The page's top right under the header's switch, the left column's edge
     beside it; a short push in on the switch and the pencil, and back out as
     the chart is carried a column right; down to the toolbar's add button,
     and out to the page's full width as the page grows by the new widget's
     row, so the widget is whole with the toolbar under it. */
 const CUSTOM_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...look(PAGE_W, 0, REST) },
-  { at: 1200, ...look(PAGE_W, 0, CLOSE), dur: 800 },
-  { at: 2800, ...look(PAGE_W, 0, REST), dur: 1100 },
+  shot(0, PAGE_W, 0, REST),
+  shot(1200, PAGE_W, 0, CLOSE, 800),
+  shot(2800, PAGE_W, 0, REST, 1100),
   // the view's top over the first row's quotes, its foot just under the
   // toolbar
-  { at: 4900, ...look(PAGE_W, 190, REST), dur: 600 },
+  shot(4900, PAGE_W, 190, REST, 600),
   // from the first row's foot to the page's
-  {
-    at: ADDED + GROW_DUR + 130,
-    ...look(PAGE_W / 2, GROWN.height, VIEW.height / (GROWN.height - ROW1_FOOT), GROWN),
-    dur: 700,
-  },
+  shot(
+    ADDED + GROW_DUR + 130,
+    PAGE_W / 2,
+    GROWN.height,
+    VIEW.height / (GROWN.height - ROW1_FOOT),
+    700
+  ),
 ];
 
 /** The toolbar edit mode floats at the foot of the page. */
@@ -356,7 +358,7 @@ function CustomGrid({ edit }: { edit: boolean }) {
   // new slot from wherever the pointer let go
   const lift = ease(t, CUSTOM.grab, 160) * (1 - ease(t, CUSTOM.drop, 260));
   const settle = 1 - ease(t, CUSTOM.drop, 260);
-  const p = pointAt(CUSTOM_PATH, t);
+  const p = pointAt(CUSTOM_POINTER.path, t);
   const dx = dropped ? (DROP.x - GRAB.x - COL) * settle : held ? p.x - GRAB.x : 0;
   const dy = dropped ? (DROP.y - GRAB.y) * settle : held ? p.y - GRAB.y : 0;
   return (
@@ -484,11 +486,7 @@ function DashboardCustomize() {
   const custom = t >= CUSTOM.toggle;
   const edit = t >= CUSTOM.edit;
   return (
-    <Camera
-      shots={CUSTOM_SHOTS}
-      cursor={CUSTOM_PATH}
-      clicks={[CUSTOM.toggle, CUSTOM.edit, CUSTOM.add]}
-    >
+    <Camera shots={CUSTOM_SHOTS} page={GROWN} pointer={CUSTOM_POINTER}>
       <DashPage
         height={CUSTOM_H + grown(t)}
         header={<DashTopbar custom={custom} pencil edit={edit} />}

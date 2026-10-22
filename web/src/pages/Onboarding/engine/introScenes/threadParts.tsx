@@ -2,16 +2,15 @@ import { Fragment, type ReactNode } from 'react';
 import { ArrowLeft, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentNames } from '../introAgents';
-import { useSceneTime } from './clock';
-import { Appear, InputDock, Tag } from './kit';
+import { VIEW } from './camera';
+import { PAST, useSceneTime } from './clock';
+import { Appear, InputDock, Tag, typedCount } from './kit';
 import { ChatHeaderButtons, PanelStrip } from './panelParts';
 
 /* The thread page the thread intro's scenes play on: the chat column beside
    the file panel, the panel a full-height column with its own tab strip,
    and the transcript's prose and tool rows. Each part is a small copy of the
    component the app draws it with. */
-/* eslint-disable react-refresh/only-export-components -- shared parts:
-   scene components plus layout constants */
 
 /** The file panel's width in the 400px scene; the chat column takes the rest. */
 export const PANEL_W = 212;
@@ -29,7 +28,7 @@ export function ChromeIcon({ icon: Icon }: { icon: LucideIcon }) {
  */
 export function Prose({ text, at, cps = 110 }: { text: string; at?: number; cps?: number }) {
   const t = useSceneTime();
-  let left = at == null ? Infinity : Math.max(Math.floor(((t - at) * cps) / 1000), 0);
+  let left = at == null ? Infinity : Math.max(typedCount(t, at, cps), 0);
   if (left === 0) return null;
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).filter(Boolean);
   const out: ReactNode[] = [];
@@ -87,20 +86,17 @@ function ChatHeader({ title }: { title: string }) {
   );
 }
 
-/** The thread page's size when a scene's camera frames it. */
-export const PAGE = { width: 400, height: 330 };
-
 /** The page's header row: the chat header beside the panel's tab strip. */
 export const HEADER_H = 28;
 
 /**
- * The thread page alone, drawn at `PAGE` for a scene's `Camera` to crop: the
- * chat column with its header (the thread's `title`) beside the file panel,
- * whose tab strip (`tabs`, with `back` and `tree` as `PanelStrip` reads
- * them) sits level with the chat header and `panel` fills the rest. `stack`
- * places the transcript: from the top for a new thread, or settled on the
- * composer for one with history above, the oldest lines running off the top
- * as the newest come in.
+ * The thread page alone, drawn at the view's size (`VIEW`) for a scene's
+ * `Camera` to crop: the chat column with its header (the thread's `title`)
+ * beside the file panel, whose tab strip (`tabs`, with `back` and `tree` as
+ * `PanelStrip` reads them) sits level with the chat header and `panel` fills
+ * the rest. `stack` places the transcript: from the top for a new thread, or
+ * settled on the composer for one with history above, the oldest lines
+ * running off the top as the newest come in.
  */
 export function ThreadPage({
   title,
@@ -124,7 +120,7 @@ export function ThreadPage({
   stack?: 'top' | 'bottom';
 }) {
   return (
-    <div className="relative flex flex-col" style={PAGE}>
+    <div className="relative flex flex-col" style={VIEW}>
       <div
         className="flex shrink-0 items-stretch border-b"
         style={{ height: HEADER_H, borderColor: 'var(--color-border-muted)' }}
@@ -193,8 +189,8 @@ export function ToolRow({
   icon: Icon,
   running,
   settled,
-  at = 0,
-  done = 0,
+  at = PAST,
+  done = PAST,
 }: {
   icon: LucideIcon;
   running?: RowLine;

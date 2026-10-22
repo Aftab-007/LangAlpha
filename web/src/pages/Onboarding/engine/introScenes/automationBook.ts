@@ -32,7 +32,7 @@ const BRIEF_CRON = '0 8 * * 1-5';
 const REVIEW_CRON = '0 22 * * 5';
 const MARKET_ZONE = 'America/New_York';
 export const NVDA = { price: 182.42, previous_close: 179.53 };
-export const ALERT: PriceTriggerConfig = {
+const ALERT: PriceTriggerConfig = {
   symbol: 'NVDA',
   conditions: [{ type: 'price_above', value: 190 }],
   retrigger: { mode: 'one_shot' },

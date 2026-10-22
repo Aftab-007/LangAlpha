@@ -15,7 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { useLocale } from '@/hooks/useLocale';
 import { relativeTime, shortMonthDay } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { ease, useSceneTime } from './clock';
+import { PAST, ease, useSceneTime } from './clock';
 import { Appear, Region, rv } from './kit';
 import { changeAt, upColor, signed, money, INDICES, WATCH, Spark } from './dashboardParts';
 
@@ -537,7 +537,7 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
       {/* brief and watchlist side by side, then news and earnings under them */}
       <div className="mt-1.5 grid min-h-0 grid-cols-[3fr_2fr] content-start gap-1.5">
         {/* the AI brief; on the live page its parts enter in turn */}
-        <BriefCard at={live ? GRID.brief : Number.NEGATIVE_INFINITY} />
+        <BriefCard at={live ? GRID.brief : PAST} />
         <Region delay={0.32} className="flex min-w-0 flex-col p-2">
           <div className="mb-1 flex items-center justify-between gap-1">
             <span

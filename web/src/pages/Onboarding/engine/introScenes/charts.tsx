@@ -1,18 +1,13 @@
-import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { ease, useSceneTime } from './clock';
+import { useSvgId } from './kit';
 
 /* The charts the scenes draw, each after the app's own: the price card a
    market-data tool leaves in chat (`InlineStockPriceCard`), and the bar
    chart an agent puts in a report or a reply, its own name in the accent
    among grey peers, as the README's figures draw them. Both trace in on the
    scene clock. */
-
-/** An id usable inside `url(#…)`: React's ids carry colons. */
-function svgId(id: string): string {
-  return id.replace(/[^a-zA-Z0-9_-]/g, '');
-}
 
 /** `series` across a 100×`h` box, high values up, as a smooth path (the
     monotone curve the app's charts take, here a Catmull-Rom spline). */
@@ -42,7 +37,7 @@ function curve(series: number[], h: number, pad = 1.5): { line: string; area: st
  * card draws it, traced left to right over `[at, at + dur]`. Fills its box's
  * width; `height` in px.
  */
-export function PriceArea({
+function PriceArea({
   series,
   color,
   at = 0,
@@ -57,7 +52,7 @@ export function PriceArea({
   height?: number;
   className?: string;
 }) {
-  const id = svgId(useId());
+  const id = useSvgId();
   const p = ease(useSceneTime(), at, dur);
   const h = 30;
   const { line, area } = curve(series, h);

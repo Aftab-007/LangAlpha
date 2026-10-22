@@ -6,20 +6,17 @@ import { useLocale } from '@/hooks/useLocale';
 import { shortMonthDay } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
-import { progress, useSceneTime } from './clock';
-import { CLOSE, Camera, REST, type Shot } from './camera';
-import { Appear, Caret, Loader, Region, Typed, rv } from './kit';
+import { during, progress, useSceneTime } from './clock';
+import { CLOSE, Camera, REST, type Shot, VIEW, shot, wide } from './camera';
+import { Appear, Caret, Loader, Region, Typed, pointerScript, pressAt, rv } from './kit';
 import type { IntroScene } from './types';
-import { PAGE, shot, wide, type Icon } from './chatParts';
+import type { Icon } from './chatParts';
 
 /* Scenes for the workspace gallery: the gallery page, and creating a
    workspace over it. Each part is a small copy of the component the app
    draws it with (named on each), in the same tokens and labels. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
-
-/** Whether `t` falls in `[from, to)`. */
-const during = (t: number, from: number, to: number) => t >= from && t < to;
 
 /* ── chat · step 4: the workspace gallery page ─────────────────────────── */
 
@@ -280,7 +277,7 @@ function GalleryPage({
     updated: GRID.today,
   };
   return (
-    <div className="flex flex-col gap-2 p-2.5" style={PAGE}>
+    <div className="flex flex-col gap-2 p-2.5" style={VIEW}>
       <GalleryHeader pressNew={pressNew} className="intro-rv" style={rv(0.08)} />
       {/* search */}
       <Region delay={0.16} className="flex items-center gap-1.5 px-2 py-1.5">
@@ -346,7 +343,7 @@ const NEW_WS = {
 
 /** The modal's width (px), centered on the page. */
 const MODAL_W = 260;
-const MODAL_X = (PAGE.width - MODAL_W) / 2;
+const MODAL_X = (VIEW.width - MODAL_W) / 2;
 
 /** The whole gallery, as the step before ends on it, while the pointer goes
     to New workspace; then on the form as the modal opens: name and
@@ -363,16 +360,15 @@ const NEW_WS_SHOTS: [Shot, ...Shot[]] = [
     and left of its target, where the pointer's tip lands; on Create it
     lands in the padding past the label, so the finished frame still reads
     it. */
-const NEW_WS_PATH = [
+const NEW_WS_POINTER = pointerScript(
   { at: 200, x: 300, y: 130 },
-  { at: 1050, x: 348, y: 17 },
-  { at: 2100, x: 348, y: 17 },
-  { at: 2950, x: 298, y: 126 },
-  { at: 4300, x: 298, y: 126 },
-  { at: 4850, x: 230, y: 222 },
-  { at: 5900, x: 230, y: 222 },
-  { at: 6650, x: 310, y: 297 },
-];
+  {
+    new: { x: 348, y: 17, arrive: 1050, click: NEW_WS.clickNew, leave: 2100 },
+    desc: { x: 298, y: 126, arrive: 2950, click: NEW_WS.clickDesc, leave: 4300 },
+    drop: { x: 230, y: 222, arrive: 4850, click: NEW_WS.clickDrop, leave: 5900 },
+    create: { x: 310, y: 297, arrive: 6650, click: NEW_WS.clickCreate },
+  }
+);
 
 /** A field's text typed in place: an invisible copy of the finished text
     holds the line's size, so nothing around it moves while it types. A
@@ -474,21 +470,17 @@ function CreateWorkspace() {
   const { t } = useTranslation();
   const now = useSceneTime();
   const open = now >= NEW_WS.modal;
-  const press = (at: number) => (during(now, at, at + 160) ? 'scale(0.92)' : undefined);
   const nameFocus = during(now, NEW_WS.modal, NEW_WS.clickDesc);
   const descFocus = during(now, NEW_WS.clickDesc, NEW_WS.clickDrop);
-  const overDrop = during(now, NEW_WS_PATH[5].at, NEW_WS_PATH[6].at);
+  const { drop } = NEW_WS_POINTER.beats;
+  const overDrop = during(now, drop.arrive, drop.leave);
   const typed = 'text-[8px] leading-none';
   return (
-    <Camera
-      shots={NEW_WS_SHOTS}
-      cursor={NEW_WS_PATH}
-      clicks={[NEW_WS.clickNew, NEW_WS.clickDesc, NEW_WS.clickDrop, NEW_WS.clickCreate]}
-    >
-      <div className="relative" style={PAGE}>
+    <Camera shots={NEW_WS_SHOTS} pointer={NEW_WS_POINTER}>
+      <div className="relative" style={VIEW}>
         {/* the gallery, dimmed behind the modal once it opens */}
         <div style={{ opacity: open ? 0.45 : 1, transition: 'opacity 300ms ease' }}>
-          <GalleryPage machine="running" pressNew={press(NEW_WS.clickNew)} />
+          <GalleryPage machine="running" pressNew={pressAt(now, NEW_WS.clickNew)} />
         </div>
         {/* the modal the click opens (`CreateWorkspaceModal`): name,
             description, files, Create. Centering transform lives on a static
@@ -579,7 +571,7 @@ function CreateWorkspace() {
                   style={{
                     background: 'var(--color-btn-primary-bg)',
                     color: 'var(--color-btn-primary-text)',
-                    transform: press(NEW_WS.clickCreate),
+                    transform: pressAt(now, NEW_WS.clickCreate),
                   }}
                 >
                   {t('common.create')}

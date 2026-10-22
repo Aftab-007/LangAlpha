@@ -28,9 +28,9 @@ import {
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
 import { BarChart, type Bar } from './charts';
-import { CLOSE, Camera, REST, look, type Shot } from './camera';
-import { ease, useSceneTime } from './clock';
-import { Appear, UserBubble, type Waypoint } from './kit';
+import { CLOSE, Camera, REST, shot, type Shot } from './camera';
+import { PAST, ease, useSceneTime } from './clock';
+import { Appear, UserBubble, pointerScript } from './kit';
 import { FileCrumbs, PanelTab } from './panelParts';
 import { PANEL_W, Prose, ThreadPage, Timeline, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
@@ -67,18 +67,22 @@ const FILES = {
     'Done. NVDA trades at **24.1x** NTM sales against a 9.8x median. ' +
     'The write-up is in `results/report.html`.',
   answerAt: 2800,
-  path: [
-    { at: 4200, x: 262, y: 248 },
-    { at: 5000, x: 236, y: 188 },
-    { at: 5400, x: 236, y: 188 },
-    { at: 6000, x: 300, y: 360 },
-  ] satisfies Waypoint[],
   click: 5200,
   open: 5280,
   fold: 200,
   bars: 5900,
   length: 8600,
 };
+
+/** Onto the tree, to the report's row and a click on it, then off the
+    page's foot. */
+const FILES_POINTER = pointerScript(
+  { at: 4200, x: 262, y: 248 },
+  {
+    report: { x: 236, y: 188, arrive: 5000, click: FILES.click, leave: 5400 },
+    off: { x: 300, y: 360, arrive: 6000 },
+  }
+);
 
 /** The camera: on the chat column whole, from its header to the answer,
     with the panel's empty tab beside it, as the turn runs and the answer
@@ -87,9 +91,9 @@ const FILES = {
     in on the report under its header, its note and figure, as the bars
     draw. */
 const FILE_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...look(160, 132, REST) },
-  { at: 4500, dur: 900, ...look(240, 132, REST) },
-  { at: 7700, dur: 1000, ...look(267, 138, CLOSE) },
+  shot(0, 160, 132, REST),
+  shot(4500, 240, 132, REST, 900),
+  shot(7700, 267, 138, CLOSE, 1000),
 ];
 
 /** EV / NTM sales across the nine names in comps.xlsx, high to low. */
@@ -370,11 +374,11 @@ function FilePanel() {
   const opened = t >= FILES.open;
   const fold = ease(t, FILES.open, FILES.fold);
   /* the pointer over the listing shows its guide lines, as hovering the tree does */
-  const over = t >= FILES.path[0].at && !opened;
-  const hover = t >= FILES.path[1].at && !opened;
+  const over = t >= FILES_POINTER.enter && !opened;
+  const hover = t >= FILES_POINTER.beats.report.arrive && !opened;
   const types = t >= report ? ['Docs', 'Code', 'Data'] : ['Docs', 'Data'];
   return (
-    <Camera shots={FILE_SHOTS} cursor={FILES.path} clicks={[FILES.click]}>
+    <Camera shots={FILE_SHOTS} pointer={FILES_POINTER}>
       <ThreadPage
         title="Semis comps"
         tabs={
@@ -388,7 +392,7 @@ function FilePanel() {
         tree={opened ? false : undefined}
         chat={
           <>
-            <UserBubble at={0}>{FILES.ask}</UserBubble>
+            <UserBubble at={PAST}>{FILES.ask}</UserBubble>
             <Prose text={FILES.lead} at={FILES.leadAt} />
             <Timeline>
               <ToolRow

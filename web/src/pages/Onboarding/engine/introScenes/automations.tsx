@@ -17,7 +17,6 @@ import { BriefRun, Day, FeedLayout, FeedRail, FiredRun, PreviewRun } from './aut
 import {
   AlertGroup,
   AutomationRows,
-  during,
   Field,
   FormActions,
   FormRow,
@@ -31,7 +30,6 @@ import {
   MoreToggle,
   Page,
   PageHeader,
-  pressAt,
   PriceMeter,
   Readout,
   Segmented,
@@ -40,9 +38,9 @@ import {
   WEEKDAYS,
   WeekPicker,
 } from './automationParts';
-import { CLOSE, Camera, REST, type Shot, VIEW, look } from './camera';
-import { ease, useSceneTime } from './clock';
-import { Appear, Caret, Typed } from './kit';
+import { CLOSE, Camera, REST, type Shot, VIEW, corner, shot } from './camera';
+import { during, ease, useSceneTime } from './clock';
+import { Appear, Caret, Typed, pointerScript, pressAt } from './kit';
 import type { IntroScene } from './types';
 
 /* Scenes for the Automations page: making a price alert beside a weekday
@@ -55,16 +53,6 @@ import type { IntroScene } from './types';
    pointer. Shots and pointer paths are in page px. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
-
-/**
- * The shot at `at` whose view has its top-left corner on page point
- * (`left`, `top`) at `zoom`, for a shot whose edges have to fall in the gap
- * between two rows rather than through a line of text. A shot held against
- * the page's edges is set with `look` instead.
- */
-function corner(at: number, left: number, top: number, zoom: number, dur?: number): Shot {
-  return { at, dur, zoom, x: left + VIEW.width / 2 / zoom, y: top + VIEW.height / 2 / zoom };
-}
 
 /* ── automations · step 1: a trigger, on a schedule or a price ──────────── */
 
@@ -91,23 +79,20 @@ const TRIG = {
 
 /** Past the view's height by enough that the form's Create clears the
     pane's foot. */
-const TRIG_PAGE = 340;
-const TRIG_SIZE = { width: VIEW.width, height: TRIG_PAGE };
+const TRIG_PAGE = { width: VIEW.width, height: 340 };
 
 /** New automation, the price template, the symbol, the level, Create: where
     the pointer's tip lands on each. */
-const TRIG_PATH = [
+const TRIG_POINTER = pointerScript(
   { at: 300, x: 250, y: 200 },
-  { at: 1000, x: 346, y: 36 },
-  { at: 1350, x: 346, y: 36 },
-  { at: 1900, x: 300, y: 113 },
-  { at: 2200, x: 300, y: 113 },
-  { at: 2750, x: 160, y: 177 },
-  { at: 3600, x: 160, y: 177 },
-  { at: 3850, x: 302, y: 177 },
-  { at: 5000, x: 302, y: 177 },
-  { at: 5550, x: 156, y: 313 },
-];
+  {
+    new: { x: 346, y: 36, arrive: 1000, click: TRIG.clickNew, leave: 1350 },
+    template: { x: 300, y: 113, arrive: 1900, click: TRIG.clickTemplate, leave: 2200 },
+    symbol: { x: 160, y: 177, arrive: 2750, click: TRIG.clickSymbol, leave: 3600 },
+    level: { x: 302, y: 177, arrive: 3850, click: TRIG.clickLevel, leave: 5000 },
+    create: { x: 156, y: 313, arrive: 5550, click: TRIG.clickCreate },
+  }
+);
 
 /** The header's New and the menu it drops over the pane, the list's edge
     beside it; a short push in on the form as the symbol goes in and its
@@ -116,16 +101,16 @@ const TRIG_PATH = [
     its inspector beside it. */
 const TRIG_SHOTS: [Shot, ...Shot[]] = [
   // the header's right and the pane under it, room below for the menu
-  { at: 0, ...look(VIEW.width, 0, REST, TRIG_SIZE) },
+  shot(0, VIEW.width, 0, REST),
   // under the header: the form from its title down to Instruction, the
   // pane edge to edge
-  { at: 3000, dur: 800, ...look(VIEW.width, 160, CLOSE, TRIG_SIZE) },
+  shot(3000, VIEW.width, 160, CLOSE, 800),
   // under the header again, as the quote comes back: the form from its
   // title down to Create
-  { at: 3900, dur: 400, ...look(VIEW.width, 190, REST, TRIG_SIZE) },
+  shot(3900, VIEW.width, 190, REST, 400),
   // the header's census, the list's new Watching row, and the inspector's
   // title and meter beside it, Delete off the right
-  { at: 6550, dur: 800, ...look(0, 0, REST, TRIG_SIZE) },
+  shot(6550, 0, 0, REST, 800),
 ];
 
 /** One item of the New menu: the template's icon, name and one line on it. */
@@ -318,18 +303,8 @@ function AutomationTrigger() {
       </Appear>
     );
   return (
-    <Camera
-      shots={TRIG_SHOTS}
-      cursor={TRIG_PATH}
-      clicks={[
-        TRIG.clickNew,
-        TRIG.clickTemplate,
-        TRIG.clickSymbol,
-        TRIG.clickLevel,
-        TRIG.clickCreate,
-      ]}
-    >
-      <Page height={TRIG_PAGE}>
+    <Camera shots={TRIG_SHOTS} page={TRIG_PAGE} pointer={TRIG_POINTER}>
+      <Page height={TRIG_PAGE.height}>
         <PageHeader census={census} view="manage" pressNew={pressAt(now, TRIG.clickNew)} />
         <ManageLayout
           list={
@@ -348,7 +323,7 @@ function AutomationTrigger() {
         <div className="absolute right-[12px] top-[45px] z-[5]">
           {during(now, TRIG.menu, TRIG.clickTemplate + 80) && (
             <Appear at={TRIG.menu} pop>
-              <NewMenu hover={now >= TRIG_PATH[3].at - 150} />
+              <NewMenu hover={now >= TRIG_POINTER.beats.template.arrive - 150} />
             </Appear>
           )}
         </div>
@@ -379,10 +354,7 @@ const FEED = {
     as the alert's run lands, works and reports, and as the feed scrolls on
     to the brief and the earnings preview; then across to the rail, Up next
     over the alert still watching, the runs' edge beside it. */
-const FEED_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...look(0, 0, REST) },
-  { at: 6400, dur: 900, ...look(VIEW.width, 0, REST) },
-];
+const FEED_SHOTS: [Shot, ...Shot[]] = [shot(0, 0, 0, REST), shot(6400, VIEW.width, 0, REST, 900)];
 
 function AutomationFeed() {
   const { t } = useTranslation();
@@ -436,23 +408,20 @@ const DLV = {
 };
 
 /** Edit, More options, Add, Slack DM, Save changes. */
-const DLV_PATH = [
+const DLV_POINTER = pointerScript(
   { at: 300, x: 230, y: 200 },
-  { at: 900, x: 251, y: 130 },
-  { at: 1300, x: 251, y: 130 },
-  { at: 2200, x: 160, y: 281 },
-  { at: 2900, x: 160, y: 281 },
-  { at: 3400, x: 150, y: 396 },
-  { at: 3700, x: 150, y: 396 },
-  { at: 4200, x: 190, y: 440 },
-  { at: 4650, x: 190, y: 440 },
-  { at: 5150, x: 166, y: 526 },
-];
+  {
+    edit: { x: 251, y: 130, arrive: 900, click: DLV.clickEdit, leave: 1300 },
+    more: { x: 160, y: 281, arrive: 2200, click: DLV.clickMore, leave: 2900 },
+    add: { x: 150, y: 396, arrive: 3400, click: DLV.clickAdd, leave: 3700 },
+    dm: { x: 190, y: 440, arrive: 4200, click: DLV.clickDm, leave: 4650 },
+    save: { x: 166, y: 526, arrive: 5150, click: DLV.clickSave },
+  }
+);
 
 /** How tall the manage page is drawn: the edit form at full length, which
     the camera pans down as the page's scroller would. */
-const DLV_PAGE = 560;
-const DLV_SIZE = { width: VIEW.width, height: DLV_PAGE };
+const DLV_PAGE = { width: VIEW.width, height: 560 };
 
 /** The brief's inspector and its Edit, the list's edge beside it; down the
     form to More options as it opens; a short push in on Delivery as its
@@ -462,13 +431,13 @@ const DLV_SIZE = { width: VIEW.width, height: DLV_PAGE };
 const DLV_SHOTS: [Shot, ...Shot[]] = [
   // the header's right and the pane under it: the brief's inspector and its
   // latest run
-  { at: 0, ...look(VIEW.width, 0, REST, DLV_SIZE) },
+  shot(0, VIEW.width, 0, REST),
   // over Instruction: More options and the rows it opens, down to Delivery
   corner(2450, 80, 220, REST, 900),
   // over Thread: Delivery, and the Add list under it, to the page's foot
   corner(3550, 117, 336, CLOSE),
   // Delivery down to Save changes, at the foot of the page
-  { at: 4800, dur: 800, ...look(VIEW.width, DLV_PAGE, REST, DLV_SIZE) },
+  shot(4800, VIEW.width, DLV_PAGE.height, REST, 800),
   // the cut to the next morning's feed: the header, and the runs with
   // where the brief's went, the rail's edge beside them
   corner(DLV.feed, 0, 3, REST, 1),
@@ -607,7 +576,7 @@ function EditForm() {
               {during(now, DLV.popover, DLV.clickDm + 80) && (
                 <div className="absolute left-0 top-[19px] z-[5]">
                   <Appear at={DLV.popover} pop>
-                    <DeliveryList pick={now >= DLV_PATH[7].at - 120} />
+                    <DeliveryList pick={now >= DLV_POINTER.beats.dm.arrive - 120} />
                   </Appear>
                 </div>
               )}
@@ -648,11 +617,7 @@ function AutomationDelivery() {
   ].join(' · ');
   const feed = now >= DLV.feed;
   return (
-    <Camera
-      shots={DLV_SHOTS}
-      cursor={feed ? undefined : DLV_PATH}
-      clicks={[DLV.clickEdit, DLV.clickMore, DLV.clickAdd, DLV.clickDm, DLV.clickSave]}
-    >
+    <Camera shots={DLV_SHOTS} page={DLV_PAGE} pointer={feed ? undefined : DLV_POINTER}>
       {feed ? (
         // the next morning: the brief's run, sent where it was told, over
         // yesterday's
@@ -676,7 +641,7 @@ function AutomationDelivery() {
           </Page>
         </Appear>
       ) : (
-        <Page height={DLV_PAGE}>
+        <Page height={DLV_PAGE.height}>
           <PageHeader census={census} view="manage" />
           <ManageLayout
             list={

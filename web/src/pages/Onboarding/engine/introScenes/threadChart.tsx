@@ -11,7 +11,7 @@ import {
 import { useLocale } from '@/hooks/useLocale';
 import { fixed2, signedFixed2 } from '@/lib/format';
 import type { IntroVisualId } from '../../registry';
-import { CLOSE, Camera, REST, look, type Shot } from './camera';
+import { CLOSE, Camera, REST, type Shot, VIEW, shot } from './camera';
 import { Candles, EventBadge } from './candles';
 import {
   CommentBox,
@@ -26,11 +26,11 @@ import {
   besideRegion,
 } from './chartTools';
 import { StockPriceCard } from './charts';
-import { useSceneTime } from './clock';
-import { Appear, Loader, Typed, UserBubble, type Waypoint, pointAt } from './kit';
+import { PAST, useSceneTime } from './clock';
+import { Appear, Loader, Typed, UserBubble, pointAt, pointerScript } from './kit';
 import { NVDA, NVDA_EVENTS, NVDA_LAST, NVDA_PREV, NVDA_QUOTE, chartScale } from './nvdaSeries';
 import { PanelTab } from './panelParts';
-import { HEADER_H, PAGE, PANEL_W, Prose, ThreadPage, ToolRow } from './threadParts';
+import { HEADER_H, PANEL_W, Prose, ThreadPage, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
 
 /* The thread intro's chart step: a chart tab in the file panel
@@ -46,13 +46,13 @@ import type { IntroScene } from './types';
 /* ── layout, in the page's px ──────────────────────────────────────────── */
 
 /** The panel's left edge, past the chat column. */
-const PANEL_X = PAGE.width - PANEL_W;
+const PANEL_X = VIEW.width - PANEL_W;
 /** The chart card sits on the panel's ground, inset 4px top and 5px around. */
 const CARD = {
   x: PANEL_X + 1 + 5,
   y: HEADER_H + 4,
   w: PANEL_W - 1 - 10,
-  h: PAGE.height - HEADER_H - 4 - 5,
+  h: VIEW.height - HEADER_H - 4 - 5,
 };
 const TOOLBAR_H = 18;
 const SUBROW_H = 19;
@@ -73,7 +73,7 @@ const REGION_BTN = {
   y: CARD.y + 1 + TOOLBAR_H / 2,
 };
 /** The thread composer's send button. */
-const SEND = { x: PANEL_X - 10 - 7 - 8, y: PAGE.height - 10 - 7 - 8 };
+const SEND = { x: PANEL_X - 10 - 7 - 8, y: VIEW.height - 10 - 7 - 8 };
 
 const { earnings: EARNINGS, exportRule: EXPORT_RULE } = NVDA_EVENTS;
 
@@ -117,25 +117,26 @@ const ASK = 'Why did this fade?';
     as the ask is typed and the reply comes in above it; then in on the
     chart as its badges land and one opens on its story. */
 const SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...look(240, 132, REST) },
-  { at: 4100, dur: 850, ...look(160, 198, REST) },
-  { at: 8500, dur: 900, ...look(267, 142, CLOSE) },
+  shot(0, 240, 132, REST),
+  shot(4100, 160, 198, REST, 850),
+  shot(8500, 267, 142, CLOSE, 900),
 ];
 
-const PATH: Waypoint[] = [
+/** Region armed; the drag from the region's corner, pressed over the
+    dwell, to its far corner and off it; Add on the comment box; send in
+    the composer; and the export rule's badge, clicked open. */
+const POINTER = pointerScript(
   { at: 150, x: 352, y: 168 },
-  { at: 650, ...REGION_BTN },
-  { at: 1000, ...REGION_BTN },
-  { at: 1300, ...toPage(REGION.x0, REGION.y0) },
-  { at: 1400, ...toPage(REGION.x0, REGION.y0) },
-  { at: 2050, ...toPage(REGION.x1, REGION.y1) },
-  { at: 2350, ...toPage(REGION.x1 + 4, REGION.y1 - 10) },
-  { at: 2900, ...toPage(ADD.x, ADD.y) },
-  { at: 3300, ...toPage(ADD.x, ADD.y) },
-  { at: 5100, ...SEND },
-  { at: 5600, ...SEND },
-  { at: 8800, ...BADGE },
-];
+  {
+    region: { ...REGION_BTN, arrive: 650, click: CH.arm, leave: 1000 },
+    anchor: { ...toPage(REGION.x0, REGION.y0), arrive: 1300, leave: 1400 },
+    release: { ...toPage(REGION.x1, REGION.y1), arrive: 2050 },
+    clear: { ...toPage(REGION.x1 + 4, REGION.y1 - 10), arrive: 2350 },
+    add: { ...toPage(ADD.x, ADD.y), arrive: 2900, click: CH.add, leave: 3300 },
+    send: { ...SEND, arrive: 5100, click: CH.send, leave: 5600 },
+    badge: { ...BADGE, arrive: 8800, click: CH.open - 60 },
+  }
+);
 
 /* ── the chart tab ─────────────────────────────────────────────────────── */
 
@@ -217,7 +218,7 @@ function PanelChart({ armed, clear }: { armed: boolean; clear: boolean }) {
     t >= CH.release
       ? REGION
       : (() => {
-          const p = pointAt(PATH, Math.max(t, CH.press));
+          const p = pointAt(POINTER.path, Math.max(t, CH.press));
           return { ...REGION, x1: p.x - CHART.x, y1: p.y - CHART.y };
         })();
   return (
@@ -268,7 +269,7 @@ function PanelChart({ armed, clear }: { armed: boolean; clear: boolean }) {
             scale={SCALE}
             ev={EXPORT_RULE}
             at={CH.drawn + 150}
-            hover={t >= CH.open - 100}
+            hover={t >= POINTER.beats.badge.arrive}
             open={t >= CH.open}
           />
         </Candles>
@@ -355,9 +356,9 @@ function Transcript() {
           running off the top as the turn comes in */}
       <div className="flex min-h-0 grow basis-0 flex-col justify-end overflow-hidden">
         <div className="flex flex-col gap-1.5">
-          <UserBubble at={0}>When did NVDA last report?</UserBubble>
+          <UserBubble at={PAST}>When did NVDA last report?</UserBubble>
           <Prose text="**Aug 26**, after the close. Data-center revenue beat, and guidance came in above estimates." />
-          <UserBubble at={0}>Chart NVDA since earnings</UserBubble>
+          <UserBubble at={PAST}>Chart NVDA since earnings</UserBubble>
           <StockPriceCard
             sym="NVDA"
             price="$182.42"
@@ -367,7 +368,7 @@ function Transcript() {
             high="$186.90"
             low="$170.60"
             vol="181.5M"
-            at={-1}
+            at={PAST}
           />
           <Prose text="It gapped to **186.90** on Aug 27, then gave most of it back by mid-September." />
           <UserBubble at={CH.send}>{ASK}</UserBubble>
@@ -405,7 +406,7 @@ function Transcript() {
 function ChartPanel() {
   const t = useSceneTime();
   return (
-    <Camera shots={SHOTS} cursor={PATH} clicks={[CH.arm, CH.add, CH.send, CH.open - 60]}>
+    <Camera shots={SHOTS} pointer={POINTER}>
       <ThreadPage
         title="NVDA earnings reaction"
         tabs={<PanelTab icon={CandlestickChart} label="NVDA" active />}

@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
     glyph on no fill; `pressed` is a toggle that is on (the panel toggle while
     the panel is open, the tree toggle while the tree shows); `disabled` is a
     step with nowhere to go. */
-export function PanelButton({
+function PanelButton({
   icon: Icon,
   pressed = false,
   disabled = false,

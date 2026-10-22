@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, PenLine } from 'lucide-react';
 import type { IntroVisualId } from '../../registry';
-import { Camera, REST, VIEW, look, type Shot } from './camera';
+import { Camera, REST, VIEW, shot, type Shot } from './camera';
 import { Candles, EventBadge } from './candles';
 import {
   CommentBox,
@@ -12,8 +12,8 @@ import {
   SelectionChip,
   besideRegion,
 } from './chartTools';
-import { useSceneTime } from './clock';
-import { Appear, Loader, Typed, UserBubble, type Waypoint, pointAt } from './kit';
+import { PAST, useSceneTime } from './clock';
+import { Appear, Loader, Typed, UserBubble, pointAt, pointerScript } from './kit';
 import { CHART, CHAT_X, MarketPage, PAGE, REGION_BTN, SEND } from './marketParts';
 import { NVDA, NVDA_EVENTS, chartScale } from './nvdaSeries';
 import { Prose, ToolRow } from './threadParts';
@@ -38,13 +38,11 @@ const onPage = (x: number, y: number) => ({ x: CHART.x + x, y: CHART.y + y });
 const NOTE = 'What drove this drop?';
 const LEAD = 'Two pieces of news drove it. Marking them on your chart.';
 
-/** The page's size, for `look`. */
-const PAGE_SIZE = { width: PAGE.w, height: PAGE.h };
 /** Where the metrics' third column (Low, Volume) ends, in page px. A view
     of the chat side from just past it to the page's right edge sits a
     touch wider than REST and cuts none of the metrics' figures. */
 const METRICS_GAP = 137;
-const CHAT_REST = VIEW.width / (PAGE.w - METRICS_GAP);
+const CHAT_REST = VIEW.width / (PAGE.width - METRICS_GAP);
 
 /** A native tooltip (a button's `title`), under the pointer. */
 function Tip({ x, y, children }: { x: number; y: number; children: ReactNode }) {
@@ -109,34 +107,36 @@ const PIN = besideRegion(SCALE, REGION.x0, REGION.x1, REGION.y0, 10);
 const ASK_SHOTS: [Shot, ...Shot[]] = [
   // the chart column whole under the stock's header, the toolbar's tools
   // on it, the chat panel's edge beside it
-  { at: 0, ...look(0, 0, REST, PAGE_SIZE) },
+  shot(0, 0, 0, REST),
   // the panel from the toolbar's line down to the composer, the chart's
   // right half beside it
-  { at: 5150, dur: 800, ...look(PAGE.w, PAGE.h, CHAT_REST, PAGE_SIZE) },
+  shot(5150, PAGE.width, PAGE.height, CHAT_REST, 800),
   // the panel from its header down, the message on top
-  { at: 6200, dur: 750, ...look(PAGE.w, 0, CHAT_REST, PAGE_SIZE) },
+  shot(6200, PAGE.width, 0, CHAT_REST, 750),
 ];
 
 /** On the Region button, clear of the pointer its own icon draws. */
 const ON_REGION = { x: REGION_BTN.x + 2.5, y: REGION_BTN.y + 2.5 };
 
-const ASK_PATH: Waypoint[] = [
+/** Region armed, its tooltip up first; the drag from the region's
+    corner, pressed at the end of the dwell, to its far corner and off it;
+    Add on the comment box; then send in the chat's composer. */
+const ASK_POINTER = pointerScript(
   { at: 200, x: 238, y: 142 },
-  { at: 850, ...ON_REGION },
-  { at: 1450, ...ON_REGION },
-  { at: 2150, ...onPage(REGION.x0, REGION.y0) },
-  { at: 2250, ...onPage(REGION.x0, REGION.y0) },
-  { at: 2950, ...onPage(REGION.x1, REGION.y1) },
-  { at: 3200, ...onPage(REGION.x1 - 6, REGION.y1 + 8) },
-  { at: 4100, ...onPage(BOX.left + 77, BOX.top + 8) },
-  { at: 4450, ...onPage(BOX.left + 77, BOX.top + 8) },
-  { at: 5250, ...SEND },
-];
+  {
+    region: { ...ON_REGION, arrive: 850, click: ASK.arm, leave: 1450 },
+    anchor: { ...onPage(REGION.x0, REGION.y0), arrive: 2150, leave: 2250 },
+    release: { ...onPage(REGION.x1, REGION.y1), arrive: 2950 },
+    clear: { ...onPage(REGION.x1 - 6, REGION.y1 + 8), arrive: 3200 },
+    add: { ...onPage(BOX.left + 77, BOX.top + 8), arrive: 4100, click: ASK.add, leave: 4450 },
+    send: { ...SEND, arrive: 5250, click: ASK.send },
+  }
+);
 
 /** The drag in progress: the anchor corner to wherever the pointer is. */
 function dragged(t: number) {
   if (t >= ASK.release) return REGION;
-  const p = pointAt(ASK_PATH, Math.max(t, ASK.press));
+  const p = pointAt(ASK_POINTER.path, Math.max(t, ASK.press));
   return { ...REGION, x1: p.x - CHART.x, y1: p.y - CHART.y };
 }
 
@@ -146,7 +146,7 @@ function MarketAsk() {
   const sent = t >= ASK.send;
   const drawing = t >= ASK.press && !sent;
   return (
-    <Camera shots={ASK_SHOTS} cursor={ASK_PATH} clicks={[ASK.arm, ASK.add, ASK.send]}>
+    <Camera shots={ASK_SHOTS} page={PAGE} pointer={ASK_POINTER}>
       <MarketPage
         armed={t >= ASK.arm && t < ASK.release}
         chart={
@@ -273,17 +273,20 @@ const BADGE = onPage(SCALE.x(DROP.i), SCALE.y(DROP.price) - 10.5);
     under the stock's header, where each move carries its badge, and the
     drop's story opens over the toolbar. */
 const DRAW_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...look(PAGE.w, 0, CHAT_REST, PAGE_SIZE) },
+  shot(0, PAGE.width, 0, CHAT_REST),
   // a quick pan, settled before the reply's last words can trail at the edge
-  { at: 5300, dur: 600, ...look(0, 0, REST, PAGE_SIZE) },
+  shot(5300, 0, 0, REST, 600),
 ];
 
-const DRAW_PATH: Waypoint[] = [
+/** Onto the chip, held there for its tooltip, then across to the drop's
+    badge, clicked open. */
+const DRAW_POINTER = pointerScript(
   { at: 3300, x: CHAT_X + 120, y: 238 },
-  { at: DRAW.hover, ...CHIP_AT },
-  { at: DRAW.leave, ...CHIP_AT },
-  { at: 5800, ...BADGE },
-];
+  {
+    chip: { ...CHIP_AT, arrive: DRAW.hover, leave: DRAW.leave },
+    badge: { ...BADGE, arrive: 5800, click: DRAW.click },
+  }
+);
 
 function MarketDraw() {
   const { t: tr } = useTranslation();
@@ -292,7 +295,7 @@ function MarketDraw() {
   const count = DRAW.dones.filter((d) => t >= d).length;
   const hover = t >= DRAW.hover && t < DRAW.leave;
   return (
-    <Camera shots={DRAW_SHOTS} cursor={DRAW_PATH} clicks={[DRAW.click]}>
+    <Camera shots={DRAW_SHOTS} page={PAGE} pointer={DRAW_POINTER}>
       <MarketPage
         clear={t >= first}
         title={NOTE}
@@ -304,7 +307,7 @@ function MarketDraw() {
                 scale={SCALE}
                 ev={ev}
                 at={DRAW.dones[i]}
-                hover={ev === DROP && t >= 5800}
+                hover={ev === DROP && t >= DRAW_POINTER.beats.badge.arrive}
                 open={ev === DROP && t >= DRAW.click + 60}
               />
             ))}
@@ -312,7 +315,7 @@ function MarketDraw() {
         }
         transcript={
           <>
-            <Sent at={-1} />
+            <Sent at={PAST} />
             <Prose text={LEAD} />
             {t < first ? (
               <AnnotateRow at={DRAW.run} done={first} />

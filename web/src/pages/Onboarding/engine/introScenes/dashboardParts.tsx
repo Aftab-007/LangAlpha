@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
-import { frame, VIEW } from './camera';
 import { InputDock, Region } from './kit';
 
 /* The dashboard intro's shared parts: invented quotes, sparklines, the page
@@ -290,12 +289,6 @@ export const PAGE_W = 400;
 /** The page's padding and the gap between its cards, in page px. */
 export const PAD = 10;
 export const GAP = 6;
-
-/** The view whose top-left corner sits at (`left`, `top`) on the page, so
-    a crop can start in a gutter rather than through a card's text. */
-export function fromCorner(left: number, top: number, zoom: number): ReturnType<typeof frame> {
-  return { x: left + VIEW.width / 2 / zoom, y: top + VIEW.height / 2 / zoom, zoom };
-}
 
 /**
  * The dashboard page with no app around it: `header` over the content when

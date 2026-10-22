@@ -2,9 +2,9 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, Clock, Globe, PanelRight } from 'lucide-react';
 import { useAgentNames } from '../introAgents';
-import { CLOSE, Camera, REST, type Shot, VIEW, look } from './camera';
+import { CLOSE, Camera, REST, type Shot, VIEW, shot } from './camera';
 import { ActivityRow, Pill, Reply } from './chatParts';
-import { useSceneTime } from './clock';
+import { PAST, useSceneTime } from './clock';
 import { InputDock, Tag, Typed, UserBubble } from './kit';
 import type { IntroScene } from './types';
 
@@ -32,10 +32,6 @@ const COL = 240;
 const HEADER = 24;
 const INSET = 12;
 const TRANSCRIPT_TOP = HEADER + INSET;
-
-/** When the thread's earlier exchanges happened: long before the scene, so
-    they are on the page, settled, from the first frame. */
-const EARLIER = -60_000;
 
 /** The ask typed into the composer and sent, the agent's summary of what it
     would set up, the yes, the Write of the new file, and the line saying it
@@ -67,13 +63,9 @@ const ASK = {
     and the line saying the brief is set up, from the transcript's top edge
     down to the composer; and back out to the page. */
 const ASK_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...look(PAGE.width / 2, PAGE.height / 2, REST, PAGE) },
-  {
-    at: 6250,
-    dur: 700,
-    ...look(PAGE.width / 2, TRANSCRIPT_TOP + 2 + VIEW.height / 2 / CLOSE, CLOSE, PAGE),
-  },
-  { at: 9300, dur: 700, ...look(PAGE.width / 2, PAGE.height / 2, REST, PAGE) },
+  shot(0, PAGE.width / 2, PAGE.height / 2, REST),
+  shot(6250, PAGE.width / 2, TRANSCRIPT_TOP + 2 + VIEW.height / 2 / CLOSE, CLOSE, 700),
+  shot(9300, PAGE.width / 2, PAGE.height / 2, REST, 700),
 ];
 
 /** The thread page's header: back, then the thread's place. */
@@ -150,7 +142,7 @@ function AutomationAsk() {
       <Typed text={ASK.yes} at={ASK.typeYes} cps={ASK.cps} />
     ) : undefined;
   return (
-    <Camera shots={ASK_SHOTS}>
+    <Camera shots={ASK_SHOTS} page={PAGE}>
       <div className="flex flex-col" style={PAGE}>
         {/* the thread's header: back, its place, the agent it runs with, and
             the file panel's toggle */}
@@ -172,7 +164,7 @@ function AutomationAsk() {
           {/* the transcript settles on the composer: the newest lines just
               above it, the oldest running off the top as the turn grows */}
           <div className="flex min-h-0 flex-1 flex-col justify-end gap-1.5 overflow-hidden">
-            <UserBubble at={EARLIER} className="ml-12">
+            <UserBubble at={PAST} className="ml-12">
               When does AVGO report?
             </UserBubble>
             <ActivityRow
@@ -180,33 +172,28 @@ function AutomationAsk() {
               verb={t('toolArtifact.inProgress.searchingQuery', { query: 'AVGO earnings date' })}
               title={t('toolArtifact.tool.webSearch')}
               after={<Pill>AVGO earnings date</Pill>}
-              at={EARLIER}
-              done={EARLIER}
+              at={PAST}
+              done={PAST}
             />
-            <Reply text="**Thursday, Dec 10**, after the close." at={EARLIER} />
-            <UserBubble at={EARLIER} className="ml-12">
+            <Reply text="**Thursday, Dec 10**, after the close." at={PAST} />
+            <UserBubble at={PAST} className="ml-12">
               <Lines>I&apos;m off next week. Back on Monday, November 2.</Lines>
             </UserBubble>
             <Reply
               text="**Noted.** Your automations keep running while you're away, and each run's results wait in the feed. Want any of them paused?"
-              at={EARLIER}
+              at={PAST}
             />
-            <UserBubble at={EARLIER} className="ml-12">
+            <UserBubble at={PAST} className="ml-12">
               <Lines>Pause the AVGO earnings preview until I&apos;m back.</Lines>
             </UserBubble>
             {/* the file is read, then written back with its status paused */}
             <Timeline>
-              <AutomationRow
-                write={false}
-                file="avgo-earnings-preview"
-                at={EARLIER}
-                done={EARLIER}
-              />
-              <AutomationRow write file="avgo-earnings-preview" at={EARLIER} done={EARLIER} />
+              <AutomationRow write={false} file="avgo-earnings-preview" at={PAST} done={PAST} />
+              <AutomationRow write file="avgo-earnings-preview" at={PAST} done={PAST} />
             </Timeline>
             <Reply
               text="**Paused.** It won't run again until you turn it back on, here or on the Automations page."
-              at={EARLIER}
+              at={PAST}
             />
             {/* the ask, the summary it waits on, the yes, and the new file */}
             <UserBubble at={ASK.send + 60} className="ml-12">

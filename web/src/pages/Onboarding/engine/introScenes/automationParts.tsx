@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils';
 import { weekdayInitials } from '@/pages/Automations/utils/time';
 import { BRIEF_EXCERPT, NVDA, on, useBook } from './automationBook';
 import { VIEW } from './camera';
-import { ease, useSceneTime } from './clock';
+import { ease, PAST, useSceneTime } from './clock';
 
 /* The Automations page's parts at scene scale, each a small copy of the
    component named on it, in the page's tokens and labels: the header, the
@@ -24,14 +24,7 @@ import { ease, useSceneTime } from './clock';
    and the feed's run entry. Each scene draws the page at its own size and
    a camera (camera.tsx) shows the part a step is about. */
 /* eslint-disable react-refresh/only-export-components -- scene parts: small
-   components plus the timing helpers */
-
-/** Whether `t` falls in `[from, to)`. */
-export const during = (t: number, from: number, to: number) => t >= from && t < to;
-
-/** The transform of a control pressed at `at`. */
-export const pressAt = (t: number, at: number) =>
-  during(t, at, at + 160) ? 'scale(0.92)' : undefined;
+   components plus the weekday list and a hook */
 
 /** Monday to Friday, Monday first, as the week strip and day picker read it. */
 export const WEEKDAYS = [true, true, true, true, true, false, false] as const;
@@ -275,13 +268,14 @@ function OnceMark({ wash }: { wash?: string }) {
 /**
  * Where a price sits against the level that fires the run (`PriceMeter`),
  * on a scale fitted to the two with room either side, the numbers under each
- * end. The dotted stretch draws out from `at`.
+ * end. The dotted stretch draws out from `at`; without one it is already drawn,
+ * as on a page the scene opens on.
  */
 export function PriceMeter({
   symbol,
   current,
   threshold,
-  at = 0,
+  at = PAST,
 }: {
   symbol: string;
   current: number;

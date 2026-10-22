@@ -1,8 +1,8 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useId, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowUp, Mic, MousePointer2, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { progress, useSceneTime } from './clock';
+import { easeInOut, pressed, SEND_MS, useSceneTime } from './clock';
 import './kit.css';
 import './scenes.css';
 
@@ -17,6 +17,17 @@ import './scenes.css';
    components plus the `rv` style helper */
 
 export const rv = (s: number): CSSProperties => ({ '--rv': `${s}s` }) as CSSProperties;
+
+/** This component's own id, usable inside `url(#…)`: React's ids carry
+    colons. */
+export function useSvgId(): string {
+  return useId().replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
+/** The transform of a button pressed at `at`, while the press holds. */
+export function pressAt(t: number, at: number): string | undefined {
+  return pressed(t, at) ? 'scale(0.92)' : undefined;
+}
 
 /** Grey skeleton bar standing in for text. */
 export function Ln({ w, h = 3, c }: { w: string; h?: number; c?: string }) {
@@ -101,7 +112,7 @@ export function InputDock({
 }) {
   const { t: tr } = useTranslation();
   const t = useSceneTime();
-  const pressed = sendAt?.some((at) => t >= at && t < at + 260) ?? false;
+  const down = pressed(t, sendAt, SEND_MS);
   const filled = text != null;
   return (
     <div
@@ -146,7 +157,7 @@ export function InputDock({
           className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md transition-transform duration-150"
           style={{
             background: filled ? 'var(--color-btn-primary-bg)' : 'var(--color-bg-elevated)',
-            transform: pressed ? 'scale(0.85)' : undefined,
+            transform: down ? 'scale(0.85)' : undefined,
           }}
         >
           <ArrowUp
@@ -198,10 +209,16 @@ export function Caret() {
   return <span className="intro-caret" aria-hidden />;
 }
 
+/** How many characters of a text typed from `at`, `cps` a second, are in at
+    `t`; negative before `at`. */
+export function typedCount(t: number, at: number, cps: number): number {
+  return Math.floor(((t - at) * cps) / 1000);
+}
+
 /** `text` typed out from `at`, `cps` characters a second, caret at the end while it types. */
 export function Typed({ text, at, cps = 32 }: { text: string; at: number; cps?: number }) {
   const t = useSceneTime();
-  const n = Math.min(Math.max(Math.floor(((t - at) * cps) / 1000), 0), text.length);
+  const n = Math.min(Math.max(typedCount(t, at, cps), 0), text.length);
   return (
     <>
       {text.slice(0, n)}
@@ -213,7 +230,8 @@ export function Typed({ text, at, cps = 32 }: { text: string; at: number; cps?: 
 const LOADER_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 
 /** The app's `Loader`: a braille glyph stepping every 80ms on the scene
-    clock, at the surrounding text size. */
+    clock. It sits on the surrounding text's line, at that text's size
+    unless a caller's `text-[n]` sets its own. */
 export function Loader({
   color = 'currentColor',
   className,
@@ -224,11 +242,7 @@ export function Loader({
   const t = useSceneTime();
   const frame = Number.isFinite(t) ? Math.floor(t / 80) % LOADER_FRAMES.length : 0;
   return (
-    <span
-      className={cn('shrink-0 font-mono leading-none', className)}
-      style={{ color }}
-      aria-hidden
-    >
+    <span className={cn('shrink-0 font-mono', className)} style={{ color }} aria-hidden>
       {LOADER_FRAMES[frame]}
     </span>
   );
@@ -263,10 +277,55 @@ export function UserBubble({
 }
 
 /** One waypoint of a scripted pointer: where it is (px in the 400px scene) at `at` ms. */
-export interface Waypoint {
+interface Waypoint {
   at: number;
   x: number;
   y: number;
+}
+
+/**
+ * One beat of a pointer's script: it travels to (`x`, `y`), getting there
+ * at `arrive`; clicks at `click`, if it clicks; and holds still there until
+ * `leave`, or moves straight on to the next beat if it has no `leave`.
+ */
+interface Beat {
+  x: number;
+  y: number;
+  arrive: number;
+  click?: number;
+  leave?: number;
+}
+
+/**
+ * A pointer's script as the camera plays it: the waypoints it glides
+ * through, when it clicks, when it comes on, and each beat's times by name
+ * (`leave` is `arrive` for a beat it moves straight on from), so a scene
+ * can time a hover or a drop to the pointer.
+ */
+export interface PointerScript<K extends string = string> {
+  path: Waypoint[];
+  clicks: number[];
+  enter: number;
+  beats: Record<K, Beat & { leave: number }>;
+}
+
+/** The script of a pointer that comes on at `from` and plays `beats` in
+    order. */
+export function pointerScript<K extends string>(
+  from: Waypoint,
+  beats: Record<K, Beat>
+): PointerScript<K> {
+  const path = [from];
+  const clicks: number[] = [];
+  const timed = {} as PointerScript<K>['beats'];
+  for (const [name, beat] of Object.entries(beats) as [K, Beat][]) {
+    const { x, y, arrive, click, leave = arrive } = beat;
+    path.push({ at: arrive, x, y });
+    if (leave !== arrive) path.push({ at: leave, x, y });
+    if (click != null) clicks.push(click);
+    timed[name] = { ...beat, leave };
+  }
+  return { path, clicks, enter: from.at, beats: timed };
 }
 
 /** Where a pointer on `path` is at `t`, so whatever it carries rides along. */
@@ -275,8 +334,7 @@ export function pointAt(path: Waypoint[], t: number): { x: number; y: number } {
     const a = path[i];
     const b = path[i + 1];
     if (t < b.at) {
-      const p = progress(t, a.at, b.at - a.at);
-      const e = p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2;
+      const e = easeInOut(t, a.at, b.at - a.at);
       return { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e };
     }
   }
@@ -304,12 +362,12 @@ export function Cursor({
   if (path.length === 0 || t < path[0].at) return null;
   const at = pointAt(path, t);
   const { x, y } = project ? project(at) : at;
-  const pressed = clicks.some((c) => t >= c && t < c + 160);
+  const down = pressed(t, clicks);
   return (
     <div className="pointer-events-none absolute z-10" style={{ left: x, top: y }}>
       <span
         className="block transition-transform duration-100"
-        style={{ transform: pressed ? 'scale(0.82)' : undefined, transformOrigin: 'top left' }}
+        style={{ transform: down ? 'scale(0.82)' : undefined, transformOrigin: 'top left' }}
       >
         <MousePointer2
           className="intro-rv h-3 w-3"

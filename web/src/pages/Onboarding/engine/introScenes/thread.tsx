@@ -17,11 +17,11 @@ import { cn } from '@/lib/utils';
 import { formatBytes, paddedClockTime, shortMonthDay } from '@/lib/format';
 import { useLocale } from '@/hooks/useLocale';
 import type { IntroVisualId } from '../../registry';
-import { CLOSE, Camera, REST, look, type Shot } from './camera';
-import { useSceneTime, useTween } from './clock';
-import { Appear, Loader, Typed, UserBubble, pointAt, type Waypoint } from './kit';
+import { CLOSE, Camera, REST, type Shot, VIEW, shot } from './camera';
+import { PAST, useSceneTime, useTween } from './clock';
+import { Appear, Loader, Typed, UserBubble, pointAt, pointerScript } from './kit';
 import { PanelTab } from './panelParts';
-import { ChromeIcon, PANEL_W, PAGE, Prose, ThreadPage, Timeline, ToolRow } from './threadParts';
+import { ChromeIcon, PANEL_W, Prose, ThreadPage, Timeline, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
 
 /* Scenes for the thread intro's memory and memo steps: the chat column
@@ -82,25 +82,29 @@ const MEM = {
     'Saved. Every write-up will open with the call, fit on a page, and leave Street targets out.',
   replyAt: 4000,
   listed: 5500,
-  path: [
-    { at: 5900, x: 352, y: 236 },
-    { at: 6500, x: 252, y: 166 },
-    { at: 6800, x: 252, y: 166 },
-    { at: 7400, x: 372, y: 300 },
-  ] satisfies Waypoint[],
   click: 6600,
   open: 6680,
   length: 9400,
 };
+
+/** To the new file's row in the listing and a click on it, then out of
+    the way to the page's corner. */
+const MEM_POINTER = pointerScript(
+  { at: 5900, x: 352, y: 236 },
+  {
+    file: { x: 252, y: 166, arrive: 6500, click: MEM.click, leave: 6800 },
+    rest: { x: 372, y: 300, arrive: 7400 },
+  }
+);
 
 /** The camera: on the chat with the composer and the answer above it as
     the ask is typed, held there as the save lands and the reply comes in;
     across to the Memory tab as its listing picks up the new file; then in
     on the file once it opens. */
 const MEM_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...look(160, 198, REST) },
-  { at: 5700, dur: 800, ...look(240, 132, REST) },
-  { at: 7600, dur: 800, ...look(267, 110, CLOSE) },
+  shot(0, 160, 198, REST),
+  shot(5700, 240, 132, REST, 800),
+  shot(7600, 267, 110, CLOSE, 800),
 ];
 
 /** One file in the memory list: its name, then size and when it changed
@@ -199,7 +203,7 @@ function MemoryList() {
           bytes={418}
           modified={SAVED_AT}
           today
-          hover={now >= MEM.path[1].at}
+          hover={now >= MEM_POINTER.beats.file.arrive}
         />
       </Appear>
       <MemoryFile name="trade_preferences.md" bytes={655} modified={new Date(2026, 8, 12)} />
@@ -267,7 +271,7 @@ function Memory() {
   const { t: tr } = useTranslation();
   const overview = tr('toolArtifact.tool.companyOverview');
   return (
-    <Camera shots={MEM_SHOTS} cursor={MEM.path} clicks={[MEM.click]}>
+    <Camera shots={MEM_SHOTS} pointer={MEM_POINTER}>
       <ThreadPage
         title="AVGO into earnings"
         stack="bottom"
@@ -285,11 +289,11 @@ function Memory() {
         sendAt={[MEM.sendAsk]}
         chat={
           <>
-            <UserBubble at={0}>{MEM.close.ask}</UserBubble>
+            <UserBubble at={PAST}>{MEM.close.ask}</UserBubble>
             <Prose text={MEM.close.answer} />
-            <UserBubble at={0}>{MEM.date.ask}</UserBubble>
+            <UserBubble at={PAST}>{MEM.date.ask}</UserBubble>
             <Prose text={MEM.date.answer} />
-            <UserBubble at={0}>{MEM.earlier}</UserBubble>
+            <UserBubble at={PAST}>{MEM.earlier}</UserBubble>
             <Timeline>
               <ToolRow icon={Building2} settled={{ label: overview, pill: 'AVGO' }} />
             </Timeline>
@@ -337,12 +341,6 @@ function Memory() {
     pointer is over the panel, and the drag holds above the overlay's label
     so both read. */
 const MEMO = {
-  path: [
-    { at: 300, x: 118, y: 110 },
-    { at: 1300, x: 300, y: 96 },
-    { at: 1650, x: 300, y: 96 },
-    { at: 2300, x: 350, y: 380 },
-  ] satisfies Waypoint[],
   drop: 1500,
   uploaded: 2300,
   /** Listed oldest first, as the tab sorts them. */
@@ -392,13 +390,23 @@ const MEMO = {
   length: 11200,
 };
 
+/** The drag from Finder onto the Memo tab, held there over the drop, then
+    the empty pointer off the page's foot. */
+const MEMO_POINTER = pointerScript(
+  { at: 300, x: 118, y: 110 },
+  {
+    drop: { x: 300, y: 96, arrive: 1300, leave: 1650 },
+    off: { x: 350, y: 380, arrive: 2300 },
+  }
+);
+
 /** The camera: on the Memo tab as the drag comes over it, held while the
     drop uploads and the memo turns Ready; across to the chat as the
     question is typed and the two reads come in; then in on the answer. */
 const MEMO_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...look(240, 132, REST) },
-  { at: 4700, dur: 900, ...look(160, 198, REST) },
-  { at: 9900, dur: 1000, ...look(94, 190, CLOSE) },
+  shot(0, 240, 132, REST),
+  shot(4700, 160, 198, REST, 900),
+  shot(9900, 94, 190, CLOSE, 1000),
 ];
 
 /** What the OS drags out of Finder: the file's icon, marked with its kind,
@@ -406,8 +414,8 @@ const MEMO_SHOTS: [Shot, ...Shot[]] = [
 function DragChip() {
   const t = useSceneTime();
   const sink = useTween(MEMO.drop, 240);
-  if (t < MEMO.path[0].at || sink >= 1) return null;
-  const { x, y } = pointAt(MEMO.path, t);
+  if (t < MEMO_POINTER.enter || sink >= 1) return null;
+  const { x, y } = pointAt(MEMO_POINTER.path, t);
   return (
     <div
       className="pointer-events-none absolute z-[9] flex flex-col items-center gap-[3px]"
@@ -522,7 +530,9 @@ function MemoTab() {
   const t = useSceneTime();
   const { t: tr } = useTranslation();
   const over =
-    t < MEMO.drop && t >= MEMO.path[0].at && pointAt(MEMO.path, t).x >= PAGE.width - PANEL_W;
+    t < MEMO.drop &&
+    t >= MEMO_POINTER.enter &&
+    pointAt(MEMO_POINTER.path, t).x >= VIEW.width - PANEL_W;
   const uploading = t >= MEMO.drop && t < MEMO.uploaded;
   return (
     <>
@@ -567,7 +577,7 @@ function MemoTab() {
           <span>{tr('memoPanel.columns.description')}</span>
         </div>
         {MEMO.held.map((r) => (
-          <MemoRow key={r.name} {...r} at={0} ready={0} />
+          <MemoRow key={r.name} {...r} at={PAST} ready={PAST} />
         ))}
         <MemoRow {...MEMO.upload} />
         {over && (
@@ -600,7 +610,7 @@ function Memo() {
   const filing = tr('toolArtifact.tool.secFiling');
   const memo = MEMO.upload.name;
   return (
-    <Camera shots={MEMO_SHOTS} cursor={MEMO.path}>
+    <Camera shots={MEMO_SHOTS} pointer={MEMO_POINTER}>
       <ThreadPage
         tabs={
           <>
@@ -612,7 +622,7 @@ function Memo() {
         stack="bottom"
         chat={
           <>
-            <UserBubble at={0}>
+            <UserBubble at={PAST}>
               <Wrapped>{MEMO.consensus.ask}</Wrapped>
             </UserBubble>
             <Timeline>
@@ -620,7 +630,7 @@ function Memo() {
               <ToolRow icon={TrendingUp} settled={{ label: prices, pill: 'MSFT' }} />
             </Timeline>
             <Prose text={MEMO.consensus.answer} />
-            <UserBubble at={0}>{MEMO.earlier.ask}</UserBubble>
+            <UserBubble at={PAST}>{MEMO.earlier.ask}</UserBubble>
             <Timeline>
               <ToolRow icon={FileBarChart} settled={{ label: statements, pill: 'MSFT' }} />
             </Timeline>

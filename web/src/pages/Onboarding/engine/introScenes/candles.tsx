@@ -1,5 +1,6 @@
-import { useId, type ReactNode } from 'react';
-import { useSceneTime } from './clock';
+import type { ReactNode } from 'react';
+import { PAST, useSceneTime } from './clock';
+import { useSvgId } from './kit';
 import {
   AXIS_W,
   TIME_H,
@@ -18,11 +19,6 @@ import {
    selection (chartTools.tsx). The series and its scale are nvdaSeries.ts. */
 
 /* ── the chart ─────────────────────────────────────────────────────────── */
-
-/** An id usable inside `url(#…)`: React's ids carry colons. */
-function svgId(id: string): string {
-  return id.replace(/[^a-zA-Z0-9_-]/g, '');
-}
 
 const GRID = 'var(--color-border-default)';
 const AXIS_TEXT = 'var(--color-text-secondary)';
@@ -53,7 +49,7 @@ export function Candles({
   scale: ChartScale;
   children?: ReactNode;
 }) {
-  const id = svgId(useId());
+  const id = useSvgId();
   const { bars } = s;
   const n = bars.length;
   const end = bars[n - 1];
@@ -229,7 +225,7 @@ const FLIP_Y = 22;
 export function EventBadge({
   scale: k,
   ev,
-  at = Number.NEGATIVE_INFINITY,
+  at = PAST,
   hover = false,
   open = false,
 }: {

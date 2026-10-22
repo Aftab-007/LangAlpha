@@ -3,20 +3,11 @@ import { Eye, Newspaper, Paperclip, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocale } from '@/hooks/useLocale';
 import { relativeTime } from '@/lib/format';
-import { CLOSE, Camera, VIEW, look, type Shot } from './camera';
-import { progress, useSceneTime } from './clock';
-import { Typed, type Waypoint } from './kit';
+import { CLOSE, Camera, VIEW, corner, shot, type Shot } from './camera';
+import { easeInOut, useSceneTime } from './clock';
+import { Typed, pointerScript } from './kit';
 import type { IntroScene } from './types';
-import {
-  WATCH,
-  DashPage,
-  PAD,
-  PAGE_W,
-  fromCorner,
-  Floating,
-  Composer,
-  Widget,
-} from './dashboardParts';
+import { WATCH, DashPage, PAD, PAGE_W, Floating, Composer, Widget } from './dashboardParts';
 import { WatchRow, NEWS, NewsRow, AddSymbol } from './dashboardClassic';
 
 /* The dashboard intro's last scene: clipping a row into the chat's context.
@@ -42,8 +33,8 @@ const ATTACH = {
   ask: 'Is this already priced in?',
   length: 5000,
 };
-/** The page's height (a window's, so the chat floats at its foot). */
-const ATTACH_H = 300;
+/** The page's size: a window's height, so the chat floats at its foot. */
+const ATTACH_PAGE = { width: PAGE_W, height: 300 };
 /** Page px, read off the layout: the first row and its paperclip, the
     card in the composer's open deck, and the line its text goes on. */
 const ROW = { x: 17, y: 34, w: 208 };
@@ -60,17 +51,20 @@ const WATCH_NAMES_END = 300;
 const PICTURES = 33;
 const UNDER_HEADER = 31;
 const OVER_HEADER = 15;
-const COMPOSER_FOOT = ATTACH_H - PAD;
+const COMPOSER_FOOT = ATTACH_PAGE.height - PAD;
 const WIDGET_PAD = 12;
 /** The flying card's box: the clipped row, then its slot in the deck. It
     eases in and out over the camera's move, so it rides along in view. */
 const CARD_FROM = { x: ROW.x, y: ROW.y + 5, w: ROW.w };
-const ATTACH_PATH: Waypoint[] = [
+/** Onto the row's paperclip and a click on it, then down to the
+    composer's line, clicked to type. */
+const ATTACH_POINTER = pointerScript(
   { at: 300, x: 150, y: 140 },
-  { at: 1150, ...CLIP },
-  { at: ATTACH.leave, ...CLIP },
-  { at: 2650, ...TEXT },
-];
+  {
+    clip: { ...CLIP, arrive: 1150, click: ATTACH.click, leave: ATTACH.leave },
+    text: { ...TEXT, arrive: 2650, click: ATTACH.focus },
+  }
+);
 /** The feed under its header, out to the watchlist's symbols, a touch
     closer than REST; a short push in on the rows as the paperclip is
     clicked; then out with the card as it flies down to the composer, a
@@ -78,16 +72,16 @@ const ATTACH_PATH: Waypoint[] = [
     are in: the card it lands as is whole, and the question under it
     reads. */
 const ATTACH_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...look(0, 0, VIEW.width / WATCH_NAMES_END, { width: PAGE_W, height: ATTACH_H }) },
-  { at: 1150, ...fromCorner(PICTURES, UNDER_HEADER, CLOSE), dur: 900 },
-  {
-    at: ATTACH.fly + ATTACH.flyDur,
-    ...fromCorner(WIDGET_PAD, OVER_HEADER, VIEW.height / (COMPOSER_FOOT - OVER_HEADER)),
-    dur: ATTACH.flyDur,
-  },
+  shot(0, 0, 0, VIEW.width / WATCH_NAMES_END),
+  corner(1150, PICTURES, UNDER_HEADER, CLOSE, 900),
+  corner(
+    ATTACH.fly + ATTACH.flyDur,
+    WIDGET_PAD,
+    OVER_HEADER,
+    VIEW.height / (COMPOSER_FOOT - OVER_HEADER),
+    ATTACH.flyDur
+  ),
 ];
-/** The camera's move, which the flying card keeps pace with. */
-const inOut = (p: number) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);
 
 /** The context card a clipped row becomes in the composer: the story's
     title, then its source and when it ran, as the row's snapshot labels
@@ -158,12 +152,14 @@ function DashboardAttach() {
   const { t: tr } = useTranslation();
   const t = useSceneTime();
   const hovered = t >= ATTACH.hover && t < ATTACH.leave + 150;
-  const onClip = t >= 1150 && t < ATTACH.leave;
+  const { clip } = ATTACH_POINTER.beats;
+  const onClip = t >= clip.arrive && t < clip.leave;
   const landed = t >= ATTACH.fly + ATTACH.flyDur;
-  const fly = inOut(progress(t, ATTACH.fly, ATTACH.flyDur));
+  // eased as the camera's move is, so the card keeps pace with it
+  const fly = easeInOut(t, ATTACH.fly, ATTACH.flyDur);
   return (
-    <Camera shots={ATTACH_SHOTS} cursor={ATTACH_PATH} clicks={[ATTACH.click, ATTACH.focus]}>
-      <DashPage height={ATTACH_H}>
+    <Camera shots={ATTACH_SHOTS} page={ATTACH_PAGE} pointer={ATTACH_POINTER}>
+      <DashPage height={ATTACH_PAGE.height}>
         <div className="flex min-h-0 flex-1 gap-1.5">
           {/* news widget: the paperclip shows on the hovered row */}
           <Widget

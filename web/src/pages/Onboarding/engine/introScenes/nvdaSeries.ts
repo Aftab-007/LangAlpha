@@ -5,7 +5,7 @@
    arithmetic only; the chart that draws it is candles.tsx. */
 
 /** One daily bar. */
-export interface Ohlc {
+interface Ohlc {
   o: number;
   h: number;
   l: number;
@@ -127,6 +127,14 @@ export const TIME_MARKS = [
 export const NVDA_PREV = 179.53;
 export const NVDA_LAST = 182.42;
 
+/** NVDA's closes from Aug 13, short of yesterday's and today's (`NVDA_PREV`, `NVDA_LAST`). */
+const NVDA_CLOSES = [
+  170.2, 171.4, 170.8, 172.1, 173.5, 172.9, 174.2, 175.0, 174.4, 176.1, 184.5, 185.3, 184.0, 182.6,
+  181.9, 180.6, 180.2, 174.8, 173.4, 171.9, 171.3, 172.0, 171.6, 175.1, 176.3, 177.9, 179.4, 178.8,
+  181.2, 183.0, 184.6, 183.2, 181.1, 179.3, 177.6, 176.0, 174.9, 174.0, 178.1, 178.6, 177.9, 179.2,
+  180.1, 179.4, 180.7, 181.2, 180.4,
+];
+
 /**
  * NVDA, daily, each move on news. It gapped up on earnings (Aug 27) into
  * 186.90 and faded, fell 3% in a day on a new export rule (Sep 8) and slid
@@ -137,57 +145,7 @@ export const NVDA_LAST = 182.42;
 export const NVDA = seriesOf(
   'NVDA',
   priorCloses(160, 9),
-  [
-    170.2,
-    171.4,
-    170.8,
-    172.1,
-    173.5,
-    172.9,
-    174.2,
-    175.0,
-    174.4,
-    176.1,
-    184.5,
-    185.3,
-    184.0,
-    182.6,
-    181.9,
-    180.6,
-    180.2,
-    174.8,
-    173.4,
-    171.9,
-    171.3,
-    172.0,
-    171.6,
-    175.1,
-    176.3,
-    177.9,
-    179.4,
-    178.8,
-    181.2,
-    183.0,
-    184.6,
-    183.2,
-    181.1,
-    179.3,
-    177.6,
-    176.0,
-    174.9,
-    174.0,
-    178.1,
-    178.6,
-    177.9,
-    179.2,
-    180.1,
-    179.4,
-    180.7,
-    181.2,
-    180.4,
-    NVDA_PREV,
-    NVDA_LAST,
-  ],
+  [...NVDA_CLOSES, NVDA_PREV, NVDA_LAST],
   180e6,
   1,
   {

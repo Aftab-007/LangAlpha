@@ -21,40 +21,16 @@ import {
   messagingAppDomain,
   messagingAppName,
 } from '@/pages/ChatAgent/components/messaging/messageDelivery';
-import { look, VIEW, type Shot } from './camera';
 import { progress, useSceneTime } from './clock';
-import { Appear, Loader, rv } from './kit';
+import { Appear, Loader, rv, typedCount } from './kit';
 
 /* The chat transcript's parts, shared by the chat scenes: the thread's title
    and transcript column, the agent's reply, activity rows, the workspace
    line, the hand-off card, a workflow run, the caption on a message from
    another agent, a chart in the reply, and the files a turn produced. Each
    is a small copy of the component the app draws it with (named on each). */
-/* eslint-disable react-refresh/only-export-components -- shared parts:
-   scene components plus the style helper */
 
 export type Icon = ComponentType<LucideProps>;
-
-/** The chat scenes draw each page at the view's size, so the wide shot is
-    the whole page and every other shot a crop of it. */
-export const PAGE = { width: VIEW.width, height: VIEW.height };
-
-/** The camera's shot arriving at `at`: centred as near the page point
-    (`x`, `y`) as the page allows at `zoom`, the move in taking `dur` ms. */
-export const shot = (at: number, x: number, y: number, zoom: number, dur?: number): Shot => ({
-  at,
-  dur,
-  ...look(x, y, zoom),
-});
-
-/** The wide shot: the whole page, as the app draws it. */
-export const wide = (at: number, dur?: number): Shot =>
-  shot(at, PAGE.width / 2, PAGE.height / 2, 1, dur);
-
-/** Long before a scene starts: what happened then (a thread's earlier
-    exchange, a page already built) is on the page, settled, from the first
-    frame. */
-export const EARLIER = -60_000;
 
 /** The thread page's header: back, then the thread's title. */
 export function TopTitle({ children }: { children: ReactNode }) {
@@ -97,7 +73,7 @@ const toolCard: CSSProperties = {
  */
 export function Reply({ text, at, cps = 150 }: { text: string; at: number; cps?: number }) {
   const t = useSceneTime();
-  const typed = Math.floor(((t - at) * cps) / 1000);
+  const typed = typedCount(t, at, cps);
   if (typed <= 0) return null;
   // each span with where its first character falls in the plain text
   const spans: { bold: boolean; body: string; from: number }[] = [];

@@ -18,7 +18,7 @@ import { useLocale } from '@/hooks/useLocale';
 import { fixed2, signedFixed2 } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { ClearButton, Intervals, Segmented, SelectionTools, ToolBtn } from './chartTools';
-import { useSceneTime } from './clock';
+import { pressed, SEND_MS, useSceneTime } from './clock';
 import { Ln } from './kit';
 import { NVDA_LAST, NVDA_QUOTE } from './nvdaSeries';
 
@@ -39,13 +39,13 @@ const TOOLS_H = 20;
 const CHART_W = 260;
 const STRIP_W = 15;
 const CHAT_W = 170;
-export const PAGE = { w: CHART_W + STRIP_W + CHAT_W, h: 318 };
+export const PAGE = { width: CHART_W + STRIP_W + CHAT_W, height: 318 };
 /** The chart, under the header, the metrics and the toolbar. */
 export const CHART = {
   x: 0,
   y: HEAD_H + METRICS_H + TOOLS_H,
   w: CHART_W,
-  h: PAGE.h - HEAD_H - METRICS_H - TOOLS_H,
+  h: PAGE.height - HEAD_H - METRICS_H - TOOLS_H,
 };
 /** The chat panel's left edge. */
 export const CHAT_X = CHART_W + STRIP_W;
@@ -63,7 +63,7 @@ export const REGION_BTN = {
 };
 
 /** The chat composer's send button. */
-export const SEND = { x: PAGE.w - 21, y: PAGE.h - 21 };
+export const SEND = { x: PAGE.width - 21, y: PAGE.height - 21 };
 
 /* ── the header band: stock header, the strip, chat header ──────────── */
 
@@ -373,7 +373,7 @@ function Composer({
 }: ComposerState & { narrow?: boolean }) {
   const { t: tr } = useTranslation();
   const t = useSceneTime();
-  const pressed = sendAt?.some((at) => t >= at && t < at + 260) ?? false;
+  const down = pressed(t, sendAt, SEND_MS);
   const filled = text != null || ready;
   return (
     <div
@@ -402,7 +402,7 @@ function Composer({
           className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md transition-transform duration-150"
           style={{
             background: filled ? 'var(--color-btn-primary-bg)' : 'var(--color-bg-elevated)',
-            transform: pressed ? 'scale(0.85)' : undefined,
+            transform: down ? 'scale(0.85)' : undefined,
           }}
         >
           <ArrowUp
@@ -487,7 +487,7 @@ export function MarketPage({
 }) {
   const card = { borderColor: 'var(--color-border-muted)', background: 'var(--color-bg-card)' };
   return (
-    <div className="flex flex-col" style={{ width: PAGE.w, height: PAGE.h }}>
+    <div className="flex flex-col" style={PAGE}>
       <div
         className="flex shrink-0 border-b"
         style={{ height: HEAD_H, borderColor: 'var(--color-border-muted)' }}

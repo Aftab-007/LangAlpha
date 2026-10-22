@@ -1,7 +1,6 @@
-import type { CSSProperties, ReactNode } from 'react';
-import { cn } from '@/lib/utils';
-import { progress, useSceneTime } from './clock';
-import { Cursor, rv, type Waypoint } from './kit';
+import type { ReactNode } from 'react';
+import { easeInOut, useSceneTime } from './clock';
+import { Cursor, rv, type PointerScript } from './kit';
 
 /*
  * A camera over a scene's page. The page is drawn once, at its own size, and
@@ -17,9 +16,10 @@ import { Cursor, rv, type Waypoint } from './kit';
 export const VIEW = { width: 400, height: 330 };
 
 /**
- * Where the camera looks once it arrives at `at` ms: the page point (px) at
- * the center of the view, and the zoom. The move into a shot takes `dur` ms
- * and ends at `at`; before it starts, the camera holds the previous shot.
+ * Where the camera looks once it arrives at `at` ms: the page point (px) it
+ * centres on, as near as the page's edges allow (`look`), and the zoom. The
+ * move into a shot takes `dur` ms and ends at `at`; before it starts, the
+ * camera holds the previous shot.
  */
 export interface Shot {
   at: number;
@@ -29,15 +29,13 @@ export interface Shot {
   dur?: number;
 }
 
-/** A rect of the page, in page px. */
-export interface Rect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
 type View = Pick<Shot, 'x' | 'y' | 'zoom'>;
+
+/** A page's size in page px, as `VIEW` gives the view's. */
+interface Size {
+  width: number;
+  height: number;
+}
 
 /**
  * How close the camera sits. Scenes draw their pages in the view's px, so a
@@ -49,84 +47,83 @@ type View = Pick<Shot, 'x' | 'y' | 'zoom'>;
 export const REST = 1.25;
 export const CLOSE = 1.5;
 
-/** The shot that fits `r` in the view with `pad` px of page around it. */
-export function frame(r: Rect, pad = 8, view = VIEW): View {
-  return {
-    x: r.x + r.w / 2,
-    y: r.y + r.h / 2,
-    zoom: Math.min(view.width / (r.w + 2 * pad), view.height / (r.h + 2 * pad)),
-  };
+/** The shot arriving at `at`, aimed at page point (`x`, `y`) at `zoom`, the
+    move in taking `dur` ms. */
+export function shot(at: number, x: number, y: number, zoom: number, dur?: number): Shot {
+  return { at, dur, x, y, zoom };
+}
+
+/** The wide shot: a view-sized page whole, as the app draws it. */
+export function wide(at: number, dur?: number): Shot {
+  return shot(at, VIEW.width / 2, VIEW.height / 2, 1, dur);
+}
+
+/** The shot whose view has its top-left corner on page point (`left`,
+    `top`) at `zoom`, for a crop whose edges have to fall in the gap between
+    two rows rather than through a line of text. */
+export function corner(at: number, left: number, top: number, zoom: number, dur?: number): Shot {
+  return shot(at, left + VIEW.width / 2 / zoom, top + VIEW.height / 2 / zoom, zoom, dur);
 }
 
 /**
- * The shot at `zoom` centred as near the page point (`x`, `y`) as the page
+ * The view at `zoom` centred as near the page point (`x`, `y`) as `page`
  * allows: the view stops at the page's edge rather than show past it, and a
  * page smaller than the view sits centred in it.
  */
-export function look(
-  x: number,
-  y: number,
-  zoom: number,
-  page: { width: number; height: number } = VIEW,
-  view = VIEW
-): View {
+function look(x: number, y: number, zoom: number, page: Size): View {
   const hold = (c: number, size: number, v: number) => {
     const half = v / 2 / zoom;
     return size <= 2 * half ? size / 2 : Math.min(Math.max(c, half), size - half);
   };
-  return { zoom, x: hold(x, page.width, view.width), y: hold(y, page.height, view.height) };
+  return { zoom, x: hold(x, page.width, VIEW.width), y: hold(y, page.height, VIEW.height) };
 }
 
-const inOut = (p: number) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);
-
-/** Where the camera is at `t`. Zoom eases geometrically, so a push-in reads even. */
-export function viewAt(shots: Shot[], t: number): View {
-  let from: View = shots[0];
+/** Where the camera is at `t` over `page`. Zoom eases geometrically, so a
+    push-in reads even. */
+function viewAt(shots: Shot[], t: number, page: Size): View {
+  const aim = (s: Shot) => look(s.x, s.y, s.zoom, page);
+  let from = aim(shots[0]);
   for (let i = 1; i < shots.length; i++) {
     const s = shots[i];
+    const to = aim(s);
     const dur = s.dur ?? 700;
     if (t < s.at) {
-      const p = inOut(progress(t, s.at - dur, dur));
+      const p = easeInOut(t, s.at - dur, dur);
       return {
-        x: from.x + (s.x - from.x) * p,
-        y: from.y + (s.y - from.y) * p,
-        zoom: from.zoom * (s.zoom / from.zoom) ** p,
+        x: from.x + (to.x - from.x) * p,
+        y: from.y + (to.y - from.y) * p,
+        zoom: from.zoom * (to.zoom / from.zoom) ** p,
       };
     }
-    from = s;
+    from = to;
   }
   return from;
 }
 
 /**
- * The view: a window onto `children` (the page, drawn at its own size) as
- * the camera frames it at this moment. `cursor` is in page px and drawn over
- * the view at its true size, so the pointer never zooms with the page.
+ * The view: a window onto `children` (the page, drawn at its own size,
+ * `page`) as the camera frames it at this moment. The `pointer` plays in
+ * page px and is drawn over the view at its true size, so it never zooms
+ * with the page.
  */
 export function Camera({
   shots,
-  cursor,
-  clicks,
-  view = VIEW,
-  className,
-  style,
+  page = VIEW,
+  pointer,
   children,
 }: {
   shots: [Shot, ...Shot[]];
-  cursor?: Waypoint[];
-  clicks?: number[];
-  view?: { width: number; height: number };
-  className?: string;
-  style?: CSSProperties;
+  page?: Size;
+  pointer?: PointerScript;
   children: ReactNode;
 }) {
-  const { x, y, zoom } = viewAt(shots, useSceneTime());
-  const dx = view.width / 2 - x * zoom;
-  const dy = view.height / 2 - y * zoom;
+  const { x, y, zoom } = viewAt(shots, useSceneTime(), page);
+  const dx = VIEW.width / 2 - x * zoom;
+  const dy = VIEW.height / 2 - y * zoom;
   return (
     <div
-      className={cn('intro-mk intro-rv overflow-hidden', className)}
-      style={{ ...rv(0), width: view.width, height: view.height, ...style }}
+      className="intro-mk intro-rv overflow-hidden"
+      style={{ ...rv(0), width: VIEW.width, height: VIEW.height }}
     >
       <div
         className="absolute left-0 top-0 origin-top-left"
@@ -134,10 +131,10 @@ export function Camera({
       >
         {children}
       </div>
-      {cursor && (
+      {pointer && (
         <Cursor
-          path={cursor}
-          clicks={clicks}
+          path={pointer.path}
+          clicks={pointer.clicks}
           project={(p) => ({ x: dx + p.x * zoom, y: dy + p.y * zoom })}
         />
       )}

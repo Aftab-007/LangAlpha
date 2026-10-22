@@ -1,9 +1,8 @@
-import { Camera, CLOSE, REST, type Shot } from './camera';
-import { Finished, ease, useSceneTime } from './clock';
-import type { Waypoint } from './kit';
+import { Camera, CLOSE, REST, type Shot, VIEW, shot, wide } from './camera';
+import { Finished, PAST, ease, useSceneTime } from './clock';
+import { pointerScript } from './kit';
 import type { IntroScene } from './types';
 import type { IntroVisualId } from '../../registry';
-import { EARLIER, PAGE, shot, wide } from './chatParts';
 import { Dashboard, PTC_HEADER_H } from './chatDashboard';
 import { CapexThread, PTC_CHAT } from './capexThread';
 import { POPOVER_W, SharedFileBar, ShareDialog, SharePopover } from './shareParts';
@@ -37,24 +36,30 @@ const SHARE_BUTTON = { x: PTC_CHAT - 9 - 8, y: PTC_HEADER_H / 2 };
 const SHARE_POPOVER = { right: PTC_CHAT - 9, top: PTC_HEADER_H + 1 };
 
 /** The file header's share link button (`Link2`), second of its four. */
-const FILE_LINK = { x: PAGE.width - 4.5 - 16 * 2.5 - 4.5 * 2, y: PTC_HEADER_H + 9.5 };
+const FILE_LINK = { x: VIEW.width - 4.5 - 16 * 2.5 - 4.5 * 2, y: PTC_HEADER_H + 9.5 };
+
+/** A beat that lands on `p` 50ms before it clicks at `at`, and moves
+    straight on. */
+const clickAt = (at: number, p: { x: number; y: number }) => ({ ...p, arrive: at - 50, click: at });
 
 /** The pointer: up to the header's share button, then the popover's
     switch, the file browsing box and the copy button; across to the
     dashboard's share link, whose press also closes the popover; then the
     dialog's switch, its copy button, and the visitor's view. */
-const SHARE_POINTER: Waypoint[] = [
+const SHARE_POINTER = pointerScript(
   { at: 300, x: 96, y: 170 },
-  { at: SHARE.popover - 50, ...SHARE_BUTTON },
-  { at: SHARE.on - 50, x: SHARE_POPOVER.right - 8 - 9.5, y: SHARE_POPOVER.top + 8 + 5 },
-  { at: SHARE.files - 50, x: SHARE_POPOVER.right - POPOVER_W + 8 + 3, y: 83 },
-  { at: SHARE.copied - 50, x: SHARE_POPOVER.right - 8 - 7, y: SHARE_POPOVER.top + 32 },
-  { at: SHARE.dialog - 50, ...FILE_LINK },
-  { at: SHARE.fileOn - 50, x: 307, y: 154 },
-  { at: SHARE.fileCopied - 50, x: 310, y: 124 },
-  { at: SHARE.visitor - 50, x: 100, y: 231 },
-  { at: SHARE.visitor + 900, x: 372, y: 300 },
-];
+  {
+    share: clickAt(SHARE.popover, SHARE_BUTTON),
+    on: clickAt(SHARE.on, { x: SHARE_POPOVER.right - 8 - 9.5, y: SHARE_POPOVER.top + 8 + 5 }),
+    files: clickAt(SHARE.files, { x: SHARE_POPOVER.right - POPOVER_W + 8 + 3, y: 83 }),
+    copy: clickAt(SHARE.copied, { x: SHARE_POPOVER.right - 8 - 7, y: SHARE_POPOVER.top + 32 }),
+    fileLink: clickAt(SHARE.dialog, FILE_LINK),
+    fileOn: clickAt(SHARE.fileOn, { x: 307, y: 154 }),
+    fileCopy: clickAt(SHARE.fileCopied, { x: 310, y: 124 }),
+    visitor: clickAt(SHARE.visitor, { x: 100, y: 231 }),
+    rest: { x: 372, y: 300, arrive: SHARE.visitor + 900 },
+  }
+);
 
 /** The camera pushes in on the popover as it opens, steps back to take in
     the file's header and the dialog over the page, closes on the dialog,
@@ -73,21 +78,8 @@ function ShareThread() {
   const sharing = now >= SHARE.popover && now < SHARE.dialog;
   const visitor = ease(now, SHARE.visitor + 150, 350);
   return (
-    <Camera
-      shots={SHARE_SHOTS}
-      cursor={SHARE_POINTER}
-      clicks={[
-        SHARE.popover,
-        SHARE.on,
-        SHARE.files,
-        SHARE.copied,
-        SHARE.dialog,
-        SHARE.fileOn,
-        SHARE.fileCopied,
-        SHARE.visitor,
-      ]}
-    >
-      <div className="relative" style={PAGE}>
+    <Camera shots={SHARE_SHOTS} pointer={SHARE_POINTER}>
+      <div className="relative" style={VIEW}>
         {/* the thread as the Analyst left it */}
         <Finished>
           <CapexThread sharing={sharing} shared={now >= SHARE.on} />
@@ -117,7 +109,7 @@ function ShareThread() {
             style={{ background: 'var(--color-bg-page)', opacity: visitor }}
           >
             <SharedFileBar name="capex-tracker.html" />
-            <Dashboard at={EARLIER} />
+            <Dashboard at={PAST} />
           </div>
         )}
       </div>

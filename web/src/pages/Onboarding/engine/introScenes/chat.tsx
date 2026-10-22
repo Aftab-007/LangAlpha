@@ -17,9 +17,9 @@ import { messagingAppName } from '@/pages/ChatAgent/components/messaging/message
 import { useAgentNames } from '../introAgents';
 import type { IntroVisualId } from '../../registry';
 import { BarChart, StockPriceCard, type Bar } from './charts';
-import { useSceneTime } from './clock';
-import { CLOSE, Camera, REST, type Shot } from './camera';
-import { Appear, InputDock, Region, Tag, UserBubble, type Waypoint } from './kit';
+import { PAST, useSceneTime } from './clock';
+import { CLOSE, Camera, REST, type Shot, VIEW, shot, wide } from './camera';
+import { Appear, InputDock, Region, Tag, UserBubble, pointerScript } from './kit';
 import type { IntroScene } from './types';
 import {
   type FlowAgent,
@@ -27,10 +27,8 @@ import {
   ActivityRow,
   ChartCard,
   DeliveryPill,
-  EARLIER,
   FileStack,
   HandoffCard,
-  PAGE,
   Pill,
   Provenance,
   Reply,
@@ -39,8 +37,6 @@ import {
   ViaApp,
   WorkflowCard,
   WorkspaceLine,
-  shot,
-  wide,
 } from './chatParts';
 import { DASH_META_CHIP } from './chatDashboard';
 import { CapexThread, PTC, PTC_CHAT } from './capexThread';
@@ -156,7 +152,7 @@ function TwoModes() {
   const [made, created] = MODES.created;
   return (
     <Camera shots={MODES_SHOTS}>
-      <div className="flex gap-2 p-2" style={PAGE}>
+      <div className="flex gap-2 p-2" style={VIEW}>
         {/* the Chief of Staff: answers the quick question itself, hands the
             deeper follow-up off, and reports back in a line when the Analyst
             is done */}
@@ -317,7 +313,7 @@ function ChiefOfStaffAnswer() {
   const app = messagingAppName(COS.app) ?? '';
   return (
     <Camera shots={COS_SHOTS}>
-      <div className="flex flex-col" style={PAGE}>
+      <div className="flex flex-col" style={VIEW}>
         {/* the thread's header: back, its title, the agent it runs with */}
         <div
           className="flex h-6 shrink-0 items-center gap-2 border-b px-2.5"
@@ -336,7 +332,7 @@ function ChiefOfStaffAnswer() {
           <div className="flex min-h-0 flex-1 flex-col justify-end gap-1.5 overflow-hidden">
             {/* earlier today, from the phone: the week ahead, then a quick
                 market question, both answered here and relayed back */}
-            <UserBubble at={EARLIER} caption={via} className="ml-12">
+            <UserBubble at={PAST} caption={via} className="ml-12">
               Morning. What&apos;s on this week?
             </UserBubble>
             <div className="mr-12 flex flex-col gap-1.5">
@@ -345,15 +341,15 @@ function ChiefOfStaffAnswer() {
                 verb={t('toolArtifact.inProgress.searching')}
                 title={t('toolArtifact.tool.webSearch')}
                 after={<Pill>earnings this week</Pill>}
-                at={EARLIER}
-                done={EARLIER}
+                at={PAST}
+                done={PAST}
               />
               <Reply
                 text="**A busy week.** CPI prints Wednesday at 8:30, and NVDA reports after Thursday's close. Its guide rests on hyperscaler capex."
-                at={EARLIER}
+                at={PAST}
               />
             </div>
-            <UserBubble at={EARLIER} caption={via} className="ml-12">
+            <UserBubble at={PAST} caption={via} className="ml-12">
               What&apos;s moving in semis?
             </UserBubble>
             <div className="mr-12 flex flex-col gap-1.5">
@@ -362,15 +358,15 @@ function ChiefOfStaffAnswer() {
                 verb={t('toolArtifact.inProgress.fetchingQuotes')}
                 title={t('toolArtifact.tool.liveQuotes')}
                 after={<Pill>SOXX, AVGO, NVDA, TSM, AMD, MU</Pill>}
-                at={EARLIER}
-                done={EARLIER}
+                at={PAST}
+                done={PAST}
               />
               <ChartCard title="Semis today, % change" legend="SOXX +1.2%">
-                <BarChart bars={SEMIS} max={2.6} median={1.2} at={EARLIER} labelWidth={22} />
+                <BarChart bars={SEMIS} max={2.6} median={1.2} at={PAST} labelWidth={22} />
               </ChartCard>
               <Reply
                 text="**SOXX is up 1.2%.** AVGO leads; NVDA holds above $182 into earnings."
-                at={EARLIER}
+                at={PAST}
               />
             </div>
             {/* the request, texted in rather than typed here */}
@@ -449,11 +445,13 @@ const PTC_CHIP = { x: PTC_CHAT + DASH_META_CHIP.x, y: DASH_META_CHIP.y };
 /** The pointer comes in from the page's right edge, above the tiles, once
     the page is written, clicks the META chip, and rests at the empty end of
     the chip row so the filtered page shows whole. */
-const PTC_POINTER: Waypoint[] = [
-  { at: 5900, x: PAGE.width - 8, y: PTC_CHIP.y - 18 },
-  { at: 6350, x: PTC_CHIP.x, y: PTC_CHIP.y },
-  { at: 6900, x: PTC_CHIP.x + 36, y: PTC_CHIP.y + 2 },
-];
+const PTC_POINTER = pointerScript(
+  { at: 5900, x: VIEW.width - 8, y: PTC_CHIP.y - 18 },
+  {
+    chip: { ...PTC_CHIP, arrive: 6350, click: PTC.filter },
+    rest: { x: PTC_CHIP.x + 36, y: PTC_CHIP.y + 2, arrive: 6900 },
+  }
+);
 
 /** The camera rests on the chat as the task arrives and the workflow works
     through the calls, and holds as the file panel opens beside it. Once the
@@ -472,7 +470,7 @@ const PTC_SHOTS: [Shot, ...Shot[]] = [
 
 function PtcSandbox() {
   return (
-    <Camera shots={PTC_SHOTS} cursor={PTC_POINTER} clicks={[PTC.filter]}>
+    <Camera shots={PTC_SHOTS} pointer={PTC_POINTER}>
       <CapexThread filterAt={PTC.filter} />
     </Camera>
   );

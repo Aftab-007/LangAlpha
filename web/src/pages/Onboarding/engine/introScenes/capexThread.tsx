@@ -2,12 +2,11 @@ import { useTranslation } from 'react-i18next';
 import { Bot, FileSpreadsheet, Globe } from 'lucide-react';
 import { useAgentNames } from '../introAgents';
 import { ease, useSceneTime } from './clock';
-import { REST } from './camera';
+import { REST, VIEW } from './camera';
 import { InputDock, Tag, UserBubble } from './kit';
 import {
   type FlowAgent,
   FileStack,
-  PAGE,
   Provenance,
   Reply,
   TopTitle,
@@ -114,7 +113,7 @@ export const PTC_CHAT = 176;
     shows. At this width the app's centred column (max-w-3xl) fills the chat,
     so the transcript runs edge to edge in it and the agent's cards start at
     its left; the panel then slides in from the frame's right edge. */
-const PTC_CHAT_START = PAGE.width / REST;
+const PTC_CHAT_START = VIEW.width / REST;
 
 /** The Analyst's thread on the capex tracker: the chat, and the file panel
     that opens beside it on the dashboard, filtered to META at `filterAt`.
@@ -135,7 +134,7 @@ export function CapexThread({
   const now = useSceneTime();
   const open = ease(now, PTC.panel, 450);
   return (
-    <div className="flex" style={PAGE}>
+    <div className="flex" style={VIEW}>
       {/* the chat: header, the transcript, the composer; it gives way to
             the file panel when the dashboard opens */}
       <div
@@ -199,7 +198,7 @@ export function CapexThread({
           className="flex min-w-0 flex-1 overflow-hidden border-l"
           style={{ background: 'var(--color-bg-page)', borderColor: 'var(--color-border-muted)' }}
         >
-          <div className="flex shrink-0" style={{ width: PAGE.width - PTC_CHAT }}>
+          <div className="flex shrink-0" style={{ width: VIEW.width - PTC_CHAT }}>
             <DashboardPanel at={PTC.dash} filterAt={filterAt} />
           </div>
         </div>

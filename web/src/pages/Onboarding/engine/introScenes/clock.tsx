@@ -24,6 +24,16 @@ const FRAME_SLACK_MS = 4;
 /** Outside a clock, a scene draws its finished frame. */
 const SceneTime = createContext(Number.POSITIVE_INFINITY);
 
+/** Before the scene starts: what happened then (a thread's earlier
+    exchange, a page already built) is on the page, settled, from the first
+    frame. Every `t >= at` holds and every tween from it has finished. */
+export const PAST = Number.NEGATIVE_INFINITY;
+
+/** How long a click holds the pointer, and the control it lands on, down. */
+const CLICK_MS = 160;
+/** How long the composer's send button holds down when a message goes out. */
+export const SEND_MS = 260;
+
 /** Pins every scene under it to one moment (ms), for the dev preview. */
 export const FrozenSceneTime = createContext<number | null>(null);
 
@@ -46,6 +56,22 @@ export function progress(t: number, at: number, dur: number): number {
 /** `progress`, eased out: for values built from several tweens at once. */
 export function ease(t: number, at: number, dur: number): number {
   return 1 - (1 - progress(t, at, dur)) ** 3;
+}
+
+/** `progress`, eased in and out: how the camera and the pointer travel. */
+export function easeInOut(t: number, at: number, dur: number): number {
+  const p = progress(t, at, dur);
+  return p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2;
+}
+
+/** Whether `t` falls in `[from, to)`. */
+export function during(t: number, from: number, to: number): boolean {
+  return t >= from && t < to;
+}
+
+/** Whether a press at `at` (or at any of several times) still holds at `t`. */
+export function pressed(t: number, at: number | readonly number[] = [], ms = CLICK_MS): boolean {
+  return (typeof at === 'number' ? [at] : at).some((a) => during(t, a, a + ms));
 }
 
 /** Eased 0 to 1 progress through `[at, at + dur]` of the scene's script. */
