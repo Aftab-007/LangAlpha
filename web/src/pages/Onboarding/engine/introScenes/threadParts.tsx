@@ -1,9 +1,10 @@
 import { Fragment, type ReactNode } from 'react';
-import { ArrowLeft, FolderOpen, Plus, X, type LucideIcon } from 'lucide-react';
+import { ArrowLeft, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentNames } from '../introAgents';
 import { useSceneTime } from './clock';
 import { Appear, InputDock, Tag } from './kit';
+import { ChatHeaderButtons, PanelStrip } from './panelParts';
 
 /* The thread page the thread intro's scenes play on: the chat column beside
    the file panel, the panel a full-height column with its own tab strip,
@@ -17,50 +18,9 @@ export const PANEL_W = 212;
 
 export const iconStyle = { color: 'var(--iv-text-3)' };
 
-/** A tab in the panel's strip: the open one sits on a raised pill. A file
-    opened on loan (`onLoan`, the preview a next open takes over) is set in
-    italics, as the strip marks it. */
-export function PanelTab({
-  icon: Icon,
-  label,
-  active = false,
-  onLoan = false,
-}: {
-  icon: LucideIcon;
-  label: string;
-  active?: boolean;
-  onLoan?: boolean;
-}) {
-  return (
-    <span
-      className={cn(
-        'flex h-[15px] min-w-0 shrink items-center gap-1 rounded border pl-1 pr-2',
-        'text-[0.4375rem] leading-none'
-      )}
-      style={
-        active
-          ? {
-              background: 'var(--color-bg-elevated)',
-              borderColor: 'var(--color-border-muted)',
-              color: 'var(--iv-text)',
-            }
-          : { borderColor: 'transparent', color: 'var(--iv-text-3)' }
-      }
-    >
-      <Icon className="h-2 w-2 shrink-0" />
-      <span className={cn('truncate', onLoan && 'italic')}>{label}</span>
-    </span>
-  );
-}
-
-/** An icon button in the panel or tree chrome. */
-export function ChromeIcon({ icon: Icon, on = false }: { icon: LucideIcon; on?: boolean }) {
-  return (
-    <Icon
-      className="h-2 w-2 shrink-0"
-      style={{ color: on ? 'var(--iv-text)' : 'var(--iv-text-3)' }}
-    />
-  );
+/** A glyph in the chrome of a tab's own body (the Memory and Memo tabs). */
+export function ChromeIcon({ icon: Icon }: { icon: LucideIcon }) {
+  return <Icon className="h-2 w-2 shrink-0" style={iconStyle} />;
 }
 
 /**
@@ -117,12 +77,13 @@ export function Prose({
   );
 }
 
-/** The chat column's header: back, the thread's `title`, the agent, and the
-    folder button that opens the file panel, held while it is open. */
+/** The chat column's header: back, the thread's `title`, the agent, and
+    share. The panel is open beside it, so the panel toggle is in the
+    panel's corner rather than here. */
 function ChatHeader({ title }: { title: string }) {
   const { worker } = useAgentNames();
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2.5">
+    <div className="flex min-w-0 flex-1 items-center gap-1.5 pl-2.5 pr-[9px]">
       <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={iconStyle} />
       <span
         className="min-w-0 truncate text-[0.5rem] font-medium leading-none"
@@ -132,29 +93,7 @@ function ChatHeader({ title }: { title: string }) {
       </span>
       <span className="ml-auto flex shrink-0 items-center gap-1.5">
         <Tag>{worker}</Tag>
-        <span
-          className="flex h-3.5 w-3.5 items-center justify-center rounded"
-          style={{ background: 'var(--color-border-muted)' }}
-        >
-          <FolderOpen className="h-2.5 w-2.5" style={{ color: 'var(--iv-text)' }} />
-        </span>
-      </span>
-    </div>
-  );
-}
-
-/** The file panel's tab strip: `tabs`, new tab, then `actions` and close. */
-function PanelStrip({ tabs, actions }: { tabs: ReactNode; actions: ReactNode }) {
-  return (
-    <div
-      className="flex shrink-0 items-center gap-1 border-l px-1"
-      style={{ width: PANEL_W, borderColor: 'var(--iv-border)' }}
-    >
-      {tabs}
-      <ChromeIcon icon={Plus} />
-      <span className="ml-auto flex items-center gap-1.5 pr-0.5">
-        {actions}
-        <ChromeIcon icon={X} />
+        <ChatHeaderButtons panelOpen />
       </span>
     </div>
   );
@@ -169,15 +108,17 @@ export const HEADER_H = 28;
 /**
  * The thread page alone, drawn at `PAGE` for a scene's `Camera` to crop: the
  * chat column with its header (the thread's `title`) beside the file panel,
- * whose tab strip (`tabs`, `actions`) sits level with the chat header and
- * `panel` fills the rest. `stack` places the transcript: from the top for a
- * new thread, or settled on the composer for one with history above, the
- * oldest lines running off the top as the newest come in.
+ * whose tab strip (`tabs`, with `back` and `tree` as `PanelStrip` reads
+ * them) sits level with the chat header and `panel` fills the rest. `stack`
+ * places the transcript: from the top for a new thread, or settled on the
+ * composer for one with history above, the oldest lines running off the top
+ * as the newest come in.
  */
 export function ThreadPage({
   title,
   tabs,
-  actions,
+  back,
+  tree,
   chat,
   panel,
   composer,
@@ -186,7 +127,8 @@ export function ThreadPage({
 }: {
   title: string;
   tabs: ReactNode;
-  actions: ReactNode;
+  back?: boolean;
+  tree?: boolean;
   chat: ReactNode;
   panel: ReactNode;
   composer?: ReactNode;
@@ -200,7 +142,13 @@ export function ThreadPage({
         style={{ height: HEADER_H, borderColor: 'var(--iv-border)' }}
       >
         <ChatHeader title={title} />
-        <PanelStrip tabs={tabs} actions={actions} />
+        <PanelStrip
+          tabs={tabs}
+          back={back}
+          tree={tree}
+          className="border-l"
+          style={{ width: PANEL_W, borderColor: 'var(--iv-border)' }}
+        />
       </div>
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 p-2.5">

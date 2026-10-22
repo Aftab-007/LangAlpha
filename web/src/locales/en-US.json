@@ -3718,7 +3718,7 @@
         "steps": {
           "filePanel": {
             "title": "Every file lands in the file panel",
-            "body": "Word docs, Excel models, PDFs, charts: whatever the agent makes is saved to the workspace. Open the folder icon at the top to browse, preview, and download."
+            "body": "Word docs, Excel models, PDFs, charts: whatever the agent makes is saved to the workspace. Open the panel from the button at the top right to browse, preview, and download."
           },
           "chart": {
             "title": "Charts open beside the chat",

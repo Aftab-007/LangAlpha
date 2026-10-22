@@ -33,7 +33,8 @@ import { StockPriceCard } from './charts';
 import { useSceneTime } from './clock';
 import { Appear, Loader, Typed, UserBubble, type Waypoint, pointAt } from './kit';
 import { NVDA_QUOTE, SelectionCard, SelectionChip } from './marketParts';
-import { HEADER_H, PAGE, PANEL_W, PanelTab, Prose, ThreadPage, ToolRow } from './threadParts';
+import { PanelTab } from './panelParts';
+import { HEADER_H, PAGE, PANEL_W, Prose, ThreadPage, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
 
 /* The thread intro's chart step: a chart tab in the file panel
@@ -356,6 +357,8 @@ function Transcript() {
           running off the top as the turn comes in */}
       <div className="flex min-h-0 grow basis-0 flex-col justify-end overflow-hidden">
         <div className="flex flex-col gap-1.5">
+          <UserBubble at={0}>When did NVDA last report?</UserBubble>
+          <Prose text="**Aug 26**, after the close. Data-center revenue beat, and guidance came in above estimates." />
           <UserBubble at={0}>Chart NVDA since earnings</UserBubble>
           <StockPriceCard
             sym="NVDA"
@@ -408,7 +411,6 @@ function ChartPanel() {
       <ThreadPage
         title="NVDA earnings reaction"
         tabs={<PanelTab icon={CandlestickChart} label="NVDA" active />}
-        actions={null}
         chat={<Transcript />}
         panel={<PanelChart armed={t >= CH.arm && t < CH.release} clear={t >= CH.drawn} />}
         composer={

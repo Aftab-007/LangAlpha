@@ -1,8 +1,9 @@
 import { useMemo, type CSSProperties, type ReactNode } from 'react';
-import { FileSpreadsheet, X } from 'lucide-react';
+import { Download, FileSpreadsheet, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Bar } from './charts';
 import { useSceneTime } from './clock';
+import { FileCrumbs, PanelStrip, PanelTab } from './panelParts';
 
 /* The Analyst's workbook in the ptcSandbox scene: comps.xlsx as the file
    panel previews it, its rows and formulas, and the cells filling in as
@@ -313,12 +314,15 @@ function cellAt(r: number, c: number): SheetValue | null {
 }
 
 /** The file panel open on the workbook (`FilePanel`, `ExcelViewer`): the
-    file's tab, the formula bar, the sheet, and the sheet tabs. The cells
-    fill in as the build step writes them, the focus following the last
-    write, and the formula bar reading the focused cell: its formula and
-    cached value, or the value typed there. The first cell is written at
-    `at`. */
-export function SheetPanel({ at }: { at: number }) {
+    tab strip `headerH` tall, level with the chat header, then the file's
+    header, the formula bar, the sheet, and the sheet tabs. The panel is
+    narrow, so the tree is a sheet it keeps folded: the strip's tree toggle
+    is off. The workbook is not text, so its header gives no line count and
+    no edit, only share and download. The cells fill in as the build step
+    writes them, the focus following the last write, and the formula bar
+    reading the focused cell: its formula and cached value, or the value
+    typed there. The first cell is written at `at`. */
+export function SheetPanel({ at, headerH }: { at: number; headerH: number }) {
   const t = useSceneTime();
   const writes = useMemo(() => sheetWrites(at), [at]);
   const written = writes.filter((w) => w.at <= t);
@@ -328,24 +332,13 @@ export function SheetPanel({ at }: { at: number }) {
   const ref = focus ? `${SHEET_COLS[focus.c]}${focus.r + 1}` : 'A1';
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
-      {/* tab strip */}
-      <div
-        className="flex h-[18px] shrink-0 items-center border-b px-1"
-        style={{ borderColor: 'var(--color-border-muted)' }}
-      >
-        <span
-          className="flex h-3 min-w-0 items-center gap-0.5 rounded-[3px] border px-1"
-          style={{
-            background: 'var(--color-bg-elevated)',
-            borderColor: 'var(--color-border-muted)',
-            color: 'var(--iv-text)',
-          }}
-        >
-          <FileSpreadsheet className="h-2 w-2 shrink-0" />
-          <span className="truncate text-[0.4375rem] leading-none">comps.xlsx</span>
-        </span>
-        <X className="ml-auto h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-      </div>
+      <PanelStrip
+        tabs={<PanelTab icon={FileSpreadsheet} label="comps.xlsx" active />}
+        tree={false}
+        className="border-b"
+        style={{ height: headerH, borderColor: 'var(--color-border-muted)' }}
+      />
+      <FileCrumbs path={['results', 'comps.xlsx']} actions={[Link2, Download]} />
       {/* formula bar: the focused cell's reference, formula and cached value */}
       <div
         className="flex h-3 shrink-0 items-stretch border-b font-mono text-[0.3125rem] leading-none"

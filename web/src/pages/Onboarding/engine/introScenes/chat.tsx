@@ -44,6 +44,7 @@ import {
   wide,
 } from './chatParts';
 import { EV_SALES, SheetPanel } from './chatWorkbook';
+import { ChatHeaderButtons } from './panelParts';
 
 /* Scenes for the chat intro: the Chief of Staff handing work to an Analyst
    and both at work at once, the Chief of Staff's own thread coordinating
@@ -517,15 +518,18 @@ const PTC = {
     then the chat has the page, its column held to `COS_COL`. */
 const PTC_CHAT = 176;
 
+/** The chat header's height, which the panel's tab strip keeps level with. */
+const PTC_HEADER_H = 24;
+
 /** The camera rests on the chat as the task arrives and the workflow starts,
     drifts across to the sheet as the file panel opens and the workflow's
-    build step writes it, pushes in on the peers and their statistics, then
-    comes back down the chat for the answer, its chart and files, and out
-    to the whole page. */
+    build step writes it, the panel whole from its tab strip, pushes in on
+    the peers and their statistics, then comes back down the chat for the
+    answer, its chart and files, and out to the whole page. */
 const PTC_SHOTS: [Shot, ...Shot[]] = [
   shot(0, 160, 132, REST),
-  shot(1800, 240, 140, REST, 700),
-  shot(2900, 272, 150, CLOSE, 900),
+  shot(1800, 240, 132, REST, 700),
+  shot(2900, 272, 175, CLOSE, 900),
   shot(4900, 160, 198, REST, 800),
   wide(7400, 900),
 ];
@@ -544,12 +548,17 @@ function PtcSandbox() {
           className="flex shrink-0 flex-col"
           style={{ width: PAGE.width - (PAGE.width - PTC_CHAT) * open }}
         >
+          {/* the header's share and panel toggle at its right; the toggle
+              moves to the panel's corner once the panel is open */}
           <div
-            className="flex h-[18px] shrink-0 items-center gap-1.5 border-b px-2"
-            style={{ borderColor: 'var(--iv-border)' }}
+            className="flex shrink-0 items-center gap-1.5 border-b pl-2 pr-[9px]"
+            style={{ height: PTC_HEADER_H, borderColor: 'var(--iv-border)' }}
           >
             <TopTitle>Refresh the comps</TopTitle>
             <Tag>{names.worker}</Tag>
+            <span className="ml-auto flex">
+              <ChatHeaderButtons panelOpen={now >= PTC.panel} />
+            </span>
           </div>
           <div
             className="mx-auto flex min-h-0 w-full flex-1 flex-col gap-1.5 p-2.5"
@@ -601,7 +610,7 @@ function PtcSandbox() {
             style={{ background: 'var(--color-bg-page)', borderColor: 'var(--color-border-muted)' }}
           >
             <div className="flex shrink-0" style={{ width: PAGE.width - PTC_CHAT }}>
-              <SheetPanel at={PTC.sheet} />
+              <SheetPanel at={PTC.sheet} headerH={PTC_HEADER_H} />
             </div>
           </div>
         )}

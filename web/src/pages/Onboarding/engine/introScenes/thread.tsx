@@ -20,11 +20,11 @@ import type { IntroVisualId } from '../../registry';
 import { CLOSE, Camera, REST, look, type Shot } from './camera';
 import { useSceneTime, useTween } from './clock';
 import { Appear, Loader, Typed, UserBubble, pointAt, type Waypoint } from './kit';
+import { PanelTab } from './panelParts';
 import {
   ChromeIcon,
   PANEL_W,
   PAGE,
-  PanelTab,
   Prose,
   ThreadPage,
   Timeline,
@@ -65,7 +65,11 @@ const SAVED_AT = new Date(2026, 9, 21, 14, 5);
 const MEM = {
   /** The thread so far, the oldest exchange first: it runs off the top as
       the new turn comes in. */
-  date: { ask: 'When does AVGO report?', answer: '**Thursday, Dec 11**, after the close.' },
+  close: {
+    ask: 'How did AVGO close today?',
+    answer: '**$349.80**, up 1.9% on the day, on volume a third above its average.',
+  },
+  date: { ask: 'When does AVGO report?', answer: '**Thursday, Dec 10**, after the close.' },
   earlier: 'Is AVGO worth adding before earnings?',
   street:
     "**The Street's average target is $410**, 17% above spot, and 31 of 38 analysts " +
@@ -274,12 +278,6 @@ function Memory() {
             <PanelTab icon={BookMarked} label={tr('filePanel.tabs.memory')} active />
           </>
         }
-        actions={
-          <>
-            <ChromeIcon icon={BookMarked} />
-            <ChromeIcon icon={ScrollText} />
-          </>
-        }
         composer={
           t >= MEM.typeAsk && t < MEM.sendAsk ? (
             <Typed text={MEM.ask} at={MEM.typeAsk} cps={MEM.cps} />
@@ -288,6 +286,8 @@ function Memory() {
         sendAt={[MEM.sendAsk]}
         chat={
           <>
+            <UserBubble at={0}>{MEM.close.ask}</UserBubble>
+            <Prose text={MEM.close.answer} />
             <UserBubble at={0}>{MEM.date.ask}</UserBubble>
             <Prose text={MEM.date.answer} />
             <UserBubble at={0}>{MEM.earlier}</UserBubble>
@@ -610,12 +610,6 @@ function Memo() {
           <>
             <PanelTab icon={BookMarked} label={tr('filePanel.tabs.memory')} />
             <PanelTab icon={ScrollText} label={tr('filePanel.tabs.memo')} active />
-          </>
-        }
-        actions={
-          <>
-            <ChromeIcon icon={BookMarked} />
-            <ChromeIcon icon={ScrollText} />
           </>
         }
         title="MSFT capex"
