@@ -1848,15 +1848,26 @@
       "title": "额度已用尽"
     },
     "subagentCard": {
-      "titleFallback": "子 Agent 任务",
-      "viewDetails": "查看任务详情",
-      "openUpdated": "点击查看已更新的子 Agent",
-      "openResumed": "点击查看已恢复的子 Agent",
-      "openRunning": "点击查看运行中的子 Agent",
-      "openDetails": "点击查看子 Agent 详情",
-      "toolUnit_one": "次工具调用",
-      "toolUnit_other": "次工具调用",
-      "tokenUnit": "tokens"
+      "titleFallback": "子 Agent 任务"
+    },
+    "subagentRun": {
+      "starting": "正在启动",
+      "couldntStart": "未能启动",
+      "subagentsOff": "此对话已关闭子 Agent",
+      "openLabel": "打开子 Agent：{{title}}",
+      "count_one": "{{count}} 个子 Agent",
+      "count_other": "{{count}} 个子 Agent",
+      "tally": {
+        "working": "{{count}} 运行中",
+        "done": "{{count}} 已完成",
+        "failed": "{{count}} 失败",
+        "stopped": "{{count}} 已停止",
+        "updated": "{{count}} 已更新",
+        "resumed": "{{count}} 已恢复"
+      },
+      "finishedIn": "已完成，用时 {{duration}}",
+      "finished": "已完成",
+      "model": "模型：{{model}}"
     },
     "subagentBar": {
       "completedWithTools_one": "已完成（{{count}} 次工具调用）",

@@ -17,7 +17,7 @@ import { compactNumber } from '@/lib/format';
 import { readTurnEndScroll } from '@/lib/turnEndScroll';
 import { LiveMessageList } from '../../ChatAgent/components/MessageList';
 import { MessageActionsProvider, type MessageActions } from '../../ChatAgent/components/messageList/MessageActionsContext';
-import { SubagentTelemetryContext } from '../../ChatAgent/components/SubagentTelemetryContext';
+import { SubagentTelemetryContext, useHistoryTelemetry } from '../../ChatAgent/components/SubagentTelemetryContext';
 import { ChartSurfaceContext, type ChartSurface } from '../../ChatAgent/contexts/ChartSurfaceContext';
 import { WorkspaceProvider } from '../../ChatAgent/contexts/WorkspaceContext';
 import { computerFolders } from '../../ChatAgent/utils/agentPaths';
@@ -33,10 +33,6 @@ import { useTranscriptFollow } from '../../ChatAgent/components/chatView/useTran
 import { useActiveThreadPublisher } from '@/lib/threadLifecycle/useActiveThreadPublisher';
 import { appendPathSuffix, getPreviewUrl, summarizeThread, offloadThread } from '../../ChatAgent/utils/api';
 import { attachmentsToContexts } from '../../ChatAgent/utils/fileUpload';
-import {
-  resolveSubagentTelemetry as resolveSubagentTelemetryPure,
-  type SubagentHistoryLike,
-} from '../../ChatAgent/session/subagents/resolveSubagentTelemetry';
 import type { SubagentInfo } from '../../ChatAgent/components/ToolCallDetailView';
 import { useToolCallLookup } from '../../ChatAgent/components/chatView/toolCallLookup';
 import type { PreviewData } from '../../ChatAgent/hooks/utils/types';
@@ -409,6 +405,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     threadModels,
     stopWorkflow,
     getSubagentHistory,
+    getTaskRuns,
     // HITL handlers: ask-user questions, workspace/PTC/secretary proposals,
     // credit pauses and tool approvals. Without these wired into MessageList the
     // cards render but their Accept/Decline buttons are dead.
@@ -458,12 +455,9 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   const threadTuning = useThreadTuning({ threadId });
   const { toSend: tuningToSend } = threadTuning;
 
-  // Subagent telemetry resolver — feeds ActivityBlock's live token counts.
-  // MarketView has no floating cards layer, so we resolve through history only.
-  const resolveSubagentTelemetry = useCallback((subagentId: string) => {
-    const history = getSubagentHistory?.(subagentId) as SubagentHistoryLike | undefined;
-    return resolveSubagentTelemetryPure(undefined, history);
-  }, [getSubagentHistory]);
+  // MarketView has no floating cards layer, so subagent rows resolve through
+  // history only, and a run launched since the page loaded shows no progress.
+  const subagentTelemetry = useHistoryTelemetry(getSubagentHistory, getTaskRuns);
 
   // Persist thread id per (workspace, symbol) + sync to URL once the workflow
   // assigns a real id.
@@ -863,7 +857,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
         ) : (
           <div ref={transcriptRef} style={{ padding: '16px 24px', maxWidth: '100%' }}>
             <ChartSurfaceContext value={chartSurface}>
-              <SubagentTelemetryContext value={resolveSubagentTelemetry}>
+              <SubagentTelemetryContext value={subagentTelemetry}>
                 <MessageActionsProvider actions={messageActions}>
                   <DispatchStatusProvider>
                     <LiveMessageList

@@ -12,8 +12,10 @@ import SecretaryConfirmCard from '../SecretaryConfirmCard';
 import CreditPauseCard from '../CreditPauseCard';
 import ToolApprovalCard from '../ToolApprovalCard';
 import PastPlanCard from '../PastPlanCard';
-import TaskSegmentCard from './TaskSegmentCard';
-import { SubagentStopNotice } from '../SubagentTaskMessageContent';
+import WorkflowRunCard from '../WorkflowRunCard';
+import SubagentRun, { type SubagentRunMember } from './SubagentRun';
+import { WORKFLOW_TASK_TYPE } from '../../session/subagents/workflowRunState';
+import { SubagentStopNotices } from '../SubagentStopNotice';
 import type { CreditPauseState, SubagentTaskRecord, ToolApprovalState } from '@/types/chat';
 import TextMessageContent from '../TextMessageContent';
 import { visibleParagraphPrefix } from '@/lib/paragraphGate';
@@ -99,6 +101,13 @@ const HOLDS_FOR_PROSE = new Set<RenderBlock['type']>([
   'activity', 'subagent_task', 'html_widget', 'compact_artifact', 'notification',
 ]);
 
+/** Whitespace between two blocks, such as the "\n\n" a model writes between
+ *  two tool calls. It draws nothing, so it is treated as nothing: it neither
+ *  renders nor parts the blocks on either side of it. */
+function isBlankText(block: RenderBlock): boolean {
+  return block.type === 'text' && !((block as TextRenderBlock).segment.content ?? '').trim();
+}
+
 /** A compact artifact whose card is a pill, which sits beside its neighbours. */
 function isPillBlock(block: RenderBlock): boolean {
   if (block.type !== 'compact_artifact') return false;
@@ -173,6 +182,12 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
   // a cached computation only reruns for inputs it can see.
   const [now, setNow] = useState(Date.now);
   const root = useWorkspaceFolders()?.rootDir;
+  // `resuming` still counts: the request is in flight and no run has opened,
+  // so the tasks really are stopped until admission answers.
+  const creditPausePending = useMemo(
+    () => Object.values(creditPauses).some((p) => p.status !== 'resumed'),
+    [creditPauses],
+  );
 
   const projection = useMemo(() => {
     if (contentProjection && (contentProjection.nextExpiry === null || contentProjection.nextExpiry > now)) return contentProjection;
@@ -200,13 +215,11 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
     setRevealed((prev) => (prev[key] === done ? prev : { ...prev, [key]: done }));
   }, []);
 
-  let lastTextBlockIdx = -1;
   let lastActivityBlockIdx = -1;
   // Task ids in this message, for the stop notices rendered after the prose.
   const taskSubagentIds: string[] = [];
   for (let i = 0; i < renderBlocks.length; i++) {
     const b = renderBlocks[i];
-    if (b.type === 'text') lastTextBlockIdx = i;
     if (b.type === 'subagent_task') {
       const id = b.segment.subagentId;
       if (id) taskSubagentIds.push(id);
@@ -230,6 +243,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
     let waiting = false;
     for (let i = 0; i < renderBlocks.length; i++) {
       const b = renderBlocks[i];
+      if (isBlankText(b)) continue;
       // Unreported holds too. A text block reports from an effect, so on the
       // commit that first paints it there is no answer yet, and reading that
       // silence as "revealed" painted the card beneath it for one frame and
@@ -239,6 +253,17 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
       else heldForProse[i] = waiting && HOLDS_FOR_PROSE.has(b.type);
     }
   }
+
+  /** Blocks drawn as one row or group with their like neighbours. */
+  const runKind = (block: RenderBlock): 'pill' | 'subagent' | null => {
+    if (isPillBlock(block)) return 'pill';
+    if (block.type === 'subagent_task') {
+      const id = block.segment.subagentId;
+      // A workflow run has a card of its own and breaks a run of spawns.
+      return id && subagentTasks[id]?.type !== WORKFLOW_TASK_TYPE ? 'subagent' : null;
+    }
+    return null;
+  };
 
   const blockIsVisible = renderBlocks.map((block) => blockVisible(projection, block, fold, isTurnTail));
   const blockFolds = renderBlocks.map((block) => fold !== 'unfolded' && blockIsProcess(projection, block, isTurnTail));
@@ -291,7 +316,7 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
               key={block.key}
               block={block as TextRenderBlock}
               isStreaming={blockIdx === streamingTextIdx}
-              isReplyStart={blockIdx === lastTextBlockIdx}
+              isReplyStart={block.key === projection.lastTextKey}
               isSubagentView={isSubagentView}
               onOpenFile={onOpenFile}
               onRevealed={onRevealed}
@@ -318,16 +343,24 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
           );
         }
 
+        // A workflow run; a subagent spawn is drawn by its run below.
         if (block.type === 'subagent_task') {
           const subId = (block as SubagentTaskRenderBlock).segment.subagentId!;
+          const task = subagentTasks[subId];
+          // Absent while the card is still being derived.
+          if (!task) return null;
+          const launchFailed = task.status === 'error' && !!task.launchFailed;
           return (
-            <TaskSegmentCard
+            <WorkflowRunCard
               key={block.key}
               subagentId={subId}
-              task={subagentTasks[subId]}
-              toolCallProcess={toolCallProcesses[subId] || undefined}
-              onOpen={readOnly ? undefined : onOpenSubagentTask}
-              onDetailOpen={readOnly ? undefined : onToolCallDetailClick}
+              description={task.description}
+              status={task.status}
+              launchReply={task.result}
+              launchFailed={launchFailed}
+              // A launch that never ran has nothing to open: opening it would
+              // mint a tab for a run that does not exist.
+              onOpen={readOnly || launchFailed ? undefined : onOpenSubagentTask}
             />
           );
         }
@@ -466,8 +499,9 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
   return (
     <div className="sibling-space-y-3">
       {(() => {
-        // One element per block, except that a run of consecutive pill blocks
-        // sharing a fold and visibility state is gathered into one wrapping row.
+        // One element per block, except that a run of consecutive blocks of
+        // one kind (pills, subagent spawns) sharing a fold and visibility
+        // state is gathered into one element.
         const wrap = (blockIdx: number, content: React.ReactElement) => {
           const key = renderBlocks[blockIdx].key;
           if (blockFolds[blockIdx]) {
@@ -479,30 +513,49 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
         for (let blockIdx = 0; blockIdx < renderBlocks.length; blockIdx++) {
           if (heldForProse[blockIdx]) continue;
           const block = renderBlocks[blockIdx];
-          if (isPillBlock(block)) {
+          if (isBlankText(block)) continue;
+          const kind = runKind(block);
+          if (kind) {
+            const first = blockIdx;
             const run: number[] = [];
-            let j = blockIdx;
-            while (
-              j < renderBlocks.length
-              && isPillBlock(renderBlocks[j])
-              && !heldForProse[j]
-              && blockFolds[j] === blockFolds[blockIdx]
-              && blockIsVisible[j] === blockIsVisible[blockIdx]
-            ) {
+            let j = first;
+            for (; j < renderBlocks.length; j++) {
+              if (isBlankText(renderBlocks[j])) continue;
+              if (
+                runKind(renderBlocks[j]) !== kind
+                || heldForProse[j]
+                || blockFolds[j] !== blockFolds[first]
+                || blockIsVisible[j] !== blockIsVisible[first]
+              ) break;
               run.push(j);
-              j++;
             }
-            const members = run
-              .map((idx) => renderBlock(renderBlocks[idx], idx))
-              .filter((c): c is React.ReactElement => c !== null);
             blockIdx = j - 1;
-            if (members.length === 0) continue;
-            // Keyed by the first member, so a pill joining the run later grows
-            // the row without remounting the ones already there.
-            const content = members.length === 1
-              ? members[0]
-              : <div key={`pills-${renderBlocks[run[0]].key}`} data-pill-row className={PILL_ROW_CLASS}>{members}</div>;
-            out.push(wrap(run[0], content));
+            // Keyed by the first member, so a block joining the run later grows
+            // it without remounting the ones already there.
+            const firstKey = renderBlocks[run[0]].key;
+            let content: React.ReactElement | null;
+            if (kind === 'subagent') {
+              const members: SubagentRunMember[] = run.map((idx) => {
+                const subId = (renderBlocks[idx] as SubagentTaskRenderBlock).segment.subagentId!;
+                return { subagentId: subId, task: subagentTasks[subId], toolCallProcess: toolCallProcesses[subId] || undefined };
+              });
+              content = (
+                <SubagentRun
+                  key={firstKey}
+                  members={members}
+                  pausing={creditPausePending}
+                  onOpen={readOnly ? undefined : onOpenSubagentTask}
+                />
+              );
+            } else {
+              const members = run
+                .map((idx) => renderBlock(renderBlocks[idx], idx))
+                .filter((c): c is React.ReactElement => c !== null);
+              content = members.length === 0 ? null
+                : members.length === 1 ? members[0]
+                : <div key={`pills-${firstKey}`} data-pill-row className={PILL_ROW_CLASS}>{members}</div>;
+            }
+            if (content) out.push(wrap(run[0], content));
             continue;
           }
           const content = renderBlock(block, blockIdx);
@@ -516,12 +569,9 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
       {/* At the foot of the message, not beside the card that stopped. The
           agent's closing prose was written before the gate fired and still
           promises a result, so a notice above it is read first and contradicted
-          second. Last is where the turn's outcome belongs. Each self-hides
-          unless its task was stopped for credits, so ordinary turns render
-          nothing here. */}
-      {taskSubagentIds.map((id) => (
-        <SubagentStopNotice key={`stop-${id}`} subagentId={id} />
-      ))}
+          second. Last is where the turn's outcome belongs. It renders nothing
+          unless a task here was stopped for credits. */}
+      <SubagentStopNotices subagentIds={taskSubagentIds} />
     </div>
   );
 });

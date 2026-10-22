@@ -513,6 +513,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     activeAgentIdRef,
     resolvedThreadIdRef,
   });
+  const subagentTelemetry = useMemo(
+    () => ({ resolve: resolveSubagentTelemetry, followsRuns: true }),
+    [resolveSubagentTelemetry],
+  );
 
   // Whether the open subagent's turn is still running. A bubble's own
   // `isStreaming` goes false between two model calls of one agent loop, so a
@@ -1517,7 +1521,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                 history does, not per main-agent token, and only context
                 consumers re-render: MessageBubble / MessageContentSegments
                 stay React.memo'd. */}
-            <SubagentTelemetryContext value={resolveSubagentTelemetry}>
+            <SubagentTelemetryContext value={subagentTelemetry}>
             <WorkflowRunContext value={resolveWorkflowRun}>
             <TranscriptDisplayContext value={transcriptDisplay}>
             <div

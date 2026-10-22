@@ -1853,15 +1853,26 @@
       "title": "Out of credits"
     },
     "subagentCard": {
-      "titleFallback": "Subagent Task",
-      "viewDetails": "View task details",
-      "openUpdated": "Click to view updated subagent",
-      "openResumed": "Click to view resumed subagent",
-      "openRunning": "Click to view running subagent",
-      "openDetails": "Click to view subagent details",
-      "toolUnit_one": "tool",
-      "toolUnit_other": "tools",
-      "tokenUnit": "tokens"
+      "titleFallback": "Subagent Task"
+    },
+    "subagentRun": {
+      "starting": "Starting up",
+      "couldntStart": "Couldn't start",
+      "subagentsOff": "Subagents are off for this chat",
+      "openLabel": "Open subagent: {{title}}",
+      "count_one": "{{count}} subagent",
+      "count_other": "{{count}} subagents",
+      "tally": {
+        "working": "{{count}} working",
+        "done": "{{count}} done",
+        "failed": "{{count}} failed",
+        "stopped": "{{count}} stopped",
+        "updated": "{{count}} updated",
+        "resumed": "{{count}} resumed"
+      },
+      "finishedIn": "Finished in {{duration}}",
+      "finished": "Finished",
+      "model": "Model: {{model}}"
     },
     "subagentBar": {
       "completedWithTools_one": "Completed ({{count}} tool call)",

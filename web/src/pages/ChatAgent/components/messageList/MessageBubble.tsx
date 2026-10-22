@@ -8,7 +8,6 @@ import { EXIT_TWEEN } from './liveZoneTiming';
 import { visibleParagraphPrefix } from '@/lib/paragraphGate';
 import { useTranscriptDisplay } from '@/lib/transcriptDisplay';
 import { CitationMetadataProvider } from '../CitationMetadataContext';
-import { CreditPausePendingProvider } from '../CreditPausePendingContext';
 import TextMessageContent, { TurnErrorCard } from '../TextMessageContent';
 import type { StructuredError } from '@/utils/rateLimitError';
 import { countDedupedSources, type CreditPauseState, type MessageProvenance, type ProvenanceRecord, type SubagentTaskRecord, type ToolApprovalState } from '@/types/chat';
@@ -410,7 +409,6 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
       {/* Render content segments in chronological order */}
       {(message.contentSegments as ContentSegmentRecord[] | undefined) && (message.contentSegments as ContentSegmentRecord[]).length > 0 ? (
         <CitationMetadataProvider toolCallProcesses={(message.toolCallProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}>
-        <CreditPausePendingProvider creditPauses={message.creditPauses as Record<string, CreditPauseState> | undefined}>
         <OpenThoughtContext value={markOpenThought}>
         <MessageContentSegments
           contentProjection={projection}
@@ -436,7 +434,6 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
           dispatcherContext={dispatcherContext}
         />
         </OpenThoughtContext>
-        </CreditPausePendingProvider>
         </CitationMetadataProvider>
       ) : (
         // Fallback for messages without segments (backward compatibility) - main chat shows text only
