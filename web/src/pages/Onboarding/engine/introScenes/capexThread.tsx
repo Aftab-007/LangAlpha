@@ -5,7 +5,7 @@ import { REST, VIEW } from './camera';
 import { InputDock, UserBubble } from './kit';
 import { type FlowAgent, FileStack, FromChiefOfStaff, WorkflowCard } from './chatParts';
 import { Reply, ThreadHeader, Transcript } from './transcriptParts';
-import { DASH_BUILD, DashboardPanel, PTC_HEADER_H } from './chatDashboard';
+import { DASH_BUILD, DashboardPanel } from './chatDashboard';
 import { ChatHeaderButtons } from './panelParts';
 
 /* The Analyst's thread on the capex tracker, which two scenes play: the chat
@@ -134,12 +134,7 @@ export function CapexThread({
       >
         {/* the header's share and panel toggle at its right; the toggle
               moves to the panel's corner once the panel is open */}
-        <ThreadHeader
-          title="Capex tracker"
-          agent={names.worker}
-          height={PTC_HEADER_H}
-          className="gap-1.5 pl-2 pr-[9px]"
-        >
+        <ThreadHeader title="Capex tracker" agent={names.worker} className="gap-1.5 pl-2 pr-[9px]">
           <ChatHeaderButtons panelOpen={now >= PTC.panel} sharing={sharing} shared={shared} />
         </ThreadHeader>
         <div className="flex min-h-0 w-full flex-1 flex-col gap-1.5 p-2.5">

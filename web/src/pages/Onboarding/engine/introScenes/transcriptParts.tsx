@@ -15,6 +15,12 @@ import { Appear, Tag, typedCount } from './kit';
    1.45 and their tool rows are bare, while the thread and market scenes'
    prose sits at the app's 1.5 and their rows sit on the timeline's rule. */
 
+/** The thread header's height, and the file panel's tab strip's beside it:
+    the app's 53px top bar at the scenes' scale. Every scene draws it the
+    same, so whatever sits under it (a popover, a chip the pointer clicks, a
+    shot's top edge) can be placed from it. */
+export const HEADER_H = 28;
+
 /** The thread's back arrow and its title, from `ChatView`'s top bar. */
 export function TopTitle({ className, children }: { className?: string; children: ReactNode }) {
   return (
@@ -31,28 +37,27 @@ export function TopTitle({ className, children }: { className?: string; children
 }
 
 /**
- * A thread page's own header, `ChatView`'s top bar: back and the thread's
- * `title`, the `agent` it runs with, and `children` (the header's buttons)
- * at its right. `height` and the spacing in `className` are the caller's:
- * the scenes that draw this header alone do not all space it alike.
+ * A thread page's own header, `ChatView`'s top bar, `HEADER_H` tall: back
+ * and the thread's `title`, the `agent` it runs with, and `children` (the
+ * header's buttons) at its right. The spacing in `className` is the
+ * caller's: the scenes that draw this header alone do not all space it
+ * alike.
  */
 export function ThreadHeader({
   title,
   agent,
-  height,
   className,
   children,
 }: {
   title: ReactNode;
   agent: ReactNode;
-  height: number;
   className?: string;
   children?: ReactNode;
 }) {
   return (
     <div
       className={cn('flex shrink-0 items-center border-b', className)}
-      style={{ height, borderColor: 'var(--color-border-muted)' }}
+      style={{ height: HEADER_H, borderColor: 'var(--color-border-muted)' }}
     >
       <TopTitle>{title}</TopTitle>
       <Tag>{agent}</Tag>

@@ -3,7 +3,8 @@ import { Finished, PAST, ease, useSceneTime } from './clock';
 import { pointerScript } from './kit';
 import type { IntroScene } from './types';
 import type { IntroVisualId } from '../../registry';
-import { Dashboard, PTC_HEADER_H } from './chatDashboard';
+import { Dashboard } from './chatDashboard';
+import { HEADER_H } from './transcriptParts';
 import { CapexThread, PTC_CHAT } from './capexThread';
 import { POPOVER_W, SharedFileBar, ShareDialog, SharePopover } from './shareParts';
 
@@ -32,12 +33,12 @@ const SHARE = {
 
 /** The header's share button, and where the popover hangs from it: its
     right edge on the button's, just under the header. */
-const SHARE_BUTTON = { x: PTC_CHAT - 9 - 8, y: PTC_HEADER_H / 2 };
-const SHARE_POPOVER = { right: PTC_CHAT - 9, top: PTC_HEADER_H + 1 };
+const SHARE_BUTTON = { x: PTC_CHAT - 9 - 8, y: HEADER_H / 2 };
+const SHARE_POPOVER = { right: PTC_CHAT - 9, top: HEADER_H + 1 };
 
 /** The file header's share link button (`Link2`), second of the four in
     `HTML_FILE_ACTIONS`. */
-const FILE_LINK = { x: VIEW.width - 4.5 - 16 * 2.5 - 4.5 * 2, y: PTC_HEADER_H + 9.5 };
+const FILE_LINK = { x: VIEW.width - 4.5 - 16 * 2.5 - 4.5 * 2, y: HEADER_H + 9.5 };
 
 /** A beat that lands on `p` 50ms before it clicks at `at`, and moves
     straight on. */
@@ -52,7 +53,10 @@ const SHARE_POINTER = pointerScript(
   {
     share: clickAt(SHARE.popover, SHARE_BUTTON),
     on: clickAt(SHARE.on, { x: SHARE_POPOVER.right - 8 - 9.5, y: SHARE_POPOVER.top + 8 + 5 }),
-    files: clickAt(SHARE.files, { x: SHARE_POPOVER.right - POPOVER_W + 8 + 3, y: 83 }),
+    files: clickAt(SHARE.files, {
+      x: SHARE_POPOVER.right - POPOVER_W + 8 + 3,
+      y: SHARE_POPOVER.top + 58,
+    }),
     copy: clickAt(SHARE.copied, { x: SHARE_POPOVER.right - 8 - 7, y: SHARE_POPOVER.top + 32 }),
     fileLink: clickAt(SHARE.dialog, FILE_LINK),
     fileOn: clickAt(SHARE.fileOn, { x: 307, y: 154 }),

@@ -25,7 +25,8 @@ import { PAST, useSceneTime } from './clock';
 import { Appear, Loader, Typed, UserBubble, pointerScript, signColor } from './kit';
 import { NVDA, NVDA_EVENTS, NVDA_LAST, NVDA_PREV, NVDA_QUOTE, chartScale } from './nvdaSeries';
 import { PanelTab } from './panelParts';
-import { HEADER_H, PANEL_W, ThreadPage } from './threadParts';
+import { PANEL_W, ThreadPage } from './threadParts';
+import { HEADER_H } from './transcriptParts';
 import { Reply, Transcript } from './transcriptParts';
 import type { IntroScene } from './types';
 

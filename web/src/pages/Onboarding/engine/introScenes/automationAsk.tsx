@@ -4,7 +4,7 @@ import { useAgentNames } from '../introAgents';
 import { CLOSE, Camera, REST, type Shot, VIEW, shot } from './camera';
 import { PAST, useSceneTime } from './clock';
 import { InputDock, Typed, UserBubble } from './kit';
-import { Reply, ThreadHeader, Timeline, ToolRow, Transcript } from './transcriptParts';
+import { HEADER_H, Reply, ThreadHeader, Timeline, ToolRow, Transcript } from './transcriptParts';
 import type { IntroScene } from './types';
 
 /* The automations intro's chat step: setting an automation up by asking the
@@ -24,13 +24,14 @@ const PAGE = { width: VIEW.width / REST, height: VIEW.height / REST };
 /** The chat column's width (px), centred on the page as the app sets it. */
 const COL = 240;
 
-/** The header's height and the column's inset under it: where the
-    transcript's top edge falls. The push-in's own top edge sits just under
-    it, so the camera cuts no line the transcript has not, and the composer
-    keeps a margin at the foot of the view. */
-const HEADER = 24;
-const INSET = 12;
-const TRANSCRIPT_TOP = HEADER + INSET;
+/** The column's inset under the header, and so where the transcript's top
+    edge falls. The push-in's own top edge sits just under it, so the camera
+    cuts no line the transcript has not, and the composer keeps a margin at
+    the foot of the view. The transcript sits on the composer, so its lines
+    stay put whatever the header's height; the inset keeps its top edge at
+    36px, where the push-in clears the line it frames first. */
+const INSET = 8;
+const TRANSCRIPT_TOP = HEADER_H + INSET;
 
 /** The ask typed into the composer and sent, the agent's summary of what it
     would set up, the yes, the Write of the new file, and the line saying it
@@ -120,12 +121,7 @@ function AutomationAsk() {
       <div className="flex flex-col" style={PAGE}>
         {/* the thread's header: back, its place, the agent it runs with, and
             the file panel's toggle */}
-        <ThreadHeader
-          title={t('agents.allWorkspaces')}
-          agent={names.home}
-          height={HEADER}
-          className="gap-2 px-2.5"
-        >
+        <ThreadHeader title={t('agents.allWorkspaces')} agent={names.home} className="gap-2 px-2.5">
           <PanelRight
             className="h-2.5 w-2.5 shrink-0"
             style={{ color: 'var(--color-text-tertiary)' }}

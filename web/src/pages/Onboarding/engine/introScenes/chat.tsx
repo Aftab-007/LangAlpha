@@ -326,12 +326,7 @@ function ChiefOfStaffAnswer() {
     <Camera shots={COS_SHOTS}>
       <div className="flex flex-col" style={VIEW}>
         {/* the thread's header: back, its title, the agent it runs with */}
-        <ThreadHeader
-          title="Semis this week"
-          agent={names.home}
-          height={24}
-          className="gap-2 px-2.5"
-        />
+        <ThreadHeader title="Semis this week" agent={names.home} className="gap-2 px-2.5" />
         <div
           className="mx-auto flex min-h-0 flex-1 flex-col gap-1.5 pb-1 pt-[18px]"
           style={{ width: COS_COL }}
@@ -469,9 +464,9 @@ const PTC_POINTER = pointerScript(
     files, and out to the whole page. */
 const PTC_SHOTS: [Shot, ...Shot[]] = [
   shot(0, 160, 132, REST),
-  shot(4100, 267, 140, CLOSE, 900),
-  shot(5300, 267, 215, CLOSE, 700),
-  shot(6100, 240, 175, REST, 600),
+  shot(4100, 267, 144, CLOSE, 900),
+  shot(5300, 267, 219, CLOSE, 700),
+  shot(6100, 240, 179, REST, 600),
   shot(7700, 160, 198, REST, 700),
   wide(9600, 900),
 ];

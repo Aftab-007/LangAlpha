@@ -4,6 +4,7 @@ import { Globe } from 'lucide-react';
 import { ease, useSceneTime } from './clock';
 import { Appear, rv } from './kit';
 import { FileCrumbs, HTML_FILE_ACTIONS, PanelStrip, PanelTab } from './panelParts';
+import { HEADER_H } from './transcriptParts';
 
 /* The Analyst's dashboard, capex-tracker.html, as the file panel previews it
    in the capex thread (capexThread.tsx): written top to bottom as the
@@ -20,13 +21,9 @@ import { FileCrumbs, HTML_FILE_ACTIONS, PanelStrip, PanelTab } from './panelPart
 /** How long (ms) after `at` the build step takes to write the whole page. */
 export const DASH_BUILD = 2300;
 
-/** The thread's header height: the chat header, and the panel's tab strip
-    level with it. */
-export const PTC_HEADER_H = 24;
-
 /** The META filter chip's centre, in px from the panel's top-left corner,
-    for the pointer that clicks it. */
-export const DASH_META_CHIP = { x: 158, y: 82 };
+    for the pointer that clicks it: 58px under the tab strip. */
+export const DASH_META_CHIP = { x: 158, y: HEADER_H + 58 };
 
 type Company = 'MSFT' | 'GOOGL' | 'AMZN' | 'META';
 
@@ -503,7 +500,7 @@ export function DashboardPanel({ at, filterAt }: { at: number; filterAt?: number
         tabs={<PanelTab icon={Globe} label="capex-tracker.html" active />}
         tree={false}
         className="border-b"
-        style={{ height: PTC_HEADER_H, borderColor: 'var(--color-border-muted)' }}
+        style={{ height: HEADER_H, borderColor: 'var(--color-border-muted)' }}
       />
       <FileCrumbs
         path={['results', 'capex-tracker.html']}

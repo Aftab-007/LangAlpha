@@ -5,7 +5,7 @@ import { VIEW } from './camera';
 import { useSceneTime } from './clock';
 import { InputDock, Tag, Typed } from './kit';
 import { ChatHeaderButtons, PanelStrip } from './panelParts';
-import { TopTitle, Transcript } from './transcriptParts';
+import { HEADER_H, TopTitle, Transcript } from './transcriptParts';
 
 /* The thread page the thread intro's scenes play on: the chat column beside
    the file panel, the panel a full-height column with its own tab strip.
@@ -37,9 +37,6 @@ function ChatHeader({ title }: { title: string }) {
     </div>
   );
 }
-
-/** The page's header row: the chat header beside the panel's tab strip. */
-export const HEADER_H = 28;
 
 /**
  * The thread page alone, drawn at the view's size (`VIEW`) for a scene's
@@ -74,6 +71,7 @@ export function ThreadPage({
   const typing = ask && t >= ask.at && t < ask.send;
   return (
     <div className="relative flex flex-col" style={VIEW}>
+      {/* the header row: the chat header beside the panel's tab strip */}
       <div
         className="flex shrink-0 items-stretch border-b"
         style={{ height: HEADER_H, borderColor: 'var(--color-border-muted)' }}
