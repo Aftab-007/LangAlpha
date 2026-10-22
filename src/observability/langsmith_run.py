@@ -77,6 +77,10 @@ def stamp_run(tags: Optional[Sequence[str]] = None, **fields: Any) -> None:
 # monitoring app filters on them, so they are one contract in one place.
 TOOL_OUTCOME = "tool_outcome"
 TOOL_PROVIDER = "tool_provider"
+# The path a sandbox or file call took, which tool_provider alone does not
+# say: a file the mount serves or a store route answers never reaches the
+# machine, and an SSH machine may be dialled direct or through the tunnel.
+TOOL_CHANNEL = "tool_channel"
 ERROR_CLASS = "error_class"
 
 
@@ -97,6 +101,11 @@ def _stamp_tool_run(fields: dict[str, Any]) -> None:
 def stamp_tool_provider(provider: Optional[str]) -> None:
     """Name the backend that actually served the enclosing tool call."""
     _stamp_tool_run({TOOL_PROVIDER: provider})
+
+
+def stamp_tool_channel(channel: Optional[str]) -> None:
+    """Name the path the enclosing tool call took (``TOOL_CHANNEL``)."""
+    _stamp_tool_run({TOOL_CHANNEL: channel})
 
 
 def _class_of(error: BaseException | str) -> str:
@@ -179,7 +188,7 @@ def record_child_run(
         # The child inherits the parent's metadata, but the parent's outcome
         # is its own: an inherited error_class would read as this run's.
         merged = child.extra["metadata"]
-        for key in (TOOL_OUTCOME, ERROR_CLASS, TOOL_PROVIDER):
+        for key in (TOOL_OUTCOME, ERROR_CLASS, TOOL_PROVIDER, TOOL_CHANNEL):
             if key not in fields:
                 merged.pop(key, None)
         child.post()

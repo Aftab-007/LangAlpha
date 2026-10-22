@@ -14,6 +14,7 @@ call sites are always safe to leave in place.
 from .langsmith_run import (
     ERROR_CLASS,
     ERROR_TEXT_MAX,
+    TOOL_CHANNEL,
     TOOL_OUTCOME,
     TOOL_PROVIDER,
     mark_tool_failed,
@@ -21,6 +22,7 @@ from .langsmith_run import (
     merge_run_metadata,
     record_child_run,
     stamp_run,
+    stamp_tool_channel,
     stamp_tool_provider,
 )
 from .otel import init_otel, init_otel_runtime, shutdown_otel_runtime
@@ -82,11 +84,13 @@ __all__ = [
     "merge_run_metadata",
     "ERROR_CLASS",
     "ERROR_TEXT_MAX",
+    "TOOL_CHANNEL",
     "TOOL_OUTCOME",
     "TOOL_PROVIDER",
     "mark_tool_failed",
     "mark_tool_unavailable",
     "record_child_run",
+    "stamp_tool_channel",
     "stamp_tool_provider",
     "tracer",
     "meter",

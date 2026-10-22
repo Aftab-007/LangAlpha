@@ -555,6 +555,12 @@ class SSHProvider(SandboxProvider):
     def trusted_host(cls, sandbox: Any) -> bool:
         return sandbox.ssh.trusted_host
 
+    @property
+    def channel(self) -> str | None:
+        # Through the gateway is another network path than a direct dial, with
+        # its own latency.
+        return "ssh_tunnel" if self._config.tunnel else None
+
     def _runtime(self, sandbox_id: str) -> SSHRuntime:
         target = ssh_target(self._config)
         loader = _client_key_loader

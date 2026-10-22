@@ -8,7 +8,13 @@ import structlog
 
 from ptc_agent.core.sandbox._shared import SANDBOX_TIMEOUT
 from ptc_agent.core.sandbox.runtime import SandboxGoneError, SandboxTransientError
-from src.observability import mark_tool_failed, mark_tool_unavailable, stamp_tool_provider
+from ptc_agent.agent.backends.composite import IN_PROCESS_CHANNEL
+from src.observability import (
+    mark_tool_failed,
+    mark_tool_unavailable,
+    stamp_tool_channel,
+    stamp_tool_provider,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -42,16 +48,24 @@ def mark_sandbox_raised(exc: BaseException) -> None:
 
 
 def stamp_sandbox_served(backend: Any, path: str) -> None:
-    """Name the sandbox's provider on a file call the sandbox serves.
+    """Name the channel a file call takes, and the sandbox's provider on a
+    call the sandbox serves.
 
-    On every such call, not only the failures, so a provider's error rate has
-    the calls it served beneath it. A path under a store mount is served in
-    process and names no provider.
+    On every such call, not only the failures, so a provider's error rate and
+    a channel's latency have the calls beneath them. A path under a store
+    mount is served in process and names no provider.
     """
-    route_for = getattr(backend, "route_for", None)
-    provider = getattr(backend, "provider", None)
-    if provider and (route_for is None or route_for(path) is None):
-        stamp_tool_provider(provider)
+    channel_for = getattr(backend, "channel_for", None)
+    if channel_for is None:
+        return
+    try:
+        channel = channel_for(path)
+    except Exception as e:  # a call never fails for its telemetry
+        logger.debug("tool channel lookup failed: %s", e)
+        return
+    stamp_tool_channel(channel)
+    if channel != IN_PROCESS_CHANNEL:
+        stamp_tool_provider(backend.provider)
 
 
 def tool_error_handler(operation_name: str) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[str]]]:

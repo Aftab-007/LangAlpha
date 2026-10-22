@@ -8,7 +8,7 @@ from langchain_core.tools import BaseTool, tool
 from ptc_agent.agent.backends.sandbox import SandboxBackend
 from ptc_agent.agent.limits import pending_read
 from ptc_agent.core.sandbox import livefs_mount
-from src.observability import TOOL_PROVIDER, mark_tool_failed
+from src.observability import TOOL_CHANNEL, TOOL_PROVIDER, mark_tool_failed
 
 logger = structlog.get_logger(__name__)
 
@@ -118,5 +118,8 @@ def create_bash_output_tool(
             return f"ERROR: {error_msg}", {"mcp_trace": []}
 
     # Every run, as for Bash, so an error rate reads per provider.
-    BashOutput.metadata = {TOOL_PROVIDER: backend.provider}
+    BashOutput.metadata = {
+        TOOL_PROVIDER: backend.provider,
+        TOOL_CHANNEL: backend.channel,
+    }
     return BashOutput

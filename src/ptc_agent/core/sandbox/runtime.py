@@ -536,6 +536,12 @@ class SandboxProvider(ABC):
         """
         return True
 
+    @property
+    def channel(self) -> str | None:
+        """How calls reach this provider's machines, for traces and metrics,
+        where the kind alone does not say; None where it does."""
+        return None
+
     async def reconcile_platform_secrets(
         self, secrets: "Sequence[ResolvedPlatformSecret]"
     ) -> "list[ReconciledPlatformSecret]":

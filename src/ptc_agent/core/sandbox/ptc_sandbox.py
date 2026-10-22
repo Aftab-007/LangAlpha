@@ -185,6 +185,12 @@ class PTCSandbox:
         )
 
     @property
+    def channel(self) -> str:
+        """How a call reaches this computer's machine, as tool traces name it:
+        the provider's kind, unless the provider tells its ways in apart."""
+        return self.provider.channel or self.config.sandbox.provider
+
+    @property
     def mounts_livefs(self) -> bool:
         """Whether this computer's provider can serve the file mount at all."""
         return type(self.provider).mounts_livefs
