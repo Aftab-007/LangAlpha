@@ -21,8 +21,7 @@ import {
   messagingAppName,
 } from '@/pages/ChatAgent/components/messaging/messageDelivery';
 import { look, VIEW, type Shot } from './camera';
-import type { Bar } from './charts';
-import { ease, progress, useSceneTime } from './clock';
+import { progress, useSceneTime } from './clock';
 import { Appear, Loader, rv } from './kit';
 
 /* The chat transcript's parts, shared by the chat scenes: the agent's reply,
@@ -573,88 +572,6 @@ export function ChartCard({
   );
 }
 
-/** The plot's height (px) in a `ColumnChart`, and the headroom over the
-    tallest column for the marked column's value. */
-const COLUMN_H = 29;
-const COLUMN_HEAD = 7;
-
-/**
- * A column chart as an agent draws one into a reply: a column per name, the
- * subject in the accent with its value over it, the rest in grey, a dashed
- * rule at the median, and the names under the baseline. Columns rise one
- * after another from `at`, `per` ms apart.
- */
-export function ColumnChart({
-  bars,
-  max,
-  median,
-  at,
-  per = 50,
-}: {
-  bars: Bar[];
-  max: number;
-  median: number;
-  at: number;
-  per?: number;
-}) {
-  const t = useSceneTime();
-  const plot = COLUMN_H - COLUMN_HEAD;
-  return (
-    <div className="flex flex-col gap-[3px]">
-      <div
-        className="relative flex items-end gap-[3px] border-b"
-        style={{ height: COLUMN_H, borderColor: 'var(--color-border-default)' }}
-      >
-        {bars.map((bar, i) => {
-          const p = ease(t, at + i * per, 520);
-          return (
-            <span key={bar.label} className="flex flex-1 flex-col items-center justify-end">
-              {bar.mark && (
-                <span
-                  className="mb-[2px] text-[0.3125rem] font-semibold tabular-nums leading-none"
-                  style={{ color: 'var(--iv-text)', opacity: p > 0.6 ? 1 : 0 }}
-                >
-                  {bar.shown}
-                </span>
-              )}
-              <span
-                className="w-full rounded-t-[1px]"
-                style={{
-                  height: (bar.value / max) * plot * p,
-                  background: bar.mark ? 'var(--color-accent-primary)' : 'var(--iv-line-2)',
-                }}
-              />
-            </span>
-          );
-        })}
-        <span
-          className="pointer-events-none absolute inset-x-0 border-t border-dashed"
-          style={{
-            bottom: (median / max) * plot,
-            borderColor: 'var(--color-text-tertiary)',
-            opacity: ease(t, at + bars.length * per, 300),
-          }}
-          aria-hidden
-        />
-      </div>
-      <div className="flex gap-[3px]">
-        {bars.map((bar) => (
-          <span
-            key={bar.label}
-            className="flex-1 text-center text-[0.28125rem] leading-none tracking-[-0.01em]"
-            style={{
-              color: bar.mark ? 'var(--iv-text)' : 'var(--iv-text-3)',
-              fontWeight: bar.mark ? 600 : 400,
-            }}
-          >
-            {bar.label}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /** A file's thumbnail on its card: a page over a tilted sheet, the kind's glyph on it. */
 function FileThumb({ icon: Glyph }: { icon: Icon }) {
   return (
@@ -686,7 +603,7 @@ export function FileCard({
   count = 1,
 }: {
   name: string;
-  kind: 'spreadsheet' | 'document';
+  kind: 'spreadsheet' | 'document' | 'page';
   icon: Icon;
   count?: number;
 }) {
@@ -744,7 +661,7 @@ export function FileCard({
 /** A file for `FileStack`: its name, its kind, and its card's glyph. */
 interface TurnFile {
   name: string;
-  kind: 'spreadsheet' | 'document';
+  kind: 'spreadsheet' | 'document' | 'page';
   icon: Icon;
 }
 

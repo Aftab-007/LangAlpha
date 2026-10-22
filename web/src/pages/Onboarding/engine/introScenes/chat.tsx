@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   FileText,
   Folder,
+  Globe,
   Inbox,
   Search,
   Send,
@@ -22,14 +23,13 @@ import type { IntroVisualId } from '../../registry';
 import { BarChart, StockPriceCard, type Bar } from './charts';
 import { ease, useSceneTime } from './clock';
 import { CLOSE, Camera, REST, type Shot } from './camera';
-import { Appear, InputDock, Region, Tag, UserBubble } from './kit';
+import { Appear, InputDock, Region, Tag, UserBubble, type Waypoint } from './kit';
 import type { IntroScene } from './types';
 import {
   type FlowAgent,
   type Icon,
   ActivityRow,
   ChartCard,
-  ColumnChart,
   DeliveryPill,
   FileStack,
   HandoffCard,
@@ -43,7 +43,7 @@ import {
   shot,
   wide,
 } from './chatParts';
-import { EV_SALES, SheetPanel } from './chatWorkbook';
+import { DASH_BUILD, DASH_META_CHIP, DashboardPanel } from './chatDashboard';
 import { ChatHeaderButtons } from './panelParts';
 
 /* Scenes for the chat intro: the Chief of Staff answering a quick question
@@ -294,7 +294,7 @@ function TwoModes() {
     file. */
 const COS = {
   app: 'imessage',
-  ask: 'Refresh the semis comps before NVDA reports.',
+  ask: 'Build me a capex tracker before NVDA reports.',
   askAt: 1500,
   think: 1850,
   handoff: 2350,
@@ -377,7 +377,7 @@ function ChiefOfStaffAnswer() {
                 done={EARLIER}
               />
               <Reply
-                text="**A busy week.** CPI prints Wednesday at 8:30, and NVDA reports after Thursday's close. Your AI semis comps are a week old."
+                text="**A busy week.** CPI prints Wednesday at 8:30, and NVDA reports after Thursday's close. Its guide rests on hyperscaler capex."
                 at={EARLIER}
               />
             </div>
@@ -422,24 +422,24 @@ function ChiefOfStaffAnswer() {
                   done={COS.handoff}
                 />
                 <HandoffCard
-                  workspace="AI semis comps"
-                  title="Refresh the nine-name comps"
-                  brief="NTM multiples; flag what moved since last week."
+                  workspace="AI capex"
+                  title="Build a hyperscaler capex tracker"
+                  brief="Four hyperscalers, eight calls each."
                   at={COS.handoff}
                   started={COS.started}
                   finished={COS.finished}
                 />
                 <Reply
-                  text="**The AI semis comps Analyst is on it.** I'll send you what moved once it's done."
+                  text="**The AI capex Analyst is on it.** I'll send you the tracker once it's built."
                   at={COS.say}
                 />
               </div>
             )}
             {/* the Analyst's report comes back, and goes on to the phone the
-                request came from, the workbook attached */}
+                request came from, the dashboard attached */}
             <Appear at={COS.report} className="flex justify-end">
               <Provenance icon={Inbox}>
-                {t('chat.provenance.reportFrom', { name: 'AI semis comps' })}
+                {t('chat.provenance.reportFrom', { name: 'AI capex' })}
               </Provenance>
             </Appear>
             {now >= send && (
@@ -456,7 +456,7 @@ function ChiefOfStaffAnswer() {
                   <DeliveryPill app={COS.app} files={1} />
                 </Appear>
                 <Reply
-                  text="**Comps refreshed, and sent to your iMessage with comps.xlsx.** NVDA's premium widened to 2.5x the peer median on EV/Sales, from 2.2x. MU moved most."
+                  text="**The capex tracker is on your iMessage.** Spending hit $149bn last quarter, up 55% on a year ago, and all four raised their outlook in July."
                   at={COS.reply}
                 />
               </div>
@@ -471,44 +471,86 @@ function ChiefOfStaffAnswer() {
 
 /* ── chat · step 3: an Analyst thread running a workflow ───────────────── */
 
-/** The comps refresh the Analyst's workflow runs: estimates pulled three
-    names to an agent, the workbook built, then its formulas checked. */
-const COMPS_FLOW = {
-  phases: [
-    { name: 'Pull', at: 800 },
-    { name: 'Build', at: 1600 },
-    { name: 'Check', at: 4500 },
-  ],
-  agents: [
-    { label: 'NTM estimates: NVDA, AVGO, TSM', at: 850, done: 1400, took: '41.2s' },
-    { label: 'NTM estimates: AMD, ARM, QCOM', at: 900, done: 1500, took: '47.9s' },
-    { label: 'NTM estimates: MU, MRVL, INTC', at: 950, done: 1550, took: '52.3s' },
-    { label: 'Build comps.xlsx', at: 1650, done: 4400, took: '1m 38s' },
-    { label: 'Check formulas', at: 4550, done: 4900, took: '21.6s' },
-  ] satisfies FlowAgent[],
-  logs: [
-    { text: 'pulling NTM consensus for nine names', at: 850 },
-    { text: 'writing comps.xlsx', at: 1650 },
-    { text: 'checking 54 formulas', at: 4550 },
-  ],
-};
+/** The calls the Analyst's workflow reads: the four hyperscalers' last
+    eight earnings calls, a quarter at a time. */
+const CALLS = [
+  'Oct 2024',
+  'Jan 2025',
+  'Apr 2025',
+  'Jul 2025',
+  'Oct 2025',
+  'Jan 2026',
+  'Apr 2026',
+  'Jul 2026',
+].flatMap((month) => ['MSFT', 'GOOGL', 'AMZN', 'META'].map((sym) => `${sym} ${month} call`));
+
+/** The workflow runs eight agents at once and queues the rest. */
+const FLOW_SLOTS = 8;
+
+/** The read step: an agent per call, each sent as one of the eight running
+    finishes, so the run works through the calls in waves. The times are
+    the scene's; `took` is what each row reads once it settles. */
+function readAgents(start: number): FlowAgent[] {
+  const free = Array.from({ length: FLOW_SLOTS }, (_, i) => start + i * 50);
+  return CALLS.map((label, i) => {
+    const at = Math.min(...free);
+    const done = at + 300 + ((i * 89) % 130);
+    free[free.indexOf(at)] = done + 20;
+    const secs = 52 + ((i * 37) % 70);
+    const took =
+      secs < 60 ? `${secs}.${(i * 7) % 10}s` : `1m ${String(secs - 60).padStart(2, '0')}s`;
+    return { label, at, done, took };
+  });
+}
 
 /** The task from the Chief of Staff arriving, the Analyst saying what it
-    will run, the workflow running it while the file panel shows comps.xlsx
-    being written row by row, then the Analyst's long answer, the chart
-    behind it, and its files. */
+    will run, the workflow reading the calls eight at a time, then building
+    the dashboard as the file panel shows it written and checking it; the
+    dashboard's META filter clicked; then the Analyst's answer and files. */
 const PTC = {
   task: 100,
   plan: 300,
   flow: 800,
-  panel: 1600,
-  sheet: 1800,
-  flowDone: 5000,
-  say: 5200,
-  chart: 6200,
-  bars: 6300,
-  files: [6800, 7000],
-  length: 8800,
+  read: 850,
+  build: 2750,
+  panel: 2850,
+  dash: 3050,
+  check: 5450,
+  flowDone: 5950,
+  filter: 6400,
+  say: 7400,
+  files: [8200, 8400],
+  length: 10000,
+};
+
+/** The capex tracker's run: read every call, build the page, check its
+    figures and quotes against the sources. */
+const CAPEX_FLOW = {
+  phases: [
+    { name: 'Read', at: PTC.read },
+    { name: 'Build', at: PTC.build },
+    { name: 'Check', at: PTC.check },
+  ],
+  agents: [
+    ...readAgents(PTC.read),
+    {
+      label: 'Build capex-tracker.html',
+      at: PTC.build,
+      done: PTC.dash + DASH_BUILD,
+      took: '3m 12s',
+    },
+    {
+      label: 'Check figures and quotes',
+      at: PTC.check + 50,
+      done: PTC.flowDone - 100,
+      took: '58.4s',
+    },
+  ] satisfies FlowAgent[],
+  logs: [
+    { text: 'reading 32 calls, 8 at a time', at: PTC.read },
+    { text: 'writing capex-tracker.html', at: PTC.build },
+    { text: 'checking 96 figures and 14 quotes', at: PTC.check + 50 },
+  ],
 };
 
 /** The chat's width (px) once the file panel opens beside it and takes the
@@ -524,17 +566,31 @@ const PTC_CHAT_START = PAGE.width / REST;
 /** The chat header's height, which the panel's tab strip keeps level with. */
 const PTC_HEADER_H = 24;
 
-/** The camera rests on the chat as the task arrives and the workflow starts,
-    and holds as the file panel opens beside it, the narrowed chat whole with
-    the sheet's first columns at the right. Once the build step writes the
-    sheet it pushes in on the peers and their statistics, then comes back
-    down the chat for the answer, its chart and files, and out to the whole
-    page. */
+/** The META chip on the page, where the pointer clicks it. */
+const PTC_CHIP = { x: PTC_CHAT + DASH_META_CHIP.x, y: DASH_META_CHIP.y };
+
+/** The pointer comes in from the page's right edge, above the tiles, once
+    the page is written, clicks the META chip, and rests at the empty end of
+    the chip row so the filtered page shows whole. */
+const PTC_POINTER: Waypoint[] = [
+  { at: 5900, x: PAGE.width - 8, y: PTC_CHIP.y - 18 },
+  { at: 6350, x: PTC_CHIP.x, y: PTC_CHIP.y },
+  { at: 6900, x: PTC_CHIP.x + 36, y: PTC_CHIP.y + 2 },
+];
+
+/** The camera rests on the chat as the task arrives and the workflow works
+    through the calls, and holds as the file panel opens beside it. Once the
+    build step writes the page it pushes in on the totals and the chart,
+    then down to the calls' timeline as it fills, back out to the whole page
+    for the click on META, then back to the chat for the answer and its
+    files, and out to the whole page. */
 const PTC_SHOTS: [Shot, ...Shot[]] = [
   shot(0, 160, 132, REST),
-  shot(3400, 272, 175, CLOSE, 900),
-  shot(5400, 160, 198, REST, 800),
-  wide(7900, 900),
+  shot(4100, 267, 140, CLOSE, 900),
+  shot(5300, 267, 215, CLOSE, 700),
+  shot(6100, 240, 175, REST, 600),
+  shot(7700, 160, 198, REST, 700),
+  wide(9600, 900),
 ];
 
 function PtcSandbox() {
@@ -543,10 +599,10 @@ function PtcSandbox() {
   const now = useSceneTime();
   const open = ease(now, PTC.panel, 450);
   return (
-    <Camera shots={PTC_SHOTS}>
+    <Camera shots={PTC_SHOTS} cursor={PTC_POINTER} clicks={[PTC.filter]}>
       <div className="flex" style={PAGE}>
         {/* the chat: header, the transcript, the composer; it gives way to
-            the file panel when the workbook opens */}
+            the file panel when the dashboard opens */}
         <div
           className="flex shrink-0 flex-col"
           style={{ width: PTC_CHAT_START - (PTC_CHAT_START - PTC_CHAT) * open }}
@@ -557,7 +613,7 @@ function PtcSandbox() {
             className="flex shrink-0 items-center gap-1.5 border-b pl-2 pr-[9px]"
             style={{ height: PTC_HEADER_H, borderColor: 'var(--iv-border)' }}
           >
-            <TopTitle>Refresh the comps</TopTitle>
+            <TopTitle>Capex tracker</TopTitle>
             <Tag>{names.worker}</Tag>
             <span className="ml-auto flex">
               <ChatHeaderButtons panelOpen={now >= PTC.panel} />
@@ -571,36 +627,31 @@ function PtcSandbox() {
                   <Provenance icon={Bot}>{t('chat.provenance.fromChiefOfStaff')}</Provenance>
                 }
               >
-                Refresh the comps; flag what moved.
+                Build a capex tracker from the hyperscaler calls.
               </UserBubble>
               {/* the Analyst's turn opens with a line saying what it will run,
                   so the run card reads as part of that turn */}
               <Reply
-                text="I'll rerun the comps workflow on the nine names, then flag what moved."
+                text="I'll read all 32 calls, eight at a time, then build the tracker."
                 at={PTC.plan}
               />
               <WorkflowCard
-                name="semis-comps"
-                title="Refresh nine AI semis comps"
-                {...COMPS_FLOW}
+                name="capex-tracker"
+                title="Hyperscaler capex, 32 earnings calls"
+                {...CAPEX_FLOW}
                 at={PTC.flow}
                 done={PTC.flowDone}
-                took="3m 41s"
-                tokens={268_000}
+                took="14m 22s"
+                tokens={1_340_000}
               />
-              {/* the long answer, then the chart behind it, then the files */}
+              {/* the long answer, then the files */}
               <Reply
-                text="**NVDA trades at 24.1x NTM sales, 2.5x the 9.8x median,** up from 2.2x last week. MU moved most, down to 4.2x as memory prices reset. On P/E, NVDA's premium is 21%. All 54 formulas check out."
+                text="**Capex hit $149bn last quarter, up 55% on a year ago.** All four raised their outlook in July; 2026 guidance now sums to about $610bn, with GOOGL up most, to $140bn. Every figure checks against the filings."
                 at={PTC.say}
               />
-              <Appear at={PTC.chart}>
-                <ChartCard title="AI semis, EV/Sales NTM" legend="median 9.8x">
-                  <ColumnChart bars={EV_SALES} max={31} median={9.8} at={PTC.bars} />
-                </ChartCard>
-              </Appear>
               <FileStack
-                top={{ name: 'comps.xlsx', kind: 'spreadsheet', icon: FileSpreadsheet }}
-                under={{ name: 'comps-note.pdf', kind: 'document', icon: FileText }}
+                top={{ name: 'capex-tracker.html', kind: 'page', icon: Globe }}
+                under={{ name: 'capex-calls.csv', kind: 'spreadsheet', icon: FileSpreadsheet }}
                 at={PTC.files[0]}
                 next={PTC.files[1]}
               />
@@ -608,15 +659,15 @@ function PtcSandbox() {
             <InputDock delay={0.6} />
           </div>
         </div>
-        {/* file panel previewing the workbook, written as the workflow runs;
-            it slides in at its full width, so the sheet never reflows */}
+        {/* file panel previewing the dashboard, written as the workflow runs;
+            it slides in at its full width, so the page never reflows */}
         {now >= PTC.panel && (
           <div
             className="flex min-w-0 flex-1 overflow-hidden border-l"
             style={{ background: 'var(--color-bg-page)', borderColor: 'var(--color-border-muted)' }}
           >
             <div className="flex shrink-0" style={{ width: PAGE.width - PTC_CHAT }}>
-              <SheetPanel at={PTC.sheet} headerH={PTC_HEADER_H} />
+              <DashboardPanel at={PTC.dash} filterAt={PTC.filter} headerH={PTC_HEADER_H} />
             </div>
           </div>
         )}
