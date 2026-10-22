@@ -7,6 +7,7 @@
 
 import type { AssistantMessage, ChatMessage } from '@/types/chat';
 import { updateMessage } from '../../hooks/utils/messageHelpers';
+import { dispatchResultFields, jsonObjectOf, type DispatchResultFields } from '../../utils/dispatchResult';
 import type { HistoryInterruptInfo, SetMessages } from '../types';
 
 /** Interrupt types that map to proposal-based HITL cards (workspace, question, ptc, secretary). */
@@ -165,30 +166,19 @@ function resolvePendingHistoryInterrupt(
 }
 
 /**
- * What a hand-off's result writes on its card. A dispatch that fails after the
- * user approved it stays approved and says it failed, and keeps the thread an
- * unknown outcome names, where the run may have started, so the card can still
- * follow it. A result that is not the dispatch's own JSON started nothing: the
- * call was cancelled when the chat changed agents, or the tool errored.
+ * What a hand-off's result writes on its card (`utils/dispatchResult.ts`). A
+ * result that is not the dispatch's own JSON started nothing: the call was
+ * cancelled when the chat changed agents, or the tool errored.
  */
-function dispatchResultFields(content: string): Record<string, unknown> {
-  let result: Record<string, unknown> | null = null;
-  try {
-    const parsed: unknown = JSON.parse(content);
-    if (parsed && typeof parsed === 'object') result = parsed as Record<string, unknown>;
-  } catch { /* not the dispatch's result */ }
-  if (!result) return { dispatch_failed: true };
-  return {
-    ...(result.thread_id ? { thread_id: result.thread_id } : {}),
-    ...(result.workspace_id ? { workspace_id: result.workspace_id } : {}),
-    ...(result.success === false ? { dispatch_failed: true } : {}),
-  };
+function dispatchFieldsOf(content: string): DispatchResultFields {
+  const result = jsonObjectOf(content);
+  return result ? dispatchResultFields(result) : { dispatch_failed: true };
 }
 
 /**
  * Settle the pending proposal a tool result answers. A decline rejects it, and
  * so does a result with `success: false` on any card but a hand-off's (see
- * dispatchResultFields); anything else approves it. One resume can answer
+ * dispatchFieldsOf); anything else approves it. One resume can answer
  * several interrupts, and their results need not arrive in the order the cards
  * did, so an interrupt that named its tool call (a dispatch does) is settled
  * only by that call's result; the rest take the next result in order.
@@ -215,7 +205,7 @@ function settleProposalFromResult(
         } catch { /* non-JSON → treat as approved */ }
       }
       const extraFields = m.type === 'ptc_agent' && status === 'approved'
-        ? dispatchResultFields(content)
+        ? dispatchFieldsOf(content)
         : {};
       return {
         bucket: PROPOSAL_DATA_KEY_MAP[m.type] || 'questionProposals',
@@ -231,6 +221,6 @@ export {
   PROPOSAL_INTERRUPT_TYPES, PROPOSAL_DATA_KEY_MAP,
   INTERRUPT_CARD_BUCKETS, CARD_BUCKET_FOR_TYPE,
   setCardStatus, setCardFields, resolvePendingHistoryInterrupt, historyCardKey,
-  settleProposalFromResult, dispatchResultFields,
+  settleProposalFromResult, dispatchFieldsOf,
   stripHistoryInterruptCards,
 };

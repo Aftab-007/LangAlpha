@@ -538,6 +538,9 @@ export interface ThreadOrigin {
   agent?: DispatchingAgent;
 }
 
+/** How an analyst's reported run ended. */
+export type ReportOutcome = 'completed' | 'error' | 'cancelled';
+
 /**
  * What a report-back turn reports on, stamped on its query row. The turn's own
  * message is written for the model, so history labels the turn from this
@@ -545,9 +548,20 @@ export interface ThreadOrigin {
  */
 export type ReportSource =
   /** A dispatched analyst's thread reporting back, and its workspace. */
-  | { kind: 'analyst'; thread_id: string; workspace_id?: string; workspace_name?: string }
+  | {
+      kind: 'analyst'; thread_id: string; workspace_id?: string; workspace_name?: string;
+      /** How the reported run ended. Absent on reports from before it was kept. */
+      outcome?: ReportOutcome;
+      /** The run reported on and the interrupted runs it continued, oldest
+       *  first, so the run reported on is last. */
+      run_ids?: string[];
+    }
   /** A background subagent task in this thread, finished or failed. */
-  | { kind: 'task'; task_id: string; display_id: string; description?: string; failed: boolean };
+  | {
+      kind: 'task'; task_id: string; display_id: string; description?: string; failed: boolean;
+      /** The subagent's role. Absent on reports from before it was kept. */
+      subagent_type?: string;
+    };
 
 export interface ThreadMetadata {
   origin?: ThreadOrigin;

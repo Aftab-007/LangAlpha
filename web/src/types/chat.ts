@@ -391,6 +391,8 @@ export interface PTCAgentProposalState {
   tool_call_id?: string;
   report_back?: boolean;
   dispatch_failed?: boolean;
+  dispatch_unknown?: boolean;
+  run_id?: string;
 }
 
 export interface SecretaryActionProposalState {
@@ -440,8 +442,19 @@ export type MessageProvenance =
   | { kind: 'main_agent' }
   /** The two report-backs. Each is drawn as its label alone: the turn's own
    *  message is written for the model. */
-  | { kind: 'analyst_report'; threadId: string; workspaceId: string | null; workspaceName: string | null }
-  | { kind: 'task_report'; taskId: string; displayId: string; description: string | null; failed: boolean };
+  | {
+      kind: 'analyst_report'; threadId: string; workspaceId: string | null; workspaceName: string | null;
+      /** How the reported run ended; absent on older reports. */
+      outcome?: 'completed' | 'error' | 'cancelled';
+      /** The run reported on and the interrupted runs it continued, one of
+       *  which its hand-off names; absent on older reports. */
+      runIds?: string[];
+    }
+  | {
+      kind: 'task_report'; taskId: string; displayId: string; description: string | null; failed: boolean;
+      /** The subagent's role; absent on older reports. */
+      subagentType?: string;
+    };
 
 export type UserMessage = {
   id: string;

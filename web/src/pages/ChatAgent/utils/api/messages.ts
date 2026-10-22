@@ -337,8 +337,10 @@ export interface DispatchLiveness {
   status: string;
   run_id: string | null;
   can_reconnect: boolean;
-  /** ISO start of the live run; null once it settled. */
+  /** ISO start of the thread's latest run, live or settled. */
   run_started_at?: string | null;
+  /** ISO time that run settled; null while it is live. */
+  run_finished_at?: string | null;
   /** ISO time the thread's latest turn started or settled, whoever sent it. */
   last_activity_at?: string | null;
   /** The thread's title; null until it is named. */
@@ -347,29 +349,52 @@ export interface DispatchLiveness {
   workspace_name?: string | null;
 }
 
-/**
- * Batched dispatch liveness for a turn's PTC cards: one request resolves the
- * status + run_id of many dispatched threads at once, replacing N per-card
- * `/status` polls. Foreign/unknown/expired ids are omitted from the response.
- * Returns `[]` without a request for an empty id list.
- */
-/** The most ids the liveness route reads per request; it drops the rest. */
+/** A hand-off's own run, read by its id beside the threads. */
+export interface DispatchRunLiveness {
+  run_id: string;
+  thread_id: string;
+  /** The same public vocabulary as a thread's row. */
+  status: string;
+  run_started_at?: string | null;
+  /** Null while the run is live. */
+  run_finished_at?: string | null;
+}
+
+/** One batched read: each thread's latest run, and the runs asked for by id. */
+export interface HandoffLiveness {
+  liveness: DispatchLiveness[];
+  runs: DispatchRunLiveness[];
+}
+
+/** The most ids of each kind the liveness route reads per request; it drops the rest. */
 const LIVENESS_IDS_PER_REQUEST = 100;
 
-export async function getDispatchLiveness(
+/**
+ * Batched liveness for a turn's hand-offs: one request resolves the latest run
+ * of many dispatched threads, and any runs named by id, at once, replacing N
+ * per-card `/status` polls. Foreign/unknown/expired ids are omitted from the
+ * response. Resolves empty without a request when nothing is asked.
+ */
+export async function getHandoffLiveness(
   threadIds: string[],
-): Promise<DispatchLiveness[]> {
-  const batches: string[][] = [];
-  for (let i = 0; i < threadIds.length; i += LIVENESS_IDS_PER_REQUEST) {
-    batches.push(threadIds.slice(i, i + LIVENESS_IDS_PER_REQUEST));
-  }
-  const pages = await Promise.all(batches.map(async (ids) => {
+  runIds: string[] = [],
+): Promise<HandoffLiveness> {
+  const batches = Math.ceil(Math.max(threadIds.length, runIds.length) / LIVENESS_IDS_PER_REQUEST);
+  const pages = await Promise.all(Array.from({ length: batches }, async (_, i) => {
+    const ids = threadIds.slice(i * LIVENESS_IDS_PER_REQUEST, (i + 1) * LIVENESS_IDS_PER_REQUEST);
+    const runs = runIds.slice(i * LIVENESS_IDS_PER_REQUEST, (i + 1) * LIVENESS_IDS_PER_REQUEST);
     const { data } = await api.get('/api/v1/threads/dispatches/liveness', {
-      params: { ids: ids.join(',') },
+      params: {
+        ...(ids.length > 0 ? { ids: ids.join(',') } : {}),
+        ...(runs.length > 0 ? { runs: runs.join(',') } : {}),
+      },
     });
-    return (data?.liveness ?? []) as DispatchLiveness[];
+    return {
+      liveness: (data?.liveness ?? []) as DispatchLiveness[],
+      runs: (data?.runs ?? []) as DispatchRunLiveness[],
+    };
   }));
-  return pages.flat();
+  return { liveness: pages.flatMap((p) => p.liveness), runs: pages.flatMap((p) => p.runs) };
 }
 
 // SSE event name of a report-back wake on GET /threads/{id}/watch. Contract:

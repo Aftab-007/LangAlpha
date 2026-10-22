@@ -7,7 +7,7 @@ import {
   mapLivenessStatus,
   type PTCDispatchStatus,
 } from '../../hooks/usePTCDispatchStatus';
-import { getDispatchLiveness, type DispatchLiveness } from '../../utils/api';
+import { getHandoffLiveness, type DispatchLiveness } from '../../utils/api';
 import { staysOnRoster, type AnalystCandidate } from './delegatedWork';
 
 export interface RosterAnalyst {
@@ -60,7 +60,10 @@ export function useAnalystRoster(
   const { status: pushed, revision } = useThreadRunStates(ids);
   const { data, isPlaceholderData } = useQuery({
     queryKey: queryKeys.threads.dispatchActivity(ids, revision),
-    queryFn: () => getDispatchLiveness(ids),
+    // The shape the hand-off cards cache under the same key prefix, which
+    // `patchThreadTitle` rewrites in place; only the rows are read here.
+    queryFn: () => getHandoffLiveness(ids),
+    select: (read) => read.liveness,
     enabled: ids.length > 0,
     placeholderData: keepPreviousData,
     staleTime: 30_000,
@@ -92,7 +95,7 @@ export function useAnalystRoster(
       workspaceName: live?.workspace_name ?? c.workspaceName,
       title: live?.title ?? c.title,
       status,
-      startedAt: parseMs(live?.run_started_at) ?? undefined,
+      startedAt: read === 'running' ? parseMs(live?.run_started_at) ?? undefined : undefined,
       running,
       lastActivityMs: known,
     });

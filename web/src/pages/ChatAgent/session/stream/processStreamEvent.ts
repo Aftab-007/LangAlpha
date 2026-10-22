@@ -47,7 +47,7 @@ import { SCHEDULE_WAKEUP, wakeTurnOpener, withLiveWakeRow } from '../wakeupEvent
 import type {
   SSEEvent, StreamProcessorRefs, ModelStatus,
 } from '../types';
-import { dispatchResultFields, setCardFields, settleProposalFromResult } from '../interrupts/buckets';
+import { dispatchFieldsOf, setCardFields, settleProposalFromResult } from '../interrupts/buckets';
 import { projectLiveInterrupt } from '../interrupts/fromLiveEvent';
 import type { StreamRuntime } from '../runtime';
 import { preapprovedReportBack } from '../../utils/preapprovedCards';
@@ -1111,7 +1111,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         const backfillPid = toolCallId ? rt.pendingPTCBackfillRef.current.get(toolCallId) : undefined;
         if (backfillPid) {
           rt.pendingPTCBackfillRef.current.delete(toolCallId);
-          const fields = dispatchResultFields(event.content);
+          const fields = dispatchFieldsOf(event.content);
           rt.setMessages((prev) => setCardFields(prev, 'ptcAgentProposals', backfillPid, fields));
         }
       }
