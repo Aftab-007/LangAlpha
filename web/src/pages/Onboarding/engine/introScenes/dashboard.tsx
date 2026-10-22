@@ -11,17 +11,16 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useLocale } from '@/hooks/useLocale';
+import { grouped2, signedFixed2 } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
 import { CLOSE, Camera, REST, VIEW, shot, type Shot } from './camera';
 import { ease, useSceneTime } from './clock';
-import { Appear, pointAt, pointerScript } from './kit';
+import { Appear, pointAt, pointerScript, signColor } from './kit';
 import type { IntroScene } from './types';
 import { attachScene } from './dashboardAttach';
 import {
-  upColor,
-  signed,
-  money,
   WATCH,
   Spark,
   DashTopbar,
@@ -114,6 +113,7 @@ const CANDLES: [number, number, number, number][] = [
 ];
 
 function PriceChartBody() {
+  const locale = useLocale();
   const nvda = WATCH[0];
   const v = nvda.ticks[nvda.ticks.length - 1].v;
   return (
@@ -129,13 +129,13 @@ function PriceChartBody() {
           className="font-mono text-[7px] leading-none tabular-nums"
           style={{ color: 'var(--color-text-primary)' }}
         >
-          {money(nvda.prev * (1 + v / 100))}
+          {grouped2(nvda.prev * (1 + v / 100), locale)}
         </span>
         <span
           className="font-mono text-[6px] leading-none tabular-nums"
-          style={{ color: upColor(v) }}
+          style={{ color: signColor(v) }}
         >
-          {signed(v)}%
+          {signedFixed2(v, locale)}%
         </span>
       </span>
       <svg
@@ -146,6 +146,7 @@ function PriceChartBody() {
       >
         {CANDLES.map(([o, c, h, l], i) => {
           const x = 3 + i * 8;
+          // y grows down: a close drawn level with or above its open is a rise
           const col = c <= o ? 'var(--color-profit)' : 'var(--color-loss)';
           return (
             <g key={i}>
@@ -191,6 +192,7 @@ const MINI: { sym: string; v: number; series: number[] }[] = [
 ];
 
 function MiniChartBody() {
+  const locale = useLocale();
   return (
     <div className="grid min-h-0 flex-1 grid-cols-6 grid-rows-2 gap-1">
       {MINI.map(({ sym, v, series }, i) => (
@@ -210,12 +212,12 @@ function MiniChartBody() {
             </span>
             <span
               className="font-mono text-[5px] leading-none tabular-nums"
-              style={{ color: upColor(v) }}
+              style={{ color: signColor(v) }}
             >
-              {signed(v)}%
+              {signedFixed2(v, locale)}%
             </span>
           </span>
-          <Spark series={series} color={upColor(v)} stretch className="min-h-0 w-full flex-1" />
+          <Spark series={series} color={signColor(v)} stretch className="min-h-0 w-full flex-1" />
         </Appear>
       ))}
     </div>

@@ -24,13 +24,22 @@ export function useSvgId(): string {
   return useId().replace(/[^a-zA-Z0-9_-]/g, '');
 }
 
+/** A move's colour, as the app tints market figures: profit for a change at
+    or above zero (or `true`), loss below it; `soft` is the matching wash a
+    pill sits on. */
+export function signColor(change: number | boolean, soft = false): string {
+  const up = typeof change === 'boolean' ? change : change >= 0;
+  if (soft) return up ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)';
+  return up ? 'var(--color-profit)' : 'var(--color-loss)';
+}
+
 /** The transform of a button pressed at `at`, while the press holds. */
 export function pressAt(t: number, at: number): string | undefined {
   return pressed(t, at) ? 'scale(0.92)' : undefined;
 }
 
 /** Grey skeleton bar standing in for text. */
-export function Ln({ w, h = 3, c }: { w: string; h?: number; c?: string }) {
+function Ln({ w, h = 3, c }: { w: string; h?: number; c?: string }) {
   return (
     <span
       className="block rounded-full"
@@ -90,30 +99,35 @@ export function Region({
 }
 
 /**
- * The chat composer, as the app draws it: a rounded card with the text on
- * top and attach / model / mic / send below. `text` replaces the placeholder
- * (a `Typed` while the user writes) and wraps, the box growing a line at a
- * time; `focused` gives it the accent edge
- * the real one takes on focus; the send button fills once there is text and
- * presses at each time in `sendAt`.
+ * The chat composer (`ChatInput`), as the app draws it: a rounded card with
+ * the text on top and attach / model / mic / send below. `text` replaces the
+ * `placeholder` (a `Typed` while the user writes) and wraps, the box growing
+ * a line at a time; `focused` gives it the accent edge the real one takes on
+ * focus; the send button fills once there is text, or once the message is
+ * `ready` without any (a chart selection waiting as a chip), and presses at
+ * each time in `sendAt`.
  */
 export function InputDock({
   focused = false,
   delay,
   chip,
   text,
+  placeholder,
+  ready = false,
   sendAt,
 }: {
   focused?: boolean;
   delay?: number;
   chip?: ReactNode;
   text?: ReactNode;
+  placeholder?: string;
+  ready?: boolean;
   sendAt?: number[];
 }) {
   const { t: tr } = useTranslation();
   const t = useSceneTime();
   const down = pressed(t, sendAt, SEND_MS);
-  const filled = text != null;
+  const filled = text != null || ready;
   return (
     <div
       className={cn(
@@ -133,7 +147,7 @@ export function InputDock({
             className="truncate text-[8px] leading-none"
             style={{ color: 'var(--color-text-tertiary)' }}
           >
-            {tr('chat.placeholderDefault')}
+            {placeholder ?? tr('chat.placeholderDefault')}
           </span>
         ) : (
           /* the app's composer is a textarea that grows as it fills, so a

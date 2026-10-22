@@ -1,11 +1,10 @@
-import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Clock, Globe, PanelRight } from 'lucide-react';
+import { Clock, Globe, PanelRight } from 'lucide-react';
 import { useAgentNames } from '../introAgents';
 import { CLOSE, Camera, REST, type Shot, VIEW, shot } from './camera';
-import { ActivityRow, Pill, Reply } from './chatParts';
 import { PAST, useSceneTime } from './clock';
-import { InputDock, Tag, Typed, UserBubble } from './kit';
+import { InputDock, Typed, UserBubble } from './kit';
+import { Reply, ThreadHeader, Timeline, ToolRow, Transcript } from './transcriptParts';
 import type { IntroScene } from './types';
 
 /* The automations intro's chat step: setting an automation up by asking the
@@ -68,40 +67,10 @@ const ASK_SHOTS: [Shot, ...Shot[]] = [
   shot(9300, PAGE.width / 2, PAGE.height / 2, REST, 700),
 ];
 
-/** The thread page's header: back, then the thread's place. */
-function TopTitle({ children }: { children: ReactNode }) {
-  return (
-    <span className="flex min-w-0 items-center gap-1">
-      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
-      <span
-        className="truncate text-[8px] font-medium leading-none"
-        style={{ color: 'var(--color-text-primary)' }}
-      >
-        {children}
-      </span>
-    </span>
-  );
-}
-
 /** A message long enough to wrap, its lines spaced as the app's bubble
     spaces them. */
 function Lines({ children }: { children: string }) {
   return <span className="block leading-[1.3]">{children}</span>;
-}
-
-/** A turn's tool calls, threaded on the timeline's rule: a short segment
-    between one row's icon and the next, as the app draws it. */
-function Timeline({ children }: { children: ReactNode }) {
-  return (
-    <div className="relative flex flex-col gap-[10px]">
-      <span
-        aria-hidden
-        className="absolute bottom-[10.5px] left-[3.5px] top-[10.5px] w-px"
-        style={{ background: 'var(--color-border-default)' }}
-      />
-      {children}
-    </div>
-  );
 }
 
 /** One call on an automation's file: the clock glyph, `reading` or
@@ -120,11 +89,16 @@ function AutomationRow({
 }) {
   const { t } = useTranslation();
   return (
-    <ActivityRow
+    <ToolRow
+      dense
       icon={Clock}
-      verb={t(`toolArtifact.inProgress.${write ? 'updating' : 'reading'}_automations`)}
-      title={t(`toolArtifact.completed.${write ? 'updated' : 'read'}_automations`)}
-      after={<Pill>{file}</Pill>}
+      running={{
+        label: t(`toolArtifact.inProgress.${write ? 'updating' : 'reading'}_automations`),
+      }}
+      settled={{
+        label: t(`toolArtifact.completed.${write ? 'updated' : 'read'}_automations`),
+        pill: file,
+      }}
       at={at}
       done={done}
     />
@@ -146,40 +120,38 @@ function AutomationAsk() {
       <div className="flex flex-col" style={PAGE}>
         {/* the thread's header: back, its place, the agent it runs with, and
             the file panel's toggle */}
-        <div
-          className="flex shrink-0 items-center gap-2 border-b px-2.5"
-          style={{ height: HEADER, borderColor: 'var(--color-border-muted)' }}
+        <ThreadHeader
+          title={t('agents.allWorkspaces')}
+          agent={names.home}
+          height={HEADER}
+          className="gap-2 px-2.5"
         >
-          <TopTitle>{t('agents.allWorkspaces')}</TopTitle>
-          <Tag>{names.home}</Tag>
           <PanelRight
-            className="ml-auto h-2.5 w-2.5 shrink-0"
+            className="h-2.5 w-2.5 shrink-0"
             style={{ color: 'var(--color-text-tertiary)' }}
           />
-        </div>
+        </ThreadHeader>
         <div
           className="mx-auto flex min-h-0 flex-1 flex-col gap-1.5 pb-2.5"
           style={{ width: COL, paddingTop: INSET }}
         >
           {/* the transcript settles on the composer: the newest lines just
               above it, the oldest running off the top as the turn grows */}
-          <div className="flex min-h-0 flex-1 flex-col justify-end gap-1.5 overflow-hidden">
+          <Transcript settled>
             <UserBubble at={PAST} className="ml-12">
               When does AVGO report?
             </UserBubble>
-            <ActivityRow
+            <ToolRow
+              dense
               icon={Globe}
-              verb={t('toolArtifact.inProgress.searchingQuery', { query: 'AVGO earnings date' })}
-              title={t('toolArtifact.tool.webSearch')}
-              after={<Pill>AVGO earnings date</Pill>}
-              at={PAST}
-              done={PAST}
+              settled={{ label: t('toolArtifact.tool.webSearch'), pill: 'AVGO earnings date' }}
             />
-            <Reply text="**Thursday, Dec 10**, after the close." at={PAST} />
+            <Reply dense text="**Thursday, Dec 10**, after the close." at={PAST} />
             <UserBubble at={PAST} className="ml-12">
               <Lines>I&apos;m off next week. Back on Monday, November 2.</Lines>
             </UserBubble>
             <Reply
+              dense
               text="**Noted.** Your automations keep running while you're away, and each run's results wait in the feed. Want any of them paused?"
               at={PAST}
             />
@@ -187,11 +159,12 @@ function AutomationAsk() {
               <Lines>Pause the AVGO earnings preview until I&apos;m back.</Lines>
             </UserBubble>
             {/* the file is read, then written back with its status paused */}
-            <Timeline>
+            <Timeline dense>
               <AutomationRow write={false} file="avgo-earnings-preview" at={PAST} done={PAST} />
               <AutomationRow write file="avgo-earnings-preview" at={PAST} done={PAST} />
             </Timeline>
             <Reply
+              dense
               text="**Paused.** It won't run again until you turn it back on, here or on the Automations page."
               at={PAST}
             />
@@ -199,11 +172,11 @@ function AutomationAsk() {
             <UserBubble at={ASK.send + 60} className="ml-12">
               <Lines>{ASK.ask}</Lines>
             </UserBubble>
-            <Reply text={ASK.summary} at={ASK.summaryAt} cps={ASK.summaryCps} />
+            <Reply dense text={ASK.summary} at={ASK.summaryAt} cps={ASK.summaryCps} />
             <UserBubble at={ASK.sendYes + 60}>{ASK.yes}</UserBubble>
             <AutomationRow write file={ASK.file} at={ASK.write} done={ASK.written} />
-            <Reply text={ASK.created} at={ASK.createdAt} cps={ASK.createdCps} />
-          </div>
+            <Reply dense text={ASK.created} at={ASK.createdAt} cps={ASK.createdCps} />
+          </Transcript>
           <InputDock text={composer} sendAt={[ASK.send, ASK.sendYes]} />
         </div>
       </div>

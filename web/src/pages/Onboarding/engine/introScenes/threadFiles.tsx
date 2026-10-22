@@ -7,9 +7,6 @@ import {
   CheckSquare,
   ChevronDown,
   ChevronRight,
-  Code2,
-  Download,
-  ExternalLink,
   FilePlus,
   FileSpreadsheet,
   FileText,
@@ -17,7 +14,6 @@ import {
   FolderOpen,
   Globe,
   HardDrive,
-  Link2,
   RefreshCw,
   ScrollText,
   Search,
@@ -31,8 +27,9 @@ import { BarChart, type Bar } from './charts';
 import { CLOSE, Camera, REST, shot, type Shot } from './camera';
 import { PAST, ease, useSceneTime } from './clock';
 import { Appear, UserBubble, pointerScript } from './kit';
-import { FileCrumbs, PanelTab } from './panelParts';
-import { PANEL_W, Prose, ThreadPage, Timeline, ToolRow } from './threadParts';
+import { FileCrumbs, HTML_FILE_ACTIONS, PanelTab } from './panelParts';
+import { PANEL_W, ThreadPage } from './threadParts';
+import { Reply, Timeline, ToolRow } from './transcriptParts';
 import type { IntroScene } from './types';
 
 /* The thread intro's first step: the files a turn writes land in the file
@@ -393,7 +390,7 @@ function FilePanel() {
         chat={
           <>
             <UserBubble at={PAST}>{FILES.ask}</UserBubble>
-            <Prose text={FILES.lead} at={FILES.leadAt} />
+            <Reply text={FILES.lead} at={FILES.leadAt} cps={110} />
             <Timeline>
               <ToolRow
                 icon={FileText}
@@ -413,7 +410,7 @@ function FilePanel() {
                 />
               ))}
             </Timeline>
-            <Prose text={FILES.answer} at={FILES.answerAt} cps={140} />
+            <Reply text={FILES.answer} at={FILES.answerAt} cps={140} />
           </>
         }
         panel={
@@ -422,7 +419,7 @@ function FilePanel() {
               <FileCrumbs
                 path={['results', 'report.html']}
                 meta={tr('filePanel.metaLines', { count: 64 })}
-                actions={[Code2, Link2, ExternalLink, Download]}
+                actions={HTML_FILE_ACTIONS}
               />
             )}
             <div className="flex min-h-0 flex-1">

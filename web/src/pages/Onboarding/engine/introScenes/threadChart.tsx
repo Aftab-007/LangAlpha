@@ -1,36 +1,32 @@
 import { useTranslation } from 'react-i18next';
-import {
-  CandlestickChart,
-  ExternalLink,
-  Menu,
-  PanelRight,
-  PenLine,
-  TextSelect,
-  X,
-} from 'lucide-react';
+import { CandlestickChart, ExternalLink, Menu, TextSelect, X } from 'lucide-react';
 import { useLocale } from '@/hooks/useLocale';
 import { fixed2, signedFixed2 } from '@/lib/format';
 import type { IntroVisualId } from '../../registry';
 import { CLOSE, Camera, REST, type Shot, VIEW, shot } from './camera';
-import { Candles, EventBadge } from './candles';
+import { Candles, EventBadge, badgeAnchor } from './candles';
 import {
+  AnnotateRow,
   CommentBox,
   FoldedIntervals,
   Pin,
   Selection,
-  SelectionCard,
   SelectionChip,
   SelectionTools,
+  SentSelection,
   ToolBtn,
   addButton,
   besideRegion,
+  dragBox,
 } from './chartTools';
 import { StockPriceCard } from './charts';
+import { FileCard } from './chatParts';
 import { PAST, useSceneTime } from './clock';
-import { Appear, Loader, Typed, UserBubble, pointAt, pointerScript } from './kit';
+import { Appear, Loader, Typed, UserBubble, pointerScript, signColor } from './kit';
 import { NVDA, NVDA_EVENTS, NVDA_LAST, NVDA_PREV, NVDA_QUOTE, chartScale } from './nvdaSeries';
 import { PanelTab } from './panelParts';
-import { HEADER_H, PANEL_W, Prose, ThreadPage, ToolRow } from './threadParts';
+import { HEADER_H, PANEL_W, ThreadPage } from './threadParts';
+import { Reply, Transcript } from './transcriptParts';
 import type { IntroScene } from './types';
 
 /* The thread intro's chart step: a chart tab in the file panel
@@ -89,7 +85,7 @@ const BOX = besideRegion(SCALE, REGION.x0, REGION.x1, REGION.y0, BOX_W);
 const PIN = besideRegion(SCALE, REGION.x0, REGION.x1, REGION.y0, 10);
 const ADD = addButton(BOX, BOX_W);
 /** The export rule's badge, centered over its anchor. */
-const BADGE = toPage(SCALE.x(EXPORT_RULE.i), SCALE.y(EXPORT_RULE.price) - 10.5);
+const BADGE = toPage(...badgeAnchor(SCALE, EXPORT_RULE));
 
 const CH = {
   arm: 850,
@@ -147,7 +143,7 @@ function LegendLead() {
   const { t } = useTranslation();
   const locale = useLocale();
   const change = NVDA_LAST - NVDA_PREV;
-  const up = { color: 'var(--color-profit)' };
+  const tint = { color: signColor(change) };
   return (
     <span
       className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[5.5px] leading-none tabular-nums"
@@ -156,11 +152,11 @@ function LegendLead() {
       <span className="text-[6px] font-semibold" style={{ color: 'var(--color-text-primary)' }}>
         NVDA
       </span>{' '}
-      <span className="font-mono font-semibold" style={up}>
+      <span className="font-mono font-semibold" style={tint}>
         {fixed2(NVDA_LAST, locale)}
       </span>{' '}
       <span className="text-[4.8px]">USD</span>{' '}
-      <span className="font-mono" style={up}>
+      <span className="font-mono" style={tint}>
         {signedFixed2(change, locale)} ({signedFixed2((change / NVDA_PREV) * 100, locale)}%)
       </span>{' '}
       <span
@@ -177,6 +173,7 @@ function LegendStats() {
   const { t } = useTranslation();
   const locale = useLocale();
   const q = NVDA_QUOTE;
+  const pct = ((NVDA_LAST - q.prev) / q.prev) * 100;
   const stats: [string, string, string?][] = [
     [t('marketView.quote.open'), fixed2(q.open, locale)],
     [t('marketView.quote.high'), fixed2(q.high, locale)],
@@ -185,11 +182,7 @@ function LegendStats() {
     [t('marketView.quote.volume'), q.vol],
     [t('marketView.quote.prevClose'), fixed2(q.prev, locale)],
     [t('marketView.quote.range52w'), `${fixed2(q.lo52, locale)}–${fixed2(q.hi52, locale)}`],
-    [
-      t('marketView.quote.change'),
-      `${signedFixed2(((NVDA_LAST - q.prev) / q.prev) * 100, locale)}%`,
-      'var(--color-profit)',
-    ],
+    [t('marketView.quote.change'), `${signedFixed2(pct, locale)}%`, signColor(pct)],
   ];
   return (
     <div
@@ -214,13 +207,6 @@ function PanelChart({ armed, clear }: { armed: boolean; clear: boolean }) {
   const t = useSceneTime();
   const sent = t >= CH.send;
   const drawing = t >= CH.press && !sent;
-  const box =
-    t >= CH.release
-      ? REGION
-      : (() => {
-          const p = pointAt(POINTER.path, Math.max(t, CH.press));
-          return { ...REGION, x1: p.x - CHART.x, y1: p.y - CHART.y };
-        })();
   return (
     <div
       className="flex flex-1 flex-col px-[5px] pb-[5px] pt-1"
@@ -252,7 +238,9 @@ function PanelChart({ armed, clear }: { armed: boolean; clear: boolean }) {
         </div>
         <LegendStats />
         <Candles series={NVDA} scale={SCALE}>
-          {drawing && t < CH.added && <Selection {...box} />}
+          {drawing && t < CH.added && (
+            <Selection {...dragBox(REGION, POINTER.path, CHART, t, CH)} />
+          )}
           {drawing && t >= CH.added && <Selection {...REGION} active={false} />}
           {t >= CH.release && t < CH.added && (
             <CommentBox
@@ -288,117 +276,58 @@ function ChartFileCard() {
   const labels = [EARNINGS.title, EXPORT_RULE.title];
   return (
     <Appear at={CH.drawn} pop>
-      <div
-        className="flex h-6 items-center gap-1.5 rounded-lg border px-1.5"
-        style={{ borderColor: 'var(--color-border-muted)', background: 'var(--color-bg-card)' }}
-      >
-        <span className="relative h-[15px] w-3 shrink-0">
-          <span
-            className="absolute inset-0 rounded-sm border"
-            style={{
-              background: 'var(--color-bg-elevated)',
-              borderColor: 'var(--color-border-muted)',
-              transform: 'translate(-1px, 1px) rotate(-5deg)',
-            }}
-          />
-          <span
-            className="absolute inset-0 flex flex-col items-center justify-center gap-[1px] rounded-sm border"
-            style={{
-              background: 'var(--color-bg-page)',
-              borderColor: 'var(--color-border-elevated)',
-            }}
-          >
-            <CandlestickChart
-              className="h-1.5 w-1.5"
-              style={{ color: 'var(--color-accent-primary)' }}
-            />
-            <span
-              className="font-mono text-[3px] leading-none"
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
-              1D
-            </span>
-          </span>
-        </span>
-        <span className="flex min-w-0 flex-col gap-0.5">
-          <span
-            className="truncate text-[8px] leading-none"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            {t('chat.chartAnnotationCard.name', { symbol: 'NVDA', interval: '1D' })}
-          </span>
-          <span
-            className="truncate text-[6px] leading-none"
-            style={{ color: 'var(--color-text-tertiary)' }}
-          >
+      <FileCard
+        name={t('chat.chartAnnotationCard.name', { symbol: 'NVDA', interval: '1D' })}
+        meta={
+          <>
             {t('chat.chartAnnotationCard.metaCount', { count: labels.length })} ·{' '}
             {labels.join(t('chat.chartAnnotationCard.labelSeparator'))}
-          </span>
-        </span>
-        <span
-          className="ml-auto flex shrink-0 items-center gap-0.5 rounded-[4px] border px-1 py-0.5 text-[6px] leading-none"
-          style={{ borderColor: 'var(--color-border-muted)', color: 'var(--color-text-tertiary)' }}
-        >
-          <PanelRight className="h-1.5 w-1.5" />
-          {t('chat.turnFiles.open')}
-        </span>
-      </div>
+          </>
+        }
+        icon={CandlestickChart}
+        label="1D"
+        solo
+      />
     </Appear>
   );
 }
 
-function Transcript() {
+/** The chat column: a thread with history, then the selection's chip above
+    the composer while it waits to go out. */
+function Chat() {
   const t = useSceneTime();
-  const { t: tr } = useTranslation();
   return (
     <>
       {/* a thread with history, scrolled to its newest lines, the oldest
           running off the top as the turn comes in */}
-      <div className="flex min-h-0 grow basis-0 flex-col justify-end overflow-hidden">
-        <div className="flex flex-col gap-1.5">
-          <UserBubble at={PAST}>When did NVDA last report?</UserBubble>
-          <Prose text="**Aug 26**, after the close. Data-center revenue beat, and guidance came in above estimates." />
-          <UserBubble at={PAST}>Chart NVDA since earnings</UserBubble>
-          <StockPriceCard
-            sym="NVDA"
-            price="$182.42"
-            change={7.18}
-            period="2026-08-13, 2026-10-21"
-            series={NVDA.bars.map((b) => b.c)}
-            high="$186.90"
-            low="$170.60"
-            vol="181.5M"
-            at={PAST}
-          />
-          <Prose text="It gapped to **186.90** on Aug 27, then gave most of it back by mid-September." />
-          <UserBubble at={CH.send}>{ASK}</UserBubble>
-          <SelectionCard at={CH.send + 60} note={NOTE} />
-          {t >= CH.think && t < CH.draw && (
-            <Loader color="var(--color-icon-muted)" className="text-[10px]" />
-          )}
-          {t < CH.drawn ? (
-            <ToolRow
-              icon={PenLine}
-              at={CH.draw}
-              done={CH.drawn}
-              running={{ label: tr('toolArtifact.inProgress.annotatingChart') }}
-              settled={{ label: tr('toolArtifact.tool.annotateChart'), pill: 'NVDA · 1D' }}
-            />
-          ) : (
-            <ChartFileCard />
-          )}
-          <Prose
-            text="It faded on news: a **new export rule** on Sep 8 took 3% off in a day, and the slide ran through the gap to **170.60**. Both events are on the chart."
-            at={CH.answer}
-            cps={110}
-          />
-        </div>
-      </div>
-      {t >= CH.added && t < CH.send && (
-        <Appear at={CH.added} pop className="flex min-w-0">
-          <SelectionChip note={NOTE} />
-        </Appear>
-      )}
+      <Transcript settled>
+        <UserBubble at={PAST}>When did NVDA last report?</UserBubble>
+        <Reply text="**Aug 26**, after the close. Data-center revenue beat, and guidance came in above estimates." />
+        <UserBubble at={PAST}>Chart NVDA since earnings</UserBubble>
+        <StockPriceCard
+          sym="NVDA"
+          price="$182.42"
+          change={7.18}
+          period="2026-08-13, 2026-10-21"
+          series={NVDA.bars.map((b) => b.c)}
+          high="$186.90"
+          low="$170.60"
+          vol="181.5M"
+          at={PAST}
+        />
+        <Reply text="It gapped to **186.90** on Aug 27, then gave most of it back by mid-September." />
+        <SentSelection at={CH.send} text={ASK} note={NOTE} />
+        {t >= CH.think && t < CH.draw && (
+          <Loader color="var(--color-icon-muted)" className="text-[10px]" />
+        )}
+        {t < CH.drawn ? <AnnotateRow at={CH.draw} done={CH.drawn} /> : <ChartFileCard />}
+        <Reply
+          text="It faded on news: a **new export rule** on Sep 8 took 3% off in a day, and the slide ran through the gap to **170.60**. Both events are on the chart."
+          at={CH.answer}
+          cps={110}
+        />
+      </Transcript>
+      {t >= CH.added && t < CH.send && <SelectionChip note={NOTE} at={CH.added} />}
     </>
   );
 }
@@ -410,12 +339,9 @@ function ChartPanel() {
       <ThreadPage
         title="NVDA earnings reaction"
         tabs={<PanelTab icon={CandlestickChart} label="NVDA" active />}
-        chat={<Transcript />}
+        chat={<Chat />}
         panel={<PanelChart armed={t >= CH.arm && t < CH.release} clear={t >= CH.drawn} />}
-        composer={
-          t >= CH.ask && t < CH.send ? <Typed text={ASK} at={CH.ask} cps={22} /> : undefined
-        }
-        sendAt={[CH.send]}
+        ask={{ text: ASK, at: CH.ask, send: CH.send, cps: 22 }}
       />
     </Camera>
   );

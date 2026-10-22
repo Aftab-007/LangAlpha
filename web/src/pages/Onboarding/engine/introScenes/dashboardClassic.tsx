@@ -13,11 +13,11 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocale } from '@/hooks/useLocale';
-import { relativeTime, shortMonthDay } from '@/lib/format';
+import { grouped2, relativeTime, shortMonthDay, signedFixed2 } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { PAST, ease, useSceneTime } from './clock';
-import { Appear, Region, rv } from './kit';
-import { changeAt, upColor, signed, money, INDICES, WATCH, Spark } from './dashboardParts';
+import { Appear, Region, rv, signColor } from './kit';
+import { changeAt, INDICES, WATCH, Spark } from './dashboardParts';
 
 /* The classic dashboard page, drawn in miniature: index cards, the watchlist
    card and the news column. Shared by the scenes that show the page. Quotes,
@@ -54,6 +54,7 @@ function IndexCard({
   reach?: number;
   slid?: number;
 }) {
+  const locale = useLocale();
   const t = useSceneTime();
   const v = changeAt(index.ticks, t, live);
   return (
@@ -68,17 +69,17 @@ function IndexCard({
         className="font-mono text-[8px] font-bold leading-none tabular-nums"
         style={{ color: 'var(--color-text-primary)' }}
       >
-        {money(index.prev * (1 + v / 100))}
+        {grouped2(index.prev * (1 + v / 100), locale)}
       </span>
       <span
         className={'font-mono text-[6px] leading-none tabular-nums transition-colors duration-300'}
-        style={{ color: upColor(v) }}
+        style={{ color: signColor(v) }}
       >
-        {signed(v)}%
+        {signedFixed2(v, locale)}%
       </span>
       <Spark
         series={index.spark}
-        color={upColor(v)}
+        color={signColor(v)}
         reach={reach}
         slid={slid}
         stretch
@@ -92,9 +93,10 @@ function IndexCard({
     the % change in its tinted pill. */
 export function WatchRow({ row, live = false }: { row: (typeof WATCH)[number]; live?: boolean }) {
   const { t: tr } = useTranslation();
+  const locale = useLocale();
   const t = useSceneTime();
   const v = changeAt(row.ticks, t, live);
-  const c = upColor(v);
+  const c = signColor(v);
   return (
     <div className="flex items-center gap-1 px-1 py-[3px]">
       <span className="flex min-w-0 flex-col gap-[2px]">
@@ -113,7 +115,7 @@ export function WatchRow({ row, live = false }: { row: (typeof WATCH)[number]; l
           className="font-mono text-[7px] font-medium leading-none tabular-nums"
           style={{ color: 'var(--color-text-primary)' }}
         >
-          {money(row.prev * (1 + v / 100))}
+          {grouped2(row.prev * (1 + v / 100), locale)}
         </span>
         <span
           className={
@@ -122,7 +124,7 @@ export function WatchRow({ row, live = false }: { row: (typeof WATCH)[number]; l
           }
           style={{ color: c }}
         >
-          {signed((row.prev * v) / 100)}
+          {signedFixed2((row.prev * v) / 100, locale)}
         </span>
       </span>
       <span
@@ -131,11 +133,11 @@ export function WatchRow({ row, live = false }: { row: (typeof WATCH)[number]; l
           'leading-none tabular-nums transition-colors duration-300'
         }
         style={{
-          background: v >= 0 ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
+          background: signColor(v, true),
           color: c,
         }}
       >
-        {signed(v)}%
+        {signedFixed2(v, locale)}%
       </span>
     </div>
   );
@@ -203,14 +205,14 @@ export function BriefEyebrow() {
 /** A topic under the brief (`TopicBadge`): its name on the soft fill of the
     way it moved. */
 export function TopicPill({ text, up }: { text: string; up: boolean }) {
-  const soft = up ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)';
+  const soft = signColor(up, true);
   return (
     <span
       className="rounded-[2px] border px-[3px] py-[2px] text-[5px] font-medium leading-none"
       style={{
         background: soft,
         borderColor: soft,
-        color: up ? 'var(--color-profit)' : 'var(--color-loss)',
+        color: signColor(up),
       }}
     >
       #{text}

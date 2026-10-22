@@ -223,8 +223,6 @@ export interface ChartScale {
   y: (p: number) => number;
   /** An RSI value's height. */
   ry: (v: number) => number;
-  /** The price at a height. */
-  priceAt: (y: number) => number;
   /** Labelled levels on the price axis. */
   ticks: number[];
 }
@@ -266,7 +264,6 @@ export function chartScale(s: Series, width: number, height: number): ChartScale
     x: (i) => (i + 0.5) * step,
     y,
     ry: (v) => rsiTop + rsiH * 0.18 + ((rhi - v) / (rhi - rlo)) * rsiH * 0.64,
-    priceAt: (py) => hi - ((py - top) / span) * (hi - lo),
     ticks,
   };
 }

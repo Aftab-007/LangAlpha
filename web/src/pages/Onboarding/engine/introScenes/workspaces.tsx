@@ -5,6 +5,7 @@ import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
 import { useLocale } from '@/hooks/useLocale';
 import { shortMonthDay } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { COMPUTER_STATUS_UI } from '@/pages/ChatAgent/utils/computerStatus';
 import type { IntroVisualId } from '../../registry';
 import { during, progress, useSceneTime } from './clock';
 import { CLOSE, Camera, REST, type Shot, VIEW, shot, wide } from './camera';
@@ -89,32 +90,23 @@ function GalleryHeader({
     goes from stopped to starting to running. */
 type MachineState = 'stopped' | 'starting' | 'running';
 
-/** A machine's state as `ComputerStatusIndicator` draws it: a hollow ring,
-    the loader, or a filled dot, then the state's name. */
+/** A machine's state as `ComputerStatusIndicator` draws it, from the app's
+    own table (`COMPUTER_STATUS_UI`): a hollow ring, the loader, or a filled
+    dot in the state's colour, then the state's name. */
 function MachineStatus({ state }: { state: MachineState }) {
   const { t } = useTranslation();
-  const glyph =
-    state === 'starting' ? (
-      <Loader color="var(--color-accent-primary)" className="text-[6px]" />
-    ) : (
-      <span
-        className="h-[4px] w-[4px] shrink-0 rounded-full"
-        style={
-          state === 'running'
-            ? { background: 'var(--color-profit)' }
-            : { border: '1px solid var(--color-text-tertiary)' }
-        }
-      />
-    );
-  const label = {
-    stopped: t('computer.statusStopped'),
-    starting: t('computer.statusStarting'),
-    running: t('computer.statusRunning'),
-  }[state];
+  const { labelKey, shape, color } = COMPUTER_STATUS_UI[state];
   return (
     <span className="inline-flex shrink-0 items-center gap-1">
-      {glyph}
-      {label}
+      {shape === 'live' ? (
+        <Loader color={color} className="text-[6px]" />
+      ) : (
+        <span
+          className="h-[4px] w-[4px] shrink-0 rounded-full"
+          style={shape === 'dot' ? { background: color } : { border: `1px solid ${color}` }}
+        />
+      )}
+      {t(labelKey)}
     </span>
   );
 }

@@ -1,9 +1,9 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Code2, Download, ExternalLink, Globe, Link2 } from 'lucide-react';
+import { Globe } from 'lucide-react';
 import { ease, useSceneTime } from './clock';
 import { Appear, rv } from './kit';
-import { FileCrumbs, PanelStrip, PanelTab } from './panelParts';
+import { FileCrumbs, HTML_FILE_ACTIONS, PanelStrip, PanelTab } from './panelParts';
 
 /* The Analyst's dashboard, capex-tracker.html, as the file panel previews it
    in the capex thread (capexThread.tsx): written top to bottom as the
@@ -508,7 +508,7 @@ export function DashboardPanel({ at, filterAt }: { at: number; filterAt?: number
       <FileCrumbs
         path={['results', 'capex-tracker.html']}
         meta={t('filePanel.metaLines', { count: 412 })}
-        actions={[Code2, Link2, ExternalLink, Download]}
+        actions={HTML_FILE_ACTIONS}
       />
       <Dashboard at={at} filterAt={filterAt} />
     </div>

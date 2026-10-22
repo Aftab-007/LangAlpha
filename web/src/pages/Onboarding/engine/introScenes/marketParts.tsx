@@ -1,15 +1,12 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  ArrowUp,
   BarChart3,
   ChevronDown,
   ChevronLeft,
   Info,
   Menu,
   MessageSquare,
-  Mic,
-  Plus,
   RefreshCw,
   Settings2,
   SlidersHorizontal,
@@ -18,9 +15,9 @@ import { useLocale } from '@/hooks/useLocale';
 import { fixed2, signedFixed2 } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { ClearButton, Intervals, Segmented, SelectionTools, ToolBtn } from './chartTools';
-import { pressed, SEND_MS, useSceneTime } from './clock';
-import { Ln } from './kit';
+import { InputDock, signColor } from './kit';
 import { NVDA_LAST, NVDA_QUOTE } from './nvdaSeries';
+import { Transcript } from './transcriptParts';
 
 /* MarketView as the market intro's camera sees it, after pages/MarketView:
    the stock header and its metrics over the chart and its toolbar, the
@@ -66,9 +63,6 @@ export const REGION_BTN = {
 export const SEND = { x: PAGE.width - 21, y: PAGE.height - 21 };
 
 /* ── the header band: stock header, the strip, chat header ──────────── */
-
-/** A change's color: profit up, loss down. */
-const tone = (v: number) => (v >= 0 ? 'var(--color-profit)' : 'var(--color-loss)');
 
 /** The stock header's top (`StockHeader`): the symbol switcher, the names,
     the exchange and the live dot over the Company Overview pill; the price
@@ -124,7 +118,7 @@ function StockTop() {
         </span>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-[2px] leading-none tabular-nums">
-        <span className="text-[11px] font-semibold" style={{ color: tone(change) }}>
+        <span className="text-[11px] font-semibold" style={{ color: signColor(change) }}>
           {fixed2(NVDA_LAST, locale)}
           <span
             className="ml-[2px] text-[5px] font-normal"
@@ -133,7 +127,7 @@ function StockTop() {
             USD
           </span>
         </span>
-        <span className="text-[6px] font-medium" style={{ color: tone(change) }}>
+        <span className="text-[6px] font-medium" style={{ color: signColor(change) }}>
           {signedFixed2(change, locale)} {signedFixed2((change / q.prev) * 100, locale)}%
         </span>
       </div>
@@ -210,7 +204,7 @@ function Metrics() {
       t('marketView.header.dayRange'),
       `${fixed2(Math.min(q.low, last), locale)} – ${fixed2(Math.max(q.high, last), locale)}`,
     ],
-    [t('marketView.header.changePct'), `${signedFixed2(pct, locale)}%`, tone(pct)],
+    [t('marketView.header.changePct'), `${signedFixed2(pct, locale)}%`, signColor(pct)],
   ];
   return (
     <div
@@ -362,102 +356,39 @@ function EmptyChat() {
   );
 }
 
-/** The panel's composer (`ChatInput`), as the kit's dock draws the thread's,
-    under the market placeholder. `ready` fills send for a chip with no text. */
-function Composer({
-  text,
-  ready = false,
-  focused = false,
-  sendAt,
-  narrow = false,
-}: ComposerState & { narrow?: boolean }) {
-  const { t: tr } = useTranslation();
-  const t = useSceneTime();
-  const down = pressed(t, sendAt, SEND_MS);
-  const filled = text != null || ready;
-  return (
-    <div
-      className="flex flex-col gap-1.5 rounded-[11px] border p-1.5"
-      style={{
-        background: 'var(--color-bg-card)',
-        borderColor: focused ? 'var(--color-accent-primary)' : 'var(--color-border-input)',
-      }}
-    >
-      <div className="flex h-2 items-center px-0.5">
-        <span
-          className="truncate text-[8px] leading-none"
-          style={{
-            color: text == null ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
-          }}
-        >
-          {text ?? tr('marketView.chatPanel.defaultPlaceholder')}
-        </span>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <Plus className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-icon-muted)' }} />
-        {/* the model picker drops out of a panel this narrow */}
-        <span className="ml-auto">{!narrow && <Ln w="30px" h={3} c="var(--iv-line-2)" />}</span>
-        <Mic className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-icon-muted)' }} />
-        <span
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md transition-transform duration-150"
-          style={{
-            background: filled ? 'var(--color-btn-primary-bg)' : 'var(--color-bg-elevated)',
-            transform: down ? 'scale(0.85)' : undefined,
-          }}
-        >
-          <ArrowUp
-            className="h-2 w-2"
-            style={{ color: filled ? 'var(--color-btn-primary-text)' : 'var(--color-icon-muted)' }}
-          />
-        </span>
-      </div>
-    </div>
-  );
-}
-
 /** The chat panel (`MarketChatPanel`): the transcript, or the empty state
-    until there is one, then any selection chip, then the composer. */
+    until there is one, then any selection chip, then the composer under the
+    market placeholder, its send filled while a selection is `ready` to go. */
 function ChatPanel({
-  width,
   transcript,
   chip,
-  composer,
+  ready,
+  sendAt,
 }: {
-  width: number;
   transcript?: ReactNode;
   chip?: ReactNode;
-  composer: ComposerState;
+  ready?: boolean;
+  sendAt?: number[];
 }) {
+  const { t } = useTranslation();
   return (
     <div
       className="flex shrink-0 flex-col border-l px-[6px] pb-[6px]"
       style={{
-        width,
+        width: CHAT_W,
         borderColor: 'var(--color-border-muted)',
         background: 'var(--color-bg-page)',
       }}
     >
-      {transcript ? (
-        // holds its top while it fits and its newest lines once it overflows:
-        // the auto margin takes free space, and with none the flex end wins
-        <div className="flex min-h-0 grow basis-0 flex-col justify-end overflow-hidden px-[2px] pt-2">
-          <div className="mb-auto flex flex-col gap-1.5">{transcript}</div>
-        </div>
-      ) : (
-        <EmptyChat />
-      )}
+      {transcript ? <Transcript className="px-[2px] pt-2">{transcript}</Transcript> : <EmptyChat />}
       {chip && <div className="flex px-[2px] pb-[4px]">{chip}</div>}
-      <Composer {...composer} narrow={width < 120} />
+      <InputDock
+        placeholder={t('marketView.chatPanel.defaultPlaceholder')}
+        ready={ready}
+        sendAt={sendAt}
+      />
     </div>
   );
-}
-
-/** What the composer shows: its text, whether send is live, focus, presses. */
-export interface ComposerState {
-  text?: ReactNode;
-  ready?: boolean;
-  focused?: boolean;
-  sendAt?: number[];
 }
 
 /* ── the page ──────────────────────────────────────────────────────────── */
@@ -466,7 +397,8 @@ export interface ComposerState {
  * MarketView with the sidebar folded, drawn at `PAGE` size: the header band
  * over the chart column (metrics, toolbar, then `chart`, `CHART` sized), the
  * sidebar's strip, and the chat panel. `title` names the thread once there
- * is one.
+ * is one; `ready` and `sendAt` drive the composer's send, as `InputDock`
+ * reads them.
  */
 export function MarketPage({
   armed,
@@ -475,7 +407,8 @@ export function MarketPage({
   title,
   transcript,
   chip,
-  composer = {},
+  ready,
+  sendAt,
 }: {
   armed?: boolean;
   clear?: boolean;
@@ -483,7 +416,8 @@ export function MarketPage({
   title?: string;
   transcript?: ReactNode;
   chip?: ReactNode;
-  composer?: ComposerState;
+  ready?: boolean;
+  sendAt?: number[];
 }) {
   const card = { borderColor: 'var(--color-border-muted)', background: 'var(--color-bg-card)' };
   return (
@@ -507,7 +441,7 @@ export function MarketPage({
           </div>
         </div>
         <FoldedSidebar />
-        <ChatPanel width={CHAT_W} transcript={transcript} chip={chip} composer={composer} />
+        <ChatPanel transcript={transcript} chip={chip} ready={ready} sendAt={sendAt} />
       </div>
     </div>
   );

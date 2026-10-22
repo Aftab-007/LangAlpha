@@ -19,9 +19,10 @@ import { useLocale } from '@/hooks/useLocale';
 import type { IntroVisualId } from '../../registry';
 import { CLOSE, Camera, REST, type Shot, VIEW, shot } from './camera';
 import { PAST, useSceneTime, useTween } from './clock';
-import { Appear, Loader, Typed, UserBubble, pointAt, pointerScript } from './kit';
+import { Appear, Loader, UserBubble, pointAt, pointerScript } from './kit';
 import { PanelTab } from './panelParts';
-import { ChromeIcon, PANEL_W, Prose, ThreadPage, Timeline, ToolRow } from './threadParts';
+import { ChromeIcon, PANEL_W, ThreadPage } from './threadParts';
+import { Reply, Timeline, ToolRow } from './transcriptParts';
 import type { IntroScene } from './types';
 
 /* Scenes for the thread intro's memory and memo steps: the chat column
@@ -281,23 +282,18 @@ function Memory() {
             <PanelTab icon={BookMarked} label={tr('filePanel.tabs.memory')} active />
           </>
         }
-        composer={
-          t >= MEM.typeAsk && t < MEM.sendAsk ? (
-            <Typed text={MEM.ask} at={MEM.typeAsk} cps={MEM.cps} />
-          ) : undefined
-        }
-        sendAt={[MEM.sendAsk]}
+        ask={{ text: MEM.ask, at: MEM.typeAsk, send: MEM.sendAsk, cps: MEM.cps }}
         chat={
           <>
             <UserBubble at={PAST}>{MEM.close.ask}</UserBubble>
-            <Prose text={MEM.close.answer} />
+            <Reply text={MEM.close.answer} />
             <UserBubble at={PAST}>{MEM.date.ask}</UserBubble>
-            <Prose text={MEM.date.answer} />
+            <Reply text={MEM.date.answer} />
             <UserBubble at={PAST}>{MEM.earlier}</UserBubble>
             <Timeline>
               <ToolRow icon={Building2} settled={{ label: overview, pill: 'AVGO' }} />
             </Timeline>
-            <Prose text={MEM.street} />
+            <Reply text={MEM.street} />
             <UserBubble at={MEM.sendAsk + 80}>
               <Wrapped>{MEM.ask}</Wrapped>
             </UserBubble>
@@ -320,7 +316,7 @@ function Memory() {
                 done={MEM.indexed}
               />
             </Timeline>
-            <Prose text={MEM.reply} at={MEM.replyAt} />
+            <Reply text={MEM.reply} at={MEM.replyAt} cps={110} />
           </>
         }
         panel={t >= MEM.open ? <MemoryViewer /> : <MemoryList />}
@@ -602,7 +598,6 @@ function MemoTab() {
 }
 
 function Memo() {
-  const t = useSceneTime();
   const { t: tr } = useTranslation();
   const overview = tr('toolArtifact.tool.companyOverview');
   const prices = tr('toolArtifact.tool.stockPrices');
@@ -629,12 +624,12 @@ function Memo() {
               <ToolRow icon={Building2} settled={{ label: overview, pill: 'MSFT' }} />
               <ToolRow icon={TrendingUp} settled={{ label: prices, pill: 'MSFT' }} />
             </Timeline>
-            <Prose text={MEMO.consensus.answer} />
+            <Reply text={MEMO.consensus.answer} />
             <UserBubble at={PAST}>{MEMO.earlier.ask}</UserBubble>
             <Timeline>
               <ToolRow icon={FileBarChart} settled={{ label: statements, pill: 'MSFT' }} />
             </Timeline>
-            <Prose text={MEMO.earlier.answer} />
+            <Reply text={MEMO.earlier.answer} />
             <UserBubble at={MEMO.askAt}>
               <Wrapped>{MEMO.ask}</Wrapped>
             </UserBubble>
@@ -659,17 +654,12 @@ function Memo() {
                 done={MEMO.filing.done}
               />
             </Timeline>
-            <Prose text={MEMO.answer} at={MEMO.answerAt} cps={170} />
-            <Prose text={MEMO.cite} at={MEMO.citeAt} />
+            <Reply text={MEMO.answer} at={MEMO.answerAt} cps={170} />
+            <Reply text={MEMO.cite} at={MEMO.citeAt} cps={110} />
           </>
         }
         panel={<MemoTab />}
-        composer={
-          t >= MEMO.typeAsk && t < MEMO.askAt ? (
-            <Typed text={MEMO.ask} at={MEMO.typeAsk} cps={MEMO.cps} />
-          ) : undefined
-        }
-        sendAt={[MEMO.askAt]}
+        ask={{ text: MEMO.ask, at: MEMO.typeAsk, send: MEMO.askAt, cps: MEMO.cps }}
       />
       <DragChip />
     </Camera>

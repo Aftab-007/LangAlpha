@@ -33,11 +33,6 @@ export function changeAt(ticks: Ticks, t: number, live: boolean): number {
   return ticks[i].v;
 }
 
-export const upColor = (v: number) => (v >= 0 ? 'var(--color-profit)' : 'var(--color-loss)');
-export const signed = (v: number) => `${v >= 0 ? '+' : '-'}${Math.abs(v).toFixed(2)}`;
-export const money = (v: number) =>
-  v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
 /** The index cards. Their ticks run on DashboardGrid's script; the final
     signs are the static design's (up, up, down, up, down). Each `spark`
     runs three points past the seven on screen (see `Spark`). */

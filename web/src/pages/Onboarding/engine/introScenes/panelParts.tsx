@@ -2,6 +2,10 @@ import type { CSSProperties, ReactNode } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  Code2,
+  Download,
+  ExternalLink,
+  Link2,
   FolderTree,
   Maximize2,
   PanelRight,
@@ -121,6 +125,11 @@ export function PanelStrip({
     </div>
   );
 }
+
+/** The buttons on an HTML file's header, in the app's order
+    (`FileHeaderActions`): source, share link, open in a new tab, download. */
+// eslint-disable-next-line react-refresh/only-export-components -- the buttons travel with the header that draws them
+export const HTML_FILE_ACTIONS: LucideIcon[] = [Code2, Link2, ExternalLink, Download];
 
 /** An open file's header (`FileCrumbs`): the path, one segment per folder,
     then how long the file is where it is text, and the file's `actions`. */

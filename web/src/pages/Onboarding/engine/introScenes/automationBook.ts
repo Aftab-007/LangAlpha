@@ -24,7 +24,7 @@ import type { PriceTriggerConfig } from '@/types/automation';
    that fired this morning; and a one-time AVGO earnings preview that ran
    at 6:30 and is done. The reader's clock reads 10:14 on a Wednesday, and
    8:06 the next morning once a scene moves on a day. */
-export const NOW = new Date(2026, 9, 21, 10, 14).getTime();
+const NOW = new Date(2026, 9, 21, 10, 14).getTime();
 export const NEXT_MORNING = new Date(2026, 9, 22, 8, 6).getTime();
 export const on = (day: number, hour: number, minute: number) =>
   new Date(2026, 9, day, hour, minute);
@@ -32,9 +32,11 @@ const BRIEF_CRON = '0 8 * * 1-5';
 const REVIEW_CRON = '0 22 * * 5';
 const MARKET_ZONE = 'America/New_York';
 export const NVDA = { price: 182.42, previous_close: 179.53 };
+/** The level the price alert fires at. */
+export const ALERT_LEVEL = 190;
 const ALERT: PriceTriggerConfig = {
   symbol: 'NVDA',
-  conditions: [{ type: 'price_above', value: 190 }],
+  conditions: [{ type: 'price_above', value: ALERT_LEVEL }],
   retrigger: { mode: 'one_shot' },
 };
 /** The schedule chip's strip on a form not set to a schedule: the
@@ -100,6 +102,12 @@ export function useBook(now = NOW) {
       condition: formatPriceTrigger(ALERT, t),
       retrigger: formatRetriggerMode(ALERT, t),
     }),
+    /** The page header's census line; the watching part waits for a saved alert. */
+    census: (watching = true) =>
+      [
+        t('automation.censusScheduled', { count: 2 }),
+        ...(watching ? [t('automation.censusWatching', { count: 1 })] : []),
+      ].join(' · '),
     away: distanceLabel(reading, t, locale),
     price: fixed2(NVDA.price, locale),
     move: signedFixed2(((NVDA.price - NVDA.previous_close) / NVDA.previous_close) * 100, locale),

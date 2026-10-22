@@ -1,7 +1,6 @@
 import type { ComponentType, CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  ArrowLeft,
   ArrowRight,
   ArrowUpRight,
   Check,
@@ -9,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   FolderPlus,
+  Bot,
   PanelRight,
   Paperclip,
   type LucideProps,
@@ -22,41 +22,17 @@ import {
   messagingAppName,
 } from '@/pages/ChatAgent/components/messaging/messageDelivery';
 import { progress, useSceneTime } from './clock';
-import { Appear, Loader, rv, typedCount } from './kit';
+import { Appear, Loader, rv } from './kit';
 
-/* The chat transcript's parts, shared by the chat scenes: the thread's title
-   and transcript column, the agent's reply, activity rows, the workspace
-   line, the hand-off card, a workflow run, the caption on a message from
-   another agent, a chart in the reply, and the files a turn produced. Each
-   is a small copy of the component the app draws it with (named on each). */
+/* The chat intro's own transcript parts, shared by its scenes and the share
+   scene that opens on one of its threads: the workspace line, the hand-off
+   card, a workflow run, the caption on a message from another agent, a
+   chart in the reply, and the files a turn produced. The parts every
+   transcript draws (header, column, prose, tool rows) are in
+   transcriptParts.tsx. Each is a small copy of the component the app draws
+   it with (named on each). */
 
 export type Icon = ComponentType<LucideProps>;
-
-/** The thread page's header: back, then the thread's title. */
-export function TopTitle({ children }: { children: ReactNode }) {
-  return (
-    <span className="flex min-w-0 items-center gap-1">
-      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
-      <span
-        className="truncate text-[8px] font-medium leading-none"
-        style={{ color: 'var(--color-text-primary)' }}
-      >
-        {children}
-      </span>
-    </span>
-  );
-}
-
-/** A chat column's transcript: from the top while it fits, then held on its
-    newest lines with the oldest running off the top, as a thread scrolls
-    with its replies. */
-export function Transcript({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden">
-      <div className="flex min-h-full shrink-0 flex-col gap-1.5">{children}</div>
-    </div>
-  );
-}
 
 /** A solid card in the chat transcript (`--color-bg-tool-card`), as tool results sit. */
 const toolCard: CSSProperties = {
@@ -65,92 +41,6 @@ const toolCard: CSSProperties = {
 };
 
 /* ── the chat transcript ───────────────────────────────────────────────── */
-
-/**
- * The agent's reply streaming in from `at`, `cps` characters a second, in
- * the transcript's body text; `**bold**` spans render bold, as the app's
- * markdown does. Takes no room until its first character lands.
- */
-export function Reply({ text, at, cps = 150 }: { text: string; at: number; cps?: number }) {
-  const t = useSceneTime();
-  const typed = typedCount(t, at, cps);
-  if (typed <= 0) return null;
-  // each span with where its first character falls in the plain text
-  const spans: { bold: boolean; body: string; from: number }[] = [];
-  let from = 0;
-  for (const span of text.split(/(\*\*[^*]+\*\*)/).filter(Boolean)) {
-    const bold = span.startsWith('**');
-    const body = bold ? span.slice(2, -2) : span;
-    spans.push({ bold, body, from });
-    from += body.length;
-  }
-  return (
-    <p className="text-[8px] leading-[1.45]" style={{ color: 'var(--color-text-primary)' }}>
-      {spans.map(({ bold, body, from }, i) => {
-        if (typed <= from) return null;
-        const shown = body.slice(0, typed - from);
-        return bold ? (
-          <b key={i} className="font-semibold">
-            {shown}
-          </b>
-        ) : (
-          <span key={i}>{shown}</span>
-        );
-      })}
-    </p>
-  );
-}
-
-/** What a settled activity row acted on: the app's mono `.obj` pill. */
-export function Pill({ children }: { children: ReactNode }) {
-  return (
-    <span
-      className="truncate font-mono text-[7px] leading-none"
-      style={{ color: 'var(--Labels-Secondary)' }}
-    >
-      {children}
-    </span>
-  );
-}
-
-/** One row of a turn's activity (`ToolCallRow`, `ReasoningRow`): the tool's
-    icon, its running verb shimmering until `done`, then its title and what
-    it acted on. */
-export function ActivityRow({
-  icon: RowIcon,
-  verb,
-  title,
-  after,
-  at,
-  done,
-}: {
-  icon: Icon;
-  verb: string;
-  title: string;
-  after?: ReactNode;
-  at: number;
-  done: number;
-}) {
-  const live = useSceneTime() < done;
-  return (
-    <Appear at={at} className="flex items-center gap-1.5">
-      <RowIcon className="h-2 w-2 shrink-0" style={{ color: 'var(--Labels-Secondary)' }} />
-      {live ? (
-        <span className="intro-shimmer truncate text-[8px] leading-none">{verb}</span>
-      ) : (
-        <>
-          <span
-            className="shrink-0 text-[8px] leading-none"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            {title}
-          </span>
-          {after}
-        </>
-      )}
-    </Appear>
-  );
-}
 
 /** The Chief of Staff creating a workspace (`CreateWorkspaceCard`): the
     card's header with its loader until `done`, then the one line it settles
@@ -316,6 +206,13 @@ export function Provenance({
       {!logo && <ArrowUpRight className="h-[7px] w-[7px] shrink-0" />}
     </span>
   );
+}
+
+/** The caption over a task the Chief of Staff handed down
+    (`MessageProvenanceLabel`): `From the Chief of Staff`. */
+export function FromChiefOfStaff() {
+  const { t } = useTranslation();
+  return <Provenance icon={Bot}>{t('chat.provenance.fromChiefOfStaff')}</Provenance>;
 }
 
 /** A chat app's mark, as the app draws it: the favicon of the app's site. */
@@ -578,8 +475,10 @@ export function ChartCard({
   );
 }
 
-/** A file's thumbnail on its card: a page over a tilted sheet, the kind's glyph on it. */
-function FileThumb({ icon: Glyph }: { icon: Icon }) {
+/** A file's thumbnail on its card: a page over a tilted sheet, the kind's
+    glyph on it, and under the glyph the `label` a chart's card sets there
+    (its interval). */
+function FileThumb({ icon: Glyph, label }: { icon: Icon; label?: string }) {
   return (
     <span className="relative h-[15px] w-3 shrink-0">
       <span
@@ -591,36 +490,61 @@ function FileThumb({ icon: Glyph }: { icon: Icon }) {
         }}
       />
       <span
-        className="absolute inset-0 flex items-center justify-center rounded-sm border"
+        className={cn(
+          'absolute inset-0 flex items-center justify-center rounded-sm border',
+          label && 'flex-col gap-[1px]'
+        )}
         style={{ background: 'var(--color-bg-page)', borderColor: 'var(--color-border-elevated)' }}
       >
         <Glyph className="h-1.5 w-1.5" style={{ color: 'var(--color-accent-primary)' }} />
+        {label && (
+          <span
+            className="font-mono text-[3px] leading-none"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          >
+            {label}
+          </span>
+        )}
       </span>
     </span>
   );
 }
 
-/** A file the turn produced (`TurnFileCards`): thumbnail, name, kind, and
-    the Open button, or the deck's count once `count` files are stacked. */
+/**
+ * A file the turn produced (`TurnFileCards`): thumbnail, name, what it is
+ * (`meta`), and the Open button with its menu, or the deck's count once
+ * `count` files are stacked. A chart the agent drew on is the same card
+ * (`InlineChartAnnotationCard`), its interval on the thumbnail (`label`)
+ * and Open on its own (`solo`), there being no menu to open it otherwise.
+ */
 export function FileCard({
   name,
-  kind,
+  meta,
   icon,
+  label,
   count = 1,
+  solo = false,
 }: {
   name: string;
-  kind: 'spreadsheet' | 'document' | 'page';
+  meta: ReactNode;
   icon: Icon;
+  label?: string;
   count?: number;
+  solo?: boolean;
 }) {
   const { t } = useTranslation();
-  const ext = name.slice(name.lastIndexOf('.') + 1).toUpperCase();
+  const open = (
+    <>
+      <PanelRight className="h-1.5 w-1.5" />
+      {t('chat.turnFiles.open')}
+    </>
+  );
   return (
     <div
       className="flex h-6 items-center gap-1.5 rounded-lg border px-1.5"
       style={{ borderColor: 'var(--color-border-muted)', background: 'var(--color-bg-card)' }}
     >
-      <FileThumb icon={icon} />
+      <FileThumb icon={icon} label={label} />
       <span className="flex min-w-0 flex-col gap-0.5">
         <span
           className="truncate text-[8px] leading-none"
@@ -632,7 +556,7 @@ export function FileCard({
           className="truncate text-[6px] leading-none"
           style={{ color: 'var(--color-text-tertiary)' }}
         >
-          {t(`chat.turnFiles.kind.${kind}`)} · {ext}
+          {meta}
         </span>
       </span>
       {count > 1 ? (
@@ -648,6 +572,13 @@ export function FileCard({
           </span>
           <ChevronDown className="h-2 w-2" style={{ color: 'var(--color-text-tertiary)' }} />
         </span>
+      ) : solo ? (
+        <span
+          className="ml-auto flex shrink-0 items-center gap-0.5 rounded-[4px] border px-1 py-0.5 text-[6px] leading-none"
+          style={{ borderColor: 'var(--color-border-muted)', color: 'var(--color-text-tertiary)' }}
+        >
+          {open}
+        </span>
       ) : (
         <span
           className="ml-auto flex shrink-0 items-stretch text-[6px] leading-none"
@@ -657,8 +588,7 @@ export function FileCard({
             className="flex items-center gap-0.5 rounded-l-[4px] border px-1 py-0.5"
             style={{ borderColor: 'var(--color-border-muted)' }}
           >
-            <PanelRight className="h-1.5 w-1.5" />
-            {t('chat.turnFiles.open')}
+            {open}
           </span>
           <span
             className="flex items-center rounded-r-[4px] border border-l-0 px-0.5"
@@ -693,7 +623,20 @@ export function FileStack({
   at: number;
   next: number;
 }) {
+  const { t } = useTranslation();
   const stacked = useSceneTime() >= next;
+  /* the kind line reads as the card's does: the kind, then the extension,
+     kept as separate pieces of text, since one joined string sets the line
+     a hair differently */
+  const card = ({ name, kind, icon }: TurnFile) => ({
+    name,
+    icon,
+    meta: (
+      <>
+        {t(`chat.turnFiles.kind.${kind}`)} · {name.slice(name.lastIndexOf('.') + 1).toUpperCase()}
+      </>
+    ),
+  });
   return (
     <Appear at={at}>
       <div className="relative" style={{ height: stacked ? 27 : 24 }}>
@@ -702,11 +645,11 @@ export function FileStack({
             className="absolute inset-x-0 top-0"
             style={{ transform: 'translateY(3px) scale(0.98)' }}
           >
-            <FileCard {...under} />
+            <FileCard {...card(under)} />
           </div>
         )}
         <div className="absolute inset-x-0 top-0">
-          <FileCard {...top} count={stacked ? 2 : 1} />
+          <FileCard {...card(top)} count={stacked ? 2 : 1} />
         </div>
       </div>
     </Appear>

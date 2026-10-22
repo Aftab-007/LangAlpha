@@ -35,7 +35,8 @@ const SHARE = {
 const SHARE_BUTTON = { x: PTC_CHAT - 9 - 8, y: PTC_HEADER_H / 2 };
 const SHARE_POPOVER = { right: PTC_CHAT - 9, top: PTC_HEADER_H + 1 };
 
-/** The file header's share link button (`Link2`), second of its four. */
+/** The file header's share link button (`Link2`), second of the four in
+    `HTML_FILE_ACTIONS`. */
 const FILE_LINK = { x: VIEW.width - 4.5 - 16 * 2.5 - 4.5 * 2, y: PTC_HEADER_H + 9.5 };
 
 /** A beat that lands on `p` 50ms before it clicks at `at`, and moves

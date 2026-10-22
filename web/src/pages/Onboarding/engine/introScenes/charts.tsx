@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { ease, useSceneTime } from './clock';
-import { useSvgId } from './kit';
+import { signColor, useSvgId } from './kit';
 
 /* The charts the scenes draw, each after the app's own: the price card a
    market-data tool leaves in chat (`InlineStockPriceCard`), and the bar
@@ -116,7 +116,7 @@ export function StockPriceCard({
   at?: number;
 }) {
   const { t } = useTranslation();
-  const color = change >= 0 ? 'var(--color-profit)' : 'var(--color-loss)';
+  const color = signColor(change);
   const label = { color: 'var(--color-text-tertiary)' };
   return (
     <div

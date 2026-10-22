@@ -1,16 +1,16 @@
-import { Fragment, type ReactNode } from 'react';
-import { ArrowLeft, type LucideIcon } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import type { ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import { useAgentNames } from '../introAgents';
 import { VIEW } from './camera';
-import { PAST, useSceneTime } from './clock';
-import { Appear, InputDock, Tag, typedCount } from './kit';
+import { useSceneTime } from './clock';
+import { InputDock, Tag, Typed } from './kit';
 import { ChatHeaderButtons, PanelStrip } from './panelParts';
+import { TopTitle, Transcript } from './transcriptParts';
 
 /* The thread page the thread intro's scenes play on: the chat column beside
-   the file panel, the panel a full-height column with its own tab strip,
-   and the transcript's prose and tool rows. Each part is a small copy of the
-   component the app draws it with. */
+   the file panel, the panel a full-height column with its own tab strip.
+   Each part is a small copy of the component the app draws it with; the
+   transcript's own parts are in transcriptParts.tsx. */
 
 /** The file panel's width in the 400px scene; the chat column takes the rest. */
 export const PANEL_W = 212;
@@ -20,64 +20,16 @@ export function ChromeIcon({ icon: Icon }: { icon: LucideIcon }) {
   return <Icon className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />;
 }
 
-/**
- * The agent's prose as the transcript sets it: body text, `**bold**` lead-ins,
- * and a workspace path in backticks drawn as the link the app makes of it.
- * Streams in from `at`, `cps` characters a second; with no `at` it was written
- * before the scene began, and outside a clock it is whole.
- */
-export function Prose({ text, at, cps = 110 }: { text: string; at?: number; cps?: number }) {
-  const t = useSceneTime();
-  let left = at == null ? Infinity : Math.max(typedCount(t, at, cps), 0);
-  if (left === 0) return null;
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).filter(Boolean);
-  const out: ReactNode[] = [];
-  parts.forEach((part, i) => {
-    if (left <= 0) return;
-    const bold = part.startsWith('**');
-    const link = part.startsWith('`');
-    const body = bold ? part.slice(2, -2) : link ? part.slice(1, -1) : part;
-    const piece = body.slice(0, left);
-    left -= body.length;
-    out.push(
-      bold ? (
-        <b key={i} className="font-semibold">
-          {piece}
-        </b>
-      ) : link ? (
-        <span
-          key={i}
-          className="underline decoration-from-font underline-offset-[1.5px]"
-          style={{ color: 'var(--color-accent-primary)' }}
-        >
-          {piece}
-        </span>
-      ) : (
-        <Fragment key={i}>{piece}</Fragment>
-      )
-    );
-  });
-  return (
-    <p className="text-[8px] leading-[1.5]" style={{ color: 'var(--color-text-primary)' }}>
-      {out}
-    </p>
-  );
-}
-
-/** The chat column's header: back, the thread's `title`, the agent, and
-    share. The panel is open beside it, so the panel toggle is in the
-    panel's corner rather than here. */
+/** The chat column's header (`ChatView`'s top bar): back, the thread's
+    `title`, the agent, and share. The panel is open beside it, so the panel
+    toggle is in the panel's corner rather than here. This page's header
+    sets the arrow 6px from the title where the chat scenes' set it 4px, and
+    keeps the agent's tag at the right, by the buttons. */
 function ChatHeader({ title }: { title: string }) {
   const { worker } = useAgentNames();
   return (
     <div className="flex min-w-0 flex-1 items-center gap-1.5 pl-2.5 pr-[9px]">
-      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
-      <span
-        className="min-w-0 truncate text-[8px] font-medium leading-none"
-        style={{ color: 'var(--color-text-primary)' }}
-      >
-        {title}
-      </span>
+      <TopTitle className="gap-1.5">{title}</TopTitle>
       <span className="ml-auto flex shrink-0 items-center gap-1.5">
         <Tag>{worker}</Tag>
         <ChatHeaderButtons panelOpen />
@@ -96,7 +48,8 @@ export const HEADER_H = 28;
  * `PanelStrip` reads them) sits level with the chat header and `panel` fills
  * the rest. `stack` places the transcript: from the top for a new thread, or
  * settled on the composer for one with history above, the oldest lines
- * running off the top as the newest come in.
+ * running off the top as the newest come in. `ask` is typed into the
+ * composer from `at`, `cps` characters a second, and sent at `send`.
  */
 export function ThreadPage({
   title,
@@ -105,8 +58,7 @@ export function ThreadPage({
   tree,
   chat,
   panel,
-  composer,
-  sendAt,
+  ask,
   stack = 'top',
 }: {
   title: string;
@@ -115,10 +67,11 @@ export function ThreadPage({
   tree?: boolean;
   chat: ReactNode;
   panel: ReactNode;
-  composer?: ReactNode;
-  sendAt?: number[];
+  ask?: { text: string; at: number; send: number; cps: number };
   stack?: 'top' | 'bottom';
 }) {
+  const t = useSceneTime();
+  const typing = ask && t >= ask.at && t < ask.send;
   return (
     <div className="relative flex flex-col" style={VIEW}>
       <div
@@ -136,14 +89,11 @@ export function ThreadPage({
       </div>
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 p-2.5">
-          {stack === 'bottom' ? (
-            <div className="flex min-h-0 flex-1 flex-col justify-end gap-1.5 overflow-hidden">
-              {chat}
-            </div>
-          ) : (
-            chat
-          )}
-          <InputDock text={composer} sendAt={sendAt} />
+          {stack === 'bottom' ? <Transcript settled>{chat}</Transcript> : chat}
+          <InputDock
+            text={typing ? <Typed text={ask.text} at={ask.at} cps={ask.cps} /> : undefined}
+            sendAt={ask && [ask.send]}
+          />
         </div>
         <div
           className="flex shrink-0 flex-col border-l"
@@ -153,80 +103,5 @@ export function ThreadPage({
         </div>
       </div>
     </div>
-  );
-}
-
-/** A turn's tool calls, threaded on the timeline's rule through their icons. */
-export function Timeline({ children }: { children: ReactNode }) {
-  return (
-    <div className="relative flex flex-col">
-      <span
-        aria-hidden
-        className="absolute bottom-[8.5px] left-[6.5px] top-[8.5px] w-px"
-        style={{ background: 'var(--color-border-default)' }}
-      />
-      {children}
-    </div>
-  );
-}
-
-/** What a tool row says at one stage: its label, and the mono pill naming
-    the file when there is one. */
-interface RowLine {
-  label: string;
-  pill?: string;
-}
-
-/**
- * One tool call on the timeline: its icon on the rule, then what it says.
- * While it runs the label shimmers, then it settles. A file call keeps one
- * pill throughout ("Writing" then "Write", beside `notes.md`); a memory call
- * runs as one phrase and settles with its topic as the pill. The app draws
- * no spinner and no check on these rows. A row with no `running` is a call
- * the thread made before the scene began, so it is settled from the start.
- */
-export function ToolRow({
-  icon: Icon,
-  running,
-  settled,
-  at = PAST,
-  done = PAST,
-}: {
-  icon: LucideIcon;
-  running?: RowLine;
-  settled: RowLine;
-  at?: number;
-  done?: number;
-}) {
-  const now = useSceneTime();
-  const live = running != null && now < done;
-  const { label, pill } = live ? running : settled;
-  return (
-    <Appear at={at} className="flex min-w-0 items-center gap-1.5 py-[3px]">
-      {/* page-colored behind the icon, so the rule breaks around it */}
-      <span
-        className="flex h-[11px] w-3.5 shrink-0 items-center justify-center"
-        style={{ background: 'var(--color-bg-page)' }}
-      >
-        <Icon className="h-2 w-2" style={{ color: 'var(--Labels-Secondary)' }} />
-      </span>
-      {/* label and pill share a baseline, as the app's row line does */}
-      <span className="flex min-w-0 items-baseline gap-1.5">
-        <span
-          className={cn('truncate text-[8px] leading-none', live && 'intro-shimmer')}
-          style={live ? undefined : { color: 'var(--color-text-primary)' }}
-        >
-          {label}
-        </span>
-        {pill && (
-          <span
-            className="whitespace-nowrap font-mono text-[7px] leading-none"
-            style={{ color: 'var(--Labels-Secondary)' }}
-          >
-            {pill}
-          </span>
-        )}
-      </span>
-    </Appear>
   );
 }

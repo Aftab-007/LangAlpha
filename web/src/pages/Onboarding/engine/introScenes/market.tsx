@@ -1,22 +1,25 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, PenLine } from 'lucide-react';
+import { Check } from 'lucide-react';
 import type { IntroVisualId } from '../../registry';
 import { Camera, REST, VIEW, shot, type Shot } from './camera';
-import { Candles, EventBadge } from './candles';
+import { Candles, EventBadge, badgeAnchor } from './candles';
 import {
+  AnnotateRow,
   CommentBox,
   Pin,
   Selection,
-  SelectionCard,
   SelectionChip,
+  SentSelection,
+  addButton,
   besideRegion,
+  dragBox,
 } from './chartTools';
 import { PAST, useSceneTime } from './clock';
-import { Appear, Loader, Typed, UserBubble, pointAt, pointerScript } from './kit';
+import { Loader, Typed, pointerScript } from './kit';
 import { CHART, CHAT_X, MarketPage, PAGE, REGION_BTN, SEND } from './marketParts';
 import { NVDA, NVDA_EVENTS, chartScale } from './nvdaSeries';
-import { Prose, ToolRow } from './threadParts';
+import { Reply } from './transcriptParts';
 import type { IntroScene } from './types';
 
 /* The market intro, on MarketView itself, framed by a camera that shows
@@ -63,16 +66,6 @@ function Tip({ x, y, children }: { x: number; y: number; children: ReactNode }) 
   );
 }
 
-/** The user's message with its selection, as sent from the panel. */
-function Sent({ at }: { at: number }) {
-  return (
-    <>
-      <UserBubble at={at}>{NOTE}</UserBubble>
-      <SelectionCard at={at + 60} note={NOTE} />
-    </>
-  );
-}
-
 /* ── marketAsk ─────────────────────────────────────────────────────────── */
 
 const ASK = {
@@ -100,6 +93,7 @@ const REGION = {
 };
 const BOX = besideRegion(SCALE, REGION.x0, REGION.x1, REGION.y0);
 const PIN = besideRegion(SCALE, REGION.x0, REGION.x1, REGION.y0, 10);
+const ADD = addButton(BOX);
 
 /** At rest on the chart while the Region tool is armed and the drop is
     taken and noted; across to the chat panel's foot as the selection goes
@@ -128,17 +122,10 @@ const ASK_POINTER = pointerScript(
     anchor: { ...onPage(REGION.x0, REGION.y0), arrive: 2150, leave: 2250 },
     release: { ...onPage(REGION.x1, REGION.y1), arrive: 2950 },
     clear: { ...onPage(REGION.x1 - 6, REGION.y1 + 8), arrive: 3200 },
-    add: { ...onPage(BOX.left + 77, BOX.top + 8), arrive: 4100, click: ASK.add, leave: 4450 },
+    add: { ...onPage(ADD.x, ADD.y), arrive: 4100, click: ASK.add, leave: 4450 },
     send: { ...SEND, arrive: 5250, click: ASK.send },
   }
 );
-
-/** The drag in progress: the anchor corner to wherever the pointer is. */
-function dragged(t: number) {
-  if (t >= ASK.release) return REGION;
-  const p = pointAt(ASK_POINTER.path, Math.max(t, ASK.press));
-  return { ...REGION, x1: p.x - CHART.x, y1: p.y - CHART.y };
-}
 
 function MarketAsk() {
   const { t: tr } = useTranslation();
@@ -151,7 +138,9 @@ function MarketAsk() {
         armed={t >= ASK.arm && t < ASK.release}
         chart={
           <Candles series={NVDA} scale={SCALE}>
-            {drawing && t < ASK.added && <Selection {...dragged(t)} />}
+            {drawing && t < ASK.added && (
+              <Selection {...dragBox(REGION, ASK_POINTER.path, CHART, t, ASK)} />
+            )}
             {drawing && t >= ASK.added && <Selection {...REGION} active={false} />}
             {t >= ASK.release && t < ASK.added && (
               <CommentBox
@@ -165,25 +154,20 @@ function MarketAsk() {
           </Candles>
         }
         title={sent ? NOTE : undefined}
-        chip={
-          t >= ASK.added && !sent ? (
-            <Appear at={ASK.added} pop className="flex min-w-0">
-              <SelectionChip note={NOTE} />
-            </Appear>
-          ) : undefined
-        }
+        chip={t >= ASK.added && !sent ? <SelectionChip note={NOTE} at={ASK.added} /> : undefined}
         transcript={
           sent ? (
             <>
-              <Sent at={ASK.send} />
+              <SentSelection at={ASK.send} text={NOTE} note={NOTE} />
               {t >= ASK.think && t < ASK.lead && (
                 <Loader color="var(--color-icon-muted)" className="text-[10px]" />
               )}
-              <Prose text={LEAD} at={ASK.lead} cps={60} />
+              <Reply text={LEAD} at={ASK.lead} cps={60} />
             </>
           ) : undefined
         }
-        composer={{ ready: t >= ASK.added && !sent, sendAt: [ASK.send] }}
+        ready={t >= ASK.added && !sent}
+        sendAt={[ASK.send]}
       />
       {t >= ASK.tip && t < ASK.arm && (
         <Tip x={ON_REGION.x} y={REGION_BTN.y + 9}>
@@ -195,21 +179,6 @@ function MarketAsk() {
 }
 
 /* ── marketDraw ────────────────────────────────────────────────────────── */
-
-/** One `draw_chart_annotation` call: annotating while it runs, then the
-    settled row naming the chart it drew on. */
-function AnnotateRow({ at, done }: { at: number; done: number }) {
-  const { t } = useTranslation();
-  return (
-    <ToolRow
-      icon={PenLine}
-      at={at}
-      done={done}
-      running={{ label: t('toolArtifact.inProgress.annotatingChart') }}
-      settled={{ label: t('toolArtifact.tool.annotateChart'), pill: 'NVDA · 1D' }}
-    />
-  );
-}
 
 /** The chart's chip in the panel (`InlineChartAnnotationCard` beside the live
     chart): the first draw's place in the transcript, counting what is on the
@@ -266,7 +235,7 @@ const DROP = NVDA_EVENTS.exportRule;
 const CHIP_AT = { x: CHAT_X + 46, y: 126 };
 const CHIP_BOTTOM = 134;
 /** The drop's badge, centered over its anchor. */
-const BADGE = onPage(SCALE.x(DROP.i), SCALE.y(DROP.price) - 10.5);
+const BADGE = onPage(...badgeAnchor(SCALE, DROP));
 
 /** On the chat panel the whole time the reply comes in, its message on top
     and the chart's right half beside it; then across to rest on the chart
@@ -315,8 +284,8 @@ function MarketDraw() {
         }
         transcript={
           <>
-            <Sent at={PAST} />
-            <Prose text={LEAD} />
+            <SentSelection at={PAST} text={NOTE} note={NOTE} />
+            <Reply text={LEAD} />
             {t < first ? (
               <AnnotateRow at={DRAW.run} done={first} />
             ) : (
@@ -327,7 +296,7 @@ function MarketDraw() {
                 <AnnotateRow key={done} at={DRAW.run} done={done} />
               ))}
             </div>
-            <Prose text={ANSWER} at={DRAW.answer} cps={80} />
+            <Reply text={ANSWER} at={DRAW.answer} cps={80} />
           </>
         }
       />

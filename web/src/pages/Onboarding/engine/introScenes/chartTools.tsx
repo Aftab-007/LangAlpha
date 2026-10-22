@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import {
   Check,
   ChevronDown,
+  PenLine,
   Plus,
   Ruler,
   SquareDashedMousePointer,
@@ -10,19 +11,28 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Appear } from './kit';
+import { Appear, type PointerScript, UserBubble, pointAt } from './kit';
 import type { ChartScale } from './nvdaSeries';
+import { ToolRow } from './transcriptParts';
 
 /* What goes over and around the chart (candles.tsx) when the user picks out
    part of it: the selection, its pin and comment box, the chip it waits as
-   above a composer and the card it is sent as; and the chart toolbar's
-   parts. The market page and the thread's chart tab both draw these, so
-   they sit apart from either. */
+   above a composer and the card it is sent as, and the agent's annotate
+   call; and the chart toolbar's parts. The market page and the thread's
+   chart tab both draw these, so they sit apart from either. */
 /* eslint-disable react-refresh/only-export-components -- shared parts:
    the overlays plus the sizes and placement helpers the scenes lay them
    out by */
 
 /* ── the user's selection ──────────────────────────────────────────────── */
+
+/** A region's corners, in chart px. */
+interface Region {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
 
 /** A region being drawn or held (`SelectionPrimitive`): a teal box, dashed,
     bolder while it is the one being edited. Corners in chart px. */
@@ -161,27 +171,30 @@ export function besideRegion(
 }
 
 /** A chart selection waiting above the composer (`SelectionChips`): what
-    it is, the symbol and timeframe, the note, and its X. */
-export function SelectionChip({ note }: { note: string }) {
+    it is, the symbol and timeframe, the note, and its X. Pops in at `at`,
+    as the comment box's Add hands it over. */
+export function SelectionChip({ note, at }: { note: string; at: number }) {
   const { t } = useTranslation();
   return (
-    <span
-      className={cn(
-        'flex w-fit max-w-full items-center gap-[3px] rounded-[3px] border py-[2.5px] pl-[5px] pr-[3px]',
-        'text-[6px] leading-none'
-      )}
-      style={{
-        backgroundColor: 'var(--color-bg-page)',
-        backgroundImage: 'linear-gradient(var(--color-bg-surface), var(--color-bg-surface))',
-        borderColor: 'var(--color-border-muted)',
-        color: 'var(--color-text-secondary)',
-      }}
-    >
-      <span className="min-w-0 truncate">
-        {t('marketView.selection.chipRegion', { symbol: 'NVDA', timeframe: '1day' })} · "{note}"
+    <Appear at={at} pop className="flex min-w-0">
+      <span
+        className={cn(
+          'flex w-fit max-w-full items-center gap-[3px] rounded-[3px] border py-[2.5px] pl-[5px] pr-[3px]',
+          'text-[6px] leading-none'
+        )}
+        style={{
+          backgroundColor: 'var(--color-bg-page)',
+          backgroundImage: 'linear-gradient(var(--color-bg-surface), var(--color-bg-surface))',
+          borderColor: 'var(--color-border-muted)',
+          color: 'var(--color-text-secondary)',
+        }}
+      >
+        <span className="min-w-0 truncate">
+          {t('marketView.selection.chipRegion', { symbol: 'NVDA', timeframe: '1day' })} · "{note}"
+        </span>
+        <X className="h-[6px] w-[6px] shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
       </span>
-      <X className="h-[6px] w-[6px] shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
-    </span>
+    </Appear>
   );
 }
 
@@ -217,6 +230,49 @@ export function SelectionCard({ at, note }: { at: number; note: string }) {
         </span>
       </span>
     </Appear>
+  );
+}
+
+/** The user's message as it goes out with the selection under it. */
+export function SentSelection({ at, text, note }: { at: number; text: string; note: string }) {
+  return (
+    <>
+      <UserBubble at={at}>{text}</UserBubble>
+      <SelectionCard at={at + 60} note={note} />
+    </>
+  );
+}
+
+/** The region while it is dragged out: its anchor corner held, its far
+    corner on the pointer (`path`, in page px, less the chart's `origin`)
+    from `press`, and the whole of it from `release`. The overlay that
+    draws it stays inline in each scene: as a shared component its
+    constants became props, and it compiled to more than the copies it
+    replaced. */
+export function dragBox(
+  region: Region,
+  path: PointerScript['path'],
+  origin: { x: number; y: number },
+  t: number,
+  { press, release }: { press: number; release: number }
+): Region {
+  if (t >= release) return region;
+  const p = pointAt(path, Math.max(t, press));
+  return { ...region, x1: p.x - origin.x, y1: p.y - origin.y };
+}
+
+/** One `draw_chart_annotation` call (`ToolCallRow`): annotating while it
+    runs, then the settled row naming the chart it drew on. */
+export function AnnotateRow({ at, done }: { at: number; done: number }) {
+  const { t } = useTranslation();
+  return (
+    <ToolRow
+      icon={PenLine}
+      at={at}
+      done={done}
+      running={{ label: t('toolArtifact.inProgress.annotatingChart') }}
+      settled={{ label: t('toolArtifact.tool.annotateChart'), pill: 'NVDA · 1D' }}
+    />
   );
 }
 

@@ -3,11 +3,66 @@ import { useTranslation } from 'react-i18next';
 import { ArrowRight } from 'lucide-react';
 import { ease, useSceneTime } from './clock';
 import { Loader } from './kit';
-import { Excerpt, Grow, Kicker, LinkOut, PriceMeter, RunEntry } from './automationParts';
-import { BRIEF_EXCERPT, FIRED, NVDA, on, PREVIEW, useBook } from './automationBook';
+import { Excerpt, Grow, Kicker, LinkOut, PriceMeter } from './automationParts';
+import { ALERT_LEVEL, BRIEF_EXCERPT, FIRED, NVDA, on, PREVIEW, useBook } from './automationBook';
 
 /* The feed's parts at scene scale (`FeedView`, `FeedRail`): the runs of the
    account in automationBook.ts, a day at a time, and the rail beside them. */
+
+/** One run in the feed (`RunEntry` + `RunReport`): its time, the status
+    glyph and name, the meta line, the start of what it said, and its links. */
+function RunEntry({
+  time,
+  glyph,
+  name,
+  meta,
+  excerpt,
+  actions,
+}: {
+  time: string;
+  glyph?: ReactNode;
+  name: string;
+  meta: ReactNode;
+  excerpt?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div
+      className="flex gap-2 border-b py-[7px]"
+      style={{ borderColor: 'var(--color-border-muted)' }}
+    >
+      <div
+        className="w-[30px] shrink-0 whitespace-nowrap pt-px font-mono text-[6px] leading-none tabular-nums"
+        style={{ color: 'var(--color-text-tertiary)' }}
+      >
+        {time}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-[4px]">
+          {glyph && (
+            <span className="inline-flex h-[8px] w-[7px] shrink-0 items-center justify-center">
+              {glyph}
+            </span>
+          )}
+          <span
+            className="-my-px truncate text-[8px] font-medium leading-[1.25]"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
+            {name}
+          </span>
+        </div>
+        <div
+          className="mt-[3px] font-mono text-[5.5px] leading-[1.3] tabular-nums"
+          style={{ color: 'var(--color-text-tertiary)' }}
+        >
+          {meta}
+        </div>
+        {excerpt}
+        {actions && <div className="mt-[5px] flex flex-wrap items-center gap-1">{actions}</div>}
+      </div>
+    </div>
+  );
+}
 
 /** The run the $180 alert started: it lands at `land`, works, and at
     `done` finishes with what it found. */
@@ -157,7 +212,7 @@ export function FeedRail({ now }: { now?: number }) {
             </span>
           </div>
           <div className="mt-[5px]">
-            <PriceMeter symbol="NVDA" current={NVDA.price} threshold={190} />
+            <PriceMeter symbol="NVDA" current={NVDA.price} threshold={ALERT_LEVEL} />
           </div>
         </div>
       </RailSection>

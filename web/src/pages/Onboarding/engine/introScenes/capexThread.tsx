@@ -1,18 +1,10 @@
-import { useTranslation } from 'react-i18next';
-import { Bot, FileSpreadsheet, Globe } from 'lucide-react';
+import { FileSpreadsheet, Globe } from 'lucide-react';
 import { useAgentNames } from '../introAgents';
 import { ease, useSceneTime } from './clock';
 import { REST, VIEW } from './camera';
-import { InputDock, Tag, UserBubble } from './kit';
-import {
-  type FlowAgent,
-  FileStack,
-  Provenance,
-  Reply,
-  TopTitle,
-  Transcript,
-  WorkflowCard,
-} from './chatParts';
+import { InputDock, UserBubble } from './kit';
+import { type FlowAgent, FileStack, FromChiefOfStaff, WorkflowCard } from './chatParts';
+import { Reply, ThreadHeader, Transcript } from './transcriptParts';
 import { DASH_BUILD, DashboardPanel, PTC_HEADER_H } from './chatDashboard';
 import { ChatHeaderButtons } from './panelParts';
 
@@ -129,7 +121,6 @@ export function CapexThread({
   sharing?: boolean;
   shared?: boolean;
 }) {
-  const { t } = useTranslation();
   const names = useAgentNames();
   const now = useSceneTime();
   const open = ease(now, PTC.panel, 450);
@@ -143,27 +134,23 @@ export function CapexThread({
       >
         {/* the header's share and panel toggle at its right; the toggle
               moves to the panel's corner once the panel is open */}
-        <div
-          className="flex shrink-0 items-center gap-1.5 border-b pl-2 pr-[9px]"
-          style={{ height: PTC_HEADER_H, borderColor: 'var(--color-border-muted)' }}
+        <ThreadHeader
+          title="Capex tracker"
+          agent={names.worker}
+          height={PTC_HEADER_H}
+          className="gap-1.5 pl-2 pr-[9px]"
         >
-          <TopTitle>Capex tracker</TopTitle>
-          <Tag>{names.worker}</Tag>
-          <span className="ml-auto flex">
-            <ChatHeaderButtons panelOpen={now >= PTC.panel} sharing={sharing} shared={shared} />
-          </span>
-        </div>
+          <ChatHeaderButtons panelOpen={now >= PTC.panel} sharing={sharing} shared={shared} />
+        </ThreadHeader>
         <div className="flex min-h-0 w-full flex-1 flex-col gap-1.5 p-2.5">
           <Transcript>
-            <UserBubble
-              at={PTC.task}
-              caption={<Provenance icon={Bot}>{t('chat.provenance.fromChiefOfStaff')}</Provenance>}
-            >
+            <UserBubble at={PTC.task} caption={<FromChiefOfStaff />}>
               Build a capex tracker from the hyperscaler calls.
             </UserBubble>
             {/* the Analyst's turn opens with a line saying what it will run,
                   so the run card reads as part of that turn */}
             <Reply
+              dense
               text="I'll read all 32 calls, eight at a time, then build the tracker."
               at={PTC.plan}
             />
@@ -178,6 +165,7 @@ export function CapexThread({
             />
             {/* the long answer, then the files */}
             <Reply
+              dense
               text="**Capex hit $149bn last quarter, up 55% on a year ago.** All four raised their outlook in July; 2026 guidance now sums to about $610bn, with GOOGL up most, to $140bn. Every figure checks against the filings."
               at={PTC.say}
             />

@@ -215,6 +215,15 @@ const EDGE_X = 15;
 /** An anchor higher than this hangs its badge under it (`FLIP_Y`). */
 const FLIP_Y = 22;
 
+/** Where a click lands on an event's badge, in chart px: over its bar, at
+    the middle of a badge hung above its dot (the 4.5px gap and half the
+    badge's height). The badges the scenes click sit clear of the pane's
+    edges and its top, so neither clamp nor flip applies. */
+// eslint-disable-next-line react-refresh/only-export-components -- the anchor travels with the badge's geometry
+export function badgeAnchor(k: ChartScale, ev: ChartEvent): [number, number] {
+  return [k.x(ev.i), k.y(ev.price) - 10.5];
+}
+
 /**
  * An event annotation as `AgentEventOverlay` draws it, at half the app's
  * size: a dot ringed in the card color on the bar and price, and the

@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next';
 import { BarChart3, CalendarSearch, Plus, Sun, TrendingUp, X, type LucideIcon } from 'lucide-react';
-import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
 import {
   ALERT_INSTRUCTION,
@@ -9,7 +8,6 @@ import {
   LAST_EXCERPT,
   NEXT_EXCERPT,
   NEXT_MORNING,
-  NVDA,
   useBook,
 } from './automationBook';
 import { askScene } from './automationAsk';
@@ -17,27 +15,29 @@ import { BriefRun, Day, FeedLayout, FeedRail, FiredRun, PreviewRun } from './aut
 import {
   AlertGroup,
   AutomationRows,
+  Grow,
+  Inspector,
+  Kicker,
+  ManageLayout,
+  Page,
+  PageHeader,
+  AlertMeter,
+  Segmented,
+} from './automationParts';
+import {
   Field,
   FormActions,
   FormRow,
   FormTitle,
-  Grow,
-  Inspector,
   InstructionBox,
-  Kicker,
-  ManageLayout,
   MenuSurface,
   MoreToggle,
-  Page,
-  PageHeader,
-  PriceMeter,
   Readout,
-  Segmented,
   TriggerChips,
   useSummary,
   WEEKDAYS,
   WeekPicker,
-} from './automationParts';
+} from './automationForm';
 import { CLOSE, Camera, REST, type Shot, VIEW, corner, shot } from './camera';
 import { during, ease, useSceneTime } from './clock';
 import { Appear, Caret, Typed, pointerScript, pressAt } from './kit';
@@ -188,13 +188,7 @@ function PriceReadout() {
   if (now >= TRIG.meter) {
     return (
       <Appear at={TRIG.meter} className="max-w-[190px]">
-        <div
-          className={cn('mb-[3px] text-[5.5px] leading-none', mono)}
-          style={{ color: 'var(--color-text-tertiary)' }}
-        >
-          {B.away}
-        </div>
-        <PriceMeter symbol="NVDA" current={NVDA.price} threshold={190} at={TRIG.meter} />
+        <AlertMeter at={TRIG.meter} />
       </Appear>
     );
   }
@@ -283,13 +277,10 @@ function PriceForm() {
 }
 
 function AutomationTrigger() {
-  const { t } = useTranslation();
+  const B = useBook();
   const now = useSceneTime();
   const saved = now >= TRIG.saved;
-  const census = [
-    t('automation.censusScheduled', { count: 2 }),
-    ...(saved ? [t('automation.censusWatching', { count: 1 })] : []),
-  ].join(' · ');
+  const census = B.census(saved);
   const pane =
     now < TRIG.form ? (
       <Inspector which="brief" />
@@ -358,11 +349,9 @@ const FEED_SHOTS: [Shot, ...Shot[]] = [shot(0, 0, 0, REST), shot(6400, VIEW.widt
 
 function AutomationFeed() {
   const { t } = useTranslation();
+  const B = useBook();
   const now = useSceneTime();
-  const census = [
-    t('automation.censusScheduled', { count: 2 }),
-    t('automation.censusWatching', { count: 1 }),
-  ].join(' · ');
+  const census = B.census();
   return (
     <Camera shots={FEED_SHOTS}>
       <Page>
@@ -611,10 +600,7 @@ function AutomationDelivery() {
   const { t } = useTranslation();
   const B = useBook();
   const now = useSceneTime();
-  const census = [
-    t('automation.censusScheduled', { count: 2 }),
-    t('automation.censusWatching', { count: 1 }),
-  ].join(' · ');
+  const census = B.census();
   const feed = now >= DLV.feed;
   return (
     <Camera shots={DLV_SHOTS} page={DLV_PAGE} pointer={feed ? undefined : DLV_POINTER}>

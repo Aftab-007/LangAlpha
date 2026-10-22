@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next';
 import {
-  Bot,
   Brain,
   ChevronRight,
   FileSpreadsheet,
@@ -19,25 +18,22 @@ import type { IntroVisualId } from '../../registry';
 import { BarChart, StockPriceCard, type Bar } from './charts';
 import { PAST, useSceneTime } from './clock';
 import { CLOSE, Camera, REST, type Shot, VIEW, shot, wide } from './camera';
-import { Appear, InputDock, Region, Tag, UserBubble, pointerScript } from './kit';
+import { Appear, InputDock, Region, UserBubble, pointerScript } from './kit';
 import type { IntroScene } from './types';
 import {
   type FlowAgent,
   type Icon,
-  ActivityRow,
   ChartCard,
   DeliveryPill,
   FileStack,
   HandoffCard,
-  Pill,
+  FromChiefOfStaff,
   Provenance,
-  Reply,
-  TopTitle,
-  Transcript,
   ViaApp,
   WorkflowCard,
   WorkspaceLine,
 } from './chatParts';
+import { Reply, ThreadHeader, ToolRow, Transcript } from './transcriptParts';
 import { DASH_META_CHIP } from './chatDashboard';
 import { CapexThread, PTC, PTC_CHAT } from './capexThread';
 
@@ -54,6 +50,19 @@ import { CapexThread, PTC, PTC_CHAT } from './capexThread';
    private scene components, one record export */
 
 /* ── chat · step 1: one hand-off, from both sides ──────────────────────── */
+
+/** The caption alone in place of a report-back's hidden message
+    (`MessageProvenanceLabel`): `Report from <name>`, right-aligned, shown
+    at `at`. Only the chat scenes show one, so it stays here, clear of the
+    parts the thread intro loads. */
+function ReportFrom({ at, name }: { at: number; name: string }) {
+  const { t } = useTranslation();
+  return (
+    <Appear at={at} className="flex justify-end">
+      <Provenance icon={Inbox}>{t('chat.provenance.reportFrom', { name })}</Provenance>
+    </Appear>
+  );
+}
 
 /** A pane's heading, as the sidebar names a desk: its glyph, then its name. */
 function PaneHeader({ icon: Glyph, name }: { icon: Icon; name: string }) {
@@ -160,11 +169,13 @@ function TwoModes() {
           <PaneHeader icon={HomeRowIcon} name={names.home} />
           <Transcript>
             <UserBubble at={MODES.ask}>{MODES.quick}</UserBubble>
-            <ActivityRow
+            <ToolRow
+              dense
               icon={TrendingUp}
-              verb={t('toolArtifact.inProgress.fetchingSymbolPrices', { symbol: 'NVDA' })}
-              title={t('toolArtifact.tool.stockPrices')}
-              after={<Pill>NVDA</Pill>}
+              running={{
+                label: t('toolArtifact.inProgress.fetchingSymbolPrices', { symbol: 'NVDA' }),
+              }}
+              settled={{ label: t('toolArtifact.tool.stockPrices'), pill: 'NVDA' }}
               at={MODES.fetch}
               done={MODES.card}
             />
@@ -181,7 +192,11 @@ function TwoModes() {
                 at={MODES.card + 100}
               />
             </Appear>
-            <Reply text="**Up 29% in six months,** 2% off its August high." at={MODES.answered} />
+            <Reply
+              dense
+              text="**Up 29% in six months,** 2% off its August high."
+              at={MODES.answered}
+            />
             <UserBubble at={MODES.follow}>{MODES.request}</UserBubble>
             <WorkspaceLine name={MODES.workspace} at={made} done={created} />
             <HandoffCard
@@ -193,15 +208,13 @@ function TwoModes() {
               finished={MODES.files[1]}
             />
             <Reply
+              dense
               text="**An Analyst in NVDA deep dive is on it.** I'll report back when it's done."
               at={MODES.said}
             />
-            <Appear at={MODES.report} className="flex justify-end">
-              <Provenance icon={Inbox}>
-                {t('chat.provenance.reportFrom', { name: MODES.workspace })}
-              </Provenance>
-            </Appear>
+            <ReportFrom at={MODES.report} name={MODES.workspace} />
             <Reply
+              dense
               text="**NVDA looks fully priced.** Only the bull case clears today's $182; the base case is $171. The model is in valuation.xlsx."
               at={MODES.reply}
             />
@@ -212,10 +225,7 @@ function TwoModes() {
         <Region delay={0.28} className="flex min-w-0 flex-1 flex-col gap-2 p-2">
           <PaneHeader icon={Folder} name={names.worker} />
           <Transcript>
-            <UserBubble
-              at={MODES.task}
-              caption={<Provenance icon={Bot}>{t('chat.provenance.fromChiefOfStaff')}</Provenance>}
-            >
+            <UserBubble at={MODES.task} caption={<FromChiefOfStaff />}>
               Value NVDA three ways before Q3.
             </UserBubble>
             <WorkflowCard
@@ -228,6 +238,7 @@ function TwoModes() {
               tokens={412_000}
             />
             <Reply
+              dense
               text="**Base case $171 a share, 6% below spot.** Only the bull case clears $182, and it needs data-center revenue to compound 40% a year to 2028."
               at={MODES.say}
             />
@@ -315,13 +326,12 @@ function ChiefOfStaffAnswer() {
     <Camera shots={COS_SHOTS}>
       <div className="flex flex-col" style={VIEW}>
         {/* the thread's header: back, its title, the agent it runs with */}
-        <div
-          className="flex h-6 shrink-0 items-center gap-2 border-b px-2.5"
-          style={{ borderColor: 'var(--color-border-muted)' }}
-        >
-          <TopTitle>Semis this week</TopTitle>
-          <Tag>{names.home}</Tag>
-        </div>
+        <ThreadHeader
+          title="Semis this week"
+          agent={names.home}
+          height={24}
+          className="gap-2 px-2.5"
+        />
         <div
           className="mx-auto flex min-h-0 flex-1 flex-col gap-1.5 pb-1 pt-[18px]"
           style={{ width: COS_COL }}
@@ -329,22 +339,20 @@ function ChiefOfStaffAnswer() {
           {/* the transcript settles on the composer, as a thread with history
               does: the newest lines just above it, the oldest running off the
               top as they come in */}
-          <div className="flex min-h-0 flex-1 flex-col justify-end gap-1.5 overflow-hidden">
+          <Transcript settled>
             {/* earlier today, from the phone: the week ahead, then a quick
                 market question, both answered here and relayed back */}
             <UserBubble at={PAST} caption={via} className="ml-12">
               Morning. What&apos;s on this week?
             </UserBubble>
             <div className="mr-12 flex flex-col gap-1.5">
-              <ActivityRow
+              <ToolRow
+                dense
                 icon={Search}
-                verb={t('toolArtifact.inProgress.searching')}
-                title={t('toolArtifact.tool.webSearch')}
-                after={<Pill>earnings this week</Pill>}
-                at={PAST}
-                done={PAST}
+                settled={{ label: t('toolArtifact.tool.webSearch'), pill: 'earnings this week' }}
               />
               <Reply
+                dense
                 text="**A busy week.** CPI prints Wednesday at 8:30, and NVDA reports after Thursday's close. Its guide rests on hyperscaler capex."
                 at={PAST}
               />
@@ -353,18 +361,19 @@ function ChiefOfStaffAnswer() {
               What&apos;s moving in semis?
             </UserBubble>
             <div className="mr-12 flex flex-col gap-1.5">
-              <ActivityRow
+              <ToolRow
+                dense
                 icon={Zap}
-                verb={t('toolArtifact.inProgress.fetchingQuotes')}
-                title={t('toolArtifact.tool.liveQuotes')}
-                after={<Pill>SOXX, AVGO, NVDA, TSM, AMD, MU</Pill>}
-                at={PAST}
-                done={PAST}
+                settled={{
+                  label: t('toolArtifact.tool.liveQuotes'),
+                  pill: 'SOXX, AVGO, NVDA, TSM, AMD, MU',
+                }}
               />
               <ChartCard title="Semis today, % change" legend="SOXX +1.2%">
                 <BarChart bars={SEMIS} max={2.6} median={1.2} at={PAST} labelWidth={22} />
               </ChartCard>
               <Reply
+                dense
                 text="**SOXX is up 1.2%.** AVGO leads; NVDA holds above $182 into earnings."
                 at={PAST}
               />
@@ -376,10 +385,11 @@ function ChiefOfStaffAnswer() {
             {/* the turn: reasoning, the hand-off, a line on it */}
             {now >= COS.think && (
               <div className="mr-12 flex flex-col gap-1.5">
-                <ActivityRow
+                <ToolRow
+                  dense
                   icon={Brain}
-                  verb={t('toolArtifact.thinkingFor', { duration: '1s' })}
-                  title={t('toolArtifact.thoughtFor', { duration: '1s' })}
+                  running={{ label: t('toolArtifact.thinkingFor', { duration: '1s' }) }}
+                  settled={{ label: t('toolArtifact.thoughtFor', { duration: '1s' }) }}
                   after={
                     <ChevronRight
                       className="h-2 w-2 shrink-0"
@@ -398,6 +408,7 @@ function ChiefOfStaffAnswer() {
                   finished={COS.finished}
                 />
                 <Reply
+                  dense
                   text="**The AI capex Analyst is on it.** I'll send you the tracker once it's built."
                   at={COS.say}
                 />
@@ -405,18 +416,14 @@ function ChiefOfStaffAnswer() {
             )}
             {/* the Analyst's report comes back, and goes on to the phone the
                 request came from, the dashboard attached */}
-            <Appear at={COS.report} className="flex justify-end">
-              <Provenance icon={Inbox}>
-                {t('chat.provenance.reportFrom', { name: 'AI capex' })}
-              </Provenance>
-            </Appear>
+            <ReportFrom at={COS.report} name="AI capex" />
             {now >= send && (
               <div className="mr-12 flex flex-col gap-1.5">
-                <ActivityRow
+                <ToolRow
+                  dense
                   icon={Send}
-                  verb={t('toolArtifact.inProgress.sendingTo', { app })}
-                  title={t('toolArtifact.tool.sendMessage')}
-                  after={<Pill>{app}</Pill>}
+                  running={{ label: t('toolArtifact.inProgress.sendingTo', { app }) }}
+                  settled={{ label: t('toolArtifact.tool.sendMessage'), pill: app }}
                   at={send}
                   done={sent}
                 />
@@ -424,12 +431,13 @@ function ChiefOfStaffAnswer() {
                   <DeliveryPill app={COS.app} files={1} />
                 </Appear>
                 <Reply
+                  dense
                   text="**The capex tracker is on your iMessage.** Spending hit $149bn last quarter, up 55% on a year ago, and all four raised their outlook in July."
                   at={COS.reply}
                 />
               </div>
             )}
-          </div>
+          </Transcript>
           <InputDock />
         </div>
       </div>
