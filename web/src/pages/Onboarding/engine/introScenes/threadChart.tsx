@@ -11,7 +11,7 @@ import {
 import { useLocale } from '@/hooks/useLocale';
 import { fixed2, signedFixed2 } from '@/lib/format';
 import type { IntroVisualId } from '../../registry';
-import { Camera, type Shot } from './camera';
+import { CLOSE, Camera, REST, look, type Shot } from './camera';
 import {
   Candles,
   CommentBox,
@@ -33,16 +33,7 @@ import { StockPriceCard } from './charts';
 import { useSceneTime } from './clock';
 import { Appear, Loader, Typed, UserBubble, type Waypoint, pointAt } from './kit';
 import { NVDA_QUOTE, SelectionCard, SelectionChip } from './marketParts';
-import {
-  HEADER_H,
-  PAGE,
-  PANEL_W,
-  PanelTab,
-  Prose,
-  ThreadPage,
-  ToolRow,
-  framePage,
-} from './threadParts';
+import { HEADER_H, PAGE, PANEL_W, PanelTab, Prose, ThreadPage, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
 
 /* The thread intro's chart step: a chart tab in the file panel
@@ -123,14 +114,15 @@ const CH = {
 const NOTE = 'Earnings gap';
 const ASK = 'Why did this fade?';
 
-/** The chart card edge to edge, its left edge on the panel's divider, the
-    composer as the chip lands and the ask is typed, the reply as it comes
-    in, then the chart with its badges. */
+/** The camera: on the panel whole, the chart card from its toolbar to its
+    volume and an edge of the chat beside it, as the region is taken and
+    noted; across to the chat as the chip lands in the composer, held there
+    as the ask is typed and the reply comes in above it; then in on the
+    chart as its badges land and one opens on its story. */
 const SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...framePage({ x: PANEL_X, y: HEADER_H + 1, w: PANEL_W, h: 174 }, 0) },
-  { at: 4100, dur: 850, ...framePage({ x: 0, y: 175, w: PANEL_X, h: 155 }, 0) },
-  { at: 6100, dur: 800, ...framePage({ x: 0, y: 166, w: PANEL_X, h: 155 }, 0) },
-  { at: 8500, dur: 900, ...framePage({ x: CARD.x, y: CARD.y, w: CARD.w, h: 156 }, 4) },
+  { at: 0, ...look(240, 132, REST) },
+  { at: 4100, dur: 850, ...look(160, 198, REST) },
+  { at: 8500, dur: 900, ...look(267, 142, CLOSE) },
 ];
 
 const PATH: Waypoint[] = [

@@ -2,9 +2,8 @@ import { Fragment, type ReactNode } from 'react';
 import { ArrowLeft, FolderOpen, Plus, X, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentNames } from '../introAgents';
-import { VIEW, frame, type Rect, type Shot } from './camera';
 import { useSceneTime } from './clock';
-import { Appear, InputDock, Tag } from './kit';
+import { Appear, InputDock, Tag, Typed } from './kit';
 
 /* The thread page the thread intro's scenes play on: the chat column beside
    the file panel, the panel a full-height column with its own tab strip,
@@ -225,19 +224,20 @@ export function ThreadPage({
   );
 }
 
-/** The camera's view of `r` on the thread page, with `pad` px of page around
-    it, slid back inside the page where a crop near an edge would show past
-    it. */
-export function framePage(r: Rect, pad = 8): Omit<Shot, 'at' | 'dur'> {
-  const v = frame(r, pad);
-  const half = { x: VIEW.width / 2 / v.zoom, y: VIEW.height / 2 / v.zoom };
-  const hold = (c: number, h: number, size: number) =>
-    h * 2 >= size ? size / 2 : Math.min(Math.max(c, h), size - h);
-  return {
-    zoom: v.zoom,
-    x: hold(v.x, half.x, PAGE.width),
-    y: hold(v.y, half.y, PAGE.height),
-  };
+/**
+ * `text` typed into the composer from `at`, `cps` characters a second, on
+ * the composer's one line: once the line is full its start slides off the
+ * left, so the end being typed and the caret stay in view. Right-to-left
+ * flow puts the overflow on the left; the text inside runs left to right.
+ */
+export function TypedLine({ text, at, cps }: { text: string; at: number; cps?: number }) {
+  return (
+    <span className="block overflow-hidden whitespace-nowrap text-left [direction:rtl]">
+      <span dir="ltr">
+        <Typed text={text} at={at} cps={cps} />
+      </span>
+    </span>
+  );
 }
 
 /** A turn's tool calls, threaded on the timeline's rule through their icons. */

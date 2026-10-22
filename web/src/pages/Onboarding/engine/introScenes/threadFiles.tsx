@@ -29,18 +29,16 @@ import {
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
 import { BarChart, type Bar } from './charts';
-import { Camera, type Shot } from './camera';
+import { CLOSE, Camera, REST, look, type Shot } from './camera';
 import { useSceneTime } from './clock';
 import { Appear, UserBubble, type Waypoint } from './kit';
 import {
   ChromeIcon,
-  PANEL_W,
   PanelTab,
   Prose,
   ThreadPage,
   Timeline,
   ToolRow,
-  framePage,
   iconStyle,
 } from './threadParts';
 import type { IntroScene } from './types';
@@ -74,7 +72,7 @@ const FILES = {
     'The write-up is in `results/report.html`.',
   answerAt: 2800,
   path: [
-    { at: 4200, x: 250, y: 200 },
+    { at: 4200, x: 262, y: 248 },
     { at: 5000, x: 322, y: 141 },
     { at: 5400, x: 322, y: 141 },
     { at: 6000, x: 300, y: 360 },
@@ -85,17 +83,15 @@ const FILES = {
   length: 8600,
 };
 
-/** The camera: close on the turn from its header, following it down as the
-    tool rows land and the answer names the report; across to the tree the
-    files landed in; then onto the report once it opens, settling on its
-    figure. */
+/** The camera: on the chat column whole, from its header to the answer,
+    with the panel's empty tab beside it, as the turn runs and the answer
+    names the report; across to the panel as the pointer goes to the tree
+    the files landed in, held there as the report opens in its place; then
+    in on the report's note and figure as the bars draw. */
 const FILE_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...framePage({ x: 6, y: 0, w: 176, h: 145 }, 0) },
-  { at: 2400, dur: 1100, ...framePage({ x: 6, y: 28, w: 176, h: 145 }, 0) },
-  { at: 3500, dur: 900, ...framePage({ x: 6, y: 56, w: 176, h: 145 }, 0) },
-  { at: 4500, dur: 900, ...framePage({ x: 274, y: 94, w: 126, h: 104 }, 0) },
-  { at: 6000, dur: 700, ...framePage({ x: 188, y: 28, w: PANEL_W, h: 175 }, 0) },
-  { at: 7700, dur: 1000, ...framePage({ x: 199, y: 105, w: 190, h: 157 }, 0) },
+  { at: 0, ...look(160, 132, REST) },
+  { at: 4500, dur: 900, ...look(240, 132, REST) },
+  { at: 7700, dur: 1000, ...look(267, 156, CLOSE) },
 ];
 
 /** EV / NTM sales across the nine names in comps.xlsx, high to low. */

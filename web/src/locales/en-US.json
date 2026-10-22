@@ -3726,11 +3726,11 @@
           },
           "memory": {
             "title": "The agent remembers how you work",
-            "body": "It keeps a long-term memory across threads: your preferences, conventions, and conclusions worth reusing. Say “remember this” to add to it."
+            "body": "It keeps a long-term memory across threads: how you like reports written, your risk limits, the conventions you work by. Say “remember this” to add to it."
           },
           "memo": {
             "title": "Ground it in your own research",
-            "body": "Upload PDFs, notes, or spreadsheets as memos. The agent reads them when they matter, so your own research becomes part of its context."
+            "body": "Upload your own research as memos: past theses, notes, models. The agent reads them when they matter, next to the filings and market data it pulls itself."
           }
         }
       },

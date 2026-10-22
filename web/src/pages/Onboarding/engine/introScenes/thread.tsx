@@ -1,9 +1,9 @@
-import { Fragment, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowLeft,
   BookMarked,
   BookText,
+  Building2,
   CheckSquare,
   FileBarChart,
   FileText,
@@ -17,9 +17,9 @@ import { cn } from '@/lib/utils';
 import { formatBytes, paddedClockTime, shortMonthDay } from '@/lib/format';
 import { useLocale } from '@/hooks/useLocale';
 import type { IntroVisualId } from '../../registry';
-import { Camera, type Shot } from './camera';
+import { CLOSE, Camera, REST, look, type Shot } from './camera';
 import { useSceneTime, useTween } from './clock';
-import { Appear, Loader, Typed, UserBubble, pointAt, type Waypoint } from './kit';
+import { Appear, Loader, UserBubble, pointAt, type Waypoint } from './kit';
 import {
   ChromeIcon,
   PANEL_W,
@@ -29,7 +29,7 @@ import {
   ThreadPage,
   Timeline,
   ToolRow,
-  framePage,
+  TypedLine,
   iconStyle,
 } from './threadParts';
 import type { IntroScene } from './types';
@@ -37,48 +37,78 @@ import type { IntroScene } from './types';
 /* Scenes for the thread intro's memory and memo steps: the chat column
    beside the file panel, Memory and Memo open as tabs of their own, drawn
    the way the thread page draws them. The page is drawn whole and a camera
-   crops it to the part each beat is about. Labels are the app's own
-   strings. The file panel step lives in `threadFiles`. */
+   frames the part each beat is about, resting where a pane reads whole.
+   Labels are the app's own strings. The file panel step lives in
+   `threadFiles`. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
+/** A user message long enough to wrap, set at the width the app gives one
+    (80% of the column) and with room between its lines. */
+function Wrapped({ children }: { children: string }) {
+  return <span className="block max-w-[136px] leading-[1.25]">{children}</span>;
+}
+
 /* ── thread · step 2: long-term memory ─────────────────────────────────── */
 
-/** A position typed and sent, the agent adding it to the `positions` topic
-    file, the Memory tab's listing of that file picking up the change, and
-    the pointer opening it to show the line it gained. Positions are px on
-    the thread page: positions.md is the second file in the listing. */
+/** "Today" on the scene's clock: when a file saved in the scene changed. */
+const SAVED_AT = new Date(2026, 9, 21, 14, 5);
+
+/** A standing preference, not a fact about a trade: under an answer that
+    leaned on the Street's targets, the user asks the agent to remember how
+    they want write-ups done. The agent writes it to its own topic file in
+    user memory and adds a line for it to the index, `memory.md`, then says
+    what changes; the Memory tab lists the new file and shows the index as
+    changed today. The pointer opens the file to show what was kept.
+    Positions are px on the thread page: report_style.md is listed fourth
+    once it lands. The thread is sized so that, once the turn is in, its top
+    edge falls between two messages. */
 const MEM = {
-  earlier: 'Where did NVDA close?',
-  before: 'NVDA closed at **$182.42**, up 1.61% on the day.',
-  ask: 'remember: long NVDA, 4%',
+  /** The thread so far, the oldest exchange first: it runs off the top as
+      the new turn comes in. */
+  date: { ask: 'When does AVGO report?', answer: '**Thursday, Dec 11**, after the close.' },
+  earlier: 'Is AVGO worth adding before earnings?',
+  street:
+    "**The Street's average target is $410**, 17% above spot, and 31 of 38 analysts " +
+    'rate it a buy. Most expect AI revenue to beat again, and two brokers raised their ' +
+    'targets this week.',
+  ask:
+    'Remember: lead with the bottom line, keep it to a page, and skip sell-side ' +
+    'targets. I want your view.',
   typeAsk: 400,
-  sendAsk: 1400,
-  save: 1800,
-  saved: 2400,
-  topic: 'positions',
-  reply: 'Noted. NVDA ideas will now be sized against the 4% you already hold.',
-  replyAt: 2550,
-  listed: 4500,
+  cps: 52,
+  sendAsk: 2550,
+  save: 2850,
+  saved: 3400,
+  /** The index edit that follows the write. */
+  index: 3450,
+  indexed: 3850,
+  file: 'report_style.md',
+  /** What the app calls the file: its name with underscores as spaces. */
+  topic: 'report style',
+  reply:
+    'Saved. Every write-up will open with the call, fit on a page, and leave Street targets out.',
+  replyAt: 4000,
+  listed: 5500,
   path: [
-    { at: 4600, x: 330, y: 150 },
-    { at: 5100, x: 236, y: 98 },
-    { at: 5450, x: 236, y: 98 },
-    { at: 6000, x: 360, y: 260 },
+    { at: 5900, x: 352, y: 236 },
+    { at: 6500, x: 252, y: 166 },
+    { at: 6800, x: 252, y: 166 },
+    { at: 7400, x: 372, y: 300 },
   ] satisfies Waypoint[],
-  click: 5200,
-  open: 5280,
-  length: 7600,
+  click: 6600,
+  open: 6680,
+  length: 9400,
 };
 
-/** The camera: close on the composer as the ask is typed, back a little for
-    the exchange, then across to the Memory tab as the topic file changes,
-    and onto the file once it opens, the line it gained last. */
+/** The camera: on the chat with the composer and the answer above it as
+    the ask is typed, held there as the save lands and the reply comes in;
+    across to the Memory tab as its listing picks up the new file; then in
+    on the file once it opens. */
 const MEM_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...framePage({ x: 10, y: 225, w: 168, h: 100 }, 4) },
-  { at: 2300, dur: 700, ...framePage({ x: 6, y: 167, w: 182, h: 160 }, 0) },
-  { at: 4300, dur: 900, ...framePage({ x: 188, y: 28, w: 170, h: 140 }, 0) },
-  { at: 6200, dur: 900, ...framePage({ x: 190, y: 30, w: 184, h: 152 }, 0) },
+  { at: 0, ...look(160, 198, REST) },
+  { at: 5700, dur: 800, ...look(240, 132, REST) },
+  { at: 7600, dur: 800, ...look(267, 110, CLOSE) },
 ];
 
 /** One file in the memory list: its name, then size and when it changed
@@ -100,7 +130,7 @@ function MemoryFile({
   const when = today ? paddedClockTime(modified, locale) : shortMonthDay(modified, locale);
   return (
     <div
-      className="flex min-w-0 items-center gap-1.5 px-1.5 py-1"
+      className="flex min-w-0 items-center gap-1.5 px-1.5 py-1.5"
       style={{ background: hover ? 'var(--color-bg-hover)' : undefined }}
     >
       <FileText className="h-[9px] w-[9px] shrink-0" style={iconStyle} />
@@ -117,8 +147,9 @@ function MemoryFile({
 }
 
 /** The Memory tab's list (`MemoryPanel`): the User / Workspace switch, the
-    folder it lists, and the files in it, memory.md first. The topic file
-    the agent writes to grows and reads as changed today once it lands. */
+    folder it lists, and the files in it, memory.md first and the rest A to
+    Z. Once the save lands the new file takes its place in that order and
+    the index reads as changed today. */
 function MemoryList() {
   const { t } = useTranslation();
   const now = useSceneTime();
@@ -153,45 +184,37 @@ function MemoryList() {
       <span className="px-1.5 pb-0.5 pt-1.5 text-[0.375rem] leading-none" style={iconStyle}>
         .agents/user/memory/
       </span>
-      <MemoryFile name="memory.md" bytes={1260} modified={new Date(2026, 9, 18)} />
       <MemoryFile
-        name={`${MEM.topic}.md`}
-        bytes={saved ? 171 : 128}
-        modified={saved ? new Date(2026, 9, 21, 14, 5) : new Date(2026, 7, 14)}
+        name="memory.md"
+        bytes={saved ? 1342 : 1108}
+        modified={saved ? SAVED_AT : new Date(2026, 9, 9)}
         today={saved}
-        hover={now >= MEM.path[1].at}
       />
-      <MemoryFile name="risk-preferences.md" bytes={640} modified={new Date(2026, 9, 12)} />
-      <MemoryFile name="watchlist.md" bytes={412} modified={new Date(2026, 9, 9)} />
+      <MemoryFile name="data_sources.md" bytes={486} modified={new Date(2026, 8, 30)} />
+      <MemoryFile name="investor_profile.md" bytes={912} modified={new Date(2026, 7, 14)} />
+      <Appear at={MEM.listed}>
+        <MemoryFile
+          name={MEM.file}
+          bytes={418}
+          modified={SAVED_AT}
+          today
+          hover={now >= MEM.path[1].at}
+        />
+      </Appear>
+      <MemoryFile name="trade_preferences.md" bytes={655} modified={new Date(2026, 8, 12)} />
     </>
   );
 }
 
-/** A Markdown list as the panel sets one. */
-function Bullets({ items }: { items: ReactNode[] }) {
-  return (
-    <ul className="flex flex-col gap-1 pl-2.5">
-      {items.map((item, i) => (
-        <li
-          key={i}
-          className="list-disc text-[0.4375rem] leading-none marker:text-[var(--iv-text-3)]"
-          style={{ color: 'var(--iv-text-2)' }}
-        >
-          {item}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 /** A memory file open in the Memory tab: back, its path, then the file as
-    Markdown. The line the agent just added is the last one. */
+    Markdown, its frontmatter left out as the app leaves it out. The body is
+    the rule first, then why it holds. */
 function MemoryViewer() {
   const body = { color: 'var(--iv-text-2)' };
-  const held = [
-    ['TSM', '3%', 'Jun 2026'],
-    ['AVGO', '2%', 'Aug 2026'],
-    ['NVDA', '4%', 'Oct 21, 2026'],
+  const rules = [
+    'Lead with the bottom line, then the evidence.',
+    'One page at most.',
+    'No sell-side price targets. Give your own view.',
   ];
   return (
     <Appear at={MEM.open} className="flex flex-1 flex-col">
@@ -204,35 +227,36 @@ function MemoryViewer() {
           className="truncate text-[0.4375rem] font-semibold leading-none"
           style={{ color: 'var(--iv-text)' }}
         >
-          .agents/user/memory/{MEM.topic}.md
+          .agents/user/memory/{MEM.file}
         </span>
       </div>
-      <div className="flex flex-col gap-1.5 px-2.5 py-2">
+      <div className="flex flex-col gap-2 px-2.5 py-2.5">
         <span
-          className="text-[0.625rem] font-semibold leading-none"
+          className="text-[0.75rem] font-semibold leading-none"
           style={{ color: 'var(--iv-text)' }}
         >
-          Positions
+          Report style
         </span>
-        <span className="text-[0.4375rem] leading-snug" style={body}>
-          Current holdings, as a share of the book.
+        <span className="text-[0.5rem] leading-snug" style={body}>
+          How every write-up should read.
         </span>
-        <Bullets
-          items={held.map(([sym, size, since]) => (
-            <Fragment key={sym}>
-              Long <b style={{ color: 'var(--iv-text)' }}>{sym}</b>, {size} of book, since {since}
-            </Fragment>
+        <ul className="flex flex-col gap-1.5 pl-3">
+          {rules.map((rule) => (
+            <li
+              key={rule}
+              className="list-disc text-[0.5rem] leading-snug marker:text-[var(--iv-text-3)]"
+              style={body}
+            >
+              {rule}
+            </li>
           ))}
-        />
-        <span
-          className="mt-1 text-[0.5rem] font-semibold leading-none"
-          style={{ color: 'var(--iv-text)' }}
-        >
-          Notes
+        </ul>
+        <span className="text-[0.5rem] leading-snug" style={body}>
+          <b className="font-semibold" style={{ color: 'var(--iv-text)' }}>
+            Why:
+          </b>{' '}
+          wants a judgement, not the Street&apos;s consensus.
         </span>
-        <Bullets
-          items={['Benchmarked to the S&P 500.', 'Keep any single name under 6% of book.']}
-        />
       </div>
     </Appear>
   );
@@ -241,12 +265,11 @@ function MemoryViewer() {
 function Memory() {
   const t = useSceneTime();
   const { t: tr } = useTranslation();
-  const composer =
-    t >= MEM.typeAsk && t < MEM.sendAsk ? <Typed text={MEM.ask} at={MEM.typeAsk} /> : undefined;
+  const overview = tr('toolArtifact.tool.companyOverview');
   return (
     <Camera shots={MEM_SHOTS} cursor={MEM.path} clicks={[MEM.click]}>
       <ThreadPage
-        title="NVDA sizing"
+        title="AVGO into earnings"
         stack="bottom"
         tabs={
           <>
@@ -260,22 +283,30 @@ function Memory() {
             <ChromeIcon icon={ScrollText} />
           </>
         }
-        composer={composer}
+        composer={
+          t >= MEM.typeAsk && t < MEM.sendAsk ? (
+            <TypedLine text={MEM.ask} at={MEM.typeAsk} cps={MEM.cps} />
+          ) : undefined
+        }
         sendAt={[MEM.sendAsk]}
         chat={
           <>
+            <UserBubble at={0}>{MEM.date.ask}</UserBubble>
+            <Prose text={MEM.date.answer} />
             <UserBubble at={0}>{MEM.earlier}</UserBubble>
             <Timeline>
               <ToolRow
-                icon={TrendingUp}
-                running={{ label: tr('toolArtifact.tool.stockPrices'), pill: 'NVDA' }}
-                settled={{ label: tr('toolArtifact.tool.stockPrices'), pill: 'NVDA' }}
+                icon={Building2}
+                running={{ label: overview, pill: 'AVGO' }}
+                settled={{ label: overview, pill: 'AVGO' }}
                 at={0}
                 done={0}
               />
             </Timeline>
-            <Prose text={MEM.before} />
-            <UserBubble at={MEM.sendAsk + 80}>{MEM.ask}</UserBubble>
+            <Prose text={MEM.street} />
+            <UserBubble at={MEM.sendAsk + 80}>
+              <Wrapped>{MEM.ask}</Wrapped>
+            </UserBubble>
             <Timeline>
               <ToolRow
                 icon={BookMarked}
@@ -285,6 +316,14 @@ function Memory() {
                 settled={{ label: tr('toolArtifact.completed.addedMemory'), pill: MEM.topic }}
                 at={MEM.save}
                 done={MEM.saved}
+              />
+              {/* the index names no topic, so its row carries no pill */}
+              <ToolRow
+                icon={BookMarked}
+                running={{ label: tr('toolArtifact.inProgress.updatingMemory') }}
+                settled={{ label: tr('toolArtifact.completed.updatedMemory') }}
+                at={MEM.index}
+                done={MEM.indexed}
               />
             </Timeline>
             <Prose text={MEM.reply} at={MEM.replyAt} />
@@ -298,73 +337,81 @@ function Memory() {
 
 /* ── thread · step 3: memos ────────────────────────────────────────────── */
 
-/** Two documents dragged in from Finder and dropped on the Memo tab, below
-    the memos already there: the drop overlay takes the drag, Upload reads
-    "Uploading…", then each new memo is listed generating its summary and
-    turns Ready with its description. Then a question typed under the
-    thread's last exchange, which the agent answers from both. Positions are
-    px on the thread page; the overlay shows while the pointer is over the
-    panel, and the drag holds left of the overlay's label so both read. */
+/** The user's own thesis, dragged in from Finder and dropped on the Memo
+    tab below the memos already there: the drop overlay takes the drag,
+    Upload reads "Uploading…", then the memo is listed generating its summary
+    and turns Ready with its description. Then a question typed under the
+    thread's last exchange: the agent reads the memo, fetches the filing it
+    is checked against on its own, and answers with one point backed and one
+    weaker. Positions are px on the thread page; the overlay shows while the
+    pointer is over the panel, and the drag holds above the overlay's label
+    so both read. */
 const MEMO = {
   path: [
-    { at: 300, x: 120, y: 240 },
-    { at: 1400, x: 212, y: 172 },
-    { at: 1750, x: 212, y: 172 },
-    { at: 2400, x: 330, y: 380 },
+    { at: 300, x: 118, y: 110 },
+    { at: 1300, x: 300, y: 96 },
+    { at: 1650, x: 300, y: 96 },
+    { at: 2300, x: 350, y: 380 },
   ] satisfies Waypoint[],
-  drop: 1600,
-  uploaded: 2400,
+  drop: 1500,
+  uploaded: 2300,
   /** Listed oldest first, as the tab sorts them. */
   held: [
-    { name: 'semis-comps.csv', description: 'NTM consensus for nine AI semis' },
-    { name: 'ai-capex.md', description: 'Hyperscaler capex by quarter' },
-  ],
-  rows: [
     {
-      name: 'nvda-10q.pdf',
-      at: 2400,
-      ready: 3200,
-      description: '10-Q for the quarter ended Jul 27',
+      name: 'semis-valuation-framework.md',
+      description: 'How I value semis: EV/Sales against growth, margins through the cycle',
     },
-    { name: 'call-notes.md', at: 2500, ready: 3600, description: 'Notes from the Q2 call' },
+    {
+      name: 'expert-call-notes.md',
+      description: 'Notes from a call with a former hyperscaler procurement lead',
+    },
   ],
-  earlier: {
-    ask: "How did NVDA's Q2 land?",
-    answer: 'Revenue of **$46.7B**, up 56% from a year ago. Data center made $41.1B of it.',
+  upload: {
+    name: 'ai-capex-thesis.md',
+    at: 2300,
+    ready: 3200,
+    description:
+      'Thesis, Aug 2026: hyperscaler capex keeps rising through 2027; power is the constraint',
   },
-  ask: 'What did they guide for Q3?',
-  typeAsk: 4100,
-  askAt: 4950,
-  reads: [
-    { slug: 'call-notes.md', at: 5350 },
-    { slug: 'nvda-10q.pdf', at: 5700 },
-  ],
-  read: 400,
+  /** The thread so far, the oldest exchange first: what the Street
+      expected, then how the quarter came in against it. The oldest lines
+      run off the top as the new turn comes in. */
+  consensus: {
+    ask: 'What does the Street expect from MSFT this quarter?',
+    answer:
+      'Consensus has revenue at **$75.9B**, up 14%, and EPS of $3.68. Azure is ' +
+      'expected to grow 37%, and the stock is up 9% since the last print.',
+  },
+  earlier: {
+    ask: "How did MSFT's quarter land?",
+    answer: 'Revenue of **$77.4B**, up 16%. Azure grew 39%.',
+  },
+  ask: 'Does their capex guide change my thesis?',
+  typeAsk: 4300,
+  askAt: 5550,
+  readMemo: { at: 5900, done: 6300 },
+  filing: { at: 6350, done: 6950 },
   answer:
-    'Q3 revenue of **$54.0B**, plus or minus 2%, assuming no H20 sales to China. ' +
-    'Gross margin of 73.5%, plus or minus 50 bps, on opex of about $4.2B. ' +
-    'Full-year opex growth in the high 30s.',
-  answerAt: 6250,
-  cite: 'From `call-notes.md` and `nvda-10q.pdf`.',
-  citeAt: 7550,
-  length: 8700,
+    'It backs point 2 of your thesis: capex was **$41.2B** for the quarter, and they now ' +
+    'expect FY27 spend to grow faster than FY26. Point 3 looks weaker. The 10-Q flags ' +
+    'power and site delays, the constraint you expected to ease by mid-2027.',
+  answerAt: 7100,
+  cite: 'From your memo `ai-capex-thesis.md` and the MSFT 10-Q.',
+  citeAt: 8700,
+  length: 10600,
 };
 
-/** The camera: on the Memo tab's list as the drag comes over it, up to its
-    title bar and table as the drop uploads and each memo turns Ready, then
-    across to the chat's last exchange and the composer as the question is
-    typed and the reads come in, the top edge kept between messages as the
-    thread scrolls, then in on the question and its answer. */
+/** The camera: on the Memo tab as the drag comes over it, held while the
+    drop uploads and the memo turns Ready; across to the chat as the
+    question is typed and the two reads come in; then in on the answer. */
 const MEMO_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...framePage({ x: 188, y: 72, w: PANEL_W, h: 176 }, 0) },
-  { at: 2300, dur: 700, ...framePage({ x: 188, y: 0, w: PANEL_W, h: 170 }, 0) },
-  { at: 4500, dur: 700, ...framePage({ x: 0, y: 169, w: PAGE.width - PANEL_W, h: 155 }, 0) },
-  { at: 5450, dur: 200, ...framePage({ x: 1, y: 176.5, w: 186, h: 153.5 }, 0) },
-  { at: 7550, dur: 1100, ...framePage({ x: 4, y: 125.5, w: 180, h: 148.5 }, 0) },
+  { at: 0, ...look(240, 132, REST) },
+  { at: 4700, dur: 900, ...look(160, 198, REST) },
+  { at: 9300, dur: 1000, ...look(94, 190, CLOSE) },
 ];
 
-/** What the OS drags out of Finder: the file's icon and its name, with the
-    count badge a multi-file drag carries. It shrinks into the drop. */
+/** What the OS drags out of Finder: the file's icon, marked with its kind,
+    and its name. It shrinks into the drop. */
 function DragChip() {
   const t = useSceneTime();
   const sink = useTween(MEMO.drop, 240);
@@ -382,22 +429,13 @@ function DragChip() {
     >
       <span
         className={cn(
-          'relative flex h-[18px] w-[14px] items-end justify-center',
+          'flex h-[18px] w-[14px] items-end justify-center',
           'rounded-[1.5px] border pb-[2px]'
         )}
         style={{ background: '#fff', borderColor: 'rgba(0, 0, 0, 0.2)' }}
       >
         <span className="text-[0.25rem] font-semibold leading-none" style={{ color: '#8a8a8a' }}>
-          PDF
-        </span>
-        <span
-          className={cn(
-            'absolute -right-1.5 -top-1.5 flex h-2.5 min-w-2.5 items-center justify-center',
-            'rounded-full px-[2px] text-[0.375rem] font-semibold leading-none text-white'
-          )}
-          style={{ background: '#ff3b30' }}
-        >
-          {MEMO.rows.length}
+          MD
         </span>
       </span>
       <span
@@ -407,7 +445,7 @@ function DragChip() {
         )}
         style={{ background: '#0a64d8' }}
       >
-        {MEMO.rows[0].name}
+        {MEMO.upload.name}
       </span>
     </div>
   );
@@ -417,7 +455,8 @@ function DragChip() {
 function MemoStatus({ ready }: { ready: number }) {
   const t = useSceneTime();
   const { t: tr } = useTranslation();
-  const pill = 'inline-flex rounded-full px-1 py-[2px] text-[0.375rem] font-medium leading-none';
+  const pill =
+    'inline-flex shrink-0 whitespace-nowrap rounded-full px-1 py-[2px] text-[0.375rem] font-medium leading-none';
   if (t < ready) {
     return (
       <span
@@ -441,12 +480,15 @@ function MemoStatus({ ready }: { ready: number }) {
   );
 }
 
-/* the columns a narrow Memo tab keeps: name, status, description */
-const COL_NAME = 'flex w-[80px] min-w-0 shrink-0 items-center gap-1 pl-1.5';
-const COL_STATUS = 'flex w-[56px] shrink-0 px-1';
+/* the columns a narrow Memo tab keeps: name, status, description. Status
+   is as wide as a Ready pill; a memo still generating has no description
+   yet, so its wider pill runs into the empty cell beside it. */
+const COL_NAME = 'flex w-[88px] min-w-0 shrink-0 items-center gap-1 pl-1.5';
+const COL_STATUS = 'flex w-[34px] shrink-0 px-1';
 
 /** One memo in the table, listed from `at`; its description, the summary
-    the agent writes of it, fills in once it is ready. */
+    the agent writes of it, fills in once it is ready. A narrow tab gives the
+    description four lines where a wide one gives it two. */
 function MemoRow({
   name,
   at,
@@ -474,7 +516,7 @@ function MemoRow({
       </span>
       <Appear
         at={ready}
-        className="line-clamp-2 min-w-0 flex-1 pr-1.5 text-[0.375rem] leading-[1.35]"
+        className="line-clamp-4 min-w-0 flex-1 pr-1.5 text-[0.375rem] leading-[1.35]"
         style={{ color: 'var(--iv-text-2)' }}
       >
         {description}
@@ -533,9 +575,7 @@ function MemoTab() {
         {MEMO.held.map((r) => (
           <MemoRow key={r.name} {...r} at={0} ready={0} />
         ))}
-        {MEMO.rows.map((r) => (
-          <MemoRow key={r.name} {...r} />
-        ))}
+        <MemoRow {...MEMO.upload} />
         {over && (
           <div
             className={cn(
@@ -560,6 +600,11 @@ function MemoTab() {
 function Memo() {
   const t = useSceneTime();
   const { t: tr } = useTranslation();
+  const overview = tr('toolArtifact.tool.companyOverview');
+  const prices = tr('toolArtifact.tool.stockPrices');
+  const statements = tr('toolArtifact.tool.financialStatements');
+  const filing = tr('toolArtifact.tool.secFiling');
+  const memo = MEMO.upload.name;
   return (
     <Camera shots={MEMO_SHOTS} cursor={MEMO.path}>
       <ThreadPage
@@ -575,44 +620,73 @@ function Memo() {
             <ChromeIcon icon={ScrollText} />
           </>
         }
-        title="Q2 guidance"
+        title="MSFT capex"
         stack="bottom"
         chat={
           <>
+            <UserBubble at={0}>
+              <Wrapped>{MEMO.consensus.ask}</Wrapped>
+            </UserBubble>
+            <Timeline>
+              <ToolRow
+                icon={Building2}
+                running={{ label: overview, pill: 'MSFT' }}
+                settled={{ label: overview, pill: 'MSFT' }}
+                at={0}
+                done={0}
+              />
+              <ToolRow
+                icon={TrendingUp}
+                running={{ label: prices, pill: 'MSFT' }}
+                settled={{ label: prices, pill: 'MSFT' }}
+                at={0}
+                done={0}
+              />
+            </Timeline>
+            <Prose text={MEMO.consensus.answer} />
             <UserBubble at={0}>{MEMO.earlier.ask}</UserBubble>
             <Timeline>
               <ToolRow
                 icon={FileBarChart}
-                running={{ label: tr('toolArtifact.tool.financialStatements'), pill: 'NVDA' }}
-                settled={{ label: tr('toolArtifact.tool.financialStatements'), pill: 'NVDA' }}
+                running={{ label: statements, pill: 'MSFT' }}
+                settled={{ label: statements, pill: 'MSFT' }}
                 at={0}
                 done={0}
               />
             </Timeline>
             <Prose text={MEMO.earlier.answer} />
-            <UserBubble at={MEMO.askAt}>{MEMO.ask}</UserBubble>
+            <UserBubble at={MEMO.askAt}>
+              <Wrapped>{MEMO.ask}</Wrapped>
+            </UserBubble>
             <Timeline>
-              {MEMO.reads.map((r) => (
-                <ToolRow
-                  key={r.slug}
-                  icon={BookText}
-                  running={{
-                    label: tr('toolArtifact.inProgress.readingMemoSlug', { slug: r.slug }),
-                  }}
-                  settled={{ label: tr('toolArtifact.completed.readMemo'), pill: r.slug }}
-                  at={r.at}
-                  done={r.at + MEMO.read}
-                />
-              ))}
+              <ToolRow
+                icon={BookText}
+                running={{ label: tr('toolArtifact.inProgress.readingMemoSlug', { slug: memo }) }}
+                settled={{ label: tr('toolArtifact.completed.readMemo'), pill: memo }}
+                at={MEMO.readMemo.at}
+                done={MEMO.readMemo.done}
+              />
+              {/* the filing comes from the platform, not the user: a running
+                  call reads as its name and what it fetches, as the app's
+                  live label joins them, and settles on the symbol */}
+              <ToolRow
+                icon={FileBarChart}
+                running={{
+                  label: `${filing} ${tr('toolArtifact.inProgress.fetchingSymbolFiling', { symbol: 'MSFT' })}`,
+                }}
+                settled={{ label: filing, pill: 'MSFT' }}
+                at={MEMO.filing.at}
+                done={MEMO.filing.done}
+              />
             </Timeline>
-            <Prose text={MEMO.answer} at={MEMO.answerAt} cps={160} />
+            <Prose text={MEMO.answer} at={MEMO.answerAt} cps={170} />
             <Prose text={MEMO.cite} at={MEMO.citeAt} />
           </>
         }
         panel={<MemoTab />}
         composer={
           t >= MEMO.typeAsk && t < MEMO.askAt ? (
-            <Typed text={MEMO.ask} at={MEMO.typeAsk} cps={36} />
+            <TypedLine text={MEMO.ask} at={MEMO.typeAsk} cps={36} />
           ) : undefined
         }
         sendAt={[MEMO.askAt]}
