@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AnimatePresence, motion, useReducedMotion, type Variants } from '@/lib/framer';
 import {
@@ -9,8 +9,8 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { loadIntroScenes, useIntroScenes } from './introScenes';
 import { SceneStage } from './introScenes/SceneStage';
+import { useIntro } from './loadIntro';
 import type { PageIntroDef } from '../registry';
 import './pageIntro.css';
 
@@ -18,24 +18,24 @@ import './pageIntro.css';
  * One-time contextual intro for the page the user just landed on. Two
  * panels: stepped copy + navigation in the narrower one, a blueprint-style
  * product mockup in the wider one. Seen-state is per-intro — any close path
- * (final CTA, X, Esc) at any step marks the intro seen.
+ * (final CTA, X, Esc) at any step marks the intro seen. `onAbandon` reports
+ * an intro that could not show, which stays unseen.
  */
 export function PageIntroModal({
   intro,
   onClose,
+  onAbandon,
 }: {
   intro: PageIntroDef;
   onClose: () => void;
+  onAbandon: () => void;
 }) {
   const { t } = useTranslation();
   const reduceMotion = useReducedMotion();
   // Suspends until this intro's copy and scenes are in, so the modal opens
-  // whole. The scenes start first, so the two download side by side rather
-  // than one after the other.
-  const visuals = intro.steps.map((s) => s.visual);
-  void loadIntroScenes(visuals);
-  const { t: tCopy, i18n } = useTranslation('intros');
-  const scenes = useIntroScenes(visuals);
+  // whole and the copy below is already there.
+  const scenes = useIntro(intro);
+  const { t: tCopy } = useTranslation('intros');
   const [stepIdx, setStepIdx] = useState(0);
   // +1 forward / -1 back — drives which side the copy slides from. Updated on
   // every navigation (dots can jump non-adjacent steps in either direction).
@@ -63,19 +63,23 @@ export function PageIntroModal({
   };
   const shown = Math.min(stepIdx, intro.steps.length - 1);
   const step = intro.steps[shown];
-  const scene = scenes[shown];
   const isLast = stepIdx >= intro.steps.length - 1;
+
+  // The copy did not load, as when a deploy retired its chunk. Show nothing
+  // rather than raw keys, and hand the screen back: the intro stays unseen
+  // and opens after the reload the stale-build notice offers.
+  const abandoned = scenes === null;
+  useEffect(() => {
+    if (abandoned) onAbandon();
+  }, [abandoned, onAbandon]);
+  if (abandoned) return null;
+
+  const scene = scenes[shown];
   // When every step's mockup anchors right (e.g. the thread intro), the
   // visual takes the LEFT half: the anchored hot region then sits beside the
   // copy and the wireframe bleeds off the modal's outer edge. Per-intro, not
   // per-step, so the panel never jumps sides mid-intro.
   const visualFirst = scenes.every((s) => s?.anchor === 'right');
-
-  // The copy did not load, as when a deploy retired its chunk: i18next counts
-  // that as loaded, so the steps would read as raw keys. Show nothing instead;
-  // the intro stays unseen and opens after the reload the stale-build notice
-  // offers.
-  if (!i18n.hasResourceBundle(i18n.language, 'intros')) return null;
 
   return (
     <Dialog

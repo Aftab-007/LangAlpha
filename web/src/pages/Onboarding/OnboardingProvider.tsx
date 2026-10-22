@@ -17,12 +17,12 @@ import {
   isPersonalizationSnoozed,
   subscribePersonalizationSnooze,
 } from '@/pages/Dashboard/hooks/useOnboarding';
-import { isPlatformMode } from '@/config/hostMode';
 import { useOnboardingPrefs } from './useOnboardingPrefs';
+import { useFirstTurnThread } from './useFirstTurnThread';
 import { shouldAutoOpenWelcome } from './welcome/autoOpen';
 import { WELCOME_PATH, isLegacyOnboardingSearch, legacyOnboardingTarget } from './welcome/paths';
 import { readMirror, type OnboardingMirror } from './mirror';
-import { ANNOUNCEMENTS, PAGE_INTROS, GETTING_STARTED_TASKS } from './registry';
+import { ANNOUNCEMENTS, DEPLOYED_INTROS, DEPLOYED_TASKS } from './registry';
 import { unseenReleases, latestReleaseVersion } from './engine/whatsNew';
 import {
   useOnboardingOrchestrator,
@@ -41,39 +41,8 @@ interface GettingStartedState {
   doneCount: number;
   dismiss: () => void;
   /** Stamp a task done (external tasks complete on click — no route to
-   *  observe). `onSettled` runs once the stamp has landed or failed. */
-  completeTask: (id: string, onSettled?: () => void) => void;
-}
-
-/** Tasks offered in this deployment — channel integrations are platform-hosted. */
-const DEPLOYED_TASKS = GETTING_STARTED_TASKS.filter((t) => !t.platformOnly || isPlatformMode);
-
-/** Intros as this deployment shows them: platform-only steps drop off a
- *  self-hosted build. A first step is never platform-only, so none empties. */
-const DEPLOYED_INTROS: PageIntroDef[] = PAGE_INTROS.map(
-  ({ steps: [first, ...rest], ...intro }) => ({
-    ...intro,
-    steps: [first, ...rest.filter((s) => !s.platformOnly || isPlatformMode)],
-  })
-);
-
-/** The tab's note of which thread the welcome flow's conversation became. */
-const INTERVIEW_THREAD_KEY = 'onboarding.interviewThread';
-
-function readInterviewThread(): string | null {
-  try {
-    return sessionStorage.getItem(INTERVIEW_THREAD_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function writeInterviewThread(threadId: string): void {
-  try {
-    sessionStorage.setItem(INTERVIEW_THREAD_KEY, threadId);
-  } catch {
-    // Storage refused: the note lasts as long as this page, as it used to.
-  }
+   *  observe). Resolves once the stamp has landed or failed; never rejects. */
+  completeTask: (id: string) => Promise<void>;
 }
 
 interface OnboardingContextValue {
@@ -82,6 +51,8 @@ interface OnboardingContextValue {
   // page intros
   activeIntro: PageIntroDef | null;
   dismissPageIntro: () => void;
+  /** The open intro could not show: closes it unseen, for this session only. */
+  abandonPageIntro: () => void;
   // getting-started checklist
   gettingStarted: GettingStartedState;
   // What's-New
@@ -104,7 +75,7 @@ export function useOnboarding(): OnboardingContextValue {
 }
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
-  const { pathname, search } = useLocation();
+  const { pathname, search, state } = useLocation();
   const navigate = useNavigate();
   const { user } = useUser();
   const {
@@ -244,6 +215,16 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     setPhase('idle');
   }, [activeIntroId, markPageIntroSeen]);
 
+  // The intro could not show (its copy did not load, as when a deploy retired
+  // the chunk). Close WITHOUT marking seen, and hold it off for the session so
+  // the orchestrator does not reopen it in a loop; the reload the stale-build
+  // notice offers brings it back.
+  const abandonPageIntro = useCallback(() => {
+    if (activeIntroId !== null) shownIntrosRef.current.add(activeIntroId);
+    setActiveIntroId(null);
+    setPhase('idle');
+  }, [activeIntroId]);
+
   const acknowledgeWhatsNew = useCallback(() => {
     const latest = latestReleaseVersion(ANNOUNCEMENTS);
     if (latest) setLastSeenReleaseVersion(latest);
@@ -296,29 +277,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     return true;
   }, [resetAll]);
 
-  // The thread the welcome flow opens starts as /chat/t/__default__ but is
-  // renamed to a real thread id on the first message — and that navigate drops
-  // the kickoff route state. Remember WHICH thread it became and suppress
-  // intros only there: the thread intro can't pop over the first answer, but a
-  // different thread opened later the same session shows it normally. Kept in
-  // the tab's session too, so a reload in the middle of that first turn does
-  // not bring the guidance up over it.
-  const interviewThreadRef = useRef<string | null | undefined>(undefined);
-  if (interviewThreadRef.current === undefined) interviewThreadRef.current = readInterviewThread();
-  const wasInInterviewRef = useRef(false);
-  const threadId = pathname.match(/^\/chat\/t\/([^/]+)/)?.[1] ?? null;
-  if (threadId === '__default__') {
-    wasInInterviewRef.current = true;
-  } else if (wasInInterviewRef.current) {
-    // First route after the interview: the rename lands on the real thread id
-    // (null when the user left the thread view without sending a message).
-    interviewThreadRef.current = threadId;
-    if (threadId !== null) writeInterviewThread(threadId);
-    wasInInterviewRef.current = false;
-  }
-  const inInterview =
-    threadId === '__default__' ||
-    (threadId !== null && threadId === interviewThreadRef.current);
+  // A new chat's first turn, which no intro pops over, and the welcome flow's
+  // conversation, which the getting-started list stays out of too.
+  const { firstTurn, welcome: inWelcomeChat } = useFirstTurnThread(pathname, state);
 
   // Reactive snooze: snoozing the dashboard banner fires an event; without it
   // the provider wouldn't re-render and the dashboard intro would stay
@@ -328,13 +289,14 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     isPersonalizationSnoozed
   );
 
-  // Suppress while onboarding owns the screen: the welcome flow, the chat it
-  // opens, and the dashboard while its banner offers the flow (unless
-  // snoozed). Read off `onboarding_completed` alone, as the banner is:
-  // `personalization_completed` means the user has a key of their own.
+  // Suppress while onboarding owns the screen: the welcome flow, a new chat's
+  // first turn (the welcome flow's among them), and the dashboard while its
+  // banner offers the flow (unless snoozed). Read off `onboarding_completed`
+  // alone, as the banner is: `personalization_completed` means the user has a
+  // key of their own.
   const onboardingCompleted = user?.onboarding_completed === true;
   const suppress =
-    inInterview ||
+    firstTurn ||
     pathname === WELCOME_PATH ||
     isLegacyOnboardingSearch(search) ||
     (!onboardingCompleted && pathname === '/dashboard' && !personalizationSnoozed);
@@ -378,11 +340,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     }));
     const doneCount = tasks.filter((t) => t.done).length;
     return {
-      // Out of the way while the welcome flow's conversation runs: the user is
-      // answering the agent there, and the list comes back on the next page.
+      // Out of the welcome flow's conversation: the user is answering the
+      // agent there, and the list comes back on the next page.
       visible:
         !isLoading &&
-        !inInterview &&
+        !inWelcomeChat &&
         prefs.gettingStartedDismissedAt === null &&
         doneCount < tasks.length,
       tasks,
@@ -390,7 +352,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       dismiss: dismissGettingStarted,
       completeTask: markTaskDone,
     };
-  }, [prefs, onboardingCompleted, hasWorkspace, isLoading, inInterview, dismissGettingStarted, markTaskDone]);
+  }, [prefs, onboardingCompleted, hasWorkspace, isLoading, inWelcomeChat, dismissGettingStarted, markTaskDone]);
 
   useOnboardingOrchestrator({
     isLoading,
@@ -414,6 +376,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       unseen,
       activeIntro,
       dismissPageIntro,
+      abandonPageIntro,
       gettingStarted,
       acknowledgeWhatsNew,
       replayGuides,
@@ -425,6 +388,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       unseen,
       activeIntro,
       dismissPageIntro,
+      abandonPageIntro,
       gettingStarted,
       acknowledgeWhatsNew,
       replayGuides,

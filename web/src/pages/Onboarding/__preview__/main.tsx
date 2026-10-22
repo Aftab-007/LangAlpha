@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- entry file, not a module */
-import { StrictMode, useEffect, useState } from 'react';
+import { StrictMode, Suspense, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import i18n, { initI18n } from '@/i18n';
 import { switchLocale } from '@/lib/locale';
@@ -170,11 +170,16 @@ function Preview() {
       {surface === 'guide' ? (
         <GuidePreview key={`${guideVariant}-${locale}-${run}`} variant={guideVariant} done={2} />
       ) : surface === 'intro' ? (
-        <PageIntroModal
-          key={`${intro.id}-${locale}-${run}`}
-          intro={intro}
-          onClose={() => setRun((n) => n + 1)}
-        />
+        // The modal still suspends for a tick on each intro and language: the
+        // loads below are done, but `use` meets each promise for the first time.
+        <Suspense fallback={null}>
+          <PageIntroModal
+            key={`${intro.id}-${locale}-${run}`}
+            intro={intro}
+            onClose={() => setRun((n) => n + 1)}
+            onAbandon={() => console.warn(`[preview] no ${locale} copy for the ${intro.id} intro`)}
+          />
+        </Suspense>
       ) : (
         <WhatsNewModal
           key={`wn-${locale}-${twoReleases}-${run}`}
@@ -186,7 +191,7 @@ function Preview() {
   );
 }
 
-// Every scene and the intro copy up front, so nothing here suspends.
+// Every scene and the intro copy up front, so nothing here waits on a download.
 void Promise.all([
   initI18n().then(() => i18n.loadNamespaces('intros')),
   loadIntroScenes(INTRO_VISUALS),

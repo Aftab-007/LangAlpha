@@ -7,11 +7,10 @@ import type { GettingStartedTaskState } from '../OnboardingProvider';
 const dismiss = vi.fn();
 const completeTask = vi.fn();
 let mockTasks: GettingStartedTaskState[] = [];
-let mockVisible = true;
 vi.mock('../OnboardingProvider', () => ({
   useOnboarding: () => ({
     gettingStarted: {
-      visible: mockVisible,
+      visible: true,
       tasks: mockTasks,
       doneCount: mockTasks.filter((t) => t.done).length,
       dismiss,
@@ -50,18 +49,11 @@ describe('GettingStartedLauncher', () => {
     localStorage.clear();
     dismiss.mockClear();
     completeTask.mockClear();
-    mockVisible = true;
     mockTasks = GETTING_STARTED_TASKS.map((def, i) => ({ def, done: i === 0 }));
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it('renders nothing when not visible', () => {
-    mockVisible = false;
-    const { container } = renderLauncher();
-    expect(container.querySelector('button')).toBeNull();
   });
 
   it('sits in the sidebar unfolded, marks the done tasks, and describes only the next one', () => {

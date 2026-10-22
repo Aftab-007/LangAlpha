@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router';
 import { ArrowUpRight, Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { isDesktopShell } from '@/lib/desktop';
-import { cn } from '@/lib/utils';
+import { cn, safeLocalStorage } from '@/lib/utils';
 import { useOnboarding, type GettingStartedTaskState } from '../OnboardingProvider';
 import type { GettingStartedTaskDef } from '../registry';
 import './GettingStarted.css';
@@ -12,24 +12,14 @@ import './GettingStarted.css';
 /** The longest a hand-off to the account portal waits for its task's stamp. */
 const STAMP_WAIT_MS = 1500;
 
-/** Whether the list is folded open; a per-browser convenience, open by default. */
+/**
+ * Whether the list is folded open; a per-browser convenience, open by default.
+ * Blocked storage reads as open, and the list still folds, forgetting on reload.
+ */
 const OPEN_KEY = 'onboarding.guideOpen';
 
-function readOpen(): boolean {
-  try {
-    return localStorage.getItem(OPEN_KEY) !== '0';
-  } catch {
-    return true;
-  }
-}
-
-function writeOpen(open: boolean): void {
-  try {
-    localStorage.setItem(OPEN_KEY, open ? '1' : '0');
-  } catch {
-    // Storage blocked: the list still folds, it just forgets on reload.
-  }
-}
+const readOpen = () => safeLocalStorage.getItem(OPEN_KEY) !== '0';
+const writeOpen = (open: boolean) => safeLocalStorage.setItem(OPEN_KEY, open ? '1' : '0');
 
 /**
  * Set when the rail's ring expands the sidebar. The ring unmounts with the
@@ -273,9 +263,8 @@ export type GettingStartedLauncherProps =
 
 /**
  * The checklist, wired to the onboarding state: the section in the expanded
- * sidebar, the ring in the rail (`onExpand` opens the sidebar). Absent once
- * every task is done, the guide is hidden, or the welcome flow's
- * conversation has the screen.
+ * sidebar, the ring in the rail (`onExpand` opens the sidebar). Mounted by
+ * GettingStartedGate, only while the list is visible.
  *
  * Tasks complete via route visits or a derived signal (the saved investing
  * profile, a workspace); picking a pending one goes to it.
@@ -283,8 +272,6 @@ export type GettingStartedLauncherProps =
 export function GettingStartedLauncher(props: GettingStartedLauncherProps) {
   const { gettingStarted } = useOnboarding();
   const navigate = useNavigate();
-
-  if (!gettingStarted.visible) return null;
   const { tasks, doneCount, dismiss, completeTask } = gettingStarted;
 
   if (props.variant === 'rail') {
@@ -300,14 +287,8 @@ export function GettingStartedLauncher(props: GettingStartedLauncherProps) {
       // The portal shares this window in the desktop app, as Usage & Plan
       // does, and the shell answers a window.open with a window of its own or
       // the browser. Leaving unloads the page, so the stamp goes first.
-      let left = false;
-      const leave = () => {
-        if (left) return;
-        left = true;
-        window.location.assign(def.to);
-      };
-      setTimeout(leave, STAMP_WAIT_MS);
-      completeTask(def.id, leave);
+      const waited = new Promise<void>((resolve) => setTimeout(resolve, STAMP_WAIT_MS));
+      void Promise.race([completeTask(def.id), waited]).then(() => window.location.assign(def.to));
       return;
     }
     // Cross-app page — no route of ours to observe, so a successful open is

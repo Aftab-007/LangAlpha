@@ -8,13 +8,19 @@ import { WhatsNewModal } from './engine/WhatsNewModal';
  * authenticated shell. The getting-started list lives in the sidebar.
  */
 export function OnboardingHost() {
-  const { phase, activeIntro, unseen, dismissPageIntro, acknowledgeWhatsNew } = useOnboarding();
+  const { phase, activeIntro, unseen, dismissPageIntro, abandonPageIntro, acknowledgeWhatsNew } =
+    useOnboarding();
 
   return (
     <>
       {phase === 'pageIntro' && activeIntro && (
         // Keyed so step state never leaks between two different intros.
-        <PageIntroModal key={activeIntro.id} intro={activeIntro} onClose={dismissPageIntro} />
+        <PageIntroModal
+          key={activeIntro.id}
+          intro={activeIntro}
+          onClose={dismissPageIntro}
+          onAbandon={abandonPageIntro}
+        />
       )}
       {phase === 'whatsNew' && (
         <WhatsNewModal announcements={unseen} onAcknowledge={acknowledgeWhatsNew} />

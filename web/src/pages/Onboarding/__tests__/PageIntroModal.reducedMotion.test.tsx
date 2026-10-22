@@ -1,5 +1,6 @@
+import { Suspense } from 'react';
 import { describe, it, expect, vi, beforeAll } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import type { PageIntroDef } from '../registry';
 
 // framer-motion's useReducedMotion initializes a module-level matchMedia
@@ -33,7 +34,14 @@ const intro: PageIntroDef = {
 
 describe('PageIntroModal under prefers-reduced-motion', () => {
   it('renders and navigates via the instant-crossfade path', async () => {
-    render(<PageIntroModal intro={intro} onClose={vi.fn()} />);
+    // Held in an awaited act: the modal suspends on its load, then retries.
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <PageIntroModal intro={intro} onClose={vi.fn()} onAbandon={vi.fn()} />
+        </Suspense>
+      );
+    });
     expect(screen.getByText('chat.s1.title')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     expect(await screen.findByText('chat.s2.title')).toBeInTheDocument();

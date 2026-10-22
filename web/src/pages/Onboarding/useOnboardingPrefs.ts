@@ -62,39 +62,35 @@ export function useOnboardingPrefs() {
   const taskAttemptsRef = useRef({ gen: remoteUpdateGen.current, ids: new Set<string>() });
 
   /**
-   * Stamp a getting-started task complete. `onSettled` runs once the write
-   * lands or fails, or at once when there is nothing to send, for a caller
-   * about to leave the page that would otherwise cut the write off.
+   * Stamp a getting-started task complete. Resolves once the write lands or
+   * fails, or at once when there is nothing to send, for a caller about to
+   * leave the page that would otherwise cut the write off. Never rejects.
    */
   const markTaskDone = useCallback(
-    (id: string, onSettled?: () => void) => {
-      if (isLoading) {
-        onSettled?.();
-        return;
-      }
+    (id: string): Promise<void> => {
+      if (isLoading) return Promise.resolve();
       const attempts = taskAttemptsRef.current;
       if (attempts.gen !== remoteUpdateGen.current) {
         attempts.gen = remoteUpdateGen.current;
         attempts.ids.clear();
       }
-      if (attempts.ids.has(id)) {
-        onSettled?.();
-        return;
-      }
-      const accepted = writeOnboardingPrefs(
-        (cur) =>
-          cur.gettingStartedDoneAt[id] != null
-            ? null
-            : { ...cur, gettingStartedDoneAt: { ...cur.gettingStartedDoneAt, [id]: Date.now() } },
-        { fallbackOther, onSuccess: onSettled, onError: onSettled }
-      );
-      if (accepted) attempts.ids.add(id);
-      else onSettled?.();
+      if (attempts.ids.has(id)) return Promise.resolve();
+      return new Promise<void>((settle) => {
+        const accepted = writeOnboardingPrefs(
+          (cur) =>
+            cur.gettingStartedDoneAt[id] != null
+              ? null
+              : { ...cur, gettingStartedDoneAt: { ...cur.gettingStartedDoneAt, [id]: Date.now() } },
+          { fallbackOther, onSuccess: () => settle(), onError: () => settle() }
+        );
+        if (accepted) attempts.ids.add(id);
+        else settle();
+      });
     },
     [writeOnboardingPrefs, remoteUpdateGen, fallbackOther, isLoading]
   );
 
-  /** Hide the getting-started card permanently. */
+  /** Hide the getting-started list permanently. */
   const dismissGettingStarted = useCallback(() => {
     if (isLoading) return;
     writeOnboardingPrefs(
@@ -107,7 +103,7 @@ export function useOnboardingPrefs() {
   }, [writeOnboardingPrefs, fallbackOther, isLoading]);
 
   /**
-   * Re-show all page tips and the getting-started card (Settings affordance).
+   * Re-show all page tips and the getting-started list (Settings affordance).
    * Returns false if the write was refused (cold cache) so the caller can skip
    * a "done" toast it can't honor — the server state would be unchanged.
    */

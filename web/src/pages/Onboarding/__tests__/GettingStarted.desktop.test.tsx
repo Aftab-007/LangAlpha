@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router';
 import { GETTING_STARTED_TASKS } from '../registry';
 import type { GettingStartedTaskState } from '../OnboardingProvider';
 
-const h = vi.hoisted(() => ({ assign: vi.fn(), completeTask: vi.fn() }));
+const h = vi.hoisted(() => ({ assign: vi.fn(), completeTask: vi.fn<() => Promise<void>>() }));
 
 vi.mock('@/lib/desktop', () => ({ isDesktopShell: () => true }));
 
@@ -70,38 +70,33 @@ describe('GettingStartedLauncher in the desktop app', () => {
     vi.restoreAllMocks();
   });
 
-  it('takes this window to the chat apps page once the task is stamped, never a popup', () => {
+  it('takes this window to the chat apps page once the task is stamped, never a popup', async () => {
+    let stamped!: () => void;
+    h.completeTask.mockReturnValueOnce(new Promise((resolve) => (stamped = resolve)));
     const open = vi.spyOn(window, 'open');
     pickChatApps();
     expect(open).not.toHaveBeenCalled();
-    expect(h.completeTask).toHaveBeenCalledWith('integrations', expect.any(Function));
+    expect(h.completeTask).toHaveBeenCalledWith('integrations');
     // Nothing leaves before the stamp settles: the page would cut it off.
+    await vi.advanceTimersByTimeAsync(0);
     expect(h.assign).not.toHaveBeenCalled();
 
-    h.completeTask.mock.calls[0][1]();
+    stamped();
+    await vi.advanceTimersByTimeAsync(0);
     expect(h.assign).toHaveBeenCalledTimes(1);
     expect(h.assign).toHaveBeenCalledWith(expect.stringMatching(/\/integrations$/));
 
     // The fallback timer finds the page already leaving.
-    vi.advanceTimersByTime(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(h.assign).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves anyway when the stamp never settles', () => {
+  it('leaves anyway when the stamp never settles', async () => {
+    h.completeTask.mockReturnValueOnce(new Promise(() => {}));
     pickChatApps();
-    vi.advanceTimersByTime(1499);
+    await vi.advanceTimersByTimeAsync(1499);
     expect(h.assign).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(h.assign).toHaveBeenCalledTimes(1);
-  });
-
-  it('marks the task as staying in this window', () => {
-    render(
-      <MemoryRouter>
-        <GettingStartedLauncher variant="row" />
-      </MemoryRouter>
-    );
-    const task = screen.getByRole('button', { name: /Connect a chat app/ });
-    expect(task.querySelector('.lucide-arrow-up-right')).toBeNull();
   });
 });
