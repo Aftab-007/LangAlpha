@@ -9,10 +9,10 @@ import re
 import resource
 import signal
 import sys
-import time
 import weakref
 
 import asyncssh
+from asyncssh.kex import get_kex_algs
 from psycopg import AsyncConnection
 
 from ptc_agent.core.sandbox.providers._ssh_connect import (
@@ -24,6 +24,9 @@ from src.config.settings import get_conversation_pool_max
 from src.server.database import ssh_tunnels as tunnels_db
 from src.server.database.encryption import encryption_configured
 from src.server.database.pool import get_db_connection, get_or_create_pool
+from src.server.ssh_gateway import admission
+from src.server.ssh_gateway.admission import Admission
+from src.server.ssh_gateway.tally import Tally
 from src.server.services.ssh_tunnels import (
     GatewayAddress,
     gateway_dial_listen,
@@ -40,7 +43,17 @@ logger = logging.getLogger(__name__)
 if logging.getLogger("asyncssh").level == logging.NOTSET:
     logging.getLogger("asyncssh").setLevel(logging.WARNING)
 
-LOGIN_TIMEOUT_S = 30
+# A login takes a few round trips, seconds even over a satellite link. Anyone
+# may hold a connection open this long before its login is checked, buffering
+# what it sends meanwhile, so it is kept short.
+LOGIN_TIMEOUT_S = 10
+# Keys one connection may offer, as sshd's MaxAuthTries caps them: asyncssh
+# has no cap of its own, and each offer costs a decode. A machine's tunnel
+# offers its one key twice, once to ask and once signed.
+MAX_KEY_OFFERS = 6
+# A machine logs in for its forward alone; a login with none up this long
+# after it completed is closed rather than kept alive on keepalives.
+FORWARD_TIMEOUT_S = 30
 # A machine that went away without closing its connection (asleep, unplugged,
 # off the network) is given up on after interval x count seconds of silence,
 # so its tunnel reads as down and a dial to it fails at once.
@@ -51,15 +64,26 @@ KEEPALIVE_COUNT_MAX = 3
 # closed, so a machine stuck reconnecting, or a tunnel's key used to open
 # logins that never forward, cannot pile connections up.
 MAX_CONNECTIONS_PER_TUNNEL = 4
-# Anyone may open a connection and hold it unchecked for LOGIN_TIMEOUT_S, each
-# on a file of the process's. Past this many at once a new one is closed
-# before the handshake, as sshd's MaxStartups closes them, so a flood cannot
-# take the files and memory the tunnels already up need. A machine closed
-# here connects again within seconds; a burst after a restart is far smaller,
-# as a login is checked within a fraction of a second.
-MAX_UNCHECKED_CONNECTIONS = 1024
-# How often a flood held at that cap is logged.
-_REFUSALS_LOGGED_EVERY_S = 60
+# What a connection may negotiate. asyncssh's defaults also offer an RSA key
+# exchange, which makes a new RSA key per connection, and Diffie-Hellman
+# groups up to 8192 bits: tens of milliseconds of the gateway's one loop each,
+# which anyone may ask for before logging in. These cost well under one, and
+# OpenSSH has offered them since 6.5. No compression: zlib inflates what a
+# stranger sends.
+_KEX_ALGS = (
+    "mlkem768x25519-sha256",
+    "curve25519-sha256",
+    "curve25519-sha256@libssh.org",
+    "ecdh-sha2-nistp256",
+)
+_ENCRYPTION_ALGS = (
+    "chacha20-poly1305@openssh.com",
+    "aes256-gcm@openssh.com",
+    "aes128-gcm@openssh.com",
+    "aes256-ctr",
+    "aes128-ctr",
+)
+_MAC_ALGS = ("hmac-sha2-256-etm@openssh.com", "hmac-sha2-512-etm@openssh.com")
 # A machine's client answers a channel open as soon as its own sshd takes the
 # connection. One that leaves it unanswered this long is wedged or hostile.
 _CHANNEL_OPEN_TIMEOUT_S = 15
@@ -79,8 +103,8 @@ _TUNNEL_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 # An unspecified address means every address, on both families: asyncio binds
 # "0.0.0.0" for IPv4 alone, and a machine may only have a route over IPv6.
 _ANY_ADDRESS = frozenset({"0.0.0.0", "::"})
-# A refused login's name is logged; a long one is cut, so a stranger cannot
-# fill the log with it.
+# A refused login's name is logged as an example; a long one is cut, so a
+# stranger cannot fill the log with it.
 _LOGGED_NAME_MAX = 64
 
 
@@ -94,16 +118,11 @@ def _login_lookup_slots() -> int:
     return max(1, (get_conversation_pool_max() - 1) // 3)
 
 
-def _unchecked_slots() -> int:
-    """How many connections may wait on their login at once.
-
-    A quarter of the open-file limit when that is lower than the cap: a
-    native run on macOS starts at 256, which the cap alone would exhaust.
-    """
-    soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
-    if soft == resource.RLIM_INFINITY:
-        return MAX_UNCHECKED_CONNECTIONS
-    return max(1, min(MAX_UNCHECKED_CONNECTIONS, soft // 4))
+def _kex_algs() -> list[str]:
+    """The key exchanges above this asyncssh can do: the ML-KEM hybrid needs
+    a crypto library that has it."""
+    available = get_kex_algs()
+    return [alg for alg in _KEX_ALGS if alg.encode() in available]
 
 
 class _Forward(asyncssh.SSHListener):
@@ -151,10 +170,8 @@ class Gateway:
         self._logins: dict[str, list[asyncssh.SSHServerConnection]] = {}
         self._connections: set[asyncssh.SSHServerConnection] = set()
         # Connections on the machines' address not logged in yet.
-        self._unchecked: set[asyncssh.SSHServerConnection] = set()
-        self._unchecked_slots = _unchecked_slots()
-        self._refused = 0
-        self._refusal_logged_at = float("-inf")
+        self._admission = Admission()
+        self._refused_logins = Tally(logger, logging.INFO, "Refused %d logins")
         # The tunnels this run wrote connected and has not written down since:
         # a forward refused before its connect landed has nothing to undo.
         self._marked_up: set[str] = set()
@@ -181,36 +198,23 @@ class Gateway:
         """Take a new connection; False for one to close unanswered.
 
         ``checked`` is False on the machines' address, where anyone may
-        connect: those count against the cap until their login completes.
+        connect: those are admitted (see ``admission``) and count against its
+        caps until their login completes.
         """
-        if not checked:
-            if len(self._unchecked) >= self._unchecked_slots:
-                self._refuse_unchecked()
-                return False
-            self._unchecked.add(conn)
+        if not checked and not self._admission.admit(conn):
+            return False
         self._connections.add(conn)
         return True
 
-    def _refuse_unchecked(self) -> None:
-        self._refused += 1
-        now = time.monotonic()
-        if now - self._refusal_logged_at < _REFUSALS_LOGGED_EVERY_S:
-            return
-        logger.warning(
-            "%d connections are waiting on their login, the most at once; new "
-            "ones are closed unanswered (%d since the last report)",
-            self._unchecked_slots,
-            self._refused,
-        )
-        self._refused = 0
-        self._refusal_logged_at = now
-
     def logged_in(self, conn: asyncssh.SSHServerConnection) -> None:
-        self._unchecked.discard(conn)
+        self._admission.release(conn)
+
+    def login_refused(self, why: str, example: str) -> None:
+        self._refused_logins.add(why, example)
 
     def connection_lost(self, conn: asyncssh.SSHServerConnection) -> None:
         self._connections.discard(conn)
-        self._unchecked.discard(conn)
+        self._admission.release(conn)
 
     # -- Machines' logins -------------------------------------------------------
 
@@ -517,6 +521,8 @@ class Gateway:
         dialer: bool = True,
         machines: bool = True,
     ) -> asyncssh.SSHAcceptor:
+        if machines:
+            admission.require_hooks()
         host = "" if address.host in _ANY_ADDRESS else address.host
         acceptor = await asyncssh.listen(
             host,
@@ -526,6 +532,10 @@ class Gateway:
             server_host_keys=[host_key],
             config=None,
             login_timeout=LOGIN_TIMEOUT_S,
+            kex_algs=_kex_algs(),
+            encryption_algs=list(_ENCRYPTION_ALGS),
+            mac_algs=list(_MAC_ALGS),
+            compression_algs=["none"],
             keepalive_interval=KEEPALIVE_INTERVAL_S,
             keepalive_count_max=KEEPALIVE_COUNT_MAX,
             public_key_auth=True,
@@ -623,6 +633,8 @@ class _Login(asyncssh.SSHServer):
         self._key: asyncssh.SSHKey | None = None
         self._tunnel_id: str | None = None
         self._refusal = "its key was not accepted"
+        self._lookup_error: str | None = None
+        self._key_offers = 0
         self._authed = False
         self._closed = False
         self._forward: _Forward | None = None
@@ -649,11 +661,10 @@ class _Login(asyncssh.SSHServer):
             self._gateway.forward_closed(self._forward)
             self._forward = None
         if self._username is not None and not self._authed:
-            logger.info(
-                "Refused login as %r: %s",
-                self._username[:_LOGGED_NAME_MAX],
-                self._refusal,
-            )
+            example = repr(self._username[:_LOGGED_NAME_MAX])
+            if self._lookup_error is not None:
+                example += f" ({self._lookup_error})"
+            self._gateway.login_refused(self._refusal, example)
 
     # -- Authentication ---------------------------------------------------------
 
@@ -679,16 +690,21 @@ class _Login(asyncssh.SSHServer):
             self._refusal = "no such login"
             return True
         try:
-            async with self._gateway.login_lookups:
-                if self._closed:
-                    return True  # its login timed out while it waited its turn
-                row = await tunnels_db.get_tunnel(username)
+            # No longer than the login itself: asyncssh does not cancel this
+            # when the connection closes, so a lookup held up by the database
+            # would otherwise outlive it, and each connection after it add one.
+            async with asyncio.timeout(LOGIN_TIMEOUT_S):
+                async with self._gateway.login_lookups:
+                    if self._closed:
+                        return True  # its login timed out while it waited
+                    row = await tunnels_db.get_tunnel(username)
         except Exception as e:
             # Not a refusal: a machine reads "Permission denied" as its tunnel
             # removed and waits ten minutes before asking again. A disconnect
             # is retried within seconds, which is what a database that is
             # down or busy for a moment calls for.
-            self._refusal = f"looking up the tunnel failed (told to retry): {e}"
+            self._refusal = "looking up the tunnel failed (told to retry)"
+            self._lookup_error = str(e) or type(e).__name__
             raise asyncssh.ServiceNotAvailable(
                 "The gateway cannot check logins right now; try again shortly"
             ) from None
@@ -708,6 +724,12 @@ class _Login(asyncssh.SSHServer):
         return True
 
     def validate_public_key(self, username: str, key: asyncssh.SSHKey) -> bool:
+        self._key_offers += 1
+        if self._key_offers > MAX_KEY_OFFERS:
+            self._refusal = "it offered too many keys"
+            assert self._conn is not None
+            self._conn.abort()
+            return False
         return self._key is not None and key.public_data == self._key.public_data
 
     def password_auth_supported(self) -> bool:
@@ -726,10 +748,8 @@ class _Login(asyncssh.SSHServer):
         if self._tunnel_id is None:
             return  # the workers' login
         self._gateway.login_completed(self._tunnel_id, self._conn)
-        # A machine logs in for its forward alone; a login with none up by
-        # then is closed rather than kept alive on keepalives.
         self._forward_due = asyncio.get_running_loop().call_later(
-            LOGIN_TIMEOUT_S, self._forward_overdue
+            FORWARD_TIMEOUT_S, self._forward_overdue
         )
 
     def _forward_overdue(self) -> None:
@@ -740,7 +760,7 @@ class _Login(asyncssh.SSHServer):
         logger.info(
             "Closing a login of tunnel %s: no forward up within %ds",
             self._tunnel_id,
-            LOGIN_TIMEOUT_S,
+            FORWARD_TIMEOUT_S,
         )
         self._gateway.close_login(self._tunnel_id, self._conn)
 

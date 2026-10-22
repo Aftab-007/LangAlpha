@@ -18,7 +18,8 @@ import asyncssh
 import pytest
 
 from ptc_agent.core.sandbox.providers.ssh import generate_client_key
-from src.server.ssh_gateway import server
+from src.server.ssh_gateway import admission, server
+from src.server.services.ssh_tunnels import GatewayAddress
 from src.server.ssh_gateway.server import Gateway, _Forward
 
 TUNNEL = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -70,15 +71,22 @@ class _Tunnels:
 
 
 class _Conn:
-    def __init__(self) -> None:
+    def __init__(self, peer: str = "203.0.113.7") -> None:
         self.closed = False
         self.aborted = False
+        self.peer = peer
+
+    def get_extra_info(self, name: str, default: object = None) -> object:
+        return (self.peer, 40000) if name == "peername" else default
 
     def close(self) -> None:
         self.closed = True
 
     def abort(self) -> None:
         self.closed = self.aborted = True
+
+    def data_received(self, data: bytes, datatype: object = None) -> None:
+        pass
 
     def is_closed(self) -> bool:
         return self.closed
@@ -123,6 +131,36 @@ async def _serving(gateway: Gateway):
     finally:
         stop.set()
         assert await serving  # a stop asked for, not a lost lock
+
+
+@asynccontextmanager
+async def _machines_address():
+    gateway = Gateway(object())  # type: ignore[arg-type]
+    host_key = asyncssh.generate_private_key("ssh-ed25519")
+    acceptor = await gateway._listen(
+        host_key, GatewayAddress("127.0.0.1", 0), dialer=False
+    )
+    try:
+        yield acceptor.get_port()
+    finally:
+        acceptor.close()
+
+
+async def _stranger(port: int, **options: object) -> None:
+    conn = await asyncssh.connect(
+        "127.0.0.1",
+        port,
+        **{
+            "username": TUNNEL,
+            "known_hosts": None,
+            "client_keys": None,
+            "agent_path": None,
+            "config": None,
+            "connect_timeout": 5,
+            **options,
+        },
+    )
+    conn.close()
 
 
 def _liveness(tunnels: _Tunnels) -> list[tuple[str, ...]]:
@@ -444,7 +482,7 @@ class TestWhatALoginMayHold:
     async def test_past_the_cap_a_new_connection_is_closed_unanswered(
         self, machine, monkeypatch
     ):
-        monkeypatch.setattr(server, "_unchecked_slots", lambda: 2)
+        monkeypatch.setattr(admission, "unchecked_slots", lambda: 2)
         gateway = Gateway(object())  # type: ignore[arg-type]
         (first, _), (second, _), (_, refused) = (
             self._connected(gateway) for _ in range(3)
@@ -461,18 +499,108 @@ class TestWhatALoginMayHold:
 
     @pytest.mark.asyncio
     async def test_the_workers_own_address_is_not_capped(self, monkeypatch):
-        monkeypatch.setattr(server, "_unchecked_slots", lambda: 1)
+        monkeypatch.setattr(admission, "unchecked_slots", lambda: 1)
         gateway = Gateway(object())  # type: ignore[arg-type]
         self._connected(gateway)
 
         assert not self._connected(gateway, machines=False)[1].aborted
 
-    def test_the_cap_leaves_most_of_a_low_file_limit_free(self, monkeypatch):
-        monkeypatch.setattr(server.resource, "getrlimit", lambda _: (256, 256))
-        assert server._unchecked_slots() == 64
+    @pytest.mark.enable_socket  # a loopback listener, nothing beyond it
+    @pytest.mark.asyncio
+    async def test_a_stranger_cannot_pick_a_costly_key_exchange(self, tunnels):
+        """RSA and Diffie-Hellman key exchanges cost the gateway's one loop
+        tens of milliseconds each, and anyone may ask for them before logging
+        in; what is left still serves every OpenSSH since 6.5."""
+        async with _machines_address() as port:
+            for kex in (
+                "rsa2048-sha256",
+                "diffie-hellman-group14-sha256",
+                "diffie-hellman-group-exchange-sha256",
+            ):
+                with pytest.raises(asyncssh.KeyExchangeFailed):
+                    await _stranger(port, kex_algs=[kex])
+            # Past the key exchange, to a login refused: it has no key to offer.
+            with pytest.raises(asyncssh.PermissionDenied):
+                await _stranger(port, kex_algs=["curve25519-sha256@libssh.org"])
 
-        monkeypatch.setattr(server.resource, "getrlimit", lambda _: (65536, 65536))
-        assert server._unchecked_slots() == server.MAX_UNCHECKED_CONNECTIONS
+    @pytest.mark.enable_socket
+    @pytest.mark.asyncio
+    async def test_what_a_stranger_sends_before_logging_in_is_capped(
+        self, tunnels, monkeypatch
+    ):
+        """asyncssh holds whatever arrives while a login is looked up; the
+        budget is enforced on its real transport, here at a key exchange."""
+        monkeypatch.setattr(admission, "MAX_BYTES_BEFORE_LOGIN", 256)
+        async with _machines_address() as port:
+            # Aborted with its key exchange unread, so reset or lost.
+            with pytest.raises((asyncssh.ConnectionLost, ConnectionError)):
+                await _stranger(port)
+
+    @pytest.mark.enable_socket
+    @pytest.mark.asyncio
+    async def test_a_certificate_is_refused_without_checking_its_signature(
+        self, tunnels, monkeypatch
+    ):
+        """asyncssh would verify it with a signing key the sender picked,
+        before asking whether its CA is trusted."""
+        ca = asyncssh.generate_private_key("ssh-ed25519")
+        key = asyncssh.generate_private_key("ssh-ed25519")
+        cert = ca.generate_user_certificate(key, TUNNEL, principals=[TUNNEL])
+        decoded: list[bytes] = []
+        decode = asyncssh.connection.decode_ssh_certificate
+
+        def recording(data: bytes, *args: object) -> object:
+            # The client checks the gateway's host key here too, a plain key.
+            if b"-cert-v01@openssh.com" in data[:64]:
+                decoded.append(data)
+            return decode(data, *args)
+
+        monkeypatch.setattr(asyncssh.connection, "decode_ssh_certificate", recording)
+        async with _machines_address() as port:
+            with pytest.raises(asyncssh.PermissionDenied):
+                await _stranger(port, client_keys=[(key, cert)])
+
+        assert decoded == []
+
+    @pytest.mark.asyncio
+    async def test_a_connection_offering_too_many_keys_is_closed(self, tunnels):
+        login, conn = self._connected(Gateway(object()))  # type: ignore[arg-type]
+        await login.begin_auth(TUNNEL)
+        key = asyncssh.generate_private_key("ssh-ed25519")
+        for _ in range(server.MAX_KEY_OFFERS):
+            assert not login.validate_public_key(TUNNEL, key)
+        assert not conn.aborted
+
+        assert not login.validate_public_key(TUNNEL, key)
+        assert conn.aborted
+
+    @pytest.mark.asyncio
+    async def test_a_lookup_held_up_ends_with_its_login(self, tunnels, monkeypatch):
+        """Nothing cancels it when its connection closes, so each held one
+        behind a stuck query would otherwise stay."""
+        monkeypatch.setattr(server, "LOGIN_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(server, "_login_lookup_slots", lambda: 1)
+
+        async def get_tunnel(tunnel_id: str) -> None:
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(tunnels, "get_tunnel", get_tunnel)
+        gateway = Gateway(object())  # type: ignore[arg-type]
+        # One stuck on the query, one waiting its turn behind it.
+        logins = [server._Login(gateway, dialer=True, machines=True) for _ in range(2)]
+        checks = [login.begin_auth(TUNNEL) for login in logins]
+        results = await asyncio.wait_for(
+            asyncio.gather(*checks, return_exceptions=True), 1
+        )
+
+        assert all(isinstance(r, asyncssh.ServiceNotAvailable) for r in results)
+
+    def test_the_cap_leaves_most_of_a_low_file_limit_free(self, monkeypatch):
+        monkeypatch.setattr(admission.resource, "getrlimit", lambda _: (256, 256))
+        assert admission.unchecked_slots() == 64
+
+        monkeypatch.setattr(admission.resource, "getrlimit", lambda _: (65536, 65536))
+        assert admission.unchecked_slots() == admission.MAX_UNCHECKED_CONNECTIONS
 
     @pytest.mark.asyncio
     async def test_a_connection_that_changes_its_name_is_disconnected(
@@ -527,7 +655,7 @@ class TestWhatALoginMayHold:
 
     @pytest.mark.asyncio
     async def test_a_login_with_no_forward_up_is_closed(self, machine, monkeypatch):
-        monkeypatch.setattr(server, "LOGIN_TIMEOUT_S", 0.01)
+        monkeypatch.setattr(server, "FORWARD_TIMEOUT_S", 0.01)
         _, conn = await self._logged_in(Gateway(object()))  # type: ignore[arg-type]
 
         await asyncio.sleep(0.05)

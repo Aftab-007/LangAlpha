@@ -99,9 +99,13 @@ class SSHTarget:
 
 # -- Addresses ------------------------------------------------------------------
 
-# NAT64's well-known prefix carries an IPv4 address in its last 32 bits, which
-# a NAT64 gateway on the server's network would reach.
-_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+# These carry an IPv4 address in their last 32 bits, which a translator on the
+# server's network would reach: NAT64's well-known prefix, SIIT's
+# IPv4-translated form, and the deprecated IPv4-compatible one (::a.b.c.d).
+_CARRY_IPV4 = tuple(
+    ipaddress.ip_network(prefix)
+    for prefix in ("64:ff9b::/96", "::ffff:0:0:0/96", "::/96")
+)
 
 
 def is_public_address(address: str) -> bool:
@@ -114,7 +118,7 @@ def is_public_address(address: str) -> bool:
     if isinstance(ip, ipaddress.IPv6Address):
         if ip.ipv4_mapped is not None:
             ip = ip.ipv4_mapped
-        elif ip in _NAT64:
+        elif any(ip in prefix for prefix in _CARRY_IPV4):
             ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     return ip.is_global and not ip.is_multicast
 
