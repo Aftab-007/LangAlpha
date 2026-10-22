@@ -78,12 +78,17 @@ async def _confirm_dispatch_admission(
 
 
 def _unknown_dispatch_command(
-    error: str, thread_id: str, workspace_id: str | None, tool_call_id: str
+    error: str,
+    thread_id: str,
+    workspace_id: str | None,
+    tool_call_id: str,
+    handed_to: dict | None = None,
 ) -> Command:
     """Ambiguous dispatch outcome: the reservation is retained and the run may
     already be live on ``thread_id`` — surface that id so the model checks
     agent_output before re-dispatching (a blind retry would occupy a second
-    cap slot and can produce a duplicate report-back)."""
+    cap slot and can produce a duplicate report-back). ``handed_to`` is what
+    a pre-approved hand-off's card is drawn from."""
     return Command(
         update={
             "messages": [
@@ -93,6 +98,7 @@ def _unknown_dispatch_command(
                             "success": False,
                             "error": error,
                             "outcome": "unknown_retained",
+                            **(handed_to or {}),
                             "thread_id": thread_id,
                             "workspace_id": workspace_id,
                             "note": (
@@ -238,6 +244,19 @@ async def dispatch(
         ):
             report_back = overrides["report_back"]
 
+    # A hand-off approved in advance has no card but the one its result
+    # draws, so a failure from here on still says where it was going. A new
+    # thread's id is left out: no thread has it unless the run starts.
+    handed_to: dict = {}
+    if preapproved:
+        handed_to = {
+            "preapproved": True,
+            "workspace_id": workspace_id,
+            "workspace_name": workspace_name,
+        }
+        if is_continuation:
+            handed_to["thread_id"] = thread_id
+
     if not is_continuation:
         thread_id = str(uuid.uuid4())
 
@@ -296,7 +315,7 @@ async def dispatch(
 
         # Cap rejection or a fail-closed origin write — abort (reserve rolls back).
         if slot.error is not None:
-            return error_command(slot.error, tool_call_id)
+            return error_command(slot.error, tool_call_id, **handed_to)
         # ``rejected``: a definitive non-scheduling proof was observed — a
         # cancellation landing while the response and session close must then
         # NOT commit. ``ambiguous_error``: delivery unproven either way;
@@ -351,8 +370,12 @@ async def dispatch(
                             # compacting, or reporting to another Home thread.
                             # Say so, or the model reports a failure and
                             # retries into the same 409.
-                            return error_command(_THREAD_BUSY, tool_call_id)
-                        return error_command("dispatch_failed", tool_call_id)
+                            return error_command(
+                                _THREAD_BUSY, tool_call_id, **handed_to
+                            )
+                        return error_command(
+                            "dispatch_failed", tool_call_id, **handed_to
+                        )
                     if resp.status != 200:
                         # Not the endpoint's reply (it answers exactly 200;
                         # redirects are disabled): some other hop spoke —
@@ -398,7 +421,7 @@ async def dispatch(
             # The request provably never reached the endpoint, so rolling the
             # reservation back is safe.
             logger.error(f"PTC dispatch connection failed: {e}")
-            return error_command("dispatch_failed", tool_call_id)
+            return error_command("dispatch_failed", tool_call_id, **handed_to)
         except (aiohttp.ClientError, ValueError) as e:
             logger.error(f"PTC dispatch HTTP error: {e}")
             ambiguous_error = "dispatch_failed"
@@ -433,7 +456,7 @@ async def dispatch(
                 # retain without probing.
                 slot.commit()
                 return _unknown_dispatch_command(
-                    ambiguous_error, thread_id, workspace_id, tool_call_id
+                    ambiguous_error, thread_id, workspace_id, tool_call_id, handed_to
                 )
             try:
                 confirmed = await _confirm_dispatch_admission(
@@ -448,7 +471,7 @@ async def dispatch(
                 # The lost reply was a real acceptance of THIS request.
                 return dispatched()
             return _unknown_dispatch_command(
-                ambiguous_error, thread_id, workspace_id, tool_call_id
+                ambiguous_error, thread_id, workspace_id, tool_call_id, handed_to
             )
 
         slot.commit()
