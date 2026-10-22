@@ -288,7 +288,12 @@ async def dispatch(
         requested_from=requested_from.of_turn(configurable, question),
     ) as slot:
 
-        def dispatched(run_id: str | None = None, *, steered: bool = False) -> Command:
+        def dispatched(
+            run_id: str | None = None,
+            *,
+            steered: bool = False,
+            steer_id: str | None = None,
+        ) -> Command:
             # The card for a pre-approved hand-off is drawn from this result,
             # since no approval request carried the workspace's name.
             result = {
@@ -311,7 +316,11 @@ async def dispatch(
                 result["run_id"] = run_id
             if preapproved:
                 result["preapproved"] = True
-            return success_command(result, tool_call_id)
+            # The steer's row names the run that takes the hand-off in if
+            # ``run_id`` ends before reading it. The view reads it from the
+            # artifact, which the model never sees.
+            artifact = {"steer_id": steer_id} if steer_id else None
+            return success_command(result, tool_call_id, artifact=artifact)
 
         # Cap rejection or a fail-closed origin write — abort (reserve rolls back).
         if slot.error is not None:
@@ -324,6 +333,7 @@ async def dispatch(
         ambiguous_error: str | None = None
         run_id: str | None = None
         steered = False
+        steer_id: str | None = None
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -408,6 +418,7 @@ async def dispatch(
                         else:
                             run_id = body.get("run_id")
                             steered = body.get("status") == "steered"
+                            steer_id = body.get("steer_id") if steered else None
         except asyncio.CancelledError:
             # Cancellation mid-exchange (the dispatching turn cancelled, worker
             # shutdown) is as ambiguous as a lost response: the endpoint may
@@ -475,4 +486,4 @@ async def dispatch(
             )
 
         slot.commit()
-        return dispatched(run_id, steered=steered)
+        return dispatched(run_id, steered=steered, steer_id=steer_id)

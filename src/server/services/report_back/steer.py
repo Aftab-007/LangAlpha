@@ -524,9 +524,7 @@ async def _analyst_offer(job: dict, thread_id: str) -> SteeredReport | None:
 
     if await outbox_db.has_live_hand_off(owed.ptc_thread_id, owed.dispatcher_thread_id):
         return None
-    content, report_source = await report_message(
-        owed.ptc_thread_id, owed.origin, owed.final_status, steered=True
-    )
+    content, report_source = await report_message(owed, steered=True)
     return SteeredReport(
         job_id=job_id,
         content=content,

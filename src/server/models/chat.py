@@ -301,12 +301,26 @@ class ThreadOrigin(BaseModel):
 
 
 class AnalystReport(BaseModel):
-    """A dispatched analyst's thread reporting back, and its workspace."""
+    """A dispatched analyst's thread reporting back, and its workspace.
+
+    ``outcome`` says how the reported run ended. ``run_ids`` names that run
+    and the interrupted runs it continued, oldest first, so a hand-off finds
+    its report by the run its result named even when an approval split the
+    work across runs. ``steer_ids`` names the hand-offs those runs took in as
+    steers, oldest first, since one steered into a run that ended before
+    reading it is reported on by the later run that did. A list, empty or
+    not, is final; absent means unknown: a report stored before it was kept,
+    or one whose read of its steers failed. Rows stored before these were
+    kept have none of them.
+    """
 
     kind: Literal["analyst"]
     thread_id: str
     workspace_id: Optional[str] = None
     workspace_name: Optional[str] = None
+    outcome: Optional[Literal["completed", "error", "cancelled"]] = None
+    run_ids: Optional[List[str]] = None
+    steer_ids: Optional[List[str]] = None
 
 
 class TaskReport(BaseModel):
