@@ -469,59 +469,66 @@ function ChiefOfStaffAnswer() {
     names to an agent, the workbook built, then its formulas checked. */
 const COMPS_FLOW = {
   phases: [
-    { name: 'Pull', at: 300 },
-    { name: 'Build', at: 1100 },
-    { name: 'Check', at: 4000 },
+    { name: 'Pull', at: 800 },
+    { name: 'Build', at: 1600 },
+    { name: 'Check', at: 4500 },
   ],
   agents: [
-    { label: 'NTM estimates: NVDA, AVGO, TSM', at: 350, done: 900, took: '41.2s' },
-    { label: 'NTM estimates: AMD, ARM, QCOM', at: 400, done: 1000, took: '47.9s' },
-    { label: 'NTM estimates: MU, MRVL, INTC', at: 450, done: 1050, took: '52.3s' },
-    { label: 'Build comps.xlsx', at: 1150, done: 3900, took: '1m 38s' },
-    { label: 'Check formulas', at: 4050, done: 4400, took: '21.6s' },
+    { label: 'NTM estimates: NVDA, AVGO, TSM', at: 850, done: 1400, took: '41.2s' },
+    { label: 'NTM estimates: AMD, ARM, QCOM', at: 900, done: 1500, took: '47.9s' },
+    { label: 'NTM estimates: MU, MRVL, INTC', at: 950, done: 1550, took: '52.3s' },
+    { label: 'Build comps.xlsx', at: 1650, done: 4400, took: '1m 38s' },
+    { label: 'Check formulas', at: 4550, done: 4900, took: '21.6s' },
   ] satisfies FlowAgent[],
   logs: [
-    { text: 'pulling NTM consensus for nine names', at: 350 },
-    { text: 'writing comps.xlsx', at: 1150 },
-    { text: 'checking 54 formulas', at: 4050 },
+    { text: 'pulling NTM consensus for nine names', at: 850 },
+    { text: 'writing comps.xlsx', at: 1650 },
+    { text: 'checking 54 formulas', at: 4550 },
   ],
 };
 
-/** The task from the Chief of Staff arriving, the workflow running it while
-    the file panel shows comps.xlsx being written row by row, then the
-    Analyst's long answer, the chart behind it, and its files. */
+/** The task from the Chief of Staff arriving, the Analyst saying what it
+    will run, the workflow running it while the file panel shows comps.xlsx
+    being written row by row, then the Analyst's long answer, the chart
+    behind it, and its files. */
 const PTC = {
   task: 100,
-  flow: 300,
-  panel: 1100,
-  sheet: 1300,
-  flowDone: 4500,
-  say: 4700,
-  chart: 5700,
-  bars: 5800,
-  files: [6300, 6500],
-  length: 8300,
+  plan: 300,
+  flow: 800,
+  panel: 1600,
+  sheet: 1800,
+  flowDone: 5000,
+  say: 5200,
+  chart: 6200,
+  bars: 6300,
+  files: [6800, 7000],
+  length: 8800,
 };
 
 /** The chat's width (px) once the file panel opens beside it and takes the
-    rest of the page, wider than the chat, as a file preview opens. Until
-    then the chat has the page, its column held to `COS_COL`. */
+    rest of the page, wider than the chat, as a file preview opens. */
 const PTC_CHAT = 176;
+
+/** The chat's width (px) before the panel opens: what the resting camera
+    shows. At this width the app's centred column (max-w-3xl) fills the chat,
+    so the transcript runs edge to edge in it and the agent's cards start at
+    its left; the panel then slides in from the frame's right edge. */
+const PTC_CHAT_START = PAGE.width / REST;
 
 /** The chat header's height, which the panel's tab strip keeps level with. */
 const PTC_HEADER_H = 24;
 
 /** The camera rests on the chat as the task arrives and the workflow starts,
-    drifts across to the sheet as the file panel opens and the workflow's
-    build step writes it, the panel whole from its tab strip, pushes in on
-    the peers and their statistics, then comes back down the chat for the
-    answer, its chart and files, and out to the whole page. */
+    and holds as the file panel opens beside it, the narrowed chat whole with
+    the sheet's first columns at the right. Once the build step writes the
+    sheet it pushes in on the peers and their statistics, then comes back
+    down the chat for the answer, its chart and files, and out to the whole
+    page. */
 const PTC_SHOTS: [Shot, ...Shot[]] = [
   shot(0, 160, 132, REST),
-  shot(1800, 240, 132, REST, 700),
-  shot(2900, 272, 175, CLOSE, 900),
-  shot(4900, 160, 198, REST, 800),
-  wide(7400, 900),
+  shot(3400, 272, 175, CLOSE, 900),
+  shot(5400, 160, 198, REST, 800),
+  wide(7900, 900),
 ];
 
 function PtcSandbox() {
@@ -536,7 +543,7 @@ function PtcSandbox() {
             the file panel when the workbook opens */}
         <div
           className="flex shrink-0 flex-col"
-          style={{ width: PAGE.width - (PAGE.width - PTC_CHAT) * open }}
+          style={{ width: PTC_CHAT_START - (PTC_CHAT_START - PTC_CHAT) * open }}
         >
           {/* the header's share and panel toggle at its right; the toggle
               moves to the panel's corner once the panel is open */}
@@ -550,10 +557,7 @@ function PtcSandbox() {
               <ChatHeaderButtons panelOpen={now >= PTC.panel} />
             </span>
           </div>
-          <div
-            className="mx-auto flex min-h-0 w-full flex-1 flex-col gap-1.5 p-2.5"
-            style={{ maxWidth: COS_COL }}
-          >
+          <div className="flex min-h-0 w-full flex-1 flex-col gap-1.5 p-2.5">
             <Transcript>
               <UserBubble
                 at={PTC.task}
@@ -563,6 +567,12 @@ function PtcSandbox() {
               >
                 Refresh the comps; flag what moved.
               </UserBubble>
+              {/* the Analyst's turn opens with a line saying what it will run,
+                  so the run card reads as part of that turn */}
+              <Reply
+                text="I'll rerun the comps workflow on the nine names, then flag what moved."
+                at={PTC.plan}
+              />
               <WorkflowCard
                 name="semis-comps"
                 title="Refresh nine AI semis comps"
