@@ -29,56 +29,74 @@ import {
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
 import { BarChart, type Bar } from './charts';
-import { useSceneTime, useTween } from './clock';
-import { Appear, Cursor, UserBubble, type Waypoint } from './kit';
+import { Camera, type Shot } from './camera';
+import { useSceneTime } from './clock';
+import { Appear, UserBubble, type Waypoint } from './kit';
 import {
   ChromeIcon,
+  PANEL_W,
   PanelTab,
   Prose,
-  ThreadFrame,
+  ThreadPage,
   Timeline,
   ToolRow,
+  framePage,
   iconStyle,
 } from './threadParts';
 import type { IntroScene } from './types';
 
 /* The thread intro's first step: the files a turn writes land in the file
-   panel's tree, and a click there opens one in the panel. */
+   panel's tree, and a click there opens one in the panel. The thread page is
+   drawn whole and the camera crops it to the part each beat is about. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
-/** The Analyst's turn: a line of narration, three writes (each landing in the
-    tree as it finishes), and the answer. Then the pointer opens the report
-    from the tree, the narrow panel's tree folds away, and the report shows in
-    the HTML viewer. The tree sorts as the app's does: root files first, then
-    results/ and data/, names A to Z within. Pointer positions are px in the
-    400px scene: the report's row sits at y 140 in the tree (x 284–399). */
+/** The Analyst's turn: a line of narration, a read of the names to comp,
+    three writes (each landing in the tree as it finishes), and the answer.
+    Then the pointer opens the report from the tree, the narrow panel's tree
+    folds away, and the report shows in the HTML viewer. The tree sorts as
+    the app's does: root files first, then results/ and data/, names A to Z
+    within. Positions are px on the thread page: the report's row sits at
+    y 141 in the tree (x 284 to 400). */
 const FILES = {
   ask: 'Comp NVDA against AI semis',
   lead: 'Pulling NTM estimates and prices for the nine names.',
   leadAt: 250,
+  read: { name: 'universe.csv', at: 650, done: 1050 },
   writes: [
-    { name: 'prices.csv', at: 1000 },
+    { name: 'prices.csv', at: 1150 },
     { name: 'comps.xlsx', at: 1700 },
-    { name: 'report.html', at: 2400 },
+    { name: 'report.html', at: 2250 },
   ],
-  write: 500,
+  write: 450,
   answer:
     'Done. NVDA trades at **24.1x** NTM sales against a 9.8x median. ' +
     'The write-up is in `results/report.html`.',
-  answerAt: 3000,
+  answerAt: 2800,
   path: [
-    { at: 3300, x: 120, y: 236 },
-    { at: 4000, x: 318, y: 138 },
-    { at: 4500, x: 318, y: 138 },
-    { at: 5000, x: 392, y: 116 },
+    { at: 4200, x: 250, y: 200 },
+    { at: 5000, x: 322, y: 141 },
+    { at: 5400, x: 322, y: 141 },
+    { at: 6000, x: 300, y: 360 },
   ] satisfies Waypoint[],
-  click: 4100,
-  open: 4180,
-  leave: 4500,
-  bars: 4500,
-  length: 6000,
+  click: 5200,
+  open: 5280,
+  bars: 5900,
+  length: 8600,
 };
+
+/** The camera: close on the turn from its header, following it down as the
+    tool rows land and the answer names the report; across to the tree the
+    files landed in; then onto the report once it opens, settling on its
+    figure. */
+const FILE_SHOTS: [Shot, ...Shot[]] = [
+  { at: 0, ...framePage({ x: 6, y: 0, w: 176, h: 145 }, 0) },
+  { at: 2400, dur: 1100, ...framePage({ x: 6, y: 28, w: 176, h: 145 }, 0) },
+  { at: 3500, dur: 900, ...framePage({ x: 6, y: 56, w: 176, h: 145 }, 0) },
+  { at: 4500, dur: 900, ...framePage({ x: 274, y: 94, w: 126, h: 104 }, 0) },
+  { at: 6000, dur: 700, ...framePage({ x: 188, y: 28, w: PANEL_W, h: 175 }, 0) },
+  { at: 7700, dur: 1000, ...framePage({ x: 199, y: 105, w: 190, h: 157 }, 0) },
+];
 
 /** EV / NTM sales across the nine names in comps.xlsx, high to low. */
 const EV_SALES: Bar[] = [
@@ -359,10 +377,9 @@ function FilePanel() {
   const [prices, comps, report] = FILES.writes.map((w) => w.at + FILES.write);
   const opened = t >= FILES.open;
   const hover = t >= FILES.path[1].at && !opened;
-  const away = useTween(FILES.leave, 500);
   return (
-    <div className="relative w-full max-w-[400px]">
-      <ThreadFrame
+    <Camera shots={FILE_SHOTS} cursor={FILES.path} clicks={[FILES.click]}>
+      <ThreadPage
         title="Semis comps"
         tabs={
           opened ? (
@@ -377,6 +394,13 @@ function FilePanel() {
             <UserBubble at={0}>{FILES.ask}</UserBubble>
             <Prose text={FILES.lead} at={FILES.leadAt} />
             <Timeline>
+              <ToolRow
+                icon={FileText}
+                running={{ label: tr('toolArtifact.running.read'), pill: FILES.read.name }}
+                settled={{ label: tr('toolArtifact.tool.read'), pill: FILES.read.name }}
+                at={FILES.read.at}
+                done={FILES.read.done}
+              />
               {FILES.writes.map((w) => (
                 <ToolRow
                   key={w.name}
@@ -410,13 +434,7 @@ function FilePanel() {
           )
         }
       />
-      {/* the pointer opens the report from the tree, then drifts off and fades */}
-      {away < 1 && (
-        <div className="pointer-events-none absolute inset-0" style={{ opacity: 1 - away }}>
-          <Cursor path={FILES.path} clicks={[FILES.click]} />
-        </div>
-      )}
-    </div>
+    </Camera>
   );
 }
 

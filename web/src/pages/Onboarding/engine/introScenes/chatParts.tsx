@@ -9,6 +9,7 @@ import {
   type LucideProps,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { frame, VIEW, type Rect, type Shot } from './camera';
 import type { Bar } from './charts';
 import { ease, progress, useSceneTime } from './clock';
 import { Appear, Loader, rv } from './kit';
@@ -21,6 +22,40 @@ import { Appear, Loader, rv } from './kit';
    scene components plus the style helper */
 
 export type Icon = ComponentType<LucideProps>;
+
+/** The chat scenes draw each page at the view's size, so the wide shot is
+    the whole page and every other shot a crop of it. */
+export const PAGE = { width: VIEW.width, height: VIEW.height };
+
+/**
+ * The camera's shot arriving at `at` that frames `r` (page px) with `pad`
+ * around it, kept on the page: the view stops at the page's edge rather
+ * than show past it. `onPage: false` lets it run past an edge that draws
+ * nothing (the foot of a page whose last row sits short of it).
+ */
+export function shot(
+  at: number,
+  r: Rect,
+  { pad = 8, dur, onPage = true }: { pad?: number; dur?: number; onPage?: boolean } = {}
+): Shot {
+  const { x, y, zoom } = frame(r, pad);
+  const keep = (c: number, size: number, view: number) => {
+    const half = view / 2 / zoom;
+    if (!onPage) return c;
+    return size <= 2 * half ? size / 2 : Math.min(Math.max(c, half), size - half);
+  };
+  return {
+    at,
+    dur,
+    x: keep(x, PAGE.width, VIEW.width),
+    y: keep(y, PAGE.height, VIEW.height),
+    zoom,
+  };
+}
+
+/** The wide shot: the whole page, as the app draws it. */
+export const wide = (at: number, dur?: number): Shot =>
+  shot(at, { x: 0, y: 0, w: PAGE.width, h: PAGE.height }, { pad: 0, dur });
 
 /** A solid card in the chat transcript (`--color-bg-tool-card`), as tool results sit. */
 export const toolCard: CSSProperties = {

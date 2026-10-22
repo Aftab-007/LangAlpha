@@ -2,8 +2,9 @@ import { Fragment, type ReactNode } from 'react';
 import { ArrowLeft, FolderOpen, Plus, X, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentNames } from '../introAgents';
+import { VIEW, frame, type Rect, type Shot } from './camera';
 import { useSceneTime } from './clock';
-import { Appear, Frame, InputDock, Tag } from './kit';
+import { Appear, InputDock, Tag } from './kit';
 
 /* The thread page the thread intro's scenes play on: the chat column beside
    the file panel, the panel a full-height column with its own tab strip,
@@ -117,12 +118,64 @@ export function Prose({
   );
 }
 
+/** The chat column's header: back, the thread's `title`, the agent, and the
+    folder button that opens the file panel, held while it is open. */
+function ChatHeader({ title }: { title: string }) {
+  const { worker } = useAgentNames();
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2.5">
+      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={iconStyle} />
+      <span
+        className="min-w-0 truncate text-[0.5rem] font-medium leading-none"
+        style={{ color: 'var(--iv-text)' }}
+      >
+        {title}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        <Tag>{worker}</Tag>
+        <span
+          className="flex h-3.5 w-3.5 items-center justify-center rounded"
+          style={{ background: 'var(--color-border-muted)' }}
+        >
+          <FolderOpen className="h-2.5 w-2.5" style={{ color: 'var(--iv-text)' }} />
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/** The file panel's tab strip: `tabs`, new tab, then `actions` and close. */
+function PanelStrip({ tabs, actions }: { tabs: ReactNode; actions: ReactNode }) {
+  return (
+    <div
+      className="flex shrink-0 items-center gap-1 border-l px-1"
+      style={{ width: PANEL_W, borderColor: 'var(--iv-border)' }}
+    >
+      {tabs}
+      <ChromeIcon icon={Plus} />
+      <span className="ml-auto flex items-center gap-1.5 pr-0.5">
+        {actions}
+        <ChromeIcon icon={X} />
+      </span>
+    </div>
+  );
+}
+
+/** The thread page's size when a scene's camera frames it. */
+export const PAGE = { width: 400, height: 330 };
+
+/** The page's header row: the chat header beside the panel's tab strip. */
+export const HEADER_H = 28;
+
 /**
- * The thread page: the chat column with its header (the thread's `title`),
- * and the file panel beside it, its tab strip level with the chat header.
- * `tabs` and `actions` fill the strip; `panel` is everything under it.
+ * The thread page alone, drawn at `PAGE` for a scene's `Camera` to crop: the
+ * chat column with its header (the thread's `title`) beside the file panel,
+ * whose tab strip (`tabs`, `actions`) sits level with the chat header and
+ * `panel` fills the rest. `stack` places the transcript: from the top for a
+ * new thread, or settled on the composer for one with history above, the
+ * oldest lines running off the top as the newest come in.
  */
-export function ThreadFrame({
+export function ThreadPage({
   title,
   tabs,
   actions,
@@ -130,6 +183,7 @@ export function ThreadFrame({
   panel,
   composer,
   sendAt,
+  stack = 'top',
 }: {
   title: string;
   tabs: ReactNode;
@@ -138,48 +192,26 @@ export function ThreadFrame({
   panel: ReactNode;
   composer?: ReactNode;
   sendAt?: number[];
+  stack?: 'top' | 'bottom';
 }) {
-  const { worker } = useAgentNames();
   return (
-    <Frame
-      topbar={
-        <div className="-mx-2.5 flex h-full min-w-0 flex-1 items-stretch">
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2.5">
-            <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={iconStyle} />
-            <span
-              className="min-w-0 truncate text-[0.5rem] font-medium leading-none"
-              style={{ color: 'var(--iv-text)' }}
-            >
-              {title}
-            </span>
-            <span className="ml-auto flex shrink-0 items-center gap-1.5">
-              <Tag>{worker}</Tag>
-              {/* the folder button that opens the panel, held while it is open */}
-              <span
-                className="flex h-3.5 w-3.5 items-center justify-center rounded"
-                style={{ background: 'var(--color-border-muted)' }}
-              >
-                <FolderOpen className="h-2.5 w-2.5" style={{ color: 'var(--iv-text)' }} />
-              </span>
-            </span>
-          </div>
-          <div
-            className="flex shrink-0 items-center gap-1 border-l px-1"
-            style={{ width: PANEL_W, borderColor: 'var(--iv-border)' }}
-          >
-            {tabs}
-            <ChromeIcon icon={Plus} />
-            <span className="ml-auto flex items-center gap-1.5 pr-0.5">
-              {actions}
-              <ChromeIcon icon={X} />
-            </span>
-          </div>
-        </div>
-      }
-    >
-      <div className="-m-2.5 flex flex-1">
+    <div className="relative flex flex-col" style={PAGE}>
+      <div
+        className="flex shrink-0 items-stretch border-b"
+        style={{ height: HEADER_H, borderColor: 'var(--iv-border)' }}
+      >
+        <ChatHeader title={title} />
+        <PanelStrip tabs={tabs} actions={actions} />
+      </div>
+      <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 p-2.5">
-          {chat}
+          {stack === 'bottom' ? (
+            <div className="flex min-h-0 flex-1 flex-col justify-end gap-1.5 overflow-hidden">
+              {chat}
+            </div>
+          ) : (
+            chat
+          )}
           <InputDock text={composer} sendAt={sendAt} />
         </div>
         <div
@@ -189,8 +221,23 @@ export function ThreadFrame({
           {panel}
         </div>
       </div>
-    </Frame>
+    </div>
   );
+}
+
+/** The camera's view of `r` on the thread page, with `pad` px of page around
+    it, slid back inside the page where a crop near an edge would show past
+    it. */
+export function framePage(r: Rect, pad = 8): Omit<Shot, 'at' | 'dur'> {
+  const v = frame(r, pad);
+  const half = { x: VIEW.width / 2 / v.zoom, y: VIEW.height / 2 / v.zoom };
+  const hold = (c: number, h: number, size: number) =>
+    h * 2 >= size ? size / 2 : Math.min(Math.max(c, h), size - h);
+  return {
+    zoom: v.zoom,
+    x: hold(v.x, half.x, PAGE.width),
+    y: hold(v.y, half.y, PAGE.height),
+  };
 }
 
 /** A turn's tool calls, threaded on the timeline's rule through their icons. */

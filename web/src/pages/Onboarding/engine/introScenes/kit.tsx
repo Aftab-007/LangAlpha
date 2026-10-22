@@ -6,10 +6,11 @@ import { progress, useSceneTime } from './clock';
 import '../pageIntro.css';
 
 /*
- * The parts every scene is drawn with: a zoomed-out copy of the WHOLE page
- * (app rail + topbar + cards) in the app's own surfaces and type, plus the
- * pieces that move on the scene clock (typing, streaming lines, running
- * steps, a scripted pointer). All data is invented placeholder.
+ * The parts every scene is drawn with: the page's cards and composer in the
+ * app's own surfaces and type, plus the pieces that move on the scene clock
+ * (typing, running steps, a scripted pointer). A scene draws its page at its
+ * own size and a `Camera` shows the part a step is about. All data is
+ * invented placeholder.
  */
 /* eslint-disable react-refresh/only-export-components -- scene kit: small
    components plus the `rv` style helper */
@@ -68,39 +69,6 @@ export function Region({
       style={{ ...(delay != null ? rv(delay) : null), ...style }}
     >
       {children}
-    </div>
-  );
-}
-
-/** The whole-app chrome: icon rail + topbar + content. */
-export function Frame({ children, topbar }: { children: ReactNode; topbar?: ReactNode }) {
-  return (
-    <div className="intro-mk intro-rv w-full max-w-[400px] overflow-hidden" style={rv(0)}>
-      <div className="flex">
-        {/* icon rail */}
-        <div
-          className="flex w-7 shrink-0 flex-col items-center gap-2 border-r py-2.5"
-          style={{ borderColor: 'var(--iv-border)' }}
-        >
-          <span className="h-2.5 w-2.5 rounded" style={{ background: 'var(--iv-line-2)' }} />
-          {[0, 1, 2].map((i) => (
-            <span
-              key={i}
-              className="h-2.5 w-2.5 rounded"
-              style={{ background: 'var(--iv-fill)' }}
-            />
-          ))}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div
-            className="flex h-7 items-center gap-2 border-b px-2.5"
-            style={{ borderColor: 'var(--iv-border)' }}
-          >
-            {topbar ?? <Ln w="34%" />}
-          </div>
-          <div className="flex min-h-[300px] flex-col p-2.5">{children}</div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -230,51 +198,6 @@ export function Typed({ text, at, cps = 32 }: { text: string; at: number; cps?: 
   );
 }
 
-/** A skeleton line written out over `[at, at + dur]`, the way a reply streams in. */
-export function StreamLn({
-  w,
-  at,
-  dur = 420,
-  h = 3,
-  c,
-}: {
-  w: string;
-  at: number;
-  dur?: number;
-  h?: number;
-  c?: string;
-}) {
-  const p = progress(useSceneTime(), at, dur);
-  if (p === 0) return null;
-  return (
-    <span
-      className="intro-stream block rounded-full"
-      style={{ width: `calc(${w} * ${p})`, height: h, background: c ?? 'var(--iv-line)' }}
-    />
-  );
-}
-
-/** Lines streamed one after another from `at`, `per` ms each: a reply being written. */
-export function StreamBlock({
-  widths,
-  at,
-  per = 320,
-  c,
-}: {
-  widths: string[];
-  at: number;
-  per?: number;
-  c?: string;
-}) {
-  return (
-    <>
-      {widths.map((w, i) => (
-        <StreamLn key={i} w={w} at={at + i * per} dur={per} c={c} />
-      ))}
-    </>
-  );
-}
-
 const LOADER_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 
 /** The app's `Loader`: a braille glyph stepping every 80ms on the scene
@@ -348,10 +271,20 @@ export function pointAt(path: Waypoint[], t: number): { x: number; y: number } {
  * of its own color. Place it inside a `relative` box whose origin the
  * waypoints are measured from.
  */
-export function Cursor({ path, clicks = [] }: { path: Waypoint[]; clicks?: number[] }) {
+export function Cursor({
+  path,
+  clicks = [],
+  project,
+}: {
+  path: Waypoint[];
+  clicks?: number[];
+  /** Maps a waypoint to where it shows, for a pointer over a moving camera. */
+  project?: (p: { x: number; y: number }) => { x: number; y: number };
+}) {
   const t = useSceneTime();
   if (path.length === 0 || t < path[0].at) return null;
-  const { x, y } = pointAt(path, t);
+  const at = pointAt(path, t);
+  const { x, y } = project ? project(at) : at;
   const pressed = clicks.some((c) => t >= c && t < c + 160);
   return (
     <div className="pointer-events-none absolute z-10" style={{ left: x, top: y }}>

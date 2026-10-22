@@ -11,45 +11,61 @@ import {
 import { useLocale } from '@/hooks/useLocale';
 import { fixed2, signedFixed2 } from '@/lib/format';
 import type { IntroVisualId } from '../../registry';
+import { Camera, type Shot } from './camera';
 import {
   Candles,
   CommentBox,
-  EARNINGS_BAR,
+  EventBadge,
   FoldedIntervals,
   NVDA,
+  NVDA_EVENTS,
   NVDA_LAST,
   NVDA_PREV,
   Pin,
-  PriceLine,
   Selection,
   SelectionTools,
   ToolBtn,
-  VLine,
   addButton,
   besideRegion,
   chartScale,
 } from './candles';
 import { StockPriceCard } from './charts';
-import { progress, useSceneTime } from './clock';
-import { Appear, Cursor, Loader, Typed, UserBubble, type Waypoint, pointAt } from './kit';
+import { useSceneTime } from './clock';
+import { Appear, Loader, Typed, UserBubble, type Waypoint, pointAt } from './kit';
 import { NVDA_QUOTE, SelectionCard, SelectionChip } from './marketParts';
-import { PANEL_W, PanelTab, Prose, ThreadFrame, ToolRow } from './threadParts';
+import {
+  HEADER_H,
+  PAGE,
+  PANEL_W,
+  PanelTab,
+  Prose,
+  ThreadPage,
+  ToolRow,
+  framePage,
+} from './threadParts';
 import type { IntroScene } from './types';
 
 /* The thread intro's chart step: a chart tab in the file panel
    (`MarketChartSurface` in its compact form, as `ChartTab` hosts it). The
    user takes a region of it, notes it and sends it from the thread's
-   composer; the agent draws its read back onto the same chart and answers
-   with the chart's card in the transcript. */
+   composer; the agent pins the news behind the move to the same chart and
+   answers with the chart's card in the transcript. A camera follows the
+   work across the page: the chart, the composer, the reply, then the chart
+   again, where a badge opens on its story. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
-/* ── layout, in px of the 400px scene ──────────────────────────────────── */
+/* ── layout, in the page's px ──────────────────────────────────────────── */
 
-/** The panel's left edge: the frame's border and rail, then the chat column. */
-const PANEL_X = 29 + 370 - PANEL_W;
+/** The panel's left edge, past the chat column. */
+const PANEL_X = PAGE.width - PANEL_W;
 /** The chart card sits on the panel's ground, inset 4px top and 5px around. */
-const CARD = { x: PANEL_X + 1 + 5, y: 29 + 4, w: PANEL_W - 1 - 10, h: 300 - 4 - 5 };
+const CARD = {
+  x: PANEL_X + 1 + 5,
+  y: HEADER_H + 4,
+  w: PANEL_W - 1 - 10,
+  h: PAGE.height - HEADER_H - 4 - 5,
+};
 const TOOLBAR_H = 18;
 const SUBROW_H = 19;
 /** The chart inside the card, under its toolbar and the stats row. */
@@ -60,7 +76,7 @@ const CHART = {
   h: CARD.h - 2 - TOOLBAR_H - SUBROW_H,
 };
 const SCALE = chartScale(NVDA, CHART.w, CHART.h);
-const toScene = (x: number, y: number) => ({ x: CHART.x + x, y: CHART.y + y });
+const toPage = (x: number, y: number) => ({ x: CHART.x + x, y: CHART.y + y });
 
 /** The toolbar from its right end: the trail's two buttons, then the menu,
     Price level and Region. */
@@ -69,11 +85,13 @@ const REGION_BTN = {
   y: CARD.y + 1 + TOOLBAR_H / 2,
 };
 /** The thread composer's send button. */
-const SEND = { x: 29 + 370 - PANEL_W - 10 - 7 - 8, y: 29 + 300 - 10 - 7 - 8 };
+const SEND = { x: PANEL_X - 10 - 7 - 8, y: PAGE.height - 10 - 7 - 8 };
+
+const { earnings: EARNINGS, exportRule: EXPORT_RULE } = NVDA_EVENTS;
 
 /** The earnings gap and the slide that filled it: Aug 27 to Sep 11. */
 const REGION = {
-  x0: SCALE.x(EARNINGS_BAR) - SCALE.step / 2,
+  x0: SCALE.x(EARNINGS.i) - SCALE.step / 2,
   y0: SCALE.y(187.6),
   x1: SCALE.x(20) + SCALE.step / 2,
   y1: SCALE.y(169.9),
@@ -82,70 +100,55 @@ const BOX_W = 88;
 const BOX = besideRegion(SCALE, REGION.x0, REGION.x1, REGION.y0, BOX_W);
 const PIN = besideRegion(SCALE, REGION.x0, REGION.x1, REGION.y0, 10);
 const ADD = addButton(BOX, BOX_W);
+/** The export rule's badge, centered over its anchor. */
+const BADGE = toPage(SCALE.x(EXPORT_RULE.i), SCALE.y(EXPORT_RULE.price) - 10.5);
 
 const CH = {
-  hint: 250,
-  hintEnd: 1450,
-  arm: 1900,
-  press: 2400,
-  release: 3100,
-  note: 3300,
-  add: 4150,
-  added: 4300,
-  ask: 4550,
-  send: 5550,
-  think: 5750,
-  draw: 6050,
-  drawn: 6850,
-  answer: 7150,
-  away: 5950,
-  length: 9000,
+  arm: 850,
+  press: 1350,
+  release: 2050,
+  note: 2250,
+  add: 3050,
+  added: 3200,
+  ask: 4200,
+  send: 5300,
+  think: 5500,
+  draw: 5800,
+  drawn: 6600,
+  answer: 6800,
+  open: 8900,
+  length: 9900,
 };
 
 const NOTE = 'Earnings gap';
 const ASK = 'Why did this fade?';
-const GAP_FILL = 176.1;
+
+/** The chart card edge to edge, its left edge on the panel's divider, the
+    composer as the chip lands and the ask is typed, the reply as it comes
+    in, then the chart with its badges. */
+const SHOTS: [Shot, ...Shot[]] = [
+  { at: 0, ...framePage({ x: PANEL_X, y: HEADER_H + 1, w: PANEL_W, h: 174 }, 0) },
+  { at: 4100, dur: 850, ...framePage({ x: 0, y: 175, w: PANEL_X, h: 155 }, 0) },
+  { at: 6100, dur: 800, ...framePage({ x: 0, y: 166, w: PANEL_X, h: 155 }, 0) },
+  { at: 8500, dur: 900, ...framePage({ x: CARD.x, y: CARD.y, w: CARD.w, h: 156 }, 4) },
+];
 
 const PATH: Waypoint[] = [
-  { at: 0, x: 250, y: 150 },
-  { at: 250, x: 212, y: 16 },
-  { at: 1300, x: 214, y: 17 },
-  { at: 1800, ...REGION_BTN },
-  { at: 2050, ...REGION_BTN },
-  { at: 2350, ...toScene(REGION.x0, REGION.y0) },
-  { at: 2450, ...toScene(REGION.x0, REGION.y0) },
-  { at: 3100, ...toScene(REGION.x1, REGION.y1) },
-  { at: 3400, ...toScene(REGION.x1 + 4, REGION.y1 - 10) },
-  { at: 4000, ...toScene(ADD.x, ADD.y) },
-  { at: 4400, ...toScene(ADD.x, ADD.y) },
-  { at: 5350, ...SEND },
+  { at: 150, x: 352, y: 168 },
+  { at: 650, ...REGION_BTN },
+  { at: 1000, ...REGION_BTN },
+  { at: 1300, ...toPage(REGION.x0, REGION.y0) },
+  { at: 1400, ...toPage(REGION.x0, REGION.y0) },
+  { at: 2050, ...toPage(REGION.x1, REGION.y1) },
+  { at: 2350, ...toPage(REGION.x1 + 4, REGION.y1 - 10) },
+  { at: 2900, ...toPage(ADD.x, ADD.y) },
+  { at: 3300, ...toPage(ADD.x, ADD.y) },
+  { at: 5100, ...SEND },
+  { at: 5600, ...SEND },
+  { at: 8800, ...BADGE },
 ];
 
 /* ── the chart tab ─────────────────────────────────────────────────────── */
-
-/** The tab's hover card: the symbol, and under it what the tab holds. */
-function TabHint() {
-  const { t } = useTranslation();
-  return (
-    <span
-      className="intro-pop absolute z-10 flex flex-col gap-[2px] rounded-[4px] border px-[5px] py-[3px] leading-none"
-      style={{
-        left: PANEL_X + 4,
-        top: 26,
-        background: 'var(--color-bg-elevated)',
-        borderColor: 'var(--color-border-default)',
-        boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
-      }}
-    >
-      <span className="text-[0.40625rem]" style={{ color: 'var(--iv-text)' }}>
-        NVDA
-      </span>
-      <span className="font-mono text-[0.375rem]" style={{ color: 'var(--iv-text-3)' }}>
-        {t('filePanel.chartTab')} · 1D
-      </span>
-    </span>
-  );
-}
 
 /** The ticker legend that leads the compact toolbar (`LegendLead`): symbol,
     price and currency, the change, and the feed's status. Cut short with an
@@ -225,7 +228,7 @@ function PanelChart({ armed, clear }: { armed: boolean; clear: boolean }) {
     t >= CH.release
       ? REGION
       : (() => {
-          const p = pointAt(PATH, Math.max(t, 2450));
+          const p = pointAt(PATH, Math.max(t, CH.press));
           return { ...REGION, x1: p.x - CHART.x, y1: p.y - CHART.y };
         })();
   return (
@@ -258,7 +261,7 @@ function PanelChart({ armed, clear }: { armed: boolean; clear: boolean }) {
           </span>
         </div>
         <LegendStats />
-        <Candles series={NVDA} scale={SCALE} hide={t >= CH.drawn ? [GAP_FILL] : []}>
+        <Candles series={NVDA} scale={SCALE}>
           {drawing && t < CH.added && <Selection {...box} />}
           {drawing && t >= CH.added && <Selection {...REGION} active={false} />}
           {t >= CH.release && t < CH.added && (
@@ -271,8 +274,14 @@ function PanelChart({ armed, clear }: { armed: boolean; clear: boolean }) {
             />
           )}
           {t >= CH.added && !sent && <Pin n={1} left={PIN.left} top={PIN.top} />}
-          <VLine scale={SCALE} i={EARNINGS_BAR} label="Earnings" at={CH.drawn} />
-          <PriceLine scale={SCALE} price={GAP_FILL} title="Gap fill" at={CH.drawn + 250} />
+          <EventBadge scale={SCALE} ev={EARNINGS} at={CH.drawn} />
+          <EventBadge
+            scale={SCALE}
+            ev={EXPORT_RULE}
+            at={CH.drawn + 150}
+            hover={t >= CH.open - 100}
+            open={t >= CH.open}
+          />
         </Candles>
       </div>
     </div>
@@ -286,7 +295,7 @@ function PanelChart({ armed, clear }: { armed: boolean; clear: boolean }) {
     how many annotations and which, and Open. */
 function ChartFileCard() {
   const { t } = useTranslation();
-  const labels = ['Earnings', 'Gap fill'];
+  const labels = [EARNINGS.title, EXPORT_RULE.title];
   const muted = { borderColor: 'var(--color-border-muted)' };
   return (
     <Appear at={CH.drawn} pop>
@@ -351,12 +360,10 @@ function Transcript() {
   const { t: tr } = useTranslation();
   return (
     <>
-      {/* the transcript keeps its top while it fits, and once it overflows it
-          holds its newest lines in view, as the thread scrolls with a turn:
-          the auto margin takes any free space, and with none, the flex end
-          wins */}
+      {/* a thread with history, scrolled to its newest lines, the oldest
+          running off the top as the turn comes in */}
       <div className="flex min-h-0 grow basis-0 flex-col justify-end overflow-hidden">
-        <div className="mb-auto flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1.5">
           <UserBubble at={0}>Chart NVDA since earnings</UserBubble>
           <StockPriceCard
             sym="NVDA"
@@ -387,9 +394,9 @@ function Transcript() {
             <ChartFileCard />
           )}
           <Prose
-            text="Volume dried up after the gap, and price slid back to fill it at **176.10** in early September. Both are on the chart now."
+            text="It faded on news: a **new export rule** on Sep 8 took 3% off in a day, and the slide ran through the gap to **170.60**. Both events are on the chart."
             at={CH.answer}
-            cps={95}
+            cps={110}
           />
         </div>
       </div>
@@ -404,10 +411,9 @@ function Transcript() {
 
 function ChartPanel() {
   const t = useSceneTime();
-  const fade = progress(t, CH.away, 400);
   return (
-    <div className="relative w-full max-w-[400px]">
-      <ThreadFrame
+    <Camera shots={SHOTS} cursor={PATH} clicks={[CH.arm, CH.add, CH.send, CH.open - 60]}>
+      <ThreadPage
         title="NVDA earnings reaction"
         tabs={<PanelTab icon={CandlestickChart} label="NVDA" active />}
         actions={null}
@@ -418,13 +424,7 @@ function ChartPanel() {
         }
         sendAt={[CH.send]}
       />
-      {t >= CH.hint && t < CH.hintEnd && <TabHint />}
-      {fade < 1 && (
-        <div className="pointer-events-none absolute inset-0" style={{ opacity: 1 - fade }}>
-          <Cursor path={PATH} clicks={[CH.arm, CH.add, CH.send]} />
-        </div>
-      )}
-    </div>
+    </Camera>
   );
 }
 

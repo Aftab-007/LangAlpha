@@ -103,12 +103,6 @@ export const PAGE_INTROS: PageIntroDef[] = [
     matchRoute: (p) => p === '/market',
     steps: [
       {
-        id: 'live',
-        titleKey: 'onboarding.intros.market.steps.live.title',
-        bodyKey: 'onboarding.intros.market.steps.live.body',
-        visual: 'marketLive',
-      },
-      {
         id: 'ask',
         titleKey: 'onboarding.intros.market.steps.ask.title',
         bodyKey: 'onboarding.intros.market.steps.ask.body',

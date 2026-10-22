@@ -10,7 +10,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ease, useSceneTime } from './clock';
+import { useSceneTime } from './clock';
 
 /* The candlestick chart the market scenes and the file panel's chart tab
    share: MarketChart in miniature, as lightweight-charts paints it with the
@@ -18,8 +18,7 @@ import { ease, useSceneTime } from './clock';
    the price pane, MA20 and MA50, an RSI pane beneath, the price axis on the
    right with the last price on it, the time axis below. Over it go the
    user's selection (the teal region, its numbered pin, the note it takes)
-   and the agent's annotations (price line, zone, vertical line, each
-   labelled with the chip the app draws). Everything reads the scene clock. */
+   and the agent's event badges, each pinned to the bar its news hit. */
 /* eslint-disable react-refresh/only-export-components -- shared chart: the
    chart, its overlays and toolbar parts, plus the series and its scale */
 
@@ -131,11 +130,9 @@ function priorCloses(base: number, rise: number): number[] {
   );
 }
 
-/** The visible stretch: 49 sessions, Aug 13 to Oct 21, 2026. */
-export const SESSIONS = 49;
-
 /** The time axis's marks, as lightweight-charts spaces them: a month where
-    one starts, a day of the month between. */
+    one starts, a day of the month between. The 49 sessions run Aug 13 to
+    Oct 21, 2026. */
 export const TIME_MARKS = [
   { i: 2, label: '17' },
   { i: 13, label: 'Sep' },
@@ -144,18 +141,16 @@ export const TIME_MARKS = [
   { i: 42, label: '13' },
 ];
 
-/** The session NVDA reported in (Aug 27), the gap the scenes talk about. */
-export const EARNINGS_BAR = 10;
-
 /** NVDA's prior close and today's last, as every scene quotes them. */
 export const NVDA_PREV = 179.53;
 export const NVDA_LAST = 182.42;
 
 /**
- * NVDA, daily. It gapped up on earnings (Aug 27) into 186.90, faded through
- * the gap to a 170.60 low by mid-September, rallied back to 186.30 and
- * stalled again, dipped to 173.10, and is back at 182.42 today: 186 has
- * capped two rallies, and 170.60 to 173.40 has held two pullbacks.
+ * NVDA, daily, each move on news. It gapped up on earnings (Aug 27) into
+ * 186.90 and faded, fell 3% in a day on a new export rule (Sep 8) and slid
+ * to 170.60, turned on the Fed's cut (Sep 16) and rallied back to 186.30,
+ * pulled back to 173.10, and turned again on an upgrade (Oct 7) to 182.42
+ * today.
  */
 export const NVDA = seriesOf(
   'NVDA',
@@ -173,41 +168,41 @@ export const NVDA = seriesOf(
     176.1,
     184.5,
     185.3,
-    183.6,
-    181.2,
-    179.4,
-    177.6,
-    178.3,
-    176.0,
-    174.1,
-    172.4,
-    171.3,
-    172.6,
-    171.8,
-    173.9,
-    175.2,
-    176.8,
-    178.5,
-    177.9,
-    180.2,
+    184.0,
     182.6,
-    184.1,
-    182.9,
-    180.7,
-    179.0,
-    177.2,
-    175.8,
-    174.6,
-    174.0,
-    175.4,
-    176.9,
-    176.2,
-    177.8,
-    179.1,
-    178.4,
-    180.3,
-    181.0,
+    181.9,
+    180.6,
     180.2,
+    174.8,
+    173.4,
+    171.9,
+    171.3,
+    172.0,
+    171.6,
+    175.1,
+    176.3,
+    177.9,
+    179.4,
+    178.8,
+    181.2,
+    183.0,
+    184.6,
+    183.2,
+    181.1,
+    179.3,
+    177.6,
+    176.0,
+    174.9,
+    174.0,
+    178.1,
+    178.6,
+    177.9,
+    179.2,
+    180.1,
+    179.4,
+    180.7,
+    181.2,
+    180.4,
     NVDA_PREV,
     NVDA_LAST,
   ],
@@ -216,35 +211,38 @@ export const NVDA = seriesOf(
   {
     10: { o: 182.6, h: 186.8, l: 181.9, v: 412e6 },
     11: { h: 186.9 },
+    17: { o: 179.6, h: 180.1, l: 174.3, v: 390e6 },
     20: { l: 170.6 },
     22: { l: 170.9 },
+    23: { o: 171.9, h: 175.6, l: 171.4, v: 330e6 },
     30: { h: 186.3 },
     37: { l: 173.1 },
+    38: { o: 174.3, h: 178.6, l: 173.9, v: 310e6 },
     48: { o: 180.4, h: 183.05, l: 180.15 },
   }
 );
 
-/** AAPL, daily: the chart on screen before the search switches to NVDA. */
-export const AAPL = seriesOf(
-  'AAPL',
-  priorCloses(212, 8),
-  Array.from({ length: SESSIONS }, (_, i) =>
-    i === SESSIONS - 2
-      ? 226.8
-      : i === SESSIONS - 1
-        ? 226.62
-        : 220.5 + i * 0.12 + 3.4 * Math.sin(i * 0.23) + 1.8 * Math.sin(i * 0.71)
-  ),
-  52e6,
-  4
-);
-
-/** Where the live feed has the last bar's close at `t`: it ticks every
-    `every` ms from `from` and settles on the last value. */
-export function liveTick(t: number, from: number, ticks: number[], every = 450): number {
-  const k = Math.floor((t - from) / every);
-  return ticks[Math.min(Math.max(k, 0), ticks.length - 1)];
+/** One `event` annotation: the bar it is pinned to, the price its badge
+    anchors at, the headline on the badge and the story behind it. */
+export interface ChartEvent {
+  i: number;
+  price: number;
+  title: string;
+  detail?: string;
 }
+
+/** The news the agent pins to NVDA's moves, each at the bar it hit. */
+export const NVDA_EVENTS = {
+  earnings: { i: 10, price: 184.5, title: 'Earnings beat' },
+  exportRule: {
+    i: 17,
+    price: 180.1,
+    title: 'New export rule',
+    detail: 'Licenses tightened on AI chips sold abroad. NVDA fell 3% in a day.',
+  },
+  fedCut: { i: 23, price: 171.4, title: 'Fed cuts rates' },
+  upgrade: { i: 38, price: 173.9, title: 'Analyst upgrade' },
+} satisfies Record<string, ChartEvent>;
 
 /* ── the scale ─────────────────────────────────────────────────────────── */
 
@@ -342,40 +340,20 @@ function AxisLabel({ x, y, fill, text }: { x: number; y: number; fill: string; t
   );
 }
 
-/**
- * The chart: `s` laid out by `k`, revealed left to right over
- * `[at, at + dur]` (drawn whole with no `at`). `last` moves the last
- * bar's close as the live feed ticks. `children` are overlays, positioned in
- * the chart's px.
- */
+/** The chart: `s` laid out by `k`. `children` are overlays, positioned in
+    the chart's px. */
 export function Candles({
   series: s,
   scale: k,
-  at = Number.NEGATIVE_INFINITY,
-  dur = 1100,
-  last,
-  hide = [],
   children,
 }: {
   series: Series;
   scale: ChartScale;
-  at?: number;
-  dur?: number;
-  last?: number;
-  /** Prices whose labels sit on the axis (a price line's), so the levels
-      under them go unlabelled. */
-  hide?: number[];
   children?: ReactNode;
 }) {
   const id = svgId(useId());
-  const p = ease(useSceneTime(), at, dur);
-  const n = s.bars.length;
-  const bars =
-    last == null
-      ? s.bars
-      : s.bars.map((b, i) =>
-          i === n - 1 ? { ...b, c: last, h: Math.max(b.h, last), l: Math.min(b.l, last) } : b
-        );
+  const { bars } = s;
+  const n = bars.length;
   const end = bars[n - 1];
   const close = end.c;
   const vmax = Math.max(...bars.map((b) => b.v));
@@ -387,17 +365,14 @@ export function Candles({
   const rsiLine = line(s.rsi, k.ry);
   const rsiArea = `${rsiLine} ${k.x(n - 1)},${k.rsiTop + k.rsiH} ${k.x(0)},${k.rsiTop + k.rsiH}`;
   const rsiNow = s.rsi[n - 1];
-  const done = p >= 1;
   return (
+    // overlays may run past the chart, as a badge's detail does over the toolbar
     <div
-      className="relative shrink-0 overflow-hidden"
+      className="relative shrink-0"
       style={{ width: k.width, height: k.height, background: 'var(--color-bg-card)' }}
     >
       <svg width={k.width} height={k.height} className="absolute inset-0 block" aria-hidden>
         <defs>
-          <clipPath id={`${id}-reveal`}>
-            <rect x={0} y={0} width={k.paneW * p} height={plotH} />
-          </clipPath>
           <linearGradient id={`${id}-rsi`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="var(--color-accent-primary)" stopOpacity={0.2} />
             <stop offset="100%" stopColor="var(--color-accent-primary)" stopOpacity={0.02} />
@@ -418,7 +393,7 @@ export function Candles({
         {TIME_MARKS.map(({ i }) => (
           <line key={i} x1={k.x(i)} x2={k.x(i)} y1={0} y2={plotH} stroke={GRID} strokeWidth={0.5} />
         ))}
-        <g clipPath={`url(#${id}-reveal)`}>
+        <g>
           {/* volume, in the bottom fifth of the price pane */}
           {bars.map((b, i) => {
             const h = (b.v / vmax) * (k.priceH - volTop);
@@ -478,25 +453,21 @@ export function Candles({
           />
         </g>
         {/* the last price's line, dotted in the last bar's color */}
-        {done && (
-          <line
-            x1={0}
-            x2={k.paneW}
-            y1={k.y(close)}
-            y2={k.y(close)}
-            stroke={close >= end.o ? UP : DOWN}
-            strokeWidth={0.6}
-            strokeDasharray="1 1.5"
-          />
-        )}
+        <line
+          x1={0}
+          x2={k.paneW}
+          y1={k.y(close)}
+          y2={k.y(close)}
+          stroke={close >= end.o ? UP : DOWN}
+          strokeWidth={0.6}
+          strokeDasharray="1 1.5"
+        />
         {/* pane separator, then the axes' borders */}
         <line x1={0} x2={k.width} y1={k.priceH + 0.5} y2={k.priceH + 0.5} stroke={GRID} />
         <line x1={k.paneW + 0.5} x2={k.paneW + 0.5} y1={0} y2={plotH} stroke={GRID} />
         <line x1={0} x2={k.width} y1={plotH + 0.5} y2={plotH + 0.5} stroke={GRID} />
         {k.ticks
-          .filter((tick) =>
-            [...hide, ...(done ? [close] : [])].every((p) => Math.abs(k.y(tick) - k.y(p)) > 8)
-          )
+          .filter((tick) => Math.abs(k.y(tick) - k.y(close)) > 8)
           .map((tick) => (
             <text
               key={tick}
@@ -509,26 +480,22 @@ export function Candles({
               {tick.toFixed(2)}
             </text>
           ))}
-        {done && (
-          <AxisLabel
-            x={k.paneW}
-            y={k.y(close)}
-            fill={close >= end.o ? UP : DOWN}
-            text={close.toFixed(2)}
-          />
-        )}
+        <AxisLabel
+          x={k.paneW}
+          y={k.y(close)}
+          fill={close >= end.o ? UP : DOWN}
+          text={close.toFixed(2)}
+        />
         {/* the RSI pane: its label top left, its value on its own axis */}
         <text x={3} y={k.rsiTop + 6.5} fontSize={5} fill={AXIS_TEXT}>
           RSI (14)
         </text>
-        {done && (
-          <AxisLabel
-            x={k.paneW}
-            y={k.ry(rsiNow)}
-            fill="var(--color-accent-primary)"
-            text={rsiNow.toFixed(0)}
-          />
-        )}
+        <AxisLabel
+          x={k.paneW}
+          y={k.ry(rsiNow)}
+          fill="var(--color-accent-primary)"
+          text={rsiNow.toFixed(0)}
+        />
         {TIME_MARKS.map(({ i, label }) => (
           <text key={i} x={k.x(i)} y={plotH + 7} fontSize={5} fill={AXIS_TEXT} textAnchor="middle">
             {label}
@@ -540,175 +507,129 @@ export function Candles({
   );
 }
 
-/* ── the agent's annotations ───────────────────────────────────────────── */
+/* ── the agent's event badges ──────────────────────────────────────────── */
 
-/** The app's default annotation color: technical marks in slate blue. */
-export const ANNOTATION_BLUE = '#4F8AD6';
+/** An event's color when the agent names none (`DEFAULT_EVENT_COLOR`): the
+    annotation amber, apart from the slate blue of technical marks. */
+const EVENT_COLOR = '#E9954A';
+/** A badge's center keeps this far from the pane's edges (`EDGE_X`). */
+const EDGE_X = 15;
+/** An anchor higher than this hangs its badge under it (`FLIP_Y`). */
+const FLIP_Y = 22;
 
-/** The label an annotation carries (`agentAnnotationsPrimitive`): the
-    annotation's color as a dot, then ink on a card chip, set left of `x` or
-    centered on it. */
-export function AnnotationChip({
-  x,
-  y,
-  color,
-  center = false,
-  children,
+/**
+ * An event annotation as `AgentEventOverlay` draws it, at half the app's
+ * size: a dot ringed in the card color on the bar and price, and the
+ * headline on an elevated badge whose caret points down at the dot (or up,
+ * hung under a dot near the pane's top). Pops in at `at`. `hover` gives it
+ * the accent edge; `open` shows the detail in a popover beside it.
+ */
+export function EventBadge({
+  scale: k,
+  ev,
+  at = Number.NEGATIVE_INFINITY,
+  hover = false,
+  open = false,
 }: {
-  x: number;
-  y: number;
-  color: string;
-  center?: boolean;
-  children: ReactNode;
+  scale: ChartScale;
+  ev: ChartEvent;
+  at?: number;
+  hover?: boolean;
+  open?: boolean;
 }) {
+  if (useSceneTime() < at) return null;
+  const x = Math.max(EDGE_X, Math.min(k.x(ev.i), k.paneW - EDGE_X));
+  const y = k.y(ev.price);
+  const below = y < FLIP_Y;
+  const edge = hover || open ? 'var(--color-accent-primary)' : 'var(--color-border-muted)';
   return (
-    <span
-      className="absolute"
-      style={{ left: x, top: y, transform: center ? 'translateX(-50%)' : undefined }}
-    >
+    <span className="absolute" style={{ left: x, top: y, zIndex: open ? 1 : undefined }}>
       <span
-        className={cn(
-          'intro-pop flex h-[9px] items-center gap-[3px] whitespace-nowrap rounded-[2px] border',
-          'px-[3.5px] text-[0.3125rem] font-semibold leading-none'
-        )}
+        className="intro-pop absolute block h-[3.5px] w-[3.5px] rounded-full"
         style={{
-          background: 'var(--color-bg-card)',
-          borderColor: 'var(--color-border-default)',
-          color: 'var(--iv-text)',
+          left: -1.75,
+          top: -1.75,
+          background: EVENT_COLOR,
+          boxShadow: '0 0 0 1px var(--color-bg-card)',
         }}
+      />
+      {/* centered on the anchor; the pop animates the badge's own transform */}
+      <span
+        className="absolute left-0 -translate-x-1/2"
+        style={below ? { top: 4.5 } : { bottom: 4.5 }}
       >
-        <span className="h-[3px] w-[3px] shrink-0 rounded-full" style={{ background: color }} />
-        {children}
+        <span
+          className="intro-pop relative flex items-center gap-[3px] whitespace-nowrap rounded-[3px] border px-[4.5px] py-[1.5px] text-[0.34375rem] font-semibold leading-[1.3]"
+          style={{
+            background: 'var(--color-bg-elevated)',
+            borderColor: edge,
+            color: 'var(--color-text-primary)',
+            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.18)',
+          }}
+        >
+          <span
+            className="h-[3.5px] w-[3.5px] shrink-0 rounded-full"
+            style={{ background: EVENT_COLOR }}
+          />
+          {ev.title}
+          <span
+            className="absolute left-1/2 h-[3.5px] w-[3.5px] -translate-x-1/2 rotate-45"
+            style={{
+              ...(below ? { top: -2 } : { bottom: -2 }),
+              background: 'var(--color-bg-elevated)',
+              borderColor: edge,
+              borderStyle: 'solid',
+              borderWidth: below ? '1px 0 0 1px' : '0 1px 1px 0',
+            }}
+          />
+        </span>
+        {open && ev.detail && (
+          <EventDetail
+            ev={ev}
+            below={below}
+            // kept inside the chart, as the popover's collision padding keeps it on screen
+            shift={Math.max(DETAIL_W / 2 + 2, Math.min(x, k.width - DETAIL_W / 2 - 2)) - x}
+          />
+        )}
       </span>
     </span>
   );
 }
 
-/** A price line (`createPriceLine`): dashed across the pane, drawn left to
-    right from `at`, its title on the pane's edge and its price on the axis,
-    both on the line's color. */
-export function PriceLine({
-  scale: k,
-  price,
-  title,
-  at,
-  color = ANNOTATION_BLUE,
-}: {
-  scale: ChartScale;
-  price: number;
-  title: string;
-  at: number;
-  color?: string;
-}) {
-  const t = useSceneTime();
-  if (t < at) return null;
-  const p = ease(t, at, 520);
-  const y = k.y(price);
-  return (
-    <>
-      <span
-        className="absolute left-0 border-t border-dashed"
-        style={{ top: y - 0.5, width: k.paneW * p, borderColor: color }}
-      />
-      {p > 0.7 && (
-        <>
-          <span
-            className="intro-pop absolute flex h-2 items-center rounded-[1px] px-[3px] text-[0.3125rem] leading-none text-white"
-            style={{ right: k.width - k.paneW + 1, top: y - 4, background: color }}
-          >
-            {title}
-          </span>
-          <span
-            className="absolute flex h-2 items-center rounded-[1px] pl-[3px] text-[0.3125rem] leading-none text-white tabular-nums"
-            style={{ left: k.paneW, top: y - 4, width: k.width - k.paneW, background: color }}
-          >
-            {price.toFixed(2)}
-          </span>
-        </>
-      )}
-    </>
-  );
-}
+const DETAIL_W = 140;
 
-/** A rectangle the agent draws over bars `from` to `to` between two prices:
-    a light fill of its color under a fine edge, growing in from the left,
-    its chip in the top left corner. */
-export function Zone({
-  scale: k,
-  from,
-  to,
-  low,
-  high,
-  label,
-  at,
-  color = ANNOTATION_BLUE,
-}: {
-  scale: ChartScale;
-  from: number;
-  to: number;
-  low: number;
-  high: number;
-  label: string;
-  at: number;
-  color?: string;
-}) {
-  const t = useSceneTime();
-  if (t < at) return null;
-  const p = ease(t, at, 600);
-  const left = k.x(from) - k.step / 2;
-  const top = k.y(high);
+/** The badge's detail (`agent-event-pop`, a popover on its far side from the
+    dot): the dot and headline, then the story in a few sentences. `shift`
+    moves it off center. */
+function EventDetail({ ev, below, shift }: { ev: ChartEvent; below: boolean; shift: number }) {
   return (
-    <>
+    <span
+      className="intro-pop absolute left-1/2 z-10 flex flex-col gap-[3.5px] whitespace-normal rounded-[3px] border px-[7px] py-[6px]"
+      style={{
+        ...(below ? { top: 'calc(100% + 5px)' } : { bottom: 'calc(100% + 5px)' }),
+        width: DETAIL_W,
+        marginLeft: shift - DETAIL_W / 2,
+        background: 'var(--color-bg-popover)',
+        borderColor: 'var(--color-border-default)',
+        boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
+      }}
+    >
+      <span className="flex items-center gap-[3.5px]">
+        <span className="h-1 w-1 shrink-0 rounded-full" style={{ background: EVENT_COLOR }} />
+        <span
+          className="text-[0.40625rem] font-bold leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
+          {ev.title}
+        </span>
+      </span>
       <span
-        className="absolute border"
-        style={{
-          left,
-          top,
-          width: (k.x(to) + k.step / 2 - left) * p,
-          height: k.y(low) - top,
-          background: `${color}1A`,
-          borderColor: `${color}B3`,
-        }}
-      />
-      {p > 0.5 && (
-        <AnnotationChip x={left + 2} y={top + 2} color={color}>
-          {label}
-        </AnnotationChip>
-      )}
-    </>
-  );
-}
-
-/** A vertical line at bar `i`, dashed the height of the price pane, drawn
-    down from `at`, its chip centered at the top. */
-export function VLine({
-  scale: k,
-  i,
-  label,
-  at,
-  color = ANNOTATION_BLUE,
-}: {
-  scale: ChartScale;
-  i: number;
-  label: string;
-  at: number;
-  color?: string;
-}) {
-  const t = useSceneTime();
-  if (t < at) return null;
-  const p = ease(t, at, 520);
-  return (
-    <>
-      <span
-        className="absolute top-0 border-l border-dashed"
-        style={{ left: k.x(i) - 0.5, height: k.priceH * p, borderColor: `${color}CC` }}
-      />
-      {p > 0.4 && (
-        <AnnotationChip x={k.x(i)} y={2} color={color} center>
-          {label}
-        </AnnotationChip>
-      )}
-    </>
+        className="text-[0.390625rem] font-normal leading-[1.55]"
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
+        {ev.detail}
+      </span>
+    </span>
   );
 }
 

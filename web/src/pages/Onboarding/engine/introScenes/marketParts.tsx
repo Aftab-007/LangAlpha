@@ -5,14 +5,12 @@ import {
   BarChart3,
   ChevronDown,
   ChevronLeft,
-  ChevronRight,
   Info,
   Menu,
   MessageSquare,
   Mic,
   Plus,
   RefreshCw,
-  Search,
   Settings2,
   SlidersHorizontal,
   SquareDashedMousePointer,
@@ -31,40 +29,37 @@ import {
   ToolBtn,
 } from './candles';
 import { useSceneTime } from './clock';
-import { Appear, Caret, Frame, Ln } from './kit';
+import { Appear, Ln } from './kit';
 
-/* The MarketView page the market intro's scenes play on, after
-   pages/MarketView: the stock header and its metrics over the chart and its
-   toolbar, the watchlist and portfolio sidebar, and the chat panel on the
-   right with its empty state, selection chips and composer. Widths and
-   heights are fixed so the scripted pointer lands where the parts are. */
+/* MarketView as the market intro's camera sees it, after pages/MarketView:
+   the stock header and its metrics over the chart and its toolbar, the
+   folded sidebar's strip, and the chat panel with its empty state,
+   selection chips and composer. The page is drawn whole at its own size and
+   the scenes frame parts of it, so the scripted pointer lands where the
+   parts are. */
 /* eslint-disable react-refresh/only-export-components -- shared parts:
-   page components plus layout constants and quotes */
+   page components plus layout constants and the quote */
 
-/* ── layout ────────────────────────────────────────────────────────────── */
+/* ── layout, in the page's px ──────────────────────────────────────────── */
 
-/** The page's top left in the 400px scene: past the frame's border, the
-    rail and the topbar. Pointer paths are measured from the scene's corner. */
-export const ORIGIN = { x: 29, y: 29 };
-export const CONTENT_W = 370;
-const CONTENT_H = 300;
+const HEAD_H = 28;
 const METRICS_H = 40;
 const TOOLS_H = 20;
-/** The chart's top and height, under the metrics and the toolbar. */
-export const CHART_Y = ORIGIN.y + METRICS_H + TOOLS_H;
-export const CHART_H = CONTENT_H - METRICS_H - TOOLS_H;
-
-/** How wide the sidebar and the chat panel are (each with its left border);
-    the chart takes the rest. */
-export interface Layout {
-  sidebar: number;
-  chat: number;
-}
-/** The sidebar open, as the page first shows it. */
-export const OPEN: Layout = { sidebar: 86, chat: 90 };
-/** The sidebar folded to its strip, the chat panel given the room. */
-export const FOLDED: Layout = { sidebar: 15, chat: 148 };
-export const chartWidth = (l: Layout) => CONTENT_W - l.sidebar - l.chat;
+const CHART_W = 260;
+const STRIP_W = 15;
+const CHAT_W = 170;
+export const PAGE = { w: CHART_W + STRIP_W + CHAT_W, h: 318 };
+/** The toolbar's top edge, under the header and the metrics. */
+export const TOOLBAR_Y = HEAD_H + METRICS_H;
+/** The chart, under the header, the metrics and the toolbar. */
+export const CHART = {
+  x: 0,
+  y: HEAD_H + METRICS_H + TOOLS_H,
+  w: CHART_W,
+  h: PAGE.h - HEAD_H - METRICS_H - TOOLS_H,
+};
+/** The chat panel's left edge. */
+export const CHAT_X = CHART_W + STRIP_W;
 
 /** The toolbar's right group, laid from the right: the mode switch, the menu,
     the tools, then Price level and Region. */
@@ -72,35 +67,19 @@ const MODE_W = 48;
 const BTN = 11;
 const GAP = 2;
 const PAD_X = 5;
-/** The Region button's center in the scene. */
-export function regionButton(l: Layout): { x: number; y: number } {
-  const right = ORIGIN.x + chartWidth(l) - PAD_X;
-  return {
-    x: right - MODE_W - 3 * (BTN + GAP) - GAP - BTN / 2,
-    y: ORIGIN.y + METRICS_H + TOOLS_H / 2 - 0.5,
-  };
-}
+/** The Region button's center. */
+export const REGION_BTN = {
+  x: CHART_W - PAD_X - MODE_W - 3 * (BTN + GAP) - GAP - BTN / 2,
+  y: HEAD_H + METRICS_H + TOOLS_H / 2 - 0.5,
+};
 
-/** The chat composer's send button in the scene. */
-export const SEND = { x: ORIGIN.x + CONTENT_W - 21, y: ORIGIN.y + CONTENT_H - 21 };
+/** The chat composer's send button. */
+export const SEND = { x: PAGE.w - 21, y: PAGE.h - 21 };
 
-/* ── quotes ────────────────────────────────────────────────────────────── */
+/* ── the quote ─────────────────────────────────────────────────────────── */
 
-/** What the stock header prints for a symbol. */
-export interface Quote {
-  sym: string;
-  name: string;
-  prev: number;
-  open: number;
-  low: number;
-  high: number;
-  hi52: number;
-  lo52: number;
-  avgVol: string;
-  vol: string;
-}
-
-export const NVDA_QUOTE: Quote = {
+/** What the stock header prints for NVDA. */
+export const NVDA_QUOTE = {
   sym: 'NVDA',
   name: 'NVIDIA Corp',
   prev: NVDA_PREV,
@@ -113,65 +92,25 @@ export const NVDA_QUOTE: Quote = {
   vol: '143.08M',
 };
 
-export const AAPL_QUOTE: Quote = {
-  sym: 'AAPL',
-  name: 'Apple Inc',
-  prev: 226.8,
-  open: 227.1,
-  low: 225.88,
-  high: 227.95,
-  hi52: 237.49,
-  lo52: 164.08,
-  avgVol: '52.41M',
-  vol: '38.77M',
-};
-
-/** A watchlist or portfolio row: the move is the day's change for the
-    watchlist, the unrealized P/L for a holding. */
-export interface Row {
-  sym: string;
-  price: number;
-  pct: number;
-}
-
-/** The watchlist the dashboard scenes show, at the same prices. */
-export const WATCHLIST: Row[] = [
-  { sym: 'NVDA', price: NVDA_LAST, pct: 1.61 },
-  { sym: 'AAPL', price: 226.62, pct: -0.08 },
-  { sym: 'TSLA', price: 253.19, pct: 2.05 },
-  { sym: 'MSFT', price: 432.67, pct: 0.34 },
-  { sym: 'AMZN', price: 187.97, pct: 0.84 },
-];
-
-export const PORTFOLIO: Row[] = [
-  { sym: 'NVDA', price: NVDA_LAST, pct: 64.2 },
-  { sym: 'AVGO', price: 349.8, pct: 31.85 },
-  { sym: 'MSFT', price: 432.67, pct: 12.4 },
-  { sym: 'AMD', price: 158.21, pct: -4.65 },
-];
-
 const tone = (v: number) => (v >= 0 ? 'var(--color-profit)' : 'var(--color-loss)');
 
-/* ── the topbar band: stock header, sidebar tabs, chat header ──────────── */
+/* ── the header band: stock header, the strip, chat header ──────────── */
 
 /** The stock header's top (`StockHeader`): the symbol switcher, the names,
     the exchange and the live dot over the Company Overview pill; the price
-    and the day's change on the right. `open` holds the switcher pressed
-    while its search is up. */
-function StockTop({ quote: q, last, open }: { quote: Quote; last: number; open: boolean }) {
+    and the day's change on the right. */
+function StockTop() {
   const { t } = useTranslation();
   const locale = useLocale();
-  const change = last - q.prev;
+  const q = NVDA_QUOTE;
+  const change = NVDA_LAST - q.prev;
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2 px-2">
       <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
         <div className="flex min-w-0 items-center gap-[5px] leading-none">
           <span
             className="flex shrink-0 items-center gap-[1px] rounded-[2px] px-[1px] text-[0.5625rem] font-semibold"
-            style={{
-              color: 'var(--iv-text)',
-              background: open ? 'var(--color-bg-hover)' : undefined,
-            }}
+            style={{ color: 'var(--iv-text)' }}
           >
             {q.sym}
             <ChevronDown className="h-[6px] w-[6px]" style={{ color: 'var(--color-icon-muted)' }} />
@@ -206,7 +145,7 @@ function StockTop({ quote: q, last, open }: { quote: Quote; last: number; open: 
       </div>
       <div className="flex shrink-0 flex-col items-end gap-[2px] leading-none tabular-nums">
         <span className="text-[0.6875rem] font-semibold" style={{ color: tone(change) }}>
-          {fixed2(last, locale)}
+          {fixed2(NVDA_LAST, locale)}
           <span
             className="ml-[2px] text-[0.3125rem] font-normal"
             style={{ color: 'var(--iv-text-2)' }}
@@ -218,47 +157,6 @@ function StockTop({ quote: q, last, open }: { quote: Quote; last: number; open: 
           {signedFixed2(change, locale)} {signedFixed2((change / q.prev) * 100, locale)}%
         </span>
       </div>
-    </div>
-  );
-}
-
-/** The sidebar's tabs, Watchlist and Portfolio, the open one underlined in
-    the accent, and the fold chevron. Folded, the strip has no tabs. */
-function SidebarTabs({ width, tab }: { width: number; tab: 'watchlist' | 'portfolio' | null }) {
-  const { t } = useTranslation();
-  const tabs = [
-    { id: 'watchlist', label: t('marketView.header.watchlist') },
-    { id: 'portfolio', label: t('marketView.sidebar.portfolio') },
-  ] as const;
-  return (
-    <div
-      className="flex shrink-0 items-stretch border-l"
-      style={{ width, borderColor: 'var(--iv-border)', background: 'var(--color-bg-card)' }}
-    >
-      {tab &&
-        tabs.map(({ id, label }) => (
-          <span
-            key={id}
-            className="relative flex flex-1 items-center justify-center text-[0.4375rem] font-medium leading-none"
-            style={{ color: id === tab ? 'var(--iv-text)' : 'var(--iv-text-2)' }}
-          >
-            {label}
-            {id === tab && (
-              <span
-                className="absolute inset-x-0 bottom-0 h-[1.5px]"
-                style={{ background: 'var(--color-accent-primary)' }}
-              />
-            )}
-          </span>
-        ))}
-      {tab && (
-        <span
-          className="flex w-3 items-center justify-center"
-          style={{ color: 'var(--iv-text-2)' }}
-        >
-          <ChevronRight className="h-[6px] w-[6px]" />
-        </span>
-      )}
     </div>
   );
 }
@@ -304,9 +202,11 @@ function ChatHeader({ width, title }: { width: number; title?: string }) {
 /* ── the stock header's metrics and the chart toolbar ──────────────────── */
 
 /** The header's metrics grid: two rows of five, label over value. */
-function Metrics({ quote: q, last }: { quote: Quote; last: number }) {
+function Metrics() {
   const { t } = useTranslation();
   const locale = useLocale();
+  const q = NVDA_QUOTE;
+  const last = NVDA_LAST;
   const pct = ((last - q.prev) / q.prev) * 100;
   const cells: [string, string, string?][] = [
     [t('marketView.header.prevClose'), fixed2(q.prev, locale)],
@@ -391,91 +291,7 @@ function ChartTools({ armed = false, clear = false }: { armed?: boolean; clear?:
   );
 }
 
-/* ── the sidebar ───────────────────────────────────────────────────────── */
-
-/** The open sidebar (`MarketSidebarPanel`): the section's title with its live
-    dot and add button, the rows (the symbol on the chart marked on its left
-    edge), and View all. */
-function Sidebar({
-  width,
-  tab,
-  active,
-  rows,
-}: {
-  width: number;
-  tab: 'watchlist' | 'portfolio';
-  active: string;
-  rows: Row[];
-}) {
-  const { t } = useTranslation();
-  const locale = useLocale();
-  return (
-    <div
-      className="flex shrink-0 flex-col border-l"
-      style={{ width, borderColor: 'var(--iv-border)', background: 'var(--color-bg-card)' }}
-    >
-      <div className="flex items-center gap-[3px] px-[7px] pb-[3px] pt-[6px]">
-        <span
-          className="text-[0.34375rem] font-semibold leading-none"
-          style={{ color: 'var(--iv-text-2)' }}
-        >
-          {tab === 'watchlist'
-            ? t('marketView.header.watchlist')
-            : t('marketView.sidebar.portfolio')}
-        </span>
-        <span
-          className="h-[3px] w-[3px] rounded-full"
-          style={{ background: 'var(--color-profit)' }}
-        />
-        <Plus className="ml-auto h-[7px] w-[7px]" style={{ color: 'var(--iv-text-2)' }} />
-      </div>
-      <div className="flex flex-col px-[3px]">
-        {rows.map((row, i) => {
-          const on = row.sym === active;
-          return (
-            <span
-              key={row.sym}
-              className={cn(
-                'flex items-center gap-[2px] border-l-[1.5px] px-[3px] py-[5px] leading-none tabular-nums',
-                i < rows.length - 1 && 'border-b'
-              )}
-              style={{
-                borderLeftColor: on ? 'var(--color-accent-primary)' : 'transparent',
-                borderBottomColor: 'var(--color-border-subtle)',
-                background: on ? 'var(--color-bg-hover)' : undefined,
-              }}
-            >
-              <span
-                className="w-[22px] shrink-0 text-[0.375rem] font-semibold"
-                style={{ color: 'var(--iv-text)' }}
-              >
-                {row.sym}
-              </span>
-              <span
-                className="flex-1 text-right text-[0.375rem]"
-                style={{ color: 'var(--iv-text)' }}
-              >
-                {fixed2(row.price, locale)}
-              </span>
-              <span
-                className="w-[25px] shrink-0 text-right text-[0.375rem] font-medium"
-                style={{ color: tone(row.pct) }}
-              >
-                {signedFixed2(row.pct, locale)}%
-              </span>
-            </span>
-          );
-        })}
-      </div>
-      <span
-        className="px-[7px] pb-[6px] pt-[4px] text-right text-[0.34375rem] font-medium leading-none"
-        style={{ color: 'var(--iv-text-2)' }}
-      >
-        {t('marketView.sidebar.viewAll')}
-      </span>
-    </div>
-  );
-}
+/* ── the sidebar, folded ──────────────────────────────────────────────── */
 
 /** The folded sidebar: a strip with the chart glyph and the unfold chevron. */
 function FoldedSidebar({ width }: { width: number }) {
@@ -708,84 +524,15 @@ export interface ComposerState {
   sendAt?: number[];
 }
 
-/* ── the symbol search ─────────────────────────────────────────────────── */
-
-/** What the search lists as the ticker is typed. */
-const HITS: Record<string, [string, string][]> = {
-  NV: [
-    ['NVDA', 'NVIDIA Corp'],
-    ['NVO', 'Novo Nordisk A/S'],
-    ['NVS', 'Novartis AG'],
-  ],
-  NVD: [
-    ['NVDA', 'NVIDIA Corp'],
-    ['NVDL', 'GraniteShares 2x Long NVDA'],
-    ['NVDU', 'Direxion Daily NVDA Bull 2X'],
-  ],
-};
-
-/** The symbol switcher's search (`SymbolSearch` in its popover): the field,
-    then the hits for what is typed, the first one highlighted. */
-export function SymbolPopover({ typed, at }: { typed: string; at: number }) {
-  const { t } = useTranslation();
-  const hits = HITS[typed.slice(0, 3)] ?? (typed ? HITS.NV : []);
-  const typing = useSceneTime() >= at;
-  return (
-    <div
-      className="intro-pop absolute z-10 flex w-[118px] flex-col gap-[3px] rounded-md border p-[4px]"
-      style={{
-        left: ORIGIN.x + 6,
-        top: 26,
-        background: 'var(--color-bg-elevated)',
-        borderColor: 'var(--color-border-default)',
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.12)',
-      }}
-    >
-      <span
-        className="flex h-[14px] items-center gap-[4px] rounded-[4px] border px-[5px]"
-        style={{ background: 'var(--color-bg-input)', borderColor: 'var(--color-border-default)' }}
-      >
-        <Search className="h-[6px] w-[6px] shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-        <span
-          className="truncate text-[0.40625rem] leading-none"
-          style={{ color: typed ? 'var(--iv-text)' : 'var(--color-text-tertiary)' }}
-        >
-          {typed || t('marketView.symbolSearch.placeholder')}
-          {typing && typed.length < 4 && <Caret />}
-        </span>
-      </span>
-      {hits.map(([sym, name], i) => (
-        <span
-          key={sym}
-          className="flex items-baseline gap-[4px] rounded-[3px] px-[4px] py-[3px] text-[0.40625rem] leading-none"
-          style={{ background: i === 0 ? 'var(--color-bg-hover)' : undefined }}
-        >
-          <span className="shrink-0 font-mono font-semibold" style={{ color: 'var(--iv-text)' }}>
-            {sym}
-          </span>
-          <span className="truncate" style={{ color: 'var(--iv-text-3)' }}>
-            {name}
-          </span>
-        </span>
-      ))}
-    </div>
-  );
-}
-
 /* ── the page ──────────────────────────────────────────────────────────── */
 
 /**
- * MarketView: the stock header over the chart column, the sidebar (open on
- * `tab`, or folded when `tab` is null), and the chat panel. `chart` is the
- * chart itself, `chartW` px wide and `CHART_H` tall.
+ * MarketView with the sidebar folded, drawn at `PAGE` size: the header band
+ * over the chart column (metrics, toolbar, then `chart`, `CHART` sized), the
+ * sidebar's strip, and the chat panel. `title` names the thread once there
+ * is one.
  */
 export function MarketPage({
-  layout,
-  quote,
-  last,
-  switching = false,
-  tab,
-  activeRow,
   armed,
   clear,
   chart,
@@ -794,13 +541,6 @@ export function MarketPage({
   chip,
   composer = {},
 }: {
-  layout: Layout;
-  quote: Quote;
-  last: number;
-  /** The symbol switcher held open. */
-  switching?: boolean;
-  tab: 'watchlist' | 'portfolio' | null;
-  activeRow?: string;
   armed?: boolean;
   clear?: boolean;
   chart: ReactNode;
@@ -809,61 +549,36 @@ export function MarketPage({
   chip?: ReactNode;
   composer?: ComposerState;
 }) {
-  const chartW = chartWidth(layout);
+  const card = { borderColor: 'var(--iv-border)', background: 'var(--color-bg-card)' };
   return (
-    <Frame
-      topbar={
-        <div className="-mx-2.5 flex h-full min-w-0 flex-1 items-stretch">
-          <div
-            className="flex min-w-0"
-            style={{ width: chartW, background: 'var(--color-bg-card)' }}
-          >
-            <StockTop quote={quote} last={last} open={switching} />
-          </div>
-          <SidebarTabs width={layout.sidebar} tab={tab} />
-          <ChatHeader width={layout.chat} title={title} />
+    <div className="flex flex-col" style={{ width: PAGE.w, height: PAGE.h }}>
+      <div
+        className="flex shrink-0 border-b"
+        style={{ height: HEAD_H, borderColor: 'var(--iv-border)' }}
+      >
+        <div className="flex min-w-0" style={{ width: CHART_W, ...card }}>
+          <StockTop />
         </div>
-      }
-    >
-      <div className="-m-2.5 flex flex-1">
-        <div className="flex min-w-0 flex-col" style={{ width: chartW }}>
-          <Metrics quote={quote} last={last} />
+        <div className="shrink-0 border-l" style={{ width: STRIP_W, ...card }} />
+        <ChatHeader width={CHAT_W} title={title} />
+      </div>
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-col" style={{ width: CHART_W }}>
+          <Metrics />
           <ChartTools armed={armed} clear={clear} />
           <div className="relative flex-1" style={{ background: 'var(--color-bg-card)' }}>
             {chart}
           </div>
         </div>
-        {tab ? (
-          <Sidebar
-            width={layout.sidebar}
-            tab={tab}
-            active={activeRow ?? quote.sym}
-            rows={
-              // the NVDA row ticks with the header while NVDA is on the chart
-              quote.sym !== 'NVDA'
-                ? tab === 'watchlist'
-                  ? WATCHLIST
-                  : PORTFOLIO
-                : tab === 'watchlist'
-                  ? WATCHLIST.map((r) =>
-                      r.sym === 'NVDA'
-                        ? { ...r, price: last, pct: ((last - NVDA_PREV) / NVDA_PREV) * 100 }
-                        : r
-                    )
-                  : PORTFOLIO.map((r) => (r.sym === 'NVDA' ? { ...r, price: last } : r))
-            }
-          />
-        ) : (
-          <FoldedSidebar width={layout.sidebar} />
-        )}
+        <FoldedSidebar width={STRIP_W} />
         <ChatPanel
-          width={layout.chat}
-          sym={quote.sym}
+          width={CHAT_W}
+          sym="NVDA"
           transcript={transcript}
           chip={chip}
           composer={composer}
         />
       </div>
-    </Frame>
+    </div>
   );
 }

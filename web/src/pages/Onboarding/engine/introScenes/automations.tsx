@@ -1,33 +1,23 @@
-import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  AlertCircle,
-  ArrowRight,
-  BarChart3,
-  CalendarSearch,
-  Plus,
-  Sun,
-  TrendingUp,
-  X,
-  type LucideIcon,
-} from 'lucide-react';
+import { BarChart3, CalendarSearch, Plus, Sun, TrendingUp, X, type LucideIcon } from 'lucide-react';
+import { useLocale } from '@/hooks/useLocale';
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
-import { ease, useSceneTime } from './clock';
-import { Appear, Caret, Cursor, Frame, Loader, Typed } from './kit';
+import {
+  ALERT_INSTRUCTION,
+  BRIEF_INSTRUCTION,
+  DEFAULT_DAYS,
+  NEXT_EXCERPT,
+  NEXT_MORNING,
+  NVDA,
+  useBook,
+} from './automationBook';
+import { BriefRun, Day, FailedRun, FeedLayout, FeedRail, FiredRun } from './automationFeed';
 import {
   AlertGroup,
-  ALERT_INSTRUCTION,
   AutomationRows,
-  BRIEF_EXCERPT,
-  BRIEF_INSTRUCTION,
-  Btn,
-  DEFAULT_DAYS,
   during,
-  Excerpt,
-  FAILED,
   Field,
-  FIRED,
   FormActions,
   FormRow,
   FormTitle,
@@ -36,71 +26,102 @@ import {
   Inspector,
   InstructionBox,
   Kicker,
-  LinkOut,
   ManageLayout,
   MenuSurface,
   MoreToggle,
-  NEXT_EXCERPT,
-  NEXT_MORNING,
-  NVDA,
-  on,
+  Page,
   PageHeader,
   pressAt,
   PriceMeter,
   Readout,
-  RunEntry,
   Segmented,
   TriggerChips,
-  useBook,
   useSummary,
   WEEKDAYS,
   WeekPicker,
 } from './automationParts';
+import { Camera, type Shot, VIEW } from './camera';
+import { ease, useSceneTime } from './clock';
+import { Appear, Caret, Typed } from './kit';
 import type { IntroScene } from './types';
 
 /* Scenes for the Automations page: making a price alert beside a weekday
    brief, the feed its runs land in, and sending a run's results to a chat
    app. Each part is a small copy of the page's own (automationParts.tsx);
-   schedule lines, distances and times come from the page's formatters. */
+   schedule lines, distances and times come from the page's formatters.
+   Each scene draws the page alone at its own size, and a camera frames the
+   part the step is about, pushing in on the detail and following the
+   pointer. Shots and pointer paths are in page px. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
+
+/**
+ * The shot at `at` whose view has its top-left corner on page point
+ * (`left`, `top`) at `zoom`. Shots are set by their corner so the view's
+ * top and bottom edges fall in the gap between two rows rather than
+ * through a line of text; the comment on each says what it holds.
+ */
+function corner(at: number, left: number, top: number, zoom: number, dur?: number): Shot {
+  return { at, dur, zoom, x: left + VIEW.width / 2 / zoom, y: top + VIEW.height / 2 / zoom };
+}
 
 /* ── automations · step 1: a trigger, on a schedule or a price ──────────── */
 
 /** Making the price alert, played out over the manage view with the two
-    schedules already in the list: New automation, the price template, NVDA typed in
-    and the quote coming back, the level typed and the meter drawn, Create,
-    and the alert taking its place under Watching. */
+    schedules already in the list: New automation, the price template, NVDA
+    typed in and the quote coming back, the level typed and the meter drawn,
+    Create, and the alert taking its place under Watching. */
 const TRIG = {
-  clickNew: 950,
-  menu: 1030,
-  clickTemplate: 1800,
-  form: 1880,
-  clickSymbol: 2400,
-  typeSymbol: 2480,
-  asking: 2780,
-  quote: 3050,
-  clickLevel: 3450,
-  typeLevel: 3560,
-  meter: 3800,
-  clickCreate: 4650,
-  saved: 4950,
-  length: 6300,
+  clickNew: 1150,
+  menu: 1230,
+  clickTemplate: 2000,
+  form: 2080,
+  clickSymbol: 2850,
+  typeSymbol: 2930,
+  asking: 3230,
+  quote: 3500,
+  clickLevel: 3950,
+  typeLevel: 4060,
+  meter: 4300,
+  clickCreate: 5650,
+  saved: 5950,
+  length: 7800,
 };
+
+/** Past the view's height by enough that the form's Create clears the
+    pane's foot. */
+const TRIG_PAGE = 340;
 
 /** New automation, the price template, the symbol, the level, Create: where
     the pointer's tip lands on each. */
 const TRIG_PATH = [
-  { at: 200, x: 250, y: 300 },
-  { at: 900, x: 352, y: 61 },
-  { at: 1150, x: 352, y: 61 },
-  { at: 1750, x: 296, y: 137 },
-  { at: 1950, x: 296, y: 137 },
-  { at: 2350, x: 183, y: 202 },
-  { at: 3150, x: 183, y: 202 },
-  { at: 3400, x: 326, y: 202 },
-  { at: 4150, x: 326, y: 202 },
-  { at: 4600, x: 180, y: 338 },
+  { at: 300, x: 250, y: 200 },
+  { at: 1000, x: 346, y: 36 },
+  { at: 1350, x: 346, y: 36 },
+  { at: 1900, x: 300, y: 113 },
+  { at: 2200, x: 300, y: 113 },
+  { at: 2750, x: 160, y: 177 },
+  { at: 3600, x: 160, y: 177 },
+  { at: 3850, x: 302, y: 177 },
+  { at: 5000, x: 302, y: 177 },
+  { at: 5550, x: 156, y: 313 },
+];
+
+/** The header's New and the menu it drops; the form's Name and When as the
+    symbol goes in and its quote comes back; down the form to the level, the
+    meter and Create; across to the list as the alert takes its row under
+    Watching, its inspector beside it. */
+const TRIG_SHOTS: [Shot, ...Shot[]] = [
+  // the pane and the header's New, room below for the menu
+  corner(0, 122, 12, 1.43),
+  // under the header: the form from its title down to Instruction
+  corner(2700, 128, 46, 1.49),
+  // under Name, the form's full width: When, the symbol row, the quote and
+  // the meter, down to Create
+  corner(3900, 134, 114.5, 1.56, 800),
+  // under the header: the list's new Watching row, and the inspector's
+  // title and meter beside it, the header's chips and Delete off the right
+  corner(6550, 8, 46, 1.47, 800),
 ];
 
 /** One item of the New menu: the template's icon, name and one line on it. */
@@ -289,8 +310,18 @@ function AutomationTrigger() {
       </Appear>
     );
   return (
-    <div className="relative w-full max-w-[400px]">
-      <Frame topbar={<span />}>
+    <Camera
+      shots={TRIG_SHOTS}
+      cursor={TRIG_PATH}
+      clicks={[
+        TRIG.clickNew,
+        TRIG.clickTemplate,
+        TRIG.clickSymbol,
+        TRIG.clickLevel,
+        TRIG.clickCreate,
+      ]}
+    >
+      <Page height={TRIG_PAGE}>
         <PageHeader census={census} view="manage" pressNew={pressAt(now, TRIG.clickNew)} />
         <ManageLayout
           list={
@@ -305,26 +336,16 @@ function AutomationTrigger() {
           }
           pane={pane}
         />
-      </Frame>
-      {/* the menu drops from New, its right edge on the button's */}
-      <div className="absolute right-[11px] top-[73px] z-[5]">
-        {during(now, TRIG.menu, TRIG.clickTemplate + 80) && (
-          <Appear at={TRIG.menu} pop>
-            <NewMenu hover={now >= TRIG_PATH[3].at - 150} />
-          </Appear>
-        )}
-      </div>
-      <Cursor
-        path={TRIG_PATH}
-        clicks={[
-          TRIG.clickNew,
-          TRIG.clickTemplate,
-          TRIG.clickSymbol,
-          TRIG.clickLevel,
-          TRIG.clickCreate,
-        ]}
-      />
-    </div>
+        {/* the menu drops from New, its right edge on the button's */}
+        <div className="absolute right-[12px] top-[45px] z-[5]">
+          {during(now, TRIG.menu, TRIG.clickTemplate + 80) && (
+            <Appear at={TRIG.menu} pop>
+              <NewMenu hover={now >= TRIG_PATH[3].at - 150} />
+            </Appear>
+          )}
+        </div>
+      </Page>
+    </Camera>
   );
 }
 
@@ -335,298 +356,110 @@ function AutomationTrigger() {
     holds the failed run, the next scheduled times, and the alert still
     watching. */
 const FEED = {
-  land: 600,
-  done: 2900,
-  length: 4600,
+  land: 900,
+  done: 3000,
+  length: 7600,
 };
 
-/** The run the $180 alert started: live, then finished with its excerpt. */
-function FiredRun() {
-  const { t } = useTranslation();
-  const B = useBook();
-  const now = useSceneTime();
-  const live = now < FEED.done;
-  const place = t('agents.allWorkspaces');
-  return (
-    <Grow p={ease(now, FEED.land, 450)}>
-      <RunEntry
-        time={B.time(10, 12)}
-        glyph={
-          live ? (
-            <Loader color="var(--color-accent-primary)" className="text-[0.5625rem]" />
-          ) : undefined
-        }
-        name={FIRED.name}
-        meta={
-          live
-            ? [
-                t('automation.runRunning'),
-                place,
-                t('automation.startedAgo', { when: B.ago(on(21, 10, 13)) }),
-              ].join(' · ')
-            : [place, B.took(138_000)].join(' · ')
-        }
-        excerpt={
-          !live && (
-            <Grow p={ease(now, FEED.done, 450)}>
-              <Excerpt>{FIRED.excerpt}</Excerpt>
-            </Grow>
-          )
-        }
-        actions={<LinkOut>{t(live ? 'automation.watchLive' : 'automation.openThread')}</LinkOut>}
-      />
-    </Grow>
-  );
-}
-
-/** A run of the brief; `delivered` adds where it was sent, from `at`. */
-function BriefRun({
-  excerpt = BRIEF_EXCERPT,
-  delivered,
-  at = 0,
-}: {
-  excerpt?: string;
-  delivered?: string;
-  at?: number;
-}) {
-  const { t } = useTranslation();
-  const B = useBook();
-  const shown = useSceneTime() >= at;
-  return (
-    <RunEntry
-      time={B.time(8, 0)}
-      name={B.brief}
-      meta={
-        <>
-          {[t('agents.allWorkspaces'), B.took(252_000)].join(' · ')}
-          {delivered && (
-            <span style={{ opacity: shown ? 1 : 0, transition: 'opacity 300ms ease' }}>
-              {' · '}
-              <span style={{ color: INK.text2 }}>
-                {t('automation.deliveredVia', { method: delivered })}
-              </span>
-            </span>
-          )}
-        </>
-      }
-      excerpt={<Excerpt>{excerpt}</Excerpt>}
-      actions={<LinkOut>{t('automation.openThread')}</LinkOut>}
-    />
-  );
-}
-
-/** The earnings preview's failed run, with its error and a Retry. */
-function FailedRun() {
-  const { t } = useTranslation();
-  const B = useBook();
-  return (
-    <RunEntry
-      time={B.time(6, 30)}
-      glyph={
-        <AlertCircle className="h-[6px] w-[6px]" style={{ color: 'var(--color-icon-danger)' }} />
-      }
-      name={FAILED.name}
-      meta={[t('automation.runFailed'), FAILED.place, B.took(64_000)].join(' · ')}
-      excerpt={
-        <p
-          className="mt-[4px] font-mono text-[0.375rem] leading-[1.5]"
-          style={{ color: INK.text2 }}
-        >
-          {FAILED.error}
-        </p>
-      }
-      actions={
-        <>
-          <Btn>{t('common.retry')}</Btn>
-          <LinkOut>{t('automation.openThread')}</LinkOut>
-        </>
-      }
-    />
-  );
-}
-
-/** A section of the rail (`FeedRail`): its kicker over a hairline. */
-function RailSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col">
-      <Kicker className="border-b pb-[4px]">{title}</Kicker>
-      {children}
-    </div>
-  );
-}
-
-/** The rail: what needs attention, Up next, and what is watching. */
-function FeedRail({ attention = true, now }: { attention?: boolean; now?: number }) {
-  const { t } = useTranslation();
-  const B = useBook(now);
-  const rowLine = { borderColor: INK.hair };
-  return (
-    <div className="flex min-w-0 flex-col gap-[12px]">
-      {attention && (
-        <RailSection title={t('automation.groupAttention')}>
-          <div className="flex items-start gap-[5px] border-b py-[5px]" style={rowLine}>
-            <AlertCircle
-              className="mt-px h-[6px] w-[6px] shrink-0"
-              style={{ color: 'var(--color-icon-danger)' }}
-            />
-            <div className="min-w-0">
-              <div className="text-[0.4375rem] leading-[1.25]" style={{ color: INK.text }}>
-                {FAILED.name}
-              </div>
-              <div className="mt-px text-[0.34375rem] leading-[1.3]" style={{ color: INK.text3 }}>
-                {t('automation.lastRunFailedAgo', { when: B.ago(on(21, 6, 31)) })}
-              </div>
-              <div className="mt-[5px] flex flex-wrap items-center gap-[3px]">
-                <Btn>{t('common.retry')}</Btn>
-                <Btn>{t('automation.pause')}</Btn>
-                <Btn variant="ghost">{t('automation.dismiss')}</Btn>
-              </div>
-              <div className="mt-[4px] flex">
-                <LinkOut>{t('automation.openThread')}</LinkOut>
-              </div>
-            </div>
-          </div>
-        </RailSection>
-      )}
-      <RailSection title={t('automation.upNext')}>
-        <div className="grid grid-cols-[max-content_minmax(0,1fr)]">
-          {B.upNext.map(([when, name]) => (
-            <div
-              key={name}
-              className="col-span-2 grid grid-cols-subgrid gap-x-[8px] border-b py-[5px]"
-              style={rowLine}
-            >
-              <span
-                className="whitespace-nowrap font-mono text-[0.375rem] leading-[1.4] tabular-nums"
-                style={{ color: INK.text2 }}
-              >
-                {B.upcoming(when)}
-              </span>
-              <span className="text-[0.4375rem] leading-[1.25]" style={{ color: INK.text }}>
-                {name}
-              </span>
-            </div>
-          ))}
-        </div>
-      </RailSection>
-      <RailSection title={t('automation.groupWatching')}>
-        <div className="border-b py-[6px]" style={rowLine}>
-          <div className="flex items-baseline justify-between gap-1">
-            <span className="truncate text-[0.4375rem] leading-[1.25]" style={{ color: INK.text }}>
-              {B.alert}
-            </span>
-            <span
-              className="shrink-0 font-mono text-[0.34375rem] tabular-nums"
-              style={{ color: INK.text3 }}
-            >
-              {B.away}
-            </span>
-          </div>
-          <div className="mt-[5px]">
-            <PriceMeter symbol="NVDA" current={NVDA.price} threshold={190} />
-          </div>
-        </div>
-      </RailSection>
-      <span
-        className="inline-flex items-center gap-[3px] text-[0.375rem] leading-none"
-        style={{ color: INK.text2 }}
-      >
-        {t('automation.manageAll', { count: attention ? 4 : 3 })}
-        <ArrowRight className="h-[6px] w-[6px]" />
-      </span>
-    </div>
-  );
-}
-
-/** One day of the feed: its heading over a hairline, then its runs. */
-function Day({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <section className="[&+&]:mt-[10px]">
-      <Kicker className="border-b pb-[4px]">{label}</Kicker>
-      {children}
-    </section>
-  );
-}
-
-/** The feed view (`FeedView`): runs by day on the left, the rail on the
-    right; the column clips at the window's edge, faded as a page runs on. */
-function FeedLayout({ runs, rail }: { runs: ReactNode; rail: ReactNode }) {
-  return (
-    <div className="mt-[10px] grid h-[270px] grid-cols-[minmax(0,1fr)_124px] gap-[14px]">
-      <div
-        className="min-h-0 overflow-hidden"
-        style={{
-          WebkitMaskImage: 'linear-gradient(180deg, black 82%, transparent 100%)',
-          maskImage: 'linear-gradient(180deg, black 82%, transparent 100%)',
-        }}
-      >
-        {runs}
-      </div>
-      {rail}
-    </div>
-  );
+/** In close on the day's runs, the alert's on top, as it lands, works and
+    reports; across to the rail, where the failed run waits under Needs
+    attention; and down it to the alert still watching. The rail is drawn
+    edge to edge, from the gap beside the column to the page's right edge.
+    In English the next runs' names wrap to two lines, which puts Watching
+    lower, so the last shot starts lower there: past Up next's heading, in
+    its first row's padding. */
+function feedShots(wrapped: boolean): [Shot, ...Shot[]] {
+  return [
+    // under the header: the day's runs, the column's edge to the rail's
+    corner(0, 4, 44, 1.57),
+    // under the header's chips: Needs attention, then Up next to the
+    // bottom of its first row
+    corner(4900, 251, 43, 2.67, 900),
+    // Up next and Watching in full, its alert and meter, above Manage all
+    corner(6400, 251, wrapped ? 144 : 126, 2.67, 800),
+  ];
 }
 
 function AutomationFeed() {
   const { t } = useTranslation();
+  const shots = feedShots(!useLocale().startsWith('zh'));
   const census = [
     t('automation.censusScheduled', { count: 2 }),
     t('automation.censusWatching', { count: 1 }),
     t('automation.censusAttention', { count: 1 }),
   ].join(' · ');
   return (
-    <Frame topbar={<span />}>
-      <PageHeader census={census} view="feed" />
-      <FeedLayout
-        runs={
-          <Day label={t('automation.today')}>
-            <FiredRun />
-            <BriefRun />
-            <FailedRun />
-          </Day>
-        }
-        rail={<FeedRail />}
-      />
-    </Frame>
+    <Camera shots={shots}>
+      <Page>
+        <PageHeader census={census} view="feed" />
+        <FeedLayout
+          runs={
+            <Day label={t('automation.today')}>
+              <FiredRun land={FEED.land} done={FEED.done} />
+              <BriefRun />
+              <FailedRun />
+            </Day>
+          }
+          rail={<FeedRail />}
+        />
+      </Page>
+    </Camera>
   );
 }
 
 /* ── automations · step 3: delivery to a chat app ──────────────────────── */
 
 /** Sending the brief's results to Slack: Edit on the brief, More options
-    opened and the pane scrolled to it, the place and thread rows passed,
-    Add on Delivery and Slack DM picked, Save changes; then the next
-    morning's run in the feed, sent to Slack DM. */
+    opened onto the place, the thread and Delivery, Add and Slack DM
+    picked, Save changes; then the next morning's run in the feed, sent to
+    Slack DM. */
 const DLV = {
-  clickEdit: 900,
-  form: 980,
-  clickMore: 1750,
-  scroll: 1900,
-  clickAdd: 2800,
-  popover: 2880,
-  clickDm: 3550,
-  scrollMore: 3700,
-  clickSave: 4500,
-  feed: 4900,
-  sent: 5500,
-  length: 6900,
+  clickEdit: 1000,
+  form: 1080,
+  clickMore: 2300,
+  clickAdd: 3500,
+  popover: 3580,
+  clickDm: 4300,
+  clickSave: 5250,
+  feed: 5650,
+  sent: 6200,
+  length: 8200,
 };
-
-/** How far the pane scrolls: to the opened options, then on to Save. */
-const DLV_SCROLL = [200, 26];
 
 /** Edit, More options, Add, Slack DM, Save changes. */
 const DLV_PATH = [
-  { at: 200, x: 230, y: 310 },
-  { at: 850, x: 278, y: 156 },
-  { at: 1150, x: 278, y: 156 },
-  { at: 1700, x: 182, y: 308 },
-  { at: 2350, x: 182, y: 308 },
-  { at: 2750, x: 177, y: 233 },
-  { at: 3000, x: 177, y: 233 },
-  { at: 3500, x: 196, y: 276 },
-  { at: 3950, x: 196, y: 276 },
-  { at: 4450, x: 186, y: 336 },
+  { at: 300, x: 230, y: 200 },
+  { at: 900, x: 251, y: 130 },
+  { at: 1300, x: 251, y: 130 },
+  { at: 2200, x: 160, y: 281 },
+  { at: 2900, x: 160, y: 281 },
+  { at: 3400, x: 150, y: 396 },
+  { at: 3700, x: 150, y: 396 },
+  { at: 4200, x: 190, y: 440 },
+  { at: 4650, x: 190, y: 440 },
+  { at: 5150, x: 166, y: 526 },
+];
+
+/** How tall the manage page is drawn: the edit form at full length, which
+    the camera pans down as the page's scroller would. */
+const DLV_PAGE = 560;
+
+/** The brief's inspector and its Edit; down the form to More options as it
+    opens; in close on Delivery while Slack DM is picked; down to Save; then
+    a cut to the next morning's feed, and in on the run and where it went. */
+const DLV_SHOTS: [Shot, ...Shot[]] = [
+  // under the header: the brief's inspector and its latest run
+  corner(0, 128, 46, 1.49),
+  // More options at the top, the rows it opens below
+  corner(2450, 128, 270, 1.49, 900),
+  // Delivery, and the Add list under it
+  corner(3550, 117, 367, 2.2),
+  // Delivery down to Save changes, at the foot of the page
+  corner(5100, 128, 338, 1.49),
+  // the cut to the next morning's feed, under the header
+  corner(DLV.feed, 4, 44, 1.57, 1),
+  // the run's name, where it was sent, and what it said
+  corner(6900, 46, 56, 1.94, 900),
 ];
 
 /** The Add list (`DeliveryPicker`): each app's Default and its chats, the
@@ -659,7 +492,7 @@ function DeliveryList({ pick }: { pick: boolean }) {
             background: pick && i === 1 ? 'var(--color-bg-hover)' : undefined,
           }}
         >
-          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <span className="-my-px min-w-0 flex-1 truncate leading-[1.3]">{label}</span>
           {tag && (
             <span className="shrink-0 text-[0.34375rem]" style={{ color: INK.text3 }}>
               {tag}
@@ -688,12 +521,10 @@ function EditForm() {
   const open = now >= DLV.clickMore;
   const added = now >= DLV.clickDm + 60;
   const summary = useSummary(null);
-  const scroll =
-    DLV_SCROLL[0] * ease(now, DLV.scroll, 550) + DLV_SCROLL[1] * ease(now, DLV.scrollMore, 400);
   const day =
     'flex h-[15px] w-[15px] items-center justify-center rounded-[3px] border font-mono text-[0.375rem]';
   return (
-    <div style={{ transform: `translateY(${-scroll}px)` }}>
+    <div>
       <FormTitle>{t('automation.editAutomation')}</FormTitle>
       <div className="mt-[6px] border-b" style={{ borderColor: INK.hair }}>
         <FormRow first className="border-t" label={t('common.name')}>
@@ -795,58 +626,58 @@ function AutomationDelivery() {
     t('automation.censusScheduled', { count: 2 }),
     t('automation.censusWatching', { count: 1 }),
   ].join(' · ');
-  if (now >= DLV.feed) {
-    // the next morning: the brief's run, sent where it was told, over
-    // yesterday's
-    return (
-      <Appear at={DLV.feed} className="w-full max-w-[400px]">
-        <Frame topbar={<span />}>
-          <PageHeader census={census} view="feed" />
-          <FeedLayout
-            runs={
-              <>
-                <Day label={t('automation.today')}>
-                  <BriefRun excerpt={NEXT_EXCERPT} delivered={B.deliverTo} at={DLV.sent} />
-                </Day>
-                <Day label={t('automation.yesterday')}>
-                  <FiredRun />
-                  <BriefRun />
-                </Day>
-              </>
-            }
-            rail={<FeedRail attention={false} now={NEXT_MORNING} />}
-          />
-        </Frame>
-      </Appear>
-    );
-  }
+  const feed = now >= DLV.feed;
   return (
-    <div className="relative w-full max-w-[400px]">
-      <Frame topbar={<span />}>
-        <PageHeader census={census} view="manage" />
-        <ManageLayout
-          list={
-            <AutomationRows
-              chosen={now < DLV.form ? 'brief' : null}
-              alert={<AlertGroup selected={false} />}
+    <Camera
+      shots={DLV_SHOTS}
+      cursor={feed ? undefined : DLV_PATH}
+      clicks={[DLV.clickEdit, DLV.clickMore, DLV.clickAdd, DLV.clickDm, DLV.clickSave]}
+    >
+      {feed ? (
+        // the next morning: the brief's run, sent where it was told, over
+        // yesterday's
+        <Appear at={DLV.feed}>
+          <Page>
+            <PageHeader census={census} view="feed" />
+            <FeedLayout
+              runs={
+                <>
+                  <Day label={t('automation.today')}>
+                    <BriefRun excerpt={NEXT_EXCERPT} delivered={B.deliverTo} at={DLV.sent} />
+                  </Day>
+                  <Day label={t('automation.yesterday')}>
+                    <FiredRun />
+                    <BriefRun />
+                  </Day>
+                </>
+              }
+              rail={<FeedRail attention={false} now={NEXT_MORNING} />}
             />
-          }
-          pane={
-            now < DLV.form ? (
-              <Inspector which="brief" pressEdit={pressAt(now, DLV.clickEdit)} />
-            ) : (
-              <Appear at={DLV.form}>
-                <EditForm />
-              </Appear>
-            )
-          }
-        />
-      </Frame>
-      <Cursor
-        path={DLV_PATH}
-        clicks={[DLV.clickEdit, DLV.clickMore, DLV.clickAdd, DLV.clickDm, DLV.clickSave]}
-      />
-    </div>
+          </Page>
+        </Appear>
+      ) : (
+        <Page height={DLV_PAGE}>
+          <PageHeader census={census} view="manage" />
+          <ManageLayout
+            list={
+              <AutomationRows
+                chosen={now < DLV.form ? 'brief' : null}
+                alert={<AlertGroup selected={false} />}
+              />
+            }
+            pane={
+              now < DLV.form ? (
+                <Inspector which="brief" pressEdit={pressAt(now, DLV.clickEdit)} />
+              ) : (
+                <Appear at={DLV.form}>
+                  <EditForm />
+                </Appear>
+              )
+            }
+          />
+        </Page>
+      )}
+    </Camera>
   );
 }
 

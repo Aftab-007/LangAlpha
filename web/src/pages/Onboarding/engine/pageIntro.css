@@ -1,10 +1,9 @@
 /*
- * Page-intro modal visual panel: a small, zoomed-out copy of the page the
- * step is about. It is drawn with the app's own tokens (page and card
- * surfaces, borders, text, profit and loss colors), so a scene looks like the
- * app in either theme rather than an illustration of it: solid surfaces, no
- * tints, glows or decorative grid. Skeleton lines stand in for text the
- * scene does not spell out.
+ * Page-intro modal visual panel: a close-up of the part of the page the step
+ * is about, framed by the scene's camera. It is drawn with the app's own
+ * tokens (page and card surfaces, borders, text, profit and loss colors), so
+ * a scene looks like the app in either theme rather than an illustration of
+ * it: solid surfaces, no tints, glows or decorative grid.
  */
 
 .intro-visual {
@@ -146,12 +145,6 @@
   }
 }
 
-/* A streaming skeleton line: the clock steps its width at 30fps, the
-   transition fills in between. */
-.intro-stream {
-  transition: width 90ms linear;
-}
-
 /* A label the agent is still working on, like the app's TextShimmer. */
 .intro-shimmer {
   background: linear-gradient(
@@ -184,8 +177,5 @@
   .intro-caret,
   .intro-shimmer {
     animation: none;
-  }
-  .intro-stream {
-    transition: none;
   }
 }

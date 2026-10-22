@@ -434,14 +434,14 @@ export function NewsRow({
 /* ── earnings ──────────────────────────────────────────────────────────── */
 
 /** Who reports next, from the watchlist. */
-const EARNINGS = [
+export const EARNINGS = [
   { sym: 'MSFT', name: 'Microsoft Corp.', date: new Date(2026, 9, 28) },
   { sym: 'AMZN', name: 'Amazon.com Inc.', date: new Date(2026, 9, 30) },
 ];
 
 /** An upcoming report (`EarningsCalendarCard`'s row): the logo tile with the
     symbol's first letters, symbol over company, and the date. */
-function EarningsRow({ row }: { row: (typeof EARNINGS)[number] }) {
+export function EarningsRow({ row }: { row: (typeof EARNINGS)[number] }) {
   const locale = useLocale();
   const strong: CSSProperties = { color: 'var(--iv-text)' };
   return (
@@ -540,7 +540,7 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
           ))}
           <AddSymbol />
         </Region>
-        {/* news and earnings, running on under the floating chat */}
+        {/* news and earnings, the next row down */}
         <Region delay={0.3} className="flex min-w-0 flex-col gap-1 p-2">
           <div className="flex border-b pb-1.5" style={{ borderColor: 'var(--iv-border)' }}>
             <span
@@ -565,7 +565,9 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
               ))}
             </span>
           </div>
-          <NewsRow item={NEWS[0]} />
+          {NEWS.slice(0, 3).map((item) => (
+            <NewsRow key={item.title} item={item} />
+          ))}
         </Region>
         <Region delay={0.4} className="flex min-w-0 flex-col gap-1.5 p-2">
           <span className="flex items-center justify-between gap-1">

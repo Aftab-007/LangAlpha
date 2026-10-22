@@ -9,12 +9,14 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { frame, VIEW } from './camera';
 import { InputDock, Region } from './kit';
 
 /* The dashboard intro's shared parts: invented quotes, sparklines, the page
-   header and floating chat, and the widget frame. Each part is drawn after its
-   real counterpart under pages/Dashboard, in miniature, with the app's own
-   strings for its labels. */
+   and its header, the floating chat, and the widget frame. Each part is drawn
+   after its real counterpart under pages/Dashboard, in miniature, with the
+   app's own strings for its labels. The scenes show the page through a
+   camera, so it is drawn at its own size and the camera picks the crop. */
 /* eslint-disable react-refresh/only-export-components -- shared parts:
    scene components plus data and style helpers */
 
@@ -94,7 +96,7 @@ export const WATCH: { sym: string; prev: number; ticks: Ticks }[] = [
     prev: 179.53,
     ticks: [
       { at: 0, v: 1.42 },
-      { at: 1900, v: 1.61 },
+      { at: 4000, v: 1.61 },
     ],
   },
   {
@@ -102,7 +104,7 @@ export const WATCH: { sym: string; prev: number; ticks: Ticks }[] = [
     prev: 226.8,
     ticks: [
       { at: 0, v: 0.12 },
-      { at: 2800, v: -0.08 },
+      { at: 4500, v: -0.08 },
     ],
   },
   {
@@ -110,7 +112,7 @@ export const WATCH: { sym: string; prev: number; ticks: Ticks }[] = [
     prev: 248.1,
     ticks: [
       { at: 0, v: 2.31 },
-      { at: 4000, v: 2.05 },
+      { at: 5000, v: 2.05 },
     ],
   },
   { sym: 'MSFT', prev: 431.2, ticks: [{ at: 0, v: 0.34 }] },
@@ -282,17 +284,73 @@ export function DashTopbar({
   );
 }
 
-/** The page under the header: the frame's 280px content box, held to it so
-    what runs past the fold is cut off rather than growing the window. */
-export const PAGE = 'relative flex h-[280px] flex-col gap-1.5';
+/** The page's width, in page px: what the camera's shots are measured in. */
+export const PAGE_W = 400;
+/** The page's padding and the gap between its cards, in page px. */
+export const PAD = 10;
+export const GAP = 6;
+
+/** A camera shot held inside a page `height` px tall: the view slides in
+    from any edge it would run past, so it never shows beyond the page. */
+export function inPage(shot: ReturnType<typeof frame>, height: number): ReturnType<typeof frame> {
+  const halfW = VIEW.width / 2 / shot.zoom;
+  const halfH = VIEW.height / 2 / shot.zoom;
+  return {
+    zoom: shot.zoom,
+    x: Math.min(Math.max(shot.x, halfW), PAGE_W - halfW),
+    y: Math.min(Math.max(shot.y, halfH), height - halfH),
+  };
+}
+
+/** The view whose top-left corner sits at (`left`, `top`) on the page, so
+    a crop can start in a gutter rather than through a card's text. */
+export function fromCorner(left: number, top: number, zoom: number): ReturnType<typeof frame> {
+  return { x: left + VIEW.width / 2 / zoom, y: top + VIEW.height / 2 / zoom, zoom };
+}
+
+/**
+ * The dashboard page with no app around it: `header` over the content when
+ * a step is about the header, the content padded under it. `height` holds
+ * the page to a window's height, for a chat that floats at its foot; what
+ * runs past it is cut off, as the page scrolls on under the fold.
+ */
+export function DashPage({
+  header,
+  height,
+  children,
+}: {
+  header?: ReactNode;
+  height?: number;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col overflow-hidden" style={{ width: PAGE_W, height }}>
+      {header && (
+        <div
+          className="flex h-7 shrink-0 items-center gap-2 border-b px-2.5"
+          style={{ borderColor: 'var(--iv-border)' }}
+        >
+          {header}
+        </div>
+      )}
+      <div className="relative flex min-h-0 flex-1 flex-col gap-1.5" style={{ padding: PAD }}>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 /** The floating chat's own lift off the page (Dashboard.css), scaled down. */
 const FLOAT_SHADOW = '0 4px 12px rgba(0, 0, 0, 0.12)';
 
-/** What floats over the foot of the page, as the real chat is fixed over
-    the content and the page runs on under it. */
+/** What floats over the foot of a `DashPage`, as the real chat is fixed
+    over the content and the page runs on under it. */
 export function Floating({ children }: { children: ReactNode }) {
-  return <div className="absolute inset-x-0 bottom-0 flex justify-center">{children}</div>;
+  return (
+    <div className="absolute inset-x-0 flex justify-center" style={{ bottom: PAD }}>
+      {children}
+    </div>
+  );
 }
 
 /** The floating chat, as wide as the real one sits on the content column. */

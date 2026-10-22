@@ -3,64 +3,83 @@ import { useTranslation } from 'react-i18next';
 import {
   ArrowLeft,
   BookMarked,
+  BookText,
   CheckSquare,
+  FileBarChart,
   FileText,
   Info,
   RefreshCw,
   ScrollText,
+  TrendingUp,
   Upload,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatBytes, paddedClockTime, shortMonthDay } from '@/lib/format';
 import { useLocale } from '@/hooks/useLocale';
 import type { IntroVisualId } from '../../registry';
+import { Camera, type Shot } from './camera';
 import { useSceneTime, useTween } from './clock';
-import { Appear, Cursor, Loader, Typed, UserBubble, pointAt, type Waypoint } from './kit';
+import { Appear, Loader, Typed, UserBubble, pointAt, type Waypoint } from './kit';
 import {
   ChromeIcon,
+  PANEL_W,
+  PAGE,
   PanelTab,
   Prose,
-  ThreadFrame,
+  ThreadPage,
   Timeline,
   ToolRow,
+  framePage,
   iconStyle,
 } from './threadParts';
 import type { IntroScene } from './types';
 
 /* Scenes for the thread intro's memory and memo steps: the chat column
    beside the file panel, Memory and Memo open as tabs of their own, drawn
-   the way the thread page draws them. Labels are the app's own strings. The
-   file panel step lives in `threadFiles`. */
+   the way the thread page draws them. The page is drawn whole and a camera
+   crops it to the part each beat is about. Labels are the app's own
+   strings. The file panel step lives in `threadFiles`. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
 /* ── thread · step 2: long-term memory ─────────────────────────────────── */
 
 /** A position typed and sent, the agent adding it to the `positions` topic
-    file, the Memory tab's listing of that file updating, and the pointer
-    opening it to show the line it gained. Pointer positions are px in the
-    400px scene: positions.md is the second row of the listing, y 92–117. */
+    file, the Memory tab's listing of that file picking up the change, and
+    the pointer opening it to show the line it gained. Positions are px on
+    the thread page: positions.md is the second file in the listing. */
 const MEM = {
+  earlier: 'Where did NVDA close?',
   before: 'NVDA closed at **$182.42**, up 1.61% on the day.',
   ask: 'remember: long NVDA, 4%',
-  typeAsk: 450,
-  sendAsk: 1500,
-  save: 1950,
-  saved: 2650,
+  typeAsk: 400,
+  sendAsk: 1400,
+  save: 1800,
+  saved: 2400,
   topic: 'positions',
   reply: 'Noted. NVDA ideas will now be sized against the 4% you already hold.',
-  replyAt: 2800,
+  replyAt: 2550,
+  listed: 4500,
   path: [
-    { at: 2900, x: 320, y: 250 },
-    { at: 3500, x: 236, y: 103 },
-    { at: 3950, x: 236, y: 103 },
-    { at: 4500, x: 360, y: 220 },
+    { at: 4600, x: 330, y: 150 },
+    { at: 5100, x: 236, y: 98 },
+    { at: 5450, x: 236, y: 98 },
+    { at: 6000, x: 360, y: 260 },
   ] satisfies Waypoint[],
-  click: 3600,
-  open: 3680,
-  leave: 3950,
-  length: 5000,
+  click: 5200,
+  open: 5280,
+  length: 7600,
 };
+
+/** The camera: close on the composer as the ask is typed, back a little for
+    the exchange, then across to the Memory tab as the topic file changes,
+    and onto the file once it opens, the line it gained last. */
+const MEM_SHOTS: [Shot, ...Shot[]] = [
+  { at: 0, ...framePage({ x: 10, y: 225, w: 168, h: 100 }, 4) },
+  { at: 2300, dur: 700, ...framePage({ x: 6, y: 167, w: 182, h: 160 }, 0) },
+  { at: 4300, dur: 900, ...framePage({ x: 188, y: 28, w: 170, h: 140 }, 0) },
+  { at: 6200, dur: 900, ...framePage({ x: 190, y: 30, w: 184, h: 152 }, 0) },
+];
 
 /** One file in the memory list: its name, then size and when it changed
     (the time of day when that was today). */
@@ -103,7 +122,7 @@ function MemoryFile({
 function MemoryList() {
   const { t } = useTranslation();
   const now = useSceneTime();
-  const saved = now >= MEM.saved;
+  const saved = now >= MEM.listed;
   const tiers = [t('memoryPanel.tierUser'), t('memoryPanel.tierWorkspace')];
   return (
     <>
@@ -222,13 +241,13 @@ function MemoryViewer() {
 function Memory() {
   const t = useSceneTime();
   const { t: tr } = useTranslation();
-  const away = useTween(MEM.leave, 550);
   const composer =
     t >= MEM.typeAsk && t < MEM.sendAsk ? <Typed text={MEM.ask} at={MEM.typeAsk} /> : undefined;
   return (
-    <div className="relative w-full max-w-[400px]">
-      <ThreadFrame
+    <Camera shots={MEM_SHOTS} cursor={MEM.path} clicks={[MEM.click]}>
+      <ThreadPage
         title="NVDA sizing"
+        stack="bottom"
         tabs={
           <>
             <PanelTab icon={FileText} label="notes.md" />
@@ -245,6 +264,16 @@ function Memory() {
         sendAt={[MEM.sendAsk]}
         chat={
           <>
+            <UserBubble at={0}>{MEM.earlier}</UserBubble>
+            <Timeline>
+              <ToolRow
+                icon={TrendingUp}
+                running={{ label: tr('toolArtifact.tool.stockPrices'), pill: 'NVDA' }}
+                settled={{ label: tr('toolArtifact.tool.stockPrices'), pill: 'NVDA' }}
+                at={0}
+                done={0}
+              />
+            </Timeline>
             <Prose text={MEM.before} />
             <UserBubble at={MEM.sendAsk + 80}>{MEM.ask}</UserBubble>
             <Timeline>
@@ -263,51 +292,76 @@ function Memory() {
         }
         panel={t >= MEM.open ? <MemoryViewer /> : <MemoryList />}
       />
-      {/* the pointer opens the topic file, then drifts off and fades */}
-      {away < 1 && (
-        <div className="pointer-events-none absolute inset-0" style={{ opacity: 1 - away }}>
-          <Cursor path={MEM.path} clicks={[MEM.click]} />
-        </div>
-      )}
-    </div>
+    </Camera>
   );
 }
 
 /* ── thread · step 3: memos ────────────────────────────────────────────── */
 
-/** Two documents dragged in from the chat side and dropped on the Memo tab:
-    the drop overlay takes the drag, Upload reads "Uploading…", then each memo
-    is listed generating its summary and turns Ready with its description. */
+/** Two documents dragged in from Finder and dropped on the Memo tab, below
+    the memos already there: the drop overlay takes the drag, Upload reads
+    "Uploading…", then each new memo is listed generating its summary and
+    turns Ready with its description. Then a question typed under the
+    thread's last exchange, which the agent answers from both. Positions are
+    px on the thread page; the overlay shows while the pointer is over the
+    panel, and the drag holds left of the overlay's label so both read. */
 const MEMO = {
-  // pointer in px of the 400px scene; the panel spans x 188–399, and the
-  // drop overlay over its listing x 192–395, y 55–325. The overlay shows from
-  // the moment the pointer crosses into the panel (x 188 at about 1370ms).
   path: [
-    { at: 350, x: 74, y: 236 },
-    { at: 650, x: 74, y: 236 },
-    { at: 1850, x: 228, y: 112 },
-    { at: 2150, x: 228, y: 112 },
-    { at: 2750, x: 330, y: 262 },
+    { at: 300, x: 120, y: 240 },
+    { at: 1400, x: 212, y: 172 },
+    { at: 1750, x: 212, y: 172 },
+    { at: 2400, x: 330, y: 380 },
   ] satisfies Waypoint[],
-  over: 1400,
-  drop: 2050,
-  uploaded: 2650,
-  leave: 2550,
+  drop: 1600,
+  uploaded: 2400,
+  /** Listed oldest first, as the tab sorts them. */
+  held: [
+    { name: 'semis-comps.csv', description: 'NTM consensus for nine AI semis' },
+    { name: 'ai-capex.md', description: 'Hyperscaler capex by quarter' },
+  ],
   rows: [
     {
       name: 'nvda-10q.pdf',
-      at: 2650,
-      ready: 3550,
+      at: 2400,
+      ready: 3200,
       description: '10-Q for the quarter ended Jul 27',
     },
-    { name: 'call-notes.md', at: 2750, ready: 4050, description: 'Notes from the Q2 call' },
+    { name: 'call-notes.md', at: 2500, ready: 3600, description: 'Notes from the Q2 call' },
   ],
-  ask: 'What did they guide?',
+  earlier: {
+    ask: "How did NVDA's Q2 land?",
+    answer: 'Revenue of **$46.7B**, up 56% from a year ago. Data center made $41.1B of it.',
+  },
+  ask: 'What did they guide for Q3?',
+  typeAsk: 4100,
+  askAt: 4950,
+  reads: [
+    { slug: 'call-notes.md', at: 5350 },
+    { slug: 'nvda-10q.pdf', at: 5700 },
+  ],
+  read: 400,
   answer:
-    'Another sequential step up, led by data center. Add the 10-Q and your call notes ' +
-    'as memos and I can tie the segment numbers back to them.',
-  length: 5000,
+    'Q3 revenue of **$54.0B**, plus or minus 2%, assuming no H20 sales to China. ' +
+    'Gross margin of 73.5%, plus or minus 50 bps, on opex of about $4.2B. ' +
+    'Full-year opex growth in the high 30s.',
+  answerAt: 6250,
+  cite: 'From `call-notes.md` and `nvda-10q.pdf`.',
+  citeAt: 7550,
+  length: 8700,
 };
+
+/** The camera: on the Memo tab's list as the drag comes over it, up to its
+    title bar and table as the drop uploads and each memo turns Ready, then
+    across to the chat's last exchange and the composer as the question is
+    typed and the reads come in, the top edge kept between messages as the
+    thread scrolls, then in on the question and its answer. */
+const MEMO_SHOTS: [Shot, ...Shot[]] = [
+  { at: 0, ...framePage({ x: 188, y: 72, w: PANEL_W, h: 176 }, 0) },
+  { at: 2300, dur: 700, ...framePage({ x: 188, y: 0, w: PANEL_W, h: 170 }, 0) },
+  { at: 4500, dur: 700, ...framePage({ x: 0, y: 169, w: PAGE.width - PANEL_W, h: 155 }, 0) },
+  { at: 5450, dur: 200, ...framePage({ x: 1, y: 176.5, w: 186, h: 153.5 }, 0) },
+  { at: 7550, dur: 1100, ...framePage({ x: 4, y: 125.5, w: 180, h: 148.5 }, 0) },
+];
 
 /** What the OS drags out of Finder: the file's icon and its name, with the
     count badge a multi-file drag carries. It shrinks into the drop. */
@@ -429,14 +483,14 @@ function MemoRow({
   );
 }
 
-/** The Memo tab: its title bar with Upload, the table (or the empty state
-    before anything is in it), and the drop overlay while a drag is over it. */
+/** The Memo tab: its title bar with Upload, the table, and the drop overlay
+    while a drag is over it. */
 function MemoTab() {
   const t = useSceneTime();
   const { t: tr } = useTranslation();
-  const over = t >= MEMO.over && t < MEMO.drop;
+  const over =
+    t < MEMO.drop && t >= MEMO.path[0].at && pointAt(MEMO.path, t).x >= PAGE.width - PANEL_W;
   const uploading = t >= MEMO.drop && t < MEMO.uploaded;
-  const listed = t >= MEMO.rows[0].at;
   return (
     <>
       <div
@@ -471,34 +525,17 @@ function MemoTab() {
         </span>
       </div>
       <div className="relative flex flex-1 flex-col">
-        {listed ? (
-          <>
-            <div className="flex py-1 text-[0.4375rem] font-medium leading-none" style={iconStyle}>
-              <span className={COL_NAME}>{tr('memoPanel.columns.name')}</span>
-              <span className={COL_STATUS}>{tr('memoPanel.columns.status')}</span>
-              <span>{tr('memoPanel.columns.description')}</span>
-            </div>
-            {MEMO.rows.map((r) => (
-              <MemoRow key={r.name} {...r} />
-            ))}
-          </>
-        ) : (
-          <div
-            className="flex flex-col items-center gap-1.5 px-2 py-5 text-center"
-            style={iconStyle}
-          >
-            <ScrollText className="h-5 w-5 opacity-40" />
-            <span
-              className="text-[0.5rem] font-medium leading-none"
-              style={{ color: 'var(--iv-text)' }}
-            >
-              {tr('memoPanel.empty.title')}
-            </span>
-            <span className="max-w-[150px] text-[0.4375rem] leading-snug">
-              {tr('memoPanel.empty.hint')}
-            </span>
-          </div>
-        )}
+        <div className="flex py-1 text-[0.4375rem] font-medium leading-none" style={iconStyle}>
+          <span className={COL_NAME}>{tr('memoPanel.columns.name')}</span>
+          <span className={COL_STATUS}>{tr('memoPanel.columns.status')}</span>
+          <span>{tr('memoPanel.columns.description')}</span>
+        </div>
+        {MEMO.held.map((r) => (
+          <MemoRow key={r.name} {...r} at={0} ready={0} />
+        ))}
+        {MEMO.rows.map((r) => (
+          <MemoRow key={r.name} {...r} />
+        ))}
         {over && (
           <div
             className={cn(
@@ -521,15 +558,15 @@ function MemoTab() {
 }
 
 function Memo() {
-  const { t } = useTranslation();
-  const away = useTween(MEMO.leave, 600);
+  const t = useSceneTime();
+  const { t: tr } = useTranslation();
   return (
-    <div className="relative w-full max-w-[400px]">
-      <ThreadFrame
+    <Camera shots={MEMO_SHOTS} cursor={MEMO.path}>
+      <ThreadPage
         tabs={
           <>
-            <PanelTab icon={BookMarked} label={t('filePanel.tabs.memory')} />
-            <PanelTab icon={ScrollText} label={t('filePanel.tabs.memo')} active />
+            <PanelTab icon={BookMarked} label={tr('filePanel.tabs.memory')} />
+            <PanelTab icon={ScrollText} label={tr('filePanel.tabs.memo')} active />
           </>
         }
         actions={
@@ -539,22 +576,49 @@ function Memo() {
           </>
         }
         title="Q2 guidance"
+        stack="bottom"
         chat={
           <>
-            <UserBubble at={0}>{MEMO.ask}</UserBubble>
-            <Prose text={MEMO.answer} />
+            <UserBubble at={0}>{MEMO.earlier.ask}</UserBubble>
+            <Timeline>
+              <ToolRow
+                icon={FileBarChart}
+                running={{ label: tr('toolArtifact.tool.financialStatements'), pill: 'NVDA' }}
+                settled={{ label: tr('toolArtifact.tool.financialStatements'), pill: 'NVDA' }}
+                at={0}
+                done={0}
+              />
+            </Timeline>
+            <Prose text={MEMO.earlier.answer} />
+            <UserBubble at={MEMO.askAt}>{MEMO.ask}</UserBubble>
+            <Timeline>
+              {MEMO.reads.map((r) => (
+                <ToolRow
+                  key={r.slug}
+                  icon={BookText}
+                  running={{
+                    label: tr('toolArtifact.inProgress.readingMemoSlug', { slug: r.slug }),
+                  }}
+                  settled={{ label: tr('toolArtifact.completed.readMemo'), pill: r.slug }}
+                  at={r.at}
+                  done={r.at + MEMO.read}
+                />
+              ))}
+            </Timeline>
+            <Prose text={MEMO.answer} at={MEMO.answerAt} cps={160} />
+            <Prose text={MEMO.cite} at={MEMO.citeAt} />
           </>
         }
         panel={<MemoTab />}
+        composer={
+          t >= MEMO.typeAsk && t < MEMO.askAt ? (
+            <Typed text={MEMO.ask} at={MEMO.typeAsk} cps={36} />
+          ) : undefined
+        }
+        sendAt={[MEMO.askAt]}
       />
       <DragChip />
-      {/* the pointer drifts off once the files are in, then fades */}
-      {away < 1 && (
-        <div className="pointer-events-none absolute inset-0" style={{ opacity: 1 - away }}>
-          <Cursor path={MEMO.path} />
-        </div>
-      )}
-    </div>
+    </Camera>
   );
 }
 

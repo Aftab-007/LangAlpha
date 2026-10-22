@@ -3722,7 +3722,7 @@
           },
           "chart": {
             "title": "Charts open beside the chat",
-            "body": "Open a live chart in the file panel, or click one the agent made. Select a region or a price level to ask about it, and the agent can draw its read back onto the chart."
+            "body": "Open a live chart in the file panel, or click one the agent made. Select a region or a price level to ask about it, and the agent marks the events behind the move right on the chart."
           },
           "memory": {
             "title": "The agent remembers how you work",
@@ -3752,17 +3752,13 @@
       },
       "market": {
         "steps": {
-          "live": {
-            "title": "Any symbol, live",
-            "body": "Search a ticker or company name for its live chart, with your watchlist and portfolio alongside. Switch intervals and add indicators from the toolbar."
-          },
           "ask": {
             "title": "Ask about what you see",
             "body": "Pick Region or Price level in the toolbar and mark the chart. The selection goes to the agent in the side panel with the bars behind it, so it reads exactly what you marked."
           },
           "draw": {
-            "title": "The agent marks up the chart",
-            "body": "It draws levels, zones and events straight onto the chart. The drawings belong to the workspace, so its chart tab shows them too, and Open in Chat carries the conversation into a thread."
+            "title": "The agent marks what moved the price",
+            "body": "It answers on the chart too, pinning each event behind a move to the bar where it hit. Click a badge for the story behind it. The drawings stay with the workspace, so its chart tab shows them too."
           }
         }
       },

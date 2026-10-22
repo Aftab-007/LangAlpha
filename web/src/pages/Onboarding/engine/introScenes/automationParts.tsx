@@ -11,33 +11,18 @@ import {
   Zap,
 } from 'lucide-react';
 import { useLocale } from '@/hooks/useLocale';
-import { formatTook } from '@/lib/elapsed';
-import { clockTime, fixed2, formatTimezoneName, relativeTime, signedFixed2 } from '@/lib/format';
+import { fixed2 } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import {
-  cronToHuman,
-  DEFAULT_CRON,
-  parseSchedule,
-  scheduleDays,
-} from '@/pages/Automations/utils/cron';
-import {
-  distanceLabel,
-  formatPriceTrigger,
-  formatRetriggerMode,
-  meterReading,
-} from '@/pages/Automations/utils/price';
-import {
-  formatDateTimeShort,
-  formatUpcoming,
-  weekdayInitials,
-} from '@/pages/Automations/utils/time';
-import type { PriceTriggerConfig } from '@/types/automation';
+import { weekdayInitials } from '@/pages/Automations/utils/time';
+import { BRIEF_EXCERPT, NVDA, on, useBook } from './automationBook';
+import { VIEW } from './camera';
 import { ease, useSceneTime } from './clock';
 
 /* The Automations page's parts at scene scale, each a small copy of the
    component named on it, in the page's tokens and labels: the header, the
    cadence marks and price meter, the list row, the form's hairline rows,
-   and the feed's run entry. */
+   and the feed's run entry. Each scene draws the page at its own size and
+   a camera (camera.tsx) shows the part a step is about. */
 /* eslint-disable react-refresh/only-export-components -- scene parts: small
    components plus the timing and ink helpers */
 
@@ -176,7 +161,7 @@ export function PageHeader({
         </div>
         {census ? (
           <div
-            className="mt-[3px] truncate font-mono text-[0.375rem] leading-none tabular-nums"
+            className="-mb-[0.75px] mt-[2.25px] truncate font-mono text-[0.375rem] leading-[1.25] tabular-nums"
             style={{ color: INK.text3 }}
           >
             {census}
@@ -441,7 +426,8 @@ export function Field({
         ...style,
       }}
     >
-      <span className="min-w-0 flex-1 truncate">{children}</span>
+      {/* a taller line than the field's, so the clip keeps descenders */}
+      <span className="min-w-0 flex-1 truncate leading-[1.3]">{children}</span>
       {chevron && <ChevronDown className="h-[7px] w-[7px] shrink-0 opacity-60" />}
     </div>
   );
@@ -603,7 +589,7 @@ export function RunEntry({
             </span>
           )}
           <span
-            className="truncate text-[0.5rem] font-medium leading-none"
+            className="-my-px truncate text-[0.5rem] font-medium leading-[1.25]"
             style={{ color: INK.text }}
           >
             {name}
@@ -644,106 +630,25 @@ export function Grow({ p, children }: { p: number; children: ReactNode }) {
   );
 }
 
-/* ── one account's automations ─────────────────────────────────────────── */
+/* ── the page and its manage view ──────────────────────────────────────── */
 
-/* A weekday 8:00 brief and a Friday review; a price alert on NVDA, which
-   last traded at 182.42 (+1.61% on a 179.53 close, as the dashboard scenes
-   quote it); an alert at $180 that fired this morning; and an earnings
-   preview whose last run failed. The reader's clock reads 10:14 on a
-   Wednesday, and 8:06 the next morning once a scene moves on a day. */
-export const NOW = new Date(2026, 9, 21, 10, 14).getTime();
-export const NEXT_MORNING = new Date(2026, 9, 22, 8, 6).getTime();
-export const on = (day: number, hour: number, minute: number) =>
-  new Date(2026, 9, day, hour, minute);
-const BRIEF_CRON = '0 8 * * 1-5';
-const REVIEW_CRON = '0 22 * * 5';
-const MARKET_ZONE = 'America/New_York';
-export const NVDA = { price: 182.42, previous_close: 179.53 };
-export const ALERT: PriceTriggerConfig = {
-  symbol: 'NVDA',
-  conditions: [{ type: 'price_above', value: 190 }],
-  retrigger: { mode: 'one_shot' },
-};
-/** The schedule chip's strip on a form not set to a schedule: the
-    builder's own starting days. */
-export const DEFAULT_DAYS = scheduleDays(parseSchedule(DEFAULT_CRON));
-
-export const BRIEF_INSTRUCTION =
-  'Provide a pre-market briefing covering: overnight market moves, key economic data releases today, notable earnings reports, and sector trends to watch.';
-export const ALERT_INSTRUCTION =
-  'Analyze recent news and market sentiment for {symbol} to explain the price movement. Include key catalysts, analyst reactions, and short-term outlook.';
-export const BRIEF_EXCERPT =
-  'Chipmakers lead a broad rally as NVDA guides above estimates. Futures point higher, with AVGO and TSM up premarket, while Treasury yields slip ahead of Friday’s jobs report.';
-export const NEXT_EXCERPT =
-  'Semis extend gains, SOXX up 1.2% premarket as NVDA holds above $182. Jobless claims land at 8:30, and TSM reports monthly sales after the close.';
-export const FIRED = {
-  name: 'NVDA crosses $180',
-  excerpt:
-    'NVDA crossed $180.00 at 10:12, up 1.6% on the day after guiding data-center revenue above estimates. Two brokers raised their targets, and AVGO and TSM followed it higher.',
-};
-export const FAILED = {
-  name: 'AVGO earnings preview',
-  place: 'Semis research',
-  error: 'Earnings calendar request timed out after 3 retries.',
-};
-
-/** The lines the scenes print, from the page's own formatters, as they
-    read at `now`. */
-export function useBook(now = NOW) {
-  const { t } = useTranslation();
-  const locale = useLocale();
-  const reading = meterReading(ALERT, NVDA);
-  const briefLine = cronToHuman(BRIEF_CRON, t, locale);
-  const zone = formatTimezoneName(MARKET_ZONE, locale);
-  const nextBrief = on(new Date(now).getDate() + 1, 8, 0);
-  const nextReview = on(23, 22, 0);
-  return {
-    brief: t('automation.templateMorningBriefing'),
-    alert: t('automation.templatePriceAlert'),
-    briefLine,
-    briefReadout: `${briefLine} · ${zone}`,
-    briefSentence: t('automation.sentenceThen', {
-      first: t('automation.sentenceRecurring', { schedule: briefLine, zone }),
-      then: t('automation.sentenceNextRun', {
-        when: formatUpcoming(nextBrief, locale, now),
-        relative: relativeTime(nextBrief, locale, now),
-      }),
-    }),
-    nextBrief: relativeTime(nextBrief, locale, now),
-    review: t('automation.templateWeeklyReview'),
-    reviewLine: cronToHuman(REVIEW_CRON, t, locale),
-    nextReview: relativeTime(nextReview, locale, now),
-    /** What runs next, soonest first. */
-    upNext: [
-      [nextBrief, t('automation.templateMorningBriefing')],
-      [nextReview, t('automation.templateWeeklyReview')],
-    ] as [Date, string][],
-    zone,
-    alertLine: formatPriceTrigger(ALERT, t),
-    alertSentence: t('automation.sentenceWatching', {
-      condition: formatPriceTrigger(ALERT, t),
-      retrigger: formatRetriggerMode(ALERT, t),
-    }),
-    away: distanceLabel(reading, t, locale),
-    price: fixed2(NVDA.price, locale),
-    move: signedFixed2(((NVDA.price - NVDA.previous_close) / NVDA.previous_close) * 100, locale),
-    time: (hour: number, minute: number) => clockTime(on(21, hour, minute), locale),
-    ago: (d: Date) => relativeTime(d, locale, now),
-    upcoming: (d: Date) => formatUpcoming(d, locale, now),
-    moment: (d: Date) => formatDateTimeShort(d, locale),
-    took: (ms: number) => formatTook(ms, (key, opts) => t(key, opts)),
-    deliverTo: t('automation.deliverToDm', { app: t('automation.deliverToSlack') }),
-  };
+/** The page at its own size under the camera: the Automations page alone,
+    no app around it. `height` runs past the view for a pane the camera
+    pans down, as the page's own scroller would. */
+export function Page({ height = VIEW.height, children }: { height?: number; children: ReactNode }) {
+  return (
+    <div className="relative flex flex-col p-[12px]" style={{ width: VIEW.width, height }}>
+      {children}
+    </div>
+  );
 }
-
-/* ── shared pieces of the manage view ──────────────────────────────────── */
 
 /** The manage view (`ManageView`): the list on the left, what it lists on
     the right, under a hairline; both columns clip as their scrollers do. */
 export function ManageLayout({ list, pane }: { list: ReactNode; pane: ReactNode }) {
   return (
     <div
-      className="mt-[10px] grid h-[270px] grid-cols-[112px_minmax(0,1fr)] border-t"
+      className="mt-[10px] grid min-h-0 flex-1 grid-cols-[112px_minmax(0,1fr)] border-t"
       style={{ borderColor: INK.hair }}
     >
       <div
@@ -802,7 +707,8 @@ export function AlertGroup({ selected }: { selected: boolean }) {
 
 /** One automation in the pane (`AutomationInspector`): the state and place,
     the name, the schedule in a sentence, the meter for a price watch, the
-    actions, and for the brief its latest run. `pressEdit` presses Edit. */
+    actions, and the latest run: the brief's report, none yet for the new
+    alert. `pressEdit` presses Edit. */
 export function Inspector({ which, pressEdit }: { which: 'brief' | 'alert'; pressEdit?: string }) {
   const { t } = useTranslation();
   const B = useBook();
@@ -829,8 +735,9 @@ export function Inspector({ which, pressEdit }: { which: 'brief' | 'alert'; pres
       >
         {brief ? B.briefSentence : B.alertSentence}
       </p>
+      {/* as wide a share of the pane as the app's meter takes of its own */}
       {!brief && (
-        <div className="mt-[7px] max-w-[190px]">
+        <div className="mt-[7px] max-w-[140px]">
           <div
             className="mb-[3px] font-mono text-[0.34375rem] leading-none tabular-nums"
             style={{ color: INK.text3 }}
@@ -858,6 +765,14 @@ export function Inspector({ which, pressEdit }: { which: 'brief' | 'alert'; pres
           {t('common.delete')}
         </Btn>
       </div>
+      {!brief && (
+        <div className="mt-[14px]">
+          <Kicker className="mb-[5px]">{t('automation.latestRun')}</Kicker>
+          <p className="text-[0.4375rem] leading-[1.55]" style={{ color: INK.text3 }}>
+            {t('automation.noRunsForThis')}
+          </p>
+        </div>
+      )}
       {brief && (
         <div className="mt-[14px]">
           <Kicker className="mb-[5px]">{t('automation.latestRun')}</Kicker>

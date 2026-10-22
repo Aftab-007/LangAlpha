@@ -37,7 +37,6 @@ export type IntroVisualId =
   | 'dashboardGrid'
   | 'dashboardCustomize'
   | 'dashboardAttach'
-  | 'marketLive'
   | 'marketAsk'
   | 'marketDraw'
   | 'automationTrigger'
