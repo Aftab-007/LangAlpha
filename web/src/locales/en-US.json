@@ -2289,6 +2289,7 @@
     "noFilesYet": "No files yet",
     "noTypeMatches": "No {{type}} files",
     "openFile": "Open a file",
+    "files": "Files",
     "dropToUploadHint": "Drop a file here to upload it.",
     "openFiles": "Open tabs",
     "runningApps": "Running apps",

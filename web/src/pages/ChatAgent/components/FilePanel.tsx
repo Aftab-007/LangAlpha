@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useEffectEvent, useId, useMemo, useRef, useState, Suspense } from 'react';
-import { TextSelect, Upload } from 'lucide-react';
+import { CandlestickChart, FolderTree, LayoutDashboard, TextSelect, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   memoMimeForName,
@@ -62,6 +62,7 @@ import { PreviewPanes } from './filePanel/PreviewPanes';
 import { usePreviews } from './filePanel/usePreviews';
 import { usePanelTarget } from './filePanel/usePanelTarget';
 import { ActiveTabBody } from './filePanel/ActiveTabBody';
+import type { NewTabMenu } from './filePanel/panelLaunchers';
 import { useWatchTab } from './filePanel/useWatchTab';
 import type { MarketWatchState } from '../session/marketWatchEvents';
 import { useThreadWakeups } from '../hooks/useWakeups';
@@ -668,6 +669,21 @@ function FilePanel({
     previews.ensure(port);
   }, [previews, tabs, cancelPending]);
 
+  const openChart = readOnly ? null : () => { cancelPending(); tabs.openChart({ symbol: lastChartSymbol(workspaceId, { persist: persistStrip }) }); };
+
+  // A right click on the new tab button picks what the tab opens on: the
+  // files, as a plain click gives, a chart, or a running app's tab. Each one
+  // opens beside the tab in front, or on the tab it already has.
+  const newTabMenu: NewTabMenu = {
+    kinds: [
+      { key: 'files', label: t('filePanel.files'), icon: FolderTree, open: newTab },
+      ...(openChart ? [{ key: 'chart', label: t('filePanel.chartTab'), icon: CandlestickChart, open: openChart }] : []),
+    ],
+    apps: previews.previews.map((app) => ({
+      key: `app:${app.port}`, label: app.title || `:${app.port}`, icon: LayoutDashboard, open: () => openPreviewTab(app.port),
+    })),
+  };
+
   // Only a tab the tree sits beside takes a drop; every other kind shows
   // something that is not a folder. The tree takes it too, which on the
   // empty tab is all there is to drop on.
@@ -688,6 +704,7 @@ function FilePanel({
         onPin={tabs.pinTab}
         transcript={transcript}
         onNewTab={singleFileMode || readOnly ? null : newTab}
+        newTabMenu={newTabMenu}
         // A panel locked to one file still replaces it in place, and a step
         // only revisits what this panel already showed.
         history={{
@@ -923,7 +940,7 @@ function FilePanel({
               onOpenPreview={openPreviewTab}
               onOpenMemory={stores ? openMemory : null}
               onOpenMemo={viewInMemo}
-              onOpenChart={readOnly ? null : () => { cancelPending(); tabs.openChart({ symbol: lastChartSymbol(workspaceId, { persist: persistStrip }) }); }}
+              onOpenChart={openChart}
               onOpenSettings={!readOnly && !isHome ? openSettings : null}
               workspaceName={wsData?.name}
               filesRestoreIncomplete={filesRestoreIncomplete}
