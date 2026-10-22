@@ -14,7 +14,7 @@ from ptc_agent.core.paths import (
     WorkspaceLayout,
 )
 from ptc_agent.core.sandbox import livefs_mount
-from src.observability import TOOL_PROVIDER, mark_tool_failed
+from src.observability import TOOL_CHANNEL, TOOL_PROVIDER, mark_tool_failed
 
 logger = structlog.get_logger(__name__)
 
@@ -223,5 +223,8 @@ def create_execute_bash_tool(
             return f"ERROR: {error_msg}", {"mcp_trace": []}
 
     # Every run, not only a failed one, so an error rate reads per provider.
-    Bash.metadata = {TOOL_PROVIDER: backend.provider}
+    Bash.metadata = {
+        TOOL_PROVIDER: backend.provider,
+        TOOL_CHANNEL: backend.channel,
+    }
     return Bash

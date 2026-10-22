@@ -24,6 +24,7 @@ def _make_backend(result: dict) -> Any:
     backend.livefs = None
     backend.settled_livefs = AsyncMock(return_value=None)
     backend.provider = "docker"
+    backend.channel = "docker"
     return backend
 
 

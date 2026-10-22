@@ -9,7 +9,7 @@ from langchain_core.tools import BaseTool, tool
 from ptc_agent.agent.backends.sandbox import SandboxBackend
 from ptc_agent.agent.tools.utils import mark_sandbox_raised
 from ptc_agent.core.sandbox.runtime import PreviewInfo
-from src.observability import TOOL_PROVIDER
+from src.observability import TOOL_CHANNEL, TOOL_PROVIDER
 
 logger = structlog.get_logger(__name__)
 
@@ -160,5 +160,8 @@ def create_preview_url_tool(
     # no workspace each call is refused before it reaches the sandbox, so none
     # is filed under its provider.
     if workspace_id:
-        GetPreviewUrl.metadata = {TOOL_PROVIDER: backend.provider}
+        GetPreviewUrl.metadata = {
+            TOOL_PROVIDER: backend.provider,
+            TOOL_CHANNEL: backend.channel,
+        }
     return GetPreviewUrl

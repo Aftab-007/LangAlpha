@@ -32,6 +32,10 @@ _T = TypeVar("_T")
 # a third of a second.
 _INLINE_FILTER_CHARS = 1024
 
+# The channel of a file call a route answers in process, never reaching the
+# machine.
+IN_PROCESS_CHANNEL = "server"
+
 # The computer's server-held folders, which the file mount links in at the
 # root and in every folder. The sandbox glob goes through such a link only by
 # the pattern's literal prefix, so Glob finds their files only that way. The
@@ -254,6 +258,13 @@ class CompositeFilesystemBackend:
     def route_for(self, path: str) -> FilesystemRoute | None:
         """The mounted route that owns ``path``, or None where the sandbox does."""
         return self._route_for(self.normalize_path(path))
+
+    def channel_for(self, path: str) -> str:
+        """The channel a file call on ``path`` takes: ``server`` where a route
+        owns it and answers in process, else the sandbox's."""
+        if self.route_for(path) is not None:
+            return IN_PROCESS_CHANNEL
+        return self._sandbox.channel_for(path)
 
     def _route_for(self, normalized_path: str) -> FilesystemRoute | None:
         for route in self._routes:

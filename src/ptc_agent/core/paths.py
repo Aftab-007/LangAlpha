@@ -467,8 +467,8 @@ BACKUP_EXCLUDE_DIRS: frozenset[str] = frozenset({
 })
 
 # Where the file mount links the user's server-held files in, workspace-
-# relative (every workspace folder holds all of them, as the root does). The
-# server is their only copy: a backup never reads them and a restore never
+# relative (every workspace folder holds all of them). The server is their
+# only copy: a backup never reads them and a restore never
 # writes them, including rows an older manifest recorded before they were
 # mounted.
 MOUNTED_AGENT_SUBDIRS: tuple[str, ...] = (
@@ -477,6 +477,40 @@ MOUNTED_AGENT_SUBDIRS: tuple[str, ...] = (
     WorkspaceLayout.MEMORY_DIR,
     WorkspaceLayout.TRANSCRIPTS_DIR,
 )
+
+# The computer's index of past threads, which the file mount links in at the
+# root alone and writes as it is read.
+THREAD_INDEX: str = f"{SandboxLayout.AGENTS_DIR}/threads.jsonl"
+
+# What the file mount links in at the computer root, besides the thread index;
+# the per-workspace subtrees join them only where an unsplit workspace owns
+# the root.
+ROOT_MOUNTED_AGENT_SUBDIRS: tuple[str, ...] = (
+    SandboxLayout.USER_DIR,
+    SandboxLayout.WORKFLOWS_DIR,
+)
+
+
+def _under_any(relative: str, linked: tuple[str, ...]) -> bool:
+    return any(relative == d or relative.startswith(f"{d}/") for d in linked)
+
+
+def on_file_mount(path: str, workspace: WorkspaceLayout) -> bool:
+    """Whether ``path``, absolute in the sandbox, is one the file mount serves
+    while it runs, for a turn in ``workspace``: under one of its links at the
+    computer root or in a workspace folder."""
+    relative = posixpath.relpath(path, workspace.root)
+    if relative == ".." or relative.startswith("../"):
+        return False
+    if relative == THREAD_INDEX:
+        return True
+    at_root = (
+        MOUNTED_AGENT_SUBDIRS if not workspace.dir_name else ROOT_MOUNTED_AGENT_SUBDIRS
+    )
+    return _under_any(relative, at_root) or _under_any(
+        relative.partition("/")[2], MOUNTED_AGENT_SUBDIRS
+    )
+
 
 # Exclude ephemeral agent data from backup. Both tiers appear because the
 # names are matched workspace-relative and the two tiers can share a folder.

@@ -365,17 +365,23 @@ class TestReadSandboxOutcome:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("file_path", "provider"),
-        [("notes.md", "docker"), ("/memory/notes.md", None)],
-        ids=["sandbox", "store-mount"],
+        ("file_path", "channel", "provider"),
+        [
+            ("notes.md", "docker", "docker"),
+            ("../.agents/threads.jsonl", "fuse", "docker"),
+            ("/memory/notes.md", "server", None),
+        ],
+        ids=["sandbox", "file-mount", "store-mount"],
     )
-    async def test_the_provider_is_named_on_calls_the_sandbox_serves(
-        self, traced_tool, file_path, provider
+    async def test_a_call_names_its_channel_and_the_provider_of_a_sandbox_it_reaches(
+        self, traced_tool, file_path, channel, provider
     ):
+        channels = {"notes.md": "docker", "../.agents/threads.jsonl": "fuse"}
         backend = _make_backend(content="hello")
         backend.provider = "docker"
-        backend.route_for = lambda p: object() if p.startswith("/memory/") else None
+        backend.channel_for = lambda p: channels.get(p, "server")
 
         _content, metadata = await traced_tool(_get_read_tool(backend), {"file_path": file_path})
 
+        assert metadata.get("tool_channel") == channel
         assert metadata.get("tool_provider") == provider
