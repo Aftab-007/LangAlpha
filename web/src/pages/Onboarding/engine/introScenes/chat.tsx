@@ -282,19 +282,18 @@ function TwoModes() {
 
 /** The Chief of Staff's turn, played out under earlier quick answers, all in
     a thread the user writes to from iMessage: a request comes in from the
-    phone, the work is handed to the workspace's Analyst, an automation set
-    up, a line saying so; then the Analyst's report comes back and the Chief
+    phone, the work is handed to the workspace's Analyst, a line saying so;
+    then the Analyst's report comes back and the Chief
     of Staff sends it on to iMessage, where the request came from, with the
     file. */
 const COS = {
   app: 'imessage',
-  ask: 'Refresh the semis comps, and brief me before earnings.',
+  ask: 'Refresh the semis comps before NVDA reports.',
   askAt: 1500,
   think: 1850,
   handoff: 2350,
   started: 2850,
-  automation: [2950, 3450],
-  say: 3650,
+  say: 3150,
   finished: 5400,
   report: 5650,
   send: [5950, 6650],
@@ -335,7 +334,6 @@ function ChiefOfStaffAnswer() {
   const { t } = useTranslation();
   const names = useAgentNames();
   const now = useSceneTime();
-  const [automate, automated] = COS.automation;
   const [send, sent] = COS.send;
   const via = <ViaApp app={COS.app} />;
   const app = messagingAppName(COS.app) ?? '';
@@ -401,7 +399,7 @@ function ChiefOfStaffAnswer() {
             <UserBubble at={COS.askAt} caption={via} className="ml-8">
               {COS.ask}
             </UserBubble>
-            {/* the turn: reasoning, the hand-off, the automation, a line on it */}
+            {/* the turn: reasoning, the hand-off, a line on it */}
             {now >= COS.think && (
               <div className="mr-12 flex flex-col gap-1.5">
                 <ActivityRow
@@ -425,16 +423,8 @@ function ChiefOfStaffAnswer() {
                   started={COS.started}
                   finished={COS.finished}
                 />
-                <ActivityRow
-                  icon={Zap}
-                  verb={t('toolArtifact.inProgress.creatingName', { name: 'earnings-call brief' })}
-                  title={t('toolArtifact.tool.createAutomation')}
-                  after={<Pill>earnings-call brief</Pill>}
-                  at={automate}
-                  done={automated}
-                />
                 <Reply
-                  text="**The AI semis comps Analyst is on it.** A brief will land the morning of each earnings call."
+                  text="**The AI semis comps Analyst is on it.** I'll send you what moved once it's done."
                   at={COS.say}
                 />
               </div>

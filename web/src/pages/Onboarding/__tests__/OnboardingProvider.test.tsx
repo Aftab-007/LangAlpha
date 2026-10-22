@@ -160,7 +160,7 @@ describe('OnboardingProvider', () => {
     renderAt('/automations');
     expect(intro()).toBe('automations');
     // Delivery goes to chat apps, which link through the hosted platform.
-    expect(screen.getByTestId('introSteps').textContent).toBe('trigger,feed');
+    expect(screen.getByTestId('introSteps').textContent).toBe('trigger,ask,feed');
   });
 
   it('drops the Chief of Staff step, which answers from iMessage, from a self-hosted build', () => {

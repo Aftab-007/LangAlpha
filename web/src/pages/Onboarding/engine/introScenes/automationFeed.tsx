@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ArrowRight } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { ease, useSceneTime } from './clock';
 import { Loader } from './kit';
-import { Btn, Excerpt, Grow, INK, Kicker, LinkOut, PriceMeter, RunEntry } from './automationParts';
-import { BRIEF_EXCERPT, FAILED, FIRED, NVDA, on, useBook } from './automationBook';
+import { Excerpt, Grow, INK, Kicker, LinkOut, PriceMeter, RunEntry } from './automationParts';
+import { BRIEF_EXCERPT, FIRED, NVDA, on, PREVIEW, useBook } from './automationBook';
 
 /* The feed's parts at scene scale (`FeedView`, `FeedRail`): the runs of the
    account in automationBook.ts, a day at a time, and the rail beside them. */
@@ -85,32 +85,17 @@ export function BriefRun({
   );
 }
 
-/** The earnings preview's failed run, with its error and a Retry. */
-export function FailedRun() {
+/** The earnings preview's run this morning, done, with what it found. */
+export function PreviewRun() {
   const { t } = useTranslation();
   const B = useBook();
   return (
     <RunEntry
       time={B.time(6, 30)}
-      glyph={
-        <AlertCircle className="h-[6px] w-[6px]" style={{ color: 'var(--color-icon-danger)' }} />
-      }
-      name={FAILED.name}
-      meta={[t('automation.runFailed'), FAILED.place, B.took(64_000)].join(' · ')}
-      excerpt={
-        <p
-          className="mt-[4px] font-mono text-[0.375rem] leading-[1.5]"
-          style={{ color: INK.text2 }}
-        >
-          {FAILED.error}
-        </p>
-      }
-      actions={
-        <>
-          <Btn>{t('common.retry')}</Btn>
-          <LinkOut>{t('automation.openThread')}</LinkOut>
-        </>
-      }
+      name={PREVIEW.name}
+      meta={[PREVIEW.place, B.took(192_000)].join(' · ')}
+      excerpt={<Excerpt>{PREVIEW.excerpt}</Excerpt>}
+      actions={<LinkOut>{t('automation.openThread')}</LinkOut>}
     />
   );
 }
@@ -125,39 +110,14 @@ function RailSection({ title, children }: { title: string; children: ReactNode }
   );
 }
 
-/** The rail: what needs attention, Up next, and what is watching. */
-export function FeedRail({ attention = true, now }: { attention?: boolean; now?: number }) {
+/** The rail: Up next, and what is watching. Nothing needs attention, so
+    the app leaves that section out. */
+export function FeedRail({ now }: { now?: number }) {
   const { t } = useTranslation();
   const B = useBook(now);
   const rowLine = { borderColor: INK.hair };
   return (
     <div className="flex min-w-0 flex-col gap-[12px]">
-      {attention && (
-        <RailSection title={t('automation.groupAttention')}>
-          <div className="flex items-start gap-[5px] border-b py-[5px]" style={rowLine}>
-            <AlertCircle
-              className="mt-px h-[6px] w-[6px] shrink-0"
-              style={{ color: 'var(--color-icon-danger)' }}
-            />
-            <div className="min-w-0">
-              <div className="text-[0.4375rem] leading-[1.25]" style={{ color: INK.text }}>
-                {FAILED.name}
-              </div>
-              <div className="mt-px text-[0.34375rem] leading-[1.3]" style={{ color: INK.text3 }}>
-                {t('automation.lastRunFailedAgo', { when: B.ago(on(21, 6, 31)) })}
-              </div>
-              <div className="mt-[5px] flex flex-wrap items-center gap-[3px]">
-                <Btn>{t('common.retry')}</Btn>
-                <Btn>{t('automation.pause')}</Btn>
-                <Btn variant="ghost">{t('automation.dismiss')}</Btn>
-              </div>
-              <div className="mt-[4px] flex">
-                <LinkOut>{t('automation.openThread')}</LinkOut>
-              </div>
-            </div>
-          </div>
-        </RailSection>
-      )}
       <RailSection title={t('automation.upNext')}>
         <div className="grid grid-cols-[max-content_minmax(0,1fr)]">
           {B.upNext.map(([when, name]) => (
@@ -201,7 +161,7 @@ export function FeedRail({ attention = true, now }: { attention?: boolean; now?:
         className="inline-flex items-center gap-[3px] text-[0.375rem] leading-none"
         style={{ color: INK.text2 }}
       >
-        {t('automation.manageAll', { count: attention ? 4 : 3 })}
+        {t('automation.manageAll', { count: 4 })}
         <ArrowRight className="h-[6px] w-[6px]" />
       </span>
     </div>
@@ -219,8 +179,18 @@ export function Day({ label, children }: { label: string; children: ReactNode })
 }
 
 /** The feed view (`FeedView`): runs by day on the left, the rail on the
-    right; the column clips at the window's edge, faded as a page runs on. */
-export function FeedLayout({ runs, rail }: { runs: ReactNode; rail: ReactNode }) {
+    right; the column clips at the window's edge, faded as a page runs on.
+    `scroll` (px) scrolls the runs under the header, as the page's scroller
+    does, while the rail stays where it is, as its sticky rail does. */
+export function FeedLayout({
+  runs,
+  rail,
+  scroll = 0,
+}: {
+  runs: ReactNode;
+  rail: ReactNode;
+  scroll?: number;
+}) {
   return (
     <div className="mt-[10px] grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_124px] gap-[14px]">
       <div
@@ -230,7 +200,7 @@ export function FeedLayout({ runs, rail }: { runs: ReactNode; rail: ReactNode })
           maskImage: 'linear-gradient(180deg, black 82%, transparent 100%)',
         }}
       >
-        {runs}
+        <div style={scroll ? { transform: `translateY(${-scroll}px)` } : undefined}>{runs}</div>
       </div>
       {rail}
     </div>

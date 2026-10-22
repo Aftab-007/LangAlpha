@@ -3768,9 +3768,13 @@
             "title": "On a schedule, or when a price moves",
             "body": "Start from a template or write the instruction yourself, then set when it runs: every weekday at 8:00, say, or the moment NVDA crosses $190."
           },
+          "ask": {
+            "title": "Or set it up in chat",
+            "body": "Describe what you want instead. Your agent sums up the schedule and instruction, creates it once you say yes, and can pause, change or delete it the same way."
+          },
           "feed": {
             "title": "Every run is a full research run",
-            "body": "The agent works just as it does in chat, and every run is a thread you can open. What it finds lands in the feed, newest first. A run that fails waits under Needs attention."
+            "body": "The agent works just as it does in chat, and every run is a thread you can open. What it finds lands in the feed, newest first."
           },
           "delivery": {
             "title": "Results come to your chat apps",

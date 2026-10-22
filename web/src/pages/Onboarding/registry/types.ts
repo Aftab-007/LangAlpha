@@ -40,6 +40,7 @@ export type IntroVisualId =
   | 'marketAsk'
   | 'marketDraw'
   | 'automationTrigger'
+  | 'automationAsk'
   | 'automationFeed'
   | 'automationDelivery';
 

@@ -21,9 +21,9 @@ import type { PriceTriggerConfig } from '@/types/automation';
    it from the Automations page's own formatters: a weekday 8:00 brief and a
    Friday review; a price alert on NVDA, which last traded at 182.42 (+1.61%
    on a 179.53 close, as the dashboard scenes quote it); an alert at $180
-   that fired this morning; and an earnings preview whose last run failed.
-   The reader's clock reads 10:14 on a Wednesday, and 8:06 the next morning
-   once a scene moves on a day. */
+   that fired this morning; and a one-time AVGO earnings preview that ran
+   at 6:30 and is done. The reader's clock reads 10:14 on a Wednesday, and
+   8:06 the next morning once a scene moves on a day. */
 export const NOW = new Date(2026, 9, 21, 10, 14).getTime();
 export const NEXT_MORNING = new Date(2026, 9, 22, 8, 6).getTime();
 export const on = (day: number, hour: number, minute: number) =>
@@ -47,6 +47,8 @@ export const ALERT_INSTRUCTION =
   'Analyze recent news and market sentiment for {symbol} to explain the price movement. Include key catalysts, analyst reactions, and short-term outlook.';
 export const BRIEF_EXCERPT =
   'Chipmakers lead a broad rally as NVDA guides above estimates. Futures point higher, with AVGO and TSM up premarket, while Treasury yields slip ahead of Friday’s jobs report.';
+export const LAST_EXCERPT =
+  'Futures are flat ahead of a quiet data day. Semis stay bid, with AVGO and NVDA near their highs, while oil slips for a third session.';
 export const NEXT_EXCERPT =
   'Semis extend gains, SOXX up 1.2% premarket as NVDA holds above $182. Jobless claims land at 8:30, and TSM reports monthly sales after the close.';
 export const FIRED = {
@@ -54,10 +56,11 @@ export const FIRED = {
   excerpt:
     'NVDA crossed $180.00 at 10:12, up 1.6% on the day after guiding data-center revenue above estimates. Two brokers raised their targets, and AVGO and TSM followed it higher.',
 };
-export const FAILED = {
+export const PREVIEW = {
   name: 'AVGO earnings preview',
   place: 'Semis research',
-  error: 'Earnings calendar request timed out after 3 retries.',
+  excerpt:
+    'AVGO reports Thursday, Dec 10, after the close. The Street expects AI revenue to beat again, and options price a 7% move. The custom-accelerator backlog is the number to watch.',
 };
 
 /** The lines the scenes print, from the page's own formatters, as they

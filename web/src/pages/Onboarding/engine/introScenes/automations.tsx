@@ -6,12 +6,14 @@ import {
   ALERT_INSTRUCTION,
   BRIEF_INSTRUCTION,
   DEFAULT_DAYS,
+  LAST_EXCERPT,
   NEXT_EXCERPT,
   NEXT_MORNING,
   NVDA,
   useBook,
 } from './automationBook';
-import { BriefRun, Day, FailedRun, FeedLayout, FeedRail, FiredRun } from './automationFeed';
+import { askScene } from './automationAsk';
+import { BriefRun, Day, FeedLayout, FeedRail, FiredRun, PreviewRun } from './automationFeed';
 import {
   AlertGroup,
   AutomationRows,
@@ -46,8 +48,9 @@ import type { IntroScene } from './types';
 
 /* Scenes for the Automations page: making a price alert beside a weekday
    brief, the feed its runs land in, and sending a run's results to a chat
-   app. Each part is a small copy of the page's own (automationParts.tsx);
-   schedule lines, distances and times come from the page's formatters.
+   app; setting one up in chat has its own file, automationAsk.tsx. Each
+   part is a small copy of the page's own (automationParts.tsx); schedule
+   lines, distances and times come from the page's formatters.
    Each scene draws the page alone at its own size, and a camera frames the
    part the step is about, pushing in on the detail and following the
    pointer. Shots and pointer paths are in page px. */
@@ -354,44 +357,54 @@ function AutomationTrigger() {
 /* ── automations · step 2: the feed ────────────────────────────────────── */
 
 /** The feed as runs land in it: the $180 alert fires and its run slides in
-    at the top, works, and finishes with what it found. The rail beside it
-    holds the failed run, the next scheduled times, and the alert still
+    at the top, works, and finishes with what it found, over the morning's
+    brief and the earnings preview that ran before it. The feed then scrolls
+    down to those two, each done and a thread to open, the rail holding
+    still beside it with the next scheduled times and the alert still
     watching. */
 const FEED = {
   land: 900,
   done: 3000,
+  scroll: 4300,
+  /** The alert's run, once it has reported: the brief's entry then sits
+      at the column's top edge. */
+  scrollBy: 90,
   length: 7600,
 };
 
-/** At rest on the day's runs under the header, the alert's on top, as it
-    lands, works and reports, the rail's edge beside them; across to the
-    rail, where the failed run waits under Needs attention, the runs' edge
-    beside it; and down it to the alert still watching, above Manage all.
-    The rail is whole in both, in either language. */
+/** At rest on the day's runs under the header, the rail's edge beside them,
+    as the alert's run lands, works and reports, and as the feed scrolls on
+    to the brief and the earnings preview; then across to the rail, Up next
+    over the alert still watching, the runs' edge beside it. */
 const FEED_SHOTS: [Shot, ...Shot[]] = [
   { at: 0, ...look(0, 0, REST) },
-  { at: 4900, dur: 900, ...look(VIEW.width, 0, REST) },
-  { at: 6400, dur: 800, ...look(VIEW.width, VIEW.height, REST) },
+  { at: 6400, dur: 900, ...look(VIEW.width, 0, REST) },
 ];
 
 function AutomationFeed() {
   const { t } = useTranslation();
+  const now = useSceneTime();
   const census = [
     t('automation.censusScheduled', { count: 2 }),
     t('automation.censusWatching', { count: 1 }),
-    t('automation.censusAttention', { count: 1 }),
   ].join(' · ');
   return (
     <Camera shots={FEED_SHOTS}>
       <Page>
         <PageHeader census={census} view="feed" />
         <FeedLayout
+          scroll={FEED.scrollBy * ease(now, FEED.scroll, 900)}
           runs={
-            <Day label={t('automation.today')}>
-              <FiredRun land={FEED.land} done={FEED.done} />
-              <BriefRun />
-              <FailedRun />
-            </Day>
+            <>
+              <Day label={t('automation.today')}>
+                <FiredRun land={FEED.land} done={FEED.done} />
+                <BriefRun />
+                <PreviewRun />
+              </Day>
+              <Day label={t('automation.yesterday')}>
+                <BriefRun excerpt={LAST_EXCERPT} />
+              </Day>
+            </>
           }
           rail={<FeedRail />}
         />
@@ -647,7 +660,7 @@ function AutomationDelivery() {
                   </Day>
                 </>
               }
-              rail={<FeedRail attention={false} now={NEXT_MORNING} />}
+              rail={<FeedRail now={NEXT_MORNING} />}
             />
           </Page>
         </Appear>
@@ -680,6 +693,7 @@ function AutomationDelivery() {
 export const automationScenes = {
   // anchored right: New automation and the pane the form opens in
   automationTrigger: { Scene: AutomationTrigger, length: TRIG.length, anchor: 'right' },
+  automationAsk: askScene,
   automationFeed: { Scene: AutomationFeed, length: FEED.length, anchor: 'left' },
   automationDelivery: { Scene: AutomationDelivery, length: DLV.length, anchor: 'right' },
 } satisfies Partial<Record<IntroVisualId, IntroScene>>;

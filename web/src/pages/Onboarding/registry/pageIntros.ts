@@ -129,6 +129,12 @@ export const PAGE_INTROS: PageIntroDef[] = [
         visual: 'automationTrigger',
       },
       {
+        id: 'ask',
+        titleKey: 'onboarding.intros.automations.steps.ask.title',
+        bodyKey: 'onboarding.intros.automations.steps.ask.body',
+        visual: 'automationAsk',
+      },
+      {
         id: 'feed',
         titleKey: 'onboarding.intros.automations.steps.feed.title',
         bodyKey: 'onboarding.intros.automations.steps.feed.body',
