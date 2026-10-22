@@ -29,6 +29,7 @@ export type IntroVisualId =
   | 'workspaceGrid'
   | 'chiefOfStaffAnswer'
   | 'ptcSandbox'
+  | 'shareThread'
   | 'createWorkspace'
   | 'filePanel'
   | 'chartPanel'

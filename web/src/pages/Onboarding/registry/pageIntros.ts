@@ -74,6 +74,12 @@ export const PAGE_INTROS: PageIntroDef[] = [
         bodyKey: 'onboarding.intros.thread.steps.memo.body',
         visual: 'memo',
       },
+      {
+        id: 'share',
+        titleKey: 'onboarding.intros.thread.steps.share.title',
+        bodyKey: 'onboarding.intros.thread.steps.share.body',
+        visual: 'shareThread',
+      },
     ],
   },
   {

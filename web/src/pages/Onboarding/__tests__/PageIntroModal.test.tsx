@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { PageIntroModal } from '../engine/PageIntroModal';
-import type { PageIntroDef } from '../registry';
+import { PAGE_INTROS, type PageIntroDef } from '../registry';
 
 const intro: PageIntroDef = {
   id: 'chat',
@@ -64,6 +64,15 @@ describe('PageIntroModal', () => {
       ],
     };
     render(<PageIntroModal intro={rightIntro} onClose={vi.fn()} />);
+    expect(screen.getByTestId('intro-illustration').className).toMatch(/sm:order-1/);
+  });
+
+  // Every scene of the thread intro, the last one included, is drawn on a
+  // thread page whose controls sit on the right; one step anchored elsewhere
+  // would swap the whole intro's sides.
+  it('the thread intro, as registered, puts the visual panel first', () => {
+    const thread = PAGE_INTROS.find((i) => i.id === 'thread')!;
+    render(<PageIntroModal intro={thread} onClose={vi.fn()} />);
     expect(screen.getByTestId('intro-illustration').className).toMatch(/sm:order-1/);
   });
 

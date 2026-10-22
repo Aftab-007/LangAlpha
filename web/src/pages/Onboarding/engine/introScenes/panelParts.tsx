@@ -177,12 +177,28 @@ export function FileCrumbs({
 
 /** The chat header's own buttons (`ChatView`): share, then the panel toggle
     while the panel is shut. Open, the panel carries the toggle in the same
-    corner, so the header keeps only share. Both are in the header's ink. */
-export function ChatHeaderButtons({ panelOpen }: { panelOpen: boolean }) {
+    corner, so the header keeps only share. Both are in the header's ink;
+    share takes the accent once the conversation is shared (`shared`), and
+    the hover fill while its popover is open (`sharing`). */
+export function ChatHeaderButtons({
+  panelOpen,
+  sharing = false,
+  shared = false,
+}: {
+  panelOpen: boolean;
+  sharing?: boolean;
+  shared?: boolean;
+}) {
   const ink = { color: 'var(--iv-text)' };
   return (
     <span className="flex shrink-0 items-center gap-[4.5px]">
-      <span className="flex h-4 w-4 items-center justify-center" style={ink}>
+      <span
+        className="flex h-4 w-4 items-center justify-center rounded-[2.5px]"
+        style={{
+          color: shared ? 'var(--color-accent-primary)' : 'var(--iv-text)',
+          background: sharing ? 'var(--color-border-muted)' : undefined,
+        }}
+      >
         <Share2 className="h-[9px] w-[9px]" />
       </span>
       {!panelOpen && (

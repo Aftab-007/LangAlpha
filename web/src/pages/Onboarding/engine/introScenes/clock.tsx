@@ -27,6 +27,12 @@ const SceneTime = createContext(Number.POSITIVE_INFINITY);
 /** Pins every scene under it to one moment (ms), for the dev preview. */
 export const FrozenSceneTime = createContext<number | null>(null);
 
+/** Draws its children as their script left them: a scene that opens on the
+    page an earlier scene ended on. */
+export function Finished({ children }: { children: ReactNode }) {
+  return <SceneTime.Provider value={Number.POSITIVE_INFINITY}>{children}</SceneTime.Provider>;
+}
+
 /** The scene's time in ms since its script started. */
 export function useSceneTime(): number {
   return useContext(SceneTime);

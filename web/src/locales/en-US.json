@@ -3731,6 +3731,10 @@
           "memo": {
             "title": "Ground it in your own research",
             "body": "Upload your own research as memos: past theses, notes, models. The agent reads them when they matter, next to the filings and market data it pulls itself."
+          },
+          "share": {
+            "title": "Share a conversation or one file",
+            "body": "Share a conversation as a read-only link, and choose whether visitors can browse and download its files. Or share one file, such as a report or a dashboard, on its own link: the conversation stays private."
           }
         }
       },

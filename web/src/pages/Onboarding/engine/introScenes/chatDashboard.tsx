@@ -381,11 +381,11 @@ function SectionHead({ title, children }: { title: string; children?: ReactNode 
 
 /** The page's body: blank until the build step starts writing at `at`, then
     written top to bottom within `DASH_BUILD`, and filtered to META at
-    `filterAt`. */
-function Dashboard({ at, filterAt }: { at: number; filterAt: number }) {
+    `filterAt`; without one it stays on All, as the share scene shows it. */
+export function Dashboard({ at, filterAt }: { at: number; filterAt?: number }) {
   const t = useSceneTime();
-  const meta = t >= filterAt;
-  const f = ease(t, filterAt, FILTER_MS);
+  const meta = filterAt !== undefined && t >= filterAt;
+  const f = filterAt === undefined ? 0 : ease(t, filterAt, FILTER_MS);
   const w = (ms: number) => at + ms;
   const muted = { color: 'var(--iv-text-3)' };
   const rule: CSSProperties = { borderColor: 'var(--color-border-muted)' };
@@ -490,7 +490,7 @@ export function DashboardPanel({
   headerH,
 }: {
   at: number;
-  filterAt: number;
+  filterAt?: number;
   headerH: number;
 }) {
   const { t } = useTranslation();
