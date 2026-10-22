@@ -19,7 +19,7 @@ import { useLocale } from '@/hooks/useLocale';
 import type { IntroVisualId } from '../../registry';
 import { CLOSE, Camera, REST, look, type Shot } from './camera';
 import { useSceneTime, useTween } from './clock';
-import { Appear, Loader, UserBubble, pointAt, type Waypoint } from './kit';
+import { Appear, Loader, Typed, UserBubble, pointAt, type Waypoint } from './kit';
 import {
   ChromeIcon,
   PANEL_W,
@@ -29,7 +29,6 @@ import {
   ThreadPage,
   Timeline,
   ToolRow,
-  TypedLine,
   iconStyle,
 } from './threadParts';
 import type { IntroScene } from './types';
@@ -72,11 +71,9 @@ const MEM = {
     "**The Street's average target is $410**, 17% above spot, and 31 of 38 analysts " +
     'rate it a buy. Most expect AI revenue to beat again, and two brokers raised their ' +
     'targets this week.',
-  ask:
-    'Remember: lead with the bottom line, keep it to a page, and skip sell-side ' +
-    'targets. I want your view.',
-  typeAsk: 400,
-  cps: 52,
+  ask: 'Remember: bottom line first, one page, no sell-side targets.',
+  typeAsk: 250,
+  cps: 30,
   sendAsk: 2550,
   save: 2850,
   saved: 3400,
@@ -285,7 +282,7 @@ function Memory() {
         }
         composer={
           t >= MEM.typeAsk && t < MEM.sendAsk ? (
-            <TypedLine text={MEM.ask} at={MEM.typeAsk} cps={MEM.cps} />
+            <Typed text={MEM.ask} at={MEM.typeAsk} cps={MEM.cps} />
           ) : undefined
         }
         sendAt={[MEM.sendAsk]}
@@ -387,18 +384,19 @@ const MEMO = {
     answer: 'Revenue of **$77.4B**, up 16%. Azure grew 39%.',
   },
   ask: 'Does their capex guide change my thesis?',
-  typeAsk: 4300,
-  askAt: 5550,
-  readMemo: { at: 5900, done: 6300 },
-  filing: { at: 6350, done: 6950 },
+  typeAsk: 4500,
+  cps: 30,
+  askAt: 6150,
+  readMemo: { at: 6500, done: 6900 },
+  filing: { at: 6950, done: 7550 },
   answer:
     'It backs point 2 of your thesis: capex was **$41.2B** for the quarter, and they now ' +
     'expect FY27 spend to grow faster than FY26. Point 3 looks weaker. The 10-Q flags ' +
     'power and site delays, the constraint you expected to ease by mid-2027.',
-  answerAt: 7100,
+  answerAt: 7700,
   cite: 'From your memo `ai-capex-thesis.md` and the MSFT 10-Q.',
-  citeAt: 8700,
-  length: 10600,
+  citeAt: 9300,
+  length: 11200,
 };
 
 /** The camera: on the Memo tab as the drag comes over it, held while the
@@ -407,7 +405,7 @@ const MEMO = {
 const MEMO_SHOTS: [Shot, ...Shot[]] = [
   { at: 0, ...look(240, 132, REST) },
   { at: 4700, dur: 900, ...look(160, 198, REST) },
-  { at: 9300, dur: 1000, ...look(94, 190, CLOSE) },
+  { at: 9900, dur: 1000, ...look(94, 190, CLOSE) },
 ];
 
 /** What the OS drags out of Finder: the file's icon, marked with its kind,
@@ -686,7 +684,7 @@ function Memo() {
         panel={<MemoTab />}
         composer={
           t >= MEMO.typeAsk && t < MEMO.askAt ? (
-            <TypedLine text={MEMO.ask} at={MEMO.typeAsk} cps={36} />
+            <Typed text={MEMO.ask} at={MEMO.typeAsk} cps={MEMO.cps} />
           ) : undefined
         }
         sendAt={[MEMO.askAt]}

@@ -76,7 +76,8 @@ export function Region({
 /**
  * The chat composer, as the app draws it: a rounded card with the text on
  * top and attach / model / mic / send below. `text` replaces the placeholder
- * (a `Typed` while the user writes); `focused` gives it the accent edge
+ * (a `Typed` while the user writes) and wraps, the box growing a line at a
+ * time; `focused` gives it the accent edge
  * the real one takes on focus; the send button fills once there is text and
  * presses at each time in `sendAt`.
  */
@@ -110,7 +111,7 @@ export function InputDock({
       }}
     >
       {chip}
-      <div className="flex h-2 items-center px-0.5">
+      <div className="flex min-h-2 items-center px-0.5">
         {text == null ? (
           <span
             className="truncate text-[0.5rem] leading-none"
@@ -119,7 +120,13 @@ export function InputDock({
             {tr('chat.placeholderDefault')}
           </span>
         ) : (
-          <span className="truncate text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+          /* the app's composer is a textarea that grows as it fills, so a
+             long message wraps onto a new line rather than scrolling; the
+             negative margin keeps one line at the placeholder's height */
+          <span
+            className="-my-px block min-w-0 flex-1 text-[0.5rem] leading-[10px]"
+            style={{ color: 'var(--iv-text)' }}
+          >
             {text}
           </span>
         )}

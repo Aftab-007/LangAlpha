@@ -3,7 +3,7 @@ import { ArrowLeft, FolderOpen, Plus, X, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentNames } from '../introAgents';
 import { useSceneTime } from './clock';
-import { Appear, InputDock, Tag, Typed } from './kit';
+import { Appear, InputDock, Tag } from './kit';
 
 /* The thread page the thread intro's scenes play on: the chat column beside
    the file panel, the panel a full-height column with its own tab strip,
@@ -221,22 +221,6 @@ export function ThreadPage({
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * `text` typed into the composer from `at`, `cps` characters a second, on
- * the composer's one line: once the line is full its start slides off the
- * left, so the end being typed and the caret stay in view. Right-to-left
- * flow puts the overflow on the left; the text inside runs left to right.
- */
-export function TypedLine({ text, at, cps }: { text: string; at: number; cps?: number }) {
-  return (
-    <span className="block overflow-hidden whitespace-nowrap text-left [direction:rtl]">
-      <span dir="ltr">
-        <Typed text={text} at={at} cps={cps} />
-      </span>
-    </span>
   );
 }
 
