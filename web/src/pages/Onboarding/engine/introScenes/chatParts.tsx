@@ -4,15 +4,22 @@ import {
   ArrowRight,
   ArrowUpRight,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   FolderPlus,
   PanelRight,
+  Paperclip,
   type LucideProps,
 } from 'lucide-react';
 import { useLocale } from '@/hooks/useLocale';
 import { compactNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { Favicon } from '@/pages/ChatAgent/components/Favicon';
+import {
+  messagingAppDomain,
+  messagingAppName,
+} from '@/pages/ChatAgent/components/messaging/messageDelivery';
 import { look, VIEW, type Shot } from './camera';
 import type { Bar } from './charts';
 import { ease, progress, useSceneTime } from './clock';
@@ -286,18 +293,75 @@ export function HandoffCard({
 }
 
 /** The caption over a message nobody typed in this thread
-    (`MessageProvenanceLabel`): who sent it, then the arrow that opens where
-    it came from. It sits over the bubble's right edge, or alone in place of
-    a report-back's hidden message. */
-export function Provenance({ icon: Glyph, children }: { icon: Icon; children: ReactNode }) {
+    (`MessageProvenanceLabel`): who sent it, by its glyph or a chat app's
+    `logo`, then the arrow that opens where it came from. A chat app's
+    message has nowhere to open, so it goes without. It sits over the
+    bubble's right edge, or alone in place of a report-back's hidden
+    message. */
+export function Provenance({
+  icon: Glyph,
+  logo,
+  children,
+}: {
+  icon?: Icon;
+  logo?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <span
       className="inline-flex min-w-0 items-center gap-1 text-[0.4375rem] leading-none"
       style={{ color: 'var(--iv-text-3)' }}
     >
-      <Glyph className="h-[7px] w-[7px] shrink-0" />
+      {logo ?? (Glyph && <Glyph className="h-[7px] w-[7px] shrink-0" />)}
       <span className="truncate">{children}</span>
-      <ArrowUpRight className="h-[7px] w-[7px] shrink-0" />
+      {!logo && <ArrowUpRight className="h-[7px] w-[7px] shrink-0" />}
+    </span>
+  );
+}
+
+/** A chat app's mark, as the app draws it: the favicon of the app's site. */
+export function AppLogo({ app, size = 7 }: { app: string; size?: number }) {
+  return <Favicon domain={messagingAppDomain(app) ?? ''} size={size} />;
+}
+
+/** The caption over a message that came in from a chat app: its logo and
+    `Via iMessage`. */
+export function ViaApp({ app }: { app: string }) {
+  const { t } = useTranslation();
+  return (
+    <Provenance logo={<AppLogo app={app} />}>
+      {t('chat.provenance.viaChannel', { platform: messagingAppName(app) })}
+    </Provenance>
+  );
+}
+
+/** A message the agent sent to a chat app (`MessageDeliveryCard`), as its
+    pill: the app, how many files went with it, and the send's status. */
+export function DeliveryPill({ app, files }: { app: string; files: number }) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className="inline-flex w-fit items-center gap-1 rounded-full border py-[3px] pl-1.5 pr-[3px] text-[0.4375rem] leading-none"
+      style={{
+        borderColor: 'var(--color-border-elevated)',
+        background: 'var(--color-bg-card)',
+        color: 'var(--iv-text)',
+      }}
+    >
+      <AppLogo app={app} size={8} />
+      <span className="font-medium">{messagingAppName(app)}</span>
+      <span className="flex items-center gap-0.5" style={{ color: 'var(--iv-text-2)' }}>
+        <span style={{ color: 'var(--iv-text-3)' }}>·</span>
+        <Paperclip className="h-[7px] w-[7px]" />
+        {files}
+      </span>
+      <span
+        className="flex items-center gap-0.5 rounded-full px-1 py-0.5 font-medium"
+        style={{ background: 'var(--color-success-soft)', color: 'var(--color-success)' }}
+      >
+        <CheckCircle2 className="h-[7px] w-[7px]" />
+        {t('toolArtifact.messageDelivery.status.sent')}
+      </span>
     </span>
   );
 }

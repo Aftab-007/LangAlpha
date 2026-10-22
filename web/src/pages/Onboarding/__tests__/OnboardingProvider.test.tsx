@@ -163,6 +163,12 @@ describe('OnboardingProvider', () => {
     expect(screen.getByTestId('introSteps').textContent).toBe('trigger,feed');
   });
 
+  it('drops the Chief of Staff step, which answers from iMessage, from a self-hosted build', () => {
+    renderAt('/chat');
+    expect(intro()).toBe('chat');
+    expect(screen.getByTestId('introSteps').textContent).toBe('modes,ptc,workspace,create');
+  });
+
   it('shows nothing on pages with no matching intro', () => {
     renderAt('/settings');
     expect(phase()).toBe('idle');

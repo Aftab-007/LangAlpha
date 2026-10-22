@@ -5921,7 +5921,7 @@
       },
       "chiefOfStaff": {
         "title": "All workspaces: your Chief of Staff",
-        "body": "Just say what you need. Your Chief of Staff answers quick questions, creates workspaces, hands deep work to their Analysts and reports back, and manages your automations. Its threads sit under All workspaces, and its own files live in Home."
+        "body": "Just say what you need, here or from a chat app like Slack or iMessage. Your Chief of Staff answers quick questions, creates workspaces, hands deep work to their Analysts and reports back where you asked, and manages your automations. Its threads sit under All workspaces, and its own files live in Home."
       },
       "analyst": {
         "title": "A workspace: its Analyst does the work",

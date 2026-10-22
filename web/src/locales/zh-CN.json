@@ -5814,7 +5814,7 @@
       },
       "chiefOfStaff": {
         "title": "所有工作区：你的 Chief of Staff Agent",
-        "body": "你只管提出需求。Chief of Staff Agent 会回答快速问题、创建工作区、把深度任务交给各工作区的分析师并汇报结果，还会管理你的自动化。它的对话归入“所有工作区”，自己的文件存放在 Home 中。"
+        "body": "你只管提出需求，在这里或在 Slack、iMessage 等聊天应用里都可以。Chief of Staff Agent 会回答快速问题、创建工作区、把深度任务交给各工作区的分析师，并在你提问的地方汇报结果，还会管理你的自动化。它的对话归入“所有工作区”，自己的文件存放在 Home 中。"
       },
       "analyst": {
         "title": "工作区：由分析师完成工作",

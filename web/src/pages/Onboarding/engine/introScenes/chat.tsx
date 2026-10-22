@@ -10,17 +10,19 @@ import {
   Folder,
   Inbox,
   Search,
+  Send,
   TrendingUp,
   Zap,
 } from 'lucide-react';
 import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
 import { cn } from '@/lib/utils';
+import { messagingAppName } from '@/pages/ChatAgent/components/messaging/messageDelivery';
 import { useAgentNames } from '../introAgents';
 import type { IntroVisualId } from '../../registry';
 import { BarChart, StockPriceCard, type Bar } from './charts';
 import { ease, useSceneTime } from './clock';
 import { CLOSE, Camera, REST, type Shot } from './camera';
-import { Appear, InputDock, Region, Tag, Typed, UserBubble } from './kit';
+import { Appear, InputDock, Region, Tag, UserBubble } from './kit';
 import type { IntroScene } from './types';
 import {
   type FlowAgent,
@@ -28,13 +30,14 @@ import {
   ActivityRow,
   ChartCard,
   ColumnChart,
-  FileCard,
+  DeliveryPill,
   FileStack,
   HandoffCard,
   PAGE,
   Pill,
   Provenance,
   Reply,
+  ViaApp,
   WorkflowCard,
   WorkspaceLine,
   shot,
@@ -276,25 +279,27 @@ function TwoModes() {
 
 /* ── chat · step 2: a Chief of Staff thread ────────────────────────────── */
 
-/** The Chief of Staff's turn, played out under an earlier quick answer: a
-    request typed and sent, the work handed to the workspace's Analyst, an
-    automation set up, a line saying so, then the Analyst's report coming
-    back and the Chief of Staff passing it on in two sentences with the
+/** The Chief of Staff's turn, played out under earlier quick answers, all in
+    a thread the user writes to from iMessage: a request comes in from the
+    phone, the work is handed to the workspace's Analyst, an automation set
+    up, a line saying so; then the Analyst's report comes back and the Chief
+    of Staff sends it on to iMessage, where the request came from, with the
     file. */
 const COS = {
-  ask: 'Refresh the semis comps; brief me before earnings.',
-  typeAsk: 500,
-  sendAsk: 2200,
-  think: 2450,
-  handoff: 2950,
-  started: 3450,
-  automation: [3550, 4050],
-  say: 4250,
-  finished: 6200,
-  report: 6450,
-  reply: 6700,
-  file: 7650,
-  length: 9400,
+  app: 'imessage',
+  ask: 'Refresh the semis comps, and brief me before earnings.',
+  askAt: 1500,
+  think: 1850,
+  handoff: 2350,
+  started: 2850,
+  automation: [2950, 3450],
+  say: 3650,
+  finished: 5400,
+  report: 5650,
+  send: [5950, 6650],
+  delivered: 6700,
+  reply: 7000,
+  length: 9800,
 };
 
 /** The chat column's width (px), centered on the page as the app sets it. */
@@ -316,13 +321,13 @@ const SEMIS: Bar[] = [
 ];
 
 /** The whole thread first, its header naming the Chief of Staff, then down
-    to the composer as the request goes out and the turn builds above it, in
-    on the report as it comes back, and out again. */
+    to the newest lines as the request comes in and the turn builds, in on
+    the send to iMessage as the report goes back out, and out again. */
 const COS_SHOTS: [Shot, ...Shot[]] = [
   wide(0),
-  shot(2200, 200, 198, REST, 900),
-  shot(7000, 200, 220, CLOSE, 700),
-  shot(8900, 200, 198, REST, 700),
+  shot(1300, 200, 198, REST, 900),
+  shot(6700, 200, 220, CLOSE, 800),
+  shot(9000, 200, 198, REST, 700),
 ];
 
 function ChiefOfStaffAnswer() {
@@ -330,8 +335,9 @@ function ChiefOfStaffAnswer() {
   const names = useAgentNames();
   const now = useSceneTime();
   const [automate, automated] = COS.automation;
-  const composer =
-    now >= COS.typeAsk && now < COS.sendAsk ? <Typed text={COS.ask} at={COS.typeAsk} /> : undefined;
+  const [send, sent] = COS.send;
+  const via = <ViaApp app={COS.app} />;
+  const app = messagingAppName(COS.app) ?? '';
   return (
     <Camera shots={COS_SHOTS}>
       <div className="flex flex-col" style={PAGE}>
@@ -351,9 +357,9 @@ function ChiefOfStaffAnswer() {
               does: the newest lines just above it, the oldest running off the
               top as they come in */}
           <div className="flex min-h-0 flex-1 flex-col justify-end gap-1.5 overflow-hidden">
-            {/* earlier today: the week ahead, then a quick market question,
-                both answered here */}
-            <UserBubble at={EARLIER} className="ml-12">
+            {/* earlier today, from the phone: the week ahead, then a quick
+                market question, both answered here and relayed back */}
+            <UserBubble at={EARLIER} caption={via} className="ml-12">
               Morning. What&apos;s on this week?
             </UserBubble>
             <div className="mr-12 flex flex-col gap-1.5">
@@ -370,7 +376,7 @@ function ChiefOfStaffAnswer() {
                 at={EARLIER}
               />
             </div>
-            <UserBubble at={EARLIER} className="ml-12">
+            <UserBubble at={EARLIER} caption={via} className="ml-12">
               What&apos;s moving in semis?
             </UserBubble>
             <div className="mr-12 flex flex-col gap-1.5">
@@ -390,7 +396,8 @@ function ChiefOfStaffAnswer() {
                 at={EARLIER}
               />
             </div>
-            <UserBubble at={COS.sendAsk + 80} className="ml-8">
+            {/* the request, texted in rather than typed here */}
+            <UserBubble at={COS.askAt} caption={via} className="ml-8">
               {COS.ask}
             </UserBubble>
             {/* the turn: reasoning, the hand-off, the automation, a line on it */}
@@ -431,25 +438,34 @@ function ChiefOfStaffAnswer() {
                 />
               </div>
             )}
-            {/* the Analyst's report comes back, and is passed on in a line */}
+            {/* the Analyst's report comes back, and goes on to the phone the
+                request came from, the workbook attached */}
             <Appear at={COS.report} className="flex justify-end">
               <Provenance icon={Inbox}>
                 {t('chat.provenance.reportFrom', { name: 'AI semis comps' })}
               </Provenance>
             </Appear>
-            {now >= COS.reply && (
+            {now >= send && (
               <div className="mr-12 flex flex-col gap-1.5">
+                <ActivityRow
+                  icon={Send}
+                  verb={t('toolArtifact.inProgress.sendingTo', { app })}
+                  title={t('toolArtifact.tool.sendMessage')}
+                  after={<Pill>{app}</Pill>}
+                  at={send}
+                  done={sent}
+                />
+                <Appear at={COS.delivered} pop>
+                  <DeliveryPill app={COS.app} files={1} />
+                </Appear>
                 <Reply
-                  text="**Comps refreshed.** NVDA's premium widened to 2.5x the peer median on EV/Sales, from 2.2x. MU moved most, down to 4.2x."
+                  text="**Comps refreshed, and sent to your iMessage with comps.xlsx.** NVDA's premium widened to 2.5x the peer median on EV/Sales, from 2.2x. MU moved most."
                   at={COS.reply}
                 />
-                <Appear at={COS.file} pop>
-                  <FileCard name="comps.xlsx" kind="spreadsheet" icon={FileSpreadsheet} />
-                </Appear>
               </div>
             )}
           </div>
-          <InputDock text={composer} sendAt={[COS.sendAsk]} />
+          <InputDock />
         </div>
       </div>
     </Camera>

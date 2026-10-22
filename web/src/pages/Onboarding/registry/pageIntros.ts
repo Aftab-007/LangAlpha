@@ -22,6 +22,8 @@ export const PAGE_INTROS: PageIntroDef[] = [
         titleKey: 'agents.tour.chiefOfStaff.title',
         bodyKey: 'agents.tour.chiefOfStaff.body',
         visual: 'chiefOfStaffAnswer',
+        // It answers from iMessage, and chat apps link through the hosted platform.
+        platformOnly: true,
       },
       {
         id: 'ptc',
