@@ -85,6 +85,9 @@ export interface SubagentTaskRecord {
   /** The reply itself was a failure, so nothing ran. Kept apart from `status`,
    *  which a started task's own settle can also set to `error`. */
   launchFailed?: boolean;
+  /** Why a launch was refused, when the reply names a reason the user can be
+   *  told in their own words (`result` is written for the model). */
+  launchRefusal?: 'subagents_off';
 }
 
 export interface NotificationSegment {

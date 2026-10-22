@@ -660,7 +660,20 @@ export async function sendSubagentMessage(threadId: string, taskId: string, cont
 export async function getSubagentTaskStatus(
   threadId: string,
   taskId: string,
-): Promise<{ task_id: string; status: string | null; error: string | null; last_activity_ms?: number | null }> {
+): Promise<{
+  task_id: string;
+  status: string | null;
+  error: string | null;
+  last_activity_ms?: number | null;
+  /** The latest run's id, which its facts are filed under beside the ones
+   *  the stream and replay found. */
+  run_id?: string | null;
+  /** The latest run's ledger bounds (epoch ms); no finish while it runs. */
+  started_ms?: number | null;
+  finished_ms?: number | null;
+  /** That run's model, present only when it was not its launcher's. */
+  model?: { id: string; provider: string };
+}> {
   const { data } = await api.get(
     `/api/v1/threads/${threadId}/tasks/${taskId}/status`,
   );

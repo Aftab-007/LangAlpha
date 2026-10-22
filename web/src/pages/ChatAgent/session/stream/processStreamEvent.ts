@@ -620,6 +620,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
             content: event.content as string,
             finishReason: event.finish_reason,
             elapsedMs: typeof event.elapsed_ms === 'number' ? event.elapsed_ms : undefined,
+            atMs: typeof event._atMs === 'number' ? event._atMs : undefined,
             refs,
             updateSubagentCard: queueCardForHandlers,
           });
@@ -636,6 +637,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
             taskId,
             assistantMessageId: subagentAssistantMessageId,
             toolCalls: (event.tool_calls || []) as unknown as Record<string, unknown>[],
+            atMs: typeof event._atMs === 'number' ? event._atMs : undefined,
             refs,
             updateSubagentCard: rt.updateSubagentCard,
           });
