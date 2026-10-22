@@ -7,8 +7,7 @@ import '@/index.css';
 import { ANNOUNCEMENTS, PAGE_INTROS } from '@/pages/Onboarding/registry';
 import { PageIntroModal } from '@/pages/Onboarding/engine/PageIntroModal';
 import { WhatsNewModal } from '@/pages/Onboarding/engine/WhatsNewModal';
-import { INTRO_SCENES } from '@/pages/Onboarding/engine/introScenes';
-import type { IntroVisualId } from '@/pages/Onboarding/registry';
+import { INTRO_VISUALS, loadIntroScenes } from '@/pages/Onboarding/engine/introScenes';
 import { GuidePreview } from './guide';
 import { ScenePreview } from './scenes';
 
@@ -46,19 +45,7 @@ const initialLocale = LOCALES.find((l) => l === params.get('locale')) ?? 'en-US'
 const SURFACES = ['intro', 'whatsNew', 'guide'] as const;
 const initialSurface = SURFACES.find((v) => v === params.get('surface')) ?? 'intro';
 const sceneParam = params.get('scene');
-const scene = sceneParam && sceneParam in INTRO_SCENES ? (sceneParam as IntroVisualId) : null;
-
-/** `frames=8` = eight evenly spaced through the script; a list = those times. */
-function readFrames(visual: IntroVisualId): number[] | null {
-  const raw = params.get('frames');
-  if (!raw) return null;
-  if (!raw.includes(',')) {
-    const n = Math.max(Number(raw) || 8, 2);
-    const { length } = INTRO_SCENES[visual];
-    return Array.from({ length: n }, (_, i) => Math.round((length * i) / (n - 1)));
-  }
-  return raw.split(',').map(Number).filter(Number.isFinite);
-}
+const scene = INTRO_VISUALS.find((v) => v === sceneParam) ?? null;
 
 function Btn({
   on,
@@ -111,7 +98,7 @@ function Preview() {
 
   const intro = PAGE_INTROS.find((i) => i.id === introId) ?? PAGE_INTROS[0];
 
-  if (scene) return <ScenePreview key={locale} visual={scene} frames={readFrames(scene)} />;
+  if (scene) return <ScenePreview key={locale} visual={scene} frames={params.get('frames')} />;
 
   return (
     <>
@@ -199,7 +186,11 @@ function Preview() {
   );
 }
 
-void initI18n().then(() =>
+// Every scene and the intro copy up front, so nothing here suspends.
+void Promise.all([
+  initI18n().then(() => i18n.loadNamespaces('intros')),
+  loadIntroScenes(INTRO_VISUALS),
+]).then(() =>
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <Preview />

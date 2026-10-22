@@ -45,12 +45,14 @@ export type IntroVisualId =
   | 'automationFeed'
   | 'automationDelivery';
 
-/** One stage of a page intro. Copy is i18n keys under `onboarding.intros.*`. */
+/**
+ * One stage of a page intro. Its copy is `<intro id>.<step id>.title` and
+ * `.body` in the `intros` namespace (locales/intros/), which loads with the
+ * first intro rather than on every page.
+ */
 export interface PageIntroStepDef {
-  /** Stable id — React key + i18n path segment. */
+  /** Stable id — React key + the copy's key segment. */
   id: string;
-  titleKey: string;
-  bodyKey: string;
   visual: IntroVisualId;
   /**
    * Only on the hosted platform, where the step's feature exists (chat app

@@ -1,7 +1,6 @@
 import { cn } from '@/lib/utils';
-import type { IntroVisualId } from '../../registry';
 import { SceneClock } from './clock';
-import { INTRO_SCENES } from './index';
+import type { IntroScene } from './types';
 
 /**
  * One scene playing on its clock, at its 400px design size and scaled by
@@ -9,8 +8,7 @@ import { INTRO_SCENES } from './index';
  * lives on this static wrapper because the scene's entrances animate
  * `transform` on their own elements.
  */
-export function SceneStage({ visual }: { visual: IntroVisualId }) {
-  const { Scene, length, anchor } = INTRO_SCENES[visual];
+export function SceneStage({ scene: { Scene, length, anchor } }: { scene: IntroScene }) {
   return (
     <div
       className={cn(

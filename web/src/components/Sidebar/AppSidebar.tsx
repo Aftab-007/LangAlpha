@@ -18,7 +18,7 @@ import AccountMenu from './AccountMenu';
 import { useChatRoute } from './useChatRoute';
 import { useSidebarAgents } from '@/pages/ChatAgent/components/sidebarAgentsBridge';
 import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
-import { GettingStartedLauncher } from '@/pages/Onboarding';
+import { GettingStartedGate } from '@/pages/Onboarding';
 import { SIDEBAR_DEFAULT_WIDTH, clampSidebarWidth } from './sidebarWidth';
 import './Sidebar.css';
 
@@ -233,7 +233,7 @@ function AppSidebar({ collapsed, onToggleCollapse, width, onWidthChange }: AppSi
           </TooltipProvider>
         </nav>
         <div className="sidebar-bottom">
-          <GettingStartedLauncher variant="rail" onExpand={onToggleCollapse} />
+          <GettingStartedGate variant="rail" onExpand={onToggleCollapse} />
           <AccountMenu />
         </div>
         </React.Fragment>
@@ -319,7 +319,7 @@ function AppSidebar({ collapsed, onToggleCollapse, width, onWidthChange }: AppSi
         <NavigationPanel {...navTreeProps} />
       </div>
 
-      <GettingStartedLauncher variant="row" />
+      <GettingStartedGate variant="row" />
 
       <div className="sidebar-panel-bottom">
         <AccountMenu variant="row" />

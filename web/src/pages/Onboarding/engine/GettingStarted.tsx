@@ -7,6 +7,7 @@ import { isDesktopShell } from '@/lib/desktop';
 import { cn } from '@/lib/utils';
 import { useOnboarding, type GettingStartedTaskState } from '../OnboardingProvider';
 import type { GettingStartedTaskDef } from '../registry';
+import './GettingStarted.css';
 
 /** The longest a hand-off to the account portal waits for its task's stamp. */
 const STAMP_WAIT_MS = 1500;
@@ -266,6 +267,10 @@ export function GettingStartedRail({
   );
 }
 
+export type GettingStartedLauncherProps =
+  | { variant: 'row' }
+  | { variant: 'rail'; onExpand: () => void };
+
 /**
  * The checklist, wired to the onboarding state: the section in the expanded
  * sidebar, the ring in the rail (`onExpand` opens the sidebar). Absent once
@@ -275,9 +280,7 @@ export function GettingStartedRail({
  * Tasks complete via route visits or a derived signal (the saved investing
  * profile, a workspace); picking a pending one goes to it.
  */
-export function GettingStartedLauncher(
-  props: { variant: 'row' } | { variant: 'rail'; onExpand: () => void }
-) {
+export function GettingStartedLauncher(props: GettingStartedLauncherProps) {
   const { gettingStarted } = useOnboarding();
   const navigate = useNavigate();
 

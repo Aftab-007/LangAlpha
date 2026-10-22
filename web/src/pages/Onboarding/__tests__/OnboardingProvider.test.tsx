@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { emptyOnboardingPrefs } from '../onboardingPrefsSchema';
@@ -57,7 +57,17 @@ vi.mock('@/hooks/useWorkspaces', () => ({
   useWorkspaces: (opts?: { enabled?: boolean }) => useWorkspacesSpy(opts),
 }));
 
+// The onboarding chunk, behind which the intros' scenes and copy load: the
+// factory runs only if the host gate imports it.
+const hostChunkLoaded = vi.hoisted(() => vi.fn());
+vi.mock('../OnboardingHost', () => {
+  hostChunkLoaded();
+  return { OnboardingHost: () => null };
+});
+
 import { OnboardingProvider, useOnboarding } from '../OnboardingProvider';
+import { OnboardingHostGate } from '../OnboardingHostGate';
+import { PAGE_INTROS } from '../registry';
 
 function Harness() {
   const {
@@ -106,13 +116,14 @@ function LocationProbe() {
   return <span data-testid="location">{pathname + search}</span>;
 }
 
-function renderAt(route: string) {
+function renderAt(route: string, { withHost = false } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[route]}>
         <OnboardingProvider>
           <Harness />
+          {withHost && <OnboardingHostGate />}
         </OnboardingProvider>
       </MemoryRouter>
     </QueryClientProvider>
@@ -575,5 +586,29 @@ describe('OnboardingProvider', () => {
     renderAt('/chat');
     expect(phase()).toBe('idle');
     expect(card()).toBe('hidden');
+  });
+
+  it('downloads no intro code for a user who has seen every intro, on any page', async () => {
+    mockPrefs = {
+      ...emptyOnboardingPrefs(),
+      firstRunAt: 1,
+      lastSeenReleaseVersion: '9999.1',
+      pageIntrosSeen: Object.fromEntries(PAGE_INTROS.map((i) => [i.id, 1])),
+    };
+    const routes = ['/chat', '/chat/t/a-thread', '/dashboard', '/market', '/automations'];
+    // One route per intro, so an intro added later is covered or fails here.
+    expect(PAGE_INTROS.filter((i) => !routes.some((r) => i.matchRoute(r)))).toEqual([]);
+    for (const route of routes) {
+      const { unmount } = renderAt(route, { withHost: true });
+      await act(async () => {});
+      expect(phase()).toBe('idle');
+      unmount();
+    }
+    expect(hostChunkLoaded).not.toHaveBeenCalled();
+
+    // The same page with its intro unseen does load it, so the spy can tell.
+    mockPrefs = { ...mockPrefs, pageIntrosSeen: {} };
+    renderAt('/market', { withHost: true });
+    await waitFor(() => expect(hostChunkLoaded).toHaveBeenCalled());
   });
 });

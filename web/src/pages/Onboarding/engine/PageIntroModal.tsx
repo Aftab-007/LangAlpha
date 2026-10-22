@@ -9,7 +9,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { INTRO_SCENES } from './introScenes';
+import { loadIntroScenes, useIntroScenes } from './introScenes';
 import { SceneStage } from './introScenes/SceneStage';
 import type { PageIntroDef } from '../registry';
 import './pageIntro.css';
@@ -29,6 +29,13 @@ export function PageIntroModal({
 }) {
   const { t } = useTranslation();
   const reduceMotion = useReducedMotion();
+  // Suspends until this intro's copy and scenes are in, so the modal opens
+  // whole. The scenes start first, so the two download side by side rather
+  // than one after the other.
+  const visuals = intro.steps.map((s) => s.visual);
+  void loadIntroScenes(visuals);
+  const { t: tCopy, i18n } = useTranslation('intros');
+  const scenes = useIntroScenes(visuals);
   const [stepIdx, setStepIdx] = useState(0);
   // +1 forward / -1 back — drives which side the copy slides from. Updated on
   // every navigation (dots can jump non-adjacent steps in either direction).
@@ -54,13 +61,21 @@ export function PageIntroModal({
       transition: { duration: reduceMotion ? 0 : 0.15, ease: 'easeIn' },
     }),
   };
-  const step = intro.steps[Math.min(stepIdx, intro.steps.length - 1)];
+  const shown = Math.min(stepIdx, intro.steps.length - 1);
+  const step = intro.steps[shown];
+  const scene = scenes[shown];
   const isLast = stepIdx >= intro.steps.length - 1;
   // When every step's mockup anchors right (e.g. the thread intro), the
   // visual takes the LEFT half: the anchored hot region then sits beside the
   // copy and the wireframe bleeds off the modal's outer edge. Per-intro, not
   // per-step, so the panel never jumps sides mid-intro.
-  const visualFirst = intro.steps.every((s) => INTRO_SCENES[s.visual].anchor === 'right');
+  const visualFirst = scenes.every((s) => s?.anchor === 'right');
+
+  // The copy did not load, as when a deploy retired its chunk: i18next counts
+  // that as loaded, so the steps would read as raw keys. Show nothing instead;
+  // the intro stays unseen and opens after the reload the stale-build notice
+  // offers.
+  if (!i18n.hasResourceBundle(i18n.language, 'intros')) return null;
 
   return (
     <Dialog
@@ -112,13 +127,13 @@ export function PageIntroModal({
                     className="text-2xl font-semibold leading-tight sm:text-[1.75rem]"
                     style={{ color: 'var(--color-text-primary)' }}
                   >
-                    {t(step.titleKey)}
+                    {tCopy(`${intro.id}.${step.id}.title`)}
                   </DialogTitle>
                   <DialogDescription
                     className="text-sm leading-relaxed sm:text-[0.9375rem]"
                     style={{ color: 'var(--color-text-secondary)' }}
                   >
-                    {t(step.bodyKey)}
+                    {tCopy(`${intro.id}.${step.id}.body`)}
                   </DialogDescription>
                 </DialogHeader>
               </motion.div>
@@ -200,7 +215,7 @@ export function PageIntroModal({
                   transition: { duration: reduceMotion ? 0 : 0.15, ease: 'easeIn' },
                 }}
               >
-                <SceneStage visual={step.visual} />
+                {scene && <SceneStage scene={scene} />}
               </motion.div>
             </AnimatePresence>
           </div>

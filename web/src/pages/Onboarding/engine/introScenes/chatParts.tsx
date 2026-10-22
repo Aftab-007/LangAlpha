@@ -1,6 +1,7 @@
 import type { ComponentType, CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  ArrowLeft,
   ArrowRight,
   ArrowUpRight,
   Check,
@@ -24,11 +25,11 @@ import { look, VIEW, type Shot } from './camera';
 import { progress, useSceneTime } from './clock';
 import { Appear, Loader, rv } from './kit';
 
-/* The chat transcript's parts, shared by the chat scenes: the agent's reply,
-   activity rows, the workspace line, the hand-off card, a workflow run, the
-   caption on a message from another agent, a chart in the reply, and the
-   files a turn produced. Each is a small copy of the component the app draws
-   it with (named on each). */
+/* The chat transcript's parts, shared by the chat scenes: the thread's title
+   and transcript column, the agent's reply, activity rows, the workspace
+   line, the hand-off card, a workflow run, the caption on a message from
+   another agent, a chart in the reply, and the files a turn produced. Each
+   is a small copy of the component the app draws it with (named on each). */
 /* eslint-disable react-refresh/only-export-components -- shared parts:
    scene components plus the style helper */
 
@@ -49,6 +50,37 @@ export const shot = (at: number, x: number, y: number, zoom: number, dur?: numbe
 /** The wide shot: the whole page, as the app draws it. */
 export const wide = (at: number, dur?: number): Shot =>
   shot(at, PAGE.width / 2, PAGE.height / 2, 1, dur);
+
+/** Long before a scene starts: what happened then (a thread's earlier
+    exchange, a page already built) is on the page, settled, from the first
+    frame. */
+export const EARLIER = -60_000;
+
+/** The thread page's header: back, then the thread's title. */
+export function TopTitle({ children }: { children: ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
+      <span
+        className="truncate text-[0.5rem] font-medium leading-none"
+        style={{ color: 'var(--iv-text)' }}
+      >
+        {children}
+      </span>
+    </span>
+  );
+}
+
+/** A chat column's transcript: from the top while it fits, then held on its
+    newest lines with the oldest running off the top, as a thread scrolls
+    with its replies. */
+export function Transcript({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden">
+      <div className={cn('flex min-h-full shrink-0 flex-col gap-1.5', className)}>{children}</div>
+    </div>
+  );
+}
 
 /** A solid card in the chat transcript (`--color-bg-tool-card`), as tool results sit. */
 export const toolCard: CSSProperties = {

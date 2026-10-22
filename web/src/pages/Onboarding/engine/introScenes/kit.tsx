@@ -4,6 +4,7 @@ import { ArrowUp, Mic, MousePointer2, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { progress, useSceneTime } from './clock';
 import '../pageIntro.css';
+import './scenes.css';
 
 /*
  * The parts every scene is drawn with: the page's cards and composer in the
