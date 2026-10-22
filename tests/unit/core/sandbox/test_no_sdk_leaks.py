@@ -140,6 +140,7 @@ ALLOWED_ASYNCSSH_IMPORTS = {
     "src/ptc_agent/core/sandbox/providers/_ssh_connect.py",
     # The tunnel gateway is an SSH server of its own, run beside the backend.
     "src/server/ssh_gateway/server.py",
+    "src/server/ssh_gateway/admission.py",
 }
 
 
