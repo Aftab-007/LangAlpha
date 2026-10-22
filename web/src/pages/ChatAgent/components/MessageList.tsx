@@ -125,8 +125,10 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
   );
 
   // Both display preferences fold finished turns; only live reasoning differs.
-  const turnFolds = React.useMemo(() => {
+  // The same pass times every settled turn, whose reply shows when it ended.
+  const { turnFolds, turnEnds } = React.useMemo(() => {
     const folds = new Map<number, TurnFoldInfo>();
+    const ends = new Map<number, number>();
 
     const startedAt = new Map<number, number>();
     const firstReplyAt = new Map<number, number>();
@@ -190,11 +192,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
       if (!turnTails[i]) continue;
       const { message, turnIndex } = visible[i];
       if (turnIndex === null) continue;
-      const start = startedAt.get(turnIndex);
-      const pos = rowPos.get(turnIndex);
-      if (start === undefined || pos === undefined) continue;
       const contents = (assistantBubbles.get(turnIndex) ?? []).map((bubble) => projectMessageContent(bubble, isSubagentView, folders?.rootDir));
-      if (!contents.some((content) => content.hasProcess) && contents.reduce((sum, content) => sum + content.textCount, 0) < 2) continue;
       const isLive = live.has(turnIndex);
       // A pinned call outlives the stream that launched it, so the stream-close
       // stamp was taken before the turn's work was done and a fold reading it
@@ -208,16 +206,22 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
           : end),
         observedEnd,
       );
+      const completedAt = isLive ? undefined : messageTimeMs(endStamp.completedAt) ?? localEnd;
+      if (completedAt !== undefined) ends.set(turnIndex, completedAt);
+      const start = startedAt.get(turnIndex);
+      const pos = rowPos.get(turnIndex);
+      if (start === undefined || pos === undefined) continue;
+      if (!contents.some((content) => content.hasProcess) && contents.reduce((sum, content) => sum + content.textCount, 0) < 2) continue;
       const hasFiles = !!onOpenFile && (!readOnly || allowFiles) && (filesByTurn.get(turnIndex)?.length ?? 0) > 0;
       folds.set(turnIndex, {
         noAnswer: !(contents.at(-1)?.lastTextKey || contents.some((content) => content.hasRetained) || hasFiles),
         rowPos: pos,
         startedAt: start,
-        completedAt: isLive ? undefined : messageTimeMs(endStamp.completedAt) ?? localEnd,
+        completedAt,
         isLive,
       });
     }
-    return folds;
+    return { turnFolds: folds, turnEnds: ends };
   }, [visible, turned, turnTails, live, isSubagentView, folders?.rootDir, filesByTurn, onOpenFile, readOnly, allowFiles]);
 
   const items = React.useMemo(
@@ -328,6 +332,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
             ? info.isLive
             : (turnIndex !== null && live.has(turnIndex)) || !!message.isStreaming,
           turnFiles: turnTails[i] && turnIndex !== null ? filesByTurn.get(turnIndex) : undefined,
+          completedAt: turnTails[i] && turnIndex !== null ? turnEnds.get(turnIndex) : undefined,
           feedback: turnIndex === null ? null : feedbackByTurn?.[turnIndex] ?? null,
           isLoading,
           fold,
