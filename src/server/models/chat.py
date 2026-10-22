@@ -324,13 +324,18 @@ class AnalystReport(BaseModel):
 
 
 class TaskReport(BaseModel):
-    """A background subagent task in this thread, finished or failed."""
+    """A background subagent task in this thread, finished or failed.
+
+    ``subagent_type`` picks the role's glyph for the report's row. Reports
+    enqueued before it was kept have none.
+    """
 
     kind: Literal["task"]
     task_id: str
     display_id: str
     description: Optional[str] = None
     failed: bool = False
+    subagent_type: Optional[str] = None
 
 
 # What a report-back turn announces, kept on its query row for display only.

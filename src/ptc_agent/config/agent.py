@@ -9,7 +9,7 @@ Use src.config.loaders for file-based loading.
 import os
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -31,6 +31,14 @@ from ptc_agent.config.core import (
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
+
+
+class SubagentModel(TypedDict):
+    """The model a subagent runs when it is not its launcher's: the catalog
+    name and the provider serving it."""
+
+    id: str
+    provider: str
 
 
 class CredentialSource(StrEnum):
@@ -343,6 +351,12 @@ class AgentConfig(BaseModel):
     # Written alongside the clients above, because a role without a client of
     # its own still runs a model: by name, or by inheriting the main one.
     role_prompt_guidance: dict[str, str] = Field(default_factory=dict, exclude=True)
+    # Each subagent whose clients above run a model other than the turn's.
+    # Admission records it on the run, because nothing downstream of the
+    # build can still tell which model a run used.
+    subagent_models: dict[str, SubagentModel] = Field(
+        default_factory=dict, exclude=True
+    )
     # None permits standalone name resolution; [] means resolution rejected all candidates.
     fallback_llm_clients: list[Any] | None = Field(default=None, exclude=True)
     # Display names aligned index-for-index with ``fallback_llm_clients``

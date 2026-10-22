@@ -680,6 +680,7 @@ class PTCAgent:
             registry=_bg_registry,
             checkpointer=checkpointer,
             namespace_owner=namespace_owner,
+            subagent_models=self.config.subagent_models,
         )
         main_only_middleware.append(background_middleware)
         if not disable_subagents:
