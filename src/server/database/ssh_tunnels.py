@@ -312,6 +312,27 @@ async def claim_released_tunnel(
             return await cur.fetchone()
 
 
+async def taken_off_elsewhere(tunnel_id: str, *, within: timedelta) -> bool:
+    """Whether a release or the sweep claimed the unused tunnel within ``within``.
+
+    That claimant may still log in to the machine anew, with the key line a
+    removal would otherwise take off, and a sweep that finds the login refused
+    forgets the tunnel while its service stays on the machine.
+    """
+    async with get_db_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"""
+                SELECT 1 FROM ssh_tunnels t
+                WHERE t.tunnel_id = %(tunnel_id)s::uuid
+                  AND t.swept_at >= NOW() - %(within)s
+                  AND {_UNNAMED}
+                """,
+                {"tunnel_id": tunnel_id, "within": within},
+            )
+            return await cur.fetchone() is not None
+
+
 async def begin_take_off(tunnel_id: str, *, paired_at: datetime) -> bool:
     """Stamp the tunnel as being taken off its machine, if still as claimed.
 

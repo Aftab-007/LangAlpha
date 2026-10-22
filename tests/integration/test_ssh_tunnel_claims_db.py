@@ -89,6 +89,22 @@ async def test_a_release_takes_a_tunnel_not_paired_since_its_computer(
     assert await _release(unknown_age, made_ago=None) is not None
 
 
+async def test_a_release_after_the_sweep_claimed_it_leaves_it_to_the_sweep(
+    tunnels, test_db_pool
+):
+    swept = await _tunnel(test_db_pool, login=False, paired_at=2 * DAY)
+    paired_again = await _tunnel(test_db_pool)
+
+    assert swept in await _sweep()
+
+    assert await _release(swept, made_ago=3 * DAY) is None
+    assert await db.taken_off_elsewhere(swept, within=db.TAKE_OFF_WINDOW) is True
+    assert await _release(paired_again, made_ago=timedelta(hours=1)) is None
+    assert (
+        await db.taken_off_elsewhere(paired_again, within=db.TAKE_OFF_WINDOW) is False
+    )
+
+
 async def test_the_sweep_leaves_a_machine_away_less_than_its_give_up(
     tunnels, test_db_pool
 ):
