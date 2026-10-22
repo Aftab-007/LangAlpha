@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, PenLine } from 'lucide-react';
 import type { IntroVisualId } from '../../registry';
-import { Camera, VIEW, frame, type Rect, type Shot } from './camera';
+import { Camera, REST, VIEW, look, type Shot } from './camera';
 import {
   Candles,
   CommentBox,
@@ -25,19 +25,19 @@ import {
   SEND,
   SelectionCard,
   SelectionChip,
-  TOOLBAR_Y,
 } from './marketParts';
 import { Prose, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
 
-/* The market intro, on MarketView itself, framed by a camera that never
-   shows the whole page. marketAsk: in tight on the toolbar, the Region tool
-   is armed; out to the candles, where the September drop is taken and noted;
-   across to the chat panel, where the selection goes out as a chip. The
-   agent starts on it. marketDraw: in tight on the reply as the agent pins
-   the news behind each move to the chart; the pointer rests on its chip,
-   then the camera crosses to the chart, where each move carries its event
-   badge, and a click opens the story behind the drop. */
+/* The market intro, on MarketView itself, framed by a camera that shows
+   one side of the page at a time with an edge of the other. marketAsk: on
+   the chart under the stock's header, the Region tool is armed and the
+   September drop is taken and noted; across to the chat panel, where the
+   selection goes out as a chip. The agent starts on it. marketDraw: on the
+   chat panel as the agent pins the news behind each move to the chart;
+   the pointer rests on its chip, then the camera crosses to the chart,
+   where each move carries its event badge, and a click opens the story
+   behind the drop. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
@@ -50,18 +50,13 @@ const CHAT = { x: CHAT_X, w: PAGE.w - CHAT_X };
 const NOTE = 'What drove this drop?';
 const LEAD = 'Two pieces of news drove it. Marking them on your chart.';
 
-/** The shot that fits `r` with `pad` px around it, slid back inside the page
-    where the crop would show past its edge (`framePage`, for this page). */
-function framed(r: Rect, pad = 6): Omit<Shot, 'at' | 'dur'> {
-  const v = frame(r, pad);
-  const hold = (c: number, half: number, size: number) =>
-    half * 2 >= size ? size / 2 : Math.min(Math.max(c, half), size - half);
-  return {
-    zoom: v.zoom,
-    x: hold(v.x, VIEW.width / 2 / v.zoom, PAGE.w),
-    y: hold(v.y, VIEW.height / 2 / v.zoom, PAGE.h),
-  };
-}
+/** The page's size, for `look`. */
+const PAGE_SIZE = { width: PAGE.w, height: PAGE.h };
+/** Where the metrics' third column (Low, Volume) ends, in page px. A view
+    of the chat side from just past it to the page's right edge sits a
+    touch wider than REST and cuts none of the metrics' figures. */
+const METRICS_GAP = 137;
+const CHAT_REST = VIEW.width / (PAGE.w - METRICS_GAP);
 
 /** A native tooltip (a button's `title`), under the pointer. */
 function Tip({ x, y, children }: { x: number; y: number; children: ReactNode }) {
@@ -120,19 +115,18 @@ const REGION = {
 const BOX = besideRegion(SCALE, REGION.x0, REGION.x1, REGION.y0);
 const PIN = besideRegion(SCALE, REGION.x0, REGION.x1, REGION.y0, 10);
 
-/** In tight on the selection tools, out to the drop and the note beside it,
-    across to the composer, then up to the message as it lands. */
+/** At rest on the chart while the Region tool is armed and the drop is
+    taken and noted; across to the chat panel's foot as the selection goes
+    out, then up the panel to the message as it lands. */
 const ASK_SHOTS: [Shot, ...Shot[]] = [
-  // left edge in the gutter before the day's range in either locale, top
-  // edge between the metrics' two rows
-  { at: 0, ...framed({ x: 145, y: 48, w: 121, h: 100 }, 0) },
-  {
-    at: 2150,
-    dur: 850,
-    ...framed({ x: CHART.x + 12, y: CHART.y, w: BOX.left + 104, h: REGION.y1 + 12 }, 6),
-  },
-  { at: 5150, dur: 800, ...framed({ x: CHAT.x, y: PAGE.h - 112, w: CHAT.w, h: 112 }, 6) },
-  { at: 6200, dur: 750, ...framed({ x: CHAT.x, y: 22, w: CHAT.w, h: 112 }, 6) },
+  // the chart column whole under the stock's header, the toolbar's tools
+  // on it, the chat panel's edge beside it
+  { at: 0, ...look(0, 0, REST, PAGE_SIZE) },
+  // the panel from the toolbar's line down to the composer, the chart's
+  // right half beside it
+  { at: 5150, dur: 800, ...look(PAGE.w, PAGE.h, CHAT_REST, PAGE_SIZE) },
+  // the panel from its header down, the message on top
+  { at: 6200, dur: 750, ...look(PAGE.w, 0, CHAT_REST, PAGE_SIZE) },
 ];
 
 /** On the Region button, clear of the pointer its own icon draws. */
@@ -286,30 +280,14 @@ const CHIP_BOTTOM = 134;
 /** The drop's badge, centered over its anchor. */
 const BADGE = onPage(SCALE.x(DROP.i), SCALE.y(DROP.price) - 10.5);
 
-/** The last shot: from the toolbar, which the badge's story rises over,
-    wide enough to hold the upgrade's badge whole rather than cut at the
-    edge. The metrics above stay out of frame. */
-const DETAIL_W = 218;
-const DETAIL: Rect = {
-  x: CHART.x,
-  y: TOOLBAR_Y + 1,
-  w: DETAIL_W,
-  // the view's own shape, so its top edge is the rect's
-  h: (DETAIL_W * VIEW.height) / VIEW.width,
-};
-
-/** In tight on the reply, down with it as it grows, then across to the
-    chart, and in on the drop's badge as its story opens. */
+/** On the chat panel the whole time the reply comes in, its message on top
+    and the chart's right half beside it; then across to rest on the chart
+    under the stock's header, where each move carries its badge, and the
+    drop's story opens over the toolbar. */
 const DRAW_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...framed({ x: CHAT.x, y: 64, w: CHAT.w, h: 120 }, 6) },
-  { at: 2900, dur: 900, ...framed({ x: CHAT.x, y: 104, w: CHAT.w, h: 140 }, 6) },
+  { at: 0, ...look(PAGE.w, 0, CHAT_REST, PAGE_SIZE) },
   // a quick pan, settled before the reply's last words can trail at the edge
-  {
-    at: 5300,
-    dur: 600,
-    ...framed({ x: CHART.x, y: CHART.y - 4, w: CHART.w, h: SCALE.priceH + 4 }, 6),
-  },
-  { at: 6900, dur: 800, ...framed(DETAIL, 0) },
+  { at: 5300, dur: 600, ...look(0, 0, REST, PAGE_SIZE) },
 ];
 
 const DRAW_PATH: Waypoint[] = [

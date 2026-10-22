@@ -290,18 +290,6 @@ export const PAGE_W = 400;
 export const PAD = 10;
 export const GAP = 6;
 
-/** A camera shot held inside a page `height` px tall: the view slides in
-    from any edge it would run past, so it never shows beyond the page. */
-export function inPage(shot: ReturnType<typeof frame>, height: number): ReturnType<typeof frame> {
-  const halfW = VIEW.width / 2 / shot.zoom;
-  const halfH = VIEW.height / 2 / shot.zoom;
-  return {
-    zoom: shot.zoom,
-    x: Math.min(Math.max(shot.x, halfW), PAGE_W - halfW),
-    y: Math.min(Math.max(shot.y, halfH), height - halfH),
-  };
-}
-
 /** The view whose top-left corner sits at (`left`, `top`) on the page, so
     a crop can start in a gutter rather than through a card's text. */
 export function fromCorner(left: number, top: number, zoom: number): ReturnType<typeof frame> {

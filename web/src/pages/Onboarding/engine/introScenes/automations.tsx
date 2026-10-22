@@ -1,6 +1,5 @@
 import { useTranslation } from 'react-i18next';
 import { BarChart3, CalendarSearch, Plus, Sun, TrendingUp, X, type LucideIcon } from 'lucide-react';
-import { useLocale } from '@/hooks/useLocale';
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
 import {
@@ -40,7 +39,7 @@ import {
   WEEKDAYS,
   WeekPicker,
 } from './automationParts';
-import { Camera, type Shot, VIEW } from './camera';
+import { CLOSE, Camera, REST, type Shot, VIEW, look } from './camera';
 import { ease, useSceneTime } from './clock';
 import { Appear, Caret, Typed } from './kit';
 import type { IntroScene } from './types';
@@ -57,9 +56,9 @@ import type { IntroScene } from './types';
 
 /**
  * The shot at `at` whose view has its top-left corner on page point
- * (`left`, `top`) at `zoom`. Shots are set by their corner so the view's
- * top and bottom edges fall in the gap between two rows rather than
- * through a line of text; the comment on each says what it holds.
+ * (`left`, `top`) at `zoom`, for a shot whose edges have to fall in the gap
+ * between two rows rather than through a line of text. A shot held against
+ * the page's edges is set with `look` instead.
  */
 function corner(at: number, left: number, top: number, zoom: number, dur?: number): Shot {
   return { at, dur, zoom, x: left + VIEW.width / 2 / zoom, y: top + VIEW.height / 2 / zoom };
@@ -91,6 +90,7 @@ const TRIG = {
 /** Past the view's height by enough that the form's Create clears the
     pane's foot. */
 const TRIG_PAGE = 340;
+const TRIG_SIZE = { width: VIEW.width, height: TRIG_PAGE };
 
 /** New automation, the price template, the symbol, the level, Create: where
     the pointer's tip lands on each. */
@@ -107,21 +107,23 @@ const TRIG_PATH = [
   { at: 5550, x: 156, y: 313 },
 ];
 
-/** The header's New and the menu it drops; the form's Name and When as the
-    symbol goes in and its quote comes back; down the form to the level, the
-    meter and Create; across to the list as the alert takes its row under
-    Watching, its inspector beside it. */
+/** The header's New and the menu it drops over the pane, the list's edge
+    beside it; a short push in on the form as the symbol goes in and its
+    quote comes back; back out, down the form to the level, the meter and
+    Create; across to the list as the alert takes its row under Watching,
+    its inspector beside it. */
 const TRIG_SHOTS: [Shot, ...Shot[]] = [
-  // the pane and the header's New, room below for the menu
-  corner(0, 122, 12, 1.43),
-  // under the header: the form from its title down to Instruction
-  corner(2700, 128, 46, 1.49),
-  // under Name, the form's full width: When, the symbol row, the quote and
-  // the meter, down to Create
-  corner(3900, 134, 114.5, 1.56, 800),
-  // under the header: the list's new Watching row, and the inspector's
-  // title and meter beside it, the header's chips and Delete off the right
-  corner(6550, 8, 46, 1.47, 800),
+  // the header's right and the pane under it, room below for the menu
+  { at: 0, ...look(VIEW.width, 0, REST, TRIG_SIZE) },
+  // under the header: the form from its title down to Instruction, the
+  // pane edge to edge
+  { at: 3000, dur: 800, ...look(VIEW.width, 160, CLOSE, TRIG_SIZE) },
+  // under the header again, as the quote comes back: the form from its
+  // title down to Create
+  { at: 3900, dur: 400, ...look(VIEW.width, 190, REST, TRIG_SIZE) },
+  // the header's census, the list's new Watching row, and the inspector's
+  // title and meter beside it, Delete off the right
+  { at: 6550, dur: 800, ...look(0, 0, REST, TRIG_SIZE) },
 ];
 
 /** One item of the New menu: the template's icon, name and one line on it. */
@@ -361,35 +363,26 @@ const FEED = {
   length: 7600,
 };
 
-/** In close on the day's runs, the alert's on top, as it lands, works and
-    reports; across to the rail, where the failed run waits under Needs
-    attention; and down it to the alert still watching. The rail is drawn
-    edge to edge, from the gap beside the column to the page's right edge.
-    In English the next runs' names wrap to two lines, which puts Watching
-    lower, so the last shot starts lower there: past Up next's heading, in
-    its first row's padding. */
-function feedShots(wrapped: boolean): [Shot, ...Shot[]] {
-  return [
-    // under the header: the day's runs, the column's edge to the rail's
-    corner(0, 4, 44, 1.57),
-    // under the header's chips: Needs attention, then Up next to the
-    // bottom of its first row
-    corner(4900, 251, 43, 2.67, 900),
-    // Up next and Watching in full, its alert and meter, above Manage all
-    corner(6400, 251, wrapped ? 144 : 126, 2.67, 800),
-  ];
-}
+/** At rest on the day's runs under the header, the alert's on top, as it
+    lands, works and reports, the rail's edge beside them; across to the
+    rail, where the failed run waits under Needs attention, the runs' edge
+    beside it; and down it to the alert still watching, above Manage all.
+    The rail is whole in both, in either language. */
+const FEED_SHOTS: [Shot, ...Shot[]] = [
+  { at: 0, ...look(0, 0, REST) },
+  { at: 4900, dur: 900, ...look(VIEW.width, 0, REST) },
+  { at: 6400, dur: 800, ...look(VIEW.width, VIEW.height, REST) },
+];
 
 function AutomationFeed() {
   const { t } = useTranslation();
-  const shots = feedShots(!useLocale().startsWith('zh'));
   const census = [
     t('automation.censusScheduled', { count: 2 }),
     t('automation.censusWatching', { count: 1 }),
     t('automation.censusAttention', { count: 1 }),
   ].join(' · ');
   return (
-    <Camera shots={shots}>
+    <Camera shots={FEED_SHOTS}>
       <Page>
         <PageHeader census={census} view="feed" />
         <FeedLayout
@@ -443,23 +436,26 @@ const DLV_PATH = [
 /** How tall the manage page is drawn: the edit form at full length, which
     the camera pans down as the page's scroller would. */
 const DLV_PAGE = 560;
+const DLV_SIZE = { width: VIEW.width, height: DLV_PAGE };
 
-/** The brief's inspector and its Edit; down the form to More options as it
-    opens; in close on Delivery while Slack DM is picked; down to Save; then
-    a cut to the next morning's feed, and in on the run and where it went. */
+/** The brief's inspector and its Edit, the list's edge beside it; down the
+    form to More options as it opens; a short push in on Delivery as its
+    Add list opens, and back out as Slack DM is picked, down to Save; then
+    a cut to the next morning's feed, at rest on the run and where it
+    went. */
 const DLV_SHOTS: [Shot, ...Shot[]] = [
-  // under the header: the brief's inspector and its latest run
-  corner(0, 128, 46, 1.49),
-  // More options at the top, the rows it opens below
-  corner(2450, 128, 270, 1.49, 900),
-  // Delivery, and the Add list under it
-  corner(3550, 117, 367, 2.2),
+  // the header's right and the pane under it: the brief's inspector and its
+  // latest run
+  { at: 0, ...look(VIEW.width, 0, REST, DLV_SIZE) },
+  // over Instruction: More options and the rows it opens, down to Delivery
+  corner(2450, 80, 220, REST, 900),
+  // over Thread: Delivery, and the Add list under it, to the page's foot
+  corner(3550, 117, 336, CLOSE),
   // Delivery down to Save changes, at the foot of the page
-  corner(5100, 128, 338, 1.49),
-  // the cut to the next morning's feed, under the header
-  corner(DLV.feed, 4, 44, 1.57, 1),
-  // the run's name, where it was sent, and what it said
-  corner(6900, 46, 56, 1.94, 900),
+  { at: 4800, dur: 800, ...look(VIEW.width, DLV_PAGE, REST, DLV_SIZE) },
+  // the cut to the next morning's feed: the header, and the runs with
+  // where the brief's went, the rail's edge beside them
+  corner(DLV.feed, 0, 3, REST, 1),
 ];
 
 /** The Add list (`DeliveryPicker`): each app's Default and its chats, the

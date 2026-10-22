@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { IntroVisualId } from '../../registry';
-import { Camera, frame, VIEW, type Shot } from './camera';
+import { CLOSE, Camera, REST, VIEW, look, type Shot } from './camera';
 import { ease, useSceneTime } from './clock';
 import { Appear, pointAt, type Waypoint } from './kit';
 import type { IntroScene } from './types';
@@ -27,8 +27,6 @@ import {
   PAGE_W,
   PAD,
   GAP,
-  inPage,
-  fromCorner,
   Floating,
   Composer,
   Widget,
@@ -50,7 +48,8 @@ import {
 /* Scenes for the dashboard intro: the live page, and customizing it. Each
    part is drawn after its real counterpart under pages/Dashboard, in
    miniature, with the app's own strings for its labels. A camera shows the
-   page a part at a time, close enough to read. */
+   page a part at a time, close enough to read, with an edge of the next
+   part so the viewer can tell where on the page it is. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
@@ -69,30 +68,32 @@ export const GRID = {
   length: 7600,
 };
 
-/** The Classic page's height, and its cards, in page px (measured off it). */
-const GRID_H = 403;
-const BRIEF = { x: 10, y: 91, w: 224, h: 157 };
-const WATCHLIST = { x: 240, y: 91, w: 150, h: 157 };
-const NEWS_CARD = { x: 10, y: 254, w: 224, h: 139 };
-/** The left column edge to edge, its cards' borders just inside the view. */
-const LEFT = { x: 121, zoom: VIEW.width / 234 };
-/** The watchlist from the gutter beside it to the page's edge, and from the
-    gutter under the index cards down past its last quote (its foot falls
-    between that and the add button). */
-const WATCH_SHOT = fromCorner(
-  WATCHLIST.x - 1,
-  WATCHLIST.y - 5,
-  VIEW.width / (PAGE_W - WATCHLIST.x + 1)
-);
+/** The Classic page's size, and its brief card's center, in page px
+    (measured off it). */
+const GRID_PAGE = { width: PAGE_W, height: 403 };
+const BRIEF_MID = { x: 122, y: 170 };
+/** Between the watchlist's symbols and its prices: a view from the page's
+    left edge that ends here sits a touch closer than REST and cuts none of
+    the watchlist's figures. */
+const WATCH_NAMES_END = 300;
+/** As wide as the camera goes before the page's text is too small to read,
+    which shows the Classic page whole but for the news card's foot. */
+const WIDE = 0.85;
 
 /** A slow pan across the page: the title and index lines with the brief
-    arriving under them, the brief whole, the watchlist while its quotes
-    tick, then the news. Each crop stops in a gutter or at a card's edge. */
+    arriving under them, a short push in on the brief, out to the watchlist
+    while its quotes tick, the index cards over it, then out to the page
+    whole, the news under the brief. */
 const GRID_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...LEFT, y: 104 },
-  { at: 2600, x: 122, y: 182, zoom: frame(BRIEF, 4).zoom, dur: 1000 },
-  { at: 3800, ...WATCH_SHOT, dur: 1000 },
-  { at: 6400, ...inPage({ ...frame(NEWS_CARD), ...LEFT }, GRID_H), dur: 1000 },
+  // the title, the index cards and the brief, out to the watchlist's symbols
+  { at: 0, ...look(0, 0, VIEW.width / WATCH_NAMES_END, GRID_PAGE) },
+  // the brief, a little higher than its center so the index cards' changes
+  // stay in at the top
+  { at: 2600, ...look(BRIEF_MID.x, BRIEF_MID.y - 8, CLOSE, GRID_PAGE), dur: 1000 },
+  // the watchlist and the index cards over it, from under the page's title
+  // (the left edge falls in the gutter after the first index card)
+  { at: 3800, ...look(PAGE_W, 155, REST, GRID_PAGE), dur: 1000 },
+  { at: 6400, ...look(PAGE_W / 2, 0, WIDE, GRID_PAGE), dur: 1000 },
 ];
 
 export function DashboardGrid() {
@@ -270,23 +271,10 @@ const GROW = GAP + MINI_ROW;
 const ADDED = CUSTOM.add + 120;
 const GROW_DUR = 500;
 const grown = (t: number) => (t >= ADDED ? GROW * ease(t, ADDED, GROW_DUR) : 0);
-const ROW3_TOP = GRID_TOP + 2 * (ROW + GAP);
-/** Where the crops' edges fall, in page px (read off the layout): the
-    gutter between Classic's index cards, which lines up with the one between
-    its brief and watchlist; the middle Custom column's right edge, past its
-    content; and, down the page, the line under the header, the gap under the
-    index cards, and the gap under Custom's second quote. */
-const CLASSIC_GUTTER = 237.5;
-const CUSTOM_EDGE = 259;
-const UNDER_HEADER = 31;
-const UNDER_INDEX = 116;
-const UNDER_QUOTE = 107;
-/** Lower down: the page's left margin, the gutter over the second row, and
-    the gap between the toolbar's second button and Reset (in both
-    languages). */
-const PAGE_EDGE = 5;
-const ROW2_GUTTER = GRID_TOP + ROW + GAP / 2;
-const TOOL_GAP = 209;
+/** The page once it has grown by the new row, and the first row's foot,
+    where the closing crop starts. */
+const GROWN = { width: PAGE_W, height: CUSTOM_H + GROW };
+const ROW1_FOOT = GRID_TOP + ROW;
 /** Past halfway, the watchlist gives up its slot. */
 const SWAP = (CUSTOM.carry + CUSTOM.drop) / 2;
 const CUSTOM_PATH: Waypoint[] = [
@@ -303,30 +291,22 @@ const CUSTOM_PATH: Waypoint[] = [
   { at: ADDED, ...ADD },
   { at: ADDED + GROW_DUR, x: ADD.x, y: ADD.y + GROW },
 ];
-/** The right column (index cards over the watchlist), then up and in on
-    the header's switch, a step right with the pointer once Custom's columns
-    are in, out to the two columns the chart is carried across (from under
-    the header, a little gutter either side), down to the toolbar's add
-    button, and down with the page as it grows by the new widget's row, to
-    the row's first half. Every crop starts in a gutter or at the page's
-    margin, so nothing on the left is cut through its text. */
+/** The page's top right under the header's switch, the left column's edge
+    beside it; a short push in on the switch and the pencil, and back out as
+    the chart is carried a column right; down to the toolbar's add button,
+    and out to the page's full width as the page grows by the new widget's
+    row, so the widget is whole with the toolbar under it. */
 const CUSTOM_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...fromCorner(CLASSIC_GUTTER, UNDER_HEADER, VIEW.width / (PAGE_W - CLASSIC_GUTTER)) },
-  { at: 1000, ...fromCorner(CLASSIC_GUTTER, 0, VIEW.height / UNDER_INDEX), dur: 800 },
-  { at: 1550, ...fromCorner(CUSTOM_EDGE, 0, VIEW.height / UNDER_QUOTE), dur: 400 },
-  {
-    at: 2800,
-    ...fromCorner(PAD + COL - 4, UNDER_HEADER, VIEW.width / (2 * COL - GAP + 8)),
-    dur: 1000,
-  },
-  {
-    at: 4900,
-    ...fromCorner(PAGE_EDGE, ROW2_GUTTER, VIEW.width / (TOOL_GAP - PAGE_EDGE)),
-    dur: 600,
-  },
+  { at: 0, ...look(PAGE_W, 0, REST) },
+  { at: 1200, ...look(PAGE_W, 0, CLOSE), dur: 800 },
+  { at: 2800, ...look(PAGE_W, 0, REST), dur: 1100 },
+  // the view's top over the first row's quotes, its foot just under the
+  // toolbar
+  { at: 4900, ...look(PAGE_W, 190, REST), dur: 600 },
+  // from the first row's foot to the page's
   {
     at: ADDED + GROW_DUR + 130,
-    ...fromCorner(PAGE_EDGE, ROW3_TOP - GAP / 2, VIEW.width / (PAGE_W / 2 - PAGE_EDGE)),
+    ...look(PAGE_W / 2, GROWN.height, VIEW.height / (GROWN.height - ROW1_FOOT), GROWN),
     dur: 700,
   },
 ];

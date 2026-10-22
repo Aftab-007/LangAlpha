@@ -39,6 +39,16 @@ export interface Rect {
 
 type View = Pick<Shot, 'x' | 'y' | 'zoom'>;
 
+/**
+ * How close the camera sits. Scenes draw their pages in the view's px, so a
+ * zoom of 1 shows a view-sized page whole. A resting shot sits at `REST`,
+ * which keeps a pane whole with its header and an edge of its neighbour, so
+ * the viewer can tell which part of the page they are looking at. A push-in
+ * on one detail goes no closer than `CLOSE`.
+ */
+export const REST = 1.25;
+export const CLOSE = 1.5;
+
 /** The shot that fits `r` in the view with `pad` px of page around it. */
 export function frame(r: Rect, pad = 8, view = VIEW): View {
   return {
@@ -46,6 +56,25 @@ export function frame(r: Rect, pad = 8, view = VIEW): View {
     y: r.y + r.h / 2,
     zoom: Math.min(view.width / (r.w + 2 * pad), view.height / (r.h + 2 * pad)),
   };
+}
+
+/**
+ * The shot at `zoom` centred as near the page point (`x`, `y`) as the page
+ * allows: the view stops at the page's edge rather than show past it, and a
+ * page smaller than the view sits centred in it.
+ */
+export function look(
+  x: number,
+  y: number,
+  zoom: number,
+  page: { width: number; height: number } = VIEW,
+  view = VIEW
+): View {
+  const hold = (c: number, size: number, v: number) => {
+    const half = v / 2 / zoom;
+    return size <= 2 * half ? size / 2 : Math.min(Math.max(c, half), size - half);
+  };
+  return { zoom, x: hold(x, page.width, view.width), y: hold(y, page.height, view.height) };
 }
 
 const inOut = (p: number) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);

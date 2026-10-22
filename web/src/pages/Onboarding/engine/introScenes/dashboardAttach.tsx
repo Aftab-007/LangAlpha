@@ -4,11 +4,11 @@ import { useTranslation } from 'react-i18next';
 import { useLocale } from '@/hooks/useLocale';
 import { relativeTime } from '@/lib/format';
 import type { IntroVisualId } from '../../registry';
-import { Camera, VIEW, type Shot } from './camera';
+import { CLOSE, Camera, VIEW, look, type Shot } from './camera';
 import { progress, useSceneTime } from './clock';
 import { Typed, type Waypoint } from './kit';
 import type { IntroScene } from './types';
-import { WATCH, DashPage, inPage, fromCorner, Floating, Composer, Widget } from './dashboardParts';
+import { WATCH, DashPage, PAGE_W, fromCorner, Floating, Composer, Widget } from './dashboardParts';
 import { WatchRow, NEWS, NewsRow, AddSymbol } from './dashboardClassic';
 
 /* The dashboard intro's last scene: clipping a row into the chat's context.
@@ -41,16 +41,18 @@ const ROW = { x: 17, y: 34, w: 208, h: 36 };
 const CLIP = { x: 216, y: 52 };
 const CARD = { x: 89, y: 216, w: 222 };
 const TEXT = { x: 198, y: 257 };
-/** Where the closer crops' edges fall, in page px: the column edge between
-    the rows' pictures and their titles, the line under the feed's header,
-    the foot of its last row, the gap over the third row from the end, and
-    just past the end of the card's title (the watchlist's symbols end
-    before it, its prices start after). */
-const TITLES = 47;
+/** Where the crops' edges fall, in page px: between the watchlist's
+    symbols and its prices; across the rows' pictures, before their titles;
+    the line under the feed's header; above the headers' text; the foot of
+    the composer; and the widgets' left padding, which puts the right edge
+    of a view at the last shot's zoom between the watchlist's prices and
+    their changes. */
+const WATCH_NAMES_END = 300;
+const PICTURES = 33;
 const UNDER_HEADER = 31;
-const ROWS_END = 191;
-const ROW_GAP = 103;
-const TITLE_END = 275;
+const OVER_HEADER = 15;
+const COMPOSER_FOOT = 290;
+const WIDGET_PAD = 12;
 /** The flying card's box: the clipped row, then its slot in the deck. It
     eases in and out over the camera's move, so it rides along in view. */
 const CARD_FROM = { x: ROW.x, y: ROW.y + 5, w: ROW.w };
@@ -61,21 +63,18 @@ const ATTACH_PATH: Waypoint[] = [
   { at: ATTACH.leave, ...CLIP },
   { at: 2650, ...TEXT },
 ];
-/** The feed, then in on the rows under its header (the crop falls between
-    the pictures and the titles, and ends at the watchlist's border), then
-    down with the card to the composer: from the same column edge to just
-    past the card's title, so the card it lands as is whole and the
-    question under it reads; only the send button is cut. */
+/** The feed under its header, out to the watchlist's symbols, a touch
+    closer than REST; a short push in on the rows as the paperclip is
+    clicked; then out with the card as it flies down to the composer, a
+    touch wider than REST so both widgets' headers and the composer's foot
+    are in: the card it lands as is whole, and the question under it
+    reads. */
 const ATTACH_SHOTS: [Shot, ...Shot[]] = [
-  { at: 0, ...inPage({ x: 118, y: 0, zoom: 400 / 236 }, ATTACH_H) },
-  {
-    at: 1150,
-    ...fromCorner(TITLES, UNDER_HEADER, VIEW.height / (ROWS_END - UNDER_HEADER)),
-    dur: 900,
-  },
+  { at: 0, ...look(0, 0, VIEW.width / WATCH_NAMES_END, { width: PAGE_W, height: ATTACH_H }) },
+  { at: 1150, ...fromCorner(PICTURES, UNDER_HEADER, CLOSE), dur: 900 },
   {
     at: ATTACH.fly + ATTACH.flyDur,
-    ...fromCorner(TITLES, ROW_GAP, VIEW.width / (TITLE_END - TITLES)),
+    ...fromCorner(WIDGET_PAD, OVER_HEADER, VIEW.height / (COMPOSER_FOOT - OVER_HEADER)),
     dur: ATTACH.flyDur,
   },
 ];
