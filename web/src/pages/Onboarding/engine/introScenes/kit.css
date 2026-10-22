@@ -117,6 +117,52 @@
   }
 }
 
+/* A turn's tool calls on the timeline's rule (`Timeline`), drawn as the
+   app's ActivityBlock.css draws it: not one line masked behind each icon,
+   but a short segment from one row's icon to the next, clear of each icon
+   by 5px of 16px there, 2.5px of 8px here. Each row draws the part above
+   its icon and the part below, reaching half the space between rows and a
+   hair past it so the two meet; the first row has none above and the last
+   none below. A row's icon sits at its middle, so the parts are placed
+   from there: 4px to the glyph's edge, then the 2.5px clear of it. */
+.intro-tl {
+  --tl-x: 6.5px;
+  --tl-reach: 0.5px;
+}
+
+.intro-tl--dense {
+  --tl-x: 3.5px;
+  --tl-reach: 5.5px;
+}
+
+.intro-tl > * {
+  position: relative;
+}
+
+.intro-tl > *::before,
+.intro-tl > *::after {
+  content: '';
+  position: absolute;
+  left: var(--tl-x);
+  width: 1px;
+  background: var(--color-border-default);
+}
+
+.intro-tl > *::before {
+  top: calc(-1 * var(--tl-reach));
+  height: calc(var(--tl-reach) + 50% - 6.5px);
+}
+
+.intro-tl > *::after {
+  top: calc(50% + 6.5px);
+  bottom: calc(-1 * var(--tl-reach));
+}
+
+.intro-tl > :first-child::before,
+.intro-tl > :last-child::after {
+  display: none;
+}
+
 /* A label the agent is still working on, like the app's TextShimmer. */
 .intro-shimmer {
   background: linear-gradient(

@@ -10,9 +10,8 @@ import { Appear, Tag, typedCount } from './kit';
    scenes all show the same chat page, so its parts live here once. Each is
    a small copy of the component the app draws it with (named on each).
 
-   Two scene families set their tool rows differently, and `dense` keeps
-   each as it was: the chat and automations scenes' rows are bare, while
-   the thread and market scenes' rows sit on the timeline's rule. */
+   The chat and automations scenes draw their tool rows `dense`, bare with
+   no icon column, where the thread scenes keep the app's icon column. */
 
 /** The thread header's height, and the file panel's tab strip's beside it:
     the app's 53px top bar at the scenes' scale. Every scene draws it the
@@ -164,11 +163,10 @@ interface RowLine {
  * rows. A row with no `running` is a call the thread made before the scene
  * began, so it is settled from the start.
  *
- * On the timeline's rule the icon sits on a page-colored box so the rule
- * breaks around it, and the label and pill share a baseline, as the app's
- * row line does. A `dense` row is bare: no box, no padding, label and pill
- * centred on each other, and the settled label kept whole so the pill is
- * what truncates.
+ * As the app's row line does, the label and pill share a baseline, and a
+ * settled label stays whole so the pill is what truncates; a running label
+ * may truncate. A full row keeps the app's icon column and a little
+ * padding; a `dense` row is bare, its icon its whole height.
  */
 export function ToolRow({
   icon: Icon,
@@ -192,28 +190,18 @@ export function ToolRow({
   const { label, pill } = live ? running : settled;
   const muted = { color: 'var(--Labels-Secondary)' };
   return (
-    <Appear
-      at={at}
-      className={dense ? 'flex items-center gap-1.5' : 'flex min-w-0 items-center gap-1.5 py-[3px]'}
-    >
+    <Appear at={at} className={cn('flex min-w-0 items-center gap-1.5', !dense && 'py-[3px]')}>
       {dense ? (
         <Icon className="h-2 w-2 shrink-0" style={muted} />
       ) : (
-        <span
-          className="flex h-[11px] w-3.5 shrink-0 items-center justify-center"
-          style={{ background: 'var(--color-bg-page)' }}
-        >
+        <span className="flex h-[11px] w-3.5 shrink-0 items-center justify-center">
           <Icon className="h-2 w-2" style={muted} />
         </span>
       )}
-      <span
-        className={
-          dense ? 'flex min-w-0 items-center gap-1.5' : 'flex min-w-0 items-baseline gap-1.5'
-        }
-      >
+      <span className="flex min-w-0 items-baseline gap-1.5">
         <span
           className={cn(
-            dense && !live ? 'shrink-0' : 'truncate',
+            live ? 'truncate' : 'shrink-0 whitespace-nowrap',
             'text-[8px] leading-none',
             live && 'intro-shimmer'
           )}
@@ -222,13 +210,7 @@ export function ToolRow({
           {label}
         </span>
         {pill && (
-          <span
-            className={cn(
-              dense ? 'truncate' : 'whitespace-nowrap',
-              'font-mono text-[7px] leading-none'
-            )}
-            style={muted}
-          >
+          <span className="truncate font-mono text-[7px] leading-none" style={muted}>
             {pill}
           </span>
         )}
@@ -239,23 +221,15 @@ export function ToolRow({
 }
 
 /**
- * A turn's tool calls threaded on the timeline's rule (`ActivityBlock`). Under
- * full rows the rule runs from the first icon to the last, broken by each
- * icon's box; under `dense` rows, spaced apart, it is a short segment between
- * one row's icon and the next, as the app draws it.
+ * A turn's tool calls threaded on the timeline's rule (`ActivityBlock`). As
+ * the app draws it, the rule is a short segment from one row's icon to the
+ * next, clear of each icon, and ends at the first and last icons; kit.css
+ * draws it (`.intro-tl`). Under `dense` rows, which are bare, the rows sit
+ * 10px apart so the segment has room between them.
  */
 export function Timeline({ dense = false, children }: { dense?: boolean; children: ReactNode }) {
   return (
-    <div className={dense ? 'relative flex flex-col gap-[10px]' : 'relative flex flex-col'}>
-      <span
-        aria-hidden
-        className={
-          dense
-            ? 'absolute bottom-[10.5px] left-[3.5px] top-[10.5px] w-px'
-            : 'absolute bottom-[8.5px] left-[6.5px] top-[8.5px] w-px'
-        }
-        style={{ background: 'var(--color-border-default)' }}
-      />
+    <div className={cn('intro-tl flex flex-col', dense && 'intro-tl--dense gap-[10px]')}>
       {children}
     </div>
   );

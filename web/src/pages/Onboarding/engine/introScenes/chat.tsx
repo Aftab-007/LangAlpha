@@ -377,8 +377,10 @@ function ChiefOfStaffAnswer() {
                   running={{ label: t('toolArtifact.thinkingFor', { duration: '1s' }) }}
                   settled={{ label: t('toolArtifact.thoughtFor', { duration: '1s' }) }}
                   after={
+                    // centered on the line, as the app's chevron is, not
+                    // sat on the label's baseline
                     <ChevronRight
-                      className="h-2 w-2 shrink-0"
+                      className="h-2 w-2 shrink-0 self-center"
                       style={{ color: 'var(--color-icon-muted)' }}
                     />
                   }
