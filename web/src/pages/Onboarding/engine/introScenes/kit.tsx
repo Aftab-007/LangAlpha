@@ -262,25 +262,38 @@ export function Loader({
   );
 }
 
-/** The user's message, right-aligned in the chat column. A message nobody
-    typed here carries its `caption` above it, naming who sent it. */
+/**
+ * The user's message, right-aligned in the chat column. A message nobody
+ * typed here carries its `caption` above it, naming who sent it.
+ *
+ * `wrap` is a message long enough to wrap, set as the app's bubble sets it:
+ * no wider than 80% of the column, its lines 1.5 apart as the chat's
+ * `leading-normal` spaces them. Its padding gives back the 2px each line
+ * adds above and below its type, so its first line sits where a one-line
+ * bubble's does.
+ */
 export function UserBubble({
   at,
   caption,
+  wrap = false,
   className,
   children,
 }: {
   at: number;
   caption?: ReactNode;
+  wrap?: boolean;
   className?: string;
   children: ReactNode;
 }) {
   return (
     <Appear at={at} className={cn('flex flex-col items-end gap-1', className)}>
       {caption}
-      <div className="rounded-md px-1.5 py-1" style={{ background: 'var(--color-bg-elevated)' }}>
+      <div
+        className={cn('rounded-md px-1.5', wrap ? 'max-w-[80%] py-0.5' : 'py-1')}
+        style={{ background: 'var(--color-bg-elevated)' }}
+      >
         <span
-          className="block text-[8px] leading-none"
+          className={cn('block text-[8px]', wrap ? 'leading-[1.5]' : 'leading-none')}
           style={{ color: 'var(--color-text-primary)' }}
         >
           {children}

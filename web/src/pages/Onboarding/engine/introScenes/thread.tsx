@@ -34,12 +34,6 @@ import type { IntroScene } from './types';
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
-/** A user message long enough to wrap, set at the width the app gives one
-    (80% of the column) and with room between its lines. */
-function Wrapped({ children }: { children: string }) {
-  return <span className="block max-w-[136px] leading-[1.25]">{children}</span>;
-}
-
 /* ── thread · step 2: long-term memory ─────────────────────────────────── */
 
 /** "Today" on the scene's clock: when a file saved in the scene changed. */
@@ -294,8 +288,8 @@ function Memory() {
               <ToolRow icon={Building2} settled={{ label: overview, pill: 'AVGO' }} />
             </Timeline>
             <Reply text={MEM.street} />
-            <UserBubble at={MEM.sendAsk + 80}>
-              <Wrapped>{MEM.ask}</Wrapped>
+            <UserBubble at={MEM.sendAsk + 80} wrap>
+              {MEM.ask}
             </UserBubble>
             <Timeline>
               <ToolRow
@@ -617,8 +611,8 @@ function Memo() {
         stack="bottom"
         chat={
           <>
-            <UserBubble at={PAST}>
-              <Wrapped>{MEMO.consensus.ask}</Wrapped>
+            <UserBubble at={PAST} wrap>
+              {MEMO.consensus.ask}
             </UserBubble>
             <Timeline>
               <ToolRow icon={Building2} settled={{ label: overview, pill: 'MSFT' }} />
@@ -630,8 +624,8 @@ function Memo() {
               <ToolRow icon={FileBarChart} settled={{ label: statements, pill: 'MSFT' }} />
             </Timeline>
             <Reply text={MEMO.earlier.answer} />
-            <UserBubble at={MEMO.askAt}>
-              <Wrapped>{MEMO.ask}</Wrapped>
+            <UserBubble at={MEMO.askAt} wrap>
+              {MEMO.ask}
             </UserBubble>
             <Timeline>
               <ToolRow

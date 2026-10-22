@@ -76,12 +76,6 @@ const ASK_SHOTS: [Shot, ...Shot[]] = [
   shot(9300, PAGE.width / 2, PAGE.height / 2, REST, 700),
 ];
 
-/** A message long enough to wrap, its lines spaced as the app's bubble
-    spaces them. */
-function Lines({ children }: { children: string }) {
-  return <span className="block leading-[1.3]">{children}</span>;
-}
-
 /** One call on an automation's file: the clock glyph, `reading` or
     `updating automations...` while it runs, then `Read` or `Updated
     automations` with the file's name. */
@@ -139,24 +133,22 @@ function AutomationAsk() {
           {/* the transcript settles on the composer: the newest lines just
               above it, the oldest running off the top as the turn grows */}
           <Transcript settled>
-            <UserBubble at={PAST} className="ml-12">
-              When does AVGO report?
-            </UserBubble>
+            <UserBubble at={PAST}>When does AVGO report?</UserBubble>
             <ToolRow
               dense
               icon={Globe}
               settled={{ label: t('toolArtifact.tool.webSearch'), pill: 'AVGO earnings date' }}
             />
             <Reply text="**Thursday, Dec 10**, after the close." at={PAST} />
-            <UserBubble at={PAST} className="ml-12">
-              <Lines>I&apos;m off next week. Back on Monday, November 2.</Lines>
+            <UserBubble at={PAST} wrap>
+              I&apos;m off next week. Back on Monday, November 2.
             </UserBubble>
             <Reply
               text="**Noted.** Your automations keep running while you're away, and each run's results wait in the feed. Want any of them paused?"
               at={PAST}
             />
-            <UserBubble at={PAST} className="ml-12">
-              <Lines>Pause the AVGO earnings preview until I&apos;m back.</Lines>
+            <UserBubble at={PAST} wrap>
+              Pause the AVGO earnings preview until I&apos;m back.
             </UserBubble>
             {/* the file is read, then written back with its status paused */}
             <Timeline dense>
@@ -168,8 +160,8 @@ function AutomationAsk() {
               at={PAST}
             />
             {/* the ask, the summary it waits on, the yes, and the new file */}
-            <UserBubble at={ASK.send + 60} className="ml-12">
-              <Lines>{ASK.ask}</Lines>
+            <UserBubble at={ASK.send + 60} wrap>
+              {ASK.ask}
             </UserBubble>
             <Reply text={ASK.summary} at={ASK.summaryAt} cps={ASK.summaryCps} />
             <UserBubble at={ASK.sendYes + 60}>{ASK.yes}</UserBubble>
