@@ -686,6 +686,33 @@ test.describe('Chat View -- SSE Streaming', () => {
     await expect(page.getByRole('button', { name: 'Toggle file tree' })).toHaveCount(0);
   });
 
+  test('a right click on the new tab button picks what the tab opens on', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await mockAPI(page, {
+      ...chatViewOverrides(),
+      'GET /workspaces/a0000001-0000-4000-8000-000000000001/files': { files: ['report.pdf', 'analysis.py'] },
+      'GET /workspaces/a0000001-0000-4000-8000-000000000001/files/read': {
+        workspace_id: 'a0000001-0000-4000-8000-000000000001', path: 'analysis.py', content: 'print(1)', mime: 'text/x-python', truncated: false,
+      },
+    });
+    await configureEmptyReplay();
+
+    await page.goto('/chat/t/b0000001-0000-4000-8000-000000000001');
+    await page.waitForSelector('textarea', { timeout: 10000 });
+    await page.locator('button[title="Workspace Files"]').click();
+    await page.getByRole('treeitem', { name: 'analysis.py' }).dispatchEvent('click');
+    await expect(page.locator('[role="tab"]', { hasText: 'analysis.py' })).toHaveAttribute('aria-selected', 'true');
+
+    await page.getByRole('button', { name: 'New tab' }).click({ button: 'right' });
+    const menu = page.getByRole('menu');
+    await expect(menu.getByRole('menuitem')).toHaveText(['Files', 'Chart']);
+    await menu.getByRole('menuitem', { name: 'Files' }).click();
+
+    await expect(page.locator('[role="tab"]')).toHaveCount(2);
+    await expect(page.getByRole('treeitem', { name: 'report.pdf' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Toggle file tree' })).toHaveCount(0);
+  });
+
   test('a keyboard open waits on the loading strip for as long as the panel takes', async ({ page }) => {
     await mockAPI(page, {
       ...chatViewOverrides(),
