@@ -713,6 +713,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     onThumbUp: stableThumbUp,
     onThumbDown: stableThumbDown,
     onWidgetSendPrompt: stableWidgetSendPrompt,
+    onRevealMessage: follow.reveal,
   }), [
     stableOpenSubagentTask, stableToolCallDetail,
     stableAnswerQuestion, stableSkipQuestion, stableApproveCreateWorkspace,
@@ -720,7 +721,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     stableApprovePTCAgent, stableRejectPTCAgent, stableApproveSecretaryAction,
     stableRejectSecretaryAction, stableResumeCreditPause, stableApproveToolCall, stableRejectToolCall,
     stableEditMessage, stableRegenerate, stableRetry, editDrafts,
-    stableThumbUp, stableThumbDown, stableWidgetSendPrompt,
+    stableThumbUp, stableThumbDown, stableWidgetSendPrompt, follow.reveal,
   ]);
 
   // In All workspaces, carry the source thread/workspace into a PTC-agent

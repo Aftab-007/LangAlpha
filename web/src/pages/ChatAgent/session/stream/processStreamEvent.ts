@@ -47,10 +47,11 @@ import { SCHEDULE_WAKEUP, wakeTurnOpener, withLiveWakeRow } from '../wakeupEvent
 import type {
   SSEEvent, StreamProcessorRefs, ModelStatus,
 } from '../types';
-import { dispatchFieldsOf, setCardFields, settleProposalFromResult } from '../interrupts/buckets';
+import { setCardFields, settleProposalFromResult } from '../interrupts/buckets';
 import { projectLiveInterrupt } from '../interrupts/fromLiveEvent';
 import type { StreamRuntime } from '../runtime';
 import { preapprovedReportBack } from '../../utils/preapprovedCards';
+import { dispatchResultFields } from '../../utils/dispatchResult';
 
 type RefreshOnResult = 'refreshMarketWatch' | 'refreshWakeups';
 
@@ -691,6 +692,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
               taskId,
               content: event.content as string,
               entries: event.entries as DeliveredInstruction[] | undefined,
+              steered: true,
               refs,
               updateSubagentCard: rt.updateSubagentCard,
             });
@@ -705,6 +707,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
               taskId,
               content: event.content as string,
               entries: [{ content: event.content as string, sender: 'agent' }],
+              steered: false,
               refs,
               updateSubagentCard: rt.updateSubagentCard,
             });
@@ -1048,10 +1051,8 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
       // Settle a card the history replay left pending, from the result of the
       // run that answered it.
       const unresolvedList = refs.unresolvedHistoryInterruptRef?.current;
-      if (unresolvedList && typeof event.content === 'string') {
-        settleProposalFromResult(
-          unresolvedList, event.tool_call_id as string | undefined, event.content, rt.setMessages,
-        );
+      if (unresolvedList) {
+        settleProposalFromResult(unresolvedList, event.tool_call_id as string | undefined, event, rt.setMessages);
       }
 
       const toolCallId = event.tool_call_id as string;
@@ -1111,7 +1112,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         const backfillPid = toolCallId ? rt.pendingPTCBackfillRef.current.get(toolCallId) : undefined;
         if (backfillPid) {
           rt.pendingPTCBackfillRef.current.delete(toolCallId);
-          const fields = dispatchFieldsOf(event.content);
+          const fields = dispatchResultFields(event);
           rt.setMessages((prev) => setCardFields(prev, 'ptcAgentProposals', backfillPid, fields));
         }
       }

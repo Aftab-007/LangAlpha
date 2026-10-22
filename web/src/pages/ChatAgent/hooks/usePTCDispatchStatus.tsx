@@ -9,9 +9,17 @@ import {
   type ReactNode,
 } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useStableArray } from '@/hooks/useStableArray';
+import { epochMs } from '@/lib/elapsed';
 import { queryKeys } from '@/lib/queryKeys';
-import { useThreadRunStatus, type PublicRunStatus } from '@/lib/threadLifecycle/store';
-import { getHandoffLiveness, type HandoffLiveness } from '../utils/api';
+import { useThreadRunStatuses, type PublicRunStatus } from '@/lib/threadLifecycle/store';
+import type { ReportOutcome } from '@/types/api';
+import {
+  getHandoffLiveness,
+  type DispatchSteerLiveness,
+  type HandoffLiveness,
+  type LivenessAsk,
+} from '../utils/api';
 import { isLastingRefusal } from '../utils/api/errors';
 
 /** UI-facing lifecycle of a dispatched PTC research run. */
@@ -23,7 +31,12 @@ export type PTCDispatchStatus =
   | 'failed'
   | 'stopped';
 
-const TERMINAL: ReadonlySet<PTCDispatchStatus> = new Set(['completed', 'failed', 'stopped']);
+/** A hand-off's status as the reads resolve it: its run's, or `dropped` for a
+ *  steer no run took in, which started nothing. Kept out of
+ *  `PTCDispatchStatus`, every member of which the status surfaces draw. */
+export type DispatchReadStatus = PTCDispatchStatus | 'dropped';
+
+const TERMINAL: ReadonlySet<DispatchReadStatus> = new Set(['completed', 'failed', 'stopped', 'dropped']);
 
 // A dispatched run that never registers (e.g. a continuation rejected by the
 // per-user cap) stays 'starting' on every poll. Stop after this many polls so
@@ -85,83 +98,124 @@ export function nextDispatchPollInterval(
  * fast→steady cadence alive; a still-`starting`-only set polls until the
  * starting cap then gives up; an all-terminal set stops.
  */
-function aggregateStatus(statuses: PTCDispatchStatus[]): PTCDispatchStatus {
+function aggregateStatus(statuses: DispatchReadStatus[]): PTCDispatchStatus {
   if (statuses.some((s) => s === 'running' || s === 'needs_input')) return 'running';
   if (statuses.some((s) => s === 'starting')) return 'starting';
   return 'completed';
 }
 
-interface DispatchSlice {
-  status: PTCDispatchStatus;
-  /** Start of the thread's latest run (epoch ms), when the ledger has one. */
+/** How a report says the run it reports on ended. */
+export function mapReportOutcome(outcome: ReportOutcome): PTCDispatchStatus {
+  switch (outcome) {
+    case 'completed': return 'completed';
+    case 'error': return 'failed';
+    case 'cancelled': return 'stopped';
+  }
+}
+
+/** Where a run stands, as a read or the feed has it. */
+export interface RunRead<S extends DispatchReadStatus = PTCDispatchStatus> {
+  status: S;
+  /** When the run started (epoch ms), when the ledger has it. */
   startedAt?: number;
-  /** When that run settled (epoch ms); absent while it is live. */
+  /** When it settled (epoch ms); absent while it is live. */
   finishedAt?: number;
+}
+
+/** Where a hand-off's run stands, as the reads resolve it. */
+type DispatchRead = RunRead<DispatchReadStatus>;
+
+/** What a read says of a thread beside its latest run. */
+interface ThreadNames {
   /** The thread's title, once it is named. */
   title?: string;
   /** The current name of the thread's workspace. */
   workspaceName?: string;
 }
 
-/** A hand-off's own run, read by its id. */
-interface RunSlice {
-  status: PTCDispatchStatus;
-  startedAt?: number;
-  finishedAt?: number;
-}
+/** A thread's latest run, and what the same read says of the thread. */
+type ThreadRead = RunRead & ThreadNames;
 
-/** What a hand-off reads beyond its thread. */
-export interface DispatchPin {
-  /** The hand-off's run, as the dispatch's result named it. */
-  runId?: string;
-  /** For a dispatch whose outcome is unknown: when it was made (epoch ms).
-   *  A run the thread started before then is not the hand-off's. */
-  since?: number;
-}
+/**
+ * What pins a hand-off's run on its thread. The run its report is on, else the
+ * one its dispatch named. For a hand-off steered into a run already going,
+ * until a report names its run, its steer: the run that takes the steer in is
+ * the hand-off's own, since the one it was steered into can end without
+ * reading it, and stands in only for a steer the read does not know. With
+ * neither, the thread's latest run; for a dispatch whose outcome is unknown,
+ * `since` is when it was made (epoch ms), and a run the thread started before
+ * then is not the hand-off's.
+ */
+export type DispatchPin =
+  | { kind: 'run'; runId: string }
+  | { kind: 'steer'; steerId: string; steeredInto: string }
+  | { kind: 'thread'; since?: number };
 
-interface DispatchWatch extends DispatchPin {
+/** What a hand-off watches: its thread, and what pins its run there. */
+export interface DispatchWatch {
   threadId: string;
+  pin: DispatchPin;
+  /** How the report that answers the hand-off says its run ended. Not read
+   *  by the poll, which goes on until it has that run's times. */
+  outcome?: ReportOutcome;
 }
 
-/** Where a hand-off stands as the reads and the feed have it. */
-export interface DispatchRead {
-  status: PTCDispatchStatus;
-  startedAt?: number;
-  finishedAt?: number;
-}
+/** A hand-off's own run as a read has it: `queued` while its steer waits for
+ *  a run to take it in, `dropped` once none will, and undefined while there is
+ *  no run of its own to read. */
+type OwnRead = RunRead | 'queued' | 'dropped' | undefined;
+
+/** Whether the hand-off's own run is over, so the read alone says how it ended. */
+const ownOver = (own: OwnRead) => own === 'dropped' || (typeof own === 'object' && TERMINAL.has(own.status));
 
 /**
  * Whether the thread's latest run can be a hand-off made at `since`: one it
  * started, or one still live then, which a hand-off that steered in joined.
  * A run already over by then cannot be.
  */
-function liveSince(thread: DispatchSlice | undefined, since: number): boolean {
+function liveSince(thread: ThreadRead | undefined, since: number): boolean {
   if (thread?.startedAt === undefined) return false;
   if (thread.startedAt >= since) return true;
   return thread.finishedAt === undefined ? !TERMINAL.has(thread.status) : thread.finishedAt >= since;
 }
 
 /**
- * Which run describes a hand-off. Its own run once that run is over: the
- * hand-off ended there, whatever the thread does later. While its run is live
- * it is the thread's latest, which the feed reaches first. An interrupted run
- * is answered by a new run on the thread, so a hand-off whose run stopped to
- * ask follows the thread. With no run to pin, the thread's latest run, unless
- * it was over before a dispatch of unknown outcome was made.
+ * Which run describes a hand-off, and so both its status and its times, first
+ * match wins. A report that answers it says how its run ended, whatever the
+ * reads have caught up to; the times are its own run's, or the thread's latest
+ * once that ended as the report says. Its own run once that is over: the
+ * hand-off ended there, whatever the thread does later, and a steer dropped
+ * ended it with no run at all. A dispatch of unknown outcome waits for a run
+ * the thread had live once it was made. A steer still queued has no run of its
+ * own, and the thread's live run is not ours: it is the run the steer went
+ * into, which reads it next, so the hand-off is Working while that run is live
+ * and Starting after, until a later run takes the steer in. Else the live run:
+ * the thread's latest, which the feed reaches first, timed by its own run when
+ * the read has it. An interrupted run is answered by a new run on the thread,
+ * so a hand-off whose run stopped to ask follows the thread.
  */
 function resolveDispatchRead(
-  pin: DispatchPin,
-  thread: DispatchSlice | undefined,
-  run: RunSlice | undefined,
+  watch: DispatchWatch,
+  own: OwnRead,
+  thread: ThreadRead | undefined,
   pushed: PTCDispatchStatus | null,
 ): DispatchRead {
+  const run = typeof own === 'object' ? own : undefined;
+  if (watch.outcome) {
+    const status = mapReportOutcome(watch.outcome);
+    const timed = run ?? (thread?.status === status ? thread : undefined);
+    return { status, startedAt: timed?.startedAt, finishedAt: timed?.finishedAt };
+  }
+  if (own === 'dropped') return { status: 'dropped' };
   if (run && TERMINAL.has(run.status)) {
     return { status: run.status, startedAt: run.startedAt, finishedAt: run.finishedAt };
   }
-  if (pin.since !== undefined && !liveSince(thread, pin.since)) {
+  const { pin } = watch;
+  if (pin.kind === 'thread' && pin.since !== undefined && !liveSince(thread, pin.since)) {
     return { status: 'starting' };
   }
   const status = pushed ?? thread?.status ?? 'starting';
+  if (own === 'queued' && TERMINAL.has(status)) return { status: 'starting' };
   if (run && run.status !== 'needs_input') {
     return { status, startedAt: run.startedAt, finishedAt: run.finishedAt };
   }
@@ -176,45 +230,85 @@ function resolveDispatchRead(
   };
 }
 
-/** One read as the provider caches it, with the ids it asked about: an id
- *  asked about and absent has no run yet, which is an answer too. */
+/** One read as the provider caches it, with what it asked: an id asked
+ *  about and absent has no run yet, which is an answer too. */
 interface LivenessRead extends HandoffLiveness {
-  threadIds: readonly string[];
-  runIds: readonly string[];
+  asked: LivenessAsk;
 }
 
 interface ReadSlices {
-  threads: Map<string, DispatchSlice>;
-  runs: Map<string, RunSlice>;
-  readThreads: ReadonlySet<string>;
-  readRuns: ReadonlySet<string>;
+  threads: Map<string, ThreadRead>;
+  runs: Map<string, RunRead>;
+  steers: Map<string, DispatchSteerLiveness>;
+  asked: LivenessAsk;
 }
 
-function parseMs(iso: string | null | undefined): number | undefined {
-  const ms = iso ? Date.parse(iso) : NaN;
-  return Number.isFinite(ms) ? ms : undefined;
-}
+const NOTHING_ASKED: LivenessAsk = { threads: [], runs: [], steers: [] };
+
+const runReadOf = (row: { status: string; run_started_at?: string | null; run_finished_at?: string | null }): RunRead => ({
+  status: mapLivenessStatus(row.status),
+  startedAt: epochMs(row.run_started_at) ?? undefined,
+  finishedAt: epochMs(row.run_finished_at) ?? undefined,
+});
 
 function slicesOf(read: LivenessRead | undefined): ReadSlices {
-  const threads = new Map<string, DispatchSlice>();
+  const threads = new Map<string, ThreadRead>();
   for (const row of read?.liveness ?? []) {
     threads.set(row.thread_id, {
-      status: mapLivenessStatus(row.status),
-      startedAt: parseMs(row.run_started_at),
-      finishedAt: parseMs(row.run_finished_at),
+      ...runReadOf(row),
       title: row.title?.trim() || undefined,
       workspaceName: row.workspace_name?.trim() || undefined,
     });
   }
-  const runs = new Map<string, RunSlice>();
-  for (const row of read?.runs ?? []) {
-    runs.set(row.run_id, {
-      status: mapLivenessStatus(row.status),
-      startedAt: parseMs(row.run_started_at),
-      finishedAt: parseMs(row.run_finished_at),
-    });
+  const runs = new Map<string, RunRead>();
+  for (const row of read?.runs ?? []) runs.set(row.run_id, runReadOf(row));
+  const steers = new Map<string, DispatchSteerLiveness>();
+  for (const row of read?.steers ?? []) steers.set(row.steer_id, row);
+  return { threads, runs, steers, asked: read?.asked ?? NOTHING_ASKED };
+}
+
+/**
+ * A hand-off's own run as a read has it. A taken steer's is the run that took
+ * it in, which the read carries whether it was asked for or not. A steer the
+ * read does not know (purged, or never the user's) leaves the run it was
+ * steered into.
+ */
+function ownRead({ pin }: DispatchWatch, read: ReadSlices): OwnRead {
+  if (pin.kind === 'thread') return undefined;
+  if (pin.kind === 'run') return read.runs.get(pin.runId);
+  const steer = read.steers.get(pin.steerId);
+  if (!steer) return read.runs.get(pin.steeredInto);
+  if (steer.state === 'taken' && steer.run_id) return read.runs.get(steer.run_id);
+  return steer.state === 'dropped' ? 'dropped' : 'queued';
+}
+
+/** The runs and steers a pin is read by. A steer pin asks for the run it was
+ *  steered into as well, so the fallback for a steer the read does not know
+ *  needs no second read. */
+function pinnedIds(pin: DispatchPin): { runs: string[]; steers: string[] } {
+  switch (pin.kind) {
+    case 'run': return { runs: [pin.runId], steers: [] };
+    case 'steer': return { runs: [pin.steeredInto], steers: [pin.steerId] };
+    case 'thread': return { runs: [], steers: [] };
   }
-  return { threads, runs, readThreads: new Set(read?.threadIds), readRuns: new Set(read?.runIds) };
+}
+
+const sortedSet = (values: Iterable<string>) => [...new Set(values)].sort();
+
+/** What the watches ask one read, each list sorted and deduped. */
+function askOf(watches: readonly DispatchWatch[]): LivenessAsk {
+  const pinned = watches.map((w) => pinnedIds(w.pin));
+  return {
+    threads: sortedSet(watches.map((w) => w.threadId)),
+    runs: sortedSet(pinned.flatMap((p) => p.runs)),
+    steers: sortedSet(pinned.flatMap((p) => p.steers)),
+  };
+}
+
+/** Whether a read asked about everything a pin is read by. */
+function askedFor(asked: LivenessAsk, pin: DispatchPin): boolean {
+  const { runs, steers } = pinnedIds(pin);
+  return runs.every((id) => asked.runs.includes(id)) && steers.every((id) => asked.steers.includes(id));
 }
 
 interface DispatchStatusContextValue {
@@ -229,36 +323,26 @@ interface DispatchStatusContextValue {
 
 const DispatchStatusContext = createContext<DispatchStatusContextValue | null>(null);
 
-const watchKey = ({ threadId, runId, since }: DispatchWatch) =>
-  JSON.stringify([threadId, runId ?? null, since ?? null]);
-
-function watchOf(key: string): DispatchWatch {
-  const [threadId, runId, since] = JSON.parse(key) as [string, string | null, number | null];
-  return { threadId, ...(runId ? { runId } : {}), ...(since !== null ? { since } : {}) };
-}
-
-/** Sorted, deduped, and joined, so an unchanged set keeps its identity. */
-function idSet(values: Iterable<string | undefined>): string {
-  return [...new Set([...values].filter((v): v is string => !!v))].sort().join(',');
-}
-
-const splitIds = (joined: string): string[] => (joined ? joined.split(',') : []);
+/** What the poll reads for a watch; the outcome is not part of it. */
+const watchKey = ({ threadId, pin }: DispatchWatch) => JSON.stringify([threadId, pin]);
 
 /**
  * Runs ONE batched dispatch-liveness query for every hand-off in a Chief of
- * Staff turn. Each hand-off registers what it watches (its thread, and its own
- * run once the dispatch named it); the provider polls the sorted id sets once
- * and distributes a slice per thread and per run via context, collapsing N
+ * Staff turn. Each hand-off registers what it watches (its thread, and what
+ * pins its run there); the provider asks one read about all of them and
+ * distributes a slice per thread, run and steer via context, collapsing N
  * per-card `/status` polls into a single request on a single timer.
  */
 export function DispatchStatusProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const [watchKeys, setWatchKeys] = useState<string[]>([]);
+  const [watchMap, setWatchMap] = useState<ReadonlyMap<string, DispatchWatch>>(() => new Map());
   // Ref-count registrations so two cards on the same hand-off share one entry
   // and one card unmounting doesn't drop a watch another card still holds.
   const countsRef = useRef<Map<string, number>>(new Map());
+  // How many distinct watches each thread has, for `register`.
+  const threadWatchesRef = useRef<Map<string, number>>(new Map());
   // Latest distributed slices, readable from the stable `register` callback.
-  const slicesRef = useRef<Map<string, DispatchSlice>>(new Map());
+  const slicesRef = useRef<Map<string, ThreadRead>>(new Map());
   // Poll-cadence counters scoped to the CURRENT polling window. The query's
   // update counts are cumulative for its life, so deriving cadence from them
   // directly makes the starting cap trip instantly (and skips the fast window)
@@ -268,17 +352,22 @@ export function DispatchStatusProvider({ children }: { children: ReactNode }) {
   const register = useCallback((watch: DispatchWatch) => {
     const key = watchKey(watch);
     const counts = countsRef.current;
-    const threadWatched = [...counts.keys()].some((k) => k !== key && watchOf(k).threadId === watch.threadId);
+    const perThread = threadWatchesRef.current;
+    const threadWatched = (perThread.get(watch.threadId) ?? 0) > (counts.has(key) ? 1 : 0);
     const next = (counts.get(key) ?? 0) + 1;
     counts.set(key, next);
-    if (next === 1) setWatchKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
-    // A hand-off with no run of its own registering on a thread already read,
-    // whose run already finished, is a RESUMED dispatch: the id sets (and thus
-    // the query key) are unchanged, so the dormant query would keep serving
-    // the stale terminal slice forever. Re-arm the cadence window and wake
-    // every id-set variant. Terminal-gated so re-renders during live polling
-    // never add fetches. A run of its own is a new key, read on its own.
-    if (watch.runId || (next === 1 && !threadWatched)) return;
+    if (next === 1) {
+      perThread.set(watch.threadId, (perThread.get(watch.threadId) ?? 0) + 1);
+      const { threadId, pin } = watch;
+      setWatchMap((prev) => (prev.has(key) ? prev : new Map(prev).set(key, { threadId, pin })));
+    }
+    // A hand-off pinned only to its thread registering on a thread already
+    // read, whose run already finished, is a RESUMED dispatch: the ask (and
+    // thus the query key) is unchanged, so the dormant query would keep
+    // serving the stale terminal slice forever. Re-arm the cadence window and
+    // wake every ask variant. Terminal-gated so re-renders during live polling
+    // never add fetches. A run or steer of its own is a new ask, read on its own.
+    if (watch.pin.kind !== 'thread' || (next === 1 && !threadWatched)) return;
     const current = slicesRef.current.get(watch.threadId)?.status;
     if (current && TERMINAL.has(current)) {
       cadenceRef.current.polls = 0;
@@ -296,51 +385,55 @@ export function DispatchStatusProvider({ children }: { children: ReactNode }) {
       return;
     }
     counts.delete(key);
-    setWatchKeys((prev) => prev.filter((k) => k !== key));
+    const perThread = threadWatchesRef.current;
+    const left = (perThread.get(watch.threadId) ?? 1) - 1;
+    if (left > 0) perThread.set(watch.threadId, left);
+    else perThread.delete(watch.threadId);
+    setWatchMap((prev) => {
+      if (!prev.has(key)) return prev;
+      const rest = new Map(prev);
+      rest.delete(key);
+      return rest;
+    });
   }, []);
 
-  const watches = useMemo(() => watchKeys.map(watchOf), [watchKeys]);
-  // Joined strings first, so a new watch on a thread and run already read
-  // keeps the id arrays, and the query key, as they were.
-  const idsJoined = idSet(watches.map((w) => w.threadId));
-  const runsJoined = idSet(watches.map((w) => w.runId));
-  const sortedIds = useMemo(() => splitIds(idsJoined), [idsJoined]);
-  const sortedRuns = useMemo(() => splitIds(runsJoined), [runsJoined]);
-  // The ids the query reads, for `settle`: a refetch runs even while the query
+  const watches = useMemo(() => [...watchMap.values()], [watchMap]);
+  // Serialized first, so a new watch on a thread and run already read keeps
+  // the ask, and the query key, as it was.
+  const askJoined = JSON.stringify(askOf(watches));
+  const ask = useMemo(() => JSON.parse(askJoined) as LivenessAsk, [askJoined]);
+  // What the query reads, for `settle`: a refetch runs even while the query
   // is disabled, so asking before a thread's id is read would send a read
   // without it, and the read its registration starts answers it anyway.
-  const readIdsRef = useRef<readonly string[]>(sortedIds);
+  const askRef = useRef<LivenessAsk>(ask);
   useEffect(() => {
-    readIdsRef.current = sortedIds;
-  }, [sortedIds]);
+    askRef.current = ask;
+  }, [ask]);
 
-  // A changed id set is a NEW cache entry (its settle count restarts at 0), so
+  // A changed ask is a NEW cache entry (its settle count restarts at 0), so
   // the cadence window restarts with it.
   useEffect(() => {
     cadenceRef.current = { polls: 0, startingRounds: 0, lastSettledCount: 0 };
-  }, [sortedIds, sortedRuns]);
+  }, [ask]);
 
   const { data, refetch } = useQuery({
-    queryKey: queryKeys.threads.dispatchLiveness(sortedIds, sortedRuns),
-    queryFn: async (): Promise<LivenessRead> => ({
-      threadIds: sortedIds,
-      runIds: sortedRuns,
-      ...(await getHandoffLiveness(sortedIds, sortedRuns)),
-    }),
-    enabled: sortedIds.length > 0,
+    queryKey: queryKeys.threads.dispatchLiveness(ask),
+    queryFn: async (): Promise<LivenessRead> => ({ asked: ask, ...(await getHandoffLiveness(ask)) }),
+    enabled: ask.threads.length > 0,
     staleTime: 2_000,
     // A new hand-off is a new key; the others keep what they read meanwhile
     // rather than drop back to 'starting' for a round trip.
     placeholderData: keepPreviousData,
     refetchInterval: (query) => {
-      const { threads, runs } = slicesOf(query.state.data as LivenessRead | undefined);
+      const slices = slicesOf(query.state.data as LivenessRead | undefined);
       // Each hand-off as the poll alone resolves it: one whose own run is
-      // over keeps nothing alive, whatever its thread runs since. Omitted ids
-      // map to 'starting' (keep watching), matching mapLivenessStatus.
+      // over keeps nothing alive, whatever its thread runs since, and nor does
+      // a steer dropped. Omitted ids map to 'starting' (keep watching),
+      // matching mapLivenessStatus.
       const statuses = watches.map((w) =>
-        resolveDispatchRead(w, threads.get(w.threadId), w.runId ? runs.get(w.runId) : undefined, null).status);
+        resolveDispatchRead(w, ownRead(w, slices), slices.threads.get(w.threadId), null).status);
       const aggregate = aggregateStatus(statuses);
-      // Advance window-scoped counters once per SETTLED fetch, deduped on the
+      // Advance window-scoped counters once per finished fetch, deduped on the
       // cumulative settle count since this callback re-evaluates more often.
       // A failure counts too: the query keeps the last answer, so the round
       // reads as that answer did. Counting only successes held a failing
@@ -372,7 +465,7 @@ export function DispatchStatusProvider({ children }: { children: ReactNode }) {
   // its own. Joining a read already in flight keeps N cards on one thread to
   // one request.
   const settle = useCallback((threadId: string) => {
-    if (readIdsRef.current.includes(threadId)) void refetch({ cancelRefetch: false });
+    if (askRef.current.threads.includes(threadId)) void refetch({ cancelRefetch: false });
   }, [refetch]);
 
   const value = useMemo<DispatchStatusContextValue>(
@@ -401,76 +494,127 @@ export function mapLifecycleStatus(s: PublicRunStatus): PTCDispatchStatus | null
   }
 }
 
-/** A hand-off's status as `useDispatchStatus` reads it. */
-export interface DispatchStatusView extends DispatchRead {
-  title?: string;
-  workspaceName?: string;
-  /** Whether a read or the feed has spoken yet, or nothing is watched. Until
-   *  then the status is the default, not news. */
+/** A hand-off's status as `useDispatchStatuses` reads it. */
+export interface DispatchStatusView extends DispatchRead, ThreadNames {
+  /** Whether a read, the feed or a report has spoken yet, or nothing is
+   *  watched. Until then the status is the default, not news. */
   read: boolean;
 }
 
+const UNWATCHED: DispatchStatusView = { status: 'starting', read: true };
+
+const sameWatches = (a: (DispatchWatch | null)[], b: (DispatchWatch | null)[]) =>
+  a.length === b.length && a.every((w, i) => (w && watchKey(w)) === (b[i] && watchKey(b[i])));
+
+/** What one watch's settle check turns on; `due` once a push settled a run
+ *  the last read does not say is over. */
+interface SettleAsk {
+  key: string;
+  threadId: string;
+  pushed: PTCDispatchStatus | null;
+  due: boolean;
+  finishKnown: boolean;
+}
+
+const sameAsks = (a: (SettleAsk | null)[], b: (SettleAsk | null)[]) =>
+  a.length === b.length && a.every((x, i) => {
+    const y = b[i];
+    return x === y || (!!x && !!y && x.key === y.key && x.pushed === y.pushed && x.due === y.due && x.finishKnown === y.finishKnown);
+  });
+
 /**
- * Read one hand-off's liveness. The lifecycle store (user feed) is the primary
- * source for the thread once its run is ledger-known: settles arrive as
- * pushes, not on the next poll tick. The provider's batched poll is retained as
- * the pre-ledger fallback: a just-dispatched run has no lifecycle row yet, and
- * only the poll can distinguish "still registering" from "never registered".
- * A pinned run (`pin.runId`) is read by its id too, and once it is over it
- * alone says how the hand-off ended (see `resolveDispatchRead`). Registers the
- * watch while `enabled` so the provider's batched query covers it; reads
- * nothing otherwise. Returns 'starting' when no source has resolved it yet.
- * The thread's title and its workspace's current name come from the poll.
+ * Read hand-offs' liveness, one view per watch; a null watch reads nothing.
+ * The lifecycle store (user feed) is the primary source for a thread once its
+ * run is ledger-known: settles arrive as pushes, not on the next poll tick.
+ * The provider's batched poll is the pre-ledger fallback: a just-dispatched
+ * run has no lifecycle row yet, and only the poll can distinguish "still
+ * registering" from "never registered". A pinned run is read by its id too,
+ * and a steer by its id, which names the run that took it in; once that run
+ * is over, or the steer was dropped, the read alone says how the hand-off
+ * ended, unless a report already has (see `resolveDispatchRead`). The
+ * thread's title and its workspace's current name come from the poll.
  */
-export function useDispatchStatus(
-  threadId: string | undefined,
-  enabled: boolean,
-  pin: DispatchPin = {},
-): DispatchStatusView {
+export function useDispatchStatuses(watches: (DispatchWatch | null)[]): DispatchStatusView[] {
   const ctx = useContext(DispatchStatusContext);
-  // Pull the stable register fns out of the context value (whose identity
-  // changes every poll) so this effect doesn't re-run — and re-register — on
-  // each distribution.
+  // The stable register fns, not the context value (whose identity changes
+  // every poll), so the effects don't re-register on each distribution.
   const register = ctx?.register;
   const unregister = ctx?.unregister;
-  const active = enabled && !!threadId;
-  const { runId, since } = pin;
-
-  useEffect(() => {
-    if (!register || !unregister || !active || !threadId) return;
-    const watch = { threadId, runId, since };
-    register(watch);
-    return () => unregister(watch);
-  }, [register, unregister, active, threadId, runId, since]);
-
-  const pushed = mapLifecycleStatus(useThreadRunStatus(active && threadId ? threadId : ''));
-  const watched = active && !!threadId && !!ctx;
-  // Until a read asks about the pinned run, the one on hand is kept from
-  // before the pin, and its thread may be on an earlier run.
-  const current = watched && (!runId || ctx.read.readRuns.has(runId));
-  const named = watched ? ctx.read.threads.get(threadId) : undefined;
-  const thread = current ? named : undefined;
-  const run = watched && runId ? ctx.read.runs.get(runId) : undefined;
-  const resolved = resolveDispatchRead({ runId, since }, thread, run, pushed);
-  const pinnedOver = !!run && TERMINAL.has(run.status);
-
-  // A push that settled the run, when the last read cannot say when: the read
-  // was live, or of another run (the push moved here while this view watched).
-  // A pinned run that is over needs nothing more.
   const settle = ctx?.settle;
-  const settledByPush = pushed !== null && TERMINAL.has(pushed);
-  const finishKnown = resolved.finishedAt !== undefined && resolved.status === pushed;
-  const lastPushedRef = useRef(pushed);
-  useEffect(() => {
-    const moved = lastPushedRef.current !== pushed;
-    lastPushedRef.current = pushed;
-    if (settle && active && threadId && !pinnedOver && settledByPush && (moved || !finishKnown)) settle(threadId);
-  }, [settle, active, threadId, pinnedOver, pushed, settledByPush, finishKnown]);
+  const stable = useStableArray(watches, sameWatches);
 
-  return {
-    ...resolved,
-    title: named?.title,
-    workspaceName: named?.workspaceName,
-    read: !watched || pushed !== null || (current && ctx.read.readThreads.has(threadId)),
-  };
+  // Registers what was added and drops what went, so a watch that stays is
+  // not dropped and taken again, which on a thread already read would read
+  // as a resumed dispatch.
+  const heldRef = useRef<Map<string, DispatchWatch>>(new Map());
+  useEffect(() => {
+    if (!register || !unregister) return;
+    const held = heldRef.current;
+    const next = new Map<string, DispatchWatch>();
+    for (const w of stable) if (w) next.set(watchKey(w), w);
+    for (const [key, w] of next) if (!held.has(key)) register(w);
+    for (const [key, w] of held) if (!next.has(key)) unregister(w);
+    heldRef.current = next;
+  }, [register, unregister, stable]);
+  useEffect(() => () => {
+    heldRef.current.forEach((w) => unregister?.(w));
+    heldRef.current = new Map();
+  }, [unregister]);
+
+  const lifecycle = useThreadRunStatuses(watches.map((w) => w?.threadId ?? ''));
+  const asks: (SettleAsk | null)[] = [];
+  const views = watches.map((watch, i) => {
+    if (!watch) {
+      asks.push(null);
+      return UNWATCHED;
+    }
+    const { threadId, pin } = watch;
+    const pushed = mapLifecycleStatus(lifecycle[i] ?? 'idle');
+    // Until a read asks about the pinned run and the steer, the one on hand is
+    // kept from before the pin, and its thread may be on an earlier run, or
+    // on the run the steer missed.
+    const current = !!ctx && askedFor(ctx.read.asked, pin);
+    const named = ctx?.read.threads.get(threadId);
+    const thread = current ? named : undefined;
+    const own = ctx && current ? ownRead(watch, ctx.read) : undefined;
+    const resolved = resolveDispatchRead(watch, own, thread, pushed);
+    // A push that settled the run, when the last read cannot say when: the
+    // read was live, or of another run (the push moved here while this view
+    // watched). A pinned run that is over, or a steer dropped, needs nothing
+    // more.
+    asks.push(ctx ? {
+      key: watchKey(watch),
+      threadId,
+      pushed,
+      due: !ownOver(own) && pushed !== null && TERMINAL.has(pushed),
+      finishKnown: resolved.finishedAt !== undefined && resolved.status === pushed,
+    } : null);
+    return {
+      ...resolved,
+      title: named?.title,
+      workspaceName: named?.workspaceName,
+      read: !ctx || !!watch.outcome || pushed !== null || (current && ctx.read.asked.threads.includes(threadId)),
+    };
+  });
+
+  // Each watch's check runs when what it turns on changes, as its own effect
+  // would: the feed's status moving is a settle to read, and so is one the
+  // read still cannot time.
+  const settleAsks = useStableArray(asks, sameAsks);
+  const seenRef = useRef<Map<string, SettleAsk>>(new Map());
+  useEffect(() => {
+    const seen = seenRef.current;
+    const next = new Map<string, SettleAsk>();
+    for (const ask of settleAsks) {
+      if (!ask) continue;
+      next.set(ask.key, ask);
+      const before = seen.get(ask.key);
+      if (before && sameAsks([before], [ask])) continue;
+      const moved = !!before && before.pushed !== ask.pushed;
+      if (settle && ask.due && (moved || !ask.finishKnown)) settle(ask.threadId);
+    }
+    seenRef.current = next;
+  }, [settle, settleAsks]);
+
+  return views;
 }

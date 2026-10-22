@@ -349,7 +349,8 @@ export interface DispatchLiveness {
   workspace_name?: string | null;
 }
 
-/** A hand-off's own run, read by its id beside the threads. */
+/** A run read by its id beside the threads: one asked for, or the run that
+ *  took in a steer asked for. */
 export interface DispatchRunLiveness {
   run_id: string;
   thread_id: string;
@@ -360,10 +361,33 @@ export interface DispatchRunLiveness {
   run_finished_at?: string | null;
 }
 
-/** One batched read: each thread's latest run, and the runs asked for by id. */
+/**
+ * A hand-off's steer into a run already going, read by its id: `taken` by the
+ * run it names, whose view is in `runs` whether it was asked for or not,
+ * `queued` until a run takes it in, or `dropped` once it settled with none.
+ */
+export interface DispatchSteerLiveness {
+  steer_id: string;
+  thread_id: string;
+  state: 'taken' | 'queued' | 'dropped';
+  /** Set exactly when the steer was taken. */
+  run_id: string | null;
+}
+
+/** One batched read: each thread's latest run, the runs asked for by id with
+ *  the run of each steer taken, and the steers asked for. */
 export interface HandoffLiveness {
   liveness: DispatchLiveness[];
   runs: DispatchRunLiveness[];
+  steers: DispatchSteerLiveness[];
+}
+
+/** What one liveness read asks about, by id: threads for their latest run,
+ *  runs on their own, and steers for the run that took each in. */
+export interface LivenessAsk {
+  threads: readonly string[];
+  runs: readonly string[];
+  steers: readonly string[];
 }
 
 /** The most ids of each kind the liveness route reads per request; it drops the rest. */
@@ -371,30 +395,35 @@ const LIVENESS_IDS_PER_REQUEST = 100;
 
 /**
  * Batched liveness for a turn's hand-offs: one request resolves the latest run
- * of many dispatched threads, and any runs named by id, at once, replacing N
- * per-card `/status` polls. Foreign/unknown/expired ids are omitted from the
- * response. Resolves empty without a request when nothing is asked.
+ * of many dispatched threads, and any runs and steers named by id, at once,
+ * replacing N per-card `/status` polls. Foreign/unknown/expired ids are
+ * omitted from the response. Resolves empty without a request when nothing is
+ * asked.
  */
-export async function getHandoffLiveness(
-  threadIds: string[],
-  runIds: string[] = [],
-): Promise<HandoffLiveness> {
-  const batches = Math.ceil(Math.max(threadIds.length, runIds.length) / LIVENESS_IDS_PER_REQUEST);
+export async function getHandoffLiveness({ threads, runs, steers }: LivenessAsk): Promise<HandoffLiveness> {
+  const batches = Math.ceil(Math.max(threads.length, runs.length, steers.length) / LIVENESS_IDS_PER_REQUEST);
   const pages = await Promise.all(Array.from({ length: batches }, async (_, i) => {
-    const ids = threadIds.slice(i * LIVENESS_IDS_PER_REQUEST, (i + 1) * LIVENESS_IDS_PER_REQUEST);
-    const runs = runIds.slice(i * LIVENESS_IDS_PER_REQUEST, (i + 1) * LIVENESS_IDS_PER_REQUEST);
+    const start = i * LIVENESS_IDS_PER_REQUEST;
+    const page = (all: readonly string[]) => all.slice(start, start + LIVENESS_IDS_PER_REQUEST).join(',');
+    const [ids, runIds, steerIds] = [page(threads), page(runs), page(steers)];
     const { data } = await api.get('/api/v1/threads/dispatches/liveness', {
       params: {
-        ...(ids.length > 0 ? { ids: ids.join(',') } : {}),
-        ...(runs.length > 0 ? { runs: runs.join(',') } : {}),
+        ...(ids ? { ids } : {}),
+        ...(runIds ? { runs: runIds } : {}),
+        ...(steerIds ? { steers: steerIds } : {}),
       },
     });
     return {
       liveness: (data?.liveness ?? []) as DispatchLiveness[],
       runs: (data?.runs ?? []) as DispatchRunLiveness[],
+      steers: (data?.steers ?? []) as DispatchSteerLiveness[],
     };
   }));
-  return { liveness: pages.flatMap((p) => p.liveness), runs: pages.flatMap((p) => p.runs) };
+  return {
+    liveness: pages.flatMap((p) => p.liveness),
+    runs: pages.flatMap((p) => p.runs),
+    steers: pages.flatMap((p) => p.steers),
+  };
 }
 
 // SSE event name of a report-back wake on GET /threads/{id}/watch. Contract:

@@ -7,16 +7,16 @@ import type { OpenFileHandler } from '../../utils/fileLocation';
 import UserQuestionCard from '../UserQuestionCard';
 import CreateWorkspaceCard from '../CreateWorkspaceCard';
 import StartQuestionCard from '../StartQuestionCard';
-import PTCAgentCard from '../PTCAgentCard';
 import SecretaryConfirmCard from '../SecretaryConfirmCard';
 import CreditPauseCard from '../CreditPauseCard';
 import ToolApprovalCard from '../ToolApprovalCard';
 import PastPlanCard from '../PastPlanCard';
 import WorkflowRunCard from '../WorkflowRunCard';
 import SubagentRun, { type SubagentRunMember } from './SubagentRun';
+import AnalystHandoffRun, { type AnalystHandoffMember } from './AnalystHandoffRun';
 import { WORKFLOW_TASK_TYPE } from '../../session/subagents/workflowRunState';
 import { SubagentStopNotices } from '../SubagentStopNotice';
-import type { CreditPauseState, SubagentTaskRecord, ToolApprovalState } from '@/types/chat';
+import type { CreditPauseState, PTCAgentProposalState, SubagentTaskRecord, ToolApprovalState } from '@/types/chat';
 import TextMessageContent from '../TextMessageContent';
 import { visibleParagraphPrefix } from '@/lib/paragraphGate';
 import { useTranscriptDisplay } from '@/lib/transcriptDisplay';
@@ -68,7 +68,7 @@ interface MessageContentSegmentsProps {
   isTurnTail?: boolean;
   isSubagentView?: boolean;
   readOnly?: boolean;
-  ptcAgentProposals?: Record<string, Record<string, unknown>>;
+  ptcAgentProposals?: Record<string, PTCAgentProposalState>;
   secretaryActionProposals?: Record<string, Record<string, unknown>>;
   creditPauses?: Record<string, CreditPauseState>;
   toolApprovals?: Record<string, ToolApprovalState>;
@@ -254,14 +254,18 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
     }
   }
 
+  const proposalOf = (block: PTCAgentRenderBlock): PTCAgentProposalState | undefined =>
+    block.proposal ?? ptcAgentProposals[block.segment.proposalId!];
+
   /** Blocks drawn as one row or group with their like neighbours. */
-  const runKind = (block: RenderBlock): 'pill' | 'subagent' | null => {
+  const runKind = (block: RenderBlock): 'pill' | 'subagent' | 'analyst' | null => {
     if (isPillBlock(block)) return 'pill';
     if (block.type === 'subagent_task') {
       const id = block.segment.subagentId;
       // A workflow run has a card of its own and breaks a run of spawns.
       return id && subagentTasks[id]?.type !== WORKFLOW_TASK_TYPE ? 'subagent' : null;
     }
+    if (block.type === 'ptc_agent') return !readOnly && proposalOf(block) ? 'analyst' : null;
     return null;
   };
 
@@ -406,21 +410,6 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
           );
         }
 
-        if (block.type === 'ptc_agent') {
-          if (readOnly) return null;
-          const pad = (block as PTCAgentRenderBlock).proposal ?? ptcAgentProposals[(block as PTCAgentRenderBlock).segment.proposalId!];
-          if (!pad) return null;
-          return (
-            <PTCAgentCard
-              key={block.key}
-              proposalData={pad as any}
-              onApprove={onApprovePTCAgent ? (overrides?: { report_back?: boolean }) => onApprovePTCAgent(pad, overrides, (block as PTCAgentRenderBlock).segment.proposalId!, pad.interruptId as string) : undefined}
-              onReject={onRejectPTCAgent ? () => onRejectPTCAgent(pad, (block as PTCAgentRenderBlock).segment.proposalId!, pad.interruptId as string) : undefined}
-              dispatcherContext={dispatcherContext}
-            />
-          );
-        }
-
         if (block.type === 'delete_workspace' || block.type === 'stop_workspace' || block.type === 'delete_thread') {
           if (readOnly) return null;
           const sad = secretaryActionProposals[(block as SecretaryActionRenderBlock).segment.proposalId!];
@@ -500,8 +489,8 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
     <div className="sibling-space-y-3">
       {(() => {
         // One element per block, except that a run of consecutive blocks of
-        // one kind (pills, subagent spawns) sharing a fold and visibility
-        // state is gathered into one element.
+        // one kind (pills, subagent spawns, analyst hand-offs) sharing a fold
+        // and visibility state is gathered into one element.
         const wrap = (blockIdx: number, content: React.ReactElement) => {
           const key = renderBlocks[blockIdx].key;
           if (blockFolds[blockIdx]) {
@@ -545,6 +534,20 @@ export const MessageContentSegments = memo(function MessageContentSegments({ seg
                   members={members}
                   pausing={creditPausePending}
                   onOpen={readOnly ? undefined : onOpenSubagentTask}
+                />
+              );
+            } else if (kind === 'analyst') {
+              const members: AnalystHandoffMember[] = run.map((idx) => {
+                const b = renderBlocks[idx] as PTCAgentRenderBlock;
+                return { key: b.key, proposal: proposalOf(b)!, proposalId: b.segment.proposalId! };
+              });
+              content = (
+                <AnalystHandoffRun
+                  key={firstKey}
+                  members={members}
+                  onApprove={onApprovePTCAgent}
+                  onReject={onRejectPTCAgent}
+                  dispatcherContext={dispatcherContext}
                 />
               );
             } else {

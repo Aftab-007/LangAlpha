@@ -5,29 +5,30 @@
  * (`src/tools/secretary/approvals.py`).
  */
 
-import { dispatchResultFields, jsonObjectOf } from './dispatchResult';
+import type { PTCAgentProposalState } from '@/types/chat';
+import { dispatchResultFields, jsonObjectOf, type ToolResultLike } from './dispatchResult';
 
 const HANDOFF_TOOLS = new Set(['delegate_to_analyst', 'ptc_agent']);
 
 export type PreapprovedCard =
-  | { type: 'ptc_agent'; proposal: Record<string, unknown> }
+  | { type: 'ptc_agent'; proposal: PTCAgentProposalState }
   | { type: 'create_workspace'; proposal: Record<string, unknown> };
 
 export interface ToolCallLike {
   toolName?: unknown;
   toolCall?: { id?: unknown; args?: Record<string, unknown> } | null;
-  toolCallResult?: { content?: unknown } | null;
+  toolCallResult?: ToolResultLike | null;
 }
 
 export function preapprovedCard(
   toolName: unknown,
   args: Record<string, unknown> | undefined,
-  content: unknown,
+  tool: ToolResultLike,
   toolCallId?: string,
 ): PreapprovedCard | null {
   const isHandoff = HANDOFF_TOOLS.has(toolName as string);
   if (!isHandoff && toolName !== 'manage_workspaces') return null;
-  const result = jsonObjectOf(content);
+  const result = jsonObjectOf(tool.content);
   if (result?.preapproved !== true) return null;
   if (!isHandoff) {
     if (result.success !== true) return null;
@@ -41,7 +42,7 @@ export function preapprovedCard(
   // continuation that failed still names its thread, which ran other turns;
   // only an unknown outcome leaves the card following it, for a run that may
   // yet turn up there.
-  const { report_back = false, ...fields } = dispatchResultFields(result);
+  const { report_back = false, ...fields } = dispatchResultFields(tool);
   return {
     type: 'ptc_agent',
     proposal: {
@@ -76,7 +77,7 @@ export function preapprovedCardOf(proc: ToolCallLike | undefined): PreapprovedCa
   let card = byResult.get(result);
   if (card === undefined) {
     const id = proc.toolCall?.id;
-    card = preapprovedCard(proc.toolName, proc.toolCall?.args, result.content, typeof id === 'string' ? id : undefined);
+    card = preapprovedCard(proc.toolName, proc.toolCall?.args, result, typeof id === 'string' ? id : undefined);
     byResult.set(result, card);
   }
   return card;

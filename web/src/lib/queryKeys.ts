@@ -120,13 +120,14 @@ export const queryKeys = {
     // The wakeups the agent set in the thread, and its price targets from
     // before them. Under the prefix, so a feed reconnect's resync re-reads it.
     wakeups:     (threadId: string) => [...queryKeys.threads.all, 'wakeups', threadId],
-    // Batched dispatch-liveness read for a turn's PTC cards: their threads and
-    // the hand-offs' own runs. The base key targets every id-set variant for
+    // Batched dispatch-liveness read for a turn's PTC cards: their threads,
+    // the hand-offs' own runs, and the steers of those steered into a run
+    // already going. The base key targets every id-set variant for
     // invalidation; the concrete key is stable on the SORTED id sets so
     // registration order never churns the cache entry.
     dispatchLivenessAll: () => [...queryKeys.threads.all, 'dispatch-liveness'],
-    dispatchLiveness: (ids: string[], runs: string[] = []) =>
-      [...queryKeys.threads.dispatchLivenessAll(), [...ids].sort(), [...runs].sort()],
+    dispatchLiveness: ({ threads, runs, steers }: { threads: readonly string[]; runs: readonly string[]; steers: readonly string[] }) =>
+      [...queryKeys.threads.dispatchLivenessAll(), { threads: [...threads].sort(), runs: [...runs].sort(), steers: [...steers].sort() }],
     // The same read keyed on the threads' run states as well, so a run that
     // starts or settles is a fresh read of how long each has been quiet.
     dispatchActivity: (ids: string[], revision: string) =>

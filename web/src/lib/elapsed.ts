@@ -85,6 +85,13 @@ export function formatRunLength(ms: number, t: TFn): string {
   return formatTook(ms >= 60_000 ? Math.floor(ms / 60_000) * 60_000 : ms, t);
 }
 
+/** A wire timestamp as epoch ms; null when absent or unparseable. */
+export function epochMs(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
 /** A settled run's length, when the ledger gave both ends of it. */
 export function runLengthMs(startedAt: number | undefined, finishedAt: number | undefined): number | undefined {
   if (startedAt === undefined || finishedAt === undefined || finishedAt < startedAt) return undefined;

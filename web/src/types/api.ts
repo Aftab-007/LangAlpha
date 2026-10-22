@@ -555,6 +555,10 @@ export type ReportSource =
       /** The run reported on and the interrupted runs it continued, oldest
        *  first, so the run reported on is last. */
       run_ids?: string[];
+      /** The hand-off steers those runs took in: empty when they took none,
+       *  absent when unknown (a report from before it was kept, or one the
+       *  server could not read it for). */
+      steer_ids?: string[];
     }
   /** A background subagent task in this thread, finished or failed. */
   | {

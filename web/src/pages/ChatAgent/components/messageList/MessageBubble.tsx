@@ -10,7 +10,7 @@ import { useTranscriptDisplay } from '@/lib/transcriptDisplay';
 import { CitationMetadataProvider } from '../CitationMetadataContext';
 import TextMessageContent, { TurnErrorCard } from '../TextMessageContent';
 import type { StructuredError } from '@/utils/rateLimitError';
-import { countDedupedSources, type CreditPauseState, type MessageProvenance, type ProvenanceRecord, type SubagentTaskRecord, type ToolApprovalState } from '@/types/chat';
+import { countDedupedSources, type CreditPauseState, type MessageProvenance, type ProvenanceRecord, type PTCAgentProposalState, type SubagentTaskRecord, type ToolApprovalState } from '@/types/chat';
 import { TextShimmer } from '@/components/ui/text-shimmer';
 import type { SelectionPreviewShape } from '../SelectionContextPreview';
 import { AttachmentCard, InlineSelectionCards, InlineWidgetDeck } from './attachments';
@@ -425,7 +425,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
           fold={fold}
           isTurnTail={isTurnTail}
           isSubagentView={isSubagentView}
-          ptcAgentProposals={(message.ptcAgentProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
+          ptcAgentProposals={(message.ptcAgentProposals as Record<string, PTCAgentProposalState>) || EMPTY_OBJ}
           secretaryActionProposals={(message.secretaryActionProposals as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
           creditPauses={(message.creditPauses as Record<string, CreditPauseState>) || EMPTY_OBJ}
           toolApprovals={(message.toolApprovals as Record<string, ToolApprovalState>) || EMPTY_OBJ}
@@ -592,7 +592,7 @@ export const MessageBubble = memo(function MessageBubble({ message, contentProje
         <>
         {/* ===== NORMAL MODE ===== */}
         {isUser ? (
-          <UserBubble provenance={provenance} readOnly={readOnly} isMobile={isMobile}>
+          <UserBubble provenance={provenance} steered={!!message.steeringDelivered} readOnly={readOnly} isMobile={isMobile}>
             {bubbleContent}
           </UserBubble>
         ) : (

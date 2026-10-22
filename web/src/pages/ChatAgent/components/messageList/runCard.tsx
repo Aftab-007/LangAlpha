@@ -1,6 +1,8 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { AlertCircle, ChevronRight, StopCircle, type LucideIcon } from 'lucide-react';
 import { Loader } from '@/components/ui/loader';
+import { useNow } from '@/hooks/useNow';
+import { formatClock } from '@/lib/elapsed';
 import { cn } from '@/lib/utils';
 import { FoldPanel } from './FoldPanel';
 
@@ -62,6 +64,18 @@ export function RunPart({ className, children }: { className?: string; children:
 
 /** A mono clock on the right. */
 export const RUN_CLOCK = 'font-mono text-[0.71875rem] tabular-nums text-(--color-text-tertiary)';
+
+/**
+ * A working run's clock, in mono so its digits hold still as they tick: from
+ * its start once the server says when that was, from when this view first saw
+ * it running until then. Hidden from a screen reader, which would otherwise
+ * hear it every second.
+ */
+export function ElapsedClock({ startedAt, className }: { startedAt?: number; className?: string }): React.ReactElement {
+  const [seenAt] = useState(Date.now);
+  const now = useNow(1000);
+  return <span aria-hidden className={cn(RUN_CLOCK, className)}>{formatClock(now - (startedAt ?? seenAt))}</span>;
+}
 
 /** A group's one-line header: its icon in the avatars' column, how many, how
  *  they stand, and the fold's chevron right after the words. As wide as its
@@ -141,18 +155,20 @@ export function RunFoldChevron({ open }: { open: boolean }): React.ReactElement 
  * way. A failure takes the alert, in the danger token rather than the market
  * loss red, and a stopped run the stop. An icon draws a verb, such as an
  * update sent to a task. A finished run has none: the spinner going away is
- * the done state. Decorative: the words beside it say the same. `head` is a
- * group header's lead, a size up beside the header's larger words.
+ * the done state. `done` is where a run's glyph has a place of its own, in a
+ * column that an empty place would leave gapped: the circle the others draw,
+ * filled, its check cut out. Decorative: the
+ * words beside it say the same. `large` is a size up: a group header's lead,
+ * beside the header's larger words, and a glyph in a column of its own.
  */
-export type RunGlyphKind = 'live' | 'ring' | 'pending' | 'alert' | 'stop' | LucideIcon;
+export type RunGlyphKind = 'live' | 'ring' | 'pending' | 'alert' | 'stop' | 'done' | LucideIcon;
 
-const RUN_ICON = 'h-3 w-3 shrink-0';
-
-export function RunGlyph({ kind, head = false }: { kind: RunGlyphKind; head?: boolean }): React.ReactElement {
+export function RunGlyph({ kind, large = false }: { kind: RunGlyphKind; large?: boolean }): React.ReactElement {
+  const icon = cn(large ? 'h-3.5 w-3.5' : 'h-3 w-3', 'shrink-0');
   switch (kind) {
     case 'live':
       // The Loader carries its own role="status"; hidden, it is not said twice.
-      return head ? (
+      return large ? (
         <span aria-hidden className="flex w-3 shrink-0 justify-center">
           <Loader size={13} className="text-(--color-accent-primary)" />
         </span>
@@ -164,24 +180,43 @@ export function RunGlyph({ kind, head = false }: { kind: RunGlyphKind; head?: bo
     case 'ring':
     case 'pending':
       return (
-        <span aria-hidden className="inline-flex h-3 w-3 shrink-0 items-center justify-center">
+        <span aria-hidden className={cn(icon, 'inline-flex items-center justify-center')}>
           <span
             className={cn(
-              'block h-2 w-2 rounded-full border-[1.25px]',
+              'block rounded-full border-[1.25px]',
+              large ? 'h-2.5 w-2.5' : 'h-2 w-2',
               kind === 'ring' ? 'border-(--color-accent-primary)' : 'border-(--color-text-tertiary)',
             )}
           />
         </span>
       );
     case 'alert':
-      return <AlertCircle aria-hidden strokeWidth={2} className={cn(RUN_ICON, 'text-(--color-icon-danger)')} />;
+      return <AlertCircle aria-hidden strokeWidth={2} className={cn(icon, 'text-(--color-icon-danger)')} />;
     case 'stop':
-      return <StopCircle aria-hidden strokeWidth={2} className={cn(RUN_ICON, 'text-(--color-text-tertiary)')} />;
+      return <StopCircle aria-hidden strokeWidth={2} className={cn(icon, 'text-(--color-text-tertiary)')} />;
+    case 'done':
+      return <DoneGlyph className={cn(icon, 'text-(--color-text-tertiary)')} />;
     default: {
       const Icon = kind;
-      return <Icon aria-hidden strokeWidth={2} className={cn(RUN_ICON, 'text-(--color-text-tertiary)')} />;
+      return <Icon aria-hidden strokeWidth={2} className={cn(icon, 'text-(--color-text-tertiary)')} />;
     }
   }
+}
+
+/** The disc is the size of the outlined circles beside it, and the check is
+ *  cut through it rather than drawn over it, so it shows whatever the row is
+ *  on, hovered or not. */
+function DoneGlyph({ className }: { className: string }) {
+  const cut = useId();
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className={className}>
+      <mask id={cut}>
+        <rect width="24" height="24" fill="white" />
+        <path d="m7.5 12.5 3 3 6-7" fill="none" stroke="black" strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round" />
+      </mask>
+      <circle cx="12" cy="12" r="11" fill="currentColor" mask={`url(#${cut})`} />
+    </svg>
+  );
 }
 
 /**
@@ -385,7 +420,7 @@ export function RunGroup({
           <RunGroupIcon>{icon}</RunGroupIcon>
           <span id={titleId} className={RUN_HEAD_TITLE}>{title}</span>
           <span data-testid="run-group-tally" aria-hidden={announce ? true : undefined} className={RUN_HEAD_SUMMARY}>
-            {lead && <RunGlyph kind={lead} head />}
+            {lead && <RunGlyph kind={lead} large />}
             {quiet.length > 0 && (
               <span className="min-w-0 truncate">
                 {quiet.map((p, i) => (

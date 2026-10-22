@@ -39,6 +39,9 @@ export function reportRowProvenance(source?: ReportSource): MessageProvenance | 
         // Left out, not undefined, when an older report has none.
         ...(source.outcome !== undefined ? { outcome: source.outcome } : {}),
         ...(runIds.length > 0 ? { runIds } : {}),
+        // Kept when empty: a report that lists none says it answers no
+        // steered hand-off, which one whose steers are unknown cannot.
+        ...(source.steer_ids ? { steerIds: source.steer_ids } : {}),
       };
     }
     case 'task':

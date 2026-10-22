@@ -791,14 +791,16 @@ export interface DeliveredInstruction {
  * @param {string} params.taskId - Task ID (e.g., "task:k7Xm2p")
  * @param {string} params.content - The steering instruction content
  * @param {Array} params.entries - The queue entries a delivery took, when it names them
+ * @param {boolean} params.steered - Taken into the running run, not the instruction a run opens with
  * @param {Object} params.refs - Refs object with subagentStateRefs
  * @param {Function} params.updateSubagentCard - Callback to update subagent card
  * @returns {boolean} True if event was handled
  */
-export function handleTaskSteeringAccepted({ taskId, content, entries, refs, updateSubagentCard }: {
+export function handleTaskSteeringAccepted({ taskId, content, entries, steered, refs, updateSubagentCard }: {
   taskId: string;
   content: string;
   entries?: DeliveredInstruction[];
+  steered: boolean;
   refs: StreamRefs;
   updateSubagentCard: UpdateSubagentCard;
 }): boolean {
@@ -846,7 +848,8 @@ export function handleTaskSteeringAccepted({ taskId, content, entries, refs, upd
   const rest = updatedMessages.filter((m, i) => !taken.has(i) && !(isTaskNotice(m) && deliveredIds.has(m.inputId as string)));
   const messages = [
     ...rest.filter((m) => !isPendingInstruction(m)),
-    ...delivered,
+    // Marked as the main transcript marks a steer its turn took in.
+    ...(steered ? delivered.map((m) => ({ ...m, steeringDelivered: true })) : delivered),
     ...rest.filter(isPendingInstruction),
   ];
 

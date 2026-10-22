@@ -7,9 +7,11 @@ import { queryKeys } from '@/lib/queryKeys';
 import { switchLocale } from '@/lib/locale';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import '@/index.css';
-import type { SubagentTaskRecord } from '@/types/chat';
+import type { MessageProvenance, SubagentTaskRecord } from '@/types/chat';
 import type { SubagentTelemetry } from '@/pages/ChatAgent/session/subagents/resolveSubagentTelemetry';
 import { SubagentTelemetryContext } from '../../SubagentTelemetryContext';
+import { MessageActionsProvider } from '../MessageActionsContext';
+import { ReportRow } from '../ReportRow';
 import { SubagentRun, type SubagentRunMember } from '../SubagentRun';
 import type { SubagentInfo, ToolCallProcessRecord } from '../types';
 
@@ -287,6 +289,31 @@ function opened(info: SubagentInfo): void {
   console.info('[subagents-preview] open', info);
 }
 
+type TaskReport = Extract<MessageProvenance, { kind: 'task_report' }>;
+const taskReport = (over: Partial<TaskReport>): TaskReport => ({
+  kind: 'task_report',
+  taskId: 'r7Kp2q',
+  displayId: 'Task-r7Kp2q',
+  description: 'Extract NVDA 4-quarter segment data from the 10-Qs',
+  failed: false,
+  subagentType: 'data-prep',
+  ...over,
+});
+
+const TASK_REPORTS: Array<{ label: string; report: TaskReport }> = [
+  { label: 'finished', report: taskReport({}) },
+  { label: 'failed', report: taskReport({ description: 'Extract AMD 4-quarter segment data', failed: true }) },
+  { label: 'research', report: taskReport({ description: 'Summarize this week’s semis news', subagentType: 'research' }) },
+  { label: 'a user-defined role', report: taskReport({ description: 'Check the comps against the house style', subagentType: 'house-style' }) },
+  { label: 'before roles (legacy)', report: taskReport({ description: null, subagentType: undefined }) },
+  {
+    label: 'a title too long for the line',
+    report: taskReport({ description: 'Rebuild the segment margin bridge for every quarter since FY2024 and reconcile it against the reported totals' }),
+  },
+];
+
+const REPORT_ACTIONS = { onOpenSubagentTask: opened };
+
 function Section({ id, label, children }: { id: string; label: string; children: React.ReactNode }): React.ReactElement | null {
   if (knobs.only && knobs.only !== id) return null;
   return (
@@ -326,6 +353,18 @@ function Preview(): React.ReactElement {
             </Section>
             <Section id="group-readonly" label="Group, read-only">
               <SubagentRun members={GROUP2_LIVE} />
+            </Section>
+            <Section id="reports" label="Report rows">
+              <MessageActionsProvider actions={REPORT_ACTIONS}>
+                {TASK_REPORTS.map((r) => (
+                  <div key={r.label}>
+                    <div className="font-mono text-[0.625rem] text-(--color-text-quaternary)">{r.label}</div>
+                    <ReportRow id={`task-report-${r.label}`} provenance={r.report} />
+                  </div>
+                ))}
+              </MessageActionsProvider>
+              <div className="font-mono text-[0.625rem] text-(--color-text-quaternary)">read-only</div>
+              <ReportRow id="task-report-read-only" provenance={TASK_REPORTS[0].report} readOnly />
             </Section>
             {SINGLE_MEMBERS.map((s) => (
               <Section key={s.id} id={s.id} label={s.label}>
