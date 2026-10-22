@@ -145,7 +145,6 @@ export function CapexThread({
             {/* the Analyst's turn opens with a line saying what it will run,
                   so the run card reads as part of that turn */}
             <Reply
-              dense
               text="I'll read all 32 calls, eight at a time, then build the tracker."
               at={PTC.plan}
             />
@@ -160,7 +159,6 @@ export function CapexThread({
             />
             {/* the long answer, then the files */}
             <Reply
-              dense
               text="**Capex hit $149bn last quarter, up 55% on a year ago.** All four raised their outlook in July; 2026 guidance now sums to about $610bn, with GOOGL up most, to $140bn. Every figure checks against the filings."
               at={PTC.say}
             />

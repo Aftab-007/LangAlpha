@@ -10,10 +10,9 @@ import { Appear, Tag, typedCount } from './kit';
    scenes all show the same chat page, so its parts live here once. Each is
    a small copy of the component the app draws it with (named on each).
 
-   Two scene families set the transcript a touch differently, and `dense`
-   keeps each as it was: the chat and automations scenes' prose sits at
-   1.45 and their tool rows are bare, while the thread and market scenes'
-   prose sits at the app's 1.5 and their rows sit on the timeline's rule. */
+   Two scene families set their tool rows differently, and `dense` keeps
+   each as it was: the chat and automations scenes' rows are bare, while
+   the thread and market scenes' rows sit on the timeline's rule. */
 
 /** The thread header's height, and the file panel's tab strip's beside it:
     the app's 53px top bar at the scenes' scale. Every scene draws it the
@@ -104,21 +103,12 @@ export function Transcript({
 /**
  * The agent's prose (`TextMessageContent`, the chat variant of `Markdown`):
  * body text, `**bold**` lead-ins, and a workspace path in backticks drawn as
- * the link the app makes of it. Streams in from `at`, `cps` characters a
+ * the link the app makes of it, the lines 1.5 apart as the chat variant's
+ * `leading-normal` sets them. Streams in from `at`, `cps` characters a
  * second, and takes no room until its first character lands; with no `at`
  * it was written before the scene began, and outside a clock it is whole.
  */
-export function Reply({
-  text,
-  at = PAST,
-  cps = 150,
-  dense = false,
-}: {
-  text: string;
-  at?: number;
-  cps?: number;
-  dense?: boolean;
-}) {
+export function Reply({ text, at = PAST, cps = 150 }: { text: string; at?: number; cps?: number }) {
   let left = Math.max(typedCount(useSceneTime(), at, cps), 0);
   if (left === 0) return null;
   const out: ReactNode[] = [];
@@ -151,10 +141,7 @@ export function Reply({
       );
     });
   return (
-    <p
-      className={dense ? 'text-[8px] leading-[1.45]' : 'text-[8px] leading-[1.5]'}
-      style={{ color: 'var(--color-text-primary)' }}
-    >
+    <p className="text-[8px] leading-[1.5]" style={{ color: 'var(--color-text-primary)' }}>
       {out}
     </p>
   );

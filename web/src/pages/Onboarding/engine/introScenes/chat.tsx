@@ -192,11 +192,7 @@ function TwoModes() {
                 at={MODES.card + 100}
               />
             </Appear>
-            <Reply
-              dense
-              text="**Up 29% in six months,** 2% off its August high."
-              at={MODES.answered}
-            />
+            <Reply text="**Up 29% in six months,** 2% off its August high." at={MODES.answered} />
             <UserBubble at={MODES.follow}>{MODES.request}</UserBubble>
             <WorkspaceLine name={MODES.workspace} at={made} done={created} />
             <HandoffCard
@@ -208,13 +204,11 @@ function TwoModes() {
               finished={MODES.files[1]}
             />
             <Reply
-              dense
               text="**An Analyst in NVDA deep dive is on it.** I'll report back when it's done."
               at={MODES.said}
             />
             <ReportFrom at={MODES.report} name={MODES.workspace} />
             <Reply
-              dense
               text="**NVDA looks fully priced.** Only the bull case clears today's $182; the base case is $171. The model is in valuation.xlsx."
               at={MODES.reply}
             />
@@ -238,7 +232,6 @@ function TwoModes() {
               tokens={412_000}
             />
             <Reply
-              dense
               text="**Base case $171 a share, 6% below spot.** Only the bull case clears $182, and it needs data-center revenue to compound 40% a year to 2028."
               at={MODES.say}
             />
@@ -347,7 +340,6 @@ function ChiefOfStaffAnswer() {
                 settled={{ label: t('toolArtifact.tool.webSearch'), pill: 'earnings this week' }}
               />
               <Reply
-                dense
                 text="**A busy week.** CPI prints Wednesday at 8:30, and NVDA reports after Thursday's close. Its guide rests on hyperscaler capex."
                 at={PAST}
               />
@@ -368,7 +360,6 @@ function ChiefOfStaffAnswer() {
                 <BarChart bars={SEMIS} max={2.6} median={1.2} at={PAST} labelWidth={22} />
               </ChartCard>
               <Reply
-                dense
                 text="**SOXX is up 1.2%.** AVGO leads; NVDA holds above $182 into earnings."
                 at={PAST}
               />
@@ -403,7 +394,6 @@ function ChiefOfStaffAnswer() {
                   finished={COS.finished}
                 />
                 <Reply
-                  dense
                   text="**The AI capex Analyst is on it.** I'll send you the tracker once it's built."
                   at={COS.say}
                 />
@@ -426,7 +416,6 @@ function ChiefOfStaffAnswer() {
                   <DeliveryPill app={COS.app} files={1} />
                 </Appear>
                 <Reply
-                  dense
                   text="**The capex tracker is on your iMessage.** Spending hit $149bn last quarter, up 55% on a year ago, and all four raised their outlook in July."
                   at={COS.reply}
                 />

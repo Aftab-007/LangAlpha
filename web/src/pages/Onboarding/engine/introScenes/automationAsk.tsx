@@ -147,12 +147,11 @@ function AutomationAsk() {
               icon={Globe}
               settled={{ label: t('toolArtifact.tool.webSearch'), pill: 'AVGO earnings date' }}
             />
-            <Reply dense text="**Thursday, Dec 10**, after the close." at={PAST} />
+            <Reply text="**Thursday, Dec 10**, after the close." at={PAST} />
             <UserBubble at={PAST} className="ml-12">
               <Lines>I&apos;m off next week. Back on Monday, November 2.</Lines>
             </UserBubble>
             <Reply
-              dense
               text="**Noted.** Your automations keep running while you're away, and each run's results wait in the feed. Want any of them paused?"
               at={PAST}
             />
@@ -165,7 +164,6 @@ function AutomationAsk() {
               <AutomationRow write file="avgo-earnings-preview" at={PAST} done={PAST} />
             </Timeline>
             <Reply
-              dense
               text="**Paused.** It won't run again until you turn it back on, here or on the Automations page."
               at={PAST}
             />
@@ -173,10 +171,10 @@ function AutomationAsk() {
             <UserBubble at={ASK.send + 60} className="ml-12">
               <Lines>{ASK.ask}</Lines>
             </UserBubble>
-            <Reply dense text={ASK.summary} at={ASK.summaryAt} cps={ASK.summaryCps} />
+            <Reply text={ASK.summary} at={ASK.summaryAt} cps={ASK.summaryCps} />
             <UserBubble at={ASK.sendYes + 60}>{ASK.yes}</UserBubble>
             <AutomationRow write file={ASK.file} at={ASK.write} done={ASK.written} />
-            <Reply dense text={ASK.created} at={ASK.createdAt} cps={ASK.createdCps} />
+            <Reply text={ASK.created} at={ASK.createdAt} cps={ASK.createdCps} />
           </Transcript>
           <InputDock text={composer} sendAt={[ASK.send, ASK.sendYes]} />
         </div>
