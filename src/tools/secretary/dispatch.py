@@ -230,12 +230,13 @@ async def dispatch(
         if not approved:
             return decline_routing_command("the hand-off", response, tool_call_id)
 
-        # Apply user overrides from HITL decision (e.g. toggling report_back)
-        decisions = response.get("decisions", [])
-        if decisions:
-            overrides = decisions[0].get("overrides", {})
-            if "report_back" in overrides:
-                report_back = overrides["report_back"]
+        # The card's report-back switch, when the user moved it. A resume
+        # that names no overrides keeps what the call asked for.
+        overrides = (response.get("decisions") or [{}])[0].get("overrides")
+        if isinstance(overrides, dict) and isinstance(
+            overrides.get("report_back"), bool
+        ):
+            report_back = overrides["report_back"]
 
     if not is_continuation:
         thread_id = str(uuid.uuid4())

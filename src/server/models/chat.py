@@ -53,6 +53,19 @@ _VALID_MESSAGE_ROLES = frozenset(
 # =============================================================================
 
 
+class HITLOverrides(BaseModel):
+    """What the user changed on a proposal before approving it.
+
+    A field the user left alone stays None, which the tool reads as no
+    change: it keeps what it proposed.
+    """
+
+    report_back: Optional[bool] = Field(
+        default=None,
+        description="A hand-off's report-back, as the approval card's switch left it",
+    )
+
+
 class HITLDecision(BaseModel):
     """Decision for a single HITL action request."""
 
@@ -62,6 +75,10 @@ class HITLDecision(BaseModel):
     message: Optional[str] = Field(
         None,
         description="Feedback message, typically used when rejecting to explain why or request changes",
+    )
+    overrides: Optional[HITLOverrides] = Field(
+        default=None,
+        description="Changes the user made to the proposal before approving it",
     )
 
 
