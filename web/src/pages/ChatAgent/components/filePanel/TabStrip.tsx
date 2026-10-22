@@ -3,6 +3,7 @@ import { Activity, ArrowLeft, BookMarked, BookOpen, CandlestickChart, ChevronLef
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { fileGlyph } from './fileMeta';
 import { getCompletedRowTitle, getCompletedSummary, getToolIcon, isTaskTool } from '../toolDisplayConfig';
 import { isOnLoan, type FileTab } from './useFileTabs';
@@ -14,6 +15,7 @@ import { countDedupedSources, type ProvenanceRecord } from '@/types/chat';
 import { useTranscriptReads, type TranscriptReader } from './useTranscript';
 import { focusToggleWhenRendered } from './panelToggleFocus';
 import { useWorkspaceFolders } from '../../contexts/WorkspaceContext';
+import type { NewTabMenu, PanelLauncher } from './panelLaunchers';
 import './TabStrip.css';
 
 interface TabStripProps {
@@ -24,6 +26,8 @@ interface TabStripProps {
   onPin: (id: string) => void;
   /** Null where an empty tab would offer nothing: a read-only or single-file panel. */
   onNewTab: (() => void) | null;
+  /** What a right click on the new tab button offers to open straight away. */
+  newTabMenu?: NewTabMenu | null;
   /** The tab in front's own back and forward; null where nothing ever lands in a tab, a panel locked to one file. */
   history?: { onBack: (() => void) | null; onForward: (() => void) | null } | null;
   /** The file changed under this tab since it last read it: the amber dot. */
@@ -147,6 +151,15 @@ function describe(tab: FileTab, t: TFunction, source: TabSource, root: string | 
   }
 }
 
+function launcherItem({ key, label, icon: Icon, open }: PanelLauncher): React.ReactElement {
+  return (
+    <ContextMenuItem key={key} onSelect={open}>
+      <Icon className="h-3.5 w-3.5 shrink-0" />
+      <span className="truncate">{label}</span>
+    </ContextMenuItem>
+  );
+}
+
 /** The width of the fade at an end of the tab row, in TabStrip.css. */
 const TAB_ROW_FADE = 32;
 
@@ -226,6 +239,7 @@ export function TabStrip({
   onClose,
   onPin,
   onNewTab,
+  newTabMenu = null,
   history = null,
   hasChanged,
   transcript = null,
@@ -244,6 +258,9 @@ export function TabStrip({
   // the computer's root.
   const root = useWorkspaceFolders()?.rootDir;
   const listRef = useRef<HTMLDivElement>(null);
+  // A long press opens the new tab menu and its release still clicks the
+  // button, so a click while the menu is open is that release, not a new tab.
+  const [newTabMenuOpen, setNewTabMenuOpen] = useState(false);
   const sources = useTranscriptReads(transcript, tabs, readTabSource);
   const overflow = useTabRowScroll(listRef, activeId, tabs.map((tab) => `${tab.id}:${tab.kind}`).join(' '));
 
@@ -346,9 +363,20 @@ export function TabStrip({
       {/* Against the last tab, where the new one will appear; the list only
           grows to its tabs, so the button follows them along the strip. */}
       {onNewTab && (
-        <button type="button" onClick={onNewTab} className="file-panel-icon-btn shrink-0" title={t('filePanel.newTab')} aria-label={t('filePanel.newTab')}>
-          <Plus className="h-4 w-4" />
-        </button>
+        <ContextMenu onOpenChange={setNewTabMenuOpen}>
+          <ContextMenuTrigger asChild disabled={!newTabMenu}>
+            <button type="button" onClick={() => { if (!newTabMenuOpen) onNewTab(); }} className="file-panel-icon-btn shrink-0" title={t('filePanel.newTab')} aria-label={t('filePanel.newTab')}>
+              <Plus className="h-4 w-4" />
+            </button>
+          </ContextMenuTrigger>
+          {/* Escape closes the menu and nothing else: the panel's own Escape
+              would leave the tree's selection. */}
+          <ContextMenuContent className="max-w-64" onEscapeKeyDown={(event) => event.stopPropagation()}>
+            {newTabMenu?.kinds.map(launcherItem)}
+            {!!newTabMenu?.apps.length && <ContextMenuSeparator />}
+            {newTabMenu?.apps.map(launcherItem)}
+          </ContextMenuContent>
+        </ContextMenu>
       )}
 
       <div className="file-panel-strip-right">
