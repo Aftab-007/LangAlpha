@@ -46,8 +46,9 @@ import {
 import { EV_SALES, SheetPanel } from './chatWorkbook';
 import { ChatHeaderButtons } from './panelParts';
 
-/* Scenes for the chat intro: the Chief of Staff handing work to an Analyst
-   and both at work at once, the Chief of Staff's own thread coordinating
+/* Scenes for the chat intro: the Chief of Staff answering a quick question
+   itself and handing the deeper follow-up to an Analyst, who takes it up in
+   its own workspace, the Chief of Staff's own thread coordinating
    Analysts, and an Analyst's thread running the work it was handed. The
    Chief of Staff stays brief and talks to the user; the Analyst runs a
    workflow and writes the long answer with its charts and files. Each part
@@ -97,10 +98,11 @@ function PaneHeader({ icon: Glyph, name }: { icon: Icon; name: string }) {
   );
 }
 
-/** AVGO's closes over six months, for the Chief of Staff's quick answer. */
-const AVGO_6M = [
-  252.8, 248.1, 241.6, 238.4, 246.9, 255.3, 262.7, 259.1, 268.4, 277.9, 274.2, 283.6, 291.8, 286.5,
-  298.3, 309.7, 304.2, 317.5, 326.8, 321.4, 334.9, 356.2, 343.1, 349.8,
+/** NVDA's closes over six months, for the Chief of Staff's quick answer:
+    the high is the August print's gap to $186.90, as in the chart intro. */
+const NVDA_6M = [
+  141.6, 138.2, 133.9, 132.1, 136.8, 142.5, 147.3, 145.0, 151.2, 156.8, 153.4, 159.9, 164.1, 161.7,
+  168.5, 172.3, 186.9, 179.8, 173.4, 171.2, 175.6, 178.9, 180.3, 182.42,
 ];
 
 /** The Analyst's DCF: value per share by case, against spot. */
@@ -114,60 +116,62 @@ const DCF_CASES: Bar[] = [
     each sends out, and the log line it prints as each phase starts. */
 const NVDA_FLOW = {
   phases: [
-    { name: 'Research', at: 1600 },
-    { name: 'Value', at: 3400 },
-    { name: 'Review', at: 4700 },
+    { name: 'Research', at: 4650 },
+    { name: 'Value', at: 5700 },
+    { name: 'Review', at: 6650 },
   ],
   agents: [
-    { label: 'Data-center demand', at: 1650, done: 3250, took: '2m 31s' },
-    { label: 'DCF, three cases', at: 3450, done: 4600, took: '2m 05s' },
-    { label: 'Model check', at: 4750, done: 5300, took: '44.1s' },
+    { label: 'Data-center demand', at: 4700, done: 5600, took: '2m 31s' },
+    { label: 'DCF, three cases', at: 5750, done: 6550, took: '2m 05s' },
+    { label: 'Model check', at: 6700, done: 7100, took: '44.1s' },
   ] satisfies FlowAgent[],
   logs: [
-    { text: 'reading the Q2 call and consensus', at: 1650 },
-    { text: 'building the DCF', at: 3450 },
-    { text: 'checking the model', at: 4750 },
+    { text: 'reading the Q2 call and consensus', at: 4700 },
+    { text: 'building the DCF', at: 5750 },
+    { text: 'checking the model', at: 6700 },
   ],
 };
 
-/** Split scene: the Chief of Staff (left) hands a question to an Analyst
-    (right) and stays free, taking a quick question itself while the
-    Analyst's workflow runs. The Analyst answers at length, with a chart and
-    its files; the Chief of Staff reports back to the user in a line. */
+/** Split scene: the user asks the Chief of Staff (left) a quick question,
+    which it answers itself, then a deeper follow-up, which it hands to an
+    Analyst (right) in a new workspace. The Analyst takes the task, runs a
+    workflow on it and answers at length, with a chart and its files; the
+    Chief of Staff reports back to the user in a line. */
 const MODES = {
-  request: 'Is NVDA still worth owning into earnings?',
+  quick: 'NVDA, last 6 months?',
+  ask: 100,
+  fetch: 350,
+  card: 700,
+  answered: 1300,
+  request: 'Is it still worth owning into earnings?',
+  follow: 1900,
   workspace: 'NVDA deep dive',
-  created: [350, 750],
-  handoff: 800,
-  started: 1250,
-  said: 1400,
-  task: 1300,
-  flow: 1550,
-  quick: 'AVGO, last 6 months?',
-  ask: 3000,
-  fetch: 3150,
-  card: 3450,
-  flowDone: 5400,
-  say: 5550,
-  chart: 6300,
-  files: [6800, 7000],
-  report: 7900,
-  reply: 8150,
-  length: 10600,
+  created: [2200, 2600],
+  handoff: 2650,
+  said: 2950,
+  task: 4350,
+  flow: 4600,
+  flowDone: 7200,
+  say: 7350,
+  chart: 8100,
+  files: [8600, 8800],
+  report: 9450,
+  reply: 9650,
+  length: 12000,
 };
 
 /** The camera follows the work at rest, a pane whole with the edge of the
-    other: the Chief of Staff sending the question off, across to the
-    Analyst taking it up, back as the Chief of Staff answers the quick
-    question, across to the Analyst's answer, its chart and files, back to
+    other: the Chief of Staff answering the quick question, down its pane
+    as the follow-up is handed off, across to the Analyst taking the task
+    and starting the workflow, down to its answer, chart and files, back to
     the report, and out to both panes. */
 const MODES_SHOTS: [Shot, ...Shot[]] = [
   shot(0, 160, 132, REST),
-  shot(2300, 240, 132, REST, 800),
-  shot(3100, 160, 198, REST, 700),
-  shot(4700, 240, 198, REST, 700),
-  shot(7900, 160, 198, REST, 600),
-  wide(9700, 900),
+  shot(2800, 160, 198, REST, 700),
+  shot(4300, 240, 132, REST, 800),
+  shot(7500, 240, 198, REST, 700),
+  shot(9500, 160, 198, REST, 600),
+  wide(11400, 900),
 ];
 
 function TwoModes() {
@@ -177,47 +181,49 @@ function TwoModes() {
   return (
     <Camera shots={MODES_SHOTS}>
       <div className="flex gap-2 p-2" style={PAGE}>
-        {/* the Chief of Staff: hands the work off, stays free to talk, and
-            reports back in a line when the Analyst is done */}
+        {/* the Chief of Staff: answers the quick question itself, hands the
+            deeper follow-up off, and reports back in a line when the Analyst
+            is done */}
         <Region delay={0.12} className="flex min-w-0 flex-1 flex-col gap-2 p-2">
           <PaneHeader icon={HomeRowIcon} name={names.home} />
           <Transcript>
-            <UserBubble at={0}>{MODES.request}</UserBubble>
+            <UserBubble at={MODES.ask}>{MODES.quick}</UserBubble>
+            <ActivityRow
+              icon={TrendingUp}
+              verb={t('toolArtifact.inProgress.fetchingSymbolPrices', { symbol: 'NVDA' })}
+              title={t('toolArtifact.tool.stockPrices')}
+              after={<Pill>NVDA</Pill>}
+              at={MODES.fetch}
+              done={MODES.card}
+            />
+            <Appear at={MODES.card} pop>
+              <StockPriceCard
+                sym="NVDA"
+                price="$182.42"
+                change={28.83}
+                period="2026-04-20, 2026-10-20"
+                series={NVDA_6M}
+                high="$186.90"
+                low="$132.10"
+                vol="176.8M"
+                at={MODES.card + 100}
+              />
+            </Appear>
+            <Reply text="**Up 29% in six months,** 2% off its August high." at={MODES.answered} />
+            <UserBubble at={MODES.follow}>{MODES.request}</UserBubble>
             <WorkspaceLine name={MODES.workspace} at={made} done={created} />
             <HandoffCard
               workspace={MODES.workspace}
               title="NVDA valuation into earnings"
               brief="Value it three ways into the Q3 print."
               at={MODES.handoff}
-              started={MODES.started}
+              started={MODES.task}
               finished={MODES.files[1]}
             />
             <Reply
               text="**An Analyst in NVDA deep dive is on it.** I'll report back when it's done."
               at={MODES.said}
             />
-            <UserBubble at={MODES.ask}>{MODES.quick}</UserBubble>
-            <ActivityRow
-              icon={TrendingUp}
-              verb={t('toolArtifact.inProgress.fetchingSymbolPrices', { symbol: 'AVGO' })}
-              title={t('toolArtifact.tool.stockPrices')}
-              after={<Pill>AVGO</Pill>}
-              at={MODES.fetch}
-              done={MODES.card}
-            />
-            <Appear at={MODES.card} pop>
-              <StockPriceCard
-                sym="AVGO"
-                price="$349.80"
-                change={38.38}
-                period="2026-04-20, 2026-10-20"
-                series={AVGO_6M}
-                high="$356.20"
-                low="$238.40"
-                vol="21.3M"
-                at={MODES.card + 100}
-              />
-            </Appear>
             <Appear at={MODES.report} className="flex justify-end">
               <Provenance icon={Inbox}>
                 {t('chat.provenance.reportFrom', { name: MODES.workspace })}
@@ -229,8 +235,8 @@ function TwoModes() {
             />
           </Transcript>
         </Region>
-        {/* the Analyst: takes the question, runs a workflow on it, and
-            answers at length with a chart and its files */}
+        {/* the Analyst: takes the task, runs a workflow on it, and answers
+            at length with a chart and its files */}
         <Region delay={0.28} className="flex min-w-0 flex-1 flex-col gap-2 p-2">
           <PaneHeader icon={Folder} name={names.worker} />
           <Transcript>
