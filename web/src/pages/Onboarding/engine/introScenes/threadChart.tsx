@@ -338,7 +338,7 @@ function ChartPanel() {
   return (
     <Camera shots={SHOTS} pointer={POINTER}>
       <ThreadPage
-        title="NVDA earnings reaction"
+        title="NVDA earnings"
         tabs={<PanelTab icon={CandlestickChart} label="NVDA" active />}
         chat={<Chat />}
         panel={<PanelChart armed={t >= CH.arm && t < CH.release} clear={t >= CH.drawn} />}

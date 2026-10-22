@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
-import { ArrowLeft, type LucideIcon } from 'lucide-react';
+import { ArrowLeft, PanelRight, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { PAST, useSceneTime } from './clock';
 import { Appear, Tag, typedCount } from './kit';
@@ -21,27 +21,16 @@ import { Appear, Tag, typedCount } from './kit';
     shot's top edge) can be placed from it. */
 export const HEADER_H = 28;
 
-/** The thread's back arrow and its title, from `ChatView`'s top bar. */
-export function TopTitle({ className, children }: { className?: string; children: ReactNode }) {
-  return (
-    <span className={cn('flex min-w-0 items-center gap-1', className)}>
-      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
-      <span
-        className="truncate text-[8px] font-medium leading-none"
-        style={{ color: 'var(--color-text-primary)' }}
-      >
-        {children}
-      </span>
-    </span>
-  );
-}
-
 /**
  * A thread page's own header, `ChatView`'s top bar, `HEADER_H` tall: back
  * and the thread's `title`, the `agent` it runs with, and `children` (the
- * header's buttons) at its right. The spacing in `className` is the
- * caller's: the scenes that draw this header alone do not all space it
- * alike.
+ * header's buttons) at its right. The bar's padding and gaps are the app's
+ * at the scenes' scale, 9/16 as the panel's chrome is drawn: 16px of padding
+ * is 9px, the back button's 8px is 4.5px around the arrow, and the 16px gap
+ * after it is 9px. The app's bar names no agent; the scenes add the tag to
+ * say whose thread it is, and set it where the bar sets what follows the
+ * title, in the same group a gap after it, so the title is what truncates.
+ * `className` places the header in its page.
  */
 export function ThreadHeader({
   title,
@@ -56,13 +45,35 @@ export function ThreadHeader({
 }) {
   return (
     <div
-      className={cn('flex shrink-0 items-center border-b', className)}
+      className={cn('flex shrink-0 items-center gap-[9px] border-b px-[9px]', className)}
       style={{ height: HEADER_H, borderColor: 'var(--color-border-muted)' }}
     >
-      <TopTitle>{title}</TopTitle>
+      <span className="flex shrink-0 p-[4.5px]">
+        <ArrowLeft className="h-2.5 w-2.5" style={{ color: 'var(--color-text-tertiary)' }} />
+      </span>
+      <span
+        className="min-w-0 truncate text-[8px] font-medium leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
+        {title}
+      </span>
       <Tag>{agent}</Tag>
-      {children && <span className="ml-auto flex">{children}</span>}
+      {children && <span className="ml-auto flex shrink-0">{children}</span>}
     </div>
+  );
+}
+
+/** The chat header's panel toggle while the panel is shut: in the header's
+    ink, and pulled past the header's padding by its own, as the app pulls
+    it (`-mr-2`), so its glyph sits where the open panel's toggle does. */
+export function PanelToggle() {
+  return (
+    <span
+      className="-mr-[4.5px] flex h-4 w-4 items-center justify-center"
+      style={{ color: 'var(--color-text-primary)' }}
+    >
+      <PanelRight className="h-[9px] w-[9px]" />
+    </span>
   );
 }
 

@@ -326,7 +326,7 @@ function ChiefOfStaffAnswer() {
     <Camera shots={COS_SHOTS}>
       <div className="flex flex-col" style={VIEW}>
         {/* the thread's header: back, its title, the agent it runs with */}
-        <ThreadHeader title="Semis this week" agent={names.home} className="gap-2 px-2.5" />
+        <ThreadHeader title="Semis this week" agent={names.home} />
         <div
           className="mx-auto flex min-h-0 flex-1 flex-col gap-1.5 pb-1 pt-[18px]"
           style={{ width: COS_COL }}

@@ -274,7 +274,7 @@ function Memory() {
   return (
     <Camera shots={MEM_SHOTS} pointer={MEM_POINTER}>
       <ThreadPage
-        title="AVGO into earnings"
+        title="AVGO earnings"
         stack="bottom"
         tabs={
           <>

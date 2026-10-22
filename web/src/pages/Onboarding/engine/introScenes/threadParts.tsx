@@ -3,9 +3,9 @@ import type { LucideIcon } from 'lucide-react';
 import { useAgentNames } from '../introAgents';
 import { VIEW } from './camera';
 import { useSceneTime } from './clock';
-import { InputDock, Tag, Typed } from './kit';
+import { InputDock, Typed } from './kit';
 import { ChatHeaderButtons, PanelStrip } from './panelParts';
-import { HEADER_H, TopTitle, Transcript } from './transcriptParts';
+import { HEADER_H, ThreadHeader, Transcript } from './transcriptParts';
 
 /* The thread page the thread intro's scenes play on: the chat column beside
    the file panel, the panel a full-height column with its own tab strip.
@@ -18,24 +18,6 @@ export const PANEL_W = 212;
 /** A glyph in the chrome of a tab's own body (the Memory and Memo tabs). */
 export function ChromeIcon({ icon: Icon }: { icon: LucideIcon }) {
   return <Icon className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />;
-}
-
-/** The chat column's header (`ChatView`'s top bar): back, the thread's
-    `title`, the agent, and share. The panel is open beside it, so the panel
-    toggle is in the panel's corner rather than here. This page's header
-    sets the arrow 6px from the title where the chat scenes' set it 4px, and
-    keeps the agent's tag at the right, by the buttons. */
-function ChatHeader({ title }: { title: string }) {
-  const { worker } = useAgentNames();
-  return (
-    <div className="flex min-w-0 flex-1 items-center gap-1.5 pl-2.5 pr-[9px]">
-      <TopTitle className="gap-1.5">{title}</TopTitle>
-      <span className="ml-auto flex shrink-0 items-center gap-1.5">
-        <Tag>{worker}</Tag>
-        <ChatHeaderButtons panelOpen />
-      </span>
-    </div>
-  );
 }
 
 /**
@@ -67,22 +49,23 @@ export function ThreadPage({
   ask?: { text: string; at: number; send: number; cps: number };
   stack?: 'top' | 'bottom';
 }) {
+  const { worker } = useAgentNames();
   const t = useSceneTime();
   const typing = ask && t >= ask.at && t < ask.send;
   return (
     <div className="relative flex flex-col" style={VIEW}>
-      {/* the header row: the chat header beside the panel's tab strip */}
-      <div
-        className="flex shrink-0 items-stretch border-b"
-        style={{ height: HEADER_H, borderColor: 'var(--color-border-muted)' }}
-      >
-        <ChatHeader title={title} />
+      {/* the header row: the chat header, with share (the panel being open,
+          its toggle is in the panel's corner), beside the panel's tab strip */}
+      <div className="flex shrink-0">
+        <ThreadHeader title={title} agent={worker} className="min-w-0 flex-1">
+          <ChatHeaderButtons panelOpen />
+        </ThreadHeader>
         <PanelStrip
           tabs={tabs}
           back={back}
           tree={tree}
-          className="border-l"
-          style={{ width: PANEL_W, borderColor: 'var(--color-border-muted)' }}
+          className="border-b border-l"
+          style={{ width: PANEL_W, height: HEADER_H, borderColor: 'var(--color-border-muted)' }}
         />
       </div>
       <div className="flex min-h-0 flex-1">

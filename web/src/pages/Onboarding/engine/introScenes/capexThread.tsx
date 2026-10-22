@@ -134,7 +134,7 @@ export function CapexThread({
       >
         {/* the header's share and panel toggle at its right; the toggle
               moves to the panel's corner once the panel is open */}
-        <ThreadHeader title="Capex tracker" agent={names.worker} className="gap-1.5 pl-2 pr-[9px]">
+        <ThreadHeader title="Capex tracker" agent={names.worker}>
           <ChatHeaderButtons panelOpen={now >= PTC.panel} sharing={sharing} shared={shared} />
         </ThreadHeader>
         <div className="flex min-h-0 w-full flex-1 flex-col gap-1.5 p-2.5">

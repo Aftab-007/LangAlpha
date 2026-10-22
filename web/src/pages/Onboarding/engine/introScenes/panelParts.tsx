@@ -14,6 +14,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { PanelToggle } from './transcriptParts';
 
 /* The workspace panel's own chrome, shared by every scene that opens it: the
    tab strip (`TabStrip`) with its back and forward, new tab, expand, tree
@@ -209,14 +210,7 @@ export function ChatHeaderButtons({
       >
         <Share2 className="h-[9px] w-[9px]" />
       </span>
-      {!panelOpen && (
-        <span
-          className="-mr-[4.5px] flex h-4 w-4 items-center justify-center"
-          style={{ color: 'var(--color-text-primary)' }}
-        >
-          <PanelRight className="h-[9px] w-[9px]" />
-        </span>
-      )}
+      {!panelOpen && <PanelToggle />}
     </span>
   );
 }

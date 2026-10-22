@@ -1,10 +1,18 @@
 import { useTranslation } from 'react-i18next';
-import { Clock, Globe, PanelRight } from 'lucide-react';
+import { Clock, Globe } from 'lucide-react';
 import { useAgentNames } from '../introAgents';
 import { CLOSE, Camera, REST, type Shot, VIEW, shot } from './camera';
 import { PAST, useSceneTime } from './clock';
 import { InputDock, Typed, UserBubble } from './kit';
-import { HEADER_H, Reply, ThreadHeader, Timeline, ToolRow, Transcript } from './transcriptParts';
+import {
+  HEADER_H,
+  PanelToggle,
+  Reply,
+  ThreadHeader,
+  Timeline,
+  ToolRow,
+  Transcript,
+} from './transcriptParts';
 import type { IntroScene } from './types';
 
 /* The automations intro's chat step: setting an automation up by asking the
@@ -121,11 +129,8 @@ function AutomationAsk() {
       <div className="flex flex-col" style={PAGE}>
         {/* the thread's header: back, its place, the agent it runs with, and
             the file panel's toggle */}
-        <ThreadHeader title={t('agents.allWorkspaces')} agent={names.home} className="gap-2 px-2.5">
-          <PanelRight
-            className="h-2.5 w-2.5 shrink-0"
-            style={{ color: 'var(--color-text-tertiary)' }}
-          />
+        <ThreadHeader title={t('agents.allWorkspaces')} agent={names.home}>
+          <PanelToggle />
         </ThreadHeader>
         <div
           className="mx-auto flex min-h-0 flex-1 flex-col gap-1.5 pb-2.5"
