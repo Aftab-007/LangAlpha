@@ -7,7 +7,7 @@ import { shortMonthDay } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
 import { progress, useSceneTime } from './clock';
-import { Camera, type Shot } from './camera';
+import { CLOSE, Camera, REST, type Shot } from './camera';
 import { Appear, Caret, Loader, Region, Typed, rv } from './kit';
 import type { IntroScene } from './types';
 import { PAGE, shot, wide, type Icon } from './chatParts';
@@ -304,12 +304,9 @@ function GalleryPage({
 }
 
 /** Opens on the whole gallery, pushes in on two cards' machine lines as the
-    computer they share starts, then pulls back as work lands in them. */
-const GRID_SHOTS: [Shot, ...Shot[]] = [
-  wide(0),
-  shot(1700, { x: 204, y: 94, w: 186, h: 148 }, { pad: 6, dur: 800 }),
-  wide(5000, 900),
-];
+    computer they share starts, with the left column's edge still in view,
+    then pulls back as work lands in them. */
+const GRID_SHOTS: [Shot, ...Shot[]] = [wide(0), shot(1700, 297, 168, CLOSE, 800), wide(5000, 900)];
 
 function WorkspaceGrid() {
   const now = useSceneTime();
@@ -346,12 +343,13 @@ const NEW_WS = {
 const MODAL_W = 260;
 const MODAL_X = (PAGE.width - MODAL_W) / 2;
 
-/** In close on New workspace, then on the form as the modal opens: name and
+/** The whole gallery, as the step before ends on it, while the pointer goes
+    to New workspace; then on the form as the modal opens: name and
     description, down to the files, and out to the whole page for Create. */
 const NEW_WS_SHOTS: [Shot, ...Shot[]] = [
-  shot(0, { x: 200, y: 6, w: 192, h: 150 }),
-  shot(1950, { x: MODAL_X, y: 12, w: MODAL_W, h: 136 }, { pad: 6, dur: 650 }),
-  shot(4800, { x: MODAL_X, y: 190, w: MODAL_W, h: 120 }, { pad: 6, dur: 700 }),
+  wide(0),
+  shot(1950, 200, 80, REST, 700),
+  shot(4800, 200, 250, REST, 700),
   wide(6400, 700),
 ];
 
@@ -547,8 +545,8 @@ function CreateWorkspace() {
                   </span>
                 </span>
               </div>
-              <UploadRow name="MSFT_10-Q.pdf" size="2.4 MB" at={NEW_WS.files[0]} />
-              <UploadRow name="capex-by-company.xlsx" size="186 KB" at={NEW_WS.files[1]} />
+              <UploadRow name="capex-model-v3.xlsx" size="412 KB" at={NEW_WS.files[0]} />
+              <UploadRow name="dc-buildout-notes.md" size="18 KB" at={NEW_WS.files[1]} />
               <div className="flex items-center justify-end gap-1.5 pt-1.5">
                 <span
                   className="px-2 py-1 text-[0.5rem] font-medium leading-none"

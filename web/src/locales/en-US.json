@@ -5925,7 +5925,7 @@
       },
       "analyst": {
         "title": "A workspace: its Analyst does the work",
-        "body": "Each workspace has its own Analyst, and every thread in it shares the same files, data and past work, so research builds on itself. It works through large datasets, runs teams of subagents, and produces the deliverable: Excel models, Word docs, PDFs, dashboards."
+        "body": "Each workspace has its own Analyst, and every thread in it shares the same files, data and past work, so research builds on itself. It works through large datasets, runs multi-step workflows, and produces the deliverable: Excel models, Word docs, PDFs, dashboards."
       },
       "workspace": {
         "body": "A workspace is a desk for one project: its threads share the same files, data and results, kept apart from your other work. Your workspaces and Home all run on one computer, which starts when you start typing."

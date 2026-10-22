@@ -222,18 +222,22 @@ export function Loader({
   );
 }
 
-/** The user's message, right-aligned in the chat column. */
+/** The user's message, right-aligned in the chat column. A message nobody
+    typed here carries its `caption` above it, naming who sent it. */
 export function UserBubble({
   at,
+  caption,
   className,
   children,
 }: {
   at: number;
+  caption?: ReactNode;
   className?: string;
   children: ReactNode;
 }) {
   return (
-    <Appear at={at} className={cn('flex justify-end', className)}>
+    <Appear at={at} className={cn('flex flex-col items-end gap-1', className)}>
+      {caption}
       <div className="rounded-md px-1.5 py-1" style={{ background: 'var(--color-bg-elevated)' }}>
         <span className="block text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
           {children}

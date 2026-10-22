@@ -2,44 +2,54 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowLeft,
+  Bot,
   Brain,
   ChevronRight,
   FileSpreadsheet,
   FileText,
   Folder,
+  Inbox,
+  Search,
   TrendingUp,
   Zap,
 } from 'lucide-react';
 import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
+import { cn } from '@/lib/utils';
 import { useAgentNames } from '../introAgents';
 import type { IntroVisualId } from '../../registry';
 import { BarChart, StockPriceCard, type Bar } from './charts';
-import { useSceneTime } from './clock';
-import { Camera, type Shot } from './camera';
+import { ease, useSceneTime } from './clock';
+import { CLOSE, Camera, REST, type Shot } from './camera';
 import { Appear, InputDock, Region, Tag, Typed, UserBubble } from './kit';
 import type { IntroScene } from './types';
 import {
+  type FlowAgent,
   type Icon,
-  toolCard,
-  Pill,
-  Reply,
   ActivityRow,
-  WorkspaceLine,
-  HandoffCard,
-  SubagentCard,
   ChartCard,
   ColumnChart,
   FileCard,
+  FileStack,
+  HandoffCard,
   PAGE,
+  Pill,
+  Provenance,
+  Reply,
+  WorkflowCard,
+  WorkspaceLine,
   shot,
   wide,
 } from './chatParts';
 import { EV_SALES, SheetPanel } from './chatWorkbook';
 
-/* Scenes for the chat intro: the two agents, the Chief of Staff's turn, and
-   the Analyst's run. Each part is a small copy of the component the app
-   draws it with (named on each), in the same tokens and labels. The figures
-   are invented, and agree with each other across the scenes. */
+/* Scenes for the chat intro: the Chief of Staff handing work to an Analyst
+   and both at work at once, the Chief of Staff's own thread coordinating
+   Analysts, and an Analyst's thread running the work it was handed. The
+   Chief of Staff stays brief and talks to the user; the Analyst runs a
+   workflow and writes the long answer with its charts and files. Each part
+   is a small copy of the component the app draws it with (named on each),
+   in the same tokens and labels. The figures are invented, and agree with
+   each other across the scenes. */
 /* eslint-disable react-refresh/only-export-components -- scene module:
    private scene components, one record export */
 
@@ -58,7 +68,18 @@ function TopTitle({ children }: { children: ReactNode }) {
   );
 }
 
-/* ── chat · step 1: the agent's two roles, side by side ────────────────── */
+/** A chat column's transcript: from the top while it fits, then held on its
+    newest lines with the oldest running off the top, as a thread scrolls
+    with its replies. */
+function Transcript({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden">
+      <div className={cn('flex min-h-full shrink-0 flex-col gap-1.5', className)}>{children}</div>
+    </div>
+  );
+}
+
+/* ── chat · step 1: one hand-off, from both sides ──────────────────────── */
 
 /** A pane's heading, as the sidebar names a desk: its glyph, then its name. */
 function PaneHeader({ icon: Glyph, name }: { icon: Icon; name: string }) {
@@ -78,227 +99,206 @@ const AVGO_6M = [
   298.3, 309.7, 304.2, 317.5, 326.8, 321.4, 334.9, 356.2, 343.1, 349.8,
 ];
 
-/** The valuation subagent's DCF: value per share by case, against spot. */
+/** The Analyst's DCF: value per share by case, against spot. */
 const DCF_CASES: Bar[] = [
   { label: 'Bear', value: 128, shown: '$128' },
   { label: 'Base', value: 171, shown: '$171', mark: true },
   { label: 'Bull', value: 226, shown: '$226' },
 ];
 
-/** Split scene: the Chief of Staff (coordination) vs a workspace's Analyst
-    (subagents → deliverable), both at work at once. The Chief of Staff's
-    steps on the request land quickly, one after another, then it answers a
-    quick question itself; the Analyst's subagents grind through their tools
-    for longer and end in a finding, its chart and a file. The hand-off on
-    the left reads completed as the file lands, and the Chief of Staff
-    reports back. */
-const MODES = {
-  request: 'Set up a deep dive on NVDA earnings',
-  rows: [150, 500],
-  rowRun: 350,
-  quick: 'AVGO, last 6 months?',
-  ask: 1300,
-  fetch: 1450,
-  card: 1700,
-  // the Analyst's subagents start as the hand-off goes out
-  cards: [950, 1200],
-  cardsDone: [4500, 4900],
-  say: 4950,
-  chart: 5300,
-  file: 5700,
-  report: 7450,
-  length: 8400,
+/** The NVDA valuation the Analyst's workflow runs: three phases, the agents
+    each sends out, and the log line it prints as each phase starts. */
+const NVDA_FLOW = {
+  phases: [
+    { name: 'Research', at: 1600 },
+    { name: 'Value', at: 3400 },
+    { name: 'Review', at: 4700 },
+  ],
+  agents: [
+    { label: 'Data-center demand', at: 1650, done: 3250, took: '2m 31s' },
+    { label: 'DCF, three cases', at: 3450, done: 4600, took: '2m 05s' },
+    { label: 'Model check', at: 4750, done: 5300, took: '44.1s' },
+  ] satisfies FlowAgent[],
+  logs: [
+    { text: 'reading the Q2 call and consensus', at: 1650 },
+    { text: 'building the DCF', at: 3450 },
+    { text: 'checking the model', at: 4750 },
+  ],
 };
 
-/** The camera follows the work, a pane wide and held on what has landed:
-    the Chief of Staff sending it off and taking the quick question, down to
-    its answer, across to the Analyst's subagents finishing, down to the
-    finding, its chart and the file, and back out to both panes as the
-    report comes back. */
+/** Split scene: the Chief of Staff (left) hands a question to an Analyst
+    (right) and stays free, taking a quick question itself while the
+    Analyst's workflow runs. The Analyst answers at length, with a chart and
+    its files; the Chief of Staff reports back to the user in a line. */
+const MODES = {
+  request: 'Is NVDA still worth owning into earnings?',
+  workspace: 'NVDA deep dive',
+  created: [350, 750],
+  handoff: 800,
+  started: 1250,
+  said: 1400,
+  task: 1300,
+  flow: 1550,
+  quick: 'AVGO, last 6 months?',
+  ask: 3000,
+  fetch: 3150,
+  card: 3450,
+  flowDone: 5400,
+  say: 5550,
+  chart: 6300,
+  files: [6800, 7000],
+  report: 7900,
+  reply: 8150,
+  length: 10600,
+};
+
+/** The camera follows the work at rest, a pane whole with the edge of the
+    other: the Chief of Staff sending the question off, across to the
+    Analyst taking it up, back as the Chief of Staff answers the quick
+    question, across to the Analyst's answer, its chart and files, back to
+    the report, and out to both panes. */
 const MODES_SHOTS: [Shot, ...Shot[]] = [
-  shot(0, { x: 8, y: 8, w: 188, h: 92 }, { pad: 6 }),
-  shot(2100, { x: 8, y: 128, w: 188, h: 153 }, { pad: 6, dur: 600 }),
-  shot(4400, { x: 204, y: 8, w: 188, h: 142 }, { pad: 6, dur: 900 }),
-  shot(5500, { x: 204, y: 154, w: 188, h: 153 }, { pad: 6, dur: 600 }),
-  wide(7400, 800),
+  shot(0, 160, 132, REST),
+  shot(2300, 240, 132, REST, 800),
+  shot(3100, 160, 198, REST, 700),
+  shot(4700, 240, 198, REST, 700),
+  shot(7900, 160, 198, REST, 600),
+  wide(9700, 900),
 ];
 
 function TwoModes() {
   const { t } = useTranslation();
   const names = useAgentNames();
-  const [row1, row2] = MODES.rows;
-  const [card1, card2] = MODES.cards;
-  const [card1Done, card2Done] = MODES.cardsDone;
+  const [made, created] = MODES.created;
   return (
     <Camera shots={MODES_SHOTS}>
       <div className="flex gap-2 p-2" style={PAGE}>
-        {/* Chief of Staff half: coordinating the desk, answering quick
-            questions itself, reporting back when the work is done */}
+        {/* the Chief of Staff: hands the work off, stays free to talk, and
+            reports back in a line when the Analyst is done */}
         <Region delay={0.12} className="flex min-w-0 flex-1 flex-col gap-2 p-2">
           <PaneHeader icon={HomeRowIcon} name={names.home} />
-          <UserBubble at={0}>{MODES.request}</UserBubble>
-          <WorkspaceLine name="NVDA deep dive" at={row1} done={row1 + MODES.rowRun} />
-          <HandoffCard
-            heading={names.handoff}
-            brief="Q3 print vs guidance, data-center demand"
-            at={row2}
-            started={row2 + MODES.rowRun}
-            finished={MODES.file}
-          />
-          <UserBubble at={MODES.ask}>{MODES.quick}</UserBubble>
-          <ActivityRow
-            icon={TrendingUp}
-            verb={t('toolArtifact.inProgress.fetchingSymbolPrices', { symbol: 'AVGO' })}
-            title={t('toolArtifact.tool.stockPrices')}
-            after={<Pill>AVGO</Pill>}
-            at={MODES.fetch}
-            done={MODES.card}
-          />
-          <Appear at={MODES.card} pop>
-            <StockPriceCard
-              sym="AVGO"
-              price="$349.80"
-              change={38.38}
-              period="2026-04-20, 2026-10-20"
-              series={AVGO_6M}
-              high="$356.20"
-              low="$238.40"
-              vol="21.3M"
-              at={MODES.card + 100}
+          <Transcript>
+            <UserBubble at={0}>{MODES.request}</UserBubble>
+            <WorkspaceLine name={MODES.workspace} at={made} done={created} />
+            <HandoffCard
+              workspace={MODES.workspace}
+              title="NVDA valuation into earnings"
+              brief="Value it three ways into the Q3 print."
+              at={MODES.handoff}
+              started={MODES.started}
+              finished={MODES.files[1]}
             />
-          </Appear>
-          <Reply
-            text="**The Analyst is done:** base case $171 a share, 6% below spot."
-            at={MODES.report}
-          />
+            <Reply
+              text="**An Analyst in NVDA deep dive is on it.** I'll report back when it's done."
+              at={MODES.said}
+            />
+            <UserBubble at={MODES.ask}>{MODES.quick}</UserBubble>
+            <ActivityRow
+              icon={TrendingUp}
+              verb={t('toolArtifact.inProgress.fetchingSymbolPrices', { symbol: 'AVGO' })}
+              title={t('toolArtifact.tool.stockPrices')}
+              after={<Pill>AVGO</Pill>}
+              at={MODES.fetch}
+              done={MODES.card}
+            />
+            <Appear at={MODES.card} pop>
+              <StockPriceCard
+                sym="AVGO"
+                price="$349.80"
+                change={38.38}
+                period="2026-04-20, 2026-10-20"
+                series={AVGO_6M}
+                high="$356.20"
+                low="$238.40"
+                vol="21.3M"
+                at={MODES.card + 100}
+              />
+            </Appear>
+            <Appear at={MODES.report} className="flex justify-end">
+              <Provenance icon={Inbox}>
+                {t('chat.provenance.reportFrom', { name: MODES.workspace })}
+              </Provenance>
+            </Appear>
+            <Reply
+              text="**NVDA looks fully priced.** Only the bull case clears today's $182; the base case is $171. The model is in valuation.xlsx."
+              at={MODES.reply}
+            />
+          </Transcript>
         </Region>
-        {/* Analyst half: subagents fanning out toward a deliverable */}
+        {/* the Analyst: takes the question, runs a workflow on it, and
+            answers at length with a chart and its files */}
         <Region delay={0.28} className="flex min-w-0 flex-1 flex-col gap-2 p-2">
           <PaneHeader icon={Folder} name={names.worker} />
-          <SubagentCard
-            name="data-prep"
-            task="Clean the filings and estimates"
-            tools={23}
-            at={card1}
-            done={card1Done}
-          />
-          <SubagentCard
-            name="valuation"
-            task="Build the DCF and comps"
-            tools={17}
-            at={card2}
-            done={card2Done}
-          />
-          <Reply
-            text="**Base case $171 a share,** 6% below spot; only the bull case clears it."
-            at={MODES.say}
-          />
-          <Appear at={MODES.chart}>
-            <ChartCard title="DCF value per share" legend="spot $182.42">
-              <BarChart
-                bars={DCF_CASES}
-                max={240}
-                median={182.42}
-                at={MODES.chart + 120}
-                per={90}
-                labelWidth={18}
-              />
-            </ChartCard>
-          </Appear>
-          <Appear at={MODES.file} pop>
-            <FileCard name="valuation.xlsx" kind="spreadsheet" icon={FileSpreadsheet} />
-          </Appear>
+          <Transcript>
+            <UserBubble
+              at={MODES.task}
+              caption={<Provenance icon={Bot}>{t('chat.provenance.fromChiefOfStaff')}</Provenance>}
+            >
+              Value NVDA three ways before Q3.
+            </UserBubble>
+            <WorkflowCard
+              name="nvda-valuation"
+              title="Is NVDA worth owning into earnings?"
+              {...NVDA_FLOW}
+              at={MODES.flow}
+              done={MODES.flowDone}
+              took="6m 48s"
+              tokens={412_000}
+            />
+            <Reply
+              text="**Base case $171 a share, 6% below spot.** Only the bull case clears $182, and it needs data-center revenue to compound 40% a year to 2028."
+              at={MODES.say}
+            />
+            <Appear at={MODES.chart}>
+              <ChartCard title="DCF value per share" legend="spot $182.42">
+                <BarChart
+                  bars={DCF_CASES}
+                  max={240}
+                  median={182.42}
+                  at={MODES.chart + 120}
+                  per={90}
+                  labelWidth={18}
+                />
+              </ChartCard>
+            </Appear>
+            <FileStack
+              top={{ name: 'valuation.xlsx', kind: 'spreadsheet', icon: FileSpreadsheet }}
+              under={{ name: 'nvda-earnings.pdf', kind: 'document', icon: FileText }}
+              at={MODES.files[0]}
+              next={MODES.files[1]}
+            />
+          </Transcript>
         </Region>
       </div>
     </Camera>
   );
 }
 
-/* ── chat · step 2: a Chief of Staff chat page ─────────────────────────── */
+/* ── chat · step 2: a Chief of Staff thread ────────────────────────────── */
 
-/** A live quote for one symbol (`InlineQuoteCard`, its hero layout): symbol
-    and name, price and change, the day's low and high either side of the
-    range strip with the price marked on it, then open and previous close. */
-function QuoteCard() {
-  const { t } = useTranslation();
-  const label = { color: 'var(--iv-text-3)' };
-  const value = { color: 'var(--iv-text-2)', fontWeight: 500 };
-  return (
-    <div
-      className="flex flex-col gap-1.5 rounded-md border px-2 py-1.5 tabular-nums"
-      style={toolCard}
-    >
-      <div className="flex items-baseline gap-1 leading-none">
-        <span className="text-[0.5rem] font-bold" style={{ color: 'var(--iv-text)' }}>
-          NVDA
-        </span>
-        <span className="truncate text-[0.4375rem]" style={label}>
-          NVIDIA Corp
-        </span>
-      </div>
-      <div className="flex items-baseline gap-1.5">
-        <span
-          className="text-[0.6875rem] font-bold leading-none"
-          style={{ color: 'var(--iv-text)' }}
-        >
-          $182.42
-        </span>
-        <span
-          className="text-[0.4375rem] font-medium leading-none"
-          style={{ color: 'var(--color-profit)' }}
-        >
-          +2.89 (+1.61%)
-        </span>
-      </div>
-      {/* the day's range: low · the price on the strip · high */}
-      <div className="flex items-center gap-1 text-[0.375rem] leading-none" style={label}>
-        <span>{t('toolArtifact.low')} $180.15</span>
-        <span
-          className="relative h-0.5 flex-1 rounded-full"
-          style={{ background: 'var(--color-border-muted)' }}
-        >
-          <span
-            className="absolute top-1/2 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full"
-            style={{ left: '78%', background: 'var(--color-profit)' }}
-          />
-        </span>
-        <span>{t('toolArtifact.high')} $183.05</span>
-      </div>
-      <div className="flex gap-2 text-[0.375rem] leading-none" style={label}>
-        <span>
-          {t('toolArtifact.open')} <b style={value}>$180.40</b>
-        </span>
-        <span>
-          {t('toolArtifact.prevClose')} <b style={value}>$179.53</b>
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/** The Chief of Staff's turn, played out: a request typed and sent, the
-    agent orchestrating it step by step (workspace, hand-off to the Analyst,
-    an automation) and saying so, then a quick price check answered in
-    under a second, so fast QA reads as part of the job, not the whole job. */
+/** The Chief of Staff's turn, played out under an earlier quick answer: a
+    request typed and sent, the work handed to the workspace's Analyst, an
+    automation set up, a line saying so, then the Analyst's report coming
+    back and the Chief of Staff passing it on in two sentences with the
+    file. */
 const COS = {
-  ask: 'Set up a deep dive on NVDA earnings',
-  typeAsk: 400,
-  sendAsk: 1750,
-  think: 2000,
-  rows: [2500, 3100, 3700],
-  rowRun: 500,
+  ask: 'Refresh the semis comps; brief me before earnings.',
+  typeAsk: 500,
+  sendAsk: 2200,
+  think: 2450,
+  handoff: 2950,
+  started: 3450,
+  automation: [3550, 4050],
   say: 4250,
-  quick: 'NVDA price?',
-  typeQuick: 5400,
-  sendQuick: 5900,
-  answer: 6150,
-  card: 6600,
-  length: 8500,
+  finished: 6200,
+  report: 6450,
+  reply: 6700,
+  file: 7650,
+  length: 9400,
 };
 
 /** The chat column's width (px), centered on the page as the app sets it. */
 const COS_COL = 240;
-const COS_X = (PAGE.width - COS_COL) / 2;
 
 /** When the thread's earlier exchange happened: long before the scene, so it
     is on the page, settled, from the first frame. */
@@ -312,30 +312,26 @@ const SEMIS: Bar[] = [
   { label: 'TSM', value: 1.4, shown: '+1.4%' },
   { label: 'AMD', value: 0.9, shown: '+0.9%' },
   { label: 'MU', value: 0.6, shown: '+0.6%' },
+  { label: 'ARM', value: 0.3, shown: '+0.3%' },
 ];
 
-/** The camera stays low, where a thread with history moves: the composer
-    whole as the request is typed and sent, with the earlier exchange above
-    it, the turn building up from the composer in the same frame, then down
-    to the quick question and the quote it gets back, then the whole page. */
+/** The whole thread first, its header naming the Chief of Staff, then down
+    to the composer as the request goes out and the turn builds above it, in
+    on the report as it comes back, and out again. */
 const COS_SHOTS: [Shot, ...Shot[]] = [
-  shot(0, { x: COS_X, y: 118, w: COS_COL, h: 208 }),
-  shot(5300, { x: COS_X, y: 138, w: COS_COL, h: 195 }, { dur: 700, onPage: false }),
-  wide(7700, 800),
+  wide(0),
+  shot(2200, 200, 198, REST, 900),
+  shot(7000, 200, 220, CLOSE, 700),
+  shot(8900, 200, 198, REST, 700),
 ];
 
 function ChiefOfStaffAnswer() {
   const { t } = useTranslation();
   const names = useAgentNames();
   const now = useSceneTime();
-  const [row1, row2, row3] = COS.rows;
-  const orchestrated = row3 + COS.rowRun;
+  const [automate, automated] = COS.automation;
   const composer =
-    now >= COS.typeAsk && now < COS.sendAsk ? (
-      <Typed text={COS.ask} at={COS.typeAsk} />
-    ) : now >= COS.typeQuick && now < COS.sendQuick ? (
-      <Typed text={COS.quick} at={COS.typeQuick} />
-    ) : undefined;
+    now >= COS.typeAsk && now < COS.sendAsk ? <Typed text={COS.ask} at={COS.typeAsk} /> : undefined;
   return (
     <Camera shots={COS_SHOTS}>
       <div className="flex flex-col" style={PAGE}>
@@ -344,7 +340,7 @@ function ChiefOfStaffAnswer() {
           className="flex h-6 shrink-0 items-center gap-2 border-b px-2.5"
           style={{ borderColor: 'var(--iv-border)' }}
         >
-          <TopTitle>Semis today</TopTitle>
+          <TopTitle>Semis this week</TopTitle>
           <Tag>{names.home}</Tag>
         </div>
         <div
@@ -353,9 +349,27 @@ function ChiefOfStaffAnswer() {
         >
           {/* the transcript settles on the composer, as a thread with history
               does: the newest lines just above it, the oldest running off the
-              top as they come in, the earlier exchange gone by the end */}
+              top as they come in */}
           <div className="flex min-h-0 flex-1 flex-col justify-end gap-1.5 overflow-hidden">
-            {/* earlier today: a market question, answered with a chart */}
+            {/* earlier today: the week ahead, then a quick market question,
+                both answered here */}
+            <UserBubble at={EARLIER} className="ml-12">
+              Morning. What&apos;s on this week?
+            </UserBubble>
+            <div className="mr-12 flex flex-col gap-1.5">
+              <ActivityRow
+                icon={Search}
+                verb={t('toolArtifact.inProgress.searching')}
+                title={t('toolArtifact.tool.webSearch')}
+                after={<Pill>earnings this week</Pill>}
+                at={EARLIER}
+                done={EARLIER}
+              />
+              <Reply
+                text="**A busy week.** CPI prints Wednesday at 8:30, and NVDA reports after Thursday's close. Your AI semis comps are a week old."
+                at={EARLIER}
+              />
+            </div>
             <UserBubble at={EARLIER} className="ml-12">
               What&apos;s moving in semis?
             </UserBubble>
@@ -376,11 +390,10 @@ function ChiefOfStaffAnswer() {
                 at={EARLIER}
               />
             </div>
-            <UserBubble at={COS.sendAsk + 80} className="ml-12">
+            <UserBubble at={COS.sendAsk + 80} className="ml-8">
               {COS.ask}
             </UserBubble>
-            {/* the turn sits on the page, as the app writes replies: reasoning,
-              the workspace, the hand-off card, the automation, a line on it */}
+            {/* the turn: reasoning, the hand-off, the automation, a line on it */}
             {now >= COS.think && (
               <div className="mr-12 flex flex-col gap-1.5">
                 <ActivityRow
@@ -394,157 +407,188 @@ function ChiefOfStaffAnswer() {
                     />
                   }
                   at={COS.think}
-                  done={row1}
+                  done={COS.handoff}
                 />
-                <WorkspaceLine name="NVDA deep dive" at={row1} done={row1 + COS.rowRun} />
                 <HandoffCard
-                  heading={names.taskHandoff}
-                  brief="Q3 print vs guidance, data-center demand"
-                  at={row2}
-                  started={row2 + COS.rowRun}
+                  workspace="AI semis comps"
+                  title="Refresh the nine-name comps"
+                  brief="NTM multiples; flag what moved since last week."
+                  at={COS.handoff}
+                  started={COS.started}
+                  finished={COS.finished}
                 />
                 <ActivityRow
                   icon={Zap}
-                  verb={t('toolArtifact.inProgress.creatingName', { name: 'daily earnings brief' })}
+                  verb={t('toolArtifact.inProgress.creatingName', { name: 'earnings-call brief' })}
                   title={t('toolArtifact.tool.createAutomation')}
-                  after={<Pill>daily earnings brief</Pill>}
-                  at={row3}
-                  done={orchestrated}
+                  after={<Pill>earnings-call brief</Pill>}
+                  at={automate}
+                  done={automated}
                 />
-                <Reply text="**On it.** A brief lands each morning at 8:00." at={COS.say} />
+                <Reply
+                  text="**The AI semis comps Analyst is on it.** A brief will land the morning of each earnings call."
+                  at={COS.say}
+                />
               </div>
             )}
-            {/* quick QA rides along below */}
-            <UserBubble at={COS.sendQuick + 80} className="ml-12">
-              {COS.quick}
-            </UserBubble>
-            {now >= COS.answer && (
+            {/* the Analyst's report comes back, and is passed on in a line */}
+            <Appear at={COS.report} className="flex justify-end">
+              <Provenance icon={Inbox}>
+                {t('chat.provenance.reportFrom', { name: 'AI semis comps' })}
+              </Provenance>
+            </Appear>
+            {now >= COS.reply && (
               <div className="mr-12 flex flex-col gap-1.5">
-                <ActivityRow
-                  icon={Zap}
-                  verb={t('toolArtifact.inProgress.fetchingQuotes')}
-                  title={t('toolArtifact.tool.liveQuotes')}
-                  after={<Pill>NVDA</Pill>}
-                  at={COS.answer}
-                  done={COS.card}
+                <Reply
+                  text="**Comps refreshed.** NVDA's premium widened to 2.5x the peer median on EV/Sales, from 2.2x. MU moved most, down to 4.2x."
+                  at={COS.reply}
                 />
-                <Appear at={COS.card} pop>
-                  <QuoteCard />
+                <Appear at={COS.file} pop>
+                  <FileCard name="comps.xlsx" kind="spreadsheet" icon={FileSpreadsheet} />
                 </Appear>
               </div>
             )}
           </div>
-          <InputDock text={composer} sendAt={[COS.sendAsk, COS.sendQuick]} />
+          <InputDock text={composer} sendAt={[COS.sendAsk]} />
         </div>
       </div>
     </Camera>
   );
 }
 
-/* ── chat · step 3: an Analyst thread page running code ────────────────── */
+/* ── chat · step 3: an Analyst thread running a workflow ───────────────── */
 
-/** The Analyst mid-run, played out: two subagents in parallel, their tool
-    counts ticking, while the file panel shows comps.xlsx being written row
-    by row. The finding and the chart behind it come in once the sheet is
-    written, and the deliverables land as report-builder returns. */
-const PTC = {
-  cards: [200, 450],
-  cardsDone: [2000, 6000],
-  panel: 600,
-  sheet: 1500,
-  say: 5100,
-  chart: 5500,
-  bars: 5600,
-  chips: [6150, 6300],
-  length: 8400,
+/** The comps refresh the Analyst's workflow runs: estimates pulled three
+    names to an agent, the workbook built, then its formulas checked. */
+const COMPS_FLOW = {
+  phases: [
+    { name: 'Pull', at: 300 },
+    { name: 'Build', at: 1100 },
+    { name: 'Check', at: 4000 },
+  ],
+  agents: [
+    { label: 'NTM estimates: NVDA, AVGO, TSM', at: 350, done: 900, took: '41.2s' },
+    { label: 'NTM estimates: AMD, ARM, QCOM', at: 400, done: 1000, took: '47.9s' },
+    { label: 'NTM estimates: MU, MRVL, INTC', at: 450, done: 1050, took: '52.3s' },
+    { label: 'Build comps.xlsx', at: 1150, done: 3900, took: '1m 38s' },
+    { label: 'Check formulas', at: 4050, done: 4400, took: '21.6s' },
+  ] satisfies FlowAgent[],
+  logs: [
+    { text: 'pulling NTM consensus for nine names', at: 350 },
+    { text: 'writing comps.xlsx', at: 1150 },
+    { text: 'checking 54 formulas', at: 4050 },
+  ],
 };
 
-/** The chat column's width (px); the file panel takes the rest of the page,
-    wider than the chat, as a file preview opens. */
+/** The task from the Chief of Staff arriving, the workflow running it while
+    the file panel shows comps.xlsx being written row by row, then the
+    Analyst's long answer, the chart behind it, and its files. */
+const PTC = {
+  task: 100,
+  flow: 300,
+  panel: 1100,
+  sheet: 1300,
+  flowDone: 4500,
+  say: 4700,
+  chart: 5700,
+  bars: 5800,
+  files: [6300, 6500],
+  length: 8300,
+};
+
+/** The chat's width (px) once the file panel opens beside it and takes the
+    rest of the page, wider than the chat, as a file preview opens. Until
+    then the chat has the page, its column held to `COS_COL`. */
 const PTC_CHAT = 176;
 
-/** The camera rides the run: the subagents starting, across to the sheet as
-    report-builder writes it (down the peers to the statistics), back to the
-    finding, its chart and the files, then out to the whole page. */
+/** The camera rests on the chat as the task arrives and the workflow starts,
+    drifts across to the sheet as the file panel opens and the workflow's
+    build step writes it, pushes in on the peers and their statistics, then
+    comes back down the chat for the answer, its chart and files, and out
+    to the whole page. */
 const PTC_SHOTS: [Shot, ...Shot[]] = [
-  shot(0, { x: 10, y: 10, w: PTC_CHAT - 20, h: 108 }),
-  shot(2100, { x: PTC_CHAT + 9, y: 18, w: 172, h: 120 }, { dur: 900 }),
-  shot(3800, { x: PTC_CHAT + 9, y: 116, w: 172, h: 124 }, { dur: 1300 }),
-  shot(5100, { x: 0, y: 118, w: PTC_CHAT - 2, h: 140 }, { pad: 0, dur: 800 }),
-  wide(7500, 900),
+  shot(0, 160, 132, REST),
+  shot(1800, 240, 140, REST, 700),
+  shot(2900, 272, 150, CLOSE, 900),
+  shot(4900, 160, 198, REST, 800),
+  wide(7400, 900),
 ];
 
-/** No user bubble here — the scene is the agent mid-run: parallel subagents,
-    the finding with its chart, deliverables, and the file panel previewing
-    the Excel they produced, docked at the page's right edge as the app
-    docks it. */
 function PtcSandbox() {
+  const { t } = useTranslation();
+  const names = useAgentNames();
   const now = useSceneTime();
-  const [card1, card2] = PTC.cards;
-  const [card1Done, card2Done] = PTC.cardsDone;
-  const stacked = now >= PTC.chips[1];
+  const open = ease(now, PTC.panel, 450);
   return (
     <Camera shots={PTC_SHOTS}>
       <div className="flex" style={PAGE}>
-        {/* chat column */}
-        <div className="flex shrink-0 flex-col gap-1 p-2.5" style={{ width: PTC_CHAT }}>
-          {/* parallel subagents */}
-          <SubagentCard
-            name="data-prep"
-            task="Pull NTM estimates for 9 AI semis"
-            tools={23}
-            at={card1}
-            done={card1Done}
-          />
-          <SubagentCard
-            name="report-builder"
-            task="Write comps.xlsx and the report"
-            tools={10}
-            at={card2}
-            done={card2Done}
-          />
-          {/* the finding, then the chart behind it */}
-          <Reply
-            text="NVDA trades at **2.5x** the peer median on EV/Sales, and **21%** above it on P/E."
-            at={PTC.say}
-          />
-          <Appear at={PTC.chart}>
-            <ChartCard title="AI semis, EV/Sales NTM" legend="median 9.8x">
-              <ColumnChart bars={EV_SALES} max={31} median={9.8} at={PTC.bars} />
-            </ChartCard>
-          </Appear>
-          {/* the deliverables, stacked as the app stacks a turn's files */}
-          <Appear at={PTC.chips[0]}>
-            <div className="relative" style={{ height: stacked ? 27 : 24 }}>
-              {stacked && (
-                <div
-                  className="absolute inset-x-0 top-0"
-                  style={{ transform: 'translateY(3px) scale(0.98)' }}
-                >
-                  <FileCard name="report.pdf" kind="document" icon={FileText} />
-                </div>
-              )}
-              <div className="absolute inset-x-0 top-0">
-                <FileCard
-                  name="comps.xlsx"
-                  kind="spreadsheet"
-                  icon={FileSpreadsheet}
-                  count={stacked ? 2 : 1}
-                />
-              </div>
-            </div>
-          </Appear>
-          <InputDock delay={0.6} />
-        </div>
-        {/* file panel previewing the Excel deliverable, written as it runs */}
-        <Appear
-          at={PTC.panel}
-          reserve
-          className="flex min-w-0 flex-1 border-l"
-          style={{ background: 'var(--color-bg-page)', borderColor: 'var(--color-border-muted)' }}
+        {/* the chat: header, the transcript, the composer; it gives way to
+            the file panel when the workbook opens */}
+        <div
+          className="flex shrink-0 flex-col"
+          style={{ width: PAGE.width - (PAGE.width - PTC_CHAT) * open }}
         >
-          <SheetPanel at={PTC.sheet} />
-        </Appear>
+          <div
+            className="flex h-[18px] shrink-0 items-center gap-1.5 border-b px-2"
+            style={{ borderColor: 'var(--iv-border)' }}
+          >
+            <TopTitle>Refresh the comps</TopTitle>
+            <Tag>{names.worker}</Tag>
+          </div>
+          <div
+            className="mx-auto flex min-h-0 w-full flex-1 flex-col gap-1.5 p-2.5"
+            style={{ maxWidth: COS_COL }}
+          >
+            <Transcript>
+              <UserBubble
+                at={PTC.task}
+                caption={
+                  <Provenance icon={Bot}>{t('chat.provenance.fromChiefOfStaff')}</Provenance>
+                }
+              >
+                Refresh the comps; flag what moved.
+              </UserBubble>
+              <WorkflowCard
+                name="semis-comps"
+                title="Refresh nine AI semis comps"
+                {...COMPS_FLOW}
+                at={PTC.flow}
+                done={PTC.flowDone}
+                took="3m 41s"
+                tokens={268_000}
+              />
+              {/* the long answer, then the chart behind it, then the files */}
+              <Reply
+                text="**NVDA trades at 24.1x NTM sales, 2.5x the 9.8x median,** up from 2.2x last week. MU moved most, down to 4.2x as memory prices reset. On P/E, NVDA's premium is 21%. All 54 formulas check out."
+                at={PTC.say}
+              />
+              <Appear at={PTC.chart}>
+                <ChartCard title="AI semis, EV/Sales NTM" legend="median 9.8x">
+                  <ColumnChart bars={EV_SALES} max={31} median={9.8} at={PTC.bars} />
+                </ChartCard>
+              </Appear>
+              <FileStack
+                top={{ name: 'comps.xlsx', kind: 'spreadsheet', icon: FileSpreadsheet }}
+                under={{ name: 'comps-note.pdf', kind: 'document', icon: FileText }}
+                at={PTC.files[0]}
+                next={PTC.files[1]}
+              />
+            </Transcript>
+            <InputDock delay={0.6} />
+          </div>
+        </div>
+        {/* file panel previewing the workbook, written as the workflow runs;
+            it slides in at its full width, so the sheet never reflows */}
+        {now >= PTC.panel && (
+          <div
+            className="flex min-w-0 flex-1 overflow-hidden border-l"
+            style={{ background: 'var(--color-bg-page)', borderColor: 'var(--color-border-muted)' }}
+          >
+            <div className="flex shrink-0" style={{ width: PAGE.width - PTC_CHAT }}>
+              <SheetPanel at={PTC.sheet} />
+            </div>
+          </div>
+        )}
       </div>
     </Camera>
   );

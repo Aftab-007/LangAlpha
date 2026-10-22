@@ -1,6 +1,8 @@
 import type { ComponentType, CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  ArrowRight,
+  ArrowUpRight,
   Check,
   ChevronDown,
   ChevronRight,
@@ -8,16 +10,19 @@ import {
   PanelRight,
   type LucideProps,
 } from 'lucide-react';
+import { useLocale } from '@/hooks/useLocale';
+import { compactNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { frame, VIEW, type Rect, type Shot } from './camera';
+import { look, VIEW, type Shot } from './camera';
 import type { Bar } from './charts';
 import { ease, progress, useSceneTime } from './clock';
 import { Appear, Loader, rv } from './kit';
 
 /* The chat transcript's parts, shared by the chat scenes: the agent's reply,
-   activity rows, the workspace line, hand-off and subagent cards, a chart in
-   the reply, and a produced file's card.
-   Each is a small copy of the component the app draws it with (named on each). */
+   activity rows, the workspace line, the hand-off card, a workflow run, the
+   caption on a message from another agent, a chart in the reply, and the
+   files a turn produced. Each is a small copy of the component the app draws
+   it with (named on each). */
 /* eslint-disable react-refresh/only-export-components -- shared parts:
    scene components plus the style helper */
 
@@ -27,35 +32,17 @@ export type Icon = ComponentType<LucideProps>;
     the whole page and every other shot a crop of it. */
 export const PAGE = { width: VIEW.width, height: VIEW.height };
 
-/**
- * The camera's shot arriving at `at` that frames `r` (page px) with `pad`
- * around it, kept on the page: the view stops at the page's edge rather
- * than show past it. `onPage: false` lets it run past an edge that draws
- * nothing (the foot of a page whose last row sits short of it).
- */
-export function shot(
-  at: number,
-  r: Rect,
-  { pad = 8, dur, onPage = true }: { pad?: number; dur?: number; onPage?: boolean } = {}
-): Shot {
-  const { x, y, zoom } = frame(r, pad);
-  const keep = (c: number, size: number, view: number) => {
-    const half = view / 2 / zoom;
-    if (!onPage) return c;
-    return size <= 2 * half ? size / 2 : Math.min(Math.max(c, half), size - half);
-  };
-  return {
-    at,
-    dur,
-    x: keep(x, PAGE.width, VIEW.width),
-    y: keep(y, PAGE.height, VIEW.height),
-    zoom,
-  };
-}
+/** The camera's shot arriving at `at`: centred as near the page point
+    (`x`, `y`) as the page allows at `zoom`, the move in taking `dur` ms. */
+export const shot = (at: number, x: number, y: number, zoom: number, dur?: number): Shot => ({
+  at,
+  dur,
+  ...look(x, y, zoom),
+});
 
 /** The wide shot: the whole page, as the app draws it. */
 export const wide = (at: number, dur?: number): Shot =>
-  shot(at, { x: 0, y: 0, w: PAGE.width, h: PAGE.height }, { pad: 0, dur });
+  shot(at, PAGE.width / 2, PAGE.height / 2, 1, dur);
 
 /** A solid card in the chat transcript (`--color-bg-tool-card`), as tool results sit. */
 export const toolCard: CSSProperties = {
@@ -198,17 +185,21 @@ export function WorkspaceLine({ name, at, done }: { name: string; at: number; do
   );
 }
 
-/** A hand-off to the Analyst (`PTCAgentCard`): the workspace in small mono
-    caps, what was handed off, the brief under it in one line, and the run's
-    status: starting, working from `started`, completed from `finished`. */
+/** A hand-off to an Analyst under way (`PTCAgentCard`, its mission panel):
+    the workspace in small mono caps and the run's status, the thread's
+    title with the brief under it, then a rule over what the run is doing
+    and the way into its thread. Starting until `started`, working until
+    `finished`, then completed. */
 export function HandoffCard({
-  heading,
+  workspace,
+  title,
   brief,
   at,
   started,
   finished = Number.POSITIVE_INFINITY,
 }: {
-  heading: string;
+  workspace: string;
+  title: string;
   brief: string;
   at: number;
   started: number;
@@ -217,20 +208,18 @@ export function HandoffCard({
   const { t } = useTranslation();
   const now = useSceneTime();
   const live = now < finished;
-  const label =
+  const [label, hint] =
     now < started
-      ? 'chat.ptcCard.statusStarting'
+      ? ['chat.ptcCard.statusStarting', 'chat.ptcCard.hintProvisioning']
       : live
-        ? 'chat.ptcCard.statusWorking'
-        : 'chat.ptcCard.statusCompleted';
+        ? ['chat.ptcCard.statusWorking', 'chat.ptcCard.hintWorking']
+        : ['chat.ptcCard.statusCompleted', null];
+  const muted = 'var(--color-border-muted)';
   return (
     <Appear at={at}>
       <div
-        className="flex flex-col gap-1 rounded-md border p-1.5"
-        style={{
-          ...toolCard,
-          borderColor: live ? 'var(--color-border-default)' : 'var(--color-border-muted)',
-        }}
+        className="flex flex-col rounded-md border px-2 pb-1.5 pt-1.5"
+        style={{ ...toolCard, borderColor: live ? 'var(--color-border-default)' : muted }}
       >
         <div className="flex items-center gap-1">
           <span
@@ -240,7 +229,7 @@ export function HandoffCard({
             )}
             style={{ color: 'var(--color-text-quaternary)' }}
           >
-            NVDA deep dive
+            {workspace}
           </span>
           <span
             className={cn(
@@ -262,43 +251,118 @@ export function HandoffCard({
           </span>
         </div>
         <span
-          className="block truncate text-[0.5rem] font-medium leading-none first-letter:uppercase"
+          className="mt-1.5 truncate text-[0.5rem] font-medium leading-none"
           style={{ color: 'var(--iv-text)' }}
         >
-          {heading}
+          {title}
         </span>
         <span
-          className="truncate text-[0.4375rem] leading-none"
+          className="mt-1 truncate text-[0.4375rem] leading-none"
           style={{ color: 'var(--iv-text-3)' }}
         >
           {brief}
         </span>
+        <div
+          className="mt-1.5 flex items-center justify-between gap-1 border-t pt-1"
+          style={{ borderColor: muted }}
+        >
+          <span
+            className="truncate text-[0.375rem] leading-none"
+            style={{ color: 'var(--color-text-quaternary)' }}
+          >
+            {hint && t(hint)}
+          </span>
+          <span
+            className="flex shrink-0 items-center gap-0.5 text-[0.4375rem] font-medium leading-none"
+            style={{ color: 'var(--iv-text-3)' }}
+          >
+            {t('chat.ptcCard.ctaOpenThread')}
+            <ArrowRight className="h-2 w-2" />
+          </span>
+        </div>
       </div>
     </Appear>
   );
 }
 
-/** A subagent's task card (`TaskCardShell`): its type and status over a
-    rule, then the task as the agent wrote it, and its tool and token counts
-    ticking up from `at` until it completes at `done`. */
-export function SubagentCard({
-  name,
-  task,
-  tools,
-  at,
-  done,
-}: {
-  name: string;
-  task: string;
-  tools: number;
+/** The caption over a message nobody typed in this thread
+    (`MessageProvenanceLabel`): who sent it, then the arrow that opens where
+    it came from. It sits over the bubble's right edge, or alone in place of
+    a report-back's hidden message. */
+export function Provenance({ icon: Glyph, children }: { icon: Icon; children: ReactNode }) {
+  return (
+    <span
+      className="inline-flex min-w-0 items-center gap-1 text-[0.4375rem] leading-none"
+      style={{ color: 'var(--iv-text-3)' }}
+    >
+      <Glyph className="h-[7px] w-[7px] shrink-0" />
+      <span className="truncate">{children}</span>
+      <ArrowUpRight className="h-[7px] w-[7px] shrink-0" />
+    </span>
+  );
+}
+
+/** One agent a workflow's script sends out: its label, when it is sent,
+    and when it settles, with the time the row then reads. */
+export interface FlowAgent {
+  label: string;
   at: number;
   done: number;
+  took: string;
+}
+
+/** Agent rows the run card keeps in view; earlier ones fold into a count. */
+const FLOW_ROWS = 8;
+
+/**
+ * A workflow run (`WorkflowRunCard` in `TaskCardShell`): `workflow · name`
+ * and the run's status over a rule, the run's title, the phase rail with the
+ * phase under way in bold, a row per agent the script sends out (the loader
+ * while it runs, a check and its time once done), the latest log line while
+ * the run goes, and its totals in a band under a rule. Each phase starts at
+ * its `at`, the tokens count up from `at`, and the run settles at `done`.
+ */
+export function WorkflowCard({
+  name,
+  title,
+  phases,
+  agents,
+  logs,
+  at,
+  done,
+  took,
+  tokens,
+}: {
+  name: string;
+  title: string;
+  phases: { name: string; at: number }[];
+  agents: FlowAgent[];
+  logs: { text: string; at: number }[];
+  at: number;
+  done: number;
+  took: string;
+  tokens: number;
 }) {
   const { t } = useTranslation();
+  const locale = useLocale();
   const now = useSceneTime();
-  const used = Math.floor(tools * progress(now, at, done - at));
   const running = now < done;
-  const strong = { color: 'var(--iv-text-2)', fontWeight: 600 };
+  const current = phases.filter((p) => p.at <= now).length - 1;
+  const sent = agents.filter((a) => a.at <= now);
+  const settled = sent.filter((a) => a.done <= now).length;
+  const hidden = Math.max(0, sent.length - FLOW_ROWS);
+  const log = logs.filter((l) => l.at <= now).at(-1);
+  const spent = Math.round(tokens * progress(now, at, done - at));
+  const meta: string[] = [];
+  if (sent.length > 0) {
+    const count = t('chat.workflowRun.agents', { count: sent.length });
+    meta.push(running ? `${count} · ${t('chat.workflowRun.done', { count: settled })}` : count);
+  }
+  if (!running) meta.push(took);
+  if (spent > 0) {
+    meta.push(t('chat.workflowRun.tokens', { value: compactNumber(spent, locale) }));
+  }
+  const small = 'text-[0.375rem] leading-none';
   return (
     <Appear at={at}>
       <div className="overflow-hidden rounded-lg border font-mono" style={toolCard}>
@@ -310,7 +374,7 @@ export function SubagentCard({
             className="truncate text-[0.4375rem] font-medium lowercase leading-none"
             style={{ color: 'var(--iv-text-2)' }}
           >
-            {name}
+            workflow · {name}
           </span>
           <span
             className={cn(
@@ -326,31 +390,86 @@ export function SubagentCard({
             )}
             {t(running ? 'chat.taskCard.statusRunning' : 'chat.taskCard.statusCompleted')}
           </span>
+          <ChevronRight
+            className="h-2 w-2 shrink-0"
+            style={{ color: 'var(--color-text-quaternary)' }}
+          />
         </div>
-        <div className="flex flex-col gap-1.5 px-1.5 pb-1.5 pt-1.5">
+        <div className="flex flex-col gap-1.5 px-1.5 py-1.5">
           <span
             className="truncate font-sans text-[0.5rem] font-medium leading-none"
             style={{ color: 'var(--iv-text)' }}
           >
-            {task}
+            {title}
           </span>
-          <span
-            className={cn(
-              'h-[0.375rem] whitespace-nowrap',
-              'text-[0.375rem] leading-none tracking-[0.02em]'
-            )}
-            style={{ color: 'var(--iv-text-3)' }}
-          >
-            {used > 0 && (
-              <>
-                <b style={strong}>{used}</b> {t('chat.subagentCard.toolUnit', { count: used })}
-                {' · '}
-                <b style={strong}>{((used * 540) / 1000).toFixed(1)}k</b>{' '}
-                {t('chat.subagentCard.tokenUnit')}
-              </>
-            )}
+          {/* the phase rail: done phases dim, the one under way bold */}
+          <span className={cn('flex flex-wrap items-center gap-x-1', small)}>
+            {phases.map((phase, i) => (
+              <span key={phase.name} className="flex items-center gap-1">
+                {i > 0 && <span style={{ color: 'var(--color-text-quaternary)' }}>─</span>}
+                <span
+                  style={
+                    running && i === current
+                      ? { color: 'var(--iv-text)', fontWeight: 600 }
+                      : {
+                          color:
+                            !running || i < current
+                              ? 'var(--iv-text-3)'
+                              : 'var(--color-text-quaternary)',
+                          fontWeight: 500,
+                        }
+                  }
+                >
+                  {phase.name}
+                </span>
+              </span>
+            ))}
           </span>
+          {sent.length > 0 && (
+            <span className="flex flex-col gap-[3px]">
+              {hidden > 0 && (
+                <span className={small} style={{ color: 'var(--color-text-quaternary)' }}>
+                  {t('chat.workflowRun.earlier', { count: hidden })}
+                </span>
+              )}
+              {sent.slice(hidden).map((agent) => {
+                const live = now < agent.done;
+                return (
+                  <span key={agent.label} className={cn('flex items-center gap-1', small)}>
+                    {live ? (
+                      <Loader color="var(--color-warning)" className="text-[0.375rem]" />
+                    ) : (
+                      <Check
+                        className="h-[6px] w-[6px] shrink-0"
+                        strokeWidth={2.5}
+                        style={{ color: 'var(--color-success)' }}
+                      />
+                    )}
+                    <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--iv-text-2)' }}>
+                      {agent.label}
+                    </span>
+                    <span className="shrink-0" style={{ color: 'var(--iv-text-3)' }}>
+                      {live ? '' : agent.took}
+                    </span>
+                  </span>
+                );
+              })}
+            </span>
+          )}
+          {running && log && (
+            <span className={cn('truncate', small)} style={{ color: 'var(--iv-text-3)' }}>
+              › {log.text}
+            </span>
+          )}
         </div>
+        {meta.length > 0 && (
+          <div
+            className={cn('border-t px-1.5 py-1 tracking-[0.02em]', small)}
+            style={{ borderColor: 'var(--color-border-subtle)', color: 'var(--iv-text-3)' }}
+          >
+            {meta.join(' · ')}
+          </div>
+        )}
       </div>
     </Appear>
   );
@@ -555,5 +674,46 @@ export function FileCard({
         </span>
       )}
     </div>
+  );
+}
+
+/** A file for `FileStack`: its name, its kind, and its card's glyph. */
+interface TurnFile {
+  name: string;
+  kind: 'spreadsheet' | 'document';
+  icon: Icon;
+}
+
+/** The files a turn produced, stacked as the app stacks them: the first
+    card lands at `at`, and once the second lands at `next` it peeks out
+    under the first, which takes the count. */
+export function FileStack({
+  top,
+  under,
+  at,
+  next,
+}: {
+  top: TurnFile;
+  under: TurnFile;
+  at: number;
+  next: number;
+}) {
+  const stacked = useSceneTime() >= next;
+  return (
+    <Appear at={at}>
+      <div className="relative" style={{ height: stacked ? 27 : 24 }}>
+        {stacked && (
+          <div
+            className="absolute inset-x-0 top-0"
+            style={{ transform: 'translateY(3px) scale(0.98)' }}
+          >
+            <FileCard {...under} />
+          </div>
+        )}
+        <div className="absolute inset-x-0 top-0">
+          <FileCard {...top} count={stacked ? 2 : 1} />
+        </div>
+      </div>
+    </Appear>
   );
 }

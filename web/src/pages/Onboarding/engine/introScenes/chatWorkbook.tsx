@@ -6,7 +6,7 @@ import { useSceneTime } from './clock';
 
 /* The Analyst's workbook in the ptcSandbox scene: comps.xlsx as the file
    panel previews it, its rows and formulas, and the cells filling in as
-   report-builder writes them. The chart in the Analyst's reply reads the
+   the workflow's build step writes them. The chart in the Analyst's reply reads the
    same rows. */
 /* eslint-disable react-refresh/only-export-components -- scene part:
    the panel plus the rows its chart reads */
@@ -73,7 +73,7 @@ function peer(
   };
 }
 
-/** The comps sheet report-builder writes, laid out as the comps skill lays
+/** The comps sheet the build step writes, laid out as the comps skill lays
     one out: title and basis, the valuation band, nine peers, then the
     statistics on the comparable columns only (never price or size), and
     NVDA against the median. The statistics' cached values are the real
@@ -314,7 +314,7 @@ function cellAt(r: number, c: number): SheetValue | null {
 
 /** The file panel open on the workbook (`FilePanel`, `ExcelViewer`): the
     file's tab, the formula bar, the sheet, and the sheet tabs. The cells
-    fill in as report-builder writes them, the focus following the last
+    fill in as the build step writes them, the focus following the last
     write, and the formula bar reading the focused cell: its formula and
     cached value, or the value typed there. The first cell is written at
     `at`. */
