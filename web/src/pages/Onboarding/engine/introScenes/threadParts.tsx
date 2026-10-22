@@ -16,11 +16,9 @@ import { ChatHeaderButtons, PanelStrip } from './panelParts';
 /** The file panel's width in the 400px scene; the chat column takes the rest. */
 export const PANEL_W = 212;
 
-export const iconStyle = { color: 'var(--iv-text-3)' };
-
 /** A glyph in the chrome of a tab's own body (the Memory and Memo tabs). */
 export function ChromeIcon({ icon: Icon }: { icon: LucideIcon }) {
-  return <Icon className="h-2 w-2 shrink-0" style={iconStyle} />;
+  return <Icon className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />;
 }
 
 /**
@@ -29,17 +27,7 @@ export function ChromeIcon({ icon: Icon }: { icon: LucideIcon }) {
  * Streams in from `at`, `cps` characters a second; with no `at` it was written
  * before the scene began, and outside a clock it is whole.
  */
-export function Prose({
-  text,
-  at,
-  cps = 110,
-  className,
-}: {
-  text: string;
-  at?: number;
-  cps?: number;
-  className?: string;
-}) {
+export function Prose({ text, at, cps = 110 }: { text: string; at?: number; cps?: number }) {
   const t = useSceneTime();
   let left = at == null ? Infinity : Math.max(Math.floor(((t - at) * cps) / 1000), 0);
   if (left === 0) return null;
@@ -71,7 +59,7 @@ export function Prose({
     );
   });
   return (
-    <p className={cn('text-[0.5rem] leading-[1.5]', className)} style={{ color: 'var(--iv-text)' }}>
+    <p className="text-[8px] leading-[1.5]" style={{ color: 'var(--color-text-primary)' }}>
       {out}
     </p>
   );
@@ -84,10 +72,10 @@ function ChatHeader({ title }: { title: string }) {
   const { worker } = useAgentNames();
   return (
     <div className="flex min-w-0 flex-1 items-center gap-1.5 pl-2.5 pr-[9px]">
-      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={iconStyle} />
+      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
       <span
-        className="min-w-0 truncate text-[0.5rem] font-medium leading-none"
-        style={{ color: 'var(--iv-text)' }}
+        className="min-w-0 truncate text-[8px] font-medium leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
       >
         {title}
       </span>
@@ -139,7 +127,7 @@ export function ThreadPage({
     <div className="relative flex flex-col" style={PAGE}>
       <div
         className="flex shrink-0 items-stretch border-b"
-        style={{ height: HEADER_H, borderColor: 'var(--iv-border)' }}
+        style={{ height: HEADER_H, borderColor: 'var(--color-border-muted)' }}
       >
         <ChatHeader title={title} />
         <PanelStrip
@@ -147,7 +135,7 @@ export function ThreadPage({
           back={back}
           tree={tree}
           className="border-l"
-          style={{ width: PANEL_W, borderColor: 'var(--iv-border)' }}
+          style={{ width: PANEL_W, borderColor: 'var(--color-border-muted)' }}
         />
       </div>
       <div className="flex min-h-0 flex-1">
@@ -163,7 +151,7 @@ export function ThreadPage({
         </div>
         <div
           className="flex shrink-0 flex-col border-l"
-          style={{ width: PANEL_W, borderColor: 'var(--iv-border)' }}
+          style={{ width: PANEL_W, borderColor: 'var(--color-border-muted)' }}
         >
           {panel}
         </div>
@@ -198,43 +186,45 @@ interface RowLine {
  * While it runs the label shimmers, then it settles. A file call keeps one
  * pill throughout ("Writing" then "Write", beside `notes.md`); a memory call
  * runs as one phrase and settles with its topic as the pill. The app draws
- * no spinner and no check on these rows.
+ * no spinner and no check on these rows. A row with no `running` is a call
+ * the thread made before the scene began, so it is settled from the start.
  */
 export function ToolRow({
   icon: Icon,
   running,
   settled,
-  at,
-  done,
+  at = 0,
+  done = 0,
 }: {
   icon: LucideIcon;
-  running: RowLine;
+  running?: RowLine;
   settled: RowLine;
-  at: number;
-  done: number;
+  at?: number;
+  done?: number;
 }) {
-  const live = useSceneTime() < done;
+  const now = useSceneTime();
+  const live = running != null && now < done;
   const { label, pill } = live ? running : settled;
   return (
     <Appear at={at} className="flex min-w-0 items-center gap-1.5 py-[3px]">
       {/* page-colored behind the icon, so the rule breaks around it */}
       <span
         className="flex h-[11px] w-3.5 shrink-0 items-center justify-center"
-        style={{ background: 'var(--iv-mk-bg)' }}
+        style={{ background: 'var(--color-bg-page)' }}
       >
         <Icon className="h-2 w-2" style={{ color: 'var(--Labels-Secondary)' }} />
       </span>
       {/* label and pill share a baseline, as the app's row line does */}
       <span className="flex min-w-0 items-baseline gap-1.5">
         <span
-          className={cn('truncate text-[0.5rem] leading-none', live && 'intro-shimmer')}
-          style={live ? undefined : { color: 'var(--iv-text)' }}
+          className={cn('truncate text-[8px] leading-none', live && 'intro-shimmer')}
+          style={live ? undefined : { color: 'var(--color-text-primary)' }}
         >
           {label}
         </span>
         {pill && (
           <span
-            className="whitespace-nowrap font-mono text-[0.4375rem] leading-none"
+            className="whitespace-nowrap font-mono text-[7px] leading-none"
             style={{ color: 'var(--Labels-Secondary)' }}
           >
             {pill}

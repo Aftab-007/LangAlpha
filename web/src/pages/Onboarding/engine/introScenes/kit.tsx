@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowUp, Mic, MousePointer2, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { progress, useSceneTime } from './clock';
-import '../pageIntro.css';
+import './kit.css';
 import './scenes.css';
 
 /*
@@ -31,14 +31,14 @@ export function Ln({ w, h = 3, c }: { w: string; h?: number; c?: string }) {
 /** A small label chip, as the app draws tags: a solid chip, colored text. */
 export function Tag({
   children,
-  color = 'var(--iv-text-2)',
+  color = 'var(--color-text-secondary)',
 }: {
   children: ReactNode;
   color?: string;
 }) {
   return (
     <span
-      className="w-fit shrink-0 rounded px-1 py-0.5 text-[0.5rem] font-medium leading-none"
+      className="w-fit shrink-0 rounded-[4px] px-1 py-0.5 text-[8px] font-medium leading-none"
       style={{ background: 'var(--color-bg-tag)', color }}
     >
       {children}
@@ -51,7 +51,7 @@ export function Region({
   active = false,
   dashed = false,
   delay,
-  className = '',
+  className,
   style,
   children,
 }: {
@@ -64,9 +64,13 @@ export function Region({
 }) {
   return (
     <div
-      className={`intro-region ${active ? 'intro-region--active' : ''} ${
-        dashed ? 'intro-region--dashed' : ''
-      } ${delay != null ? 'intro-rv' : ''} ${className}`}
+      className={cn(
+        'intro-region',
+        active && 'intro-region--active',
+        dashed && 'intro-region--dashed',
+        delay != null && 'intro-rv',
+        className
+      )}
       style={{ ...(delay != null ? rv(delay) : null), ...style }}
     >
       {children}
@@ -115,8 +119,8 @@ export function InputDock({
       <div className="flex min-h-2 items-center px-0.5">
         {text == null ? (
           <span
-            className="truncate text-[0.5rem] leading-none"
-            style={{ color: 'var(--iv-text-3)' }}
+            className="truncate text-[8px] leading-none"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {tr('chat.placeholderDefault')}
           </span>
@@ -125,8 +129,8 @@ export function InputDock({
              long message wraps onto a new line rather than scrolling; the
              negative margin keeps one line at the placeholder's height */
           <span
-            className="-my-px block min-w-0 flex-1 text-[0.5rem] leading-[10px]"
-            style={{ color: 'var(--iv-text)' }}
+            className="-my-px block min-w-0 flex-1 text-[8px] leading-[10px]"
+            style={{ color: 'var(--color-text-primary)' }}
           >
             {text}
           </span>
@@ -247,7 +251,10 @@ export function UserBubble({
     <Appear at={at} className={cn('flex flex-col items-end gap-1', className)}>
       {caption}
       <div className="rounded-md px-1.5 py-1" style={{ background: 'var(--color-bg-elevated)' }}>
-        <span className="block text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+        <span
+          className="block text-[8px] leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
           {children}
         </span>
       </div>
@@ -307,7 +314,7 @@ export function Cursor({
         <MousePointer2
           className="intro-rv h-3 w-3"
           strokeWidth={1.5}
-          style={{ ...rv(0), color: 'var(--color-bg-page)', fill: 'var(--iv-text)' }}
+          style={{ ...rv(0), color: 'var(--color-bg-page)', fill: 'var(--color-text-primary)' }}
         />
       </span>
     </div>

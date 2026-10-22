@@ -9,6 +9,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { cn } from '@/lib/utils';
 import { frame, VIEW } from './camera';
 import { InputDock, Region } from './kit';
 
@@ -202,19 +203,19 @@ function ModeToggle({ custom }: { custom: boolean }) {
   const { t } = useTranslation();
   const seg = (on: boolean): CSSProperties => ({
     background: on ? 'var(--color-bg-elevated)' : 'transparent',
-    color: on ? 'var(--iv-text)' : 'var(--iv-text-2)',
+    color: on ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
     fontWeight: on ? 600 : 400,
   });
-  const cls = 'flex items-center gap-[3px] rounded px-1.5 py-[3px] text-[0.4375rem] leading-none';
+  const cls = 'flex items-center gap-[3px] rounded-[4px] px-1.5 py-[3px] text-[7px] leading-none';
   return (
     <span
       className="flex items-center rounded-md border p-[1.5px]"
-      style={{ background: 'var(--color-bg-input)', borderColor: 'var(--iv-border)' }}
+      style={{ background: 'var(--color-bg-input)', borderColor: 'var(--color-border-muted)' }}
     >
-      <span className={`${cls} transition-colors duration-150`} style={seg(!custom)}>
+      <span className={cn(cls, 'transition-colors duration-150')} style={seg(!custom)}>
         {t('dashboard.layoutToggle.classic')}
       </span>
-      <span className={`${cls} transition-colors duration-150`} style={seg(custom)}>
+      <span className={cn(cls, 'transition-colors duration-150')} style={seg(custom)}>
         <LayoutGrid className="h-[7px] w-[7px]" />
         {t('dashboard.layoutToggle.custom')}
       </span>
@@ -242,17 +243,17 @@ export function DashTopbar({
     <>
       <span
         className="flex h-[17px] w-[44%] items-center gap-1 rounded-md border px-1.5"
-        style={{ background: 'var(--color-bg-input)', borderColor: 'var(--iv-border)' }}
+        style={{ background: 'var(--color-bg-input)', borderColor: 'var(--color-border-muted)' }}
       >
         <Search className="h-2 w-2 shrink-0" style={{ color: 'var(--color-icon-muted)' }} />
         <span
-          className="truncate text-[0.375rem] leading-none"
-          style={{ color: 'var(--iv-text-3)' }}
+          className="truncate text-[6px] leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           {t('dashboard.searchPlaceholder')}
         </span>
         <span
-          className="ml-auto rounded-[2px] border px-[2px] text-[0.3125rem] leading-[1.3]"
+          className="ml-auto rounded-[2px] border px-[2px] text-[5px] leading-[1.3]"
           style={{
             borderColor: 'var(--color-border-default)',
             color: 'var(--color-text-quaternary)',
@@ -266,19 +267,19 @@ export function DashTopbar({
         {pencil && (
           <span
             className={
-              'flex h-3.5 w-3.5 items-center justify-center rounded transition-colors ' +
+              'flex h-3.5 w-3.5 items-center justify-center rounded-[4px] transition-colors ' +
               'duration-150'
             }
             style={{
               opacity: custom ? 1 : 0,
               background: edit ? 'var(--color-btn-primary-bg)' : 'transparent',
-              color: edit ? 'var(--color-btn-primary-text)' : 'var(--iv-text-2)',
+              color: edit ? 'var(--color-btn-primary-text)' : 'var(--color-text-secondary)',
             }}
           >
             <Pencil className="h-2 w-2" />
           </span>
         )}
-        <HelpCircle className="h-2.5 w-2.5" style={{ color: 'var(--iv-text-2)' }} />
+        <HelpCircle className="h-2.5 w-2.5" style={{ color: 'var(--color-text-secondary)' }} />
       </span>
     </>
   );
@@ -316,7 +317,7 @@ export function DashPage({
       {header && (
         <div
           className="flex h-7 shrink-0 items-center gap-2 border-b px-2.5"
-          style={{ borderColor: 'var(--iv-border)' }}
+          style={{ borderColor: 'var(--color-border-muted)' }}
         >
           {header}
         </div>
@@ -381,7 +382,7 @@ export function Widget({
   count,
   edit = false,
   delay,
-  className = '',
+  className,
   style,
   children,
 }: {
@@ -399,8 +400,8 @@ export function Widget({
 }) {
   const label = (
     <span
-      className="truncate text-[0.375rem] font-semibold uppercase leading-none"
-      style={{ color: 'var(--iv-text-2)', letterSpacing: edit ? '0.06em' : '0.14em' }}
+      className="truncate text-[6px] font-semibold uppercase leading-none"
+      style={{ color: 'var(--color-text-secondary)', letterSpacing: edit ? '0.06em' : '0.14em' }}
     >
       {edit ? title : header}
     </span>
@@ -408,39 +409,42 @@ export function Widget({
   return (
     <Region
       delay={delay}
-      className={`flex h-full min-w-0 flex-col overflow-hidden ${edit ? '' : 'p-1.5'} ${className}`}
+      className={cn('flex h-full min-w-0 flex-col overflow-hidden', !edit && 'p-1.5', className)}
       style={edit ? { ...EDIT_FRAME, ...style } : style}
     >
       {edit ? (
         <div
           className="flex h-4 shrink-0 items-center gap-1 border-b px-1"
-          style={{ borderColor: 'var(--iv-border)' }}
+          style={{ borderColor: 'var(--color-border-muted)' }}
         >
-          <GripVertical className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
+          <GripVertical
+            className="h-2.5 w-2.5 shrink-0"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          />
           {label}
           <MoreVertical
             className="ml-auto h-2.5 w-2.5 shrink-0"
-            style={{ color: 'var(--iv-text-3)' }}
+            style={{ color: 'var(--color-text-tertiary)' }}
           />
         </div>
       ) : (
         <div
           className="mb-1 flex shrink-0 items-center gap-1 border-b pb-1"
-          style={{ borderColor: 'var(--iv-border)' }}
+          style={{ borderColor: 'var(--color-border-muted)' }}
         >
-          <Icon className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
+          <Icon className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
           {label}
           {count && (
             <span
-              className="font-mono text-[0.5rem] leading-none tabular-nums"
-              style={{ color: 'var(--iv-text)' }}
+              className="font-mono text-[8px] leading-none tabular-nums"
+              style={{ color: 'var(--color-text-primary)' }}
             >
               {count}
             </span>
           )}
         </div>
       )}
-      <div className={`flex min-h-0 flex-1 flex-col gap-1 ${edit ? 'p-1.5' : ''}`}>{children}</div>
+      <div className={cn('flex min-h-0 flex-1 flex-col gap-1', edit && 'p-1.5')}>{children}</div>
     </Region>
   );
 }

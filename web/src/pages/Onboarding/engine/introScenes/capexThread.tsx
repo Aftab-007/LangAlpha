@@ -14,7 +14,7 @@ import {
   Transcript,
   WorkflowCard,
 } from './chatParts';
-import { DASH_BUILD, DashboardPanel } from './chatDashboard';
+import { DASH_BUILD, DashboardPanel, PTC_HEADER_H } from './chatDashboard';
 import { ChatHeaderButtons } from './panelParts';
 
 /* The Analyst's thread on the capex tracker, which two scenes play: the chat
@@ -116,9 +116,6 @@ export const PTC_CHAT = 176;
     its left; the panel then slides in from the frame's right edge. */
 const PTC_CHAT_START = PAGE.width / REST;
 
-/** The chat header's height, which the panel's tab strip keeps level with. */
-export const PTC_HEADER_H = 24;
-
 /** The Analyst's thread on the capex tracker: the chat, and the file panel
     that opens beside it on the dashboard, filtered to META at `filterAt`.
     The share scene opens on it finished and unfiltered, and draws the
@@ -149,7 +146,7 @@ export function CapexThread({
               moves to the panel's corner once the panel is open */}
         <div
           className="flex shrink-0 items-center gap-1.5 border-b pl-2 pr-[9px]"
-          style={{ height: PTC_HEADER_H, borderColor: 'var(--iv-border)' }}
+          style={{ height: PTC_HEADER_H, borderColor: 'var(--color-border-muted)' }}
         >
           <TopTitle>Capex tracker</TopTitle>
           <Tag>{names.worker}</Tag>
@@ -203,7 +200,7 @@ export function CapexThread({
           style={{ background: 'var(--color-bg-page)', borderColor: 'var(--color-border-muted)' }}
         >
           <div className="flex shrink-0" style={{ width: PAGE.width - PTC_CHAT }}>
-            <DashboardPanel at={PTC.dash} filterAt={filterAt} headerH={PTC_HEADER_H} />
+            <DashboardPanel at={PTC.dash} filterAt={filterAt} />
           </div>
         </div>
       )}

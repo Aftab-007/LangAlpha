@@ -4,8 +4,8 @@ import type { Waypoint } from './kit';
 import type { IntroScene } from './types';
 import type { IntroVisualId } from '../../registry';
 import { EARLIER, PAGE, shot, wide } from './chatParts';
-import { Dashboard } from './chatDashboard';
-import { CapexThread, PTC_CHAT, PTC_HEADER_H } from './capexThread';
+import { Dashboard, PTC_HEADER_H } from './chatDashboard';
+import { CapexThread, PTC_CHAT } from './capexThread';
 import { POPOVER_W, SharedFileBar, ShareDialog, SharePopover } from './shareParts';
 
 /* The thread intro's last step: share the conversation, or the one file. It

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowRight } from 'lucide-react';
 import { ease, useSceneTime } from './clock';
 import { Loader } from './kit';
-import { Excerpt, Grow, INK, Kicker, LinkOut, PriceMeter, RunEntry } from './automationParts';
+import { Excerpt, Grow, Kicker, LinkOut, PriceMeter, RunEntry } from './automationParts';
 import { BRIEF_EXCERPT, FIRED, NVDA, on, PREVIEW, useBook } from './automationBook';
 
 /* The feed's parts at scene scale (`FeedView`, `FeedRail`): the runs of the
@@ -22,9 +22,7 @@ export function FiredRun({ land = 0, done = 0 }: { land?: number; done?: number 
       <RunEntry
         time={B.time(10, 12)}
         glyph={
-          live ? (
-            <Loader color="var(--color-accent-primary)" className="text-[0.5625rem]" />
-          ) : undefined
+          live ? <Loader color="var(--color-accent-primary)" className="text-[9px]" /> : undefined
         }
         name={FIRED.name}
         meta={
@@ -72,7 +70,7 @@ export function BriefRun({
           {delivered && (
             <span style={{ opacity: shown ? 1 : 0, transition: 'opacity 300ms ease' }}>
               {' · '}
-              <span style={{ color: INK.text2 }}>
+              <span style={{ color: 'var(--color-text-secondary)' }}>
                 {t('automation.deliveredVia', { method: delivered })}
               </span>
             </span>
@@ -115,7 +113,7 @@ function RailSection({ title, children }: { title: string; children: ReactNode }
 export function FeedRail({ now }: { now?: number }) {
   const { t } = useTranslation();
   const B = useBook(now);
-  const rowLine = { borderColor: INK.hair };
+  const rowLine = { borderColor: 'var(--color-border-muted)' };
   return (
     <div className="flex min-w-0 flex-col gap-[12px]">
       <RailSection title={t('automation.upNext')}>
@@ -127,12 +125,15 @@ export function FeedRail({ now }: { now?: number }) {
               style={rowLine}
             >
               <span
-                className="whitespace-nowrap font-mono text-[0.375rem] leading-[1.4] tabular-nums"
-                style={{ color: INK.text2 }}
+                className="whitespace-nowrap font-mono text-[6px] leading-[1.4] tabular-nums"
+                style={{ color: 'var(--color-text-secondary)' }}
               >
                 {B.upcoming(when)}
               </span>
-              <span className="text-[0.4375rem] leading-[1.25]" style={{ color: INK.text }}>
+              <span
+                className="text-[7px] leading-[1.25]"
+                style={{ color: 'var(--color-text-primary)' }}
+              >
                 {name}
               </span>
             </div>
@@ -142,12 +143,15 @@ export function FeedRail({ now }: { now?: number }) {
       <RailSection title={t('automation.groupWatching')}>
         <div className="border-b py-[6px]" style={rowLine}>
           <div className="flex items-baseline justify-between gap-1">
-            <span className="truncate text-[0.4375rem] leading-[1.25]" style={{ color: INK.text }}>
+            <span
+              className="truncate text-[7px] leading-[1.25]"
+              style={{ color: 'var(--color-text-primary)' }}
+            >
               {B.alert}
             </span>
             <span
-              className="shrink-0 font-mono text-[0.34375rem] tabular-nums"
-              style={{ color: INK.text3 }}
+              className="shrink-0 font-mono text-[5.5px] tabular-nums"
+              style={{ color: 'var(--color-text-tertiary)' }}
             >
               {B.away}
             </span>
@@ -158,8 +162,8 @@ export function FeedRail({ now }: { now?: number }) {
         </div>
       </RailSection>
       <span
-        className="inline-flex items-center gap-[3px] text-[0.375rem] leading-none"
-        style={{ color: INK.text2 }}
+        className="inline-flex items-center gap-[3px] text-[6px] leading-none"
+        style={{ color: 'var(--color-text-secondary)' }}
       >
         {t('automation.manageAll', { count: 4 })}
         <ArrowRight className="h-[6px] w-[6px]" />

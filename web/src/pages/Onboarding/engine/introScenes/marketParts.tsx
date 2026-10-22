@@ -13,23 +13,14 @@ import {
   RefreshCw,
   Settings2,
   SlidersHorizontal,
-  SquareDashedMousePointer,
-  X,
 } from 'lucide-react';
 import { useLocale } from '@/hooks/useLocale';
 import { fixed2, signedFixed2 } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import {
-  ClearButton,
-  Intervals,
-  NVDA_LAST,
-  NVDA_PREV,
-  Segmented,
-  SelectionTools,
-  ToolBtn,
-} from './candles';
+import { ClearButton, Intervals, Segmented, SelectionTools, ToolBtn } from './chartTools';
 import { useSceneTime } from './clock';
-import { Appear, Ln } from './kit';
+import { Ln } from './kit';
+import { NVDA_LAST, NVDA_QUOTE } from './nvdaSeries';
 
 /* MarketView as the market intro's camera sees it, after pages/MarketView:
    the stock header and its metrics over the chart and its toolbar, the
@@ -38,7 +29,7 @@ import { Appear, Ln } from './kit';
    the scenes frame parts of it, so the scripted pointer lands where the
    parts are. */
 /* eslint-disable react-refresh/only-export-components -- shared parts:
-   page components plus layout constants and the quote */
+   page components plus layout constants */
 
 /* ── layout, in the page's px ──────────────────────────────────────────── */
 
@@ -49,8 +40,6 @@ const CHART_W = 260;
 const STRIP_W = 15;
 const CHAT_W = 170;
 export const PAGE = { w: CHART_W + STRIP_W + CHAT_W, h: 318 };
-/** The toolbar's top edge, under the header and the metrics. */
-export const TOOLBAR_Y = HEAD_H + METRICS_H;
 /** The chart, under the header, the metrics and the toolbar. */
 export const CHART = {
   x: 0,
@@ -76,25 +65,10 @@ export const REGION_BTN = {
 /** The chat composer's send button. */
 export const SEND = { x: PAGE.w - 21, y: PAGE.h - 21 };
 
-/* ── the quote ─────────────────────────────────────────────────────────── */
-
-/** What the stock header prints for NVDA. */
-export const NVDA_QUOTE = {
-  sym: 'NVDA',
-  name: 'NVIDIA Corp',
-  prev: NVDA_PREV,
-  open: 180.4,
-  low: 180.15,
-  high: 183.05,
-  hi52: 195.62,
-  lo52: 86.62,
-  avgVol: '181.52M',
-  vol: '143.08M',
-};
-
-const tone = (v: number) => (v >= 0 ? 'var(--color-profit)' : 'var(--color-loss)');
-
 /* ── the header band: stock header, the strip, chat header ──────────── */
+
+/** A change's color: profit up, loss down. */
+const tone = (v: number) => (v >= 0 ? 'var(--color-profit)' : 'var(--color-loss)');
 
 /** The stock header's top (`StockHeader`): the symbol switcher, the names,
     the exchange and the live dot over the Company Overview pill; the price
@@ -109,24 +83,27 @@ function StockTop() {
       <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
         <div className="flex min-w-0 items-center gap-[5px] leading-none">
           <span
-            className="flex shrink-0 items-center gap-[1px] rounded-[2px] px-[1px] text-[0.5625rem] font-semibold"
-            style={{ color: 'var(--iv-text)' }}
+            className="flex shrink-0 items-center gap-[1px] rounded-[2px] px-[1px] text-[9px] font-semibold"
+            style={{ color: 'var(--color-text-primary)' }}
           >
             {q.sym}
             <ChevronDown className="h-[6px] w-[6px]" style={{ color: 'var(--color-icon-muted)' }} />
           </span>
-          <span className="min-w-0 truncate text-[0.4375rem]" style={{ color: 'var(--iv-text-2)' }}>
+          <span
+            className="min-w-0 truncate text-[7px]"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
             {q.name}
           </span>
           <span
-            className="shrink-0 rounded-[2px] px-[3px] py-[1.5px] text-[0.3125rem]"
-            style={{ background: 'var(--color-bg-tag)', color: 'var(--iv-text-2)' }}
+            className="shrink-0 rounded-[2px] px-[3px] py-[1.5px] text-[5px]"
+            style={{ background: 'var(--color-bg-tag)', color: 'var(--color-text-secondary)' }}
           >
             NASDAQ
           </span>
           <span
-            className="flex shrink-0 items-center gap-[2px] text-[0.3125rem]"
-            style={{ color: 'var(--iv-text-2)' }}
+            className="flex shrink-0 items-center gap-[2px] text-[5px]"
+            style={{ color: 'var(--color-text-secondary)' }}
           >
             <span
               className="h-[3px] w-[3px] rounded-full"
@@ -136,24 +113,27 @@ function StockTop() {
           </span>
         </div>
         <span
-          className="flex w-fit items-center gap-[2px] rounded-[3px] border px-[4px] py-[1.5px] text-[0.3125rem] leading-none"
-          style={{ borderColor: 'var(--color-border-default)', color: 'var(--iv-text-2)' }}
+          className="flex w-fit items-center gap-[2px] rounded-[3px] border px-[4px] py-[1.5px] text-[5px] leading-none"
+          style={{
+            borderColor: 'var(--color-border-default)',
+            color: 'var(--color-text-secondary)',
+          }}
         >
           <Info className="h-[5px] w-[5px]" />
           {t('marketView.companyOverview')}
         </span>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-[2px] leading-none tabular-nums">
-        <span className="text-[0.6875rem] font-semibold" style={{ color: tone(change) }}>
+        <span className="text-[11px] font-semibold" style={{ color: tone(change) }}>
           {fixed2(NVDA_LAST, locale)}
           <span
-            className="ml-[2px] text-[0.3125rem] font-normal"
-            style={{ color: 'var(--iv-text-2)' }}
+            className="ml-[2px] text-[5px] font-normal"
+            style={{ color: 'var(--color-text-secondary)' }}
           >
             USD
           </span>
         </span>
-        <span className="text-[0.375rem] font-medium" style={{ color: tone(change) }}>
+        <span className="text-[6px] font-medium" style={{ color: tone(change) }}>
           {signedFixed2(change, locale)} {signedFixed2((change / q.prev) * 100, locale)}%
         </span>
       </div>
@@ -178,18 +158,27 @@ function ChatHeader({ width, title }: { width: number; title?: string }) {
             opacity: title ? 1 : 0.35,
           }}
         />
-        <span className="truncate text-[0.4375rem] font-medium" style={{ color: 'var(--iv-text)' }}>
+        <span
+          className="truncate text-[7px] font-medium"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
           {title ?? t('marketView.chatHistory.newChat')}
         </span>
-        <ChevronDown className="h-[6px] w-[6px] shrink-0" style={{ color: 'var(--iv-text-3)' }} />
+        <ChevronDown
+          className="h-[6px] w-[6px] shrink-0"
+          style={{ color: 'var(--color-text-tertiary)' }}
+        />
       </span>
       {title && (
         <span
           className={cn(
             'intro-pop ml-auto flex shrink-0 items-center gap-[2px] rounded-[3px] border',
-            'px-[4px] py-[2px] text-[0.375rem] font-medium leading-none'
+            'px-[4px] py-[2px] text-[6px] font-medium leading-none'
           )}
-          style={{ borderColor: 'var(--color-border-default)', color: 'var(--iv-text-2)' }}
+          style={{
+            borderColor: 'var(--color-border-default)',
+            color: 'var(--color-text-secondary)',
+          }}
         >
           <MessageSquare className="h-[6px] w-[6px]" />
           {t('marketView.chatPanel.openInChat')}
@@ -237,14 +226,14 @@ function Metrics() {
       {cells.map(([label, value, color]) => (
         <span key={label} className="flex min-w-0 flex-col gap-[2px] leading-none">
           <span
-            className="whitespace-nowrap text-[0.28125rem] uppercase"
-            style={{ color: 'var(--iv-text-2)' }}
+            className="whitespace-nowrap text-[4.5px] uppercase"
+            style={{ color: 'var(--color-text-secondary)' }}
           >
             {label}
           </span>
           <span
-            className="whitespace-nowrap text-[0.34375rem] font-medium tabular-nums"
-            style={{ color: color ?? 'var(--iv-text)' }}
+            className="whitespace-nowrap text-[5.5px] font-medium tabular-nums"
+            style={{ color: color ?? 'var(--color-text-primary)' }}
           >
             {value}
           </span>
@@ -294,15 +283,15 @@ function ChartTools({ armed = false, clear = false }: { armed?: boolean; clear?:
 /* ── the sidebar, folded ──────────────────────────────────────────────── */
 
 /** The folded sidebar: a strip with the chart glyph and the unfold chevron. */
-function FoldedSidebar({ width }: { width: number }) {
+function FoldedSidebar() {
   return (
     <div
       className="flex shrink-0 flex-col items-center gap-[3px] border-l pt-[7px]"
       style={{
-        width,
-        borderColor: 'var(--iv-border)',
+        width: STRIP_W,
+        borderColor: 'var(--color-border-muted)',
         background: 'var(--color-bg-card)',
-        color: 'var(--iv-text-2)',
+        color: 'var(--color-text-secondary)',
       }}
     >
       <BarChart3 className="h-[7px] w-[7px]" />
@@ -335,13 +324,13 @@ function Mark() {
 
 /** A fresh chat: the mark and the prompt to start, then two suggestions
     for the symbol on the chart and the shuffle. */
-function EmptyChat({ sym }: { sym: string }) {
+function EmptyChat() {
   const { t } = useTranslation();
   return (
     <>
       <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-1 text-center">
         <Mark />
-        <span className="text-[0.375rem] leading-[1.4]" style={{ color: 'var(--iv-text-2)' }}>
+        <span className="text-[6px] leading-[1.4]" style={{ color: 'var(--color-text-secondary)' }}>
           {t('marketView.chatPanel.startConversation')}
         </span>
       </div>
@@ -349,84 +338,27 @@ function EmptyChat({ sym }: { sym: string }) {
         {(['q2', 'q3'] as const).map((q) => (
           <span
             key={q}
-            className="rounded-[5px] border px-[5px] py-[4px] text-[0.375rem] leading-[1.4]"
+            className="rounded-[5px] border px-[5px] py-[4px] text-[6px] leading-[1.4]"
             style={{
               background: 'var(--color-bg-card)',
               borderColor: 'var(--color-border-default)',
-              color: 'var(--iv-text)',
+              color: 'var(--color-text-primary)',
             }}
           >
-            {t(`marketView.quickQuery.${q}`, { symbol: sym })}
+            {t(`marketView.quickQuery.${q}`, { symbol: NVDA_QUOTE.sym })}
           </span>
         ))}
         <span
           className="flex h-[13px] w-[13px] items-center justify-center self-center rounded-full border"
-          style={{ borderColor: 'var(--color-border-default)', color: 'var(--iv-text-2)' }}
+          style={{
+            borderColor: 'var(--color-border-default)',
+            color: 'var(--color-text-secondary)',
+          }}
         >
           <RefreshCw className="h-[6px] w-[6px]" />
         </span>
       </div>
     </>
-  );
-}
-
-/** A chart selection waiting above the composer (`SelectionChips`): what
-    it is, the symbol and timeframe, the note, and its X. */
-export function SelectionChip({ note }: { note: string }) {
-  const { t } = useTranslation();
-  return (
-    <span
-      className={cn(
-        'flex w-fit max-w-full items-center gap-[3px] rounded-[3px] border py-[2.5px] pl-[5px] pr-[3px]',
-        'text-[0.375rem] leading-none'
-      )}
-      style={{
-        backgroundColor: 'var(--color-bg-page)',
-        backgroundImage: 'linear-gradient(var(--color-bg-surface), var(--color-bg-surface))',
-        borderColor: 'var(--color-border-muted)',
-        color: 'var(--iv-text-2)',
-      }}
-    >
-      <span className="min-w-0 truncate">
-        {t('marketView.selection.chipRegion', { symbol: 'NVDA', timeframe: '1day' })} · "{note}"
-      </span>
-      <X className="h-[6px] w-[6px] shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-    </span>
-  );
-}
-
-/** A sent selection under the user's message (`InlineSelectionCards`): the
-    region glyph on its tile, what was selected on which chart, the note. */
-export function SelectionCard({ at, note }: { at: number; note: string }) {
-  const { t } = useTranslation();
-  return (
-    <Appear at={at} className="flex justify-end">
-      <span
-        className="flex w-[128px] max-w-full items-center gap-[5px] rounded-[5px] border px-[5px] py-[4px]"
-        style={{ background: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-muted)' }}
-      >
-        <span
-          className="flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px]"
-          style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent-light)' }}
-        >
-          <SquareDashedMousePointer className="h-[7px] w-[7px]" />
-        </span>
-        <span className="flex min-w-0 flex-col gap-[3px] leading-none">
-          <span
-            className="truncate text-[0.375rem] font-semibold"
-            style={{ color: 'var(--iv-text)' }}
-          >
-            {t('marketView.selection.cardRegionTitle')}
-            <span className="font-normal" style={{ color: 'var(--iv-text-3)' }}>
-              {' · '}NVDA 1day
-            </span>
-          </span>
-          <span className="truncate text-[0.375rem]" style={{ color: 'var(--iv-text-2)' }}>
-            “{note}”
-          </span>
-        </span>
-      </span>
-    </Appear>
   );
 }
 
@@ -453,8 +385,10 @@ function Composer({
     >
       <div className="flex h-2 items-center px-0.5">
         <span
-          className="truncate text-[0.5rem] leading-none"
-          style={{ color: text == null ? 'var(--iv-text-3)' : 'var(--iv-text)' }}
+          className="truncate text-[8px] leading-none"
+          style={{
+            color: text == null ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
+          }}
         >
           {text ?? tr('marketView.chatPanel.defaultPlaceholder')}
         </span>
@@ -485,13 +419,11 @@ function Composer({
     until there is one, then any selection chip, then the composer. */
 function ChatPanel({
   width,
-  sym,
   transcript,
   chip,
   composer,
 }: {
   width: number;
-  sym: string;
   transcript?: ReactNode;
   chip?: ReactNode;
   composer: ComposerState;
@@ -499,7 +431,11 @@ function ChatPanel({
   return (
     <div
       className="flex shrink-0 flex-col border-l px-[6px] pb-[6px]"
-      style={{ width, borderColor: 'var(--color-border-muted)', background: 'var(--iv-mk-bg)' }}
+      style={{
+        width,
+        borderColor: 'var(--color-border-muted)',
+        background: 'var(--color-bg-page)',
+      }}
     >
       {transcript ? (
         // holds its top while it fits and its newest lines once it overflows:
@@ -508,7 +444,7 @@ function ChatPanel({
           <div className="mb-auto flex flex-col gap-1.5">{transcript}</div>
         </div>
       ) : (
-        <EmptyChat sym={sym} />
+        <EmptyChat />
       )}
       {chip && <div className="flex px-[2px] pb-[4px]">{chip}</div>}
       <Composer {...composer} narrow={width < 120} />
@@ -549,12 +485,12 @@ export function MarketPage({
   chip?: ReactNode;
   composer?: ComposerState;
 }) {
-  const card = { borderColor: 'var(--iv-border)', background: 'var(--color-bg-card)' };
+  const card = { borderColor: 'var(--color-border-muted)', background: 'var(--color-bg-card)' };
   return (
     <div className="flex flex-col" style={{ width: PAGE.w, height: PAGE.h }}>
       <div
         className="flex shrink-0 border-b"
-        style={{ height: HEAD_H, borderColor: 'var(--iv-border)' }}
+        style={{ height: HEAD_H, borderColor: 'var(--color-border-muted)' }}
       >
         <div className="flex min-w-0" style={{ width: CHART_W, ...card }}>
           <StockTop />
@@ -570,14 +506,8 @@ export function MarketPage({
             {chart}
           </div>
         </div>
-        <FoldedSidebar width={STRIP_W} />
-        <ChatPanel
-          width={CHAT_W}
-          sym="NVDA"
-          transcript={transcript}
-          chip={chip}
-          composer={composer}
-        />
+        <FoldedSidebar />
+        <ChatPanel width={CHAT_W} transcript={transcript} chip={chip} composer={composer} />
       </div>
     </div>
   );

@@ -11,11 +11,13 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { cn } from '@/lib/utils';
 import type { IntroVisualId } from '../../registry';
 import { CLOSE, Camera, REST, VIEW, look, type Shot } from './camera';
 import { ease, useSceneTime } from './clock';
 import { Appear, pointAt, type Waypoint } from './kit';
 import type { IntroScene } from './types';
+import { attachScene } from './dashboardAttach';
 import {
   upColor,
   signed,
@@ -43,9 +45,11 @@ import {
   TopicPill,
   EARNINGS,
   EarningsRow,
+  GRID,
 } from './dashboardClassic';
 
-/* Scenes for the dashboard intro: the live page, and customizing it. Each
+/* Scenes for the dashboard intro: the live page, and customizing it, and
+   from its own file (dashboardAttach.tsx) clipping a row into the chat. Each
    part is drawn after its real counterpart under pages/Dashboard, in
    miniature, with the app's own strings for its labels. A camera shows the
    page a part at a time, close enough to read, with an edge of the next
@@ -54,19 +58,6 @@ import {
    private scene components, one record export */
 
 /* ── dashboard · step 1: the page, live ────────────────────────────────── */
-
-/** The page live: the index lines trace in and keep taking new points, the
-    brief comes in part by part, quotes tick (their times are in INDICES and
-    WATCH, set to land while the camera is on them). */
-export const GRID = {
-  draw: 300,
-  drawDur: 1100,
-  brief: 700,
-  briefPer: 240,
-  shifts: [1900, 3000, 4100],
-  shiftDur: 520,
-  length: 7600,
-};
 
 /** The Classic page's size, and its brief card's center, in page px
     (measured off it). */
@@ -96,7 +87,7 @@ const GRID_SHOTS: [Shot, ...Shot[]] = [
   { at: 6400, ...look(PAGE_W / 2, 0, WIDE, GRID_PAGE), dur: 1000 },
 ];
 
-export function DashboardGrid() {
+function DashboardGrid() {
   return (
     <Camera shots={GRID_SHOTS}>
       <DashPage>
@@ -129,19 +120,19 @@ function PriceChartBody() {
     <>
       <span className="flex items-baseline gap-1">
         <span
-          className="text-[0.4375rem] font-bold leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="text-[7px] font-bold leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {nvda.sym}
         </span>
         <span
-          className="font-mono text-[0.4375rem] leading-none tabular-nums"
-          style={{ color: 'var(--iv-text)' }}
+          className="font-mono text-[7px] leading-none tabular-nums"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {money(nvda.prev * (1 + v / 100))}
         </span>
         <span
-          className="font-mono text-[0.375rem] leading-none tabular-nums"
+          className="font-mono text-[6px] leading-none tabular-nums"
           style={{ color: upColor(v) }}
         >
           {signed(v)}%
@@ -208,17 +199,17 @@ function MiniChartBody() {
           at={ADDED + 120 + i * 40}
           reserve
           className="flex min-w-0 flex-col justify-between gap-[3px] rounded-[4px] border p-1"
-          style={{ borderColor: 'var(--iv-border)' }}
+          style={{ borderColor: 'var(--color-border-muted)' }}
         >
           <span className="flex items-center justify-between gap-0.5">
             <span
-              className="text-[0.375rem] font-bold leading-none"
-              style={{ color: 'var(--iv-text)' }}
+              className="text-[6px] font-bold leading-none"
+              style={{ color: 'var(--color-text-primary)' }}
             >
               {sym}
             </span>
             <span
-              className="font-mono text-[0.3125rem] leading-none tabular-nums"
+              className="font-mono text-[5px] leading-none tabular-nums"
               style={{ color: upColor(v) }}
             >
               {signed(v)}%
@@ -314,8 +305,7 @@ const CUSTOM_SHOTS: [Shot, ...Shot[]] = [
 /** The toolbar edit mode floats at the foot of the page. */
 function EditToolbar() {
   const { t } = useTranslation();
-  const btn =
-    'flex items-center gap-[3px] rounded-full px-1.5 py-[3px] text-[0.4375rem] leading-none';
+  const btn = 'flex items-center gap-[3px] rounded-full px-1.5 py-[3px] text-[7px] leading-none';
   return (
     <Appear
       at={CUSTOM.edit}
@@ -327,7 +317,7 @@ function EditToolbar() {
       }}
     >
       <span
-        className={`${btn} font-medium`}
+        className={cn(btn, 'font-medium')}
         style={{
           background: 'var(--color-btn-primary-bg)',
           color: 'var(--color-btn-primary-text)',
@@ -336,16 +326,16 @@ function EditToolbar() {
         <Plus className="h-2 w-2" />
         {t('dashboard.widgets.shell.addWidget')}
       </span>
-      <span className={`${btn} font-medium`} style={{ color: 'var(--iv-text)' }}>
+      <span className={cn(btn, 'font-medium')} style={{ color: 'var(--color-text-primary)' }}>
         <Layers className="h-2 w-2" />
         {t('dashboard.widgets.shell.presets')}
       </span>
-      <span className={btn} style={{ color: 'var(--iv-text-2)' }}>
+      <span className={btn} style={{ color: 'var(--color-text-secondary)' }}>
         <RotateCcw className="h-2 w-2" />
         {t('dashboard.widgets.shell.reset')}
       </span>
-      <span className="mx-0.5 h-2.5 w-px" style={{ background: 'var(--iv-border)' }} />
-      <span className={`${btn} font-medium`} style={{ color: 'var(--iv-text-2)' }}>
+      <span className="mx-0.5 h-2.5 w-px" style={{ background: 'var(--color-border-muted)' }} />
+      <span className={cn(btn, 'font-medium')} style={{ color: 'var(--color-text-secondary)' }}>
         <X className="h-2 w-2" />
         {t('dashboard.widgets.shell.done')}
       </span>
@@ -376,8 +366,8 @@ function CustomGrid({ edit }: { edit: boolean }) {
           <Widget icon={Sparkles} title={tr('dashboard.widgets.insightBrief.title')} edit={edit}>
             {/* the brief card itself, in a third of the page */}
             <BriefEyebrow />
-            <BriefHeadline className="line-clamp-3 shrink-0 text-[0.4375rem]" />
-            <BriefSummary className="line-clamp-2 shrink-0 text-[0.3125rem]" />
+            <BriefHeadline className="line-clamp-3 shrink-0 text-[7px]" />
+            <BriefSummary className="line-clamp-2 shrink-0 text-[5px]" />
             <span className="flex shrink-0 flex-wrap gap-[3px]">
               {INSIGHT.topics.slice(0, 2).map((topic) => (
                 <TopicPill key={topic.text} {...topic} />
@@ -521,4 +511,5 @@ function DashboardCustomize() {
 export const dashboardScenes = {
   dashboardGrid: { Scene: DashboardGrid, length: GRID.length, anchor: 'left' },
   dashboardCustomize: { Scene: DashboardCustomize, length: CUSTOM.length, anchor: 'right' },
+  dashboardAttach: attachScene,
 } satisfies Partial<Record<IntroVisualId, IntroScene>>;

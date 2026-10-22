@@ -60,10 +60,10 @@ export const EARLIER = -60_000;
 export function TopTitle({ children }: { children: ReactNode }) {
   return (
     <span className="flex min-w-0 items-center gap-1">
-      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
+      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
       <span
-        className="truncate text-[0.5rem] font-medium leading-none"
-        style={{ color: 'var(--iv-text)' }}
+        className="truncate text-[8px] font-medium leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
       >
         {children}
       </span>
@@ -74,16 +74,16 @@ export function TopTitle({ children }: { children: ReactNode }) {
 /** A chat column's transcript: from the top while it fits, then held on its
     newest lines with the oldest running off the top, as a thread scrolls
     with its replies. */
-export function Transcript({ className, children }: { className?: string; children: ReactNode }) {
+export function Transcript({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden">
-      <div className={cn('flex min-h-full shrink-0 flex-col gap-1.5', className)}>{children}</div>
+      <div className="flex min-h-full shrink-0 flex-col gap-1.5">{children}</div>
     </div>
   );
 }
 
 /** A solid card in the chat transcript (`--color-bg-tool-card`), as tool results sit. */
-export const toolCard: CSSProperties = {
+const toolCard: CSSProperties = {
   background: 'var(--color-bg-tool-card)',
   borderColor: 'var(--color-border-muted)',
 };
@@ -95,17 +95,7 @@ export const toolCard: CSSProperties = {
  * the transcript's body text; `**bold**` spans render bold, as the app's
  * markdown does. Takes no room until its first character lands.
  */
-export function Reply({
-  text,
-  at,
-  cps = 150,
-  className,
-}: {
-  text: string;
-  at: number;
-  cps?: number;
-  className?: string;
-}) {
+export function Reply({ text, at, cps = 150 }: { text: string; at: number; cps?: number }) {
   const t = useSceneTime();
   const typed = Math.floor(((t - at) * cps) / 1000);
   if (typed <= 0) return null;
@@ -119,10 +109,7 @@ export function Reply({
     from += body.length;
   }
   return (
-    <p
-      className={cn('text-[0.5rem] leading-[1.45]', className)}
-      style={{ color: 'var(--iv-text)' }}
-    >
+    <p className="text-[8px] leading-[1.45]" style={{ color: 'var(--color-text-primary)' }}>
       {spans.map(({ bold, body, from }, i) => {
         if (typed <= from) return null;
         const shown = body.slice(0, typed - from);
@@ -142,7 +129,7 @@ export function Reply({
 export function Pill({ children }: { children: ReactNode }) {
   return (
     <span
-      className="truncate font-mono text-[0.4375rem] leading-none"
+      className="truncate font-mono text-[7px] leading-none"
       style={{ color: 'var(--Labels-Secondary)' }}
     >
       {children}
@@ -173,10 +160,13 @@ export function ActivityRow({
     <Appear at={at} className="flex items-center gap-1.5">
       <RowIcon className="h-2 w-2 shrink-0" style={{ color: 'var(--Labels-Secondary)' }} />
       {live ? (
-        <span className="intro-shimmer truncate text-[0.5rem] leading-none">{verb}</span>
+        <span className="intro-shimmer truncate text-[8px] leading-none">{verb}</span>
       ) : (
         <>
-          <span className="shrink-0 text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+          <span
+            className="shrink-0 text-[8px] leading-none"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
             {title}
           </span>
           {after}
@@ -198,13 +188,13 @@ export function WorkspaceLine({ name, at, done }: { name: string; at: number; do
         <>
           <FolderPlus className="h-2 w-2 shrink-0" style={{ color: 'var(--color-accent-light)' }} />
           <span
-            className="truncate text-[0.5rem] font-medium leading-none"
-            style={{ color: 'var(--iv-text)' }}
+            className="truncate text-[8px] font-medium leading-none"
+            style={{ color: 'var(--color-text-primary)' }}
           >
             {t('chat.createWorkspaceCard.title')}
           </span>
           <span className="ml-auto flex">
-            <Loader color="var(--color-icon-muted)" className="text-[0.4375rem]" />
+            <Loader color="var(--color-icon-muted)" className="text-[7px]" />
           </span>
         </>
       ) : (
@@ -212,8 +202,8 @@ export function WorkspaceLine({ name, at, done }: { name: string; at: number; do
           <ChevronRight className="h-2 w-2 shrink-0" style={{ color: 'var(--color-icon-muted)' }} />
           <Check className="h-2 w-2 shrink-0" style={{ color: 'var(--color-accent-light)' }} />
           <span
-            className="truncate text-[0.5rem] leading-none"
-            style={{ color: 'var(--iv-text-3)' }}
+            className="truncate text-[8px] leading-none"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {t('chat.createWorkspaceCard.created', { name })}
           </span>
@@ -234,14 +224,14 @@ export function HandoffCard({
   brief,
   at,
   started,
-  finished = Number.POSITIVE_INFINITY,
+  finished,
 }: {
   workspace: string;
   title: string;
   brief: string;
   at: number;
   started: number;
-  finished?: number;
+  finished: number;
 }) {
   const { t } = useTranslation();
   const now = useSceneTime();
@@ -252,17 +242,19 @@ export function HandoffCard({
       : live
         ? ['chat.ptcCard.statusWorking', 'chat.ptcCard.hintWorking']
         : ['chat.ptcCard.statusCompleted', null];
-  const muted = 'var(--color-border-muted)';
   return (
     <Appear at={at}>
       <div
         className="flex flex-col rounded-md border px-2 pb-1.5 pt-1.5"
-        style={{ ...toolCard, borderColor: live ? 'var(--color-border-default)' : muted }}
+        style={{
+          ...toolCard,
+          borderColor: live ? 'var(--color-border-default)' : 'var(--color-border-muted)',
+        }}
       >
         <div className="flex items-center gap-1">
           <span
             className={cn(
-              'truncate font-mono text-[0.375rem] font-medium uppercase',
+              'truncate font-mono text-[6px] font-medium uppercase',
               'leading-none tracking-[0.08em]'
             )}
             style={{ color: 'var(--color-text-quaternary)' }}
@@ -272,12 +264,12 @@ export function HandoffCard({
           <span
             className={cn(
               'ml-auto flex shrink-0 items-center gap-0.5',
-              'text-[0.4375rem] font-medium leading-none'
+              'text-[7px] font-medium leading-none'
             )}
-            style={{ color: 'var(--iv-text-3)' }}
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {live ? (
-              <Loader color="var(--color-accent-primary)" className="text-[0.4375rem]" />
+              <Loader color="var(--color-accent-primary)" className="text-[7px]" />
             ) : (
               <Check
                 className="intro-pop h-2 w-2"
@@ -289,30 +281,30 @@ export function HandoffCard({
           </span>
         </div>
         <span
-          className="mt-1.5 truncate text-[0.5rem] font-medium leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="mt-1.5 truncate text-[8px] font-medium leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {title}
         </span>
         <span
-          className="mt-1 truncate text-[0.4375rem] leading-none"
-          style={{ color: 'var(--iv-text-3)' }}
+          className="mt-1 truncate text-[7px] leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           {brief}
         </span>
         <div
           className="mt-1.5 flex items-center justify-between gap-1 border-t pt-1"
-          style={{ borderColor: muted }}
+          style={{ borderColor: 'var(--color-border-muted)' }}
         >
           <span
-            className="truncate text-[0.375rem] leading-none"
+            className="truncate text-[6px] leading-none"
             style={{ color: 'var(--color-text-quaternary)' }}
           >
             {hint && t(hint)}
           </span>
           <span
-            className="flex shrink-0 items-center gap-0.5 text-[0.4375rem] font-medium leading-none"
-            style={{ color: 'var(--iv-text-3)' }}
+            className="flex shrink-0 items-center gap-0.5 text-[7px] font-medium leading-none"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {t('chat.ptcCard.ctaOpenThread')}
             <ArrowRight className="h-2 w-2" />
@@ -340,8 +332,8 @@ export function Provenance({
 }) {
   return (
     <span
-      className="inline-flex min-w-0 items-center gap-1 text-[0.4375rem] leading-none"
-      style={{ color: 'var(--iv-text-3)' }}
+      className="inline-flex min-w-0 items-center gap-1 text-[7px] leading-none"
+      style={{ color: 'var(--color-text-tertiary)' }}
     >
       {logo ?? (Glyph && <Glyph className="h-[7px] w-[7px] shrink-0" />)}
       <span className="truncate">{children}</span>
@@ -351,7 +343,7 @@ export function Provenance({
 }
 
 /** A chat app's mark, as the app draws it: the favicon of the app's site. */
-export function AppLogo({ app, size = 7 }: { app: string; size?: number }) {
+function AppLogo({ app, size = 7 }: { app: string; size?: number }) {
   return <Favicon domain={messagingAppDomain(app) ?? ''} size={size} />;
 }
 
@@ -372,17 +364,17 @@ export function DeliveryPill({ app, files }: { app: string; files: number }) {
   const { t } = useTranslation();
   return (
     <span
-      className="inline-flex w-fit items-center gap-1 rounded-full border py-[3px] pl-1.5 pr-[3px] text-[0.4375rem] leading-none"
+      className="inline-flex w-fit items-center gap-1 rounded-full border py-[3px] pl-1.5 pr-[3px] text-[7px] leading-none"
       style={{
         borderColor: 'var(--color-border-elevated)',
         background: 'var(--color-bg-card)',
-        color: 'var(--iv-text)',
+        color: 'var(--color-text-primary)',
       }}
     >
       <AppLogo app={app} size={8} />
       <span className="font-medium">{messagingAppName(app)}</span>
-      <span className="flex items-center gap-0.5" style={{ color: 'var(--iv-text-2)' }}>
-        <span style={{ color: 'var(--iv-text-3)' }}>·</span>
+      <span className="flex items-center gap-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+        <span style={{ color: 'var(--color-text-tertiary)' }}>·</span>
         <Paperclip className="h-[7px] w-[7px]" />
         {files}
       </span>
@@ -457,7 +449,7 @@ export function WorkflowCard({
   if (spent > 0) {
     meta.push(t('chat.workflowRun.tokens', { value: compactNumber(spent, locale) }));
   }
-  const small = 'text-[0.375rem] leading-none';
+  const small = 'text-[6px] leading-none';
   return (
     <Appear at={at}>
       <div className="overflow-hidden rounded-lg border font-mono" style={toolCard}>
@@ -466,20 +458,20 @@ export function WorkflowCard({
           style={{ borderColor: 'var(--color-border-subtle)' }}
         >
           <span
-            className="truncate text-[0.4375rem] font-medium lowercase leading-none"
-            style={{ color: 'var(--iv-text-2)' }}
+            className="truncate text-[7px] font-medium lowercase leading-none"
+            style={{ color: 'var(--color-text-secondary)' }}
           >
             workflow · {name}
           </span>
           <span
             className={cn(
               'ml-auto flex shrink-0 items-center gap-0.5',
-              'text-[0.375rem] font-medium leading-none tracking-[0.04em]'
+              'text-[6px] font-medium leading-none tracking-[0.04em]'
             )}
             style={{ color: running ? 'var(--color-warning)' : 'var(--color-success)' }}
           >
             {running ? (
-              <Loader color="currentColor" className="text-[0.4375rem]" />
+              <Loader color="currentColor" className="text-[7px]" />
             ) : (
               <Check className="intro-pop h-1.5 w-1.5" strokeWidth={2.5} style={rv(0)} />
             )}
@@ -492,8 +484,8 @@ export function WorkflowCard({
         </div>
         <div className="flex flex-col gap-1.5 px-1.5 py-1.5">
           <span
-            className="truncate font-sans text-[0.5rem] font-medium leading-none"
-            style={{ color: 'var(--iv-text)' }}
+            className="truncate font-sans text-[8px] font-medium leading-none"
+            style={{ color: 'var(--color-text-primary)' }}
           >
             {title}
           </span>
@@ -505,11 +497,11 @@ export function WorkflowCard({
                 <span
                   style={
                     running && i === current
-                      ? { color: 'var(--iv-text)', fontWeight: 600 }
+                      ? { color: 'var(--color-text-primary)', fontWeight: 600 }
                       : {
                           color:
                             !running || i < current
-                              ? 'var(--iv-text-3)'
+                              ? 'var(--color-text-tertiary)'
                               : 'var(--color-text-quaternary)',
                           fontWeight: 500,
                         }
@@ -532,7 +524,7 @@ export function WorkflowCard({
                 return (
                   <span key={agent.label} className={cn('flex items-center gap-1', small)}>
                     {live ? (
-                      <Loader color="var(--color-warning)" className="text-[0.375rem]" />
+                      <Loader color="var(--color-warning)" className="text-[6px]" />
                     ) : (
                       <Check
                         className="h-[6px] w-[6px] shrink-0"
@@ -540,10 +532,13 @@ export function WorkflowCard({
                         style={{ color: 'var(--color-success)' }}
                       />
                     )}
-                    <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--iv-text-2)' }}>
+                    <span
+                      className="min-w-0 flex-1 truncate"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                    >
                       {agent.label}
                     </span>
-                    <span className="shrink-0" style={{ color: 'var(--iv-text-3)' }}>
+                    <span className="shrink-0" style={{ color: 'var(--color-text-tertiary)' }}>
                       {live ? '' : agent.took}
                     </span>
                   </span>
@@ -552,7 +547,7 @@ export function WorkflowCard({
             </span>
           )}
           {running && log && (
-            <span className={cn('truncate', small)} style={{ color: 'var(--iv-text-3)' }}>
+            <span className={cn('truncate', small)} style={{ color: 'var(--color-text-tertiary)' }}>
               › {log.text}
             </span>
           )}
@@ -560,7 +555,10 @@ export function WorkflowCard({
         {meta.length > 0 && (
           <div
             className={cn('border-t px-1.5 py-1 tracking-[0.02em]', small)}
-            style={{ borderColor: 'var(--color-border-subtle)', color: 'var(--iv-text-3)' }}
+            style={{
+              borderColor: 'var(--color-border-subtle)',
+              color: 'var(--color-text-tertiary)',
+            }}
           >
             {meta.join(' · ')}
           </div>
@@ -586,14 +584,14 @@ export function ChartCard({
     <div className="flex flex-col gap-1 rounded-md border px-2 py-1.5" style={toolCard}>
       <span className="flex items-baseline gap-1 leading-none">
         <span
-          className="truncate text-[0.4375rem] font-semibold"
-          style={{ color: 'var(--iv-text)' }}
+          className="truncate text-[7px] font-semibold"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {title}
         </span>
         <span
-          className="ml-auto flex shrink-0 items-center gap-0.5 text-[0.3125rem]"
-          style={{ color: 'var(--iv-text-3)' }}
+          className="ml-auto flex shrink-0 items-center gap-0.5 text-[5px]"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           <span className="w-1.5 border-t border-dashed" style={{ borderColor: 'currentColor' }} />
           {legend}
@@ -641,20 +639,22 @@ export function FileCard({
 }) {
   const { t } = useTranslation();
   const ext = name.slice(name.lastIndexOf('.') + 1).toUpperCase();
-  const muted = { borderColor: 'var(--color-border-muted)' };
   return (
     <div
       className="flex h-6 items-center gap-1.5 rounded-lg border px-1.5"
-      style={{ ...muted, background: 'var(--color-bg-card)' }}
+      style={{ borderColor: 'var(--color-border-muted)', background: 'var(--color-bg-card)' }}
     >
       <FileThumb icon={icon} />
       <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="truncate text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+        <span
+          className="truncate text-[8px] leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
           {name}
         </span>
         <span
-          className="truncate text-[0.375rem] leading-none"
-          style={{ color: 'var(--iv-text-3)' }}
+          className="truncate text-[6px] leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           {t(`chat.turnFiles.kind.${kind}`)} · {ext}
         </span>
@@ -664,24 +664,30 @@ export function FileCard({
           <span
             className={cn(
               'flex h-2.5 min-w-2.5 items-center justify-center rounded-full px-0.5',
-              'text-[0.375rem] font-medium leading-none'
+              'text-[6px] font-medium leading-none'
             )}
-            style={{ background: 'var(--color-bg-tag)', color: 'var(--iv-text-2)' }}
+            style={{ background: 'var(--color-bg-tag)', color: 'var(--color-text-secondary)' }}
           >
             {count}
           </span>
-          <ChevronDown className="h-2 w-2" style={{ color: 'var(--iv-text-3)' }} />
+          <ChevronDown className="h-2 w-2" style={{ color: 'var(--color-text-tertiary)' }} />
         </span>
       ) : (
         <span
-          className="ml-auto flex shrink-0 items-stretch text-[0.375rem] leading-none"
-          style={{ color: 'var(--iv-text-3)' }}
+          className="ml-auto flex shrink-0 items-stretch text-[6px] leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
-          <span className="flex items-center gap-0.5 rounded-l border px-1 py-0.5" style={muted}>
+          <span
+            className="flex items-center gap-0.5 rounded-l-[4px] border px-1 py-0.5"
+            style={{ borderColor: 'var(--color-border-muted)' }}
+          >
             <PanelRight className="h-1.5 w-1.5" />
             {t('chat.turnFiles.open')}
           </span>
-          <span className="flex items-center rounded-r border border-l-0 px-0.5" style={muted}>
+          <span
+            className="flex items-center rounded-r-[4px] border border-l-0 px-0.5"
+            style={{ borderColor: 'var(--color-border-muted)' }}
+          >
             <ChevronDown className="h-1.5 w-1.5" />
           </span>
         </span>

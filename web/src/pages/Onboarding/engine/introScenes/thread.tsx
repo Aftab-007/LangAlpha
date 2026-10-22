@@ -21,16 +21,7 @@ import { CLOSE, Camera, REST, look, type Shot } from './camera';
 import { useSceneTime, useTween } from './clock';
 import { Appear, Loader, Typed, UserBubble, pointAt, type Waypoint } from './kit';
 import { PanelTab } from './panelParts';
-import {
-  ChromeIcon,
-  PANEL_W,
-  PAGE,
-  Prose,
-  ThreadPage,
-  Timeline,
-  ToolRow,
-  iconStyle,
-} from './threadParts';
+import { ChromeIcon, PANEL_W, PAGE, Prose, ThreadPage, Timeline, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
 
 /* Scenes for the thread intro's memory and memo steps: the chat column
@@ -134,12 +125,18 @@ function MemoryFile({
       className="flex min-w-0 items-center gap-1.5 px-1.5 py-1.5"
       style={{ background: hover ? 'var(--color-bg-hover)' : undefined }}
     >
-      <FileText className="h-[9px] w-[9px] shrink-0" style={iconStyle} />
+      <FileText
+        className="h-[9px] w-[9px] shrink-0"
+        style={{ color: 'var(--color-text-tertiary)' }}
+      />
       <span className="flex min-w-0 flex-col gap-[3px]">
-        <span className="truncate text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+        <span
+          className="truncate text-[8px] leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
           {name}
         </span>
-        <span className="text-[0.375rem] leading-none" style={iconStyle}>
+        <span className="text-[6px] leading-none" style={{ color: 'var(--color-text-tertiary)' }}>
           {formatBytes(bytes, locale)} · {when}
         </span>
       </span>
@@ -160,20 +157,20 @@ function MemoryList() {
     <>
       <div
         className="flex items-center justify-between border-b px-1.5 py-1"
-        style={{ borderColor: 'var(--iv-border)' }}
+        style={{ borderColor: 'var(--color-border-muted)' }}
       >
         <span
-          className="flex gap-0.5 rounded p-[1.5px]"
+          className="flex gap-0.5 rounded-[4px] p-[1.5px]"
           style={{ background: 'var(--color-border-muted)' }}
         >
           {tiers.map((tier, i) => (
             <span
               key={tier}
-              className="rounded-[3px] px-1.5 py-[3px] text-[0.4375rem] font-medium leading-none"
+              className="rounded-[3px] px-1.5 py-[3px] text-[7px] font-medium leading-none"
               style={
                 i === 0
-                  ? { background: 'var(--color-bg-page)', color: 'var(--iv-text)' }
-                  : { color: 'var(--iv-text-3)' }
+                  ? { background: 'var(--color-bg-page)', color: 'var(--color-text-primary)' }
+                  : { color: 'var(--color-text-tertiary)' }
               }
             >
               {tier}
@@ -182,7 +179,10 @@ function MemoryList() {
         </span>
         <ChromeIcon icon={RefreshCw} />
       </div>
-      <span className="px-1.5 pb-0.5 pt-1.5 text-[0.375rem] leading-none" style={iconStyle}>
+      <span
+        className="px-1.5 pb-0.5 pt-1.5 text-[6px] leading-none"
+        style={{ color: 'var(--color-text-tertiary)' }}
+      >
         .agents/user/memory/
       </span>
       <MemoryFile
@@ -211,7 +211,6 @@ function MemoryList() {
     Markdown, its frontmatter left out as the app leaves it out. The body is
     the rule first, then why it holds. */
 function MemoryViewer() {
-  const body = { color: 'var(--iv-text-2)' };
   const rules = [
     'Lead with the bottom line, then the evidence.',
     'One page at most.',
@@ -221,39 +220,39 @@ function MemoryViewer() {
     <Appear at={MEM.open} className="flex flex-1 flex-col">
       <div
         className="flex items-center gap-1 border-b px-1.5 py-[5px]"
-        style={{ borderColor: 'var(--iv-border)' }}
+        style={{ borderColor: 'var(--color-border-muted)' }}
       >
-        <ArrowLeft className="h-2 w-2 shrink-0" style={iconStyle} />
+        <ArrowLeft className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
         <span
-          className="truncate text-[0.4375rem] font-semibold leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="truncate text-[7px] font-semibold leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           .agents/user/memory/{MEM.file}
         </span>
       </div>
       <div className="flex flex-col gap-2 px-2.5 py-2.5">
         <span
-          className="text-[0.75rem] font-semibold leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="text-[12px] font-semibold leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           Report style
         </span>
-        <span className="text-[0.5rem] leading-snug" style={body}>
+        <span className="text-[8px] leading-snug" style={{ color: 'var(--color-text-secondary)' }}>
           How every write-up should read.
         </span>
         <ul className="flex flex-col gap-1.5 pl-3">
           {rules.map((rule) => (
             <li
               key={rule}
-              className="list-disc text-[0.5rem] leading-snug marker:text-[var(--iv-text-3)]"
-              style={body}
+              className="list-disc text-[8px] leading-snug marker:text-[var(--color-text-tertiary)]"
+              style={{ color: 'var(--color-text-secondary)' }}
             >
               {rule}
             </li>
           ))}
         </ul>
-        <span className="text-[0.5rem] leading-snug" style={body}>
-          <b className="font-semibold" style={{ color: 'var(--iv-text)' }}>
+        <span className="text-[8px] leading-snug" style={{ color: 'var(--color-text-secondary)' }}>
+          <b className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>
             Why:
           </b>{' '}
           wants a judgement, not the Street&apos;s consensus.
@@ -292,13 +291,7 @@ function Memory() {
             <Prose text={MEM.date.answer} />
             <UserBubble at={0}>{MEM.earlier}</UserBubble>
             <Timeline>
-              <ToolRow
-                icon={Building2}
-                running={{ label: overview, pill: 'AVGO' }}
-                settled={{ label: overview, pill: 'AVGO' }}
-                at={0}
-                done={0}
-              />
+              <ToolRow icon={Building2} settled={{ label: overview, pill: 'AVGO' }} />
             </Timeline>
             <Prose text={MEM.street} />
             <UserBubble at={MEM.sendAsk + 80}>
@@ -432,14 +425,14 @@ function DragChip() {
         )}
         style={{ background: '#fff', borderColor: 'rgba(0, 0, 0, 0.2)' }}
       >
-        <span className="text-[0.25rem] font-semibold leading-none" style={{ color: '#8a8a8a' }}>
+        <span className="text-[4px] font-semibold leading-none" style={{ color: '#8a8a8a' }}>
           MD
         </span>
       </span>
       <span
         className={cn(
           'whitespace-nowrap rounded-[2px] px-[3px] py-[1.5px]',
-          'text-[0.375rem] leading-none text-white'
+          'text-[6px] leading-none text-white'
         )}
         style={{ background: '#0a64d8' }}
       >
@@ -454,12 +447,12 @@ function MemoStatus({ ready }: { ready: number }) {
   const t = useSceneTime();
   const { t: tr } = useTranslation();
   const pill =
-    'inline-flex shrink-0 whitespace-nowrap rounded-full px-1 py-[2px] text-[0.375rem] font-medium leading-none';
+    'inline-flex shrink-0 whitespace-nowrap rounded-full px-1 py-[2px] text-[6px] font-medium leading-none';
   if (t < ready) {
     return (
       <span
         className={cn(pill, 'items-center gap-0.5')}
-        style={{ background: 'var(--color-border-muted)', color: 'var(--iv-text-3)' }}
+        style={{ background: 'var(--color-border-muted)', color: 'var(--color-text-tertiary)' }}
       >
         <Loader />
         {tr('memoPanel.status.pending')}
@@ -501,10 +494,10 @@ function MemoRow({
   return (
     <Appear at={at} className="flex items-center py-1">
       <span className={COL_NAME}>
-        <FileText className="h-2 w-2 shrink-0" style={iconStyle} />
+        <FileText className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
         <span
-          className="truncate text-[0.4375rem] leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="truncate text-[7px] leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {name}
         </span>
@@ -514,8 +507,8 @@ function MemoRow({
       </span>
       <Appear
         at={ready}
-        className="line-clamp-4 min-w-0 flex-1 pr-1.5 text-[0.375rem] leading-[1.35]"
-        style={{ color: 'var(--iv-text-2)' }}
+        className="line-clamp-4 min-w-0 flex-1 pr-1.5 text-[6px] leading-[1.35]"
+        style={{ color: 'var(--color-text-secondary)' }}
       >
         {description}
       </Appear>
@@ -535,24 +528,24 @@ function MemoTab() {
     <>
       <div
         className="flex items-center justify-between border-b px-1.5 py-1"
-        style={{ borderColor: 'var(--iv-border)' }}
+        style={{ borderColor: 'var(--color-border-muted)' }}
       >
         <span className="flex items-center gap-1">
           <span
-            className="text-[0.5rem] font-semibold leading-none"
-            style={{ color: 'var(--iv-text)' }}
+            className="text-[8px] font-semibold leading-none"
+            style={{ color: 'var(--color-text-primary)' }}
           >
             {tr('memoPanel.title')}
           </span>
-          <Info className="h-[7px] w-[7px]" style={iconStyle} />
+          <Info className="h-[7px] w-[7px]" style={{ color: 'var(--color-text-tertiary)' }} />
         </span>
         <span className="flex items-center gap-1.5">
           <ChromeIcon icon={RefreshCw} />
           <ChromeIcon icon={CheckSquare} />
           <span
             className={cn(
-              'flex items-center gap-1 rounded px-1.5 py-[3px]',
-              'text-[0.4375rem] font-medium leading-none'
+              'flex items-center gap-1 rounded-[4px] px-1.5 py-[3px]',
+              'text-[7px] font-medium leading-none'
             )}
             style={{
               background: 'var(--color-btn-primary-bg)',
@@ -565,7 +558,10 @@ function MemoTab() {
         </span>
       </div>
       <div className="relative flex flex-1 flex-col">
-        <div className="flex py-1 text-[0.4375rem] font-medium leading-none" style={iconStyle}>
+        <div
+          className="flex py-1 text-[7px] font-medium leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
+        >
           <span className={COL_NAME}>{tr('memoPanel.columns.name')}</span>
           <span className={COL_STATUS}>{tr('memoPanel.columns.status')}</span>
           <span>{tr('memoPanel.columns.description')}</span>
@@ -578,12 +574,12 @@ function MemoTab() {
           <div
             className={cn(
               'absolute inset-1 z-[5] flex flex-col items-center justify-center gap-1',
-              'rounded-[5px] border-[1.5px] border-dashed text-[0.5rem] font-medium leading-none'
+              'rounded-[5px] border-[1.5px] border-dashed text-[8px] font-medium leading-none'
             )}
             style={{
               background: 'var(--color-bg-overlay-strong)',
               borderColor: 'var(--color-accent-overlay)',
-              color: 'var(--iv-text-3)',
+              color: 'var(--color-text-tertiary)',
             }}
           >
             <Upload className="h-4 w-4" style={{ color: 'var(--color-accent-primary)' }} />
@@ -620,31 +616,13 @@ function Memo() {
               <Wrapped>{MEMO.consensus.ask}</Wrapped>
             </UserBubble>
             <Timeline>
-              <ToolRow
-                icon={Building2}
-                running={{ label: overview, pill: 'MSFT' }}
-                settled={{ label: overview, pill: 'MSFT' }}
-                at={0}
-                done={0}
-              />
-              <ToolRow
-                icon={TrendingUp}
-                running={{ label: prices, pill: 'MSFT' }}
-                settled={{ label: prices, pill: 'MSFT' }}
-                at={0}
-                done={0}
-              />
+              <ToolRow icon={Building2} settled={{ label: overview, pill: 'MSFT' }} />
+              <ToolRow icon={TrendingUp} settled={{ label: prices, pill: 'MSFT' }} />
             </Timeline>
             <Prose text={MEMO.consensus.answer} />
             <UserBubble at={0}>{MEMO.earlier.ask}</UserBubble>
             <Timeline>
-              <ToolRow
-                icon={FileBarChart}
-                running={{ label: statements, pill: 'MSFT' }}
-                settled={{ label: statements, pill: 'MSFT' }}
-                at={0}
-                done={0}
-              />
+              <ToolRow icon={FileBarChart} settled={{ label: statements, pill: 'MSFT' }} />
             </Timeline>
             <Prose text={MEMO.earlier.answer} />
             <UserBubble at={MEMO.askAt}>

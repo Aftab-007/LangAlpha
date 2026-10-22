@@ -32,7 +32,7 @@ import { CLOSE, Camera, REST, look, type Shot } from './camera';
 import { ease, useSceneTime } from './clock';
 import { Appear, UserBubble, type Waypoint } from './kit';
 import { FileCrumbs, PanelTab } from './panelParts';
-import { PANEL_W, Prose, ThreadPage, Timeline, ToolRow, iconStyle } from './threadParts';
+import { PANEL_W, Prose, ThreadPage, Timeline, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
 
 /* The thread intro's first step: the files a turn writes land in the file
@@ -113,7 +113,7 @@ const TREE_TOOLS: LucideIcon[] = [CheckSquare, Upload, HardDrive, RefreshCw, Arr
 function TreeTool({ icon: Icon }: { icon: LucideIcon }) {
   return (
     <span className="flex h-[15px] w-[15px] shrink-0 items-center justify-center">
-      <Icon className="h-[9px] w-[9px]" style={iconStyle} />
+      <Icon className="h-[9px] w-[9px]" style={{ color: 'var(--color-text-tertiary)' }} />
     </span>
   );
 }
@@ -123,15 +123,15 @@ function TreeTool({ icon: Icon }: { icon: LucideIcon }) {
 function Chip({ active = false, children }: { active?: boolean; children: ReactNode }) {
   return (
     <span
-      className="whitespace-nowrap rounded-full border px-[4.5px] py-[1.5px] text-[0.375rem] font-medium leading-none"
+      className="whitespace-nowrap rounded-full border px-[4.5px] py-[1.5px] text-[6px] font-medium leading-none"
       style={
         active
           ? {
               background: 'var(--color-bg-hover)',
               borderColor: 'var(--color-border-default)',
-              color: 'var(--iv-text)',
+              color: 'var(--color-text-primary)',
             }
-          : { borderColor: 'var(--color-border-muted)', color: 'var(--iv-text-3)' }
+          : { borderColor: 'var(--color-border-muted)', color: 'var(--color-text-tertiary)' }
       }
     >
       {children}
@@ -144,8 +144,11 @@ function Chip({ active = false, children }: { active?: boolean; children: ReactN
 function StoreRow({ icon: Icon, name }: { icon: LucideIcon; name: string }) {
   return (
     <div className="flex h-[15px] min-w-0 items-center gap-[4.5px] px-[5.5px]">
-      <Icon className="h-2 w-2 shrink-0" style={iconStyle} />
-      <span className="truncate text-[0.4375rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+      <Icon className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+      <span
+        className="truncate text-[7px] leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
         {name}
       </span>
     </div>
@@ -173,7 +176,7 @@ function TreeColumn({
   return (
     <div
       className={cn('flex flex-col overflow-hidden', width == null && 'flex-1')}
-      style={{ width, background: 'var(--iv-mk-bg)' }}
+      style={{ width, background: 'var(--color-bg-page)' }}
     >
       <div className="flex min-w-[148px] flex-1 flex-col">
         <div className="flex items-center gap-px px-[3.5px] pb-[2.5px] pt-[3.5px]">
@@ -192,8 +195,11 @@ function TreeColumn({
               borderColor: 'var(--color-border-muted)',
             }}
           >
-            <Search className="h-2 w-2 shrink-0" style={iconStyle} />
-            <span className="truncate text-[0.4375rem] leading-none" style={iconStyle}>
+            <Search className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+            <span
+              className="truncate text-[7px] leading-none"
+              style={{ color: 'var(--color-text-tertiary)' }}
+            >
               {t('filePanel.searchFiles')}
             </span>
           </div>
@@ -206,7 +212,10 @@ function TreeColumn({
             ))}
           </div>
         )}
-        <div className="border-b pb-[2.5px] pt-px" style={{ borderColor: 'var(--iv-border)' }}>
+        <div
+          className="border-b pb-[2.5px] pt-px"
+          style={{ borderColor: 'var(--color-border-muted)' }}
+        >
           <StoreRow icon={BookMarked} name={t('filePanel.tabs.memory')} />
           <StoreRow icon={ScrollText} name={t('filePanel.tabs.memo')} />
           <StoreRow icon={CandlestickChart} name={t('filePanel.chartTab')} />
@@ -251,8 +260,11 @@ function TreeFile({
           style={{ background: 'var(--color-border-muted)' }}
         />
       )}
-      <Icon className="h-2 w-2 shrink-0" style={iconStyle} />
-      <span className="truncate text-[0.4375rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+      <Icon className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+      <span
+        className="truncate text-[7px] leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
         {name}
       </span>
     </Appear>
@@ -277,12 +289,15 @@ function TreeFolder({
   const Chevron = t >= openAt ? ChevronDown : ChevronRight;
   return (
     <Appear at={at} className="flex h-4 min-w-0 items-center gap-[3.5px] px-[9px]">
-      <Chevron className="h-2 w-2 shrink-0" style={iconStyle} />
-      <Folder className="h-2 w-2 shrink-0" style={iconStyle} />
-      <span className="truncate text-[0.4375rem] font-medium leading-none" style={iconStyle}>
+      <Chevron className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+      <Folder className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+      <span
+        className="truncate text-[7px] font-medium leading-none"
+        style={{ color: 'var(--color-text-tertiary)' }}
+      >
         {name}/
       </span>
-      <span className="text-[0.4375rem] leading-none" style={{ color: 'var(--color-icon-muted)' }}>
+      <span className="text-[7px] leading-none" style={{ color: 'var(--color-icon-muted)' }}>
         {count}
       </span>
     </Appear>
@@ -294,32 +309,34 @@ function TreeFolder({
     the accent. The file's header above it is the panel's, not the
     viewer's. */
 function ReportView() {
-  const text = { color: 'var(--iv-text-2)' };
   return (
     <Appear at={FILES.open} className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-1 flex-col px-3 pb-2 pt-2.5">
         <span
-          className="text-[0.3125rem] font-medium uppercase leading-none tracking-[0.08em]"
-          style={iconStyle}
+          className="text-[5px] font-medium uppercase leading-none tracking-[0.08em]"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           AI semis · Oct 21, 2026
         </span>
         <span
-          className="mt-1.5 font-serif text-[0.6875rem] font-semibold leading-[1.15]"
-          style={{ color: 'var(--iv-text)' }}
+          className="mt-1.5 font-serif text-[11px] font-semibold leading-[1.15]"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           Where NVDA sits in the AI semis
         </span>
-        <p className="mt-1.5 text-[0.4375rem] leading-[1.55]" style={text}>
+        <p
+          className="mt-1.5 text-[7px] leading-[1.55]"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
           At $182.42, NVDA trades at 24.1x NTM sales, well above the 9.8x median of the nine names.
           Only ARM screens richer, on a far smaller revenue base.
         </p>
         <span
-          className="mt-2.5 text-[0.375rem] font-semibold leading-none"
+          className="mt-2.5 text-[6px] font-semibold leading-none"
           style={{ color: 'var(--color-accent-primary)' }}
         >
           Figure 1.{' '}
-          <span className="font-normal" style={text}>
+          <span className="font-normal" style={{ color: 'var(--color-text-secondary)' }}>
             EV / NTM sales, dashed line at the median
           </span>
         </span>
@@ -329,10 +346,13 @@ function ReportView() {
           median={9.8}
           at={FILES.bars}
           labelWidth={20}
-          surface="var(--iv-mk-bg)"
+          surface="var(--color-bg-page)"
           className="mt-1.5"
         />
-        <span className="mt-2 text-[0.3125rem] leading-none" style={iconStyle}>
+        <span
+          className="mt-2 text-[5px] leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
+        >
           Source: comps.xlsx, NTM consensus as of Oct 21
         </span>
       </div>

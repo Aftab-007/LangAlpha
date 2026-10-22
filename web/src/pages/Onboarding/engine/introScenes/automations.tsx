@@ -23,7 +23,6 @@ import {
   FormRow,
   FormTitle,
   Grow,
-  INK,
   Inspector,
   InstructionBox,
   Kicker,
@@ -146,12 +145,12 @@ function MenuItem({
       className="flex items-start gap-[6px] rounded-[3px] px-[6px] py-[4px]"
       style={{ background: hovered ? 'var(--color-bg-hover)' : undefined }}
     >
-      <Glyph className="mt-px h-2 w-2 shrink-0" style={{ color: INK.text3 }} />
+      <Glyph className="mt-px h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
       <span className="flex min-w-0 flex-col gap-[2px]">
-        <span className="text-[0.4375rem] leading-[1.2]" style={{ color: INK.text }}>
+        <span className="text-[7px] leading-[1.2]" style={{ color: 'var(--color-text-primary)' }}>
           {name}
         </span>
-        <span className="text-[0.375rem] leading-[1.3]" style={{ color: INK.text3 }}>
+        <span className="text-[6px] leading-[1.3]" style={{ color: 'var(--color-text-tertiary)' }}>
           {desc}
         </span>
       </span>
@@ -176,7 +175,10 @@ function NewMenu({ hover }: { hover: boolean }) {
         name={t('automation.blankAutomation')}
         desc={t('automation.blankAutomationDesc')}
       />
-      <div className="-mx-[3px] my-[3px] h-px" style={{ background: INK.hair }} />
+      <div
+        className="-mx-[3px] my-[3px] h-px"
+        style={{ background: 'var(--color-border-muted)' }}
+      />
       <Kicker className="px-[6px] pb-[3px] pt-[3px]">{t('automation.fromTemplate')}</Kicker>
       {templates.map(([icon, id], i) => (
         <MenuItem
@@ -202,8 +204,8 @@ function PriceReadout() {
     return (
       <Appear at={TRIG.meter} className="max-w-[190px]">
         <div
-          className={cn('mb-[3px] text-[0.34375rem] leading-none', mono)}
-          style={{ color: INK.text3 }}
+          className={cn('mb-[3px] text-[5.5px] leading-none', mono)}
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           {B.away}
         </div>
@@ -214,14 +216,14 @@ function PriceReadout() {
   if (now < TRIG.asking) return <Readout>{t('automation.priceHint')}</Readout>;
   return (
     <Readout className="flex items-baseline gap-[4px]">
-      <span className={mono} style={{ color: INK.text2 }}>
+      <span className={mono} style={{ color: 'var(--color-text-secondary)' }}>
         NVDA
       </span>
       {now < TRIG.quote ? (
         <span>…</span>
       ) : (
         <>
-          <span className={mono} style={{ color: INK.text }}>
+          <span className={mono} style={{ color: 'var(--color-text-primary)' }}>
             {B.price}
           </span>
           <span>
@@ -241,15 +243,14 @@ function PriceForm() {
   const { t } = useTranslation();
   const B = useBook();
   const now = useSceneTime();
-  const summary = useSummary(null);
+  const summary = useSummary();
   const symbolFocus = during(now, TRIG.clickSymbol, TRIG.clickLevel);
   const levelFocus = during(now, TRIG.clickLevel, TRIG.clickCreate);
   const saving = now >= TRIG.clickCreate + 120;
-  const quiet = { color: INK.text3 };
   return (
     <div>
       <FormTitle>{t('automation.newAutomation')}</FormTitle>
-      <div className="mt-[6px] border-b" style={{ borderColor: INK.hair }}>
+      <div className="mt-[6px] border-b" style={{ borderColor: 'var(--color-border-muted)' }}>
         <FormRow first className="border-t" label={t('common.name')}>
           <Field>{B.alert}</Field>
         </FormRow>
@@ -262,18 +263,20 @@ function PriceForm() {
               ) : symbolFocus ? (
                 <Caret />
               ) : (
-                <span style={quiet}>{t('automation.priceSymbol')}</span>
+                <span style={{ color: 'var(--color-text-tertiary)' }}>
+                  {t('automation.priceSymbol')}
+                </span>
               )}
             </Field>
             <Field chevron className="w-[86px]">
               {t('automation.priceConditionAbove')}
             </Field>
             <Field focus={levelFocus} className="w-[52px] font-mono tabular-nums">
-              <span style={quiet}>$</span>{' '}
+              <span style={{ color: 'var(--color-text-tertiary)' }}>$</span>{' '}
               {now >= TRIG.typeLevel ? (
                 <Typed text="190" at={TRIG.typeLevel} cps={14} />
               ) : (
-                <span style={quiet}>150.00</span>
+                <span style={{ color: 'var(--color-text-tertiary)' }}>150.00</span>
               )}
             </Field>
           </div>
@@ -476,9 +479,8 @@ const DLV_SHOTS: [Shot, ...Shot[]] = [
 function DeliveryList({ pick }: { pick: boolean }) {
   const { t } = useTranslation();
   const B = useBook();
-  const heading = 'px-[5px] pb-[2px] pt-[2px] font-mono text-[0.34375rem] leading-none';
-  const item =
-    'flex items-center gap-1 rounded-[3px] px-[5px] py-[3px] text-[0.40625rem] leading-none';
+  const heading = 'px-[5px] pb-[2px] pt-[2px] font-mono text-[5.5px] leading-none';
+  const item = 'flex items-center gap-1 rounded-[3px] px-[5px] py-[3px] text-[6.5px] leading-none';
   const slack: { label: string; tag?: string }[] = [
     {
       label: t('automation.deliveryDefaultOptionLands', { name: '#markets' }),
@@ -489,7 +491,7 @@ function DeliveryList({ pick }: { pick: boolean }) {
   ];
   return (
     <MenuSurface className="w-[140px]">
-      <div className={heading} style={{ color: INK.text3 }}>
+      <div className={heading} style={{ color: 'var(--color-text-tertiary)' }}>
         {t('automation.deliverToSlack')}
       </div>
       {slack.map(({ label, tag }, i) => (
@@ -497,23 +499,26 @@ function DeliveryList({ pick }: { pick: boolean }) {
           key={label}
           className={item}
           style={{
-            color: INK.text,
+            color: 'var(--color-text-primary)',
             background: pick && i === 1 ? 'var(--color-bg-hover)' : undefined,
           }}
         >
           <span className="-my-px min-w-0 flex-1 truncate leading-[1.3]">{label}</span>
           {tag && (
-            <span className="shrink-0 text-[0.34375rem]" style={{ color: INK.text3 }}>
+            <span className="shrink-0 text-[5.5px]" style={{ color: 'var(--color-text-tertiary)' }}>
               {tag}
             </span>
           )}
         </div>
       ))}
-      <div className="mt-[2px] border-t pt-[2px]" style={{ borderColor: INK.hair }}>
-        <div className={heading} style={{ color: INK.text3 }}>
+      <div
+        className="mt-[2px] border-t pt-[2px]"
+        style={{ borderColor: 'var(--color-border-muted)' }}
+      >
+        <div className={heading} style={{ color: 'var(--color-text-tertiary)' }}>
           {t('automation.deliverToDiscord')}
         </div>
-        <div className={item} style={{ color: INK.text }}>
+        <div className={item} style={{ color: 'var(--color-text-primary)' }}>
           {t('automation.deliveryDefaultOption')}
         </div>
       </div>
@@ -529,19 +534,22 @@ function EditForm() {
   const now = useSceneTime();
   const open = now >= DLV.clickMore;
   const added = now >= DLV.clickDm + 60;
-  const summary = useSummary(null);
+  const summary = useSummary();
   const day =
-    'flex h-[15px] w-[15px] items-center justify-center rounded-[3px] border font-mono text-[0.375rem]';
+    'flex h-[15px] w-[15px] items-center justify-center rounded-[3px] border font-mono text-[6px]';
   return (
     <div>
       <FormTitle>{t('automation.editAutomation')}</FormTitle>
-      <div className="mt-[6px] border-b" style={{ borderColor: INK.hair }}>
+      <div className="mt-[6px] border-b" style={{ borderColor: 'var(--color-border-muted)' }}>
         <FormRow first className="border-t" label={t('common.name')}>
           <Field>{B.brief}</Field>
         </FormRow>
         <FormRow label={t('automation.fieldWhen')}>
           <TriggerChips value="cron" days={WEEKDAYS} />
-          <div className="flex items-center gap-1 text-[0.4375rem]" style={{ color: INK.text2 }}>
+          <div
+            className="flex items-center gap-1 text-[7px]"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
             <Field chevron className="shrink-0">
               {t('automation.freqDays')}
             </Field>
@@ -577,11 +585,14 @@ function EditForm() {
             {added && (
               <Appear at={DLV.clickDm + 60} pop className="flex">
                 <span
-                  className="inline-flex h-[14px] items-center gap-[3px] rounded-[3px] border pl-[5px] pr-[2px] text-[0.40625rem] leading-none"
-                  style={{ borderColor: INK.hair, color: INK.text }}
+                  className="inline-flex h-[14px] items-center gap-[3px] rounded-[3px] border pl-[5px] pr-[2px] text-[6.5px] leading-none"
+                  style={{
+                    borderColor: 'var(--color-border-muted)',
+                    color: 'var(--color-text-primary)',
+                  }}
                 >
                   {B.deliverTo}
-                  <X className="h-[6px] w-[6px]" style={{ color: INK.text3 }} />
+                  <X className="h-[6px] w-[6px]" style={{ color: 'var(--color-text-tertiary)' }} />
                 </span>
               </Appear>
             )}
@@ -607,11 +618,11 @@ function EditForm() {
           </FormRow>
           <FormRow label={t('common.description')}>
             <div
-              className="h-[20px] rounded-[4px] border px-[5px] py-[3px] text-[0.40625rem] leading-none"
+              className="h-[20px] rounded-[4px] border px-[5px] py-[3px] text-[6.5px] leading-none"
               style={{
                 background: 'var(--color-bg-input)',
-                borderColor: INK.hair,
-                color: INK.text3,
+                borderColor: 'var(--color-border-muted)',
+                color: 'var(--color-text-tertiary)',
               }}
             >
               {t('automation.descPlaceholder')}

@@ -26,7 +26,7 @@ const during = (t: number, from: number, to: number) => t >= from && t < to;
 /** An outlined header button, as the gallery draws its secondary actions. */
 function OutlineButton({
   icon: Glyph,
-  color = 'var(--iv-text-3)',
+  color = 'var(--color-text-tertiary)',
   children,
 }: {
   icon?: Icon;
@@ -37,7 +37,7 @@ function OutlineButton({
     <span
       className={cn(
         'flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1',
-        'text-[0.4375rem] leading-none'
+        'text-[7px] leading-none'
       )}
       style={{ borderColor: 'var(--color-border-muted)', color }}
     >
@@ -62,12 +62,12 @@ function GalleryHeader({
   return (
     <div className={cn('flex items-center gap-1.5', className)} style={style}>
       <span
-        className="mr-auto text-[0.75rem] font-semibold leading-none tracking-[-0.01em]"
-        style={{ color: 'var(--iv-text)' }}
+        className="mr-auto text-[12px] font-semibold leading-none tracking-[-0.01em]"
+        style={{ color: 'var(--color-text-primary)' }}
       >
         {t('workspace.workspaces')}
       </span>
-      <OutlineButton icon={Server} color="var(--iv-text-2)">
+      <OutlineButton icon={Server} color="var(--color-text-secondary)">
         <span className="font-medium">{t('computer.computers', 'Computers')}</span>
       </OutlineButton>
       <span
@@ -82,9 +82,7 @@ function GalleryHeader({
         }}
       >
         <Plus className="h-2 w-2" />
-        <span className="text-[0.4375rem] font-medium leading-none">
-          {t('workspace.newWorkspace')}
-        </span>
+        <span className="text-[7px] font-medium leading-none">{t('workspace.newWorkspace')}</span>
       </span>
     </div>
   );
@@ -100,7 +98,7 @@ function MachineStatus({ state }: { state: MachineState }) {
   const { t } = useTranslation();
   const glyph =
     state === 'starting' ? (
-      <Loader color="var(--color-accent-primary)" className="text-[0.375rem]" />
+      <Loader color="var(--color-accent-primary)" className="text-[6px]" />
     ) : (
       <span
         className="h-[4px] w-[4px] shrink-0 rounded-full"
@@ -157,7 +155,6 @@ function GalleryCard({
   const locale = useLocale();
   const now = useSceneTime();
   const fresh = desk.ran != null && (settled || now >= desk.ran);
-  const tertiary = { color: 'var(--iv-text-3)' };
   return (
     <div
       className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-lg border py-2 pl-2.5 pr-2"
@@ -177,21 +174,29 @@ function GalleryCard({
             style={{ color: 'var(--color-accent-primary)' }}
           />
         )}
-        {desk.pinned && <Pin className="h-2 w-2 shrink-0 rotate-45" style={tertiary} />}
+        {desk.pinned && (
+          <Pin
+            className="h-2 w-2 shrink-0 rotate-45"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          />
+        )}
         <span
-          className="truncate text-[0.5625rem] font-medium leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="truncate text-[9px] font-medium leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {desk.name}
         </span>
       </div>
-      <span className="line-clamp-1 text-[0.4375rem] leading-[1.3]" style={tertiary}>
+      <span
+        className="line-clamp-1 text-[7px] leading-[1.3]"
+        style={{ color: 'var(--color-text-tertiary)' }}
+      >
         {desk.description}
       </span>
       {!home && (
         <span
-          className="flex min-w-0 items-center gap-1 text-[0.375rem] leading-none"
-          style={tertiary}
+          className="flex min-w-0 items-center gap-1 text-[6px] leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           <Server className="h-[7px] w-[7px] shrink-0" />
           <span className="truncate">Cloud computer</span>
@@ -200,8 +205,8 @@ function GalleryCard({
       )}
       <span
         key={fresh ? 'fresh' : 'old'}
-        className={cn('mt-auto block text-[0.375rem] leading-none', fresh && 'intro-rv')}
-        style={{ ...rv(0), ...tertiary }}
+        className={cn('mt-auto block text-[6px] leading-none', fresh && 'intro-rv')}
+        style={{ ...rv(0), color: 'var(--color-text-tertiary)' }}
       >
         {t('workspace.updated', {
           time: shortMonthDay(fresh ? GRID.today : desk.updated, locale),
@@ -279,14 +284,14 @@ function GalleryPage({
       <GalleryHeader pressNew={pressNew} className="intro-rv" style={rv(0.08)} />
       {/* search */}
       <Region delay={0.16} className="flex items-center gap-1.5 px-2 py-1.5">
-        <Search className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-        <span className="text-[0.5rem] leading-none" style={{ color: 'var(--iv-text-3)' }}>
+        <Search className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+        <span className="text-[8px] leading-none" style={{ color: 'var(--color-text-tertiary)' }}>
           {t('workspace.searchWorkspaces')}
         </span>
       </Region>
       {/* sort */}
       <div className="intro-rv flex items-center justify-end gap-1.5" style={rv(0.2)}>
-        <span className="text-[0.4375rem] leading-none" style={{ color: 'var(--iv-text-3)' }}>
+        <span className="text-[7px] leading-none" style={{ color: 'var(--color-text-tertiary)' }}>
           {t('workspace.sortBy')}
         </span>
         <OutlineButton>{t('workspace.activity')}</OutlineButton>
@@ -390,12 +395,15 @@ function TypedInPlace({ text, at, focus }: { text: string; at: number; focus: bo
 function FieldLabel({ children, required = false }: { children: ReactNode; required?: boolean }) {
   const { t } = useTranslation();
   return (
-    <span className="text-[0.5rem] font-medium leading-none" style={{ color: 'var(--iv-text)' }}>
+    <span
+      className="text-[8px] font-medium leading-none"
+      style={{ color: 'var(--color-text-primary)' }}
+    >
       {children}{' '}
       {required ? (
         <span style={{ color: 'var(--color-loss)' }}>*</span>
       ) : (
-        <span className="text-[0.4375rem] font-normal" style={{ color: 'var(--iv-text-2)' }}>
+        <span className="text-[7px] font-normal" style={{ color: 'var(--color-text-secondary)' }}>
           {t('common.optional')}
         </span>
       )}
@@ -421,11 +429,14 @@ function UploadRow({ name, size, at }: { name: string; size: string; at: number 
     <Appear
       at={at}
       reserve
-      className="flex items-center gap-1.5 rounded border px-1.5 py-1"
+      className="flex items-center gap-1.5 rounded-[4px] border px-1.5 py-1"
       style={{ background: 'var(--color-bg-tag)', borderColor: 'var(--color-border-muted)' }}
     >
-      <FileText className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-2)' }} />
-      <span className="truncate text-[0.4375rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+      <FileText className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-secondary)' }} />
+      <span
+        className="truncate text-[7px] leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
         {name}
       </span>
       <span className="ml-auto flex h-2 items-center gap-1">
@@ -445,10 +456,13 @@ function UploadRow({ name, size, at }: { name: string; size: string; at: number 
           </span>
         ) : (
           <>
-            <span className="text-[0.375rem] leading-none" style={{ color: 'var(--iv-text-2)' }}>
+            <span
+              className="text-[6px] leading-none"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
               {size}
             </span>
-            <X className="h-1.5 w-1.5" style={{ color: 'var(--iv-text-2)' }} />
+            <X className="h-1.5 w-1.5" style={{ color: 'var(--color-text-secondary)' }} />
           </>
         )}
       </span>
@@ -464,7 +478,7 @@ function CreateWorkspace() {
   const nameFocus = during(now, NEW_WS.modal, NEW_WS.clickDesc);
   const descFocus = during(now, NEW_WS.clickDesc, NEW_WS.clickDrop);
   const overDrop = during(now, NEW_WS_PATH[5].at, NEW_WS_PATH[6].at);
-  const typed = 'text-[0.5rem] leading-none';
+  const typed = 'text-[8px] leading-none';
   return (
     <Camera
       shots={NEW_WS_SHOTS}
@@ -495,18 +509,18 @@ function CreateWorkspace() {
           >
             <div className="flex items-center justify-between">
               <span
-                className="text-[0.625rem] font-semibold leading-none"
-                style={{ color: 'var(--iv-text)' }}
+                className="text-[10px] font-semibold leading-none"
+                style={{ color: 'var(--color-text-primary)' }}
               >
                 {t('workspace.createNewWorkspace')}
               </span>
-              <X className="h-2.5 w-2.5" style={{ color: 'var(--iv-text)' }} />
+              <X className="h-2.5 w-2.5" style={{ color: 'var(--color-text-primary)' }} />
             </div>
             <div className="mt-2.5 flex flex-col gap-1">
               {/* name, focused when the modal opens */}
               <FieldLabel required>{t('workspace.workspaceName')}</FieldLabel>
-              <div className="rounded border px-1.5 py-1" style={field(nameFocus)}>
-                <span className={typed} style={{ color: 'var(--iv-text)' }}>
+              <div className="rounded-[4px] border px-1.5 py-1" style={field(nameFocus)}>
+                <span className={typed} style={{ color: 'var(--color-text-primary)' }}>
                   <TypedInPlace text={NEW_WS.name} at={NEW_WS.typeName} focus={nameFocus} />
                 </span>
               </div>
@@ -514,8 +528,8 @@ function CreateWorkspace() {
               <div className="mt-1.5">
                 <FieldLabel>{t('common.description')}</FieldLabel>
               </div>
-              <div className="h-9 rounded border px-1.5 py-1" style={field(descFocus)}>
-                <span className={typed} style={{ color: 'var(--iv-text)' }}>
+              <div className="h-9 rounded-[4px] border px-1.5 py-1" style={field(descFocus)}>
+                <span className={typed} style={{ color: 'var(--color-text-primary)' }}>
                   <TypedInPlace text={NEW_WS.desc} at={NEW_WS.typeDesc} focus={descFocus} />
                 </span>
               </div>
@@ -523,7 +537,10 @@ function CreateWorkspace() {
               <div className="mt-1.5">
                 <FieldLabel>{t('workspace.files')}</FieldLabel>
               </div>
-              <span className="text-[0.375rem] leading-none" style={{ color: 'var(--iv-text-2)' }}>
+              <span
+                className="text-[6px] leading-none"
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
                 {t('workspace.filesUploadNote')}
               </span>
               <div
@@ -534,10 +551,10 @@ function CreateWorkspace() {
                     : 'var(--color-border-muted)',
                 }}
               >
-                <Upload className="h-3 w-3" style={{ color: 'var(--iv-text-2)' }} />
+                <Upload className="h-3 w-3" style={{ color: 'var(--color-text-secondary)' }} />
                 <span
-                  className="text-[0.4375rem] leading-none"
-                  style={{ color: 'var(--iv-text-2)' }}
+                  className="text-[7px] leading-none"
+                  style={{ color: 'var(--color-text-secondary)' }}
                 >
                   {t('workspace.dragFilesHere')}
                   <span className="font-medium" style={{ color: 'var(--color-accent-primary)' }}>
@@ -549,14 +566,14 @@ function CreateWorkspace() {
               <UploadRow name="dc-buildout-notes.md" size="18 KB" at={NEW_WS.files[1]} />
               <div className="flex items-center justify-end gap-1.5 pt-1.5">
                 <span
-                  className="px-2 py-1 text-[0.5rem] font-medium leading-none"
-                  style={{ color: 'var(--iv-text)' }}
+                  className="px-2 py-1 text-[8px] font-medium leading-none"
+                  style={{ color: 'var(--color-text-primary)' }}
                 >
                   {t('common.cancel')}
                 </span>
                 <span
                   className={cn(
-                    'rounded px-2 py-1 text-[0.5rem] font-medium leading-none',
+                    'rounded-[4px] px-2 py-1 text-[8px] font-medium leading-none',
                     'transition-transform duration-150'
                   )}
                   style={{

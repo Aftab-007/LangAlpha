@@ -134,24 +134,24 @@ export function StockPriceCard({
       {/* wraps in a narrow column, as the app's does: the period drops to
           its own line, flush right */}
       <div className="flex flex-wrap items-baseline gap-x-1 gap-y-0.5 leading-none">
-        <span className="text-[0.5rem] font-bold" style={{ color: 'var(--iv-text)' }}>
+        <span className="text-[8px] font-bold" style={{ color: 'var(--color-text-primary)' }}>
           {sym}
         </span>
-        <span className="text-[0.5rem] font-semibold" style={{ color: 'var(--iv-text)' }}>
+        <span className="text-[8px] font-semibold" style={{ color: 'var(--color-text-primary)' }}>
           {price}
         </span>
-        <span className="text-[0.4375rem] font-semibold" style={{ color }}>
+        <span className="text-[7px] font-semibold" style={{ color }}>
           {change >= 0 ? '+' : ''}
           {change.toFixed(2)}%
         </span>
-        <span className="ml-auto whitespace-nowrap text-[0.375rem]" style={label}>
+        <span className="ml-auto whitespace-nowrap text-[6px]" style={label}>
           {period}
         </span>
       </div>
       <PriceArea series={series} color={color} at={at} height={30} />
       {/* wraps whole stats in a narrow column, never a label from its value */}
       <div
-        className="flex flex-wrap gap-x-2 gap-y-0.5 whitespace-nowrap text-[0.375rem] leading-none"
+        className="flex flex-wrap gap-x-2 gap-y-0.5 whitespace-nowrap text-[6px] leading-none"
         style={label}
       >
         <span>
@@ -213,10 +213,10 @@ export function BarChart({
         return (
           <div key={bar.label} className="flex items-center gap-1 leading-none">
             <span
-              className="shrink-0 truncate text-right text-[0.375rem]"
+              className="shrink-0 truncate text-right text-[6px]"
               style={{
                 width: labelWidth,
-                color: bar.mark ? 'var(--iv-text)' : 'var(--color-text-tertiary)',
+                color: bar.mark ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
                 fontWeight: bar.mark ? 600 : 400,
               }}
             >
@@ -232,10 +232,10 @@ export function BarChart({
                 }}
               />
               <span
-                className="relative z-[1] ml-[2px] shrink-0 px-[1px] text-[0.3125rem] tabular-nums"
+                className="relative z-[1] ml-[2px] shrink-0 px-[1px] text-[5px] tabular-nums"
                 style={{
                   background: surface,
-                  color: bar.mark ? 'var(--iv-text)' : 'var(--color-text-tertiary)',
+                  color: bar.mark ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
                   opacity: p > 0.6 ? 1 : 0,
                   transition: 'opacity 160ms',
                 }}

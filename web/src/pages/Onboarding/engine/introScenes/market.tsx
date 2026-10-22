@@ -3,29 +3,19 @@ import { useTranslation } from 'react-i18next';
 import { Check, PenLine } from 'lucide-react';
 import type { IntroVisualId } from '../../registry';
 import { Camera, REST, VIEW, look, type Shot } from './camera';
+import { Candles, EventBadge } from './candles';
 import {
-  Candles,
   CommentBox,
-  EventBadge,
-  NVDA,
-  NVDA_EVENTS,
   Pin,
   Selection,
-  besideRegion,
-  chartScale,
-} from './candles';
-import { useSceneTime } from './clock';
-import { Appear, Loader, Typed, UserBubble, type Waypoint, pointAt } from './kit';
-import {
-  CHART,
-  CHAT_X,
-  MarketPage,
-  PAGE,
-  REGION_BTN,
-  SEND,
   SelectionCard,
   SelectionChip,
-} from './marketParts';
+  besideRegion,
+} from './chartTools';
+import { useSceneTime } from './clock';
+import { Appear, Loader, Typed, UserBubble, type Waypoint, pointAt } from './kit';
+import { CHART, CHAT_X, MarketPage, PAGE, REGION_BTN, SEND } from './marketParts';
+import { NVDA, NVDA_EVENTS, chartScale } from './nvdaSeries';
 import { Prose, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
 
@@ -44,8 +34,6 @@ import type { IntroScene } from './types';
 const SCALE = chartScale(NVDA, CHART.w, CHART.h);
 /** A point of the chart, in page px. */
 const onPage = (x: number, y: number) => ({ x: CHART.x + x, y: CHART.y + y });
-/** The chat panel's width. */
-const CHAT = { x: CHAT_X, w: PAGE.w - CHAT_X };
 
 const NOTE = 'What drove this drop?';
 const LEAD = 'Two pieces of news drove it. Marking them on your chart.';
@@ -62,13 +50,13 @@ const CHAT_REST = VIEW.width / (PAGE.w - METRICS_GAP);
 function Tip({ x, y, children }: { x: number; y: number; children: ReactNode }) {
   return (
     <span
-      className="intro-pop absolute z-10 whitespace-nowrap rounded-[2px] border px-[3px] py-[2px] text-[0.3125rem] leading-none"
+      className="intro-pop absolute z-10 whitespace-nowrap rounded-[2px] border px-[3px] py-[2px] text-[5px] leading-none"
       style={{
         left: x,
         top: y,
         background: 'var(--color-bg-elevated)',
         borderColor: 'var(--color-border-default)',
-        color: 'var(--iv-text)',
+        color: 'var(--color-text-primary)',
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.12)',
       }}
     >
@@ -189,7 +177,7 @@ function MarketAsk() {
             <>
               <Sent at={ASK.send} />
               {t >= ASK.think && t < ASK.lead && (
-                <Loader color="var(--color-icon-muted)" className="text-[0.625rem]" />
+                <Loader color="var(--color-icon-muted)" className="text-[10px]" />
               )}
               <Prose text={LEAD} at={ASK.lead} cps={60} />
             </>
@@ -230,16 +218,16 @@ function ChartChip({ count, hover }: { count: number; hover: boolean }) {
   const { t } = useTranslation();
   return (
     <span
-      className="intro-pop flex w-fit items-center gap-[4px] rounded-full border px-[5px] py-[3px] text-[0.40625rem] leading-none transition-colors"
+      className="intro-pop flex w-fit items-center gap-[4px] rounded-full border px-[5px] py-[3px] text-[6.5px] leading-none transition-colors"
       style={{
         background: 'var(--color-bg-tool-card)',
         borderColor: hover ? 'var(--color-accent-primary)' : 'var(--color-border-muted)',
-        color: 'var(--iv-text-3)',
+        color: 'var(--color-text-tertiary)',
       }}
     >
       <Check className="h-[7px] w-[7px] shrink-0" style={{ color: 'var(--color-profit)' }} />
       <span className="whitespace-nowrap">
-        <span className="font-semibold" style={{ color: 'var(--iv-text)' }}>
+        <span className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>
           NVDA
         </span>
         {' · 1D · '}
@@ -275,7 +263,7 @@ const EVENTS = [
 const DROP = NVDA_EVENTS.exportRule;
 
 /** On the chip, in page px, and the bottom of it. */
-const CHIP_AT = { x: CHAT.x + 46, y: 126 };
+const CHIP_AT = { x: CHAT_X + 46, y: 126 };
 const CHIP_BOTTOM = 134;
 /** The drop's badge, centered over its anchor. */
 const BADGE = onPage(SCALE.x(DROP.i), SCALE.y(DROP.price) - 10.5);
@@ -291,7 +279,7 @@ const DRAW_SHOTS: [Shot, ...Shot[]] = [
 ];
 
 const DRAW_PATH: Waypoint[] = [
-  { at: 3300, x: CHAT.x + 120, y: 238 },
+  { at: 3300, x: CHAT_X + 120, y: 238 },
   { at: DRAW.hover, ...CHIP_AT },
   { at: DRAW.leave, ...CHIP_AT },
   { at: 5800, ...BADGE },

@@ -3,19 +3,28 @@ import { Eye, Newspaper, Paperclip, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocale } from '@/hooks/useLocale';
 import { relativeTime } from '@/lib/format';
-import type { IntroVisualId } from '../../registry';
 import { CLOSE, Camera, VIEW, look, type Shot } from './camera';
 import { progress, useSceneTime } from './clock';
 import { Typed, type Waypoint } from './kit';
 import type { IntroScene } from './types';
-import { WATCH, DashPage, PAGE_W, fromCorner, Floating, Composer, Widget } from './dashboardParts';
+import {
+  WATCH,
+  DashPage,
+  PAD,
+  PAGE_W,
+  fromCorner,
+  Floating,
+  Composer,
+  Widget,
+} from './dashboardParts';
 import { WatchRow, NEWS, NewsRow, AddSymbol } from './dashboardClassic';
 
 /* The dashboard intro's last scene: clipping a row into the chat's context.
    Drawn after its real counterpart under pages/Dashboard (row paperclip,
-   context deck), in miniature. */
-/* eslint-disable react-refresh/only-export-components -- scene module:
-   private scene components, one record export */
+   context deck), in miniature. It plays from the dashboard intro's record,
+   so it downloads with that intro's other scenes. */
+/* eslint-disable react-refresh/only-export-components -- scene module: a
+   private scene component and its record entry */
 
 /* ── dashboard · step 3: clip a row into chat context ──────────────────── */
 
@@ -37,26 +46,25 @@ const ATTACH = {
 const ATTACH_H = 300;
 /** Page px, read off the layout: the first row and its paperclip, the
     card in the composer's open deck, and the line its text goes on. */
-const ROW = { x: 17, y: 34, w: 208, h: 36 };
+const ROW = { x: 17, y: 34, w: 208 };
 const CLIP = { x: 216, y: 52 };
 const CARD = { x: 89, y: 216, w: 222 };
 const TEXT = { x: 198, y: 257 };
 /** Where the crops' edges fall, in page px: between the watchlist's
     symbols and its prices; across the rows' pictures, before their titles;
     the line under the feed's header; above the headers' text; the foot of
-    the composer; and the widgets' left padding, which puts the right edge
-    of a view at the last shot's zoom between the watchlist's prices and
-    their changes. */
+    the composer, which floats the page's padding above the page's foot;
+    and the widgets' left padding, which puts the right edge of a view at
+    the last shot's zoom between the watchlist's prices and their changes. */
 const WATCH_NAMES_END = 300;
 const PICTURES = 33;
 const UNDER_HEADER = 31;
 const OVER_HEADER = 15;
-const COMPOSER_FOOT = 290;
+const COMPOSER_FOOT = ATTACH_H - PAD;
 const WIDGET_PAD = 12;
 /** The flying card's box: the clipped row, then its slot in the deck. It
     eases in and out over the camera's move, so it rides along in view. */
 const CARD_FROM = { x: ROW.x, y: ROW.y + 5, w: ROW.w };
-const CARD_TO = CARD;
 const ATTACH_PATH: Waypoint[] = [
   { at: 300, x: 150, y: 140 },
   { at: 1150, ...CLIP },
@@ -89,29 +97,33 @@ function ContextCard({ style }: { style?: CSSProperties }) {
   return (
     <div
       className="flex items-center gap-1.5 rounded-md border p-1"
-      style={{ background: 'var(--color-bg-card)', borderColor: 'var(--iv-border)', ...style }}
+      style={{
+        background: 'var(--color-bg-card)',
+        borderColor: 'var(--color-border-muted)',
+        ...style,
+      }}
     >
       <span
-        className="flex h-4 w-4 shrink-0 items-center justify-center rounded"
+        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px]"
         style={{ background: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
       >
         <Newspaper className="h-2 w-2" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
         <span
-          className="truncate text-[0.4375rem] font-medium leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="truncate text-[7px] font-medium leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           News: {NEWS[0].title}
         </span>
         <span
-          className="truncate text-[0.3125rem] leading-none"
+          className="truncate text-[5px] leading-none"
           style={{ color: 'var(--color-text-tertiary)' }}
         >
           {NEWS[0].source} · {relativeTime(-NEWS[0].hours * 3_600_000, locale, 0)}
         </span>
       </span>
-      <X className="h-2 w-2 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
+      <X className="h-2 w-2 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
     </div>
   );
 }
@@ -122,11 +134,11 @@ function ContextDeck({ shown }: { shown: boolean }) {
   return (
     <div
       className="flex flex-col gap-1 border-b border-dashed pb-1"
-      style={{ borderColor: 'var(--iv-border)', visibility: shown ? 'visible' : 'hidden' }}
+      style={{ borderColor: 'var(--color-border-muted)', visibility: shown ? 'visible' : 'hidden' }}
     >
       <span
         className={
-          'flex items-center gap-1 px-0.5 font-mono text-[0.3125rem] uppercase leading-none ' +
+          'flex items-center gap-1 px-0.5 font-mono text-[5px] uppercase leading-none ' +
           'tracking-[0.18em]'
         }
         style={{ color: 'var(--color-accent-primary)' }}
@@ -175,7 +187,7 @@ function DashboardAttach() {
                     style={{
                       opacity: hovered ? 1 : 0,
                       background: onClip ? 'var(--color-accent-soft)' : 'transparent',
-                      color: onClip ? 'var(--color-accent-primary)' : 'var(--iv-text-3)',
+                      color: onClip ? 'var(--color-accent-primary)' : 'var(--color-text-tertiary)',
                     }}
                   >
                     <Paperclip className="h-2 w-2" />
@@ -222,9 +234,9 @@ function DashboardAttach() {
             style={{
               position: 'absolute',
               pointerEvents: 'none',
-              left: CARD_FROM.x + (CARD_TO.x - CARD_FROM.x) * fly,
-              top: CARD_FROM.y + (CARD_TO.y - CARD_FROM.y) * fly,
-              width: CARD_FROM.w + (CARD_TO.w - CARD_FROM.w) * fly,
+              left: CARD_FROM.x + (CARD.x - CARD_FROM.x) * fly,
+              top: CARD_FROM.y + (CARD.y - CARD_FROM.y) * fly,
+              width: CARD_FROM.w + (CARD.w - CARD_FROM.w) * fly,
               // lifted off the row: solid at once, with the shadow a
               // carried card takes
               opacity: Math.min(fly * 12, 1),
@@ -237,6 +249,9 @@ function DashboardAttach() {
   );
 }
 
-export const dashboardAttachScenes = {
-  dashboardAttach: { Scene: DashboardAttach, length: ATTACH.length, anchor: 'right' },
-} satisfies Partial<Record<IntroVisualId, IntroScene>>;
+/** The scene's entry in the dashboard record (dashboard.tsx). */
+export const attachScene: IntroScene = {
+  Scene: DashboardAttach,
+  length: ATTACH.length,
+  anchor: 'right',
+};

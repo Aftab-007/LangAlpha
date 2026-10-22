@@ -36,7 +36,7 @@ export function PanelButton({
       className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[2.5px]"
       style={{
         background: pressed ? 'var(--color-bg-hover)' : undefined,
-        color: pressed ? 'var(--iv-text)' : 'var(--iv-text-3)',
+        color: pressed ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
         opacity: disabled ? 0.3 : undefined,
       }}
     >
@@ -65,16 +65,16 @@ export function PanelTab({
     <span
       className={cn(
         'flex h-4 max-w-[100px] shrink-0 items-center gap-[3.5px] rounded-[4.5px] border pl-[4.5px] pr-2',
-        'text-[0.4375rem] leading-none'
+        'text-[7px] leading-none'
       )}
       style={
         active
           ? {
               background: 'var(--color-bg-elevated)',
               borderColor: 'var(--color-border-muted)',
-              color: 'var(--iv-text)',
+              color: 'var(--color-text-primary)',
             }
-          : { borderColor: 'transparent', color: 'var(--iv-text-3)' }
+          : { borderColor: 'transparent', color: 'var(--color-text-tertiary)' }
       }
     >
       <Icon className="h-2 w-2 shrink-0" />
@@ -138,14 +138,14 @@ export function FileCrumbs({
       className="flex min-h-[19px] shrink-0 items-center gap-[4.5px] border-b pl-[7px] pr-[4.5px]"
       style={{ borderColor: 'var(--color-border-muted)' }}
     >
-      <span className="flex min-w-0 items-center gap-px text-[0.40625rem] leading-none">
+      <span className="flex min-w-0 items-center gap-px text-[6.5px] leading-none">
         {path.map((seg, i) => {
           const file = i === path.length - 1;
           return (
             <span key={seg} className="flex min-w-0 items-center gap-px">
               <span
                 className="truncate px-[1.5px]"
-                style={{ color: file ? 'var(--iv-text)' : 'var(--iv-text-3)' }}
+                style={{ color: file ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)' }}
               >
                 {seg}
               </span>
@@ -162,8 +162,8 @@ export function FileCrumbs({
       <span className="ml-auto" />
       {meta && (
         <span
-          className="shrink-0 whitespace-nowrap text-[0.40625rem] leading-none"
-          style={{ color: 'var(--iv-text-3)' }}
+          className="shrink-0 whitespace-nowrap text-[6.5px] leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           {meta}
         </span>
@@ -189,20 +189,22 @@ export function ChatHeaderButtons({
   sharing?: boolean;
   shared?: boolean;
 }) {
-  const ink = { color: 'var(--iv-text)' };
   return (
     <span className="flex shrink-0 items-center gap-[4.5px]">
       <span
         className="flex h-4 w-4 items-center justify-center rounded-[2.5px]"
         style={{
-          color: shared ? 'var(--color-accent-primary)' : 'var(--iv-text)',
+          color: shared ? 'var(--color-accent-primary)' : 'var(--color-text-primary)',
           background: sharing ? 'var(--color-border-muted)' : undefined,
         }}
       >
         <Share2 className="h-[9px] w-[9px]" />
       </span>
       {!panelOpen && (
-        <span className="-mr-[4.5px] flex h-4 w-4 items-center justify-center" style={ink}>
+        <span
+          className="-mr-[4.5px] flex h-4 w-4 items-center justify-center"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
           <PanelRight className="h-[9px] w-[9px]" />
         </span>
       )}

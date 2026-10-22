@@ -15,10 +15,6 @@ vi.mock('../engine/introScenes/threadFiles', async (load) => (imported.add('thre
 vi.mock('../engine/introScenes/threadChart', async (load) => (imported.add('threadChart'), load()));
 vi.mock('../engine/introScenes/thread', async (load) => (imported.add('thread'), load()));
 vi.mock('../engine/introScenes/dashboard', async (load) => (imported.add('dashboard'), load()));
-vi.mock(
-  '../engine/introScenes/dashboardAttach',
-  async (load) => (imported.add('dashboardAttach'), load())
-);
 vi.mock('../engine/introScenes/market', async (load) => (imported.add('market'), load()));
 vi.mock('../engine/introScenes/automations', async (load) => (imported.add('automations'), load()));
 
@@ -33,7 +29,7 @@ describe('intro scenes', () => {
     await act(async () => {
       render(
         <Suspense fallback={null}>
-          <PageIntroModal intro={market} onClose={vi.fn()} />
+          <PageIntroModal intro={market} onClose={vi.fn()} onAbandon={vi.fn()} />
         </Suspense>
       );
       await loadIntroScenes(market.steps.map((s) => s.visual));
@@ -50,12 +46,29 @@ describe('intro scenes', () => {
     await act(async () => {
       render(
         <Suspense fallback={null}>
-          <PageIntroModal intro={thread} onClose={vi.fn()} />
+          <PageIntroModal intro={thread} onClose={vi.fn()} onAbandon={vi.fn()} />
         </Suspense>
       );
       await loadIntroScenes(thread.steps.map((s) => s.visual));
     });
     expect(screen.getByTestId('intro-illustration')).toBeInTheDocument();
     expect([...imported].sort()).toEqual(['share', 'thread', 'threadChart', 'threadFiles']);
+  });
+
+  // The attach step's scene has a file of its own, but plays from the
+  // dashboard record, so the intro fetches the one module.
+  it('give the dashboard intro its three scenes from one module', async () => {
+    imported.clear();
+    const dashboard = byId('dashboard');
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <PageIntroModal intro={dashboard} onClose={vi.fn()} onAbandon={vi.fn()} />
+        </Suspense>
+      );
+      await loadIntroScenes(dashboard.steps.map((s) => s.visual));
+    });
+    expect(screen.getByTestId('intro-illustration')).toBeInTheDocument();
+    expect([...imported]).toEqual(['dashboard']);
   });
 });

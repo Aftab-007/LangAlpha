@@ -12,27 +12,23 @@ import { useLocale } from '@/hooks/useLocale';
 import { fixed2, signedFixed2 } from '@/lib/format';
 import type { IntroVisualId } from '../../registry';
 import { CLOSE, Camera, REST, look, type Shot } from './camera';
+import { Candles, EventBadge } from './candles';
 import {
-  Candles,
   CommentBox,
-  EventBadge,
   FoldedIntervals,
-  NVDA,
-  NVDA_EVENTS,
-  NVDA_LAST,
-  NVDA_PREV,
   Pin,
   Selection,
+  SelectionCard,
+  SelectionChip,
   SelectionTools,
   ToolBtn,
   addButton,
   besideRegion,
-  chartScale,
-} from './candles';
+} from './chartTools';
 import { StockPriceCard } from './charts';
 import { useSceneTime } from './clock';
 import { Appear, Loader, Typed, UserBubble, type Waypoint, pointAt } from './kit';
-import { NVDA_QUOTE, SelectionCard, SelectionChip } from './marketParts';
+import { NVDA, NVDA_EVENTS, NVDA_LAST, NVDA_PREV, NVDA_QUOTE, chartScale } from './nvdaSeries';
 import { PanelTab } from './panelParts';
 import { HEADER_H, PAGE, PANEL_W, Prose, ThreadPage, ToolRow } from './threadParts';
 import type { IntroScene } from './types';
@@ -153,16 +149,16 @@ function LegendLead() {
   const up = { color: 'var(--color-profit)' };
   return (
     <span
-      className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[0.34375rem] leading-none tabular-nums"
-      style={{ color: 'var(--iv-text-2)' }}
+      className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[5.5px] leading-none tabular-nums"
+      style={{ color: 'var(--color-text-secondary)' }}
     >
-      <span className="text-[0.375rem] font-semibold" style={{ color: 'var(--iv-text)' }}>
+      <span className="text-[6px] font-semibold" style={{ color: 'var(--color-text-primary)' }}>
         NVDA
       </span>{' '}
       <span className="font-mono font-semibold" style={up}>
         {fixed2(NVDA_LAST, locale)}
       </span>{' '}
-      <span className="text-[0.3rem]">USD</span>{' '}
+      <span className="text-[4.8px]">USD</span>{' '}
       <span className="font-mono" style={up}>
         {signedFixed2(change, locale)} ({signedFixed2((change / NVDA_PREV) * 100, locale)}%)
       </span>{' '}
@@ -170,7 +166,7 @@ function LegendLead() {
         className="inline-block h-[3px] w-[3px] rounded-full align-middle"
         style={{ background: 'var(--color-profit)' }}
       />{' '}
-      <span className="text-[0.3125rem]">{t('marketView.quote.live')}</span>
+      <span className="text-[5px]">{t('marketView.quote.live')}</span>
     </span>
   );
 }
@@ -196,13 +192,13 @@ function LegendStats() {
   ];
   return (
     <div
-      className="flex shrink-0 flex-wrap content-center gap-x-[5px] gap-y-[2px] border-b px-[5px] font-mono text-[0.3125rem] leading-none tabular-nums"
+      className="flex shrink-0 flex-wrap content-center gap-x-[5px] gap-y-[2px] border-b px-[5px] font-mono text-[5px] leading-none tabular-nums"
       style={{ height: SUBROW_H, borderColor: 'var(--color-border-default)' }}
     >
       {stats.map(([key, value, color]) => (
         <span key={key} className="whitespace-nowrap">
-          <span style={{ color: 'var(--iv-text-3)' }}>{key}</span>{' '}
-          <span style={{ color: color ?? 'var(--iv-text)' }}>{value}</span>
+          <span style={{ color: 'var(--color-text-tertiary)' }}>{key}</span>{' '}
+          <span style={{ color: color ?? 'var(--color-text-primary)' }}>{value}</span>
         </span>
       ))}
     </div>
@@ -289,12 +285,11 @@ function PanelChart({ armed, clear }: { armed: boolean; clear: boolean }) {
 function ChartFileCard() {
   const { t } = useTranslation();
   const labels = [EARNINGS.title, EXPORT_RULE.title];
-  const muted = { borderColor: 'var(--color-border-muted)' };
   return (
     <Appear at={CH.drawn} pop>
       <div
         className="flex h-6 items-center gap-1.5 rounded-lg border px-1.5"
-        style={{ ...muted, background: 'var(--color-bg-card)' }}
+        style={{ borderColor: 'var(--color-border-muted)', background: 'var(--color-bg-card)' }}
       >
         <span className="relative h-[15px] w-3 shrink-0">
           <span
@@ -317,28 +312,31 @@ function ChartFileCard() {
               style={{ color: 'var(--color-accent-primary)' }}
             />
             <span
-              className="font-mono text-[0.1875rem] leading-none"
-              style={{ color: 'var(--iv-text-3)' }}
+              className="font-mono text-[3px] leading-none"
+              style={{ color: 'var(--color-text-tertiary)' }}
             >
               1D
             </span>
           </span>
         </span>
         <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="truncate text-[0.5rem] leading-none" style={{ color: 'var(--iv-text)' }}>
+          <span
+            className="truncate text-[8px] leading-none"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
             {t('chat.chartAnnotationCard.name', { symbol: 'NVDA', interval: '1D' })}
           </span>
           <span
-            className="truncate text-[0.375rem] leading-none"
-            style={{ color: 'var(--iv-text-3)' }}
+            className="truncate text-[6px] leading-none"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {t('chat.chartAnnotationCard.metaCount', { count: labels.length })} ·{' '}
             {labels.join(t('chat.chartAnnotationCard.labelSeparator'))}
           </span>
         </span>
         <span
-          className="ml-auto flex shrink-0 items-center gap-0.5 rounded border px-1 py-0.5 text-[0.375rem] leading-none"
-          style={{ ...muted, color: 'var(--iv-text-3)' }}
+          className="ml-auto flex shrink-0 items-center gap-0.5 rounded-[4px] border px-1 py-0.5 text-[6px] leading-none"
+          style={{ borderColor: 'var(--color-border-muted)', color: 'var(--color-text-tertiary)' }}
         >
           <PanelRight className="h-1.5 w-1.5" />
           {t('chat.turnFiles.open')}
@@ -375,7 +373,7 @@ function Transcript() {
           <UserBubble at={CH.send}>{ASK}</UserBubble>
           <SelectionCard at={CH.send + 60} note={NOTE} />
           {t >= CH.think && t < CH.draw && (
-            <Loader color="var(--color-icon-muted)" className="text-[0.625rem]" />
+            <Loader color="var(--color-icon-muted)" className="text-[10px]" />
           )}
           {t < CH.drawn ? (
             <ToolRow

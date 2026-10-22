@@ -6,8 +6,10 @@ export type { IntroScene } from './types';
 
 type SceneMap = Partial<Record<IntroVisualId, IntroScene>>;
 
-// One chunk per page's scenes, so an intro downloads only the scenes it plays
-// and a What's New downloads none.
+// Each loader is a lazy chunk. An intro fetches the chunks its steps map to
+// and no others, so it downloads only the scenes it plays, and a What's New
+// downloads none. Most intros take one module; the chat intro takes two and
+// the thread intro four, one for each part of the app they show.
 const chat = () => import('./chat').then((m): SceneMap => m.chatScenes);
 const share = () => import('./share').then((m): SceneMap => m.shareScenes);
 const workspaces = () => import('./workspaces').then((m): SceneMap => m.workspaceScenes);
@@ -15,8 +17,6 @@ const threadFiles = () => import('./threadFiles').then((m): SceneMap => m.thread
 const threadChart = () => import('./threadChart').then((m): SceneMap => m.threadChartScenes);
 const thread = () => import('./thread').then((m): SceneMap => m.threadScenes);
 const dashboard = () => import('./dashboard').then((m): SceneMap => m.dashboardScenes);
-const dashboardAttach = () =>
-  import('./dashboardAttach').then((m): SceneMap => m.dashboardAttachScenes);
 const market = () => import('./market').then((m): SceneMap => m.marketScenes);
 const automations = () => import('./automations').then((m): SceneMap => m.automationScenes);
 
@@ -33,7 +33,7 @@ const MODULES: Record<IntroVisualId, () => Promise<SceneMap>> = {
   memo: thread,
   dashboardGrid: dashboard,
   dashboardCustomize: dashboard,
-  dashboardAttach: dashboardAttach,
+  dashboardAttach: dashboard,
   marketAsk: market,
   marketDraw: market,
   automationTrigger: automations,

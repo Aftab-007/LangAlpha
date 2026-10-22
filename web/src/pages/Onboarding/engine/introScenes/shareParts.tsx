@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Copy, ExternalLink, FileDown, Link2, Lock, X } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { ease, useSceneTime } from './clock';
 import { Appear, Loader } from './kit';
 
@@ -22,13 +23,8 @@ function href(path: string): string {
   return `${origin}${path}`;
 }
 
-const sm = 'text-[0.4375rem] leading-none';
-const xs = 'text-[0.375rem] leading-none';
-const ink = {
-  text: { color: 'var(--iv-text)' },
-  text2: { color: 'var(--iv-text-2)' },
-  text3: { color: 'var(--iv-text-3)' },
-};
+const sm = 'text-[7px] leading-none';
+const xs = 'text-[6px] leading-none';
 
 /** The app's switch (`ToggleSwitch`): the accent with its knob at the right
     once on; off, `offFill` (the popover's own switch sits on the muted
@@ -61,7 +57,7 @@ function CheckBox({ on }: { on: boolean }) {
               background: 'var(--color-accent-primary)',
               borderColor: 'var(--color-accent-primary)',
             }
-          : { borderColor: 'var(--iv-text-3)' }
+          : { borderColor: 'var(--color-text-tertiary)' }
       }
     >
       {on && <Check className="h-[5px] w-[5px] text-white" strokeWidth={4} />}
@@ -73,10 +69,10 @@ function CheckBox({ on }: { on: boolean }) {
 function LinkWell({ path, mono = false }: { path: string; mono?: boolean }) {
   return (
     <span
-      className={`flex min-w-0 flex-1 items-center rounded-[3px] px-[6px] ${xs}`}
-      style={{ background: 'var(--color-bg-input)', ...ink.text2 }}
+      className={cn('flex min-w-0 flex-1 items-center rounded-[3px] px-[6px]', xs)}
+      style={{ background: 'var(--color-bg-input)', color: 'var(--color-text-secondary)' }}
     >
-      <span className={`truncate py-[1px] ${mono ? 'font-mono' : ''}`}>{href(path)}</span>
+      <span className={cn('truncate py-[1px]', mono && 'font-mono')}>{href(path)}</span>
     </span>
   );
 }
@@ -85,11 +81,14 @@ function LinkWell({ path, mono = false }: { path: string; mono?: boolean }) {
 function OutlineButton({ children, style }: { children: ReactNode; style?: CSSProperties }) {
   return (
     <span
-      className={`flex h-[17px] shrink-0 items-center gap-[3px] rounded-[3px] border px-[6px] font-medium ${xs}`}
+      className={cn(
+        'flex h-[17px] shrink-0 items-center gap-[3px] rounded-[3px] border px-[6px] font-medium',
+        xs
+      )}
       style={{
         background: 'var(--color-bg-page)',
         borderColor: 'var(--color-border-default)',
-        ...ink.text,
+        color: 'var(--color-text-primary)',
         ...style,
       }}
     >
@@ -143,9 +142,9 @@ export function SharePopover({
           {shared ? (
             <Link2 className="h-2 w-2" style={{ color: 'var(--color-accent-primary)' }} />
           ) : (
-            <Lock className="h-2 w-2" style={ink.text3} />
+            <Lock className="h-2 w-2" style={{ color: 'var(--color-text-tertiary)' }} />
           )}
-          <span className={`${sm} font-medium`} style={ink.text}>
+          <span className={cn(sm, 'font-medium')} style={{ color: 'var(--color-text-primary)' }}>
             {shared ? tr('share.publicLinkEnabled') : tr('share.shareConversation')}
           </span>
         </span>
@@ -157,30 +156,33 @@ export function SharePopover({
           <LinkWell path="/s/k7Qm2xVp9LcT" />
           <span
             className="flex h-[14px] w-[14px] shrink-0 items-center justify-center"
-            style={{ color: done ? 'var(--color-success)' : 'var(--iv-text-2)' }}
+            style={{ color: done ? 'var(--color-success)' : 'var(--color-text-secondary)' }}
           >
             {done ? <Check className="h-2 w-2" /> : <Copy className="h-2 w-2" />}
           </span>
         </div>
         {/* what a visitor may do with its files */}
         <div className="flex flex-col gap-[4px] pt-[2px]">
-          <span className={xs} style={ink.text3}>
+          <span className={xs} style={{ color: 'var(--color-text-tertiary)' }}>
             {tr('share.permissions')}
           </span>
           <span className="flex items-center gap-[4px]">
             <CheckBox on={browse} />
-            <span className={xs} style={ink.text2}>
+            <span className={xs} style={{ color: 'var(--color-text-secondary)' }}>
               {tr('share.allowFileBrowsing')}
             </span>
           </span>
           <Appear at={files} className="ml-[8px] flex items-center gap-[4px]">
             <CheckBox on={false} />
-            <span className={xs} style={ink.text2}>
+            <span className={xs} style={{ color: 'var(--color-text-secondary)' }}>
               {tr('share.allowFileDownload')}
             </span>
           </Appear>
         </div>
-        <span className={`pt-[2px] ${xs} leading-[1.35]`} style={ink.text3}>
+        <span
+          className={cn('pt-[2px]', xs, 'leading-[1.35]')}
+          style={{ color: 'var(--color-text-tertiary)' }}
+        >
           {tr('share.anyoneWithLink')}
         </span>
       </Appear>
@@ -242,14 +244,17 @@ export function ShareDialog({
           transform: `scale(${0.96 + 0.04 * p})`,
         }}
       >
-        <X className="absolute right-[8px] top-[8px] h-2 w-2 opacity-70" style={ink.text} />
+        <X
+          className="absolute right-[8px] top-[8px] h-2 w-2 opacity-70"
+          style={{ color: 'var(--color-text-primary)' }}
+        />
         <span
-          className="truncate pr-[12px] text-[0.5rem] font-semibold leading-none"
-          style={ink.text}
+          className="truncate pr-[12px] text-[8px] font-semibold leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {tr('shareLink.title', { file: 'capex-tracker.html' })}
         </span>
-        <span className={`${xs} leading-[1.35]`} style={ink.text2}>
+        <span className={cn(xs, 'leading-[1.35]')} style={{ color: 'var(--color-text-secondary)' }}>
           {tr('shareLink.chatStaysPrivate')}
         </span>
         <div className="flex flex-col gap-[8px] pt-[1px]">
@@ -277,13 +282,19 @@ export function ShareDialog({
                   style={{ color: 'var(--color-accent-primary)' }}
                 />
               ) : (
-                <Lock className="h-2 w-2 shrink-0" style={ink.text3} />
+                <Lock
+                  className="h-2 w-2 shrink-0"
+                  style={{ color: 'var(--color-text-tertiary)' }}
+                />
               )}
               <span className="flex min-w-0 flex-col gap-[2.5px]">
-                <span className={`${sm} font-medium`} style={ink.text}>
+                <span
+                  className={cn(sm, 'font-medium')}
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
                   {tr('shareLink.anyoneWithLink')}
                 </span>
-                <span className={xs} style={ink.text3}>
+                <span className={xs} style={{ color: 'var(--color-text-tertiary)' }}>
                   {shared ? tr('shareLink.sharedHint') : tr('shareLink.privateHint')}
                 </span>
               </span>
@@ -292,7 +303,10 @@ export function ShareDialog({
           </div>
           {/* the files the link covers */}
           <div className="flex flex-col gap-[3px]">
-            <span className={`${xs} font-medium`} style={ink.text2}>
+            <span
+              className={cn(xs, 'font-medium')}
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
               {ready
                 ? tr('shareLink.linkCovers', { count: COVERED.length })
                 : tr('shareLink.listingFiles')}
@@ -303,20 +317,27 @@ export function ShareDialog({
             >
               {!ready && (
                 <span className="flex h-[25px] items-center justify-center">
-                  <Loader className={xs} color="var(--iv-text-3)" />
+                  <Loader className={xs} color="var(--color-text-tertiary)" />
                 </span>
               )}
               {COVERED.map((file) => (
                 <span
                   key={file.name}
-                  className={`${ready ? 'flex' : 'hidden'} h-[12.5px] items-center gap-[6px] px-[6px] ${xs}`}
+                  className={cn(
+                    ready ? 'flex' : 'hidden',
+                    'h-[12.5px] items-center gap-[6px] px-[6px]',
+                    xs
+                  )}
                   style={{ borderColor: 'var(--color-border-subtle)' }}
                 >
                   <span className="min-w-0 flex-1 truncate">
-                    <span style={ink.text3}>{file.dir}</span>
-                    <span style={ink.text}>{file.name}</span>
+                    <span style={{ color: 'var(--color-text-tertiary)' }}>{file.dir}</span>
+                    <span style={{ color: 'var(--color-text-primary)' }}>{file.name}</span>
                   </span>
-                  <span className="shrink-0 tabular-nums" style={ink.text3}>
+                  <span
+                    className="shrink-0 tabular-nums"
+                    style={{ color: 'var(--color-text-tertiary)' }}
+                  >
                     {file.size}
                   </span>
                   <span
@@ -332,7 +353,10 @@ export function ShareDialog({
           {/* the footer: the visitor's view once shared, and done */}
           <div className="flex items-center justify-between pt-[2px]">
             {shared ? (
-              <span className={`flex items-center gap-[3px] ${xs}`} style={ink.text2}>
+              <span
+                className={cn('flex items-center gap-[3px]', xs)}
+                style={{ color: 'var(--color-text-secondary)' }}
+              >
                 <ExternalLink className="h-[7px] w-[7px]" />
                 {tr('shareLink.viewAsVisitor')}
               </span>
@@ -356,13 +380,19 @@ export function SharedFileBar({ name }: { name: string }) {
       className="flex h-[23px] shrink-0 items-center gap-[4px] border-b px-[8.5px]"
       style={{ background: 'var(--color-bg-page)', borderColor: 'var(--color-border-muted)' }}
     >
-      <span className={`title-font shrink-0 font-semibold ${sm}`} style={ink.text}>
+      <span
+        className={cn('title-font shrink-0 font-semibold', sm)}
+        style={{ color: 'var(--color-text-primary)' }}
+      >
         LangAlpha
       </span>
-      <span className={`shrink-0 ${sm}`} style={{ color: 'var(--color-text-quaternary)' }}>
+      <span className={cn('shrink-0', sm)} style={{ color: 'var(--color-text-quaternary)' }}>
         /
       </span>
-      <span className={`min-w-0 flex-1 truncate ${sm}`} style={ink.text2}>
+      <span
+        className={cn('min-w-0 flex-1 truncate', sm)}
+        style={{ color: 'var(--color-text-secondary)' }}
+      >
         {name}
       </span>
       <OutlineButton style={{ height: 16, paddingInline: 5 }}>

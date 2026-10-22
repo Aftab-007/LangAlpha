@@ -63,8 +63,11 @@ import { CapexThread, PTC, PTC_CHAT } from './capexThread';
 function PaneHeader({ icon: Glyph, name }: { icon: Icon; name: string }) {
   return (
     <div className="flex items-center gap-1">
-      <Glyph className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
-      <span className="text-[0.5rem] font-medium leading-none" style={{ color: 'var(--iv-text)' }}>
+      <Glyph className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+      <span
+        className="text-[8px] font-medium leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
         {name}
       </span>
     </div>
@@ -318,7 +321,7 @@ function ChiefOfStaffAnswer() {
         {/* the thread's header: back, its title, the agent it runs with */}
         <div
           className="flex h-6 shrink-0 items-center gap-2 border-b px-2.5"
-          style={{ borderColor: 'var(--iv-border)' }}
+          style={{ borderColor: 'var(--color-border-muted)' }}
         >
           <TopTitle>Semis this week</TopTitle>
           <Tag>{names.home}</Tag>
@@ -476,7 +479,7 @@ function PtcSandbox() {
 }
 
 export const chatScenes = {
-  // centered: symmetric comparison, fades its own edges
+  // centered: a side-by-side comparison, so neither column may crop
   twoModes: { Scene: TwoModes, length: MODES.length, anchor: 'center' },
   chiefOfStaffAnswer: { Scene: ChiefOfStaffAnswer, length: COS.length, anchor: 'center' },
   ptcSandbox: { Scene: PtcSandbox, length: PTC.length, anchor: 'center' },

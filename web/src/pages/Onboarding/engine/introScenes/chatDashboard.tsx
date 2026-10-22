@@ -5,18 +5,24 @@ import { ease, useSceneTime } from './clock';
 import { Appear, rv } from './kit';
 import { FileCrumbs, PanelStrip, PanelTab } from './panelParts';
 
-/* The Analyst's dashboard in the ptcSandbox scene: capex-tracker.html as
-   the file panel previews it, written top to bottom as the workflow's build
-   step runs, then filtered to META by a click on its chip. The page is laid
-   out as the html-report skill writes one: a title and its basis, filter
-   chips, KPI tiles, a stacked column chart, and a timeline of what each call
-   said, in the app's own tokens so it themes with the app. It is the user's
-   file, so its text stays English in every locale. */
+/* The Analyst's dashboard, capex-tracker.html, as the file panel previews it
+   in the capex thread (capexThread.tsx): written top to bottom as the
+   workflow's build step runs, then filtered to META by a click on its chip.
+   The chat intro's ptcSandbox scene plays that; the share scene opens on it
+   finished, and shows the page again as its link's visitor sees it. The
+   page is laid out as the html-report skill writes one: a title and its
+   basis, filter chips, KPI tiles, a stacked column chart, and a timeline of
+   what each call said, in the app's own tokens so it themes with the app.
+   It is the user's file, so its text stays English in every locale. */
 /* eslint-disable react-refresh/only-export-components -- scene part:
-   the panel plus the layout constants the scene's camera reads */
+   the panel plus the layout constants the scenes' cameras read */
 
 /** How long (ms) after `at` the build step takes to write the whole page. */
 export const DASH_BUILD = 2300;
+
+/** The thread's header height: the chat header, and the panel's tab strip
+    level with it. */
+export const PTC_HEADER_H = 24;
 
 /** The META filter chip's centre, in px from the panel's top-left corner,
     for the pointer that clicks it. */
@@ -191,7 +197,7 @@ const FILTER_MS = 360;
 function Chip({ co, active, children }: { co?: Company; active: boolean; children: ReactNode }) {
   return (
     <span
-      className="flex h-[11px] items-center gap-[2.5px] rounded-[3px] border px-[4px] text-[0.34375rem] font-medium leading-none transition-colors duration-150"
+      className="flex h-[11px] items-center gap-[2.5px] rounded-[3px] border px-[4px] text-[5.5px] font-medium leading-none transition-colors duration-150"
       style={
         active
           ? {
@@ -199,7 +205,7 @@ function Chip({ co, active, children }: { co?: Company; active: boolean; childre
               borderColor: 'var(--color-btn-primary-bg)',
               color: 'var(--color-btn-primary-text)',
             }
-          : { borderColor: 'var(--color-border-default)', color: 'var(--iv-text-2)' }
+          : { borderColor: 'var(--color-border-default)', color: 'var(--color-text-secondary)' }
       }
     >
       {co && (
@@ -223,18 +229,18 @@ function KpiTile({ kpi, at, f, meta }: { kpi: Kpi; at: number; f: number; meta: 
       className="flex min-w-0 flex-1 flex-col gap-[3px] rounded-[3px] border px-[5px] py-[4px] leading-none"
       style={{ background: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)' }}
     >
-      <span className="truncate text-[0.3125rem]" style={{ color: 'var(--iv-text-3)' }}>
+      <span className="truncate text-[5px]" style={{ color: 'var(--color-text-tertiary)' }}>
         {kpi.label}
       </span>
       <span
-        className="text-[0.5rem] font-semibold tabular-nums"
-        style={{ color: 'var(--iv-text)' }}
+        className="text-[8px] font-semibold tabular-nums"
+        style={{ color: 'var(--color-text-primary)' }}
       >
         {kpi.print(v)}
       </span>
       <span
-        className="truncate text-[0.3125rem] tabular-nums"
-        style={{ color: 'var(--iv-text-2)' }}
+        className="truncate text-[5px] tabular-nums"
+        style={{ color: 'var(--color-text-secondary)' }}
       >
         {kpi.sub[meta ? 1 : 0]}
       </span>
@@ -251,7 +257,6 @@ const onAxis = (v: number) => `${(v / AXIS_MAX) * 100}%`;
     glides down onto META's segment, counting down to its value. */
 function CapexChart({ at, f }: { at: number; f: number }) {
   const t = useSceneTime();
-  const muted = { color: 'var(--iv-text-3)' };
   return (
     <div className="relative mt-[6px] min-h-0 flex-1">
       {/* gridlines, each with its value at the left */}
@@ -262,8 +267,8 @@ function CapexChart({ at, f }: { at: number; f: number }) {
           style={{ bottom: onAxis(v), transform: 'translateY(50%)' }}
         >
           <span
-            className="w-[11px] shrink-0 text-right text-[0.3125rem] leading-none tabular-nums"
-            style={muted}
+            className="w-[11px] shrink-0 text-right text-[5px] leading-none tabular-nums"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {v}
           </span>
@@ -303,10 +308,10 @@ function CapexChart({ at, f }: { at: number; f: number }) {
                 ))}
               </div>
               <span
-                className="absolute text-[0.3125rem] font-medium leading-none tabular-nums"
+                className="absolute text-[5px] font-medium leading-none tabular-nums"
                 style={{
                   bottom: `calc(${onAxis(label)} + 1.5px)`,
-                  color: 'var(--iv-text-2)',
+                  color: 'var(--color-text-secondary)',
                   opacity: p > 0.85 ? 1 : 0,
                   transition: 'opacity 160ms',
                 }}
@@ -338,27 +343,27 @@ function CallRow({ call, last }: { call: Call; last: boolean }) {
       <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
         <div className="flex items-center gap-[4px] leading-none">
           <span
-            className="font-mono text-[0.3125rem] tabular-nums"
-            style={{ color: 'var(--iv-text-3)' }}
+            className="font-mono text-[5px] tabular-nums"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {call.date}
           </span>
           <span
-            className="rounded-[2px] px-[2px] py-[1px] text-[0.3125rem] font-semibold"
+            className="rounded-[2px] px-[2px] py-[1px] text-[5px] font-semibold"
             style={{ background: 'var(--color-bg-tag)', color: INK[call.co] }}
           >
             {call.co}
           </span>
           <span
-            className="ml-auto font-mono text-[0.3125rem] tabular-nums"
-            style={{ color: 'var(--iv-text-3)' }}
+            className="ml-auto font-mono text-[5px] tabular-nums"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {call.capex}
           </span>
         </div>
         <span
-          className="whitespace-nowrap text-[0.375rem] leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="whitespace-nowrap text-[6px] leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {call.text}
         </span>
@@ -371,7 +376,7 @@ function CallRow({ call, last }: { call: Call; last: boolean }) {
 function SectionHead({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="flex shrink-0 items-center gap-[4px] leading-none">
-      <span className="text-[0.375rem] font-semibold" style={{ color: 'var(--iv-text)' }}>
+      <span className="text-[6px] font-semibold" style={{ color: 'var(--color-text-primary)' }}>
         {title}
       </span>
       <span className="ml-auto flex items-center gap-[5px]">{children}</span>
@@ -387,7 +392,6 @@ export function Dashboard({ at, filterAt }: { at: number; filterAt?: number }) {
   const meta = filterAt !== undefined && t >= filterAt;
   const f = filterAt === undefined ? 0 : ease(t, filterAt, FILTER_MS);
   const w = (ms: number) => at + ms;
-  const muted = { color: 'var(--iv-text-3)' };
   const rule: CSSProperties = { borderColor: 'var(--color-border-muted)' };
   const calls = meta ? CALLS.meta : CALLS.all;
   return (
@@ -395,14 +399,17 @@ export function Dashboard({ at, filterAt }: { at: number; filterAt?: number }) {
       {/* title and basis */}
       <Appear at={w(WRITE.title)} reserve className="shrink-0">
         <span
-          className="block text-[0.5rem] font-semibold leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="block text-[8px] font-semibold leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           Hyperscaler AI capex
         </span>
       </Appear>
       <Appear at={w(WRITE.basis)} reserve className="mt-[4px] shrink-0">
-        <span className="block text-[0.34375rem] leading-none" style={muted}>
+        <span
+          className="block text-[5.5px] leading-none"
+          style={{ color: 'var(--color-text-tertiary)' }}
+        >
           MSFT, GOOGL, AMZN, META · 32 calls · USD bn
         </span>
       </Appear>
@@ -436,7 +443,11 @@ export function Dashboard({ at, filterAt }: { at: number; filterAt?: number }) {
       >
         <SectionHead title="Capex by quarter">
           {COMPANIES.map((co) => (
-            <span key={co} className="flex items-center gap-[2px] text-[0.3125rem]" style={muted}>
+            <span
+              key={co}
+              className="flex items-center gap-[2px] text-[5px]"
+              style={{ color: 'var(--color-text-tertiary)' }}
+            >
               <span className="h-[4px] w-[4px] rounded-[1px]" style={{ background: FILL[co] }} />
               {co}
             </span>
@@ -447,8 +458,8 @@ export function Dashboard({ at, filterAt }: { at: number; filterAt?: number }) {
           {QUARTERS.map((q) => (
             <span
               key={q}
-              className="flex-1 text-center text-[0.3125rem] leading-none tabular-nums"
-              style={muted}
+              className="flex-1 text-center text-[5px] leading-none tabular-nums"
+              style={{ color: 'var(--color-text-tertiary)' }}
             >
               {q}
             </span>
@@ -459,7 +470,7 @@ export function Dashboard({ at, filterAt }: { at: number; filterAt?: number }) {
       <div className="mt-[8px] flex shrink-0 flex-col">
         <Appear at={w(WRITE.calls)} reserve className="border-t pt-[6px]" style={rule}>
           <SectionHead title="On the calls">
-            <span className="text-[0.3125rem]" style={muted}>
+            <span className="text-[5px]" style={{ color: 'var(--color-text-tertiary)' }}>
               Newest first
             </span>
           </SectionHead>
@@ -482,17 +493,9 @@ export function Dashboard({ at, filterAt }: { at: number; filterAt?: number }) {
 }
 
 /** The file panel open on the dashboard (`FilePanel` previewing an HTML
-    file): the tab strip `headerH` tall, level with the chat header, the
-    file's header with its line count and actions, then the page. */
-export function DashboardPanel({
-  at,
-  filterAt,
-  headerH,
-}: {
-  at: number;
-  filterAt?: number;
-  headerH: number;
-}) {
+    file): the tab strip, level with the chat header, the file's header
+    with its line count and actions, then the page. */
+export function DashboardPanel({ at, filterAt }: { at: number; filterAt?: number }) {
   const { t } = useTranslation();
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -500,7 +503,7 @@ export function DashboardPanel({
         tabs={<PanelTab icon={Globe} label="capex-tracker.html" active />}
         tree={false}
         className="border-b"
-        style={{ height: headerH, borderColor: 'var(--color-border-muted)' }}
+        style={{ height: PTC_HEADER_H, borderColor: 'var(--color-border-muted)' }}
       />
       <FileCrumbs
         path={['results', 'capex-tracker.html']}

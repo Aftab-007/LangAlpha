@@ -24,7 +24,7 @@ import { ease, useSceneTime } from './clock';
    and the feed's run entry. Each scene draws the page at its own size and
    a camera (camera.tsx) shows the part a step is about. */
 /* eslint-disable react-refresh/only-export-components -- scene parts: small
-   components plus the timing and ink helpers */
+   components plus the timing helpers */
 
 /** Whether `t` falls in `[from, to)`. */
 export const during = (t: number, from: number, to: number) => t >= from && t < to;
@@ -32,14 +32,6 @@ export const during = (t: number, from: number, to: number) => t >= from && t < 
 /** The transform of a control pressed at `at`. */
 export const pressAt = (t: number, at: number) =>
   during(t, at, at + 160) ? 'scale(0.92)' : undefined;
-
-/** The page's inks: three text weights and the hairline. */
-export const INK = {
-  text: 'var(--iv-text)',
-  text2: 'var(--iv-text-2)',
-  text3: 'var(--iv-text-3)',
-  hair: 'var(--color-border-muted)',
-} as const;
 
 /** Monday to Friday, Monday first, as the week strip and day picker read it. */
 export const WEEKDAYS = [true, true, true, true, true, false, false] as const;
@@ -59,11 +51,11 @@ export function Kicker({
   return (
     <div
       className={cn(
-        'font-mono text-[0.34375rem] font-medium uppercase leading-none',
+        'font-mono text-[5.5px] font-medium uppercase leading-none',
         !zh && 'tracking-[0.08em]',
         className
       )}
-      style={{ color: INK.text3 }}
+      style={{ color: 'var(--color-text-tertiary)' }}
     >
       {children}
       {count != null && (
@@ -81,16 +73,16 @@ export function Segmented({ options, value }: { options: string[]; value: number
   return (
     <span
       className="inline-flex shrink-0 overflow-hidden rounded-[5px] border"
-      style={{ borderColor: INK.hair }}
+      style={{ borderColor: 'var(--color-border-muted)' }}
     >
       {options.map((label, i) => (
         <span
           key={label}
-          className="whitespace-nowrap px-[5px] py-[3px] text-[0.40625rem] font-medium leading-none"
+          className="whitespace-nowrap px-[5px] py-[3px] text-[6.5px] font-medium leading-none"
           style={
             i === value
               ? { background: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }
-              : { color: INK.text2 }
+              : { color: 'var(--color-text-secondary)' }
           }
         >
           {label}
@@ -102,7 +94,7 @@ export function Segmented({ options, value }: { options: string[]; value: number
 
 /** A header action (`HeaderButton`): primary fill, secondary hairline, or a
     ghost with no edge. `pressed` is its transform. */
-export function Btn({
+function Btn({
   variant = 'secondary',
   pressed,
   className,
@@ -121,13 +113,13 @@ export function Btn({
           borderColor: 'transparent',
         }
       : variant === 'secondary'
-        ? { color: INK.text2, borderColor: INK.hair }
-        : { color: INK.text3, borderColor: 'transparent' };
+        ? { color: 'var(--color-text-secondary)', borderColor: 'var(--color-border-muted)' }
+        : { color: 'var(--color-text-tertiary)', borderColor: 'transparent' };
   return (
     <span
       className={cn(
         'inline-flex shrink-0 items-center gap-[3px] whitespace-nowrap rounded-[4px] border',
-        'px-1.5 py-[3px] text-[0.375rem] leading-none transition-transform duration-150',
+        'px-1.5 py-[3px] text-[6px] leading-none transition-transform duration-150',
         className
       )}
       style={{ ...look, transform: pressed }}
@@ -154,20 +146,23 @@ export function PageHeader({
     <div className="flex h-[30px] shrink-0 items-end justify-between gap-2">
       <div className="min-w-0">
         <div
-          className="text-[0.75rem] font-semibold leading-[1.2] tracking-[-0.01em]"
-          style={{ color: INK.text }}
+          className="text-[12px] font-semibold leading-[1.2] tracking-[-0.01em]"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {t('automation.automations')}
         </div>
         {census ? (
           <div
-            className="-mb-[0.75px] mt-[2.25px] truncate font-mono text-[0.375rem] leading-[1.25] tabular-nums"
-            style={{ color: INK.text3 }}
+            className="-mb-[0.75px] mt-[2.25px] truncate font-mono text-[6px] leading-[1.25] tabular-nums"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {census}
           </div>
         ) : (
-          <div className="mt-[3px] text-[0.4375rem] leading-none" style={{ color: INK.text2 }}>
+          <div
+            className="mt-[3px] text-[7px] leading-none"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
             {t('automation.tagline')}
           </div>
         )}
@@ -193,19 +188,19 @@ export function PageHeader({
 
 /** The days a schedule lands on (`WeekStrip`): weekday initials, the days it
     runs in full ink and the rest faded. */
-export function WeekStrip({ days }: { days: readonly boolean[] }) {
+function WeekStrip({ days }: { days: readonly boolean[] }) {
   const initials = weekdayInitials(useLocale());
   return (
     <span
-      className="grid grid-cols-[repeat(7,6px)] font-mono text-[0.34375rem] leading-[6px]"
-      style={{ color: INK.text3 }}
+      className="grid grid-cols-[repeat(7,6px)] font-mono text-[5.5px] leading-[6px]"
+      style={{ color: 'var(--color-text-tertiary)' }}
       aria-hidden
     >
       {initials.map((initial, i) => (
         <span
           key={i}
           className="text-center"
-          style={days[i] ? { color: INK.text } : { opacity: 0.45 }}
+          style={days[i] ? { color: 'var(--color-text-primary)' } : { opacity: 0.45 }}
         >
           {initial}
         </span>
@@ -233,11 +228,18 @@ function Track({
 }) {
   return (
     <span className="relative block h-[6px]" style={{ width }} aria-hidden>
-      <span className="absolute inset-x-0 top-[2.5px] h-px" style={{ background: INK.hair }} />
+      <span
+        className="absolute inset-x-0 top-[2.5px] h-px"
+        style={{ background: 'var(--color-border-muted)' }}
+      />
       {gap && gap[1] > 0 && (
         <span
           className="absolute top-[2.5px] h-0 border-t border-dotted"
-          style={{ left: `${gap[0]}%`, width: `${gap[1]}%`, borderColor: INK.text3 }}
+          style={{
+            left: `${gap[0]}%`,
+            width: `${gap[1]}%`,
+            borderColor: 'var(--color-text-tertiary)',
+          }}
         />
       )}
       {thr != null && (
@@ -251,7 +253,7 @@ function Track({
           className="absolute top-px -ml-0.5 h-1 w-1 rounded-full"
           style={{
             left: `${cur}%`,
-            background: INK.text,
+            background: 'var(--color-text-primary)',
             boxShadow: `0 0 0 1px ${wash ?? 'transparent'}, 0 0 0 1px var(--color-bg-page)`,
           }}
         />
@@ -261,12 +263,12 @@ function Track({
 }
 
 /** A price watch's mark (`MeterMark`), at the week strip's width. */
-export function MeterMark({ wash }: { wash?: string }) {
+function MeterMark({ wash }: { wash?: string }) {
   return <Track width={42} cur={30} thr={72} gap={[30, 42]} wash={wash} />;
 }
 
 /** A one-time run's mark (`OnceMark`): one point on the track. */
-export function OnceMark({ wash }: { wash?: string }) {
+function OnceMark({ wash }: { wash?: string }) {
   return <Track width={42} cur={62} wash={wash} />;
 }
 
@@ -306,13 +308,14 @@ export function PriceMeter({
       />
       <div
         className={cn(
-          'mt-[2px] flex justify-between gap-1 font-mono text-[0.34375rem] leading-none',
+          'mt-[2px] flex justify-between gap-1 font-mono text-[5.5px] leading-none',
           'tabular-nums'
         )}
-        style={{ color: INK.text3 }}
+        style={{ color: 'var(--color-text-tertiary)' }}
       >
         <span>
-          <span style={{ color: INK.text2 }}>{symbol}</span> {fixed2(current, locale)}
+          <span style={{ color: 'var(--color-text-secondary)' }}>{symbol}</span>{' '}
+          {fixed2(current, locale)}
         </span>
         <span>{t('automation.firesAt', { value: fixed2(threshold, locale) })}</span>
       </div>
@@ -324,7 +327,7 @@ export function PriceMeter({
 
 /** A row of the list (`AutomationList`): the name over its schedule line,
     what comes next at the end, the hover fill when chosen. */
-export function ListRow({
+function ListRow({
   name,
   sub,
   trailing,
@@ -342,22 +345,22 @@ export function ListRow({
     >
       <span className="min-w-0 flex-1">
         <span
-          className="block truncate text-[0.40625rem] font-medium leading-[1.25]"
-          style={{ color: INK.text }}
+          className="block truncate text-[6.5px] font-medium leading-[1.25]"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {name}
         </span>
         <span
-          className="mt-px block truncate text-[0.34375rem] leading-[1.25]"
-          style={{ color: INK.text3 }}
+          className="mt-px block truncate text-[5.5px] leading-[1.25]"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           {sub}
         </span>
       </span>
       {trailing && (
         <span
-          className="shrink-0 whitespace-nowrap pt-px text-[0.34375rem] leading-[1.25]"
-          style={{ color: INK.text3 }}
+          className="shrink-0 whitespace-nowrap pt-px text-[5.5px] leading-[1.25]"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           {trailing}
         </span>
@@ -384,9 +387,12 @@ export function FormRow({
   return (
     <div
       className={cn('flex flex-col gap-[4px] py-[5px]', !first && 'border-t', className)}
-      style={{ borderColor: INK.hair }}
+      style={{ borderColor: 'var(--color-border-muted)' }}
     >
-      <div className="text-[0.4375rem] font-medium leading-[9px]" style={{ color: INK.text }}>
+      <div
+        className="text-[7px] font-medium leading-[9px]"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
         {label}
       </div>
       {children}
@@ -399,31 +405,26 @@ export function FormRow({
 export function Field({
   focus = false,
   chevron = false,
-  muted = false,
   className,
-  style,
   children,
 }: {
   focus?: boolean;
   chevron?: boolean;
-  muted?: boolean;
   className?: string;
-  style?: CSSProperties;
   children?: ReactNode;
 }) {
   return (
     <div
       className={cn(
         'flex h-4 min-w-0 items-center gap-[3px] rounded-[4px] border px-[5px]',
-        'text-[0.4375rem] leading-none',
+        'text-[7px] leading-none',
         className
       )}
       style={{
         background: 'var(--color-bg-input)',
-        borderColor: focus ? 'var(--color-accent-primary)' : INK.hair,
-        color: muted ? INK.text3 : INK.text,
+        borderColor: focus ? 'var(--color-accent-primary)' : 'var(--color-border-muted)',
+        color: 'var(--color-text-primary)',
         transition: 'border-color 120ms ease',
-        ...style,
       }}
     >
       {/* a taller line than the field's, so the clip keeps descenders */}
@@ -463,8 +464,12 @@ export function TriggerChips({
             )}
             style={
               on
-                ? { borderColor: INK.text2, background: 'var(--color-bg-hover)', color: INK.text }
-                : { borderColor: INK.hair, color: INK.text2 }
+                ? {
+                    borderColor: 'var(--color-text-secondary)',
+                    background: 'var(--color-bg-hover)',
+                    color: 'var(--color-text-primary)',
+                  }
+                : { borderColor: 'var(--color-border-muted)', color: 'var(--color-text-secondary)' }
             }
           >
             <span style={{ opacity: on ? 1 : 0.6 }}>
@@ -476,7 +481,7 @@ export function TriggerChips({
                 <MeterMark wash={wash} />
               )}
             </span>
-            <span className="text-[0.4375rem] font-medium leading-none">{kind.label}</span>
+            <span className="text-[7px] font-medium leading-none">{kind.label}</span>
           </div>
         );
       })}
@@ -487,7 +492,10 @@ export function TriggerChips({
 /** What the trigger as set adds up to, read back under it. */
 export function Readout({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <div className={cn('text-[0.4375rem] leading-[1.3]', className)} style={{ color: INK.text3 }}>
+    <div
+      className={cn('text-[7px] leading-[1.3]', className)}
+      style={{ color: 'var(--color-text-tertiary)' }}
+    >
       {children}
     </div>
   );
@@ -500,7 +508,7 @@ export function FormActions({ label, pressed }: { label: string; pressed?: strin
     <div className="flex items-center gap-1 pt-[6px]">
       <span
         className={cn(
-          'inline-flex h-[15px] items-center rounded-[4px] px-2 text-[0.4375rem] font-medium',
+          'inline-flex h-[15px] items-center rounded-[4px] px-2 text-[7px] font-medium',
           'leading-none transition-transform duration-150'
         )}
         style={{
@@ -512,8 +520,8 @@ export function FormActions({ label, pressed }: { label: string; pressed?: strin
         {label}
       </span>
       <span
-        className="inline-flex h-[15px] items-center px-2 text-[0.4375rem] font-medium leading-none"
-        style={{ color: INK.text }}
+        className="inline-flex h-[15px] items-center px-2 text-[7px] font-medium leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
       >
         {t('common.cancel')}
       </span>
@@ -534,7 +542,11 @@ export function MenuSurface({
   return (
     <div
       className={cn('rounded-[5px] border p-[3px] shadow-md', className)}
-      style={{ background: 'hsl(var(--popover))', borderColor: INK.hair, ...style }}
+      style={{
+        background: 'hsl(var(--popover))',
+        borderColor: 'var(--color-border-muted)',
+        ...style,
+      }}
     >
       {children}
     </div>
@@ -547,8 +559,8 @@ export function MenuSurface({
 export function LinkOut({ children }: { children: ReactNode }) {
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-[2px] text-[0.375rem] leading-none"
-      style={{ color: INK.text2 }}
+      className="inline-flex shrink-0 items-center gap-[2px] text-[6px] leading-none"
+      style={{ color: 'var(--color-text-secondary)' }}
     >
       {children}
       <ArrowUpRight className="h-[6px] w-[6px]" />
@@ -574,10 +586,13 @@ export function RunEntry({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex gap-2 border-b py-[7px]" style={{ borderColor: INK.hair }}>
+    <div
+      className="flex gap-2 border-b py-[7px]"
+      style={{ borderColor: 'var(--color-border-muted)' }}
+    >
       <div
-        className="w-[30px] shrink-0 whitespace-nowrap pt-px font-mono text-[0.375rem] leading-none tabular-nums"
-        style={{ color: INK.text3 }}
+        className="w-[30px] shrink-0 whitespace-nowrap pt-px font-mono text-[6px] leading-none tabular-nums"
+        style={{ color: 'var(--color-text-tertiary)' }}
       >
         {time}
       </div>
@@ -589,15 +604,15 @@ export function RunEntry({
             </span>
           )}
           <span
-            className="-my-px truncate text-[0.5rem] font-medium leading-[1.25]"
-            style={{ color: INK.text }}
+            className="-my-px truncate text-[8px] font-medium leading-[1.25]"
+            style={{ color: 'var(--color-text-primary)' }}
           >
             {name}
           </span>
         </div>
         <div
-          className="mt-[3px] font-mono text-[0.34375rem] leading-[1.3] tabular-nums"
-          style={{ color: INK.text3 }}
+          className="mt-[3px] font-mono text-[5.5px] leading-[1.3] tabular-nums"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
           {meta}
         </div>
@@ -612,8 +627,8 @@ export function RunEntry({
 export function Excerpt({ children }: { children: ReactNode }) {
   return (
     <p
-      className="mt-[4px] line-clamp-3 text-[0.4375rem] leading-[1.5]"
-      style={{ color: INK.text2 }}
+      className="mt-[4px] line-clamp-3 text-[7px] leading-[1.5]"
+      style={{ color: 'var(--color-text-secondary)' }}
     >
       {children}
     </p>
@@ -649,11 +664,11 @@ export function ManageLayout({ list, pane }: { list: ReactNode; pane: ReactNode 
   return (
     <div
       className="mt-[10px] grid min-h-0 flex-1 grid-cols-[112px_minmax(0,1fr)] border-t"
-      style={{ borderColor: INK.hair }}
+      style={{ borderColor: 'var(--color-border-muted)' }}
     >
       <div
         className="min-h-0 overflow-hidden border-r pr-[6px] pt-[6px]"
-        style={{ borderColor: INK.hair }}
+        style={{ borderColor: 'var(--color-border-muted)' }}
       >
         {list}
       </div>
@@ -723,15 +738,15 @@ export function Inspector({ which, pressEdit }: { which: 'brief' | 'alert'; pres
         ].join(' · ')}
       </Kicker>
       <div
-        className="mt-[5px] text-[0.75rem] font-semibold leading-[1.2] tracking-[-0.01em]"
-        style={{ color: INK.text }}
+        className="mt-[5px] text-[12px] font-semibold leading-[1.2] tracking-[-0.01em]"
+        style={{ color: 'var(--color-text-primary)' }}
       >
         {brief ? B.brief : B.alert}
       </div>
       {/* two lines held, so the actions sit level in every language */}
       <p
-        className="mt-[4px] min-h-[22px] text-[0.4375rem] leading-[1.55]"
-        style={{ color: INK.text2 }}
+        className="mt-[4px] min-h-[22px] text-[7px] leading-[1.55]"
+        style={{ color: 'var(--color-text-secondary)' }}
       >
         {brief ? B.briefSentence : B.alertSentence}
       </p>
@@ -739,8 +754,8 @@ export function Inspector({ which, pressEdit }: { which: 'brief' | 'alert'; pres
       {!brief && (
         <div className="mt-[7px] max-w-[140px]">
           <div
-            className="mb-[3px] font-mono text-[0.34375rem] leading-none tabular-nums"
-            style={{ color: INK.text3 }}
+            className="mb-[3px] font-mono text-[5.5px] leading-none tabular-nums"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {B.away}
           </div>
@@ -768,7 +783,7 @@ export function Inspector({ which, pressEdit }: { which: 'brief' | 'alert'; pres
       {!brief && (
         <div className="mt-[14px]">
           <Kicker className="mb-[5px]">{t('automation.latestRun')}</Kicker>
-          <p className="text-[0.4375rem] leading-[1.55]" style={{ color: INK.text3 }}>
+          <p className="text-[7px] leading-[1.55]" style={{ color: 'var(--color-text-tertiary)' }}>
             {t('automation.noRunsForThis')}
           </p>
         </div>
@@ -778,11 +793,11 @@ export function Inspector({ which, pressEdit }: { which: 'brief' | 'alert'; pres
           <Kicker className="mb-[5px]">{t('automation.latestRun')}</Kicker>
           <div
             className="rounded-[5px] border px-2 py-[7px]"
-            style={{ background: 'var(--color-bg-card)', borderColor: INK.hair }}
+            style={{ background: 'var(--color-bg-card)', borderColor: 'var(--color-border-muted)' }}
           >
             <div
-              className="font-mono text-[0.34375rem] leading-none tabular-nums"
-              style={{ color: INK.text3 }}
+              className="font-mono text-[5.5px] leading-none tabular-nums"
+              style={{ color: 'var(--color-text-tertiary)' }}
             >
               {[t('automation.runCompleted'), B.moment(on(21, 8, 0)), B.took(252_000)].join(' · ')}
             </div>
@@ -800,7 +815,10 @@ export function Inspector({ which, pressEdit }: { which: 'brief' | 'alert'; pres
 /** The form's title, one step under the page's. */
 export function FormTitle({ children }: { children: ReactNode }) {
   return (
-    <div className="text-[0.5625rem] font-semibold leading-none" style={{ color: INK.text }}>
+    <div
+      className="text-[9px] font-semibold leading-none"
+      style={{ color: 'var(--color-text-primary)' }}
+    >
       {children}
     </div>
   );
@@ -810,8 +828,12 @@ export function FormTitle({ children }: { children: ReactNode }) {
 export function InstructionBox({ text }: { text: string }) {
   return (
     <div
-      className="rounded-[4px] border px-[5px] py-[3px] text-[0.40625rem] leading-[1.35]"
-      style={{ background: 'var(--color-bg-input)', borderColor: INK.hair, color: INK.text }}
+      className="rounded-[4px] border px-[5px] py-[3px] text-[6.5px] leading-[1.35]"
+      style={{
+        background: 'var(--color-bg-input)',
+        borderColor: 'var(--color-border-muted)',
+        color: 'var(--color-text-primary)',
+      }}
     >
       {/* clamped inside the padding, so a third line cannot show through it */}
       <p className="line-clamp-2">{text}</p>
@@ -826,11 +848,11 @@ export function MoreToggle({ open, summary }: { open: boolean; summary: string }
   return (
     <div
       className="flex flex-col gap-[3px] border-t pb-[5px] pt-[5px]"
-      style={{ borderColor: INK.hair }}
+      style={{ borderColor: 'var(--color-border-muted)' }}
     >
       <span
-        className="inline-flex items-center gap-[2px] text-[0.4375rem] font-medium leading-[9px]"
-        style={{ color: open ? INK.text : INK.text2 }}
+        className="inline-flex items-center gap-[2px] text-[7px] font-medium leading-[9px]"
+        style={{ color: open ? 'var(--color-text-primary)' : 'var(--color-text-secondary)' }}
       >
         {t('automation.moreOptions')}
         <ChevronRight
@@ -839,7 +861,10 @@ export function MoreToggle({ open, summary }: { open: boolean; summary: string }
         />
       </span>
       {!open && (
-        <span className="truncate text-[0.40625rem] leading-[9px]" style={{ color: INK.text3 }}>
+        <span
+          className="truncate text-[6.5px] leading-[9px]"
+          style={{ color: 'var(--color-text-tertiary)' }}
+        >
           {summary}
         </span>
       )}
@@ -848,12 +873,12 @@ export function MoreToggle({ open, summary }: { open: boolean; summary: string }
 }
 
 /** What the folded options say, as `MoreOptions` joins it. */
-export function useSummary(delivery: string | null): string {
+export function useSummary(): string {
   const { t } = useTranslation();
   return [
     t('agents.allWorkspaces'),
     t('automation.continueExisting'),
-    delivery ? t('automation.deliversTo', { method: delivery }) : t('automation.noDelivery'),
+    t('automation.noDelivery'),
     t('automation.stopsAfter', { count: 3 }),
   ].join(' · ');
 }
@@ -869,8 +894,12 @@ export function WeekPicker({ className }: { className: string }) {
           className={className}
           style={
             WEEKDAYS[i]
-              ? { borderColor: INK.text2, background: 'var(--color-bg-hover)', color: INK.text }
-              : { borderColor: INK.hair, color: INK.text3 }
+              ? {
+                  borderColor: 'var(--color-text-secondary)',
+                  background: 'var(--color-bg-hover)',
+                  color: 'var(--color-text-primary)',
+                }
+              : { borderColor: 'var(--color-border-muted)', color: 'var(--color-text-tertiary)' }
           }
         >
           {initial}

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import {
   ArrowRight,
   Briefcase,
@@ -14,16 +14,30 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useLocale } from '@/hooks/useLocale';
 import { relativeTime, shortMonthDay } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { ease, useSceneTime } from './clock';
 import { Appear, Region, rv } from './kit';
 import { changeAt, upColor, signed, money, INDICES, WATCH, Spark } from './dashboardParts';
-import { GRID } from './dashboard';
 
 /* The classic dashboard page, drawn in miniature: index cards, the watchlist
    card and the news column. Shared by the scenes that show the page. Quotes,
    headlines and symbols are invented. */
 /* eslint-disable react-refresh/only-export-components -- shared parts:
    scene components plus data and style helpers */
+
+/** The live page's script (ms), which the dashboard intro's first scene
+    plays: the index lines trace in and keep taking new points, the brief
+    comes in part by part, quotes tick (their times are in INDICES and WATCH,
+    set to land while the camera is on them). */
+export const GRID = {
+  draw: 300,
+  drawDur: 1100,
+  brief: 700,
+  briefPer: 240,
+  shifts: [1900, 3000, 4100],
+  shiftDur: 520,
+  length: 7600,
+};
 
 /* ── classic page ──────────────────────────────────────────────────────── */
 
@@ -45,21 +59,19 @@ function IndexCard({
   return (
     <Region className="flex min-w-0 flex-col gap-[3px] p-1.5">
       <span
-        className="truncate text-[0.4375rem] font-bold leading-none"
-        style={{ color: 'var(--iv-text)' }}
+        className="truncate text-[7px] font-bold leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
       >
         {index.name}
       </span>
       <span
-        className="font-mono text-[0.5rem] font-bold leading-none tabular-nums"
-        style={{ color: 'var(--iv-text)' }}
+        className="font-mono text-[8px] font-bold leading-none tabular-nums"
+        style={{ color: 'var(--color-text-primary)' }}
       >
         {money(index.prev * (1 + v / 100))}
       </span>
       <span
-        className={
-          'font-mono text-[0.375rem] leading-none tabular-nums transition-colors duration-300'
-        }
+        className={'font-mono text-[6px] leading-none tabular-nums transition-colors duration-300'}
         style={{ color: upColor(v) }}
       >
         {signed(v)}%
@@ -87,25 +99,25 @@ export function WatchRow({ row, live = false }: { row: (typeof WATCH)[number]; l
     <div className="flex items-center gap-1 px-1 py-[3px]">
       <span className="flex min-w-0 flex-col gap-[2px]">
         <span
-          className="text-[0.4375rem] font-bold leading-none"
-          style={{ color: 'var(--iv-text)' }}
+          className="text-[7px] font-bold leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {row.sym}
         </span>
-        <span className="text-[0.3125rem] leading-none" style={{ color: 'var(--iv-text-2)' }}>
+        <span className="text-[5px] leading-none" style={{ color: 'var(--color-text-secondary)' }}>
           {tr('dashboard.portfolioWatchlistCard.stock')}
         </span>
       </span>
       <span className="ml-auto flex flex-col items-end gap-[2px]">
         <span
-          className="font-mono text-[0.4375rem] font-medium leading-none tabular-nums"
-          style={{ color: 'var(--iv-text)' }}
+          className="font-mono text-[7px] font-medium leading-none tabular-nums"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {money(row.prev * (1 + v / 100))}
         </span>
         <span
           className={
-            'font-mono text-[0.3125rem] font-medium leading-none tabular-nums transition-colors ' +
+            'font-mono text-[5px] font-medium leading-none tabular-nums transition-colors ' +
             'duration-300'
           }
           style={{ color: c }}
@@ -115,7 +127,7 @@ export function WatchRow({ row, live = false }: { row: (typeof WATCH)[number]; l
       </span>
       <span
         className={
-          'min-w-[27px] rounded-[3px] px-[3px] py-[2px] text-center text-[0.375rem] font-bold ' +
+          'min-w-[27px] rounded-[3px] px-[3px] py-[2px] text-center text-[6px] font-bold ' +
           'leading-none tabular-nums transition-colors duration-300'
         }
         style={{
@@ -136,9 +148,9 @@ export function AddSymbol() {
     <span
       className={
         'mt-1 flex items-center justify-center gap-[3px] rounded-[5px] border border-dashed ' +
-        'py-[5px] text-[0.375rem] font-medium leading-none'
+        'py-[5px] text-[6px] font-medium leading-none'
       }
-      style={{ borderColor: 'var(--color-border-default)', color: 'var(--iv-text-2)' }}
+      style={{ borderColor: 'var(--color-border-default)', color: 'var(--color-text-secondary)' }}
     >
       <Plus className="h-[7px] w-[7px]" />
       {t('dashboard.portfolioWatchlistCard.addSymbol')}
@@ -174,7 +186,7 @@ export function BriefEyebrow() {
     <span
       className={
         'flex w-fit shrink-0 items-center gap-[3px] rounded-full border px-1 py-[2px] ' +
-        'text-[0.3125rem] font-semibold uppercase leading-none tracking-wider'
+        'text-[5px] font-semibold uppercase leading-none tracking-wider'
       }
       style={{
         background: 'var(--color-accent-soft)',
@@ -194,7 +206,7 @@ export function TopicPill({ text, up }: { text: string; up: boolean }) {
   const soft = up ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)';
   return (
     <span
-      className="rounded-[2px] border px-[3px] py-[2px] text-[0.3125rem] font-medium leading-none"
+      className="rounded-[2px] border px-[3px] py-[2px] text-[5px] font-medium leading-none"
       style={{
         background: soft,
         borderColor: soft,
@@ -206,20 +218,26 @@ export function TopicPill({ text, up }: { text: string; up: boolean }) {
   );
 }
 
-/** The brief's headline, at the card's display weight. */
-export function BriefHeadline({ className = '' }: { className?: string }) {
+/** The brief's headline, at the card's display weight. Its leading goes
+    after the caller's classes: `cn` reads a text size there as setting the
+    line height too, and would drop a leading that came before it. */
+export function BriefHeadline({ className }: { className?: string }) {
   return (
-    <span className={`font-bold leading-tight ${className}`} style={{ color: 'var(--iv-text)' }}>
+    <span
+      className={cn('font-bold', className, 'leading-tight')}
+      style={{ color: 'var(--color-text-primary)' }}
+    >
       {INSIGHT.headline}
     </span>
   );
 }
 
-/** The brief's summary, in the card's secondary text. */
-export function BriefSummary({ className = '' }: { className?: string }) {
+/** The brief's summary, in the card's secondary text. Its leading goes
+    last, as the headline's does. */
+export function BriefSummary({ className }: { className?: string }) {
   return (
     <span
-      className={`leading-relaxed ${className}`}
+      className={cn(className, 'leading-relaxed')}
       style={{ color: 'var(--color-text-secondary)' }}
     >
       {INSIGHT.summary}
@@ -237,7 +255,7 @@ function BriefCard({ at }: { at: number }) {
   const { t } = useTranslation();
   const locale = useLocale();
   const btn =
-    'flex items-center gap-[3px] rounded-[4px] px-1.5 py-[3px] text-[0.3125rem] ' +
+    'flex items-center gap-[3px] rounded-[4px] px-1.5 py-[3px] text-[5px] ' +
     'font-semibold leading-none';
   return (
     <Region delay={0.22} className="relative flex min-w-0 flex-col gap-[5px] overflow-hidden p-2">
@@ -250,7 +268,7 @@ function BriefCard({ at }: { at: number }) {
       <span className="flex items-center gap-1">
         <BriefEyebrow />
         <span
-          className="truncate text-[0.3125rem] leading-none"
+          className="truncate text-[5px] leading-none"
           style={{ color: 'var(--color-text-secondary)' }}
         >
           {t('dashboard.brief.updatedWhen', {
@@ -259,10 +277,10 @@ function BriefCard({ at }: { at: number }) {
         </span>
       </span>
       <Appear at={at}>
-        <BriefHeadline className="block pr-7 text-[0.5625rem]" />
+        <BriefHeadline className="block pr-7 text-[9px]" />
       </Appear>
       <Appear at={at + GRID.briefPer}>
-        <BriefSummary className="block text-[0.375rem]" />
+        <BriefSummary className="block text-[6px]" />
       </Appear>
       <Appear at={at + 2 * GRID.briefPer} className="flex flex-wrap gap-[3px]">
         {INSIGHT.topics.map((topic) => (
@@ -271,7 +289,7 @@ function BriefCard({ at }: { at: number }) {
       </Appear>
       <Appear at={at + 3 * GRID.briefPer} className="mt-auto flex justify-end gap-1">
         <span
-          className={`${btn} border`}
+          className={cn(btn, 'border')}
           style={{
             borderColor: 'var(--color-border-default)',
             color: 'var(--color-text-secondary)',
@@ -379,7 +397,7 @@ export function NewsRow({
   const locale = useLocale();
   return (
     <div
-      className="relative flex items-start gap-1.5 rounded px-1 py-1 transition-colors duration-150"
+      className="relative flex items-start gap-1.5 rounded-[4px] px-1 py-1 transition-colors duration-150"
       style={{ background: hovered ? 'var(--color-bg-card-hover)' : 'transparent' }}
     >
       <NewsThumb thumb={item.thumb} />
@@ -387,25 +405,25 @@ export function NewsRow({
         <span className="flex items-center gap-[3px]">
           <span
             className="h-[3px] w-[3px] shrink-0 rounded-full"
-            style={{ background: item.hot ? 'var(--color-profit)' : 'var(--iv-text-2)' }}
+            style={{ background: item.hot ? 'var(--color-profit)' : 'var(--color-text-secondary)' }}
           />
           <span
-            className="truncate text-[0.28125rem] font-semibold uppercase leading-none tracking-wide"
+            className="truncate text-[4.5px] font-semibold uppercase leading-none tracking-wide"
             style={{ color: 'var(--color-accent-light)' }}
           >
             {item.source}
           </span>
           <span
-            className="flex shrink-0 items-center gap-[2px] text-[0.3125rem] leading-none"
-            style={{ color: 'var(--iv-text-3)' }}
+            className="flex shrink-0 items-center gap-[2px] text-[5px] leading-none"
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             <Clock className="h-[5px] w-[5px]" />
             {relativeTime(-item.hours * 3_600_000, locale, 0)}
           </span>
         </span>
         <span
-          className="line-clamp-2 text-[0.4375rem] font-medium leading-[1.3]"
-          style={{ color: 'var(--iv-text)' }}
+          className="line-clamp-2 text-[7px] font-medium leading-[1.3]"
+          style={{ color: 'var(--color-text-primary)' }}
         >
           {item.title}
         </span>
@@ -414,7 +432,7 @@ export function NewsRow({
             {item.tickers.map((sym) => (
               <span
                 key={sym}
-                className="rounded-[2px] px-[3px] py-[1.5px] text-[0.28125rem] font-bold leading-none"
+                className="rounded-[2px] px-[3px] py-[1.5px] text-[4.5px] font-bold leading-none"
                 style={{
                   background: 'var(--color-accent-soft)',
                   color: 'var(--color-accent-light)',
@@ -443,29 +461,37 @@ export const EARNINGS = [
     symbol's first letters, symbol over company, and the date. */
 export function EarningsRow({ row }: { row: (typeof EARNINGS)[number] }) {
   const locale = useLocale();
-  const strong: CSSProperties = { color: 'var(--iv-text)' };
   return (
     <span className="flex items-center gap-1 px-0.5">
       <span
         className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border"
         style={{ background: 'var(--color-bg-tag)', borderColor: 'var(--color-border-muted)' }}
       >
-        <span className="text-[0.28125rem] font-bold leading-none" style={strong}>
+        <span
+          className="text-[4.5px] font-bold leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
           {row.sym.slice(0, 2)}
         </span>
       </span>
       <span className="flex min-w-0 flex-col gap-[2px]">
-        <span className="text-[0.375rem] font-bold leading-none" style={strong}>
+        <span
+          className="text-[6px] font-bold leading-none"
+          style={{ color: 'var(--color-text-primary)' }}
+        >
           {row.sym}
         </span>
         <span
-          className="truncate text-[0.3125rem] leading-none"
+          className="truncate text-[5px] leading-none"
           style={{ color: 'var(--color-text-secondary)' }}
         >
           {row.name}
         </span>
       </span>
-      <span className="ml-auto shrink-0 text-[0.375rem] font-medium leading-none" style={strong}>
+      <span
+        className="ml-auto shrink-0 text-[6px] font-medium leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
+      >
         {shortMonthDay(row.date, locale)}
       </span>
     </span>
@@ -492,8 +518,8 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <span
-        className="intro-rv mb-1.5 text-[0.6875rem] font-bold leading-none"
-        style={{ ...rv(0.05), color: 'var(--iv-text)' }}
+        className="intro-rv mb-1.5 text-[11px] font-bold leading-none"
+        style={{ ...rv(0.05), color: 'var(--color-text-primary)' }}
       >
         {tr('dashboard.classic.marketOverview')}
       </span>
@@ -515,19 +541,22 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
         <Region delay={0.32} className="flex min-w-0 flex-col p-2">
           <div className="mb-1 flex items-center justify-between gap-1">
             <span
-              className="text-[0.5rem] font-bold leading-none"
-              style={{ color: 'var(--iv-text)' }}
+              className="text-[8px] font-bold leading-none"
+              style={{ color: 'var(--color-text-primary)' }}
             >
               {tr('dashboard.portfolioWatchlistCard.headerWatchlist')}
             </span>
-            <span className="flex rounded p-[1.5px]" style={{ background: 'var(--color-bg-tag)' }}>
+            <span
+              className="flex rounded-[4px] p-[1.5px]"
+              style={{ background: 'var(--color-bg-tag)' }}
+            >
               {['tabWatch', 'tabHoldings'].map((label, i) => (
                 <span
                   key={label}
-                  className="rounded-[3px] px-1 py-[2px] text-[0.3125rem] font-medium leading-none"
+                  className="rounded-[3px] px-1 py-[2px] text-[5px] font-medium leading-none"
                   style={{
                     background: i === 0 ? 'var(--color-bg-elevated)' : 'transparent',
-                    color: i === 0 ? 'var(--iv-text)' : 'var(--iv-text-2)',
+                    color: i === 0 ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
                   }}
                 >
                   {tr(`dashboard.portfolioWatchlistCard.${label}`)}
@@ -542,21 +571,24 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
         </Region>
         {/* news and earnings, the next row down */}
         <Region delay={0.3} className="flex min-w-0 flex-col gap-1 p-2">
-          <div className="flex border-b pb-1.5" style={{ borderColor: 'var(--iv-border)' }}>
+          <div
+            className="flex border-b pb-1.5"
+            style={{ borderColor: 'var(--color-border-muted)' }}
+          >
             <span
-              className="flex gap-[2px] rounded p-[2px]"
+              className="flex gap-[2px] rounded-[4px] p-[2px]"
               style={{ background: 'var(--color-bg-tag)' }}
             >
               {NEWS_TABS.map(({ icon: Icon, label }, i) => (
                 <span
                   key={label}
                   className={
-                    'flex items-center gap-[2px] rounded-[3px] px-1 py-[2px] text-[0.3125rem] ' +
+                    'flex items-center gap-[2px] rounded-[3px] px-1 py-[2px] text-[5px] ' +
                     'font-medium leading-none'
                   }
                   style={{
                     background: i === 0 ? 'var(--color-bg-elevated)' : 'transparent',
-                    color: i === 0 ? 'var(--iv-text)' : 'var(--iv-text-2)',
+                    color: i === 0 ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
                   }}
                 >
                   <Icon className="h-[6px] w-[6px]" />
@@ -572,13 +604,13 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
         <Region delay={0.4} className="flex min-w-0 flex-col gap-1.5 p-2">
           <span className="flex items-center justify-between gap-1">
             <span
-              className="text-[0.5rem] font-bold leading-none"
-              style={{ color: 'var(--iv-text)' }}
+              className="text-[8px] font-bold leading-none"
+              style={{ color: 'var(--color-text-primary)' }}
             >
               {tr('dashboard.widgets.earningsCalendar.title')}
             </span>
             <span
-              className="flex items-center text-[0.3125rem] leading-none"
+              className="flex items-center text-[5px] leading-none"
               style={{ color: 'var(--color-text-secondary)' }}
             >
               {tr('dashboard.earningsCalendarCard.viewAll')}
@@ -586,7 +618,7 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
             </span>
           </span>
           <span
-            className="px-0.5 text-[0.28125rem] font-bold uppercase leading-none tracking-wider"
+            className="px-0.5 text-[4.5px] font-bold uppercase leading-none tracking-wider"
             style={{ color: 'var(--color-text-secondary)' }}
           >
             {tr('dashboard.earningsCalendarCard.sectionUpcoming')}

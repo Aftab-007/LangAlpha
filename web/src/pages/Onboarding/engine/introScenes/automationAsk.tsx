@@ -80,10 +80,10 @@ const ASK_SHOTS: [Shot, ...Shot[]] = [
 function TopTitle({ children }: { children: ReactNode }) {
   return (
     <span className="flex min-w-0 items-center gap-1">
-      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--iv-text-3)' }} />
+      <ArrowLeft className="h-2.5 w-2.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
       <span
-        className="truncate text-[0.5rem] font-medium leading-none"
-        style={{ color: 'var(--iv-text)' }}
+        className="truncate text-[8px] font-medium leading-none"
+        style={{ color: 'var(--color-text-primary)' }}
       >
         {children}
       </span>
@@ -156,13 +156,13 @@ function AutomationAsk() {
             the file panel's toggle */}
         <div
           className="flex shrink-0 items-center gap-2 border-b px-2.5"
-          style={{ height: HEADER, borderColor: 'var(--iv-border)' }}
+          style={{ height: HEADER, borderColor: 'var(--color-border-muted)' }}
         >
           <TopTitle>{t('agents.allWorkspaces')}</TopTitle>
           <Tag>{names.home}</Tag>
           <PanelRight
             className="ml-auto h-2.5 w-2.5 shrink-0"
-            style={{ color: 'var(--iv-text-3)' }}
+            style={{ color: 'var(--color-text-tertiary)' }}
           />
         </div>
         <div
