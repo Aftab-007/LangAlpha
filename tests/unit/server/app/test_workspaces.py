@@ -1949,6 +1949,7 @@ async def test_a_move_is_accepted_with_202_and_run_after_answering(client, move_
         workspace_id=ws["workspace_id"],
         target_computer_id=TARGET_ID,
         make_primary=False,
+        from_backup=False,
     )
     move_runner.schedule.assert_called_once()
     key, start = move_runner.schedule.call_args.args
@@ -1967,6 +1968,7 @@ async def test_a_move_is_accepted_with_202_and_run_after_answering(client, move_
         ("target_unavailable", 409),
         ("turn_active", 409),
         ("move_in_progress", 409),
+        ("no_backup", 409),
     ],
 )
 async def test_a_refused_move_answers_in_the_shape_its_failure_is_read_in(
@@ -2014,6 +2016,111 @@ async def test_another_users_workspace_is_not_moved(client, move_runner):
     assert resp.status_code == 403
     claim.assert_not_awaited()
     move_runner.schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_move_from_the_backup_reaches_the_claim(client, move_runner):
+    """The claim is where a move that leaves its folder behind is refused, so
+    the flag must arrive there rather than stop at the route."""
+    ws = _ws()
+    with (
+        patch(
+            "src.server.app.workspaces.db_get_workspace",
+            new_callable=AsyncMock,
+            return_value=ws,
+        ),
+        patch(
+            "src.server.app.computers.claim_workspace_move",
+            AsyncMock(return_value=_move(ws["workspace_id"], from_backup=True)),
+        ) as claim,
+    ):
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['workspace_id']}/move",
+            json={"computer_id": TARGET_ID, "from_backup": True},
+        )
+
+    assert resp.status_code == 202
+    assert resp.json()["from_backup"] is True
+    assert claim.await_args.kwargs["from_backup"] is True
+
+
+# ---------------------------------------------------------------------------
+# Restore choice: the owner answers a restore offer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restore", [True, False])
+async def test_a_restore_choice_answers_with_the_workspace_as_it_now_reads(client, restore):
+    """The offer clears in the row the choice settled, so the answer is a
+    fresh read, not the row read before it."""
+    ws = _ws(files_restore_offered_at=NOW)
+    manager = MagicMock()
+    manager.settle_files_restore_offer = AsyncMock(return_value=True)
+    with (
+        patch(
+            "src.server.app.workspaces.db_get_workspace",
+            new_callable=AsyncMock,
+            side_effect=[ws, {**ws, "files_restore_offered_at": None}],
+        ),
+        patch("src.server.app.workspaces.WorkspaceManager.get_instance", return_value=manager),
+    ):
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['workspace_id']}/files/restore-choice",
+            json={"restore": restore},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["files_restore_offered_at"] is None
+    manager.settle_files_restore_offer.assert_awaited_once_with(
+        ws["workspace_id"], user_id="test-user-123", restore=restore
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_restore_choice_with_none_waiting_is_a_conflict(client):
+    """The folder came back or another tab chose; the client then reads the
+    workspace again rather than showing a choice that took."""
+    ws = _ws()
+    manager = MagicMock()
+    manager.settle_files_restore_offer = AsyncMock(return_value=False)
+    with (
+        patch(
+            "src.server.app.workspaces.db_get_workspace",
+            new_callable=AsyncMock,
+            return_value=ws,
+        ),
+        patch("src.server.app.workspaces.WorkspaceManager.get_instance", return_value=manager),
+    ):
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['workspace_id']}/files/restore-choice",
+            json={"restore": True},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "No restore is waiting on a choice for this workspace."
+
+
+@pytest.mark.asyncio
+async def test_another_users_restore_offer_is_not_answered(client):
+    ws = _ws(user_id="other-user", files_restore_offered_at=NOW)
+    manager = MagicMock()
+    manager.settle_files_restore_offer = AsyncMock()
+    with (
+        patch(
+            "src.server.app.workspaces.db_get_workspace",
+            new_callable=AsyncMock,
+            return_value=ws,
+        ),
+        patch("src.server.app.workspaces.WorkspaceManager.get_instance", return_value=manager),
+    ):
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['workspace_id']}/files/restore-choice",
+            json={"restore": False},
+        )
+
+    assert resp.status_code == 403
+    manager.settle_files_restore_offer.assert_not_awaited()
 
 
 @pytest.mark.asyncio

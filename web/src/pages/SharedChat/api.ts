@@ -25,6 +25,10 @@ export interface SharedThreadMetadata {
   created_at: string;
   updated_at: string;
   workspace_name: string;
+  /** The workspace's folder and the root of the computer it is on, which the
+   *  agent's absolute paths are spelled with. Absent from an older server. */
+  root_dir?: string | null;
+  dir_name?: string | null;
   permissions: Record<string, unknown>;
 }
 

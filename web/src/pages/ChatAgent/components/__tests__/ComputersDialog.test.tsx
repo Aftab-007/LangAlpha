@@ -35,6 +35,7 @@ vi.mock('../../utils/api', async () => {
     stopComputer: vi.fn(),
     deleteComputer: vi.fn(),
     setComputerAlwaysOn: vi.fn(),
+    setComputerFilesBackup: vi.fn(),
     apiErrorObject: errors.apiErrorObject,
     apiErrorReason: errors.apiErrorReason,
     getWorkspaceQuota: vi.fn(async () => ({ performance: null, max: null, always_on: null })),
@@ -55,6 +56,7 @@ import {
   getComputers,
   getWorkspaceQuota,
   setComputerAlwaysOn,
+  setComputerFilesBackup,
   startComputer,
   stopComputer,
 } from '../../utils/api';
@@ -70,6 +72,7 @@ const mockStart = startComputer as Mock;
 const mockStop = stopComputer as Mock;
 const mockDelete = deleteComputer as Mock;
 const mockSetAlwaysOn = setComputerAlwaysOn as Mock;
+const mockSetFilesBackup = setComputerFilesBackup as Mock;
 const mockToast = toast as unknown as Mock;
 
 const PRIMARY_ID = '5319ad0e-7835-4ca6-9541-b7c2961a7bf6';
@@ -454,6 +457,28 @@ describe('ComputersDialog: removing a computer', () => {
     expect(remove).not.toHaveAccessibleDescription();
   });
 
+  it('offers Make primary on a hosted computer', async () => {
+    open();
+    expect(within(await secondRow()).getByRole('button', { name: 'Make primary' })).toBeInTheDocument();
+  });
+
+  it('never offers Make primary on a machine its owner brought', async () => {
+    mockGetComputers.mockResolvedValue(
+      withSecond({ kind: 'ssh', ssh: { host: 'box.example.com', port: 22, username: 'dev', fingerprint: 'SHA256:x' } }),
+    );
+    open();
+    const owned = await secondRow();
+    expect(within(owned).queryByRole('button', { name: 'Make primary' })).not.toBeInTheDocument();
+    expect(within(owned).getByRole('button', { name: 'Remove' })).toBeInTheDocument();
+  });
+
+  it('names no tier for a machine its owner brought, even while its address is unknown', async () => {
+    // Its owner sizes it, so the tier its row holds is no spec of theirs.
+    mockGetComputers.mockResolvedValue(withSecond({ kind: 'ssh', ssh: null }));
+    open();
+    expect(await secondRow()).not.toHaveTextContent('Performance');
+  });
+
   it.each([
     [2, 'Delete its 2 workspaces to remove it.'],
     [1, 'Delete its workspace to remove it.'],
@@ -518,6 +543,21 @@ describe('ComputersDialog: removing a computer', () => {
     expect(mockToast).toHaveBeenCalledWith({ title: 'Second machine removed' });
     // The button that opened the confirm went with its row.
     await waitFor(() => expect(screen.getByRole('dialog', { name: 'Computers' })).toContainElement(document.activeElement as HTMLElement));
+  });
+
+  it('tells the owner of a machine they brought that their files stay on it', async () => {
+    const user = userEvent.setup();
+    mockGetComputers.mockResolvedValue(withSecond({
+      kind: 'ssh',
+      root_dir: '/home/dev/langalpha',
+      ssh: { host: 'box.example.com', port: 22, username: 'dev', fingerprint: 'SHA256:x' },
+    }));
+    open();
+    await user.click(within(await secondRow()).getByRole('button', { name: 'Remove' }));
+
+    const confirm = await screen.findByRole('dialog', { name: 'Remove Second machine?' });
+    expect(confirm).toHaveTextContent('Your files in /home/dev/langalpha stay');
+    expect(confirm).not.toHaveTextContent('everything on its disk are deleted');
   });
 
   it('holds both buttons and says so while the remove is in flight', async () => {
@@ -619,5 +659,64 @@ describe('ComputersDialog: one panel at a time', () => {
     await user.click(toggle);
     await waitFor(() => expect(mockSetAlwaysOn).toHaveBeenCalledWith(first.computer_id, false));
     expect(screen.queryByRole('dialog', { name: /always-on/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('ComputersDialog: file backup', () => {
+  const SSH = { host: 'box.example.com', port: 22, username: 'dev', fingerprint: 'SHA256:x', tunnel: false, tunnel_connected: null };
+
+  it('offers the switch only on a machine the user brought, and asks before turning it off', async () => {
+    const user = userEvent.setup();
+    // What the server holds, so the re-read after each change agrees with it.
+    let held = true;
+    const brought = { kind: 'ssh', status: 'running', provider_ref: 'dev@box', ssh: SSH };
+    mockGetComputers.mockImplementation(async () => withSecond({ ...brought, files_backup: held }));
+    mockSetFilesBackup.mockImplementation(async (_computerId: string, enabled: boolean) => {
+      held = enabled;
+      return withSecond({ ...brought, files_backup: held }).computers[1];
+    });
+    open();
+
+    const [hosted, row] = await screen.findAllByTestId('computer-row');
+    expect(within(hosted).queryByRole('switch', { name: 'Back up files' })).not.toBeInTheDocument();
+    const toggle = within(row).getByRole('switch', { name: 'Back up files' });
+    expect(toggle).toBeChecked();
+
+    await user.click(toggle);
+    const confirm = await screen.findByRole('dialog', { name: 'Stop backing up files?' });
+    expect(within(confirm).getByText(/each workspace on Second machine is kept but stops updating/)).toBeInTheDocument();
+    expect(mockSetFilesBackup).not.toHaveBeenCalled();
+
+    await user.click(within(confirm).getByRole('button', { name: 'Stop backing up' }));
+    await waitFor(() => expect(mockSetFilesBackup).toHaveBeenCalledWith(SECOND_ID, false));
+    await waitFor(() => expect(within(row).getByRole('switch', { name: 'Back up files' })).not.toBeChecked());
+
+    // Back on needs no confirmation.
+    await user.click(within(row).getByRole('switch', { name: 'Back up files' }));
+    await waitFor(() => expect(mockSetFilesBackup).toHaveBeenCalledWith(SECOND_ID, true));
+    expect(screen.queryByRole('dialog', { name: 'Stop backing up files?' })).not.toBeInTheDocument();
+  });
+
+  it('puts the switch back and says why when the server refuses', async () => {
+    const user = userEvent.setup();
+    mockGetComputers.mockResolvedValue(withSecond({ kind: 'ssh', status: 'running', provider_ref: 'dev@box', ssh: SSH, files_backup: false }));
+    const refusal = Object.assign(new Error('Request failed with status code 409'), {
+      status: 409,
+      response: { status: 409, data: { detail: 'This computer is being changed. Try again shortly.' }, headers: {} },
+    });
+    mockSetFilesBackup.mockRejectedValue(refusal);
+    open();
+
+    const brought = await secondRow();
+    const toggle = within(brought).getByRole('switch', { name: 'Back up files' });
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith({
+      variant: 'destructive',
+      title: "Couldn't change file backup",
+      description: 'This computer is being changed. Try again shortly.',
+    }));
+    expect(within(brought).getByRole('switch', { name: 'Back up files' })).not.toBeChecked();
   });
 });

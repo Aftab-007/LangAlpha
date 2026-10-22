@@ -52,6 +52,23 @@ describe('normalizeFileRefs', () => {
     expect(normalizeFileRefs(input)).toBe('[report.md](/home/daytona/results/report.md)');
   });
 
+  it('unwraps file:// on the computer\'s own root when given it', () => {
+    // A computer whose user cannot create the stock root keeps its folders
+    // under one of its own, and a `file://` link there is dropped the same way.
+    const input = '[report.md](file:///home/someone/langalpha/AAPL/report.md)';
+    expect(normalizeFileRefs(input, '/home/someone/langalpha'))
+      .toBe('[report.md](/home/someone/langalpha/AAPL/report.md)');
+    expect(normalizeFileRefs(input)).toBe(input);
+  });
+
+  it('unwraps file:// on an own root written percent-encoded', () => {
+    // A destination is read before it is decoded, so a root with a space
+    // arrives as `%20` and has to match in that spelling too.
+    const input = '[report.md](file:///home/someone/my%20files/AAPL/report.md)';
+    expect(normalizeFileRefs(input, '/home/someone/my files'))
+      .toBe('[report.md](/home/someone/my%20files/AAPL/report.md)');
+  });
+
   it('unwraps file:// from an image link href', () => {
     const input = '![chart](file:///home/workspace/charts/fig.png)';
     expect(normalizeFileRefs(input)).toBe('![chart](/home/workspace/charts/fig.png)');

@@ -46,7 +46,7 @@ import ShareUnavailable from './ShareUnavailable';
 import type { TextSegment } from '@/types/chat';
 import { isTaskAgentId } from '../ChatAgent/utils/agentId';
 import type { FileLocation } from '../ChatAgent/utils/fileLocation';
-import { computeAgentArtifactRouting } from '../ChatAgent/utils/agentPaths';
+import { computeAgentArtifactRouting, type ComputerFolders } from '../ChatAgent/utils/agentPaths';
 import { collectRecentWritePaths, downloadTarget, type TurnMessage } from '../ChatAgent/utils/fileRefResolver';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { DispatchStatusProvider } from '../ChatAgent/hooks/usePTCDispatchStatus';
@@ -422,16 +422,24 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
 
   const imageDownloader = useCallback((path: string) => servedObjectUrl(servePrefix, path), [servePrefix]);
 
+  // The workspace's folder, so its absolute paths read as workspace paths here
+  // as they do in the owner's view. Its siblings are not the viewer's.
+  const { root_dir: rootDir, dir_name: dirName } = metadata;
+  const folders = useMemo<ComputerFolders | null>(
+    () => (rootDir || dirName ? { rootDir, dirName, siblings: [] } : null),
+    [rootDir, dirName],
+  );
+
   // Open file from chat (tool call artifacts, file mention cards)
   const handleOpenFile = useCallback((filePath: string, _workspaceId?: string, location?: FileLocation, opts?: { pin?: boolean }) => {
     if (!canBrowseFiles) return;
     setShowFilePanel(true);
-    const dir = computeAgentArtifactRouting(filePath).targetDirectory;
+    const dir = computeAgentArtifactRouting(filePath, undefined, folders).targetDirectory;
     // The panel reads a request off the counter rather than off a changed
     // string, so the same folder clicked twice arrives twice here too.
     const seq = ++filePanelTargetSeq.current;
     setFilePanelTarget(dir == null ? fileTarget(filePath, { location, pin: opts?.pin }, seq) : dirTarget(dir, seq));
-  }, [canBrowseFiles]);
+  }, [canBrowseFiles, folders]);
 
   // A chart card opens the symbol as a chart tab here, prices only. The card
   // names the owner's workspace, whose drawings and events the share does not
@@ -459,7 +467,7 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
   // This thread's writes break ties between namesakes, the same tiebreak the
   // owner view passes. Identity-stable, so the actions memo below does not
   // rebuild on every replayed message.
-  const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages as TurnMessage[]));
+  const getRecentWritePaths = useStableHandler(() => collectRecentWritePaths(messages as TurnMessage[], folders));
 
   // Read-only adapter for the transcript's action surface. The shared view has
   // no turn to edit/regenerate/rate and no interrupt to approve. Subagent-task
@@ -548,27 +556,29 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
 
   // One panel for both layouts; only its container differs by viewport.
   const filePanel = (
-    <FilePanel
-      readOnly
-      canDownload={canDownload}
-      workspaceId=""
-      apiAdapter={fileApiAdapter}
-      // No files to browse means no tree.
-      singleFileMode={!canBrowseFiles}
-      onActiveTabKindChange={setPanelTabKind}
-      expanded={panelExpanded}
-      onToggleExpanded={isMobile ? null : handleTogglePanelExpanded}
-      onClose={() => setShowFilePanel(false)}
-      // A panel the header did not open (a file link, with nothing to
-      // browse) has no toggle to stand in for, so it keeps its close.
-      panelToggle={canBrowseFiles}
-      files={files}
-      filesLoading={filesLoading}
-      target={filePanelTarget}
-      onTargetHandled={handleTargetHandled}
-      onOpenFile={handleOpenFile}
-      getRecentWritePaths={getRecentWritePaths}
-    />
+    <WorkspaceProvider workspaceId={null} downloadFile={null} folders={folders}>
+      <FilePanel
+        readOnly
+        canDownload={canDownload}
+        workspaceId=""
+        apiAdapter={fileApiAdapter}
+        // No files to browse means no tree.
+        singleFileMode={!canBrowseFiles}
+        onActiveTabKindChange={setPanelTabKind}
+        expanded={panelExpanded}
+        onToggleExpanded={isMobile ? null : handleTogglePanelExpanded}
+        onClose={() => setShowFilePanel(false)}
+        // A panel the header did not open (a file link, with nothing to
+        // browse) has no toggle to stand in for, so it keeps its close.
+        panelToggle={canBrowseFiles}
+        files={files}
+        filesLoading={filesLoading}
+        target={filePanelTarget}
+        onTargetHandled={handleTargetHandled}
+        onOpenFile={handleOpenFile}
+        getRecentWritePaths={getRecentWritePaths}
+      />
+    </WorkspaceProvider>
   );
 
   // The metadata resolved, so a failure here is the replay's, not the link's.
@@ -646,7 +656,7 @@ export default function SharedChatView({ shareToken, metadata }: SharedChatViewP
                         <span className="ml-2 text-sm" style={{ color: 'var(--color-text-tertiary)' }}>Loading conversation...</span>
                       </div>
                     ) : (
-                      <WorkspaceProvider workspaceId={null} downloadFile={imageDownloader}>
+                      <WorkspaceProvider workspaceId={null} downloadFile={imageDownloader} folders={folders}>
                       <MessageActionsProvider actions={readOnlyActions}>
                       <DispatchStatusProvider>
                         <MessageList

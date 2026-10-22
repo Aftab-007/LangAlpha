@@ -25,6 +25,8 @@ interface RefOpenArgs {
   onLandOnSearch: (ref: string, name: string, matches: string[]) => void;
   /** Re-read the file already open, which is what a retry with no reference does. */
   refetch: () => void;
+  /** The computer's root, which an absolute reference may start with. */
+  root?: string | null;
 }
 
 /**
@@ -38,7 +40,7 @@ interface RefOpenArgs {
  */
 export function useFileRefOpen({
   tabs, cache, hasChanged, files, workspaceStatus, resolveFileFn, getRecentWritePaths,
-  onBeforeOpen, clearSearch, onLandOnSearch, refetch,
+  onBeforeOpen, clearSearch, onLandOnSearch, refetch, root,
 }: RefOpenArgs) {
   // Bumped by every open, direct or by reference, so a slow lookup cannot land
   // after the reader has already opened something else: whatever asked last
@@ -94,7 +96,7 @@ export function useFileRefOpen({
   ) => {
     const seq = ++refSeq.current;
     const current = () => seq === refSeq.current;
-    const candidates = fromFile ? linkCandidates(rawRef, fromFile) : [normalizeAgentPath(rawRef)];
+    const candidates = fromFile ? linkCandidates(rawRef, fromFile, root) : [normalizeAgentPath(rawRef, root)];
     const primary = candidates[0];
     if (!primary) return;
     clearSearch();
@@ -164,7 +166,7 @@ export function useFileRefOpen({
     };
     await search();
     if (missed.size) tabs.forgetPaths([...missed]);
-  }, [openAt, tabs, clearSearch, onLandOnSearch, resolveFileFn, getRecentWritePaths, files]);
+  }, [openAt, tabs, clearSearch, onLandOnSearch, resolveFileFn, getRecentWritePaths, files, root]);
 
   /** The error card's retry: re-ask the lookup where this tab was owed one, else re-read. */
   const retryOpen = useCallback((path: string | null) => {

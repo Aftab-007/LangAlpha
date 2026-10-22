@@ -10,6 +10,7 @@ import { useComputerFolders } from '../useComputerFolders';
 const mocks = vi.hoisted(() => ({
   viewed: null as Record<string, unknown> | null,
   rows: [] as Record<string, unknown>[],
+  computers: [] as Record<string, unknown>[],
 }));
 
 vi.mock('@/hooks/useWorkspace', () => ({
@@ -18,6 +19,12 @@ vi.mock('@/hooks/useWorkspace', () => ({
 
 vi.mock('@/hooks/useAllWorkspaces', () => ({
   useAllWorkspaces: () => ({ data: { workspaces: mocks.rows } }),
+}));
+
+vi.mock('../useComputers', () => ({
+  useComputerRootDir: (computerId: string | null | undefined) =>
+    mocks.computers.find((c) => c.computer_id === computerId)?.root_dir,
+  useComputerRootDirs: () => mocks.computers.map((c) => c.root_dir),
 }));
 
 const viewed = (extra: Record<string, unknown> = {}) => ({
@@ -39,6 +46,20 @@ describe('useComputerFolders', () => {
     mocks.rows = [mocks.viewed, sibling({ status: 'stopped' })];
     rerender();
     expect(result.current).toBe(first);
+  });
+
+  it("carries the root of the workspace's own computer", () => {
+    // A computer whose user cannot create the stock root keeps its folders
+    // under one of its own, and the agent's absolute paths start there.
+    mocks.viewed = viewed();
+    mocks.rows = [mocks.viewed];
+    mocks.computers = [
+      { computer_id: 'c-0', root_dir: '/home/workspace' },
+      { computer_id: 'c-1', root_dir: '/home/someone/langalpha' },
+    ];
+    const { result } = renderHook(() => useComputerFolders('ws-1'));
+    expect(result.current?.rootDir).toBe('/home/someone/langalpha');
+    mocks.computers = [];
   });
 
   it('changes when a folder does', () => {

@@ -110,6 +110,13 @@ export interface Workspace {
   /** The restore from this workspace's file backup did not finish, so the tree
    *  is short some files until the next start retries it. */
   files_restore_incomplete?: boolean;
+  /** When the server found this workspace's folder gone from a machine the
+   *  user brought and held its backup for the user to choose: restore it, or
+   *  keep the folder empty. Set, the backup stops following the folder until
+   *  the user answers. */
+  files_restore_offered_at?: string | null;
+  /** When the last complete backup pass ran; null when unknown. */
+  files_backed_up_at?: string | null;
   created_at?: string;
   updated_at?: string;
   [key: string]: unknown;
@@ -161,6 +168,18 @@ export type ComputerStatus =
   | 'error'
   | 'deleted';
 
+/** Where an `ssh` computer lives. */
+export interface ComputerSsh {
+  host: string;
+  port: number;
+  username: string;
+  fingerprint: string | null;
+  /** Reached through the tunnel the machine opened; `host` is then only its name. */
+  tunnel: boolean;
+  /** Whether the tunnel is up now; null when the computer has none. */
+  tunnel_connected: boolean | null;
+}
+
 export interface Computer {
   computer_id: string;
   user_id: string;
@@ -180,6 +199,11 @@ export interface Computer {
    *  page a caller happens to hold is not that number. */
   workspace_count?: number;
   root_dir: string;
+  /** The user's own machine, for an `ssh` computer; null for every other kind. */
+  ssh: ComputerSsh | null;
+  /** Whether the server keeps a backup of each workspace's files. Only a
+   *  machine the user brings can turn it off; read absent as on. */
+  files_backup?: boolean;
   /** Vendor id of the running machine. Owner-only, and null before first boot. */
   provider_ref?: string | null;
   created_at?: string;
@@ -334,6 +358,8 @@ export interface WorkspaceMove {
   target_computer_id: string;
   /** Home moving because its target is being made primary; the flip lands when the move commits. */
   make_primary: boolean;
+  /** Restored onto the target from the workspace's backup, without the source. */
+  from_backup?: boolean;
   phase: WorkspaceMovePhase;
   error?: WorkspaceMoveError | null;
   created_at: string;
@@ -354,6 +380,96 @@ export interface ComputerCreate {
   resource_tier?: ResourceTier;
   /** Omitted means the deployment's default provider. */
   kind?: string;
+  /** The target of an `ssh` computer, with the host key it answered with when the server connected. */
+  ssh?: SshTarget & { host_key: string; root_dir?: string };
+  /** Keep a backup of each workspace's files. Omitted means on; the server
+   *  refuses off for a machine it runs. */
+  files_backup?: boolean;
+}
+
+export interface SshTarget {
+  host: string;
+  port: number;
+  username: string;
+  /** Set for a machine reached through a tunnel; `host` is then only its name and `port` its own SSH port. */
+  tunnel_id?: string | null;
+}
+
+/** `GET /api/v1/computers/ssh/key`: the key the user authorizes on their machine. */
+export interface SshKeyResponse {
+  public_key: string;
+  fingerprint: string;
+  authorized_keys_command: string;
+}
+
+/** `POST /api/v1/computers/ssh/probe` success. */
+export interface SshProbeResult {
+  host_key: string;
+  fingerprint: string;
+  os: string;
+  arch: string;
+  distro: string;
+  home: string;
+  shell: string;
+  is_root: boolean;
+  has_sudo: boolean;
+  disk_free_bytes: number | null;
+  supported: boolean;
+  problems: string[];
+  /** The folder a computer created without one works in: `~/langalpha`, or the next free `~/langalpha-N`. */
+  suggested_root_dir: string;
+  /** The machine's own name, the default name of the computer; empty when it gave none. */
+  hostname: string;
+}
+
+export type SshProbeErrorCode =
+  | 'auth_failed'
+  | 'unreachable'
+  | 'not_connected'
+  | 'gateway_unreachable'
+  | 'script_failed'
+  | 'private_address'
+  | 'timeout'
+  | 'host_key_mismatch'
+  | 'unsupported'
+  | 'expired';
+
+/** A refusal's code: one this build words, or one it shows in the server's words. */
+export type SshErrorCode = SshProbeErrorCode | (string & {});
+
+/** `POST /api/v1/computers/ssh/pairings`: a one-line command that checks a machine in. */
+export interface SshPairing {
+  token: string;
+  /** `echo 'url = "<script_url>"' | curl -fsSL -K - | sh`, run on the machine as the login to use. */
+  command: string;
+  script_url: string;
+  expires_at: string;
+  /** The command reaches the server only from the machine running it, so it adds that machine alone. */
+  local_only: boolean;
+}
+
+export type SshPairingState = 'waiting' | 'checking' | 'tunneling' | 'ready' | 'failed';
+
+/** What the pairing script reported about the machine it ran on. */
+export interface SshPairingMachine {
+  username: string;
+  hostname: string;
+  /** `uname -s`: Linux or Darwin; empty when the script could not tell. */
+  os: string;
+  addresses: string[];
+}
+
+/** `GET /api/v1/computers/ssh/pairings/{token}`, and the answer to its `/connect`. */
+export interface SshPairingStatus {
+  status: SshPairingState;
+  expires_at: string;
+  /** Set once the script checked in. */
+  machine: SshPairingMachine | null;
+  /** Set with `probe` once ready: the address the server reached. */
+  target: SshTarget | null;
+  probe: SshProbeResult | null;
+  /** Set when failed. */
+  error: { code: SshErrorCode; message: string } | null;
 }
 
 export interface ReorderItem {
@@ -607,6 +723,10 @@ export interface BackupStatusResponse {
   untracked: string[];
   total_backed_up_size: number;
   files_restore_incomplete: boolean;
+  /** The computer's backup switch. */
+  files_backup?: boolean;
+  /** As on the workspace row: a restore offer waiting on the user. */
+  files_restore_offered_at?: string | null;
 }
 
 // --- Subagent ---

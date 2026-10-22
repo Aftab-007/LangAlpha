@@ -174,9 +174,11 @@ export function TreeColumn(props: TreeColumnProps): React.ReactElement {
                   >
                     <Upload className="h-4 w-4" />
                   </button>
-                  <button onClick={backup.handleBackup} className="file-panel-icon-btn" title={t('filePanel.backupFiles')} disabled={backup.backingUp}>
-                    <HardDrive className={`h-4 w-4 ${backup.backingUp ? 'animate-pulse' : ''}`} />
-                  </button>
+                  {backup.canBackUp && (
+                    <button onClick={backup.handleBackup} className="file-panel-icon-btn" title={t('filePanel.backupFiles')} disabled={backup.backingUp}>
+                      <HardDrive className={`h-4 w-4 ${backup.backingUp ? 'animate-pulse' : ''}`} />
+                    </button>
+                  )}
                   <button onClick={props.onRefreshFiles} className="file-panel-icon-btn" title={t('filePanel.refresh')}>
                     {props.filesLoading ? <Loader size={16} className="text-current" /> : <RefreshCw className="h-4 w-4" />}
                   </button>
@@ -293,6 +295,13 @@ export function TreeColumn(props: TreeColumnProps): React.ReactElement {
         {!selection.selectMode && !filter.missedRef && props.filesRestoreIncomplete && (
           <p className="px-2 pb-1.5 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
             {t('filePanel.restoreIncomplete')}
+          </p>
+        )}
+
+        {/* In place of the back-up-now button, which the tree no longer offers. */}
+        {!props.readOnly && !selection.selectMode && backup.backupOff && (
+          <p className="px-2 pb-1.5 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+            {t('filePanel.backupOff', 'File backup is off for this computer.')}
           </p>
         )}
 

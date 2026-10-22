@@ -13,6 +13,7 @@ import { messagingAppName, platformOf, readMessageDelivery } from '../messaging/
 import { countDedupedSources, type ProvenanceRecord } from '@/types/chat';
 import { useTranscriptReads, type TranscriptReader } from './useTranscript';
 import { focusToggleWhenRendered } from './panelToggleFocus';
+import { useWorkspaceFolders } from '../../contexts/WorkspaceContext';
 import './TabStrip.css';
 
 interface TabStripProps {
@@ -78,13 +79,13 @@ interface TabReading {
 
 // A call's record is replaced, never edited, when the call changes, so a tool
 // tab's reading is kept per record rather than worked out on every render.
-const toolReadings = new WeakMap<ToolCallProcessRecord, { t: TFunction; reading: TabReading }>();
+const toolReadings = new WeakMap<ToolCallProcessRecord, { t: TFunction; root: string | null | undefined; reading: TabReading }>();
 
-function readToolCall(proc: ToolCallProcessRecord, t: TFunction): TabReading {
+function readToolCall(proc: ToolCallProcessRecord, t: TFunction, root: string | null | undefined): TabReading {
   const toolName = proc.toolName || '';
   const call = proc.toolCall ? { ...proc.toolCall } : undefined;
   const artifact = proc.toolCallResult?.artifact;
-  const title = isTaskTool(toolName) ? t('toolArtifact.subagentTask') : getCompletedRowTitle(toolName, call, t, artifact);
+  const title = isTaskTool(toolName) ? t('toolArtifact.subagentTask') : getCompletedRowTitle(toolName, call, t, { artifact, root });
   if (toolName === 'send_message') {
     // The app's favicon names where it went; its name moves to the hint. A
     // send that did not go is marked as a failed call is.
@@ -100,17 +101,17 @@ function readToolCall(proc: ToolCallProcessRecord, t: TFunction): TabReading {
       };
     }
   }
-  const summary = getCompletedSummary(toolName, call, t);
+  const summary = getCompletedSummary(toolName, call, t, root);
   const short = summary && summary.length > TOOL_SUMMARY_MAX ? `${summary.slice(0, TOOL_SUMMARY_MAX - 1)}…` : summary;
   return {
     name: short ? `${title} · ${short}` : title,
-    Glyph: getToolIcon(toolName, call?.args),
+    Glyph: getToolIcon(toolName, call?.args, root),
     detail: summary && summary !== short ? summary : null,
     failed: isToolCallFailed(proc),
   };
 }
 
-function describe(tab: FileTab, t: TFunction, source: TabSource): TabReading {
+function describe(tab: FileTab, t: TFunction, source: TabSource, root: string | null | undefined): TabReading {
   switch (tab.kind) {
     case 'empty':
       return { name: t('filePanel.openFile'), Glyph: FolderOpen, detail: null };
@@ -136,9 +137,9 @@ function describe(tab: FileTab, t: TFunction, source: TabSource): TabReading {
       const proc = source as ToolCallProcessRecord | undefined;
       if (!proc) return { name: t('toolArtifact.toolCall'), Glyph: getToolIcon('', undefined), detail: null };
       const kept = toolReadings.get(proc);
-      if (kept?.t === t) return kept.reading;
-      const reading = readToolCall(proc, t);
-      toolReadings.set(proc, { t, reading });
+      if (kept?.t === t && kept.root === root) return kept.reading;
+      const reading = readToolCall(proc, t, root);
+      toolReadings.set(proc, { t, root, reading });
       return reading;
     }
     case 'sources':
@@ -239,6 +240,9 @@ export function TabStrip({
   panelToggle = false,
 }: TabStripProps): React.ReactElement {
   const { t } = useTranslation();
+  // A tool tab is named the way its row is, and a row reads its paths under
+  // the computer's root.
+  const root = useWorkspaceFolders()?.rootDir;
   const listRef = useRef<HTMLDivElement>(null);
   const sources = useTranscriptReads(transcript, tabs, readTabSource);
   const overflow = useTabRowScroll(listRef, activeId, tabs.map((tab) => `${tab.id}:${tab.kind}`).join(' '));
@@ -289,7 +293,7 @@ export function TabStrip({
         data-more-end={overflow.end || undefined}
       >
         {tabs.map((tab, i) => {
-          const { name, Glyph, detail, failed } = describe(tab, t, sources[i]);
+          const { name, Glyph, detail, failed } = describe(tab, t, sources[i], root);
           const hasHint = detail != null || tab.kind === 'file';
           const active = tab.id === activeId;
           const onLoan = isOnLoan(tab);

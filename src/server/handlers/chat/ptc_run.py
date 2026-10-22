@@ -751,10 +751,7 @@ async def astream_ptc_workflow(
         else:
             skill_contexts = None
         skill_dirs = (
-            [
-                local_dir
-                for local_dir, _ in config.skills.local_skill_dirs_with_sandbox()
-            ]
+            config.skills.local_skill_dirs()
             + ([config.user_skill_dir] if config.user_skill_dir else [])
             if skill_contexts
             else None

@@ -141,6 +141,12 @@ async def get_shared_thread_metadata(
         "created_at": thread.get("created_at"),
         "updated_at": thread.get("updated_at"),
         "workspace_name": thread.get("workspace_name"),
+        # The transcript's absolute paths are spelled with these, so the viewer
+        # reads them as workspace paths the way the owner does. Former folder
+        # names stay out: they are old workspace names the share never showed,
+        # and the file routes still fold them.
+        "root_dir": thread.get("root_dir"),
+        "dir_name": thread.get("dir_name"),
         "permissions": {
             "allow_files": perms.get("allow_files", False),
             "allow_download": perms.get("allow_download", False),

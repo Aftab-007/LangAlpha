@@ -1,6 +1,8 @@
 """Grep tool for content searching with ripgrep."""
 
 import re
+import re._constants as sre_constants
+import re._parser as sre_parser
 from typing import Literal
 
 import structlog
@@ -12,6 +14,36 @@ from ptc_agent.core.sandbox.grep_render import GrepLine
 from src.observability.private_errors import failure
 
 logger = structlog.get_logger(__name__)
+
+# What neither rg's default engine nor RE2 runs, both being linear-time.
+_BACKTRACKING_ONLY = frozenset({
+    sre_constants.ASSERT,
+    sre_constants.ASSERT_NOT,
+    sre_constants.GROUPREF,
+    sre_constants.GROUPREF_EXISTS,
+    sre_constants.ATOMIC_GROUP,
+})
+
+
+def _needs_backtracking(pattern: str) -> bool:
+    """Whether *pattern*, valid for ``re``, uses what no search route runs.
+
+    Every route answers such a pattern with no lines, so without this a
+    search that never ran reads as one that found nothing. Read off ``re``'s
+    own parse rather than RE2's refusal, since RE2 also refuses syntax rg
+    takes (``(?x)``, ``\\u00e9``, ``\\<``) and the sandbox route runs rg.
+    """
+    stack: list = [sre_parser.parse(pattern)]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, sre_parser.SubPattern):
+            for op, av in node:
+                if op in _BACKTRACKING_ONLY:
+                    return True
+                stack.append(av)
+        elif isinstance(node, (tuple, list)):
+            stack.extend(node)
+    return False
 
 
 def create_grep_tool(backend: FilesystemBackend) -> BaseTool:
@@ -74,6 +106,13 @@ def create_grep_tool(backend: FilesystemBackend) -> BaseTool:
                 error_msg = f"Invalid regex pattern: {e}"
                 logger.info("Invalid regex pattern", pattern_length=len(pattern))
                 return f"ERROR: {error_msg}"
+            if _needs_backtracking(pattern):
+                logger.info("Regex pattern search cannot run", pattern_length=len(pattern))
+                return (
+                    "ERROR: Invalid regex pattern: search does not support "
+                    "look-around, backreferences or atomic groups. Rewrite the "
+                    "pattern without them."
+                )
 
             # Normalize virtual path to absolute sandbox path
             normalized_path = backend.normalize_path(search_path)
@@ -111,9 +150,11 @@ def create_grep_tool(backend: FilesystemBackend) -> BaseTool:
                 offset=offset,
             )
 
+            # What a search left out, such as files a route stopped before.
+            notes = "".join(f"\n\n{note}" for note in getattr(results, "notes", ()))
             if not results:
                 logger.info("No matches found", path=logged_path(search_path))
-                return f"No matches found for pattern '{pattern}' in '{search_path}'"
+                return f"No matches found for pattern '{pattern}' in '{search_path}'{notes}"
 
             # Format output based on mode, virtualizing paths for agent
             if output_mode == "files_with_matches":
@@ -145,7 +186,7 @@ def create_grep_tool(backend: FilesystemBackend) -> BaseTool:
                 results_count=len(results),
             )
 
-            return result.rstrip()
+            return result.rstrip() + notes
 
         except Exception as e:
             error_msg = f"Failed to grep content: {e!s}"

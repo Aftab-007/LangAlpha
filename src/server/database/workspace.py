@@ -83,6 +83,8 @@ _WS_COLUMNS: tuple[str, ...] = (
     "is_always_on",
     "platform_secret_version",
     "mcp_config_version",
+    "files_restore_offered_at",
+    "files_backed_up_at",
 )
 
 # The restore flag is read as a boolean, never as its column: the timestamp is
@@ -651,18 +653,33 @@ async def get_live_workspace_folders_for_computer(
 
 
 async def get_workspace_dir_names_for_computer(
-    computer_id: str, *, conn=None
+    computer_id: str, *, conn=None, left_by_moves: bool = True
 ) -> tuple[str, ...]:
     """Every folder a row on this computer holds, tombstones included.
 
     A stopped machine may still hold a deleted workspace's folder. A row staged
     mid-move also holds the folder it left, the one its name lands on and every
     one a pass planned for it: until the move is recorded its content may be in
-    any, and a deleted one's clearing takes whatever it finds there.
+    any, and a deleted one's clearing takes whatever it finds there. So does a
+    move from the backup that left its folder in place, until the sweep sets it
+    aside: its sync marker would vouch for a stale copy to whatever took it.
+    ``left_by_moves=False`` leaves those out, for the sweep asking whether a
+    workspace holds the name now.
     """
+    left = (
+        """
+            UNION ALL
+            SELECT source_folder, NULL, NULL FROM workspace_moves
+            WHERE source_computer_id = %(computer)s
+              AND from_backup AND leftovers_removed_at IS NULL
+              AND phase IN ('committed', 'done')
+        """
+        if left_by_moves
+        else ""
+    )
     async with _ws_cursor(conn) as cur:
         await cur.execute(
-            """
+            f"""
             SELECT dir_name AS folder, NULL AS landing, NULL::jsonb AS landings
             FROM workspaces
             WHERE computer_id = %(computer)s AND dir_name IS NOT NULL
@@ -670,6 +687,7 @@ async def get_workspace_dir_names_for_computer(
             SELECT previous_dir_names[1], name, config->'folder_landings' FROM workspaces
             WHERE computer_id = %(computer)s
               AND dir_name = %(moving)s || workspace_id::text
+            {left}
             """,
             {"computer": computer_id, "moving": f"{MOVING_DIR}/"},
         )
@@ -860,6 +878,8 @@ async def duplicate_workspace_on_computer(
 
     A visible empty project can attach before the copy and record an empty
     restore as complete, permanently skipping the files that arrive later.
+    The copy's restore is owed from the start: on a machine its owner
+    brought, a folder missing its files is otherwise theirs to decline.
     """
     from src.server.database.workspace_file import copy_workspace_files
 
@@ -873,6 +893,9 @@ async def duplicate_workspace_on_computer(
             if workspace is not None:
                 await copy_workspace_files(
                     source_id, str(workspace["workspace_id"]), conn=conn,
+                )
+                await set_files_restore_incomplete(
+                    str(workspace["workspace_id"]), True, conn=conn
                 )
             return workspace
 
@@ -1353,6 +1376,81 @@ async def files_restore_incomplete(workspace_id: str, *, conn=None) -> bool:
         )
         row = await cur.fetchone()
     return bool(row and row["files_restore_incomplete_at"] is not None)
+
+
+async def computer_backs_up_files(workspace_id: str, *, conn=None) -> bool:
+    """Whether the switch of the computer holding the workspace leaves routine backups on.
+
+    Read by each routine backup under the workspace's sync lock, so turning
+    backups off stops every one that had not started when the switch landed,
+    not only the passes planned after it."""
+    async with _ws_cursor(conn) as cur:
+        await cur.execute(
+            "SELECT c.files_backup FROM workspaces w "
+            "JOIN computers c ON c.computer_id = w.computer_id "
+            "WHERE w.workspace_id = %s",
+            (workspace_id,),
+        )
+        row = await cur.fetchone()
+    return row is None or row["files_backup"] is not False
+
+
+async def offer_files_restore(workspace_id: str, *, conn=None) -> bool:
+    """Record that the folder is gone and restoring it waits on the owner.
+
+    False when a restore is owed instead: one a move, a rollback or the owner
+    already asked for is not theirs to decline, so an offer never stands
+    beside the flag."""
+    async with _ws_cursor(conn) as cur:
+        await cur.execute(
+            """
+            UPDATE workspaces
+            SET files_restore_offered_at = COALESCE(files_restore_offered_at, NOW())
+            WHERE workspace_id = %s AND status <> 'deleted'
+              AND files_restore_incomplete_at IS NULL
+            """,
+            (workspace_id,),
+        )
+        return cur.rowcount > 0
+
+
+async def files_restore_offered(workspace_id: str, *, conn=None) -> bool:
+    """Propagate read failures, as the flag's reader does: a backup that read
+    no offer would mirror the emptied folder over the files it stands for."""
+    async with _ws_cursor(conn) as cur:
+        await cur.execute(
+            "SELECT files_restore_offered_at FROM workspaces WHERE workspace_id = %s",
+            (workspace_id,),
+        )
+        row = await cur.fetchone()
+    return bool(row and row["files_restore_offered_at"] is not None)
+
+
+async def settle_files_restore_offer(
+    workspace_id: str, *, restore: bool, conn=None
+) -> bool:
+    """End a standing offer, owing its restore or dropping it; False if none stood.
+
+    Owing the restore takes the offer's place in one write, so the backup is
+    held by one or the other throughout. Either way the files arrive anew, as
+    a move's do: every worker that attached the folder while the offer stood
+    attaches it again, which lays the restore owed wherever the next open
+    lands, or queues the bring-up the offer held back."""
+    owe = (
+        ", files_restore_incomplete_at = COALESCE(files_restore_incomplete_at, NOW())"
+        if restore
+        else ""
+    )
+    async with _ws_cursor(conn) as cur:
+        await cur.execute(
+            f"""
+            UPDATE workspaces
+            SET files_restore_offered_at = NULL, files_epoch = gen_random_uuid(){owe}
+            WHERE workspace_id = %s AND files_restore_offered_at IS NOT NULL
+            """,
+            (workspace_id,),
+        )
+        return cur.rowcount > 0
 
 
 async def workspace_owner(workspace_id: str, conn=None) -> str:

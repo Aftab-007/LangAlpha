@@ -79,7 +79,10 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
   // tail then run over the VISIBLE list, so a hidden bubble never steals an
   // affordance from a painted one.
   const projected = React.useMemo(() => projectTurns(messages), [messages]);
-  const visible = React.useMemo(() => visibleProjection(projected, isSubagentView), [projected, isSubagentView]);
+  const visible = React.useMemo(
+    () => visibleProjection(projected, isSubagentView, folders?.rootDir),
+    [projected, isSubagentView, folders?.rootDir],
+  );
   const turnTails = React.useMemo(() => computeTurnTails(visible), [visible]);
   // The bubbles of the server's turns. A send it never stored is painted
   // like any other but has no turn to time, fold, rate or list files under.
@@ -117,8 +120,8 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
   }, [turned]);
 
   const live = React.useMemo(
-    () => liveTurns(turned, newestTurn, !!isLoading, (message) => projectMessageContent(message, isSubagentView).hasPinnedLive),
-    [turned, newestTurn, isLoading, isSubagentView],
+    () => liveTurns(turned, newestTurn, !!isLoading, (message) => projectMessageContent(message, isSubagentView, folders?.rootDir).hasPinnedLive),
+    [turned, newestTurn, isLoading, isSubagentView, folders?.rootDir],
   );
 
   // Both display preferences fold finished turns; only live reasoning differs.
@@ -190,7 +193,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
       const start = startedAt.get(turnIndex);
       const pos = rowPos.get(turnIndex);
       if (start === undefined || pos === undefined) continue;
-      const contents = (assistantBubbles.get(turnIndex) ?? []).map((bubble) => projectMessageContent(bubble, isSubagentView));
+      const contents = (assistantBubbles.get(turnIndex) ?? []).map((bubble) => projectMessageContent(bubble, isSubagentView, folders?.rootDir));
       if (!contents.some((content) => content.hasProcess) && contents.reduce((sum, content) => sum + content.textCount, 0) < 2) continue;
       const isLive = live.has(turnIndex);
       // A pinned call outlives the stream that launched it, so the stream-close
@@ -215,7 +218,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
       });
     }
     return folds;
-  }, [visible, turned, turnTails, live, isSubagentView, filesByTurn, onOpenFile, readOnly, allowFiles]);
+  }, [visible, turned, turnTails, live, isSubagentView, folders?.rootDir, filesByTurn, onOpenFile, readOnly, allowFiles]);
 
   const items = React.useMemo(
     () => planQuietChecks(visible, turned, live, isSubagentView),
@@ -310,7 +313,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, isSubagentView, re
             : turnIndex !== null && expandedTurns.has(turnIndex) ? 'expanded' : info.noAnswer ? 'process' : 'collapsed';
         const bubbleProps = {
           message,
-          contentProjection: projectMessageContent(message, isSubagentView),
+          contentProjection: projectMessageContent(message, isSubagentView, folders?.rootDir),
           turnIndex,
           isTurnTail: turnTails[i],
           canRegenerate: turnIndex === null || !hiddenTurns.has(turnIndex),

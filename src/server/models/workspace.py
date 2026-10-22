@@ -198,8 +198,28 @@ class WorkspaceResponse(BaseModel):
             "records may be absent from its folder"
         ),
     )
+    files_restore_offered_at: Optional[datetime] = Field(
+        None,
+        description=(
+            "When the folder was found gone from its owner's machine while a "
+            "backup holds it. Set, the restore waits on the owner's choice "
+            "(POST files/restore-choice) and no backup of it runs"
+        ),
+    )
+    files_backed_up_at: Optional[datetime] = Field(
+        None, description="When the last complete backup of the folder ran"
+    )
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class FilesRestoreChoice(BaseModel):
+    restore: bool = Field(
+        description=(
+            "True lays the backup back into the folder; False keeps the folder "
+            "as it is, and the backup then follows it"
+        )
+    )
 
 
 class WorkspaceReorderItem(BaseModel):

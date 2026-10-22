@@ -19,6 +19,7 @@ import type { AttachmentData, WidgetChipShape } from './attachments';
 import { MessageContentSegments } from './MessageContentSegments';
 import { OverflowCollapse } from './OverflowCollapse';
 import { useMessageActions } from './MessageActionsContext';
+import { useWorkspaceFolders } from '../../contexts/WorkspaceContext';
 import { OpenThoughtContext, openThoughtLength, useArrivalQuiet, useOpenThoughts } from './useArrivalQuiet';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { useEditDraft, useEditDraftStore } from '../../hooks/utils/editDrafts';
@@ -86,7 +87,8 @@ interface MessageBubbleProps {
 export const MessageBubble = memo(function MessageBubble({ message, contentProjection, turnIndex, isTurnTail, canRegenerate = true, isLatestReply = true, isTurnLive, turnFiles, feedback, isLoading, fold = 'unfolded', isSubagentView, readOnly, allowFiles, isMobile, dispatcherContext }: MessageBubbleProps): React.ReactElement | null {
   const { onOpenFile, onDownloadFile, onRevealFiles, onOpenSources, onEditMessage, editDrafts, onRegenerate, onRetry, onThumbUp, onThumbDown, onReportWithAgent } = useMessageActions();
   const { t } = useTranslation();
-  const projection = contentProjection ?? projectMessageContent(message, isSubagentView);
+  const root = useWorkspaceFolders()?.rootDir;
+  const projection = contentProjection ?? projectMessageContent(message, isSubagentView, root);
   const isUser = (message.role as string) === 'user';
   const isAssistant = (message.role as string) === 'assistant';
   const isPendingDelivery = isUser && ((message.isPending as boolean) || (message.steering as boolean) || (message.queued as boolean));
