@@ -476,8 +476,8 @@ export function ChartCard({
 }
 
 /** A file's thumbnail on its card: a page over a tilted sheet, the kind's
-    glyph on it, and under the glyph the `label` a chart's card sets there
-    (its interval). */
+    glyph on it, and under the glyph its `label`, set as the app's
+    `.turn-file-ext` sets it: a file's extension, or a chart's interval. */
 function FileThumb({ icon: Glyph, label }: { icon: Icon; label?: string }) {
   return (
     <span className="relative h-[15px] w-3 shrink-0">
@@ -499,7 +499,7 @@ function FileThumb({ icon: Glyph, label }: { icon: Icon; label?: string }) {
         <Glyph className="h-1.5 w-1.5" style={{ color: 'var(--color-accent-primary)' }} />
         {label && (
           <span
-            className="font-mono text-[3px] leading-none"
+            className="font-mono text-[3px] leading-none tracking-[0.04em]"
             style={{ color: 'var(--color-text-tertiary)' }}
           >
             {label}
@@ -513,9 +513,10 @@ function FileThumb({ icon: Glyph, label }: { icon: Icon; label?: string }) {
 /**
  * A file the turn produced (`TurnFileCards`): thumbnail, name, what it is
  * (`meta`), and the Open button with its menu, or the deck's count once
- * `count` files are stacked. A chart the agent drew on is the same card
- * (`InlineChartAnnotationCard`), its interval on the thumbnail (`label`)
- * and Open on its own (`solo`), there being no menu to open it otherwise.
+ * `count` files are stacked. The thumbnail carries `label` under its glyph:
+ * a file's extension, or, on a chart the agent drew on
+ * (`InlineChartAnnotationCard`), its interval, that card having Open on its
+ * own (`solo`), there being no menu to open it otherwise.
  */
 export function FileCard({
   name,
@@ -625,18 +626,23 @@ export function FileStack({
 }) {
   const { t } = useTranslation();
   const stacked = useSceneTime() >= next;
-  /* the kind line reads as the card's does: the kind, then the extension,
-     kept as separate pieces of text, since one joined string sets the line
-     a hair differently */
-  const card = ({ name, kind, icon }: TurnFile) => ({
-    name,
-    icon,
-    meta: (
-      <>
-        {t(`chat.turnFiles.kind.${kind}`)} · {name.slice(name.lastIndexOf('.') + 1).toUpperCase()}
-      </>
-    ),
-  });
+  /* the extension goes under the thumbnail's glyph, as the app's card puts
+     it, and the kind line reads as the card's does: the kind, then the
+     extension, kept as separate pieces of text, since one joined string sets
+     the line a hair differently */
+  const card = ({ name, kind, icon }: TurnFile) => {
+    const ext = name.slice(name.lastIndexOf('.') + 1).toUpperCase();
+    return {
+      name,
+      icon,
+      label: ext,
+      meta: (
+        <>
+          {t(`chat.turnFiles.kind.${kind}`)} · {ext}
+        </>
+      ),
+    };
+  };
   return (
     <Appear at={at}>
       <div className="relative" style={{ height: stacked ? 27 : 24 }}>
