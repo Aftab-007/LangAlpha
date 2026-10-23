@@ -1600,6 +1600,37 @@
         "rateLimited_other": "这个账号在过去一小时内尝试的 SSH 连接过多。请在 {{count}} 分钟后重试。",
         "generic": "无法连接，请重试。"
       }
+    },
+    "remoteControl": {
+      "cardTitle": "这台 Mac",
+      "cardDesc": "让 Agent 直接在这台 Mac 上工作，关闭 LangAlpha 后也不会中断。",
+      "alreadyAdded": "已添加",
+      "title": "远程控制这台 Mac",
+      "intro": "LangAlpha 的 Agent 将以 {{account}} 的身份在这台 Mac 上工作，拥有这个账户的全部权限。",
+      "meansLabel": "这意味着",
+      "meansAccess": "它可以运行任何命令，在任何文件夹中读取或修改 {{account}} 有权访问的任何文件。它的工作会放在你选择的文件夹里，但这台 Mac 上没有任何机制把它限制在那里。",
+      "meansBackground": "关闭 LangAlpha 后它仍会继续工作。远程控制在后台运行，每次登录都会自动启动，直到你将它关闭。",
+      "meansCredentials": "它可以读取命令行工具为 {{account}} 保存的内容，例如 Git 和云服务的登录信息，也能访问你的家庭或办公网络。",
+      "meansAccount": "任何登录你的 LangAlpha 账号的人都可以指挥它。",
+      "stopLabel": "如何停止",
+      "stop": "你可以随时在 LangAlpha 菜单中暂停它，也可以在“系统设置 > 通用 > 登录项”中关闭。在 LangAlpha 中移除这台计算机会关闭远程控制，并从这台 Mac 上删除它的密钥。",
+      "folderPrompts": "macOS 可能会询问是否允许 LangAlpha 访问“文稿”“桌面”等文件夹。你可以拒绝：Agent 自己的文件夹不需要这项权限。",
+      "previewNotice": "远程控制仍处于预览阶段，我们正在加入更多安全保护。在此之前，Agent 拥有与你相同的访问权限，因此请只在可以接受这一点的 Mac 上开启。",
+      "acknowledge": "我了解 LangAlpha 的 Agent 能以 {{account}} 的身份在这台 Mac 上运行命令、修改文件。",
+      "turnOn": "开启远程控制",
+      "turningOn": "正在开启远程控制…",
+      "connecting": "正在连接这台 Mac…",
+      "needsApproval": "需要你在 macOS 中确认。请在“系统设置 > 通用 > 登录项”中允许 LangAlpha 在后台运行，然后点击“继续”。",
+      "continue": "继续",
+      "tryAgain": "重试",
+      "failed": "无法开启远程控制，请重试。",
+      "insecure": "远程控制要求服务器地址以 https 开头，这台 Mac 才能信任收到的配对信息。",
+      "thisMacBadge": "这台 Mac",
+      "provider": "远程控制",
+      "asAccount": "以 {{account}} 身份",
+      "notConnected": "未连接",
+      "paused": "远程控制已暂停，可在 LangAlpha 菜单中恢复。",
+      "removeTurnsOff": "这台 Mac 上的远程控制也会随之关闭。"
     }
   },
   "thread": {

@@ -193,6 +193,8 @@ export interface ComputerSsh {
   tunnel: boolean;
   /** Whether the tunnel is up now; null when the computer has none. */
   tunnel_connected: boolean | null;
+  /** Answered by LangAlpha's helper (remote control of a Mac) rather than the machine's own sshd. */
+  helper: boolean;
 }
 
 export interface Computer {
@@ -361,6 +363,8 @@ export interface ComputerTierSpec {
 /** The providers a user can create a computer on, default first. */
 export interface ComputerProvidersResponse {
   providers: ComputerProviderOption[];
+  /** Whether this server runs a tunnel gateway, which a machine that cannot be dialed connects out to. */
+  tunnels: boolean;
 }
 
 // --- Workspace move ---
@@ -461,6 +465,8 @@ export interface SshProbeResult {
   suggested_root_dir: string;
   /** The machine's own name, the default name of the computer; empty when it gave none. */
   hostname: string;
+  /** Answered by LangAlpha's helper (remote control of a Mac) rather than the machine's own sshd. */
+  helper: boolean;
 }
 
 export type SshProbeErrorCode =

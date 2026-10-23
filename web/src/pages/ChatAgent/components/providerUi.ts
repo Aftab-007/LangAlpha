@@ -139,3 +139,22 @@ export function providerOptions(
     };
   });
 }
+
+/** The This Mac card's value. Not a provider kind: this Mac is added by remote control as an `ssh` computer. */
+export const THIS_MAC_OPTION = 'this-mac';
+
+/** Whether this Mac can still be added, or a computer already is this Mac. */
+export type ThisMacCard = 'offered' | 'added';
+
+/** This Mac's card, which leads the providers in the desktop app on a Mac. */
+export function thisMacOption(t: Translate, state: ThisMacCard): RadioCardOption<string> {
+  return {
+    value: THIS_MAC_OPTION,
+    title: t('computer.remoteControl.cardTitle', 'This Mac'),
+    description: t('computer.remoteControl.cardDesc', 'Let the agent work on this Mac, even while LangAlpha is closed.'),
+    note: state === 'added'
+      ? t('computer.remoteControl.alreadyAdded', 'Already added')
+      : t('computer.ssh.previewLabel', 'Preview'),
+    disabled: state === 'added',
+  };
+}

@@ -101,6 +101,12 @@ export const queryKeys = {
     mint:   () => [...queryKeys.sshPairings.all, 'mint'],
     status: (token: string) => [...queryKeys.sshPairings.all, 'status', token],
   },
+  // Read from the desktop shell, not the server: what this Mac's own helper
+  // says, so it is not under `computers`, whose refreshes go to the server.
+  desktop: {
+    all:           ['desktop'],
+    remoteControl: () => [...queryKeys.desktop.all, 'remote-control'],
+  },
   threads: {
     all:         ['threads'],
     byWorkspace: (wsId: string) => [...queryKeys.threads.all, 'workspace', wsId],
