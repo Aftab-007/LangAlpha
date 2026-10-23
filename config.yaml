@@ -300,14 +300,3 @@ market_insight:
     market_update_start: "10:00"  # Hourly updates start
     market_update_end: "20:00"    # Hourly updates end (inclusive)
     market_update_interval: 60    # Minutes between updates
-
-
-# =============================================================================
-# GITHUB BOT CONFIGURATION
-# =============================================================================
-# GitHub bot for agent self-improvement (issue reporting, PR proposals)
-github:
-  enabled: true
-  bot_name: "langalpha-bot"
-  bot_email: "bot@ginlix.ai"
-  token_env: "GITHUB_BOT_TOKEN"  # env var name holding the bot PAT (resolved from .env)
