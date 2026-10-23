@@ -44,6 +44,8 @@ vi.mock('../useAllModels', () => ({
     validModelNames: new Set(Object.keys(ACCESS)),
     systemDefaults: mocks.systemDefaults,
     offPlanModels: new Set(),
+    platform: mocks.platform ? { model_tier: 0, byok_providers: [], oauth_providers: [] } : null,
+    rawApiResponse: {},
   }),
 }));
 
