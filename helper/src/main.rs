@@ -12,6 +12,8 @@ mod keys;
 mod pair;
 mod process;
 mod server;
+#[cfg(test)]
+mod tests;
 mod tunnel;
 
 use std::path::PathBuf;
