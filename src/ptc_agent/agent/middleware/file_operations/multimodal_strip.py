@@ -19,7 +19,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 
 from ptc_agent.agent.middleware._message_utils import order_tool_results_first
-from ptc_agent.agent.middleware.file_operations.image_fit import fit_images
+from ptc_agent.agent.middleware.file_operations.image_fit import fit_images, unsaved_upload_name
 from src.llms.attachment_payload import FILE_BLOCK_TYPES, IMAGE_BLOCK_TYPES, block_type
 from src.llms.llm import (
     get_image_types,
@@ -222,11 +222,24 @@ def placeholder_guidance(source: str | None) -> str:
     return PLACEHOLDER_GUIDANCE
 
 
-def _removed_placeholder(block: Any, name: str | None, pages: int | None) -> dict[str, str] | None:
+def _removed_placeholder(
+    block: Any, name: str | None, pages: int | None, unsaved_image: str | None = None
+) -> dict[str, str] | None:
     """The text standing in for an attachment taken out to fit the context
-    window, or None for a block that is not one."""
+    window, or None for a block that is not one. ``unsaved_image`` names an
+    uploaded image whose label says no copy of it was saved."""
     kind = block_type(block)
     if kind in IMAGE_BLOCK_TYPES:
+        if unsaved_image is not None:
+            # Nothing to Read: the block was its only copy.
+            return {
+                "type": "text",
+                "text": (
+                    f"[Image {unsaved_image} was removed from the conversation to fit the "
+                    "context window, and no copy was saved. Ask the user to attach it again "
+                    "if you need it.]"
+                ),
+            }
         image = f"Image {name}" if name else "Image"
         return {
             "type": "text",
@@ -236,12 +249,14 @@ def _removed_placeholder(block: Any, name: str | None, pages: int | None) -> dic
         return None
     name = name or block.get("filename") or "PDF"
     size = f" ({pages} page{'' if pages == 1 else 's'})" if pages else ""
+    if _unsaved(block):
+        # Nothing to Read: the block was its only copy.
+        tail = ", and no copy was saved. Ask the user to attach it again if you need it.]"
+    else:
+        tail = ". Read it again by page range if you need it.]"
     return {
         "type": "text",
-        "text": (
-            f"[{name}{size} was removed from the conversation to fit the context "
-            "window. Read it again by page range if you need it.]"
-        ),
+        "text": f"[{name}{size} was removed from the conversation to fit the context window{tail}",
     }
 
 
@@ -273,11 +288,14 @@ def remove_attachments(
             continue
         name = _source(msg, sources)
         new_blocks = []
-        for block in content:
+        for j, block in enumerate(content):
             placeholder = None
             if isinstance(block, dict):
                 count = pages(block) if block_type(block) in FILE_BLOCK_TYPES else None
-                placeholder = _removed_placeholder(block, name, count)
+                # An image block reaches the provider as it is, so whether an
+                # upload was saved is read off the label written just before it.
+                unsaved = unsaved_upload_name(content[j - 1]) if j else None
+                placeholder = _removed_placeholder(block, name, count, unsaved)
             new_blocks.append(block if placeholder is None else placeholder)
         if new_blocks == content:
             result.append(msg)

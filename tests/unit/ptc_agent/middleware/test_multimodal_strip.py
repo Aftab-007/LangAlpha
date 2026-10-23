@@ -102,6 +102,49 @@ class TestRemoveAttachments:
             "[Image was removed from the conversation to fit the context window.]",
         ]
 
+    def test_an_unsaved_upload_asks_for_it_again_instead_of_a_read(self):
+        upload = HumanMessage(id="h1", content=[
+            {"type": "file", "base64": "JVBERi0=", "mime_type": "application/pdf",
+             "filename": "q3.pdf", "unsaved": True},
+        ])
+        (result,) = remove_attachments([upload], {"h1"}, pages=lambda block: 12)
+        assert result.content == [{"type": "text", "text": (
+            "[q3.pdf (12 pages) was removed from the conversation to fit the context "
+            "window, and no copy was saved. Ask the user to attach it again if you need it.]"
+        )}]
+
+    def test_an_image_uploaded_with_no_saved_copy_asks_for_it_again(self):
+        upload = HumanMessage(id="h1", content=[
+            {"type": "text", "text": "[Attached image: chart.png]"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            {"type": "text", "text": "[Attached image: kept.png (saved to work/uploads/kept.png)]"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,def"}},
+        ])
+        (result,) = remove_attachments([upload], {"h1"})
+        assert [b["text"] for b in result.content] == [
+            "[Attached image: chart.png]",
+            "[Image chart.png was removed from the conversation to fit the context window, "
+            "and no copy was saved. Ask the user to attach it again if you need it.]",
+            "[Attached image: kept.png (saved to work/uploads/kept.png)]",
+            "[Image was removed from the conversation to fit the context window.]",
+        ]
+
+    @pytest.mark.parametrize("path", [None, "work/uploads/chart.png"], ids=["unsaved", "saved"])
+    def test_the_label_the_server_writes_is_the_one_read_back(self, path):
+        from src.server.models.additional_context import MultimodalContext
+        from src.server.utils.multimodal_context import inject_multimodal_context
+
+        image = MultimodalContext(
+            type="image", data="data:image/png;base64,abc", description="chart.png"
+        )
+        (written,) = inject_multimodal_context(
+            [{"role": "user", "content": "what is this?"}], [image], file_paths=[path]
+        )
+        upload = HumanMessage(id="h1", content=written["content"])
+        (result,) = remove_attachments([upload], {"h1"})
+        asked = "Ask the user to attach it again" in result.content[1]["text"]
+        assert asked is (path is None)
+
     def test_messages_not_named_are_the_same_objects(self):
         msgs = _read_result("c1", "docs/a.pdf")
         assert remove_attachments(msgs, {"other"}) is msgs
