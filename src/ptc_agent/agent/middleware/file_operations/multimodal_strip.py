@@ -111,7 +111,7 @@ def strip_unsupported_content_blocks(
     has_image: bool,
     has_pdf: bool,
     max_pdf_pages: int | None = None,
-    guidance: str = "",
+    guidance: str | Callable[[str | None], str] = "",
     unreadable: Collection[tuple[int, int]] = (),
 ) -> list:
     """Replace image/file blocks this target can't read with text placeholders.
@@ -125,16 +125,20 @@ def strip_unsupported_content_blocks(
     created it — the same document is fine on a 1M-context route and rejected on
     a 200K one, and only this side knows which one is being called.
 
+    ``guidance`` is one text for every block, or the text for a block given the
+    path or URL its Read was given (None for any other attachment).
+
     Returns the original list when nothing changed, and never mutates a message:
     these are checkpoint objects shared with the rest of the graph.
     """
     result: list = []
     modified = False
-    # The guidance rides on the first placeholder only: the advice is the
-    # same for every block, and the first is the one whose text never moves
-    # when a later turn adds another attachment, so the prefix behind it
-    # stays cached.
-    said = False
+    sources = read_sources(messages) if callable(guidance) else {}
+    # Each guidance rides on the first placeholder it applies to only: the
+    # advice is the same for every block from the same place, and the first
+    # is the one whose text never moves when a later turn adds another
+    # attachment, so the prefix behind it stays cached.
+    said: set[str] = set()
 
     for i, msg in enumerate(messages):
         content = getattr(msg, "content", None)
@@ -142,6 +146,7 @@ def strip_unsupported_content_blocks(
             result.append(msg)
             continue
 
+        advice = guidance(_source(msg, sources)) if callable(guidance) else guidance
         new_blocks = []
         changed = False
         for j, block in enumerate(content):
@@ -150,11 +155,11 @@ def strip_unsupported_content_blocks(
                 has_image and (i, j) not in unreadable,
                 has_pdf,
                 max_pdf_pages,
-                "" if said else guidance,
+                "" if advice in said else advice,
             )
             if placeholder is not None:
                 changed = True
-                said = True
+                said.add(advice)
             new_blocks.append(block if placeholder is None else placeholder)
 
         if not changed:
@@ -170,13 +175,32 @@ def strip_unsupported_content_blocks(
 # placeholder rather than in the system prompt, so the advice is decided on the
 # call where the target is known (a fallback or a subagent is judged on its own
 # model) without the cached prefix moving.
-PLACEHOLDER_GUIDANCE = (
-    "The file is still in the workspace: extract it yourself with Python in the "
-    "sandbox (a PDF's text or page renders, OCR or image analysis) before giving up. "
+_IF_NOT = (
     "If that cannot answer the question, tell the user: an unsupported input type "
     "means switching to a model that accepts it, a page-limit rejection means "
     "splitting the document or a longer-context model. Answer in best effort otherwise."
 )
+PLACEHOLDER_GUIDANCE = (
+    "The file is still in the workspace: extract it yourself with Python in the "
+    "sandbox (a PDF's text or page renders, OCR or image analysis) before giving up. "
+    + _IF_NOT
+)
+
+
+def placeholder_guidance(source: str | None) -> str:
+    """The guidance for a block read from ``source``.
+
+    A URL's bytes are fetched by the server and never written to the
+    workspace, so telling the model the file is there sends it looking for
+    something that does not exist.
+    """
+    if source and source.startswith(("http://", "https://")):
+        return (
+            f"The file is at {source}: download it in the sandbox and extract it "
+            "yourself with Python (a PDF's text or page renders, OCR or image "
+            "analysis) before giving up. " + _IF_NOT
+        )
+    return PLACEHOLDER_GUIDANCE
 
 
 def _removed_placeholder(block: Any, name: str | None, pages: int | None) -> dict[str, str] | None:
@@ -348,13 +372,14 @@ class MultimodalStripMiddleware(AgentMiddleware):
         # a subagent on its own model then inherited wrongly. The system prompt
         # is left alone so the cached prefix does not move with the strip, and
         # every placeholder, an image the fit could not use among them, is
-        # written in this one pass so the guidance stays on the first.
+        # written in this one pass so each guidance stays on the first it
+        # applies to.
         messages = strip_unsupported_content_blocks(
             messages,
             has_image,
             has_pdf,
             max_pdf_pages,
-            PLACEHOLDER_GUIDANCE,
+            placeholder_guidance,
             unreadable=unreadable,
         )
         if messages is not request.messages:
@@ -364,6 +389,7 @@ class MultimodalStripMiddleware(AgentMiddleware):
 
 __all__ = [
     "MultimodalStripMiddleware",
+    "placeholder_guidance",
     "read_sources",
     "remove_attachments",
     "strip_unsupported_content_blocks",

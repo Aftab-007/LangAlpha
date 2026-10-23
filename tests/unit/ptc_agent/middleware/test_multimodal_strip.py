@@ -17,6 +17,7 @@ from ptc_agent.agent.middleware._message_utils import order_tool_results_first
 from ptc_agent.agent.middleware.file_operations.multimodal_strip import (
     PLACEHOLDER_GUIDANCE,
     MultimodalStripMiddleware,
+    placeholder_guidance,
     remove_attachments,
     strip_unsupported_content_blocks,
 )
@@ -140,6 +141,32 @@ class TestStripUnsupportedContentBlocks:
         assert len(placeholders) == 3
         assert "Ask for a description." in placeholders[0]
         assert all("Ask for a description" not in p for p in placeholders[1:])
+
+    def test_a_url_read_is_not_said_to_be_in_the_workspace(self):
+        # The server fetched it; nothing wrote it into the workspace.
+        url = "https://example.test/report.pdf"
+        msgs = [
+            *_read_result("c1", "docs/a.pdf"),
+            *_read_result("c2", url),
+            *_read_result("c3", "docs/b.pdf"),
+        ]
+        result = strip_unsupported_content_blocks(
+            msgs, has_image=True, has_pdf=False, guidance=placeholder_guidance
+        )
+        texts = [m.content[1]["text"] for m in result if isinstance(m, ToolMessage)]
+
+        assert texts[0].endswith(f" {PLACEHOLDER_GUIDANCE}]")
+        assert texts[1] == (
+            "[PDF attached in a prior turn, not visible to the current model. "
+            f"The file is at {url}: download it in the sandbox and extract it yourself "
+            "with Python (a PDF's text or page renders, OCR or image analysis) before "
+            "giving up. If that cannot answer the question, tell the user: an unsupported "
+            "input type means switching to a model that accepts it, a page-limit rejection "
+            "means splitting the document or a longer-context model. Answer in best effort "
+            "otherwise.]"
+        )
+        # Each guidance is said once, on the first block it applies to.
+        assert texts[2] == "[PDF attached in a prior turn, not visible to the current model.]"
 
     def test_text_only_strips_image_blocks(self):
         msgs = [
