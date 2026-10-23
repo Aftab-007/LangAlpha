@@ -251,6 +251,7 @@ def provider_config_for(
     username: str,
     host_key: str,
     tunnel_id: Optional[str] = None,
+    helper: bool = False,
 ) -> Dict[str, Any]:
     """What a new ssh computer is built from. The key owner is always the caller.
 
@@ -264,6 +265,7 @@ def provider_config_for(
         "host_key": host_key,
         "key_owner": user_id,
         "tunnel": tunnel_id or "",
+        "helper": helper,
     }
 
 
@@ -326,6 +328,19 @@ def other_ssh_computers(
             yield other
 
 
+def key_line_logins(
+    computers: Iterable[Dict[str, Any]], computer: Dict[str, Any]
+) -> Iterator[Dict[str, Any]]:
+    """The other live ssh computers that log in through a line in ``~/.ssh``.
+
+    Not one LangAlpha's helper answers for: the helper checks the key itself,
+    so the line can go from under it.
+    """
+    for other in other_ssh_computers(computers, computer):
+        if not (other.get("provider_config") or {}).get("helper"):
+            yield other
+
+
 def computer_sharing_login(
     computers: Iterable[Dict[str, Any]], computer: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
@@ -337,7 +352,7 @@ def computer_sharing_login(
     taken for it only leaves the key in place.
     """
     config = computer.get("provider_config") or {}
-    for other in other_ssh_computers(computers, computer):
+    for other in key_line_logins(computers, computer):
         theirs = other.get("provider_config") or {}
         if theirs.get("username") == config.get("username") and _same_machine(
             theirs,
@@ -568,6 +583,7 @@ async def plan_create(
             username=spec.username,
             host_key=spec.host_key,
             tunnel_id=spec.tunnel_id,
+            helper=found.helper,
         ),
         root_dir=root_dir,
         default_name=found.hostname or spec.host,
@@ -683,4 +699,5 @@ def ssh_info(
         fingerprint=fingerprint,
         tunnel=bool(tunnel_id),
         tunnel_connected=connected,
+        helper=bool(config.get("helper")),
     )

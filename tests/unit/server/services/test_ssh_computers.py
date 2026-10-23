@@ -302,3 +302,15 @@ def test_a_listing_fingerprints_a_key_as_the_provider_does():
     for line in (_KEY, f"{_KEY} root@box", minted):
         assert host_key_fingerprint(line) == ssh.public_key_fingerprint(line)
     assert host_key_fingerprint("ssh-ed25519 not*base64") is None
+
+
+@pytest.mark.parametrize(("stored", "helper"), [(True, True), (None, False)])
+def test_a_listing_says_whether_the_helper_answers_for_the_machine(stored, helper):
+    """A computer added before the helper existed has no such key."""
+    from src.server.services.ssh_computers import ssh_info
+
+    computer = _ssh("/home/ubuntu/langalpha")
+    if stored is not None:
+        computer["provider_config"]["helper"] = stored
+
+    assert ssh_info(computer).helper is helper
