@@ -70,6 +70,7 @@ from src.server.services.workspace_files import (
     HOME_NOT_ON_COMPUTER_REASON,
     acquire_sandbox_to_change,
     contained_target,
+    not_running_for_upload,
     owned_workspace_on_computer,
     owner_layout,
     previous_dir_names_of,
@@ -956,10 +957,7 @@ async def upload_workspace_file(
     workspace = await owned_workspace_on_computer(workspace_id, x_user_id)
 
     if served_from_mirror(workspace.get("status")):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot upload files — workspace is {workspace.get('status')}. Wait for it to be running.",
-        )
+        raise not_running_for_upload(workspace)
 
     async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
         work_dir = owner_work_dir(workspace)

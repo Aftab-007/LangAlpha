@@ -135,6 +135,9 @@ _REDIS_BACKGROUND_SINGLETONS: tuple[tuple[str, str], ...] = (
     # Takes tunnels no computer uses off their machines; a claim on each
     # tunnel's row in Postgres dedups it across workers.
     ("TunnelSweeper", "src.server.services.ssh_tunnel_sweep"),
+    # Ends uploads their browser abandoned and takes over pulls whose worker
+    # died; a claim on each upload's row in Postgres dedups it across workers.
+    ("UploadSweeper", "src.server.services.workspace_upload_pull"),
 )
 
 

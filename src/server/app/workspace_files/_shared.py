@@ -23,6 +23,7 @@ from ptc_agent.core.paths import (
     ALWAYS_HIDDEN_PATH_SEGMENTS,
     ALWAYS_HIDDEN_SUFFIXES,
     HIDDEN_DIR_NAMES,
+    TRANSIENT_ROOT_PREFIX,
     SandboxLayout,
     logged_path,
 )
@@ -369,6 +370,11 @@ def _is_hidden_path(client_path: str) -> bool:
 
 def _is_always_hidden_path(client_path: str) -> bool:
     normalized = f"/{client_path.lstrip('/')}"
+
+    # A transfer's partial or staged file, whose bytes are not yet the file
+    # they will become; one a user edits or removes fails the transfer.
+    if normalized.rfind("/") == 0 and normalized[1:].startswith(TRANSIENT_ROOT_PREFIX):
+        return True
 
     if normalized.endswith(_ALWAYS_HIDDEN_BASENAMES):
         return True

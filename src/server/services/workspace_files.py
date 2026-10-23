@@ -1,4 +1,4 @@
-"""The sandbox access the file routes share."""
+"""The sandbox access the file routes and the upload pull share."""
 
 from __future__ import annotations
 
@@ -56,6 +56,14 @@ async def owned_workspace_on_computer(workspace_id: str, user_id: str) -> dict[s
     if is_unbound(workspace):
         raise HTTPException(status_code=400, detail=HOME_NOT_ON_COMPUTER)
     return workspace
+
+
+def not_running_for_upload(workspace: dict[str, Any]) -> HTTPException:
+    """The refusal of an upload into a workspace that is not running, on either path."""
+    return HTTPException(
+        status_code=409,
+        detail=f"Cannot upload files: the workspace is {workspace.get('status')}. Wait for it to be running.",
+    )
 
 
 async def acquire_sandbox(
