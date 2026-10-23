@@ -45,6 +45,11 @@ CLAIMABLE_FOR_START = (ComputerStatus.STOPPED, ComputerStatus.CREATING)
 
 ComputerKind = Literal["daytona", "docker", "e2b", "ssh"]
 
+# Spec presets a request may name. Shown as Small, Medium, Large and Extra
+# Large; the ids predate those names and are persisted on computer rows. Each
+# provider offers its own subset (xlarge is E2B's alone).
+ResourceTierId = Literal["standard", "performance", "max", "xlarge"]
+
 
 _HOSTNAME = re.compile(
     r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -172,7 +177,7 @@ class ComputerCreate(BaseModel):
         max_length=255,
         description="User-facing computer name; a default is used when absent",
     )
-    resource_tier: Literal["standard", "performance", "max"] = Field(
+    resource_tier: ResourceTierId = Field(
         "standard",
         description="Spec preset the computer is created at",
     )
@@ -401,6 +406,15 @@ class ComputerSSHInfo(BaseModel):
     )
 
 
+class ComputerTierSpec(BaseModel):
+    """One spec preset a provider offers, as its config sizes it."""
+
+    tier: str = Field(description="Tier id, as a create or spec change names it")
+    cpu: int = Field(description="vCPU cores")
+    memory_gib: int = Field(description="Memory in GiB")
+    disk_gib: int = Field(description="Disk in GiB")
+
+
 class ComputerProviderOption(BaseModel):
     """One sandbox provider a new computer may be created on."""
 
@@ -413,6 +427,13 @@ class ComputerProviderOption(BaseModel):
             "Whether the caller may create a computer here; null when it is "
             "not gated or the answer is unknown, and the create is then allowed"
         )
+    )
+    tiers: List[ComputerTierSpec] = Field(
+        default_factory=list,
+        description=(
+            "The spec presets offered here, smallest first; empty where the "
+            "machine is its owner's and they size it"
+        ),
     )
 
 
@@ -427,7 +448,7 @@ class ComputerProvidersResponse(BaseModel):
 class ComputerSpecRequest(BaseModel):
     """Request model for changing a computer's spec tier."""
 
-    tier: Literal["standard", "performance", "max"] = Field(
+    tier: ResourceTierId = Field(
         description="Target spec preset",
     )
 
@@ -577,7 +598,10 @@ class ComputerResponse(BaseModel):
     )
     resource_tier: str = Field(
         "standard",
-        description="Spec preset: standard, performance, max",
+        description=(
+            "Spec preset: standard (Small), performance (Medium), max (Large), "
+            "xlarge (Extra Large)"
+        ),
     )
     is_always_on: bool = Field(
         False,

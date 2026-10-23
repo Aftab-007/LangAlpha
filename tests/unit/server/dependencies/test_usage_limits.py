@@ -1056,6 +1056,19 @@ class TestExtractCapacityAliases:
     def test_absent_counts_stay_none(self):
         assert self._extract()({"allowed": True}) == (None, None)
 
+    def test_null_names_fall_through_to_the_counted_ones(self):
+        """The platform sends every quota field, the unused ones as null; a
+        computer quota carries its counts under the workspace names only."""
+        assert self._extract()(
+            {
+                "allowed": True,
+                "capacity_used": None,
+                "capacity_limit": None,
+                "active_workspaces": 1,
+                "workspace_limit": 2,
+            }
+        ) == (1, 2)
+
 
 # ===================================================================
 # always_on_entitlement_lost — the idle-cleanup reconciler's check.
