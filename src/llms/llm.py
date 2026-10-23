@@ -10,7 +10,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_deepseek import ChatDeepSeek
 from langchain_qwq import ChatQwen
 
-from .endpoints import is_official_openai_endpoint
+from .endpoints import anthropic_sdk_base_url, is_official_openai_endpoint
 from .model_spec import (
     ModelSpec,
     canonical_reasoning_efforts,
@@ -164,6 +164,30 @@ class ModelConfig:
         the precomputed map in ``__init__``.
         """
         return list(self._child_variants.get(provider, ()))
+
+    def shares_api_key(self, provider: str, other: str) -> bool:
+        """Whether a key issued for ``provider`` is also valid for ``other``.
+
+        A manifest family shares one key unless a variant declares
+        ``"own_api_key": true``: its vendor issues that variant's keys apart
+        from its parent's (a coding-plan key against the platform endpoint, or
+        one region's key against another's), so the other side rejects them.
+        Such a variant is the root of its own credential and its descendants
+        stay with it, which is why this walks up to the nearest declaring
+        ancestor rather than comparing the two flags.
+        """
+        return self._key_issuer(provider) == self._key_issuer(other)
+
+    def _key_issuer(self, provider: str) -> str:
+        seen: set[str] = set()
+        while provider not in seen:
+            seen.add(provider)
+            info = self._flat_providers.get(provider, {})
+            parent = info.get("parent_provider")
+            if info.get("own_api_key") is True or not parent:
+                return provider
+            provider = parent
+        return provider
 
     def get_display_name(self, provider: str) -> str:
         """Return display name, preferring own name then resolving through parent."""
@@ -901,6 +925,12 @@ class LLM:
         # This will override max_tokens if explicitly set in model config
         filtered_params = {k: v for k, v in self.parameters.items() if k != "enable_caching"}
         params.update(filtered_params)
+
+        # After the parameters expansion, which can carry either alias. The
+        # stored URL is left as it is: it keys the route identity.
+        for url_key in ("base_url", "anthropic_api_url"):
+            if params.get(url_key):
+                params[url_key] = anthropic_sdk_base_url(params[url_key])
 
         # Merged after the parameters expansion so a parameters["default_headers"]
         # entry augments the provider-level headers instead of clobbering them.

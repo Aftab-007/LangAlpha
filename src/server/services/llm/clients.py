@@ -79,7 +79,8 @@ def is_own_key_turn(config: Any) -> bool:
 
 # ---------------------------------------------------------------------------
 # Finding the key. A stored BYOK key may sit under the model's own provider
-# slug, its manifest parent, or a sibling variant of that parent.
+# slug, its manifest parent, or a sibling variant of that parent, as long as
+# the family's vendor issues them as one credential.
 # ---------------------------------------------------------------------------
 
 
@@ -88,6 +89,8 @@ def _candidate_slugs(provider: str, mc) -> list[str]:
 
     Shared by ``_walk_byok_candidates`` (key lookup) and STEP-0 prefetch so the
     two can't drift. Excludes platform-only siblings (BYOK keys never live there).
+    Whether a key found here may serve the model is ``_key_fits``'s call, since
+    it depends on what was saved with the key.
     """
     parent = mc.get_parent_provider(provider)
     candidates: list[str] = [provider]
@@ -105,17 +108,31 @@ def _candidate_slugs(provider: str, mc) -> list[str]:
     return candidates
 
 
+def _key_fits(provider: str, holder: str, byok_config: dict, mc) -> bool:
+    """Whether a key stored under ``holder`` may serve a model of ``provider``.
+
+    Not when the two are separate credentials (``own_api_key`` in the
+    manifest): the key would go to the model's endpoint, which never issued it
+    and rejects it. A base URL saved with the key lifts that, since it wins over
+    the model's endpoint, so the key goes where the user pointed it.
+    """
+    return bool(byok_config.get("base_url")) or mc.shares_api_key(provider, holder)
+
+
 async def _walk_byok_candidates(
     user_id,
     provider,
     mc,
     *,
     _byok_cache=None,
+    any_credential: bool = False,
 ):
     """Walk [provider → parent → sibling variants] for a stored BYOK key.
 
     Returns ``(byok_config, holding_slug)`` — the first candidate (in priority
-    order) that has a key, or ``(None, None)``. Honors a request-scoped
+    order) that has a key ``_key_fits`` lets serve the model, or ``(None, None)``.
+    ``any_credential`` takes any key, for a walk that builds against the endpoint
+    of whichever slug held it. Honors a request-scoped
     ``_byok_cache`` (``dict[str, dict | None] | None``): a slug mapping to a
     dict is a confirmed key, a slug mapping to ``None`` is confirmed-absent, and
     a slug absent from the cache is NOT prefetched — it MUST fall back to a
@@ -142,7 +159,9 @@ async def _walk_byok_candidates(
 
     for candidate in candidates:  # keep the provider → parent → sibling priority
         byok_config = configs.get(candidate)
-        if byok_config:
+        if byok_config and (
+            any_credential or _key_fits(provider, candidate, byok_config, mc)
+        ):
             return byok_config, candidate
 
     return None, None
@@ -217,6 +236,9 @@ async def _resolve_custom_model_byok(
        parent slug (e.g. ``moonshot``) but the user only configured a variant
        (e.g. ``moonshot-coding``) so the key lives under that variant.
        Platform-only variants are excluded (BYOK keys are never stored there).
+       Unlike a system model's walk, this one crosses a separate credential
+       (``own_api_key``): the client is built against the endpoint of the slug
+       that held the key, so the key still goes to the service that issued it.
     """
     from src.server.database.api_keys import get_byok_config_for_provider
 
@@ -247,7 +269,7 @@ async def _resolve_custom_model_byok(
     #    model is tagged with the parent slug but the user only configured a
     #    variant (e.g. coding-plan) so the key lives under the variant.
     byok_config, holding = await _walk_byok_candidates(
-        user_id, provider, mc, _byok_cache=_byok_cache,
+        user_id, provider, mc, _byok_cache=_byok_cache, any_credential=True,
     )
     if byok_config:
         base_url = byok_config.get("base_url") or mc.get_provider_info(holding).get("base_url")
@@ -379,8 +401,9 @@ async def resolve_byok_llm_client(
 
     # System model — the BYOK key may live under the model's own provider
     # slug (coding-plan variants store it there), its parent, or a sibling
-    # variant. Walk all three; but pin SDK + base_url to the MODEL'S OWN
-    # provider, never the candidate that merely held the key.
+    # variant that shares its credential. Walk all three; but pin SDK +
+    # base_url to the MODEL'S OWN provider, never the candidate that merely
+    # held the key.
     provider = config_entry["provider"]
     byok_config, holding = await _walk_byok_candidates(
         user_id, provider, mc, _byok_cache=_byok_cache,

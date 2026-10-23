@@ -5,8 +5,12 @@ from unittest.mock import MagicMock
 from pydantic import BaseModel
 
 # Apply the patch before importing _create_usage_metadata
-from src.llms.patches import _patch_langchain_anthropic_usage_metadata
+from src.llms.patches import (
+    _patch_langchain_anthropic_context_management,
+    _patch_langchain_anthropic_usage_metadata,
+)
 _patch_langchain_anthropic_usage_metadata()
+_patch_langchain_anthropic_context_management()
 
 
 class MockCacheCreation(BaseModel):
@@ -109,3 +113,82 @@ class TestPatchLangchainAnthropicUsageMetadata:
 
         # The patched function should be our wrapper, not the original
         assert "patched" in chat_models._create_usage_metadata.__name__
+
+
+def _message_delta(**extra):
+    """Built the way the SDK parses a stream line, so unknown keys land in extras."""
+    from anthropic._models import construct_type
+    from anthropic.types import RawMessageStreamEvent
+
+    return construct_type(
+        type_=RawMessageStreamEvent,
+        value={
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 5, "input_tokens": 10},
+            **extra,
+        },
+    )
+
+
+def _chunk_from(event):
+    from langchain_anthropic import ChatAnthropic
+
+    llm = ChatAnthropic(model="claude-sonnet-4-5", api_key="test-key")
+    chunk, _ = llm._make_message_chunk_from_anthropic_event(
+        event, stream_usage=True, coerce_content_to_string=False
+    )
+    return chunk
+
+
+class TestPatchLangchainAnthropicContextManagement:
+    """A proxy's ``context_management`` arrives in extras as a dict, not a model."""
+
+    def test_dict_context_management_does_not_crash(self):
+        event = _message_delta(context_management={"applied_edits": []})
+        assert isinstance(event.context_management, dict)
+
+        chunk = _chunk_from(event)
+
+        assert chunk.response_metadata["stop_reason"] == "end_turn"
+        assert chunk.response_metadata["context_management"] == {"applied_edits": []}
+        assert chunk.usage_metadata["output_tokens"] == 5
+
+    def test_event_is_left_untouched(self):
+        event = _message_delta(context_management={"applied_edits": []})
+
+        _chunk_from(event)
+
+        assert event.context_management == {"applied_edits": []}
+
+    def test_non_dict_value_is_dropped(self):
+        chunk = _chunk_from(_message_delta(context_management="unexpected"))
+
+        assert chunk.response_metadata["stop_reason"] == "end_turn"
+        assert "context_management" not in chunk.response_metadata
+
+    def test_absent_or_null_field_is_unchanged(self):
+        for extra in ({}, {"context_management": None}):
+            chunk = _chunk_from(_message_delta(**extra))
+            assert "context_management" not in chunk.response_metadata
+
+    def test_model_valued_field_takes_the_upstream_path(self):
+        """Once the SDK models the field, the shim must stand aside."""
+
+        class Managed(BaseModel):
+            applied_edits: list = []
+
+        event = _message_delta()
+        event.__pydantic_extra__["context_management"] = Managed(applied_edits=["x"])
+
+        chunk = _chunk_from(event)
+
+        assert chunk.response_metadata["context_management"] == {"applied_edits": ["x"]}
+
+    def test_patch_is_idempotent(self):
+        from langchain_anthropic import ChatAnthropic
+
+        installed = ChatAnthropic._make_message_chunk_from_anthropic_event
+        _patch_langchain_anthropic_context_management()
+
+        assert ChatAnthropic._make_message_chunk_from_anthropic_event is installed

@@ -3,9 +3,9 @@
 Replaces the stock langchain ``ModelRetryMiddleware`` + ``ModelFallbackMiddleware``
 pair so that:
 
-- non-retryable errors (bad request / auth / unknown model) skip straight to
-  the next fallback model instead of burning retries on a call that cannot
-  succeed,
+- non-retryable errors (bad request / auth / unknown model, or a crash in
+  parsing the response) skip straight to the next fallback model instead of
+  burning retries on a call that cannot succeed,
 - every retry and fallback switch is emitted as a custom stream event
   (``model_retry`` / ``model_fallback``) for the client to render, and
 - on total exhaustion the PRIMARY model's exception is re-raised with the full

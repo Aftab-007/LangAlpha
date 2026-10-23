@@ -169,6 +169,64 @@ class TestRetryBehavior:
         assert fallbacks[0]["status_code"] == 404
 
 
+class TestProgrammingErrors:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            AttributeError("'dict' object has no attribute 'model_dump'"),
+            TypeError("'NoneType' object is not iterable"),
+            KeyError("choices"),
+        ],
+    )
+    async def test_a_parsing_crash_goes_straight_to_the_fallback(self, exc, events):
+        client = _FakeModel("primary-model")
+        fallback_client = _FakeModel("fallback-a")
+        mw = _make_middleware(client, fallbacks=[("fallback-a", fallback_client)])
+        calls = []
+
+        async def handler(req):
+            calls.append(req.model)
+            if req.model is client:
+                raise exc
+            return "ok-from-fallback"
+
+        result = await mw.awrap_model_call(_FakeRequest(client), handler)
+        assert result == "ok-from-fallback"
+        assert calls == [client, fallback_client]
+        assert _fallback_props(events)[0]["attempts_on_from"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_crash_with_no_fallback_surfaces_after_one_attempt(self, events):
+        client = _FakeModel("primary-model")
+        mw = _make_middleware(client)
+        calls = []
+
+        async def handler(req):
+            calls.append(req)
+            raise KeyError("choices")
+
+        with pytest.raises(KeyError):
+            await mw.awrap_model_call(_FakeRequest(client), handler)
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_connection_error_keeps_its_retries(self, events):
+        import httpx
+
+        client = _FakeModel("primary-model")
+        mw = _make_middleware(client, max_retries=2)
+        calls = []
+
+        async def handler(req):
+            calls.append(req)
+            raise httpx.ConnectError("refused")
+
+        with pytest.raises(httpx.ConnectError):
+            await mw.awrap_model_call(_FakeRequest(client), handler)
+        assert len(calls) == 3
+
+
 class TestStalledStream:
     @pytest.mark.asyncio
     async def test_a_stall_after_the_stream_started_is_retried_once(self, events):
