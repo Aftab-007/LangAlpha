@@ -1,7 +1,11 @@
 import copy
+import functools
+import inspect
+import logging
 import os
 import json
 import uuid
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Dict, Optional, Any
 from dotenv import load_dotenv
@@ -25,6 +29,8 @@ from .reasoning_lineage import ROUTE_ENDPOINT_SEP
 from .task_costs import task_cost
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class MissingProviderKeyError(ValueError):
@@ -391,6 +397,75 @@ def _merged_default_headers(params: dict, *bases: dict | None) -> dict:
     merged.update(params.get("default_headers") or {})
     return merged
 
+# Constructor keys a model's ``parameters`` can use to move its endpoint: the
+# OpenAI family's ``base_url``/``openai_api_base``/``api_base``, Anthropic's
+# ``anthropic_api_url``, Gemini's ``client_options``. A custom model's
+# parameters are its user's, so each of these is a URL the user supplied.
+ENDPOINT_PARAM_KEYS = (
+    "base_url",
+    "openai_api_base",
+    "api_base",
+    "anthropic_api_url",
+    "client_options",
+)
+
+# Constructor keys that choose how a client connects: a proxy, an http client,
+# a prebuilt SDK client. A client held to an egress transport drops them, since
+# each would route around it, and ChatOpenAI refuses a proxy beside an http
+# client outright.
+CONNECTION_PARAM_KEYS = frozenset({
+    "openai_proxy",
+    "anthropic_proxy",
+    "client_args",
+    "http_client",
+    "http_async_client",
+    "client",
+    "async_client",
+    "root_client",
+    "root_async_client",
+})
+
+
+def param_levels(params: Mapping | None) -> list[tuple[str, Mapping]]:
+    """Each level of ``parameters`` a client constructor reads keys from, with
+    the prefix that names it in a message.
+
+    Every LangChain chat model the factory builds promotes a ``model_kwargs``
+    key that names one of its fields to that field (``_build_model_kwargs``),
+    so a key there routes the client as it would at the top. It promotes
+    once, and a ``model_kwargs`` inside it is refused, so there is no third.
+    """
+    if not isinstance(params, Mapping):
+        return []
+    levels: list[tuple[str, Mapping]] = [("", params)]
+    nested = params.get("model_kwargs")
+    if isinstance(nested, Mapping):
+        levels.append(("model_kwargs.", nested))
+    return levels
+
+
+def _drop_connection_params(params: dict, model: str) -> None:
+    """Drop the routing a held client cannot keep, at either level. A row saved
+    before these were refused at save time still carries them, and the call
+    runs without."""
+    dropped = sorted(key for key in CONNECTION_PARAM_KEYS if params.pop(key, None) is not None)
+    nested = params.get("model_kwargs")
+    if isinstance(nested, Mapping) and not CONNECTION_PARAM_KEYS.isdisjoint(nested):
+        dropped += sorted(
+            f"model_kwargs.{key}"
+            for key, value in nested.items()
+            if key in CONNECTION_PARAM_KEYS and value is not None
+        )
+        # A new mapping: the one in ``params`` is the model's own ``parameters``.
+        params["model_kwargs"] = {k: v for k, v in nested.items() if k not in CONNECTION_PARAM_KEYS}
+    if dropped:
+        logger.warning(
+            "Model %r is held to the egress transport; ignoring parameters %s",
+            model,
+            ", ".join(dropped),
+        )
+
+
 # Name regex for custom models: alphanumeric start, then alphanumeric/./_/-/:
 # Colon allowed for Ollama-style name:tag format (e.g. gemma4:31b)
 CUSTOM_MODEL_NAME_RE = r"^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$"
@@ -401,6 +476,10 @@ class LLM:
 
     # Class-level model config instance
     _model_config = None
+
+    # No hold unless a caller asks for one, including on an instance that was
+    # put together without ``__init__``.
+    egress_transport: Callable[[str], Any] | None = None
 
     @classmethod
     def get_model_config(cls) -> ModelConfig:
@@ -415,6 +494,8 @@ class LLM:
         api_key: str | None = None,
         base_url_override=_UNSET,
         reasoning_effort: str | None = None,
+        *,
+        egress_transport: Callable[[str], Any] | None = None,
         **override_params,
     ):
         """
@@ -427,8 +508,13 @@ class LLM:
             base_url_override: Override base URL. Use _UNSET (default) for no override,
                 None to clear to SDK default, or a string for a custom URL.
             reasoning_effort: Optional reasoning effort level ("low", "medium", "high").
+            egress_transport: Builds the transport every request of the client
+                is sent through, given its SDK family ("openai", "anthropic" or
+                "gemini"). None leaves each SDK its own; whether an endpoint
+                needs one is the caller's call, not the factory's.
             **override_params: Additional parameters to override defaults.
         """
+        self.egress_transport = egress_transport
         self.model_config = self.get_model_config()
         spec = (
             model
@@ -540,6 +626,8 @@ class LLM:
         base_url_override=_UNSET,
         cache_key: str | None = None,
         reasoning_effort: str | None = None,
+        *,
+        egress_transport: Callable[[str], Any] | None = None,
         **override_params,
     ):
         """
@@ -558,6 +646,7 @@ class LLM:
             reasoning_effort: Optional reasoning effort level, clamped against
                 the ladder the config declares, or the one it inherits from the
                 built-in whose name it took.
+            egress_transport: See :class:`LLM`.
             **override_params: Additional parameters to override defaults.
 
         Returns:
@@ -571,6 +660,7 @@ class LLM:
             api_key=api_key,
             base_url_override=base_url_override,
             reasoning_effort=reasoning_effort,
+            egress_transport=egress_transport,
             **override_params,
         )
         return instance.get_llm(cache_key=cache_key)
@@ -711,6 +801,75 @@ class LLM:
                 raise MissingProviderKeyError(f"{self.env_key} environment variable is not set")
         return "EMPTY"
 
+    def _hold_params_to_egress(self, params: dict, family: str) -> None:
+        """Send every request of the client ``params`` builds through the egress
+        transport. Applied last, so nothing in ``parameters`` can swap it out."""
+        if self.egress_transport is None:
+            return
+        _drop_connection_params(params, self.model)
+        transport = self.egress_transport(family)
+        # Redirects are not followed: no model API needs one, and a hop is one
+        # more connection for an endpoint to choose.
+        if family == "openai":
+            import openai
+
+            # Explicitly, or the field falls back to OPENAI_PROXY, which
+            # ChatOpenAI refuses beside a client of its own.
+            params["openai_proxy"] = None
+            params["http_client"] = openai.DefaultHttpxClient(
+                transport=transport, follow_redirects=False
+            )
+            params["http_async_client"] = openai.DefaultAsyncHttpxClient(
+                transport=transport, follow_redirects=False
+            )
+        elif family == "gemini":
+            # One mapping serves both of google-genai's clients, and a transport
+            # in it is also what turns off its aiohttp path, which no httpx
+            # transport would see.
+            params["client_args"] = {"transport": transport, "follow_redirects": False}
+        else:
+            raise ValueError(f"No egress hold for SDK family {family!r}")
+
+    def _hold_anthropic_to_egress(self, llm) -> None:
+        """Pre-seed ChatAnthropic's SDK clients with ones on the egress transport.
+
+        ChatAnthropic takes no http client: it builds each SDK client lazily in a
+        cached property from a default one. Seeding the cache is the one way in,
+        so a release that stops caching under these names is refused here rather
+        than left to dial on its own.
+        """
+        if self.egress_transport is None:
+            return
+        import anthropic
+
+        for name in ("_client", "_async_client"):
+            if not isinstance(inspect.getattr_static(type(llm), name, None), functools.cached_property):
+                raise TypeError(
+                    f"{type(llm).__name__}.{name} is not a cached property; "
+                    "the egress transport cannot be attached"
+                )
+        transport = self.egress_transport("anthropic")
+        client_params = llm._client_params
+        http_kwargs = {"timeout": client_params["timeout"]} if "timeout" in client_params else {}
+        # Not followed, as in ``_hold_params_to_egress``.
+        http_kwargs["follow_redirects"] = False
+        sync_client = anthropic.Client(
+            **client_params,
+            http_client=anthropic.DefaultHttpxClient(transport=transport, **http_kwargs),
+        )
+        async_client = anthropic.AsyncClient(
+            **client_params,
+            http_client=anthropic.DefaultAsyncHttpxClient(transport=transport, **http_kwargs),
+        )
+        if client_params.get("auth_token"):
+            # As ChatAnthropicOAuth does for its own clients: the SDK fills a
+            # None api_key from the environment, and a bearer client must not
+            # send that key alongside its token.
+            sync_client.api_key = None
+            async_client.api_key = None
+        llm.__dict__["_client"] = sync_client
+        llm.__dict__["_async_client"] = async_client
+
     def _resolve_base_url(self, param_name: str = "base_url") -> dict:
         """Resolve base URL with HOST_IP substitution. Returns dict to merge into params."""
         if not self.base_url:
@@ -771,6 +930,7 @@ class LLM:
             existing_mk = params.get("model_kwargs") or {}
             params["model_kwargs"] = {**existing_mk, "prompt_cache_key": cache_key}
 
+        self._hold_params_to_egress(params, "openai")
         return params
 
     def _get_openai_llm(self, cache_key: str | None = None):
@@ -836,6 +996,7 @@ class LLM:
             existing_mk = params.get("model_kwargs") or {}
             params["model_kwargs"] = {**existing_mk, "prompt_cache_key": cache_key}
 
+        self._hold_params_to_egress(params, "openai")
         return ChatCodexOpenAI(**params)
 
     def _get_deepseek_llm(self):
@@ -856,6 +1017,7 @@ class LLM:
         if self.extra_body:
             params["extra_body"] = self.extra_body
 
+        self._hold_params_to_egress(params, "openai")
         return ChatDeepSeek(**params)
 
     def _get_glm_llm(self):
@@ -878,6 +1040,7 @@ class LLM:
         if self.extra_body:
             params["extra_body"] = self.extra_body
 
+        self._hold_params_to_egress(params, "openai")
         return ChatZai(**params)
 
     def _get_qwq_llm(self):
@@ -898,6 +1061,7 @@ class LLM:
         if self.extra_body:
             params["extra_body"] = self.extra_body
 
+        self._hold_params_to_egress(params, "openai")
         return ChatQwen(**params)
 
     def _get_anthropic_llm(self):
@@ -943,11 +1107,14 @@ class LLM:
         if self.extra_body:
             params.setdefault("model_kwargs", {})["extra_body"] = self.extra_body
 
+        if self.egress_transport is not None:
+            _drop_connection_params(params, self.model)
+
         # OAuth tokens (sk-ant-oat*) need Authorization: Bearer, not X-Api-Key.
         # ChatAnthropicOAuth redirects api_key → auth_token on the underlying SDK client.
-        if is_oauth:
-            return ChatAnthropicOAuth(**params)
-        return ChatAnthropic(**params)
+        llm = ChatAnthropicOAuth(**params) if is_oauth else ChatAnthropic(**params)
+        self._hold_anthropic_to_egress(llm)
+        return llm
 
     def _get_gemini_llm(self):
         """Get Gemini LLM."""
@@ -970,6 +1137,7 @@ class LLM:
         if self.extra_body:
             params.setdefault("model_kwargs", {})["extra_body"] = self.extra_body
 
+        self._hold_params_to_egress(params, "gemini")
         return ChatGoogleGenerativeAI(**params)
 
 

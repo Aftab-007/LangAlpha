@@ -305,6 +305,27 @@ async def _custom_provider_model(
     }
 
 
+async def _egress_kwargs(model_name: str, base_url: str | None, params: dict | None = None) -> dict:
+    """``egress_transport=`` for a client on the user's own key that goes where
+    the user pointed it, in platform mode.
+
+    Only the user's own endpoints are held: a base URL saved with the key, an
+    endpoint or connection in a custom model's parameters, a local provider's
+    default. One the policy refuses is refused here, before the client exists,
+    so the user is told why instead of a call failing. So are Vertex keys in the
+    parameters, even beside an operator's endpoint, which they would replace.
+    """
+    from . import egress
+
+    if not egress.enforced():
+        return {}
+    urls = egress.user_endpoints(base_url, params)
+    await egress.refuse_model_endpoints(model_name, urls, params)
+    if not urls and not egress.connection_params(params):
+        return {}
+    return {"egress_transport": egress.sdk_transport}
+
+
 async def resolve_byok_llm_client(
     user_id: str,
     model_name: str,
@@ -376,6 +397,7 @@ async def resolve_byok_llm_client(
             cache_key=cache_key,
             reasoning_effort=reasoning_effort,
             **_tier_kwargs(service_tier, custom_config["provider"]),
+            **await _egress_kwargs(model_name, base_url, custom_config.get("parameters")),
         )
 
     # Unknown name — last-chance check for a custom-provider slug. Covers the
@@ -397,6 +419,7 @@ async def resolve_byok_llm_client(
             cache_key=cache_key,
             reasoning_effort=reasoning_effort,
             **_tier_kwargs(service_tier, custom_config["provider"]),
+            **await _egress_kwargs(model_name, base_url, custom_config.get("parameters")),
         )
 
     # System model — the BYOK key may live under the model's own provider
@@ -427,6 +450,7 @@ async def resolve_byok_llm_client(
         reasoning_effort=reasoning_effort,
         cache_key=cache_key,
         **_tier_kwargs(service_tier, provider),
+        **await _egress_kwargs(model_name, base_url),
     )
 
 

@@ -194,6 +194,21 @@ class UpdateApiKeysRequest(BaseModel):
         return v
 
 
+async def _refuse_base_urls(base_urls: Dict[str, Optional[str]]) -> None:
+    """Refuse, in platform mode, a base URL the server must not dial."""
+    from src.server.services.llm import egress
+
+    if not egress.enforced():
+        return
+    reasons = await egress.save_refusals(base_urls.values())
+    for provider, url in base_urls.items():
+        if url and reasons[url]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Base URL for {provider} cannot be used: {reasons[url]}",
+            )
+
+
 def _get_allowed_providers(custom_providers: list) -> set[str]:
     """Return the set of provider names allowed for API key operations.
 
@@ -220,21 +235,28 @@ async def update_api_keys(body: UpdateApiKeysRequest, user_id: CurrentUserId):
     - byok_enabled: toggle the global switch
     - api_keys: { "openai": "sk-..." } to set, { "openai": null } to delete
     """
+    custom_providers = await _get_custom_providers(user_id)
+    allowed = _get_allowed_providers(custom_providers)
+
+    # Before anything is written, so a refused request leaves nothing applied.
+    # Names first: a URL is resolved only for a provider there is, which bounds
+    # the lookups one request can ask for.
+    for provider in (*(body.api_keys or {}), *(body.base_urls or {})):
+        if provider not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported provider: {provider}.",
+            )
+    if body.base_urls:
+        await _refuse_base_urls(body.base_urls)
+
     # Toggle BYOK if requested
     if body.byok_enabled is not None:
         await set_byok_enabled(user_id, body.byok_enabled)
 
-    custom_providers = await _get_custom_providers(user_id)
-    allowed = _get_allowed_providers(custom_providers)
-
     # Upsert / delete individual provider keys
     if body.api_keys:
         for provider, key_value in body.api_keys.items():
-            if provider not in allowed:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unsupported provider: {provider}.",
-                )
             base_url = body.base_urls.get(provider) if body.base_urls else None
             if key_value is None and not base_url:
                 await delete_api_key(user_id, provider)
@@ -245,11 +267,6 @@ async def update_api_keys(body: UpdateApiKeysRequest, user_id: CurrentUserId):
     # Update base_urls independently (when key already exists)
     if body.base_urls:
         for provider, url in body.base_urls.items():
-            if provider not in allowed:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unsupported provider: {provider}.",
-                )
             # Skip if already handled in api_keys upsert above
             if body.api_keys and provider in body.api_keys:
                 continue
@@ -346,7 +363,7 @@ class TestApiKeyRequest(BaseModel):
 
 
 async def _test_anthropic_key(
-    api_key: str, model: str, base_url: str | None, timeout: float
+    api_key: str, model: str, base_url: str | None, timeout: float, transport=None
 ) -> dict:
     """Test an Anthropic API key. Try /models first, fall back to inference."""
     import httpx
@@ -358,7 +375,7 @@ async def _test_anthropic_key(
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
     }
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
         # Strategy 1: list models
         resp = await client.get(f"{base}/v1/models?limit=5", headers=headers)
         if resp.status_code not in (404, 405, 422):
@@ -382,14 +399,14 @@ async def _test_anthropic_key(
 
 
 async def _test_openai_key(
-    api_key: str, model: str, base_url: str | None, timeout: float
+    api_key: str, model: str, base_url: str | None, timeout: float, transport=None
 ) -> dict:
     """Test an OpenAI-compatible API key. Try /models first, fall back to inference."""
     import httpx
 
     base = (base_url or "https://api.openai.com/v1").rstrip("/")
     headers = {"Authorization": f"Bearer {api_key}"}
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
         # Strategy 1: list models
         resp = await client.get(f"{base}/models", headers=headers)
         if resp.status_code not in (404, 405):
@@ -413,13 +430,13 @@ async def _test_openai_key(
 
 
 async def _test_gemini_key(
-    api_key: str, model: str, base_url: str | None, timeout: float
+    api_key: str, model: str, base_url: str | None, timeout: float, transport=None
 ) -> dict:
     """Test a Gemini API key. Try /models first, fall back to inference."""
     import httpx
 
     base = (base_url or "https://generativelanguage.googleapis.com").rstrip("/")
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
         # Strategy 1: list models
         resp = await client.get(f"{base}/v1beta/models?key={api_key}&pageSize=5")
         if resp.status_code not in (404, 405):
@@ -453,40 +470,21 @@ _SDK_TEST_DISPATCH: dict[str, tuple] = {
 }
 
 
-_SSRF_BLOCKED_HOSTS = frozenset({"localhost", "metadata.google.internal", "metadata.goog", "instance-data"})
+async def _probe_transport(base_url: str | None):
+    """The transport a probe of a user's endpoint goes out on.
 
+    None where the platform policy does not apply. Otherwise a URL the policy
+    refuses is a 400 here, and the rest go out pinned, so a name that resolves
+    elsewhere by the time it is dialed cannot carry the probe inside.
+    """
+    from src.server.services.llm import egress
 
-async def _check_ssrf(base_url: str) -> None:
-    """Block private/internal IPs in platform mode. No-op in OSS mode."""
-    if HOST_MODE != "platform" or not base_url:
-        return
-    from urllib.parse import urlparse
-    import ipaddress
-    import socket
-    import asyncio
-
-    hostname = urlparse(base_url).hostname or ""
-
-    if hostname.rstrip(".").lower() in _SSRF_BLOCKED_HOSTS or hostname.endswith(".internal"):
-        raise HTTPException(
-            status_code=400,
-            detail="Base URL cannot point to a private or internal address.",
-        )
-
-    try:
-        loop = asyncio.get_running_loop()
-        infos = await loop.run_in_executor(
-            None, socket.getaddrinfo, hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM,
-        )
-        for family, _type, _proto, _canonname, sockaddr in infos:
-            addr = ipaddress.ip_address(sockaddr[0])
-            if addr.is_private or addr.is_loopback or addr.is_link_local:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Base URL cannot point to a private or internal address.",
-                )
-    except socket.gaierror:
-        pass  # DNS resolution failed — allow; the actual HTTP call will fail later
+    if not egress.enforced() or not base_url or egress.is_operator_endpoint(base_url):
+        return None
+    reason = await egress.endpoint_refusal(base_url)
+    if reason:
+        raise HTTPException(status_code=400, detail=f"Base URL cannot be used: {reason}")
+    return egress.http_transport()
 
 
 @router.post("/api/v1/keys/test")
@@ -556,11 +554,15 @@ async def test_api_key(body: TestApiKeyRequest, user_id: CurrentUserId):
 
     base_url = body.base_url or provider_info.get("base_url") if provider_info else body.base_url
 
-    await _check_ssrf(base_url)
+    transport = await _probe_transport(base_url)
+
+    from src.server.services.llm.egress import EndpointRefused
 
     start = time.monotonic()
     try:
-        result = await test_fn(body.api_key, default_model, base_url, timeout=5.0)
+        result = await test_fn(
+            body.api_key, default_model, base_url, timeout=5.0, transport=transport
+        )
         latency_ms = int((time.monotonic() - start) * 1000)
         return {
             "success": True,
@@ -583,6 +585,10 @@ async def test_api_key(body: TestApiKeyRequest, user_id: CurrentUserId):
             msg = e.response.text[:200]
         msg = _sanitize_error(msg) if msg else f"HTTP {status}"
         return {"success": False, "error": msg, "latency_ms": latency_ms}
+    except EndpointRefused as e:
+        # A name that passed the check above and then resolved inward at
+        # connect time gets the same 400 as one that was inward from the start.
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         latency_ms = int((time.monotonic() - start) * 1000)
         msg = _sanitize_error(str(e))
@@ -628,7 +634,7 @@ async def list_provider_models(provider: str, user_id: CurrentUserId):
     if not base_url:
         raise HTTPException(status_code=400, detail="No base URL configured for provider")
 
-    await _check_ssrf(base_url)
+    transport = await _probe_transport(base_url)
 
     # All local providers (Ollama, LM Studio, vLLM) expose OpenAI-compatible
     # GET /v1/models. The base_url may or may not already include /v1.
@@ -648,8 +654,10 @@ async def list_provider_models(provider: str, user_id: CurrentUserId):
     except Exception:
         pass  # No key available — proceed without auth
 
+    from src.server.services.llm.egress import EndpointRefused
+
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, transport=transport) as client:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -667,6 +675,8 @@ async def list_provider_models(provider: str, user_id: CurrentUserId):
         raise HTTPException(status_code=502, detail=f"Provider returned {e.response.status_code}")
     except httpx.ConnectError:
         raise HTTPException(status_code=502, detail="Could not connect to provider — is it running?")
+    except EndpointRefused as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("list_provider_models failed for %s: %s", provider, e, exc_info=True)
         raise HTTPException(status_code=502, detail="Internal error while querying provider")
