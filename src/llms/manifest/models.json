@@ -162,6 +162,9 @@
         "display": "summarized"
       }
     },
+    "additional_betas": [
+      "compact-2026-09-04"
+    ],
     "reasoning": {
       "efforts": [
         "low",
@@ -200,7 +203,8 @@
       }
     },
     "additional_betas": [
-      "thinking-binding-controls-2026-08-01"
+      "thinking-binding-controls-2026-08-01",
+      "compact-2026-09-04"
     ],
     "reasoning": {
       "efforts": [
@@ -240,7 +244,8 @@
       }
     },
     "additional_betas": [
-      "thinking-binding-controls-2026-08-01"
+      "thinking-binding-controls-2026-08-01",
+      "compact-2026-09-04"
     ],
     "reasoning": {
       "efforts": [
@@ -279,7 +284,8 @@
       }
     },
     "additional_betas": [
-      "thinking-binding-controls-2026-08-01"
+      "thinking-binding-controls-2026-08-01",
+      "compact-2026-09-04"
     ],
     "reasoning": {
       "efforts": [
@@ -1208,6 +1214,9 @@
         "display": "summarized"
       }
     },
+    "additional_betas": [
+      "compact-2026-09-04"
+    ],
     "reasoning": {
       "efforts": [
         "low",
@@ -1246,7 +1255,8 @@
       }
     },
     "additional_betas": [
-      "thinking-binding-controls-2026-08-01"
+      "thinking-binding-controls-2026-08-01",
+      "compact-2026-09-04"
     ],
     "reasoning": {
       "efforts": [
@@ -1286,7 +1296,8 @@
       }
     },
     "additional_betas": [
-      "thinking-binding-controls-2026-08-01"
+      "thinking-binding-controls-2026-08-01",
+      "compact-2026-09-04"
     ],
     "reasoning": {
       "efforts": [
@@ -1325,7 +1336,8 @@
       }
     },
     "additional_betas": [
-      "thinking-binding-controls-2026-08-01"
+      "thinking-binding-controls-2026-08-01",
+      "compact-2026-09-04"
     ],
     "reasoning": {
       "efforts": [

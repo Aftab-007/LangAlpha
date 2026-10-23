@@ -87,7 +87,7 @@ def compaction_profile_for(entry: dict[str, Any] | None) -> str | None:
 
 @dataclass(frozen=True)
 class Tuning:
-    """The four settings a user may set per account or per model.
+    """The settings a user may set per account or per model.
 
     Typed rather than a loose bag because every read site was re-checking the
     same invariants the write site had already enforced.
@@ -97,6 +97,9 @@ class Tuning:
     compaction_profile: str | None = None
     reasoning_effort: str | None = None
     fast_mode: bool | None = None
+    #: Whether a model whose provider can compact the conversation itself
+    #: does. None leaves it on.
+    native_compaction: bool | None = None
 
 
 #: Settings a per-model profile may override. Derived from :class:`Tuning` so
@@ -142,9 +145,10 @@ def validate_tuning(
                 field, f"{where}.{field} must be one of {sorted(valid)}"
             )
 
-    fast = values.get("fast_mode")
-    if fast is not None and not isinstance(fast, bool):
-        raise TuningError("fast_mode", f"{where}.fast_mode must be a boolean")
+    for field in ("fast_mode", "native_compaction"):
+        flag = values.get(field)
+        if flag is not None and not isinstance(flag, bool):
+            raise TuningError(field, f"{where}.{field} must be a boolean")
 
     effort = values.get("reasoning_effort")
     if effort is not None:
@@ -199,7 +203,7 @@ def resolve_tuning_field(model_pref: dict[str, Any], model: str | None, field: s
 
 
 def resolve_tuning(model_pref: dict[str, Any], model: str | None) -> Tuning:
-    """All four fields at once, with per-model overrides applied.
+    """Every tuning field at once, with per-model overrides applied.
 
     The typed twin of ``resolveTuning`` in ``web/src/lib/modelTuning.ts``; the
     two implement one precedence rule and are pinned together by

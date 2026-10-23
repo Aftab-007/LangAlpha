@@ -18,6 +18,7 @@ from ptc_agent.agent.subagents.merge import turn_roster
 from src.llms.preferences import (
     Tuning,
     compaction_profile_for,
+    custom_model,
     resolve_tuning,
 )
 from src.server.services.features import effective_flags_for_user
@@ -237,7 +238,9 @@ async def load_user_context(
 _THRESHOLD_SHARE = (3, 4)
 
 
-def apply_compaction(config, tuning: Tuning, entry: dict[str, Any] | None) -> None:
+def apply_compaction(
+    config, tuning: Tuning, entry: dict[str, Any] | None, *, custom: bool = False
+) -> None:
     """Apply the named compaction preset, capped to what the model's window
     can hold.
 
@@ -249,9 +252,16 @@ def apply_compaction(config, tuning: Tuning, entry: dict[str, Any] | None) -> No
     An account-wide preset reaches every model, so a 750k preset chosen for a
     1M model also lands on a 400k one, where it would never trigger and every
     long turn would compact only after the provider refused it.
+
+    ``native`` is the user's per-model choice. A ``custom`` model never
+    compacts natively: the settings offer the choice only for manifest models,
+    so one of the user's own would compact with no switch to turn it off. The
+    ``provider_compaction`` feature, and whether the provider can compact for
+    this turn, are weighed when the middleware is built and called.
     """
     from ptc_agent.config.agent import COMPACTION_PROFILES
 
+    config.compaction.native = not custom and tuning.native_compaction is not False
     profile = tuning.compaction_profile
     if not isinstance(profile, str):
         profile = compaction_profile_for(entry)
@@ -403,7 +413,12 @@ async def resolve_llm_config(
         # model and a 1M one.
         tuning = resolve_tuning(model_pref, selection.effective_model)
         config.prompt_guidance = user_models.guidance_for(model_pref, selection.effective_model)
-        apply_compaction(config, tuning, user_models.model_entry(model_pref, selection.effective_model))
+        apply_compaction(
+            config,
+            tuning,
+            user_models.model_entry(model_pref, selection.effective_model),
+            custom=custom_model(model_pref, selection.effective_model) is not None,
+        )
         permits = await gate_capabilities(config, user_id, model_pref)
 
         # After the gate, whose tier check the merge reuses, and before the

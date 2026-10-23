@@ -80,6 +80,12 @@ class CompactionConfig(BaseModel):
     #: window. Reported, never read: the knobs are the behavior.
     profile: str | None = None
 
+    #: Whether a model whose provider can compact the conversation itself does
+    #: (see ``src.llms.provider_compaction``): the user's ``native_compaction``
+    #: setting, set per turn by ``apply_compaction``. The ``provider_compaction``
+    #: feature gates it when the middleware is built.
+    native: bool = True
+
 
 # Named presets that bundle the two user-facing compaction knobs
 # (token_threshold, keep_messages). Applied at request time in
