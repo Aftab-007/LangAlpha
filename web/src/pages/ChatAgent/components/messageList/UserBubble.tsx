@@ -24,9 +24,13 @@ interface UserBubbleProps {
 }
 
 export function UserBubble({ provenance, readOnly, dispatcherContext, isMobile, className, children }: UserBubbleProps): React.ReactElement | null {
+  // Every parent right-aligns the bubble in a column flexbox, which sizes it to
+  // its widest unbreakable run of text (a comma-joined list, a URL), and an
+  // end-aligned item wider than its column spills out the left, where nothing
+  // can scroll to it. Capping it at the column makes `break-word` split the run.
   const bubble = children === undefined ? null : (
     <div
-      className={cn('overflow-hidden rounded-xl', isMobile ? 'px-3 py-2' : 'px-4 py-3', !provenance && className)}
+      className={cn('max-w-full overflow-hidden rounded-xl wrap-break-word', isMobile ? 'px-3 py-2' : 'px-4 py-3', !provenance && className)}
       style={{ backgroundColor: 'var(--color-bg-elevated)', color: 'var(--color-text-primary)' }}
     >
       {children}
