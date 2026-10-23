@@ -117,12 +117,15 @@ export function useComputerActions() {
       // and put the row back without its change, which also stops the poll.
       await queryClient.cancelQueries({ queryKey: queryKeys.computers.lists() });
       patchComputerRow(queryClient, computerId, row);
-      if (row.spec_change?.state !== 'in_progress') {
-        // Already at that tier: nothing was scheduled.
-        toast({ title: t('workspace.specUpdated', 'Computer spec updated'), description: tierLabel(t, tier) });
-        invalidateMachine(queryClient);
-        closeComputerSpec();
+      if (row.spec_change?.state === 'in_progress') {
+        // The accepted change already holds a slot of the tier it is going to.
+        void queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.quota() });
+        return;
       }
+      // Already at that tier: nothing was scheduled.
+      toast({ title: t('workspace.specUpdated', 'Computer spec updated'), description: tierLabel(t, tier) });
+      invalidateMachine(queryClient);
+      closeComputerSpec();
     },
     onError: () => invalidateMachine(queryClient),
   });

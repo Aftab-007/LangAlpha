@@ -1254,14 +1254,15 @@
     "alwaysOnFailed": "Could not change always-on",
     "tierBadgeTitle": "{{tier}} sandbox spec",
     "tier": {
-      "standard": "Standard",
-      "performance": "Performance",
-      "max": "Max"
+      "standard": "Small",
+      "performance": "Medium",
+      "max": "Large",
+      "xlarge": "Extra Large"
     },
-    "tierSpec": {
-      "standard": "1 vCPU · 1 GB RAM · 3 GB disk",
-      "performance": "2 vCPU · 4 GB RAM · 5 GB disk",
-      "max": "4 vCPU · 8 GB RAM · 10 GB disk"
+    "tierFact": {
+      "cpu": "{{count}} vCPU",
+      "memory": "{{count}} GB RAM",
+      "disk": "{{count}} GB disk"
     },
     "specUpdated": "Computer spec updated",
     "duplicate": "Duplicate",
@@ -1363,6 +1364,10 @@
     "createDesc": "A separate machine with its own files. Workspaces you put on it start and stop with it.",
     "planLimitedProvider": "Need a provider your plan doesn't include?",
     "planLimitedBoth": "Need a provider or spec your plan doesn't include?",
+    "capReached": "You have as many computers as your plan allows. Remove one to add another.",
+    "capPlanLimited": "Need more computers than your plan includes?",
+    "tierElsewhere": "{{tier}} is available on {{provider}}.",
+    "switchProvider": "Switch to {{provider}}",
     "computerLabel": "Computer",
     "computerHint": "Workspaces on one computer share its disk and start and stop together.",
     "primaryOption": "{{name}} (Primary)",
@@ -1374,7 +1379,8 @@
       "e2bDesc": "Stopping keeps memory and running programs, so it picks up where it left off.",
       "dockerDesc": "Runs on this machine.",
       "sshDesc": "Any Linux server or Mac you can SSH into. Stopping ends only the agent's programs.",
-      "sshLabel": "Your machine (SSH)"
+      "sshLabel": "Your machine (SSH)",
+      "capReached": "Limit reached"
     },
     "newComputer": "New computer",
     "create": "Create computer",

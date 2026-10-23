@@ -79,8 +79,8 @@ export interface FeatureState {
 
 // --- Workspace ---
 
-/** Sandbox resource tier. */
-export type ResourceTier = 'standard' | 'performance' | 'max';
+/** Sandbox resource tier. Shown as Small, Medium, Large and Extra Large. */
+export type ResourceTier = 'standard' | 'performance' | 'max' | 'xlarge';
 
 export interface Workspace {
   workspace_id: string;
@@ -156,7 +156,15 @@ export interface WorkspaceCapacity {
 export interface WorkspaceQuota {
   performance: WorkspaceCapacity | null;
   max: WorkspaceCapacity | null;
+  /** Absent from an older server, which is read as unknown. */
+  xlarge?: WorkspaceCapacity | null;
   always_on: WorkspaceCapacity | null;
+  /**
+   * Computers the user holds against the plan's cap, stopped ones included.
+   * Only computers the deployment runs count; a machine the user brings never
+   * does. Absent from an older server, which is read as unknown.
+   */
+  computers?: WorkspaceCapacity | null;
 }
 
 // --- Computer ---
@@ -337,6 +345,17 @@ export interface ComputerProviderOption {
   /** False when the user's plan lacks it; null when it is not gated or the
    *  platform did not say, which is treated as allowed. */
   allowed: boolean | null;
+  /** The sizes it offers, smallest first, from its server config. Empty for a
+   *  machine the user sizes; absent from an older server, which is unknown. */
+  tiers?: ComputerTierSpec[];
+}
+
+/** One size a provider offers, as its server config defines it. */
+export interface ComputerTierSpec {
+  tier: string;
+  cpu: number;
+  memory_gib: number;
+  disk_gib: number;
 }
 
 /** The providers a user can create a computer on, default first. */

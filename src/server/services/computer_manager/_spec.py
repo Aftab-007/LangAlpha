@@ -47,6 +47,7 @@ from src.server.services.computer_errors import (
     MachineBusyError,
     SpecChangeLostError,
     SpecNotChangeable,
+    UnknownResourceTier,
 )
 from src.server.services.computer_manager._types import ComputerBinding
 from src.server.services.persistence.transfer import PULL_MAX_INFLIGHT_BYTES
@@ -100,7 +101,10 @@ def _spec_refusal(
             "on that machine rather than here."
         )
     if tier not in tiers:
-        raise ValueError(f"Unknown resource tier: {tier}")
+        # Each provider offers its own sizes, so one may lack a tier another has.
+        raise UnknownResourceTier(
+            f"This computer's provider does not offer the {tier!r} spec"
+        )
     record = computer.get("spec_change") or {}
     took_over = (
         claim_id is not None
@@ -303,7 +307,8 @@ class ComputerSpecMixin:
         backed-up files won't fit the smaller disk is refused before teardown.
 
         Raises:
-            ValueError: Computer not found or ``tier`` is unknown.
+            ValueError: Computer not found.
+            UnknownResourceTier: The computer's provider has no ``tier``.
             ComputerBusyError: Another spec change or operation holds the machine.
             DiskTooSmallError: Downgrade refused, files exceed the target disk.
             MachineBusyError: A turn is running on the machine.

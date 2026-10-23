@@ -31,6 +31,7 @@ import type { Computer, ComputerCreate, ComputerSsh } from '@/types/api';
 import { useComputerProviders, useComputerStorage, useComputers } from '../hooks/useComputers';
 import { openComputerSpec } from '../hooks/computerPanelStore';
 import { useComputerActions, type PowerAction } from '../hooks/useComputerActions';
+import { useTierQuota } from '../hooks/useTierQuota';
 import { usePrepareStage } from '../hooks/computerPreparation';
 import { isMoveActive, useWorkspaceMove } from '../hooks/useWorkspaceMove';
 import { ComputerStatusIndicator } from './computerStatusUi';
@@ -42,7 +43,10 @@ import { COMPUTER_NAME_MAX } from './computerName';
 import FilesBackupOffDialog from './FilesBackupOffDialog';
 import RemoveComputerDialog from './RemoveComputerDialog';
 import MakePrimaryDialog, { MakePrimaryButton } from './MakePrimaryDialog';
+import { PlanUpgradeHint } from './planUpgradeHint';
 import {
+  computerCapReached,
+  isProviderLocked,
   providerCanBePrimary,
   providerHoldsOurKey,
   providerKeepsFilesOnRemove,
@@ -100,6 +104,14 @@ function ComputersDialog({
   const backupOffTarget = backupOffTargetId ? computers.find((c) => c.computer_id === backupOffTargetId) ?? null : null;
   const { data: providerData } = useComputerProviders({ enabled: open });
   const showProvider = rowsShowProvider(providerData?.providers, computers);
+  const { data: quota } = useTierQuota({ enabled: open });
+  // At the plan's computer cap only a machine the user brings can still be
+  // added. With none of those open there is nothing for the form to offer,
+  // so the button holds and says why rather than opening onto a dead end.
+  // Waits for the providers: until then which ones are open is unknown.
+  const atCap = computerCapReached(quota);
+  const createHeld = atCap && !!providerData && !providerData.providers.some((p) => !isProviderLocked(p, true));
+  const capNoteId = useId();
   const { power, renameComputerTo, turnOffAlwaysOn, setFilesBackup, create, remove, makePrimary } = useComputerActions();
   // Home moves with the primary, so a make-primary that has to move it runs
   // as Home's move: read here so it shows on its row, after a reopen too.
@@ -192,7 +204,14 @@ function ComputersDialog({
             density="form"
             covered={covered || createOpen || !!removeTarget || !!primaryTarget || !!backupOffTarget}
             footer={
-              <Button variant="ghost" size="sm" className="gap-1.5" onClick={openCreate}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5"
+                onClick={openCreate}
+                disabled={createHeld}
+                aria-describedby={createHeld ? capNoteId : undefined}
+              >
                 <Plus className="h-3.5 w-3.5" />
                 {t('computer.newComputer', 'New computer')}
               </Button>
@@ -240,6 +259,18 @@ function ComputersDialog({
                     }}
                   />
                 ))}
+              </div>
+            )}
+
+            {createHeld && (
+              <div className="flex flex-col gap-1">
+                <p id={capNoteId} className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                  {t('computer.capReached', 'You have as many computers as your plan allows. Remove one to add another.')}
+                </p>
+                <PlanUpgradeHint
+                  lead={t('computer.capPlanLimited', 'Need more computers than your plan includes?')}
+                  testId="computers-cap-plan-cta"
+                />
               </div>
             )}
 
