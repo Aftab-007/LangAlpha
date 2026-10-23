@@ -33,7 +33,11 @@ from langchain.agents.middleware.types import (
 )
 from langchain_core.messages import AIMessage
 
-from ptc_agent.agent.middleware.compaction.utils import get_effective_messages, measured_tokens
+from ptc_agent.agent.middleware.compaction.utils import (
+    context_tokens,
+    get_effective_messages,
+    read_ahead,
+)
 from ptc_agent.agent.middleware.runtime_context.changes import UPDATE_SCHEMA_VERSION
 from ptc_agent.agent.middleware.runtime_context.durable import (
     DurableUpdate,
@@ -277,7 +281,7 @@ class NotesDueMiddleware(AgentMiddleware):
         return await handler(_without_answered(request))
 
     async def abefore_model(self, state: Any, runtime: Any = None) -> dict[str, Any] | None:
-        fill = self._fill(state)
+        fill = await self._fill(state)
         # At 1.0 the summary runs on this very call, too late to write anything.
         if fill >= 1.0:
             return None
@@ -295,19 +299,18 @@ class NotesDueMiddleware(AgentMiddleware):
         # Sync fallback: the async agent won't call this but the protocol requires it.
         return None
 
-    def _fill(self, state: Any) -> float:
+    async def _fill(self, state: Any) -> float:
         """The context's share of the threshold as the summary trigger reads
-        it: what the last call measured, else a count of the view.
+        it (``context_tokens``).
 
         The count runs short of the trigger's by the system prompt, which
         state does not hold, so where no usage is reported the reminder comes
         late by that much rather than never.
         """
-        used = measured_tokens(state)
-        if used is None:
-            event = state.get("_summarization_event")
-            used = self._counter(get_effective_messages(state.get("messages") or [], event))
-        return used / self._token_threshold
+        event = state.get("_summarization_event")
+        view = get_effective_messages(state.get("messages") or [], event)
+        await read_ahead(view)
+        return context_tokens(state, view, self._counter) / self._token_threshold
 
     def _notes_due(self, state: Any, fill: float, since: str | None) -> DurableUpdate | None:
         if fill < notes_due_at(self._token_threshold):

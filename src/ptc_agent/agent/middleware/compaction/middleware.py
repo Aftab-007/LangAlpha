@@ -64,10 +64,11 @@ from ptc_agent.agent.middleware.compaction.compact import (
 )
 from ptc_agent.agent.middleware.compaction.summary_request import NATIVE_SUMMARY_PROMPT
 from ptc_agent.agent.middleware.compaction.utils import (
+    context_tokens,
     find_group_safe_cutoff,
     get_effective_messages,
-    measured_tokens,
     provider_cutoff,
+    read_ahead,
     stamp_compaction_summary,
     stamp_context_threshold,
 )
@@ -245,8 +246,10 @@ class CompactionMiddleware(AgentMiddleware):
             transcript=transcript,
             shell=shell_reads_transcripts(self._backend),
         )
+        await read_ahead(view)
 
-        tokens = self._context_tokens(request, view)
+        system = [request.system_message] if request.system_message is not None else []
+        tokens = context_tokens(request.state, view, self._summarizer.counter, system)
         if tokens < self._token_threshold:
             try:
                 return self._answered(await handler(request.override(messages=view)))
@@ -279,14 +282,6 @@ class CompactionMiddleware(AgentMiddleware):
         response = await handler(request.override(messages=compaction.messages))
         self._stamp_summary(response, compaction)
         return self._answered(response, compaction.update(request.state))
-
-    def _context_tokens(self, request: ModelRequest, view: list[AnyMessage]) -> int:
-        """What the last call measured, else a count of ``view``."""
-        measured = measured_tokens(request.state)
-        if measured is not None:
-            return measured
-        system = [request.system_message] if request.system_message is not None else []
-        return self._summarizer.counter([*system, *view])
 
     async def _compact(
         self,
