@@ -24,7 +24,7 @@ from ptc_agent.core.sandbox.runtime import (
 )
 from src.server.database.workspace_folders import WorkspaceFolderMoving
 from src.server.models.computer import ComputerStatus
-from src.server.services.computer_errors import SpecChangeLostError
+from src.server.services.computer_errors import SpecChangeLostError, UnknownResourceTier
 from src.server.services.computer_manager._types import ComputerBinding
 
 # Imported for its side effect: this module binds ``platform_secrets_active`` by
@@ -5841,10 +5841,23 @@ class TestSetWorkspaceSpec:
         """Tier validation uses the durable computer provider configuration."""
         mock_get_computer.return_value = self._computer()
         manager = self._make_manager()
-        with pytest.raises(ValueError, match="Unknown resource tier"):
+        with pytest.raises(UnknownResourceTier, match="does not offer the 'titanium' spec"):
             await manager.set_workspace_spec("ws-1", "titanium")
         # Refused by the precheck, before anything is claimed.
         assert mock_get_computer.await_count == 1
+        self.claim.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch(f"{_SPEC}.get_computer", new_callable=AsyncMock)
+    async def test_extra_large_is_refused_on_a_daytona_computer(self, mock_get_computer):
+        """Daytona's own tiers stop at Large, whatever E2B offers."""
+        from ptc_agent.config.core import DaytonaConfig
+
+        mock_get_computer.return_value = self._computer(kind="daytona")
+        manager = self._make_manager()
+        manager.config.sandbox.daytona.resource_tiers = DaytonaConfig().resource_tiers
+        with pytest.raises(UnknownResourceTier, match="'xlarge'"):
+            await manager.set_computer_spec(_STUB_COMPUTER["computer_id"], "xlarge")
         self.claim.assert_not_awaited()
 
     @pytest.mark.asyncio

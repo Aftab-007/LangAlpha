@@ -535,7 +535,7 @@ class TestDaytonaProvider:
         from ptc_agent.core.sandbox.providers.daytona import DaytonaProvider
 
         provider = DaytonaProvider.__new__(DaytonaProvider)
-        provider._config = DaytonaConfig(api_key="test-key")  # standard 1/1/3
+        provider._config = DaytonaConfig(api_key="test-key")  # standard 1/2/5
         provider._working_dir = "/home/workspace"
         provider._client = mock_daytona_client
 
@@ -546,8 +546,8 @@ class TestDaytonaProvider:
         kwargs = mock_ensure.call_args.kwargs
         assert kwargs["tier"] == "standard"
         assert kwargs["resources"].cpu == 1
-        assert kwargs["resources"].memory == 1
-        assert kwargs["resources"].disk == 3
+        assert kwargs["resources"].memory == 2
+        assert kwargs["resources"].disk == 5
 
     @patch("ptc_agent.core.sandbox.providers.daytona.AsyncDaytona")
     @pytest.mark.asyncio
