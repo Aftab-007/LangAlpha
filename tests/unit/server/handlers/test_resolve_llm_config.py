@@ -338,6 +338,29 @@ class TestOtherModelPreferences:
         assert config.llm.fallback == ["model-a", "model-b"]
 
     @pytest.mark.asyncio
+    async def test_the_fallback_chain_drops_repeats_but_keeps_the_turns_model(self, base_config):
+        from src.server.services.llm.config import resolve_llm_config
+
+        mock_mc = _mock_model_config(self.CATALOG)
+        with (
+            patch(
+                f"{USER_MODELS}.get_model_preference",
+                new_callable=AsyncMock,
+                return_value={
+                    "fallback_models": ["system-default-model", "model-a", "model-a", "model-b"]
+                },
+            ),
+            patch(f"{CLIENTS}.resolve_oauth_llm_client", new_callable=AsyncMock, return_value=None),
+            patch("src.llms.llm.LLM.get_model_config", return_value=mock_mc),
+            patch("src.llms.llm.create_llm", return_value=MagicMock()),
+        ):
+            config = await resolve_llm_config(base_config, "user-1", None, False)
+        # A subagent on another model may still fall back to the turn's; the
+        # resilience middleware drops it for the turn's own requests.
+        assert config.llm.fallback == ["system-default-model", "model-a", "model-b"]
+        assert config.fallback_llm_names == ["system-default-model", "model-a", "model-b"]
+
+    @pytest.mark.asyncio
     async def test_compaction_profile_aggressive_applies_preset(self, base_config):
         from src.server.services.llm.config import resolve_llm_config
         from ptc_agent.config.agent import COMPACTION_PROFILES
@@ -1790,14 +1813,14 @@ class TestStaleModelPreference:
             {
                 "preferred_model": "gpt-4o",
                 "fetch_model": ["not", "a", "name"],
-                "fallback_models": [{"name": "x"}, "gpt-4o"],
+                "fallback_models": [{"name": "x"}, "system-background-model"],
                 "custom_providers": ["not-a-dict"],
             },
             "primary",
         )
 
         assert config.llm.fetch_name == "gpt-4o"
-        assert config.llm.fallback == ["gpt-4o"]
+        assert config.llm.fallback == ["system-background-model"]
 
     @pytest.mark.asyncio
     async def test_a_background_turns_own_dead_model_is_refused_not_dropped(self, base_config):

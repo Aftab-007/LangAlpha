@@ -360,6 +360,62 @@ class TestFallbackChain:
         assert trace["attempted_models"][1]["error"] == "fallback param mismatch"
 
     @pytest.mark.asyncio
+    async def test_each_distinct_model_is_tried_once(self, events):
+        # A fallback naming the primary, or a name listed twice, would send the
+        # request that just failed to the model that refused it.
+        client = _FakeModel("primary-model")
+        fb = _FakeModel("fallback-a")
+        mw = _make_middleware(
+            client,
+            fallbacks=[("primary-model", client), ("fallback-a", fb), ("fallback-a", fb)],
+        )
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            raise _status_error("bad request", status=400)
+
+        with pytest.raises(Exception):
+            await mw.awrap_model_call(_FakeRequest(client), handler)
+        assert tried == ["primary-model", "fallback-a"]
+
+    @pytest.mark.asyncio
+    async def test_a_subagent_on_a_fallback_model_skips_that_fallback(self, events):
+        client = _FakeModel("primary-model")
+        fb_a = _FakeModel("fallback-a")
+        fb_b = _FakeModel("fallback-b")
+        sub = _FakeModel("fallback-a-id")
+        sub.metadata = {"manifest_model": "fallback-a"}
+        mw = _make_middleware(client, fallbacks=[("fallback-a", fb_a), ("fallback-b", fb_b)])
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            raise _status_error("bad request", status=400)
+
+        with pytest.raises(Exception):
+            await mw.awrap_model_call(_FakeRequest(sub), handler)
+        assert tried == ["fallback-a-id", "fallback-b"]
+
+    @pytest.mark.asyncio
+    async def test_a_subagent_on_its_own_model_can_fall_back_to_the_turns_model(self, events):
+        # The turn's model is listed as a fallback: useless to the main agent,
+        # but a real second model for a subagent on another one.
+        client = _FakeModel("primary-model")
+        sub = _FakeModel("sub-model-id")
+        sub.metadata = {"manifest_model": "sub-model"}
+        mw = _make_middleware(client, fallbacks=[("primary-model", client)])
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            raise _status_error("bad request", status=400)
+
+        with pytest.raises(Exception):
+            await mw.awrap_model_call(_FakeRequest(sub), handler)
+        assert tried == ["sub-model-id", "primary-model"]
+
+    @pytest.mark.asyncio
     async def test_no_fallbacks_configured_raises_primary(self, events):
         client = _FakeModel("primary-model")
         mw = _make_middleware(client)

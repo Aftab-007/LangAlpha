@@ -83,6 +83,29 @@ def _model_display_name(model: Any) -> str:
     return type(model).__name__
 
 
+def _manifest_name(model: Any) -> str | None:
+    """The models.json name ``LLM.get_llm()`` stamped on a client, which is
+    the namespace fallback names are in; None for an unstamped client."""
+    metadata = getattr(model, "metadata", None)
+    stamped = metadata.get("manifest_model") if isinstance(metadata, dict) else None
+    return stamped if isinstance(stamped, str) and stamped else None
+
+
+def _distinct(fallbacks: list[tuple[str, Any]], primary: str | None) -> list[tuple[str, Any]]:
+    """``fallbacks`` without ``primary`` and without a name listed twice.
+
+    Moving to the model that just failed re-sends the same request to it, so
+    the "fallback" is one more identical attempt that fails the same way.
+    """
+    seen = {primary} if primary else set()
+    distinct = []
+    for name, client in fallbacks:
+        if name not in seen:
+            seen.add(name)
+            distinct.append((name, client))
+    return distinct
+
+
 def build_fallback_pairs(config: Any) -> list[tuple[str, Any]]:
     """Resolve ``(display_name, client)`` pairs for the configured fallbacks.
 
@@ -147,7 +170,9 @@ class ModelResilienceMiddleware(AgentMiddleware):
         super().__init__()
         self.primary_name = primary_name
         self.primary_client = primary_client
-        self.fallbacks = list(fallbacks or [])
+        # Repeats only; the model a request targets is dropped per request,
+        # as the instance is shared into subagents on other models.
+        self.fallbacks = _distinct(list(fallbacks or []), None)
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.initial_delay = initial_delay
@@ -285,7 +310,12 @@ class ModelResilienceMiddleware(AgentMiddleware):
         # has a summarizer of its own to fall back to.
         if is_compaction_request(request.model_settings):
             return [primary]
-        return [primary, *self.fallbacks]
+        if self.primary_client is None or request.model is self.primary_client:
+            target = self.primary_name
+        else:
+            # A subagent on its own model, which may be one of the fallbacks.
+            target = _manifest_name(request.model)
+        return [primary, *_distinct(self.fallbacks, target)]
 
     def _classify(self, exc: Exception) -> tuple[int | None, bool]:
         status = extract_status_code(exc)

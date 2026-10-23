@@ -413,7 +413,7 @@ def _summary_fallback(config: AgentConfig) -> BaseChatModel | None:
     except for a user on their own key or subscription, whose summary never
     moves to a platform key."""
     client = config.client_for_role("compaction_fallback")
-    names = (config.llm.fallback if config.llm else None) or []
+    names = config.llm.fallbacks_for(config.llm.compaction_name) if config.llm else []
     if client is not None or not names or config.credential_source in (
         CredentialSource.OAUTH,
         CredentialSource.BYOK,
