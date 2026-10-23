@@ -1164,6 +1164,122 @@ def get_max_pdf_pages(model_name: str) -> int | None:
     return _ANTHROPIC_MAX_PDF_PAGES
 
 
+# Published per-side pixel ceilings for an image in a request, per vendor: the
+# largest side, then (image count, tighter side) steps that apply from that
+# count on. Two tighten with the number of images in the request, which is why
+# the count is an argument: Anthropic's above 20, DeepSeek's from 15. OpenAI,
+# Gemini and DashScope document that they shrink an oversized image rather than
+# refuse it, hence no rule.
+_IMAGE_SIDE_RULES: dict[str, tuple[int, tuple[tuple[int, int], ...]]] = {
+    "anthropic": (8000, ((21, 2000),)),
+    "deepseek": (8192, ((15, 4096),)),
+    "z-ai": (6000, ()),
+}
+_UNBOUNDED_IMAGE_PROVIDERS = frozenset({"openai", "gemini", "dashscope"})
+
+# The vendors whose image rules are known. Any other route (an aggregator, a
+# local server) is judged by the vendor of the model it serves, if known.
+_IMAGE_FAMILIES = frozenset({
+    "anthropic", "openai", "gemini", "dashscope", "deepseek", "z-ai", "moonshot", "minimax",
+})
+
+
+def _provider_family(provider: str) -> str:
+    """The root of a provider's variant chain, so a regional or plan route
+    (``z-ai-cn-coding``, ``claude-oauth``) is judged as the vendor it serves."""
+    config = LLM.get_model_config()
+    seen = {provider}
+    while (parent := config.get_parent_provider(provider)) not in seen:
+        seen.add(parent)
+        provider = parent
+    return provider
+
+
+def _endpoint_family(endpoint: str) -> str | None:
+    """The vendor whose manifest endpoints share this URL's host, if exactly one."""
+    from urllib.parse import urlparse
+
+    host = urlparse(endpoint).hostname
+    if not host:
+        return None
+    families = {
+        _provider_family(name)
+        for name, info in LLM.get_model_config().flat_providers.items()
+        if isinstance(info.get("base_url"), str)
+        and urlparse(info["base_url"]).hostname == host
+    } & _IMAGE_FAMILIES
+    return next(iter(families)) if len(families) == 1 else None
+
+
+def image_route(client_metadata: dict[str, Any] | None) -> str:
+    """The vendor whose image rules a call through this client has to meet.
+
+    Read off the client's stamp rather than the manifest key: a user-defined
+    model has no manifest row, a platform route replaces the manifest provider
+    when the caller brings no key, and a BYOK base URL can point a provider's
+    slot at another vendor. The endpoint decides when it is a known vendor's,
+    then the provider the client was built for, then the manifest model's own.
+    Empty when none is known, which gets the strictest rules.
+    """
+    metadata = client_metadata or {}
+    route = metadata.get("provider_route")
+    if isinstance(route, str) and ROUTE_ENDPOINT_SEP in route:
+        family = _endpoint_family(route.split(ROUTE_ENDPOINT_SEP, 1)[1])
+        if family:
+            return family
+    model = metadata.get("manifest_model")
+    model_info = (
+        LLM.get_model_config().get_model_config(model) if isinstance(model, str) else None
+    ) or {}
+    for provider in (metadata.get("pricing_provider"), model_info.get("provider")):
+        if isinstance(provider, str) and provider:
+            family = _provider_family(provider)
+            if family in _IMAGE_FAMILIES:
+                return family
+    return ""
+
+
+# The image types a route takes as is, from each vendor's docs. Most list the
+# same four; Gemini and DashScope list more, and neither lists GIF.
+COMMON_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+_IMAGE_TYPES = {
+    "gemini": frozenset({"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"}),
+    "dashscope": frozenset({
+        "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff", "image/heic",
+    }),
+}
+
+
+def get_image_types(route: str) -> frozenset[str]:
+    """MIME types ``route`` (from :func:`image_route`) takes as is."""
+    return _IMAGE_TYPES.get(route, COMMON_IMAGE_TYPES)
+
+
+def get_max_image_side(route: str, image_count: int) -> int | None:
+    """Largest side in pixels each image may have on ``route``, or None if unbounded.
+
+    ``route`` comes from :func:`image_route`. ``image_count`` is the number of
+    images in the request being sent, not in the one message carrying this
+    image. A route with no rule of its own gets the tightest of the known rules
+    at that count, for the reason ``get_max_pdf_pages`` gives: it may be any of
+    those vendors behind a gateway, and no one vendor's rule is the tightest
+    at every count.
+    """
+    if route in _UNBOUNDED_IMAGE_PROVIDERS:
+        return None
+    if route in _IMAGE_SIDE_RULES:
+        return _side_rule(route, image_count)
+    return min(_side_rule(vendor, image_count) for vendor in _IMAGE_SIDE_RULES)
+
+
+def _side_rule(vendor: str, image_count: int) -> int:
+    side, steps = _IMAGE_SIDE_RULES[vendor]
+    for from_count, tighter in steps:
+        if image_count >= from_count:
+            side = tighter
+    return side
+
+
 def should_enable_caching(model_name: str) -> bool:
     """
     Check if a model should enable Anthropic prompt caching.
