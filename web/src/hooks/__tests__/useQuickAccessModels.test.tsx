@@ -43,6 +43,7 @@ vi.mock('../useAllModels', () => ({
     modelAccessMap: mocks.accessMap,
     validModelNames: new Set(Object.keys(ACCESS)),
     systemDefaults: mocks.systemDefaults,
+    offPlanModels: new Set(),
   }),
 }));
 
