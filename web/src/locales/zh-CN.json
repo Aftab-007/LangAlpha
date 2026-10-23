@@ -1252,14 +1252,15 @@
     "alwaysOnFailed": "无法更改常驻设置",
     "tierBadgeTitle": "{{tier}} 沙箱规格",
     "tier": {
-      "standard": "标准",
-      "performance": "高性能",
-      "max": "旗舰"
+      "standard": "小型",
+      "performance": "中型",
+      "max": "大型",
+      "xlarge": "超大型"
     },
-    "tierSpec": {
-      "standard": "1 vCPU · 1 GB 内存 · 3 GB 磁盘",
-      "performance": "2 vCPU · 4 GB 内存 · 5 GB 磁盘",
-      "max": "4 vCPU · 8 GB 内存 · 10 GB 磁盘"
+    "tierFact": {
+      "cpu": "{{count}} vCPU",
+      "memory": "{{count}} GB 内存",
+      "disk": "{{count}} GB 磁盘"
     },
     "specUpdated": "计算机规格已更新",
     "duplicate": "复制",
@@ -1361,6 +1362,10 @@
     "createDesc": "一台独立的计算机，有自己的文件。放在上面的工作区会随它一起启动和停止。",
     "planLimitedProvider": "需要当前套餐不包含的提供商？",
     "planLimitedBoth": "需要当前套餐不包含的提供商或规格？",
+    "capReached": "你的计算机数量已达套餐上限。请先移除一台，再添加新的。",
+    "capPlanLimited": "需要比当前套餐更多的计算机？",
+    "tierElsewhere": "{{tier}}可在 {{provider}} 上使用。",
+    "switchProvider": "切换到 {{provider}}",
     "computerLabel": "计算机",
     "computerHint": "同一台计算机上的工作区共用它的磁盘，并会一起启动和停止。",
     "primaryOption": "{{name}}（默认）",
@@ -1372,7 +1377,8 @@
       "e2bDesc": "停止后保留内存和正在运行的程序，恢复后从中断处继续。",
       "dockerDesc": "在本机运行。",
       "sshDesc": "任何可通过 SSH 登录的 Linux 服务器或 Mac。停止只会结束 Agent 的程序。",
-      "sshLabel": "你的机器 (SSH)"
+      "sshLabel": "你的机器 (SSH)",
+      "capReached": "已达上限"
     },
     "newComputer": "新建计算机",
     "create": "创建计算机",

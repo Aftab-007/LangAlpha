@@ -4,7 +4,9 @@
  * Opened over the Computers dialog, which owns the request and scrolls to the
  * new row once it lands. Mounted only while open, so every opening starts
  * from a blank form. The provider and the tier are locked by plan the same
- * way, and either lock brings up the same way out as the spec dialog.
+ * way, and either lock brings up the same way out as the spec dialog. At the
+ * plan's computer cap only a machine the user brings is left open, and the
+ * Computers dialog opens this form only when one is.
  */
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -12,7 +14,8 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ModalShell } from '@/components/ui/ModalShell';
-import type { ComputerCreate, ResourceTier } from '@/types/api';
+import { isPlatformMode } from '@/config/hostMode';
+import type { ComputerCreate, ComputerProviderOption, ResourceTier, WorkspaceQuota } from '@/types/api';
 
 import { useComputerProviders } from '../hooks/useComputers';
 import { useTierQuota } from '../hooks/useTierQuota';
@@ -20,9 +23,25 @@ import { COMPUTER_NAME_MAX } from './computerName';
 import { SshSetup } from './sshSetup';
 import { useSshSetup } from './sshSetupState';
 import { PlanUpgradeHint } from './planUpgradeHint';
-import { defaultProviderKind, isProviderLocked, providerManagesSpec, providerOptions } from './providerUi';
+import {
+  computerCapReached,
+  defaultProviderKind,
+  isProviderLocked,
+  providerCountsTowardCap,
+  providerLabel,
+  providerManagesSpec,
+  providerOptions,
+} from './providerUi';
 import { RadioCardGroup } from './radioCardGroup';
-import { TIER_ORDER, TierRadioGroup, isTierBlocked, tierCapacity } from './tierUi';
+import {
+  TIER_ORDER,
+  TierRadioGroup,
+  isTierBlocked,
+  needsBiggerPlan,
+  offeredTiers,
+  tierCapacity,
+  tierLabel,
+} from './tierUi';
 
 interface CreateComputerDialogProps {
   onClose: () => void;
@@ -56,27 +75,40 @@ function CreateComputerDialog({ onClose, onSubmit, busy, error }: CreateComputer
   // uses its default, as it does while the list is still loading.
   const choosesProvider = providers.length > 1;
 
+  const atCap = computerCapReached(quota);
+
   // Derived rather than seeded: the list and the quota land after the form
   // opens and can refetch while it is open, and a pick they have since locked
-  // falls back to what is open instead of being sent to earn a 403.
+  // falls back to what is open instead of being sent to earn a 403. So does a
+  // size the picked provider does not run.
   const picked = providers.find((p) => p.kind === pickedKind);
-  const kind = picked && !isProviderLocked(picked) ? picked.kind : defaultProviderKind(providers);
-  const tier: ResourceTier = isTierBlocked(tierCapacity(quota, pickedTier)) ? 'standard' : pickedTier;
+  const kind = picked && !isProviderLocked(picked, atCap) ? picked.kind : defaultProviderKind(providers, atCap);
+  const offer = offeredTiers(providers.find((p) => p.kind === kind));
+  const tier: ResourceTier =
+    offer.tiers.includes(pickedTier) && !isTierBlocked(tierCapacity(quota, pickedTier)) ? pickedTier : 'standard';
 
   const isSsh = kind === 'ssh';
   const ssh = useSshSetup(isSsh);
   // A machine the user brings is sized by them, so its tier is never a pick.
   const managesSpec = kind === null || providerManagesSpec(kind);
 
-  const providerLocked = choosesProvider && providers.some(isProviderLocked);
-  const tierLocked = managesSpec && TIER_ORDER.some((id) => isTierBlocked(tierCapacity(quota, id)));
-  const upgradeLead = providerLocked && tierLocked
-    ? t('computer.planLimitedBoth', "Need a provider or spec your plan doesn't include?")
-    : providerLocked
-      ? t('computer.planLimitedProvider', "Need a provider your plan doesn't include?")
-      : tierLocked
-        ? t('computer.spec.planLimited', 'Need a bigger spec than your plan includes?')
-        : null;
+  // A size the plan allows that this provider does not run but another open
+  // one does (Extra Large, on E2B alone) is named with the way there, in
+  // place of the upgrade line: a bigger plan is not what the user lacks.
+  const elsewhere = managesSpec && kind !== null ? tierElsewhere(providers, kind, offer.tiers, quota, atCap) : null;
+  const capLocked = atCap && providers.some((p) => providerCountsTowardCap(p.kind));
+  const providerLocked = choosesProvider && providers.some((p) => isProviderLocked(p));
+  const tierLocked = managesSpec && !elsewhere && offer.tiers.some((id) => needsBiggerPlan(quota, id));
+  // The cap is the lock in the way of the most, so it is the one named.
+  const upgradeLead = capLocked
+    ? t('computer.capPlanLimited', 'Need more computers than your plan includes?')
+    : providerLocked && tierLocked
+      ? t('computer.planLimitedBoth', "Need a provider or spec your plan doesn't include?")
+      : providerLocked
+        ? t('computer.planLimitedProvider', "Need a provider your plan doesn't include?")
+        : tierLocked
+          ? t('computer.spec.planLimited', 'Need a bigger spec than your plan includes?')
+          : null;
   // The body the form would send, or null while it cannot send one. An SSH
   // machine's comes from its setup and always names its kind, since the
   // server takes a target only with it.
@@ -88,8 +120,9 @@ function CreateComputerDialog({ onClose, onSubmit, busy, error }: CreateComputer
       resource_tier: tier,
       ...(choosesProvider && kind ? { kind } : {}),
     };
-  // Every provider on offer locked leaves nothing to create on.
-  const blocked = (choosesProvider && kind === null) || !fields;
+  // Every provider on offer locked leaves nothing to create on. The cap locks
+  // even a lone provider, which the form shows no choice for.
+  const blocked = ((choosesProvider || atCap) && kind === null) || !fields;
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -149,7 +182,7 @@ function CreateComputerDialog({ onClose, onSubmit, busy, error }: CreateComputer
 
         {choosesProvider && (
           <RadioCardGroup
-            options={providerOptions(t, providers).map((o) =>
+            options={providerOptions(t, providers, atCap).map((o) =>
               // Beside the title, where a lock note would sit; a lock note wins.
               o.value === 'ssh' && !o.note ? { ...o, note: t('computer.ssh.previewLabel', 'Preview') } : o,
             )}
@@ -165,11 +198,33 @@ function CreateComputerDialog({ onClose, onSubmit, busy, error }: CreateComputer
           <SshSetup state={ssh} busy={busy} nameMaxLength={COMPUTER_NAME_MAX} />
         ) : (
           <TierRadioGroup
+            offer={offer}
             value={tier}
             onChange={setPickedTier}
             label={t('computer.tierLabel', 'Computer spec')}
             quota={quota}
           />
+        )}
+
+        {elsewhere && (
+          <p className="text-xs" data-testid="create-computer-tier-elsewhere" style={{ color: 'var(--color-text-secondary)' }}>
+            {t('computer.tierElsewhere', '{{tier}} is available on {{provider}}.', {
+              tier: tierLabel(t, elsewhere.tier),
+              provider: providerLabel(elsewhere.kind, t),
+            })}{' '}
+            <button
+              type="button"
+              className="underline font-medium"
+              style={{ color: 'var(--color-text-primary)' }}
+              disabled={busy}
+              onClick={() => {
+                setPickedKind(elsewhere.kind);
+                setPickedTier(elsewhere.tier);
+              }}
+            >
+              {t('computer.switchProvider', 'Switch to {{provider}}', { provider: providerLabel(elsewhere.kind, t) })}
+            </button>
+          </p>
         )}
 
         {upgradeLead && <PlanUpgradeHint lead={upgradeLead} testId="create-computer-plan-cta" />}
@@ -182,6 +237,34 @@ function CreateComputerDialog({ onClose, onSubmit, busy, error }: CreateComputer
       </form>
     </ModalShell>
   );
+}
+
+/**
+ * The biggest size the plan has a slot of that `kind` does not run, and the
+ * first other open provider that does. A size it lacks or has spent is no
+ * reason to switch.
+ */
+function tierElsewhere(
+  providers: readonly ComputerProviderOption[],
+  kind: string,
+  offered: readonly ResourceTier[],
+  quota: WorkspaceQuota | null | undefined,
+  atCap: boolean,
+): { tier: ResourceTier; kind: string } | null {
+  if (!isPlatformMode) return null;
+  for (const tier of [...TIER_ORDER].reverse()) {
+    const capacity = tierCapacity(quota, tier);
+    if (!capacity || isTierBlocked(capacity) || offered.includes(tier)) continue;
+    const other = providers.find(
+      (p) =>
+        p.kind !== kind &&
+        providerManagesSpec(p.kind) &&
+        !isProviderLocked(p, atCap) &&
+        offeredTiers(p).tiers.includes(tier),
+    );
+    if (other) return { tier, kind: other.kind };
+  }
+  return null;
 }
 
 export default CreateComputerDialog;
