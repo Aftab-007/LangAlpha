@@ -322,11 +322,12 @@ async def get_computer_names_and_home(
     conn=None,
 ) -> List[Dict[str, Any]]:
     """The user's live computers by id and name, each flagged when the user's
-    Home is on it: the names and the Home binding from one snapshot."""
+    Home is on it: the names and the Home binding from one snapshot. The kind
+    and provider config say which is a machine of the user's own."""
     async with _computer_cursor(conn) as cur:
         await cur.execute(
             f"""
-            SELECT c.computer_id, c.name,
+            SELECT c.computer_id, c.name, c.kind, c.provider_config,
                    c.computer_id IS NOT DISTINCT FROM (
                        SELECT h.computer_id FROM workspaces h
                        WHERE h.workspace_id = %(home_id)s AND h.{FENCE_NOT_DELETED}

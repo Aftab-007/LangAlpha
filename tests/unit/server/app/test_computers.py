@@ -721,11 +721,11 @@ async def test_an_ssh_create_without_a_folder_works_in_langalpha_in_the_home(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("helper", [True, False])
-async def test_an_ssh_computer_keeps_whether_the_helper_answered_its_probe(
-    client, computer, entitled, sandbox_config, prepares, helper
+@pytest.mark.parametrize(("helper", "os"), [(True, "Darwin"), (False, "Linux")])
+async def test_an_ssh_computer_keeps_the_helper_and_system_its_probe_found(
+    client, computer, entitled, sandbox_config, prepares, helper, os
 ):
-    """Only the probe can say so: the request never carries it."""
+    """Only the probe can say so: the request never carries them."""
     import contextlib
 
     @contextlib.asynccontextmanager
@@ -739,7 +739,7 @@ async def test_an_ssh_computer_keeps_whether_the_helper_answered_its_probe(
         patch("src.server.app.computers._computer_manager", return_value=manager),
         patch(f"{_SSH}.has_client_key", AsyncMock(return_value=True)),
         patch(f"{_SSH}.client_key", AsyncMock(return_value="private key")),
-        patch(f"{_SSH}.probe", AsyncMock(return_value=_found(helper=helper))),
+        patch(f"{_SSH}.probe", AsyncMock(return_value=_found(helper=helper, os=os))),
         patch(f"{_SSH}.get_computers_for_user", AsyncMock(return_value=[])),
         patch("src.server.app.computers.computer_capacity_lock", _lock),
         patch("src.server.app.computers.enforce_computer_limit", AsyncMock()),
@@ -749,6 +749,7 @@ async def test_an_ssh_computer_keeps_whether_the_helper_answered_its_probe(
     assert resp.status_code == 201, resp.text
     kwargs = manager.create_computer_for_user.await_args.kwargs
     assert kwargs["provider_config"]["helper"] is helper
+    assert kwargs["provider_config"]["os"] == os
 
 
 @pytest.mark.asyncio

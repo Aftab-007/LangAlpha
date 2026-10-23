@@ -252,13 +252,16 @@ def provider_config_for(
     host_key: str,
     tunnel_id: Optional[str] = None,
     helper: bool = False,
+    os: str = "",
 ) -> Dict[str, Any]:
     """What a new ssh computer is built from. The key owner is always the caller.
 
     Every target field is written, the tunnel too when there is none, so the
-    deployment's settings it is laid over never fill one in.
+    deployment's settings it is laid over never fill one in. The system,
+    which the deployment may not set either, is left out when the probe could
+    not name it, as on a computer added before it was kept.
     """
-    return {
+    config = {
         "host": host,
         "port": port,
         "username": username,
@@ -267,6 +270,9 @@ def provider_config_for(
         "tunnel": tunnel_id or "",
         "helper": helper,
     }
+    if os:
+        config["os"] = os
+    return config
 
 
 async def check_ssh_capacity(user_id: str, settings: SSHConfig) -> None:
@@ -584,6 +590,7 @@ async def plan_create(
             host_key=spec.host_key,
             tunnel_id=spec.tunnel_id,
             helper=found.helper,
+            os=found.os,
         ),
         root_dir=root_dir,
         default_name=found.hostname or spec.host,

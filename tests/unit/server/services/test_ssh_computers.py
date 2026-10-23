@@ -314,3 +314,16 @@ def test_a_listing_says_whether_the_helper_answers_for_the_machine(stored, helpe
         computer["provider_config"]["helper"] = stored
 
     assert ssh_info(computer).helper is helper
+
+
+@pytest.mark.parametrize(("os", "stored"), [("Darwin", "Darwin"), ("", None)])
+def test_a_new_computer_keeps_its_system_only_when_the_probe_named_one(os, stored):
+    """The deployment may not set it, so a system left out stays unknown."""
+    from src.server.services.ssh_computers import provider_config_for
+
+    config = provider_config_for(
+        "user-1", host="203.0.113.10", port=22, username="dev", host_key=_KEY, os=os
+    )
+
+    assert config.get("os") == stored
+    assert ("os" in config) is bool(stored)

@@ -492,6 +492,10 @@ class SSHConfig(ResourceTieredConfig):
     # only the server sets, from the probe. The helper keeps the key in its
     # own folder, so nothing of ours is in the login's ~/.ssh.
     helper: bool = False
+    # The machine's system as ``uname -s`` names it ("Darwin", "Linux"), which
+    # only the server sets, from the probe. Nothing connects by it: it tells
+    # the agent a Mac's command line tools are not GNU's.
+    os: str = ""
     # The machine never stops on idle, so the server's idle reaper stops a
     # quiet one by this interval. Stopping only ends this computer's own
     # processes there; the machine keeps running.
@@ -541,6 +545,7 @@ class SSHConfig(ResourceTieredConfig):
         "key_owner",
         "tunnel",
         "helper",
+        "os",
     )
 
     @field_validator("login_from")
