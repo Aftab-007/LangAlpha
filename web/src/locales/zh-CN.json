@@ -3670,77 +3670,37 @@
     "next": "继续",
     "done": "开始探索",
     "step": "第 {{n}} 步",
-    "intros": {
-      "chat": {
-        "steps": {
-          "workspace": {
-            "title": "认识工作区"
-          }
-        }
-      },
-      "thread": {
-        "steps": {
-          "filePanel": {
-            "title": "文件统一保存在文件面板",
-            "body": "Word 文档、Excel 模型、PDF、图表等 Agent 生成的文件都会保存在工作区中。点击顶部的文件夹图标，即可浏览、预览和下载。"
-          },
-          "memory": {
-            "title": "Agent 会记住你的偏好",
-            "body": "Agent 具备跨对话的长期记忆，可以保存你的偏好、惯例和值得复用的结论。对它说“记住这个”，相关内容便会长期保留。"
-          },
-          "memo": {
-            "title": "上传备忘录，补充分析资料",
-            "body": "可以将 PDF、笔记或表格上传为备忘录。Agent 会在需要时读取，把你的私有资料纳入分析上下文。"
-          }
-        }
-      },
-      "dashboard": {
-        "steps": {
-          "overview": {
-            "title": "行情总览",
-            "body": "自选股、投资组合、新闻与实时图表集中呈现，打开页面即可掌握市场概况。"
-          },
-          "customize": {
-            "title": "自定义布局",
-            "body": "切换到自定义模式后，可以添加、删除、调整和排列小组件，搭建符合自己需求的监控面板。"
-          },
-          "attach": {
-            "title": "将组件内容附加到对话",
-            "body": "看到值得深入分析的内容时，点击该行的回形针图标，即可将其作为上下文附加到对话，Agent 会基于这一内容继续分析。"
-          }
-        }
-      }
-    },
     "gettingStarted": {
       "title": "快速上手",
       "dismiss": "隐藏引导",
+      "progress": "已完成 {{done}}/{{total}}",
       "tasks": {
         "dashboard": {
           "title": "探索仪表盘",
-          "desc": "自选股、组合、新闻与实时组件一站集齐。"
+          "desc": "自选股、组合与新闻，在一个页面实时更新。"
         },
         "market": {
           "title": "查看实时行情",
-          "desc": "实时数据流驱动的行情图表。"
+          "desc": "任意标的的实时行情图表。"
         },
         "profile": {
           "title": "设置投资画像",
           "desc": "风险、市场、风格，以及 Agent 怎么配合你。"
         },
         "createWorkspace": {
-          "title": "创建第一个工作区"
+          "title": "创建工作区"
         },
         "firstChat": {
           "title": "开始第一次分析",
-          "desc": "打开对话，询问任意股票、行业或财报。"
+          "desc": "询问任意股票、行业或财报。"
         },
         "models": {
-          "title": "查看模型配置",
-          "desc": "在设置的模型页选择默认模型并连接服务商。"
+          "title": "选择模型",
+          "desc": "设置默认模型，连接模型服务商。"
         },
         "integrations": {
-          "title": "在其他平台使用 LangAlpha",
-          "desc": "通过平台集成，在 Slack、邮件等平台使用 LangAlpha。"
+          "title": "连接聊天应用",
+          "desc": "在 Slack、飞书、Telegram 等应用里和 LangAlpha 对话。"
         }
       }
     },
@@ -5775,32 +5735,11 @@
       "setupFailed": "无法打开工作区，请重试。"
     },
     "tour": {
-      "modes": {
-        "title": "两种工作方式",
-        "body": "选择一个工作区，由该工作区的分析师在其中完成工作，使用该工作区的文件。选择所有工作区，则由 Chief of Staff Agent 接手：快速问题它亲自回答，深度任务交给合适的分析师。接下来分别介绍两者。"
-      },
-      "chiefOfStaff": {
-        "title": "所有工作区：你的 Chief of Staff Agent",
-        "body": "你只管提出需求。Chief of Staff Agent 会回答快速问题、创建和管理工作区、把深度任务交给各工作区的分析师并汇报结果，还会管理你的自动化。它的所有对话归入“所有工作区”卡片，它自己的文件存放在名为 Home 的文件夹中。"
-      },
-      "analyst": {
-        "title": "工作区：由分析师完成工作",
-        "body": "每个工作区都有一位专属分析师。同一工作区内的所有对话共享文件、数据与已有成果，分析可以持续积累。它能处理大规模数据，并行调度多个子 Agent，还能生成各类交付物：Excel 模型、Word 文档、PDF、仪表盘。"
-      },
-      "workspace": {
-        "body": "每一个工作区都是一个项目空间：围绕同一任务的对话都集中在这里，共享文件、数据和成果，与其他工作区相互独立。你的所有工作区和 Home 都位于同一台电脑上，你一开始输入它就会启动。"
-      },
-      "create": {
-        "title": "为正式任务创建专属工作区",
-        "body": "涉及数据处理或需要产出交付物的任务，建议为其创建工作区：点击“新建工作区”并按任务命名，或让 Chief of Staff Agent 替你创建。"
-      },
-      "createWorkspaceTask": "新建一个专属工作区，其分析师将在完整沙箱中执行正式分析任务。"
+      "createWorkspaceTask": "为一个项目单独开辟空间，配有专属分析师和文件。"
     },
     "intro": {
-      "chiefOfStaffRun": "CoS Agent",
       "handoff": "已交给分析师",
-      "taskHandoff": "任务已交给分析师",
-      "footer": "两种工作方式"
+      "taskHandoff": "任务已交给分析师"
     }
   }
 }
