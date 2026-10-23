@@ -374,7 +374,55 @@ async def test_analyst_offer_steers_an_owed_report():
         "The analysis you dispatched (thread ptc-1 in a workspace) has completed.\n"
         "</system>"
     )
-    assert offer.shown["report_source"] == {"kind": "analyst", "thread_id": "ptc-1"}
+    assert offer.shown["report_source"] == {
+        "kind": "analyst",
+        "thread_id": "ptc-1",
+        "outcome": "completed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_analyst_offer_labels_the_run_it_reports():
+    """A steered report labels its row as its own turn would: how the
+    reported run ended, the runs it continued, and the hand-offs they took
+    in as steers."""
+    job = _analyst_job(
+        run_id="run-1",
+        payload={
+            "ptc_thread_id": "ptc-1",
+            "final_status": "error",
+        },
+    )
+    with (
+        patch(_CACHE, return_value=_analyst_cache(_origin())),
+        patch(
+            "src.server.database.runs.lifecycle.get_latest_attempt",
+            new=AsyncMock(return_value={"conversation_response_id": "run-1"}),
+        ),
+        patch(
+            "src.server.database.runs.lifecycle.get_continued_runs",
+            new=AsyncMock(return_value=["run-0", "run-1"]),
+        ),
+        patch(
+            f"{_OUTBOX}.list_taken_hand_offs",
+            # Taken in by one of the runs the report names, on its thread.
+            new=AsyncMock(
+                side_effect=lambda thread, runs: (
+                    ["steer-1"] if (thread, runs) == ("ptc-1", ["run-0", "run-1"])
+                    else []
+                )
+            ),
+        ),
+    ):
+        offer = await steer._analyst_offer(job, "t-1")
+
+    assert offer.shown["report_source"] == {
+        "kind": "analyst",
+        "thread_id": "ptc-1",
+        "outcome": "error",
+        "run_ids": ["run-0", "run-1"],
+        "steer_ids": ["steer-1"],
+    }
 
 
 @pytest.mark.asyncio

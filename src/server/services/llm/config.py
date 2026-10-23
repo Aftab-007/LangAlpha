@@ -40,6 +40,7 @@ from .subagents import (
     demote_clientless,
     read_user_subagents,
     resolve_user_subagents,
+    subagent_models,
     subagent_roles,
 )
 from . import user_models
@@ -429,5 +430,9 @@ async def resolve_llm_config(
         user_defined=user_defined,
     )
     demote_clientless(config)
+    if slot == "primary":
+        config.subagent_models = subagent_models(
+            config, model_pref, selection.effective_model, role=role,
+        )
 
     return config
