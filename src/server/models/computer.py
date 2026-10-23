@@ -249,6 +249,10 @@ class ComputerSSHProbeResponse(BaseModel):
         description="Why it cannot, or what will not work, one sentence each",
     )
     hostname: str = Field("", description="The machine's own name for itself")
+    helper: bool = Field(
+        False,
+        description="LangAlpha's helper answers for the machine rather than an sshd",
+    )
     suggested_root_dir: str = Field(
         description=(
             "The folder a computer created without root_dir would work in: "
@@ -369,6 +373,9 @@ class ComputerSSHPairingReport(_ScriptForm):
     ports: str = ""
     addresses: str = ""
     can_tunnel: str = ""
+    # "1" from a machine with no SSH server to dial, such as one LangAlpha's
+    # helper answers for: it is reached through a tunnel or not at all.
+    tunnel_only: str = ""
     tunnel_id: str = ""
     # The run of the command that sent this, a report or a stop.
     run: str = ""
@@ -403,6 +410,14 @@ class ComputerSSHInfo(BaseModel):
     tunnel_connected: Optional[bool] = Field(
         None,
         description="Whether the tunnel is up now; null when there is none or it is not known",
+    )
+    helper: bool = Field(
+        False,
+        description=(
+            "LangAlpha's helper answers for the machine rather than an sshd, "
+            "as on a Mac under remote control; our key is then in the helper's "
+            "own folder, never in ~/.ssh/authorized_keys"
+        ),
     )
 
 
@@ -442,6 +457,13 @@ class ComputerProvidersResponse(BaseModel):
 
     providers: List[ComputerProviderOption] = Field(
         default_factory=list, description="The default provider first"
+    )
+    tunnels: bool = Field(
+        False,
+        description=(
+            "Whether an ssh machine may connect out to this server through a "
+            "tunnel, which one with no SSH server of its own needs"
+        ),
     )
 
 

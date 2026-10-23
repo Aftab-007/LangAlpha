@@ -452,11 +452,9 @@ async def test_providers_lists_only_the_default_when_nothing_is_offered(client):
         resp = await client.get("/api/v1/computers/providers")
 
     assert resp.status_code == 200
-    assert resp.json() == {
-        "providers": [
-            {"kind": "daytona", "is_default": True, "allowed": True, "tiers": ANY}
-        ]
-    }
+    assert resp.json()["providers"] == [
+        {"kind": "daytona", "is_default": True, "allowed": True, "tiers": ANY}
+    ]
     # Not read as a computer id by GET /{computer_id}.
     get_computer.assert_not_called()
 
@@ -569,6 +567,15 @@ async def test_extra_large_on_e2b_is_gated_then_created(
     assert resp.json()["resource_tier"] == "xlarge"
     entitled.assert_awaited_once_with(USER, "xlarge")
     assert manager.create_computer_for_user.await_args.kwargs["resource_tier"] == "xlarge"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_providers_say_whether_an_ssh_machine_may_connect_out(client, enabled):
+    with patch("src.server.app.computers.tunnels_enabled", return_value=enabled):
+        resp = await client.get("/api/v1/computers/providers")
+
+    assert resp.json()["tunnels"] is enabled
 
 
 _HOST_KEY = (
@@ -711,6 +718,38 @@ async def test_an_ssh_create_without_a_folder_works_in_langalpha_in_the_home(
     assert probe.await_args.kwargs["root_dir"] == "/home/dev/langalpha"
     kwargs = manager.create_computer_for_user.await_args.kwargs
     assert kwargs["root_dir"] == "/home/dev/langalpha"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("helper", "os"), [(True, "Darwin"), (False, "Linux")])
+async def test_an_ssh_computer_keeps_the_helper_and_system_its_probe_found(
+    client, computer, entitled, sandbox_config, prepares, helper, os
+):
+    """Only the probe can say so: the request never carries them."""
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def _lock(user_id):
+        yield
+
+    sandbox_config.offered_providers = ("ssh",)
+    manager = _creating_manager({**computer, "kind": "ssh"})
+    body = {**_SSH_CREATE, "ssh": {**_SSH_CREATE["ssh"], "helper": not helper}}
+    with (
+        patch("src.server.app.computers._computer_manager", return_value=manager),
+        patch(f"{_SSH}.has_client_key", AsyncMock(return_value=True)),
+        patch(f"{_SSH}.client_key", AsyncMock(return_value="private key")),
+        patch(f"{_SSH}.probe", AsyncMock(return_value=_found(helper=helper, os=os))),
+        patch(f"{_SSH}.get_computers_for_user", AsyncMock(return_value=[])),
+        patch("src.server.app.computers.computer_capacity_lock", _lock),
+        patch("src.server.app.computers.enforce_computer_limit", AsyncMock()),
+    ):
+        resp = await client.post("/api/v1/computers", json=body)
+
+    assert resp.status_code == 201, resp.text
+    kwargs = manager.create_computer_for_user.await_args.kwargs
+    assert kwargs["provider_config"]["helper"] is helper
+    assert kwargs["provider_config"]["os"] == os
 
 
 @pytest.mark.asyncio

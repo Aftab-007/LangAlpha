@@ -1603,6 +1603,37 @@
         "rateLimited_other": "This account has tried too many SSH connections in the last hour. Try again in {{count}} minutes.",
         "generic": "Could not connect. Try again."
       }
+    },
+    "remoteControl": {
+      "cardTitle": "This Mac",
+      "cardDesc": "Let the agent work on this Mac, even while LangAlpha is closed.",
+      "alreadyAdded": "Already added",
+      "title": "Remote control of this Mac",
+      "intro": "LangAlpha's agent will work on this Mac as {{account}}, with everything that account can do.",
+      "meansLabel": "What it means",
+      "meansAccess": "It can run any command and read or change any file {{account}} can, in any folder. Its work stays in the folder you pick, but nothing on this Mac holds it there.",
+      "meansBackground": "It keeps working after you close LangAlpha. Remote control runs in the background and starts again when you log in, until you turn it off.",
+      "meansCredentials": "It can read what command line tools keep for {{account}}, such as Git and cloud sign-ins, and reach your home or office network.",
+      "meansAccount": "Anyone who signs in to your LangAlpha account can direct it.",
+      "stopLabel": "Stopping it",
+      "stop": "Pause it any time from the LangAlpha menu, or in System Settings under General, Login Items. Removing this computer in LangAlpha turns it off and deletes its keys from this Mac.",
+      "folderPrompts": "macOS may ask whether LangAlpha can open folders such as Documents or Desktop. You can say no: the agent's own folder does not need it.",
+      "previewNotice": "Remote control is in preview while we build more safeguards. Until then the agent has the same access you do, so turn it on only on a Mac where that is all right.",
+      "acknowledge": "I understand LangAlpha's agent can run commands and change files on this Mac as {{account}}.",
+      "turnOn": "Turn on remote control",
+      "turningOn": "Turning on remote control…",
+      "connecting": "Connecting this Mac…",
+      "needsApproval": "macOS needs your OK. In System Settings, under General, Login Items, allow LangAlpha in the background, then continue.",
+      "continue": "Continue",
+      "tryAgain": "Try again",
+      "failed": "Couldn't turn on remote control. Try again.",
+      "insecure": "Remote control needs this server's address to start with https, so this Mac can trust the pairing it is sent.",
+      "thisMacBadge": "This Mac",
+      "provider": "Remote control",
+      "asAccount": "as {{account}}",
+      "notConnected": "Not connected",
+      "paused": "Remote control is paused. Resume it from the LangAlpha menu.",
+      "removeTurnsOff": "Remote control on this Mac turns off too."
     }
   },
   "thread": {

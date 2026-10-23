@@ -61,7 +61,7 @@ const OPEN_QUOTA: WorkspaceQuota = {
 };
 
 function open(onSubmit = vi.fn()) {
-  renderWithProviders(<CreateComputerDialog onClose={() => {}} onSubmit={onSubmit} busy={false} error={null} />);
+  renderWithProviders(<CreateComputerDialog computers={[]} onClose={() => {}} onSubmit={onSubmit} busy={false} error={null} />);
   return onSubmit;
 }
 

@@ -97,6 +97,7 @@ from src.server.services.ssh_computers import (
 from src.server.services.ssh_dial_budget import SSHDialBudgetExceeded
 from src.server.services.ssh_removal import leave_machine
 from src.server.services.ssh_tunnel_sweep import release_tunnel
+from src.server.services.ssh_tunnels import tunnels_enabled
 from src.server.services.workspace_move import (
     claim_workspace_move,
     move_error_detail,
@@ -530,7 +531,8 @@ async def list_computer_providers(x_user_id: CurrentUserId):
                 tiers=_tier_specs(sandbox, kind),
             )
             for kind in kinds
-        ]
+        ],
+        tunnels=tunnels_enabled(),
     )
 
 

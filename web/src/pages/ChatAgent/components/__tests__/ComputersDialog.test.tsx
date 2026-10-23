@@ -631,7 +631,7 @@ describe('ComputersDialog: removing a computer', () => {
     expect(within(confirm).queryByRole('checkbox')).not.toBeInTheDocument();
     await user.click(within(confirm).getByRole('button', { name: 'Remove computer' }));
 
-    expect(mockDelete).toHaveBeenCalledWith(SECOND_ID, { removeKey: true });
+    expect(mockDelete).toHaveBeenCalledWith(SECOND_ID, { removeKey: false });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Remove Second machine?' })).not.toBeInTheDocument());
     expect(screen.getAllByTestId('computer-row')).toHaveLength(1);
     expect(screen.queryByText('Second machine')).not.toBeInTheDocument();

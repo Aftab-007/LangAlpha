@@ -55,8 +55,8 @@ async def workspaces_list(user_id: str, tool_call_id: str) -> Command:
     """List workspaces for the user.
 
     A row names its folder only when the workspace is on Home's computer, the
-    one whose folders the Chief of Staff reads, and its computer only when the
-    user has more than one.
+    one whose folders the Chief of Staff reads, and its computer, with whether
+    that is the user's own, only when the user has more than one.
     """
     try:
         from src.server.database.workspace import get_workspaces_for_user
@@ -76,6 +76,8 @@ async def workspaces_list(user_id: str, tool_call_id: str) -> Command:
             row["dir_name"] = placement.folder(ws)
             if placement.names:
                 row["computer"] = placement.computer(ws)
+            if machine := placement.machine(ws):
+                row["machine"] = machine
             rows.append(row)
         content = json.dumps({"success": True, "workspaces": rows}, default=str)
     except Exception as e:
