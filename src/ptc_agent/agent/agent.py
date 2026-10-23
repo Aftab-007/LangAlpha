@@ -409,6 +409,7 @@ class PTCAgent:
             create_execute_bash_tool,
             backend,
             thread_id=short_thread_id,
+            session=session,
             call_context=call_context,
             file_tools_only=file_tools_only,
         )
