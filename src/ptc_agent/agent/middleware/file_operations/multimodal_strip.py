@@ -76,6 +76,16 @@ def _placeholder_for(
     # starts failing here.
     pages = block.get("pages")
     if max_pdf_pages is not None and isinstance(pages, int) and pages > max_pdf_pages:
+        if _unsaved(block):
+            name = block.get("filename") or "file"
+            size = f"{pages} page{'' if pages == 1 else 's'}"
+            return {
+                "type": "text",
+                "text": (
+                    f"[PDF {name} ({size}) is over the current model's "
+                    f"{max_pdf_pages}-page limit and was not sent.{tail}]"
+                ),
+            }
         return {
             "type": "text",
             "text": (
@@ -100,6 +110,12 @@ def read_sources(messages: list) -> dict[str, str]:
         for call in msg.tool_calls or ()
         if call.get("name") == "Read" and call.get("id")
     }
+
+
+def _unsaved(block: Any) -> bool:
+    """A composer PDF inlined because it could not be saved anywhere, so the
+    agent has no copy to extract from and no path to give."""
+    return isinstance(block, dict) and block.get("unsaved") is True
 
 
 def _source(msg: Any, sources: dict[str, str]) -> str | None:
@@ -150,16 +166,19 @@ def strip_unsupported_content_blocks(
         new_blocks = []
         changed = False
         for j, block in enumerate(content):
+            # Extraction advice would send the model after a copy that does
+            # not exist, so an unsaved block keeps only what to tell the user.
+            tail = _IF_NOT if advice and _unsaved(block) else advice
             placeholder = _placeholder_for(
                 block,
                 has_image and (i, j) not in unreadable,
                 has_pdf,
                 max_pdf_pages,
-                "" if advice in said else advice,
+                "" if tail in said else tail,
             )
             if placeholder is not None:
                 changed = True
-                said.add(advice)
+                said.add(tail)
             new_blocks.append(block if placeholder is None else placeholder)
 
         if not changed:

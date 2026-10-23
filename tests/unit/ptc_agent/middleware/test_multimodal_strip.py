@@ -15,6 +15,7 @@ from PIL import Image
 
 from ptc_agent.agent.middleware._message_utils import order_tool_results_first
 from ptc_agent.agent.middleware.file_operations.multimodal_strip import (
+    _IF_NOT,
     PLACEHOLDER_GUIDANCE,
     MultimodalStripMiddleware,
     placeholder_guidance,
@@ -742,6 +743,21 @@ class TestPDFPageCeilingIsPerTarget:
         assert PLACEHOLDER_GUIDANCE in blocks[1]["text"]
 
     @pytest.mark.asyncio
+    async def test_an_unsaved_upload_over_it_is_not_pointed_at_a_copy(self, route_200k):
+        """A composer PDF inlined because nothing could save it: no workspace
+        copy exists, so only what to tell the user follows."""
+        upload = HumanMessage(content=[
+            {"type": "text", "text": "[Attached PDF: filing.pdf]"},
+            {"type": "file", "base64": "abc", "mime_type": "application/pdf",
+             "filename": "filing.pdf", "pages": 300, "unsaved": True},
+        ])
+        blocks, _ = await _blocks_reaching(route_200k, upload)
+        assert blocks[1]["text"] == (
+            "[PDF filing.pdf (300 pages) is over the current model's 100-page limit "
+            f"and was not sent. {_IF_NOT}]"
+        )
+
+    @pytest.mark.asyncio
     async def test_a_pdf_inside_the_200k_ceiling_still_reaches_it(self, route_200k):
         blocks, _ = await _blocks_reaching(route_200k, _pdf_block(80))
         assert [b["type"] for b in blocks] == ["text", "file"]
@@ -776,3 +792,12 @@ class TestPageStampStaysLocal:
         document = [b for b in payload[0]["content"] if b["type"] == "document"][0]
         assert "pages" not in document
         assert "pages" not in document["source"]
+
+    def test_the_unsaved_mark_never_reaches_the_wire(self):
+        from langchain_anthropic.chat_models import _format_messages
+
+        message = _pdf_block(3)
+        message.content[1]["unsaved"] = True
+        _, payload = _format_messages([message], model="claude-sonnet-4-6")
+        document = [b for b in payload[0]["content"] if b["type"] == "document"][0]
+        assert "unsaved" not in document and "unsaved" not in document["source"]

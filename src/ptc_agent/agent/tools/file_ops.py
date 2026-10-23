@@ -115,6 +115,7 @@ def create_filesystem_tools(
             requested pages, with a marker giving the offset of the next ones.
 
         Strip the line-number prefix before passing text to Edit.
+        For a long PDF, extract or search its text with code first, then Read only the pages you need.
         """
         try:
             # Middleware injects the actual content; this return is just a sentinel.
