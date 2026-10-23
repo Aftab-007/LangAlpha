@@ -1,21 +1,18 @@
 //! The tunnel: one login to the gateway holding a `langalpha:22` forward, made
 //! again whenever it drops, with the waits `tunnel.sh`'s loop keeps.
 
-use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use russh::Channel;
 use russh::client::{self, ChannelOpenHandle};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
+use tokio::sync::watch;
 use tracing::{info, warn};
 
-use crate::keys;
-use crate::server::{Machine, Peer};
-
-pub const TUNNEL_FILE: &str = "tunnel";
+use crate::folder::{Connection, Paired};
+use crate::server::Machine;
 
 // The forward the gateway expects, the one `ssh -R langalpha:22:...` asks for.
 const FORWARD_HOST: &str = "langalpha";
@@ -26,38 +23,34 @@ pub struct Gateway {
     port: u16,
     login: String,
     key: Arc<PrivateKey>,
-    pins: Arc<Vec<PublicKey>>,
+    pin: PublicKey,
+}
+
+/// How one login to the gateway ended.
+enum Ended {
+    Dropped,
+    /// The gateway refused the login itself, which most likely means the
+    /// tunnel was removed.
+    Refused,
 }
 
 impl Gateway {
-    /// The tunnel the folder holds, as pairing left it: `tunnel` with the
-    /// deployment's answer (`tunnel_id=`, `gateway_host=`, `gateway_port=`),
-    /// `known_hosts` with the gateway's pinned key, `id_ed25519` the tunnel's.
-    pub fn load(dir: &Path) -> Result<Self> {
-        let answer = fs::read_to_string(dir.join(TUNNEL_FILE))
-            .context("this folder holds no tunnel; pair the machine first")?;
-        let field = |name: &str| {
-            answer
-                .lines()
-                .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
-                .with_context(|| format!("{TUNNEL_FILE} names no {name}"))
-        };
-        let pins = keys::public_keys(&dir.join("known_hosts"))?;
-        if pins.is_empty() {
-            bail!("known_hosts pins no key for the gateway");
-        }
+    pub fn new(paired: &Paired, key: PrivateKey) -> Result<Self> {
         Ok(Self {
-            host: field("gateway_host")?.to_string(),
-            port: field("gateway_port")?.parse().context("gateway_port")?,
-            login: field("tunnel_id")?.to_string(),
-            key: Arc::new(keys::own_key(&dir.join("id_ed25519"))?),
-            pins: Arc::new(pins),
+            host: paired.gateway_host.clone(),
+            port: paired.gateway_port,
+            login: paired.tunnel_id.clone(),
+            key: Arc::new(key),
+            pin: paired.gateway_key()?,
         })
     }
 
-    /// One login, held until it drops. Ok(false) when the gateway refused the
-    /// login itself, which most likely means the tunnel was removed.
-    async fn hold_once(&self, machine: &Arc<Machine>) -> Result<bool> {
+    /// One login, held until it drops.
+    async fn hold_once(
+        &self,
+        machine: &Arc<Machine>,
+        connection: &watch::Sender<Connection>,
+    ) -> Result<Ended> {
         let config = Arc::new(client::Config {
             keepalive_interval: Some(Duration::from_secs(15)),
             keepalive_max: 3,
@@ -65,7 +58,7 @@ impl Gateway {
             ..Default::default()
         });
         let client = Client {
-            pins: self.pins.clone(),
+            pin: self.pin.clone(),
             machine: machine.clone(),
         };
         let mut handle = tokio::time::timeout(
@@ -80,43 +73,50 @@ impl Gateway {
             .await?
             .success()
         {
-            return Ok(false);
+            return Ok(Ended::Refused);
         }
         handle
             .tcpip_forward(FORWARD_HOST, FORWARD_PORT)
             .await
             .context("the gateway refused the forward")?;
         info!("Tunnel up");
+        connection.send_replace(Connection::Connected);
         handle.await?;
-        Ok(true)
+        Ok(Ended::Dropped)
     }
 }
 
-/// Holds the tunnel for the life of the process.
-pub async fn hold(gateway: Gateway, machine: Arc<Machine>) -> Result<()> {
+/// Holds the tunnel until the task holding it is dropped, saying how it
+/// stands through `connection`.
+pub async fn hold(gateway: Gateway, machine: Arc<Machine>, connection: watch::Sender<Connection>) {
     let mut step = 5;
     loop {
         let started = Instant::now();
-        let admitted = match gateway.hold_once(&machine).await {
-            Ok(admitted) => admitted,
-            Err(e) => {
+        let ended = gateway
+            .hold_once(&machine, &connection)
+            .await
+            .unwrap_or_else(|e| {
                 warn!("Tunnel down: {e:#}");
-                true
-            }
-        };
+                Ended::Dropped
+            });
         // A connection that held for a minute starts the waits over.
         if started.elapsed() >= Duration::from_secs(60) {
             step = 5;
         }
-        let wait = if admitted {
-            let wait = step;
-            step = (step * 2).min(30);
-            wait
-        } else {
-            // Asked again now and then rather than never, in case the
-            // refusal was a mistake.
-            warn!("The gateway refused this tunnel's login");
-            600
+        let wait = match ended {
+            Ended::Dropped => {
+                connection.send_replace(Connection::Connecting);
+                let wait = step;
+                step = (step * 2).min(30);
+                wait
+            }
+            Ended::Refused => {
+                connection.send_replace(Connection::Refused);
+                // Asked again now and then rather than never, in case the
+                // refusal was a mistake.
+                warn!("The gateway refused this tunnel's login");
+                600
+            }
         };
         // Between half and one and a half times the step, so machines a
         // gateway restart drops together come back spread out.
@@ -126,7 +126,7 @@ pub async fn hold(gateway: Gateway, machine: Arc<Machine>) -> Result<()> {
 }
 
 struct Client {
-    pins: Arc<Vec<PublicKey>>,
+    pin: PublicKey,
     machine: Arc<Machine>,
 }
 
@@ -134,9 +134,10 @@ impl client::Handler for Client {
     type Error = anyhow::Error;
 
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool> {
-        Ok(
-            matches!(key, PublicKeyOrCertificate::PublicKey { key, .. } if keys::holds(&self.pins, key)),
-        )
+        Ok(matches!(
+            key,
+            PublicKeyOrCertificate::PublicKey { key, .. } if key.key_data() == self.pin.key_data()
+        ))
     }
 
     async fn server_channel_open_forwarded_tcpip(
@@ -153,16 +154,9 @@ impl client::Handler for Client {
             return Ok(()); // dropping the reply refuses the channel
         }
         reply.accept().await;
-        // The login arrives from this machine's own loopback, as it does
-        // when `ssh -R` hands the gateway's dial to the local sshd, so a key
-        // line's `from=` reads the same either way.
-        let peer = Peer {
-            address: "127.0.0.1".into(),
-            port: originator_port,
-        };
         let machine = self.machine.clone();
         tokio::spawn(async move {
-            if let Err(e) = machine.serve(channel.into_stream(), peer).await {
+            if let Err(e) = machine.serve(channel.into_stream(), originator_port).await {
                 warn!("A login ended with an error: {e:#}");
             }
         });

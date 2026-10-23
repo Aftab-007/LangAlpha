@@ -6,7 +6,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use russh::client::{self, Handle};
 use russh::keys::{Algorithm, PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{ChannelMsg, Sig};
@@ -14,7 +14,9 @@ use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use crate::server::{Machine, Peer};
+use crate::account::Account;
+use crate::keys;
+use crate::server::Machine;
 
 // The runner the backend execs: the script arrives on stdin.
 const RUNNER: &str = r#"exec bash --noprofile --norc -c 's=$(cat); exec </dev/null; eval "$s"'"#;
@@ -39,9 +41,14 @@ impl Rig {
     fn new() -> Result<Self> {
         let dir = tempfile::tempdir()?;
         let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?;
-        let line = key.public_key().to_openssh()?;
-        fs::write(dir.path().join("authorized_keys"), format!("{line}\n"))?;
-        let machine = Arc::new(Machine::load(dir.path())?);
+        // The deployment's line, as pairing records it.
+        let line = format!(
+            "no-agent-forwarding,no-X11-forwarding {}",
+            key.public_key().to_openssh()?
+        );
+        let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?;
+        let authorized = keys::key_in_line(&line).context("the line holds no key")?;
+        let machine = Arc::new(Machine::new(Account::current()?, host_key, authorized));
         Ok(Self {
             dir,
             machine,
@@ -51,11 +58,7 @@ impl Rig {
 
     async fn connect(&self) -> Result<Handle<Trusting>> {
         let (near, far) = tokio::io::duplex(1 << 16);
-        let peer = Peer {
-            address: "127.0.0.1".into(),
-            port: 50022,
-        };
-        tokio::spawn(self.machine.clone().serve(far, peer));
+        tokio::spawn(self.machine.clone().serve(far, 50022));
         client::connect_stream(Arc::new(client::Config::default()), near, Trusting).await
     }
 
@@ -151,6 +154,41 @@ async fn reports_a_death_by_signal() -> Result<()> {
 }
 
 #[tokio::test]
+async fn passes_a_signal_to_the_command() -> Result<()> {
+    let rig = Rig::new()?;
+    let handle = rig.login().await?;
+    // One russh has a variant for, and one it sends by name.
+    for (signal, name) in [(Sig::TERM, "TERM"), (Sig::Custom("USR2".into()), "USR2")] {
+        let mut channel = handle.channel_open_session().await?;
+        let script =
+            format!("trap 'echo {name}; exit 0' {name}; echo ready; while :; do sleep 0.1; done");
+        channel.exec(true, script).await?;
+        let (mut out, mut status, mut sent) = (String::new(), None, false);
+        let ran = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    ChannelMsg::Data { data } => {
+                        out.push_str(&String::from_utf8_lossy(&data));
+                        if !sent && out.contains("ready\n") {
+                            channel.signal(signal.clone()).await?;
+                            sent = true;
+                        }
+                    }
+                    ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                    ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            anyhow::Ok(())
+        });
+        ran.await.context(name)??;
+        assert_eq!(out, format!("ready\n{name}\n"));
+        assert_eq!(status, Some(0), "{name}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn leaves_a_command_running_when_its_channel_closes() -> Result<()> {
     let rig = Rig::new()?;
     let handle = rig.login().await?;
@@ -211,20 +249,27 @@ async fn refuses_what_the_backend_never_asks_for() -> Result<()> {
 }
 
 #[tokio::test]
-async fn admits_only_the_account_and_its_keys() -> Result<()> {
+async fn admits_only_the_account_and_its_paired_key() -> Result<()> {
     let rig = Rig::new()?;
-    let stranger = Arc::new(PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?);
     let (_, admitted) = rig.login_as("not-this-account", &rig.key).await?;
     assert!(!admitted, "another account");
+    let stranger = Arc::new(PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?);
     let (_, admitted) = rig.login_as(&rig.machine.account.name, &stranger).await?;
-    assert!(!admitted, "an unknown key");
+    assert!(!admitted, "a key outside the paired record");
+    Ok(())
+}
 
-    // The file is read on every login, so a key added later is let in.
-    let mut keys = fs::read_to_string(rig.dir.path().join("authorized_keys"))?;
-    keys.push_str(&format!("{}\n", stranger.public_key().to_openssh()?));
-    fs::write(rig.dir.path().join("authorized_keys"), keys)?;
-    let (_, admitted) = rig.login_as(&rig.machine.account.name, &stranger).await?;
-    assert!(admitted, "a key added after the start");
+#[tokio::test]
+async fn names_itself_the_helper_in_the_handshake() -> Result<()> {
+    let rig = Rig::new()?;
+    let (mut near, far) = tokio::io::duplex(1 << 16);
+    tokio::spawn(rig.machine.clone().serve(far, 50022));
+    let mut line = Vec::new();
+    while !line.ends_with(b"\r\n") {
+        line.push(near.read_u8().await?);
+    }
+    let expected = format!("SSH-2.0-LangAlphaHelper_{}\r\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(String::from_utf8(line)?, expected);
     Ok(())
 }
 

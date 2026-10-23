@@ -8,61 +8,60 @@
 //! machine's own.
 
 mod account;
+mod folder;
 mod keys;
+mod log;
 mod pair;
 mod process;
 mod server;
+mod service;
 #[cfg(test)]
 mod tests;
 mod tunnel;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
+
+use crate::folder::Request;
 
 #[derive(Parser)]
 #[command(version, about)]
 enum Command {
-    /// Pairs this machine with a deployment, then holds its tunnel.
+    /// Asks to pair this machine with a deployment, then serves the folder
+    /// as `run` does.
     Pair {
         /// The URL in the deployment's pairing command, ending in /script.
         url: String,
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Holds the tunnel of a machine already paired.
+    /// Serves a folder: pairs it whenever a `pairing` file asks and holds its
+    /// tunnel. What the login service runs.
     Run {
-        /// The folder pairing filled: the deployment's keys, the tunnel and
-        /// this machine's own keys.
+        /// The folder holding the pairing and this machine's own keys. A
+        /// leading `~` is the account's home.
         #[arg(long)]
         dir: PathBuf,
+        /// Where output goes with no terminal to show it, by default the
+        /// folder's `helper.log`. A leading `~` is the account's home.
+        #[arg(long)]
+        log: Option<PathBuf>,
     },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
-    match Command::parse() {
-        Command::Pair { url, dir } => {
-            std::fs::create_dir_all(&dir)?;
-            let pairing = pair::Pairing::start(&url, &dir).await?;
-            let holding = tokio::spawn(hold(dir));
-            pairing.finish().await?;
-            holding.await?
-        }
-        Command::Run { dir } => hold(dir).await,
+    let (dir, url, log) = match Command::parse() {
+        Command::Pair { url, dir } => (dir, Some(url), None),
+        Command::Run { dir, log } => (dir, None, log),
+    };
+    let dir = folder::open(dir)?;
+    log::init(&dir, log)?;
+    let _lock = folder::lock(&dir)?;
+    if let Some(url) = url {
+        Request::write(&dir, &url)?;
     }
-}
-
-async fn hold(dir: PathBuf) -> Result<()> {
-    let machine = Arc::new(server::Machine::load(&dir)?);
-    tunnel::hold(tunnel::Gateway::load(&dir)?, machine).await
+    service::run(&dir).await
 }

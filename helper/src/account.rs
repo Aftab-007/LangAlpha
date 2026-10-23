@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 
 /// The account the helper runs as, the only one it lets in.
+#[derive(Clone)]
 pub struct Account {
     pub name: String,
     pub home: PathBuf,

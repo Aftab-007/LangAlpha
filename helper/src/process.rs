@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt;
+use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 
@@ -17,26 +18,29 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::server::{Machine, Peer};
+use crate::server::Machine;
 
-pub async fn run(channel: Channel<Msg>, handle: Handle, machine: Arc<Machine>, peer: Peer) {
+/// What a session channel asked to run.
+pub enum Start {
+    /// A command, through the account's shell.
+    Shell(Vec<u8>),
+    /// The system's SFTP server, at this path.
+    Sftp(PathBuf),
+}
+
+/// Starts what the channel asked for and pipes it through the channel.
+/// `port` is the gateway's end of the dial, which the command sees as its
+/// client's.
+pub async fn run(
+    channel: Channel<Msg>,
+    handle: Handle,
+    machine: Arc<Machine>,
+    port: u32,
+    start: Start,
+) {
     let id = channel.id();
-    let (mut rx, tx) = channel.split();
-    // The handler has already answered each request; what it refused (a
-    // shell, a pty, env) is passed over here.
-    let started = loop {
-        match rx.wait().await {
-            Some(ChannelMsg::Exec { command, .. }) => {
-                break shell(&machine, &peer, &command);
-            }
-            Some(ChannelMsg::RequestSubsystem { name, .. }) if name == "sftp" => {
-                break sftp(&machine, &peer);
-            }
-            Some(ChannelMsg::Close) | None => return,
-            Some(_) => {}
-        }
-    };
-    match started {
+    let (rx, tx) = channel.split();
+    match spawn(start, &machine, port) {
         Ok(child) => pipe(child, rx, tx, handle, id).await,
         Err(e) => {
             // As a shell that cannot start its command: a message and 127.
@@ -50,25 +54,22 @@ pub async fn run(channel: Channel<Msg>, handle: Handle, machine: Arc<Machine>, p
     }
 }
 
-fn shell(machine: &Machine, peer: &Peer, command: &[u8]) -> io::Result<Child> {
-    let shell = &machine.account.shell;
-    let mut cmd = Command::new(shell);
-    cmd.arg0(shell.file_name().unwrap_or(shell.as_os_str()))
-        .arg("-c")
-        .arg(OsStr::from_bytes(command));
-    start(cmd, machine, peer)
-}
-
-fn sftp(machine: &Machine, peer: &Peer) -> io::Result<Child> {
-    let path = machine
-        .sftp_server
-        .as_ref()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no sftp-server"))?;
-    start(Command::new(path), machine, peer)
-}
-
-fn start(mut cmd: Command, machine: &Machine, peer: &Peer) -> io::Result<Child> {
+fn spawn(start: Start, machine: &Machine, port: u32) -> io::Result<Child> {
     let account = &machine.account;
+    let mut cmd = match start {
+        Start::Shell(command) => {
+            let shell = &account.shell;
+            let mut cmd = Command::new(shell);
+            cmd.arg0(shell.file_name().unwrap_or(shell.as_os_str()))
+                .arg("-c")
+                .arg(OsStr::from_bytes(&command));
+            cmd
+        }
+        Start::Sftp(server) => Command::new(server),
+    };
+    // The login arrives from this machine's own loopback, as it does when
+    // `ssh -R` hands the gateway's dial to the local sshd, so a key line's
+    // `from=` reads the same either way.
     cmd.env_clear()
         .env("USER", &account.name)
         .env("LOGNAME", &account.name)
@@ -76,11 +77,8 @@ fn start(mut cmd: Command, machine: &Machine, peer: &Peer) -> io::Result<Child> 
         .env("SHELL", &account.shell)
         .env("PATH", DEFAULT_PATH)
         .env("MAIL", format!("/var/mail/{}", account.name))
-        .env("SSH_CLIENT", format!("{} {} 22", peer.address, peer.port))
-        .env(
-            "SSH_CONNECTION",
-            format!("{} {} 127.0.0.1 22", peer.address, peer.port),
-        )
+        .env("SSH_CLIENT", format!("127.0.0.1 {port} 22"))
+        .env("SSH_CONNECTION", format!("127.0.0.1 {port} 127.0.0.1 22"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -193,42 +191,42 @@ async fn report_exit(
     }
 }
 
+// The signals a command may be sent or end by, as named on the wire. The
+// names russh has no variant for travel as `Custom`, both ways.
+fn signals() -> [(libc::c_int, Sig); 13] {
+    [
+        (libc::SIGABRT, Sig::ABRT),
+        (libc::SIGALRM, Sig::ALRM),
+        (libc::SIGFPE, Sig::FPE),
+        (libc::SIGHUP, Sig::HUP),
+        (libc::SIGILL, Sig::ILL),
+        (libc::SIGINT, Sig::INT),
+        (libc::SIGKILL, Sig::KILL),
+        (libc::SIGPIPE, Sig::PIPE),
+        (libc::SIGQUIT, Sig::QUIT),
+        (libc::SIGSEGV, Sig::SEGV),
+        (libc::SIGTERM, Sig::TERM),
+        (libc::SIGUSR1, Sig::USR1),
+        (libc::SIGUSR2, Sig::Custom("USR2".into())),
+    ]
+}
+
 fn sig(signo: libc::c_int) -> Sig {
-    match signo {
-        libc::SIGABRT => Sig::ABRT,
-        libc::SIGALRM => Sig::ALRM,
-        libc::SIGFPE => Sig::FPE,
-        libc::SIGHUP => Sig::HUP,
-        libc::SIGILL => Sig::ILL,
-        libc::SIGINT => Sig::INT,
-        libc::SIGKILL => Sig::KILL,
-        libc::SIGPIPE => Sig::PIPE,
-        libc::SIGQUIT => Sig::QUIT,
-        libc::SIGSEGV => Sig::SEGV,
-        libc::SIGTERM => Sig::TERM,
-        libc::SIGUSR1 => Sig::USR1,
-        libc::SIGUSR2 => Sig::Custom("USR2".into()),
-        other => Sig::Custom(other.to_string()),
-    }
+    signals()
+        .into_iter()
+        .find(|(n, _)| *n == signo)
+        .map_or_else(|| Sig::Custom(signo.to_string()), |(_, sig)| sig)
 }
 
 /// As sshd does, the signal goes to the command's own process only.
 fn signal_child(pid: Option<u32>, signal: &Sig) {
-    let signo = match signal {
-        Sig::ABRT => libc::SIGABRT,
-        Sig::ALRM => libc::SIGALRM,
-        Sig::FPE => libc::SIGFPE,
-        Sig::HUP => libc::SIGHUP,
-        Sig::ILL => libc::SIGILL,
-        Sig::INT => libc::SIGINT,
-        Sig::KILL => libc::SIGKILL,
-        Sig::PIPE => libc::SIGPIPE,
-        Sig::QUIT => libc::SIGQUIT,
-        Sig::SEGV => libc::SIGSEGV,
-        Sig::TERM => libc::SIGTERM,
-        Sig::USR1 => libc::SIGUSR1,
-        Sig::Custom(name) if name == "USR2" => libc::SIGUSR2,
-        Sig::Custom(_) => return,
+    // Sig has no PartialEq.
+    let same = |known: &Sig| match (known, signal) {
+        (Sig::Custom(a), Sig::Custom(b)) => a == b,
+        (a, b) => std::mem::discriminant(a) == std::mem::discriminant(b),
+    };
+    let Some((signo, _)) = signals().into_iter().find(|(_, known)| same(known)) else {
+        return;
     };
     if let Some(pid) = pid {
         unsafe { libc::kill(pid as libc::pid_t, signo) };

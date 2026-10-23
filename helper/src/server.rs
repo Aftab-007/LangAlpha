@@ -3,22 +3,23 @@
 //! connection to a port on this machine's loopback for previews. It refuses
 //! the rest: shells, ptys, env, agent and X11 forwarding, any other forward.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use russh::keys::PublicKey;
+use russh::keys::{PrivateKey, PublicKey};
 use russh::server::{self, Auth, Msg, Session};
-use russh::{Channel, ChannelId, ChannelOpenFailure, MethodKind, MethodSet};
+use russh::{Channel, ChannelId, ChannelOpenFailure, MethodKind, MethodSet, SshId};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 
 use crate::account::Account;
-use crate::keys;
-use crate::process;
+use crate::process::{self, Start};
 
 // Where each system keeps the SFTP server its sshd runs.
 const SFTP_SERVERS: &[&str] = &[
@@ -28,25 +29,26 @@ const SFTP_SERVERS: &[&str] = &[
     "/usr/lib/ssh/sftp-server",
 ];
 
+// What the backend reads at its probe to know the helper, not an sshd,
+// answers for the machine.
+const SERVER_ID: &str = concat!("SSH-2.0-LangAlphaHelper_", env!("CARGO_PKG_VERSION"));
+
 pub struct Machine {
     pub account: Account,
     pub sftp_server: Option<PathBuf>,
     config: Arc<server::Config>,
-    authorized_keys: PathBuf,
+    /// The deployment's key, the one login it lets in.
+    authorized: PublicKey,
 }
 
 impl Machine {
-    pub fn load(dir: &Path) -> Result<Self> {
-        let account = Account::current()?;
-        let host_key = keys::own_key(&dir.join("host_key"))?;
-        let authorized_keys = dir.join("authorized_keys");
-        // Read now so a missing file fails the start, not every login after.
-        keys::public_keys(&authorized_keys)?;
+    pub fn new(account: Account, host_key: PrivateKey, authorized: PublicKey) -> Self {
         let sftp_server = SFTP_SERVERS.iter().map(PathBuf::from).find(|p| p.is_file());
         if sftp_server.is_none() {
             warn!("No sftp-server on this machine; file transfer will be refused");
         }
         let config = server::Config {
+            server_id: SshId::Standard(Cow::Borrowed(SERVER_ID)),
             methods: MethodSet::from(&[MethodKind::PublicKey][..]),
             keys: vec![host_key],
             // The backend's one key either matches or does not; nothing is
@@ -57,23 +59,25 @@ impl Machine {
             ..Default::default()
         };
         info!(account = %account.name, "Serving logins for this account");
-        Ok(Self {
+        Self {
             account,
             sftp_server,
             config: Arc::new(config),
-            authorized_keys,
-        })
+            authorized,
+        }
     }
 
-    /// Serves one SSH connection arriving through the tunnel.
-    pub async fn serve<S>(self: Arc<Self>, stream: S, peer: Peer) -> Result<()>
+    /// Serves one SSH connection arriving through the tunnel, the gateway's
+    /// dial having come from `port`.
+    pub async fn serve<S>(self: Arc<Self>, stream: S, port: u32) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let config = self.config.clone();
         let login = Login {
             machine: self,
-            peer,
+            port,
+            channels: HashMap::new(),
         };
         match server::run_stream(config, stream, login).await?.await {
             // The backend went away without a goodbye, as every login does
@@ -84,31 +88,35 @@ impl Machine {
     }
 
     fn admits(&self, user: &str, key: &PublicKey) -> bool {
-        if user != self.account.name {
-            return false;
-        }
-        // Read on every login, as sshd does, so a key the deployment rotates
-        // in reaches a running helper.
-        match keys::public_keys(&self.authorized_keys) {
-            Ok(allowed) => keys::holds(&allowed, key),
-            Err(e) => {
-                warn!("Could not read the authorized keys: {e:#}");
-                false
-            }
-        }
+        user == self.account.name && key.key_data() == self.authorized.key_data()
     }
-}
-
-/// Where a login came from, as `$SSH_CONNECTION` reports it.
-#[derive(Clone)]
-pub struct Peer {
-    pub address: String,
-    pub port: u32,
 }
 
 struct Login {
     machine: Arc<Machine>,
-    peer: Peer,
+    port: u32,
+    // Session channels open and not yet running anything.
+    channels: HashMap<ChannelId, Channel<Msg>>,
+}
+
+impl Login {
+    /// Runs what a session channel asked for. Once: as with sshd, a channel
+    /// runs one command, and asking again is refused.
+    fn run(&mut self, id: ChannelId, start: Start, session: &mut Session) -> Result<()> {
+        let Some(channel) = self.channels.remove(&id) else {
+            session.channel_failure(id)?;
+            return Ok(());
+        };
+        session.channel_success(id)?;
+        tokio::spawn(process::run(
+            channel,
+            session.handle(),
+            self.machine.clone(),
+            self.port,
+            start,
+        ));
+        Ok(())
+    }
 }
 
 fn refused() -> Auth {
@@ -141,15 +149,15 @@ impl server::Handler for Login {
         &mut self,
         channel: Channel<Msg>,
         reply: server::ChannelOpenHandle,
-        session: &mut Session,
+        _: &mut Session,
     ) -> Result<()> {
         reply.accept().await;
-        tokio::spawn(process::run(
-            channel,
-            session.handle(),
-            self.machine.clone(),
-            self.peer.clone(),
-        ));
+        self.channels.insert(channel.id(), channel);
+        Ok(())
+    }
+
+    async fn channel_close(&mut self, id: ChannelId, _: &mut Session) -> Result<()> {
+        self.channels.remove(&id);
         Ok(())
     }
 
@@ -179,11 +187,13 @@ impl server::Handler for Login {
         Ok(())
     }
 
-    // The channel's own task starts what these ask for; here they are only
-    // answered.
-    async fn exec_request(&mut self, id: ChannelId, _: &[u8], session: &mut Session) -> Result<()> {
-        session.channel_success(id)?;
-        Ok(())
+    async fn exec_request(
+        &mut self,
+        id: ChannelId,
+        command: &[u8],
+        session: &mut Session,
+    ) -> Result<()> {
+        self.run(id, Start::Shell(command.to_vec()), session)
     }
 
     async fn subsystem_request(
@@ -192,12 +202,13 @@ impl server::Handler for Login {
         name: &str,
         session: &mut Session,
     ) -> Result<()> {
-        if name == "sftp" && self.machine.sftp_server.is_some() {
-            session.channel_success(id)?;
-        } else {
-            session.channel_failure(id)?;
+        match self.machine.sftp_server.clone() {
+            Some(server) if name == "sftp" => self.run(id, Start::Sftp(server), session),
+            _ => {
+                session.channel_failure(id)?;
+                Ok(())
+            }
         }
-        Ok(())
     }
 
     async fn shell_request(&mut self, id: ChannelId, session: &mut Session) -> Result<()> {
