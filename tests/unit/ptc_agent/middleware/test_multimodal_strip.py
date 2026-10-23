@@ -17,6 +17,7 @@ from ptc_agent.agent.middleware._message_utils import order_tool_results_first
 from ptc_agent.agent.middleware.file_operations.multimodal_strip import (
     PLACEHOLDER_GUIDANCE,
     MultimodalStripMiddleware,
+    remove_attachments,
     strip_unsupported_content_blocks,
 )
 from src.llms.llm import LLM, get_input_modalities
@@ -41,6 +42,68 @@ def _pdf_bytes(pages: int = 1) -> bytes:
     buf = io.BytesIO()
     writer.write(buf)
     return buf.getvalue()
+
+
+def _read_result(call_id: str, path: str, block: dict | None = None) -> list:
+    """A Read call and its result carrying an attachment."""
+    block = block or {
+        "type": "file", "base64": "JVBERi0=", "mime_type": "application/pdf",
+        "filename": "x.pdf", "pages": 3,
+    }
+    return [
+        AIMessage(content="", tool_calls=[
+            {"name": "Read", "args": {"file_path": path}, "id": call_id}
+        ]),
+        ToolMessage(
+            content=[{"type": "text", "text": f"Loading: {path}"}, block],
+            tool_call_id=call_id,
+            id=f"t-{call_id}",
+        ),
+    ]
+
+
+class TestRemoveAttachments:
+    """What stands in for an attachment taken out to fit the context window."""
+
+    def test_a_pdf_read_names_its_path_and_pages(self):
+        msgs = _read_result("c1", "docs/a.pdf")
+        (_, result) = remove_attachments(msgs, {"t-c1"})
+        assert result.content[1]["text"] == (
+            "[docs/a.pdf (3 pages) was removed from the conversation to fit the context "
+            "window. Read it again by page range if you need it.]"
+        )
+        assert result.content[0] == msgs[1].content[0]
+
+    def test_a_one_page_pdf_is_one_page(self):
+        msgs = _read_result("c1", "docs/a.pdf")
+        (_, result) = remove_attachments(msgs, {"t-c1"}, pages=lambda block: 1)
+        assert result.content[1]["text"].startswith("[docs/a.pdf (1 page) was removed")
+
+    def test_an_image_read_names_its_path(self):
+        image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+        (_, result) = remove_attachments(_read_result("c1", "charts/c.png", image), {"t-c1"})
+        assert result.content[1]["text"] == (
+            "[Image charts/c.png was removed from the conversation to fit the context window.]"
+        )
+
+    def test_an_upload_names_what_it_carries(self):
+        upload = HumanMessage(id="h1", content=[
+            {"type": "text", "text": "[Attached PDF: q3.pdf (saved to work/uploads/q3.pdf)]"},
+            {"type": "file", "base64": "JVBERi0=", "mime_type": "application/pdf",
+             "filename": "q3.pdf"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        ])
+        (result,) = remove_attachments([upload], {"h1"}, pages=lambda block: None)
+        assert [b["text"] for b in result.content[1:]] == [
+            "[q3.pdf was removed from the conversation to fit the context window. "
+            "Read it again by page range if you need it.]",
+            "[Image was removed from the conversation to fit the context window.]",
+        ]
+
+    def test_messages_not_named_are_the_same_objects(self):
+        msgs = _read_result("c1", "docs/a.pdf")
+        assert remove_attachments(msgs, {"other"}) is msgs
+        assert remove_attachments(msgs, set()) is msgs
 
 
 class TestStripUnsupportedContentBlocks:
@@ -293,6 +356,29 @@ class TestResolveModalities:
         is not that model."""
         mw = MultimodalStripMiddleware(model_name="my-custom-vlm", custom_modalities=["text", "image"])
         assert mw._resolve_target(_request(None))[1] == ["text"]
+
+
+class TestReceives:
+    """What compaction counts toward its trigger: the blocks this strip
+    would send a model as they are, nothing it turns into a placeholder."""
+
+    PDF = {"type": "file", "base64": "JVBERi0=", "mime_type": "application/pdf", "pages": 20}
+    IMAGE = {"type": "image", "base64": "iVBORw0KGgo=", "mime_type": "image/png"}
+
+    def test_a_text_only_model_is_sent_neither(self):
+        receives = MultimodalStripMiddleware().receives(_request("glm-5.2").model)
+        assert not receives(self.PDF) and not receives(self.IMAGE)
+        assert receives({"type": "text", "text": "x"})
+
+    def test_a_pdf_model_is_sent_one_within_its_page_ceiling(self):
+        receives = MultimodalStripMiddleware().receives(_request("glm-5.3-flash-cn").model)
+        assert receives(self.PDF) and receives(self.IMAGE)
+        assert not receives({**self.PDF, "pages": 142})  # over its 100 pages
+
+    def test_an_override_applies_to_the_configured_model_only(self):
+        mw = MultimodalStripMiddleware(model_name="glm-5.2", custom_modalities=["text", "image"])
+        assert mw.receives(_request("glm-5.2").model)(self.IMAGE)
+        assert not mw.receives(_request(None).model)(self.IMAGE)
 
 
 class _ModelCallRequest:

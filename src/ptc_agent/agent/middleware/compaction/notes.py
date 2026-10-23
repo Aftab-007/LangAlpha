@@ -35,7 +35,6 @@ from langchain_core.messages import AIMessage
 
 from ptc_agent.agent.middleware.compaction.utils import (
     context_tokens,
-    get_effective_messages,
     read_ahead,
 )
 from ptc_agent.agent.middleware.runtime_context.changes import UPDATE_SCHEMA_VERSION
@@ -264,6 +263,7 @@ class NotesDueMiddleware(AgentMiddleware):
         # summarizes at, measured as it measures, so the two cannot drift.
         self._token_threshold = compaction._token_threshold
         self._counter = compaction._summarizer.counter
+        self._view = compaction.view
         self._notes_folder = _notes_pattern(scratchpad.notes_subdir)
 
     def wrap_model_call(
@@ -301,14 +301,14 @@ class NotesDueMiddleware(AgentMiddleware):
 
     async def _fill(self, state: Any) -> float:
         """The context's share of the threshold as the summary trigger reads
-        it (``context_tokens``).
+        it (``context_tokens``), over the view compaction sends, without the
+        attachments it removed or the results it hid.
 
         The count runs short of the trigger's by the system prompt, which
         state does not hold, so where no usage is reported the reminder comes
         late by that much rather than never.
         """
-        event = state.get("_summarization_event")
-        view = get_effective_messages(state.get("messages") or [], event)
+        view = await self._view(state.get("messages") or [], state)
         await read_ahead(view)
         return context_tokens(state, view, self._counter) / self._token_threshold
 

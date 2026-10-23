@@ -63,6 +63,7 @@ from ptc_agent.agent.middleware.compaction.offloading import (
     aoffload_base64_content,
     offload_view,
     recorded_offloads,
+    removed_attachments,
     select_offloads,
     tool_call_ids,
 )
@@ -122,16 +123,19 @@ class Compaction:
         """The state update that installs it over ``state``.
 
         Summarized calls never reach the model again, so their recorded
-        offload ids are dropped. The cached token counts measured the view
+        offload ids are dropped, and so are the summarized messages whose
+        attachments were removed. The cached token counts measured the view
         before it: left in place, the next call would read them as still over
         the threshold and compact again at once.
         """
         live = tool_call_ids(self.preserved)
         args, reads = recorded_offloads(state)
+        kept = {msg.id for msg in self.preserved}
         return {
             "_summarization_event": self.event,
             "_offloaded_tool_call_ids": args & live,
             "_offloaded_read_result_ids": reads & live,
+            "_removed_attachment_ids": removed_attachments(state) & kept,
             "_cached_input_tokens": 0,
             "_cached_output_tokens": 0,
         }
@@ -373,7 +377,7 @@ async def compact_messages(
         raise ValueError("No messages to compact")
     ensure_message_ids(messages)
     transcript = transcript_target(backend, thread_id)
-    view = offload_view(
+    view = await offload_view(
         messages,
         state,
         max_length=config.compaction.truncate_args_max_length,

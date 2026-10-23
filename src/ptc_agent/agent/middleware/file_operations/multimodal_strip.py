@@ -12,10 +12,11 @@ agent wires both: an agent with no filesystem tool has nothing to intercept,
 but still inherits history full of blocks it may not be able to read.
 """
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import AIMessage, ToolMessage
 
 from ptc_agent.agent.middleware._message_utils import order_tool_results_first
 from ptc_agent.agent.middleware.file_operations.image_fit import fit_images
@@ -25,6 +26,7 @@ from src.llms.llm import (
     get_input_modalities,
     get_max_image_side,
     get_max_pdf_pages,
+    get_pdf_page_tokens,
     image_route,
 )
 
@@ -82,6 +84,26 @@ def _placeholder_for(
             ),
         }
     return None
+
+
+def read_sources(messages: list) -> dict[str, str]:
+    """The path or URL each Read call in ``messages`` was given, by call id.
+
+    A Read result is the only attachment that knows where its bytes came
+    from, and only through its call: the image block that carries them goes
+    to the provider as it is, so nothing can be stamped on it.
+    """
+    return {
+        call["id"]: call.get("args", {}).get("file_path") or ""
+        for msg in messages
+        if isinstance(msg, AIMessage)
+        for call in msg.tool_calls or ()
+        if call.get("name") == "Read" and call.get("id")
+    }
+
+
+def _source(msg: Any, sources: dict[str, str]) -> str | None:
+    return sources.get(msg.tool_call_id) or None if isinstance(msg, ToolMessage) else None
 
 
 def strip_unsupported_content_blocks(
@@ -157,6 +179,71 @@ PLACEHOLDER_GUIDANCE = (
 )
 
 
+def _removed_placeholder(block: Any, name: str | None, pages: int | None) -> dict[str, str] | None:
+    """The text standing in for an attachment taken out to fit the context
+    window, or None for a block that is not one."""
+    kind = block_type(block)
+    if kind in IMAGE_BLOCK_TYPES:
+        image = f"Image {name}" if name else "Image"
+        return {
+            "type": "text",
+            "text": f"[{image} was removed from the conversation to fit the context window.]",
+        }
+    if kind not in FILE_BLOCK_TYPES:
+        return None
+    name = name or block.get("filename") or "PDF"
+    size = f" ({pages} page{'' if pages == 1 else 's'})" if pages else ""
+    return {
+        "type": "text",
+        "text": (
+            f"[{name}{size} was removed from the conversation to fit the context "
+            "window. Read it again by page range if you need it.]"
+        ),
+    }
+
+
+def remove_attachments(
+    messages: list,
+    ids: Collection[str],
+    *,
+    pages: Callable[[dict], int | None] = lambda block: block.get("pages"),
+) -> list:
+    """Replace every attachment in the messages ``ids`` names with the
+    placeholder saying it was removed to fit the context window.
+
+    A Read result names its path or URL, which is what reading it again
+    takes; another attachment names the file it carries, if any. ``pages``
+    gives a PDF block's page count, None when it cannot be read.
+
+    Returns the original list when nothing changed, and never mutates a
+    message.
+    """
+    if not ids:
+        return messages
+    sources = read_sources(messages)
+    result: list = []
+    modified = False
+    for msg in messages:
+        content = getattr(msg, "content", None)
+        if getattr(msg, "id", None) not in ids or not isinstance(content, list):
+            result.append(msg)
+            continue
+        name = _source(msg, sources)
+        new_blocks = []
+        for block in content:
+            placeholder = None
+            if isinstance(block, dict):
+                count = pages(block) if block_type(block) in FILE_BLOCK_TYPES else None
+                placeholder = _removed_placeholder(block, name, count)
+            new_blocks.append(block if placeholder is None else placeholder)
+        if new_blocks == content:
+            result.append(msg)
+            continue
+        modified = True
+        result.append(msg.model_copy(update={"content": new_blocks}))
+    return result if modified else messages
+
+
 class MultimodalStripMiddleware(AgentMiddleware):
     """Remove attachment blocks the model about to be called cannot read.
 
@@ -189,7 +276,10 @@ class MultimodalStripMiddleware(AgentMiddleware):
         the client in hand. The name comes back too because the PDF page ceiling
         is per-model and has to be looked up against the same target.
         """
-        metadata = getattr(request.model, "metadata", None)
+        return self._target(request.model)
+
+    def _target(self, model: Any) -> tuple[str | None, list[str]]:
+        metadata = getattr(model, "metadata", None)
         stamped = metadata.get("manifest_model") if isinstance(metadata, dict) else None
 
         if not isinstance(stamped, str) or not stamped:
@@ -206,6 +296,31 @@ class MultimodalStripMiddleware(AgentMiddleware):
         # different model and has to be judged on its own manifest entry.
         overrides = self.custom_modalities if stamped == self.model_name else None
         return stamped, get_input_modalities(stamped, custom_modalities=overrides)
+
+    def receives(self, model: Any) -> Callable[[Any], bool]:
+        """Whether a call to ``model`` is sent a block as it is, rather than
+        the placeholder this strip writes in its place.
+
+        Compaction, outside the resilience stack, counts only those toward its
+        trigger and its fit, judged as here so the two cannot drift. An image
+        the call-time fit cannot decode still counts, as the small overcount
+        it is.
+        """
+        stamped, modalities = self._target(model)
+        has_image, has_pdf = "image" in modalities, "pdf" in modalities
+        max_pdf_pages = get_max_pdf_pages(stamped) if stamped and has_pdf else None
+        return lambda block: (
+            _placeholder_for(block, has_image, has_pdf, max_pdf_pages, "") is None
+        )
+
+    def pdf_page_tokens(self, model: Any) -> int | None:
+        """What a call to ``model`` is charged for a PDF page, where its vendor's
+        charge was measured; None leaves compaction its default estimate.
+
+        Read off the same client as ``receives``, so the vendor is the one the
+        call reaches, a fallback's or a subagent's included.
+        """
+        return get_pdf_page_tokens(image_route(getattr(model, "metadata", None)))
 
     async def awrap_model_call(self, request, handler):
         # Runs for every target, not just modality-limited ones: the interleaving
@@ -247,4 +362,9 @@ class MultimodalStripMiddleware(AgentMiddleware):
         return await handler(request)
 
 
-__all__ = ["MultimodalStripMiddleware", "strip_unsupported_content_blocks"]
+__all__ = [
+    "MultimodalStripMiddleware",
+    "read_sources",
+    "remove_attachments",
+    "strip_unsupported_content_blocks",
+]

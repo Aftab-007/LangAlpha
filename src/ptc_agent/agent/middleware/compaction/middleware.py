@@ -8,8 +8,9 @@ on the one before.
 - Tier 1: at a turn start after a long pause, when the provider's prompt
   cache has expired, large tool arguments are cut to a pointer at the
   transcript file that keeps them and stale Read results are hidden.
-- Tier 2: when the context reaches its threshold, the start of the view is
-  summarized (see ``compact``).
+- Tier 2: when the context reaches its threshold, or the model refuses it
+  as too long, the start of the view is summarized (see ``compact``), and
+  the attachments in what it keeps are taken out until it fits.
 - The window: on the main agent, at each pass through ``before_agent``, the
   runs a summary stands in for are trimmed from the checkpoint once the
   server holds them (see ``window``).
@@ -64,21 +65,26 @@ from ptc_agent.agent.middleware.compaction.compact import (
 )
 from ptc_agent.agent.middleware.compaction.summary_request import NATIVE_SUMMARY_PROMPT
 from ptc_agent.agent.middleware.compaction.utils import (
+    attachment_tokens,
     context_tokens,
     find_group_safe_cutoff,
     get_effective_messages,
+    pdf_pages,
     provider_cutoff,
     read_ahead,
     stamp_compaction_summary,
     stamp_context_threshold,
+    target_cost,
 )
 from ptc_agent.agent.middleware.compaction.offloading import (
     is_idle,
     offload_view,
     record_offloads,
     recorded_offloads,
+    removed_attachments,
     select_offloads,
 )
+from ptc_agent.agent.middleware.file_operations.multimodal_strip import remove_attachments
 from ptc_agent.agent.middleware.compaction.window import (
     WindowCarry,
     WindowCoverage,
@@ -137,6 +143,19 @@ def _user_texts(messages: Sequence[AnyMessage]) -> list[str]:
     return texts
 
 
+def _reported_usage(response: ModelResponse) -> tuple[AIMessage, int, int] | None:
+    """The newest AI message in ``response`` that reports its input tokens,
+    with its (input, output) tokens; None when none does."""
+    for msg in reversed(response.result or ()):
+        if not isinstance(msg, AIMessage):
+            continue
+        usage = extract_token_usage(msg)
+        input_tokens = usage.get("input_tokens", 0)
+        if input_tokens > 0:
+            return msg, input_tokens, usage.get("output_tokens", 0)
+    return None
+
+
 def _summary_fields(compaction: Compaction) -> dict[str, Any]:
     """The summarize complete signal's payload, one shape for the live signal
     and the stamp replay reads it back from."""
@@ -167,6 +186,8 @@ class CompactionMiddleware(AgentMiddleware):
         backend: SandboxBackend | None = None,
         workspace_id: str | None = None,
         native: bool = True,
+        receives: Callable[[Any], Callable[[Any], bool]] | None = None,
+        page_tokens: Callable[[Any], int | None] | None = None,
     ) -> None:
         """
         Args:
@@ -182,6 +203,14 @@ class CompactionMiddleware(AgentMiddleware):
                 reach the transcript before anything points at it.
             native: Whether a provider that can compact the conversation
                 itself does.
+            receives: Which attachment blocks a call to a model is sent as
+                they are (``MultimodalStripMiddleware.receives``). The strip
+                sits inside this middleware and turns the rest into short
+                placeholders, so only these count toward the trigger and the
+                fit. None counts every attachment.
+            page_tokens: What a call to a model is charged for a PDF page
+                (``MultimodalStripMiddleware.pdf_page_tokens``), or None
+                where that is not known, which counts ``PDF_PAGE_TOKENS``.
         """
         super().__init__()
         self._summarizer = summarizer
@@ -191,6 +220,8 @@ class CompactionMiddleware(AgentMiddleware):
         self._backend = backend
         self._workspace_id = workspace_id
         self._native = native
+        self._receives = receives
+        self._page_tokens = page_tokens
         # The notes folder this agent's summaries name; see with_scratchpad_notes.
         self._notes_dir: str | None = None
         # The main agent's window; see with_window.
@@ -204,6 +235,8 @@ class CompactionMiddleware(AgentMiddleware):
         *,
         backend: SandboxBackend | None = None,
         workspace_id: str | None = None,
+        receives: Callable[[Any], Callable[[Any], bool]] | None = None,
+        page_tokens: Callable[[Any], int | None] | None = None,
     ) -> CompactionMiddleware | None:
         """The middleware ``config.compaction`` describes, or None when it is off.
 
@@ -222,6 +255,8 @@ class CompactionMiddleware(AgentMiddleware):
             backend=backend,
             workspace_id=workspace_id,
             native=settings.native and config.feature_enabled("provider_compaction"),
+            receives=receives,
+            page_tokens=page_tokens,
         )
 
     # =========================================================================
@@ -236,20 +271,18 @@ class CompactionMiddleware(AgentMiddleware):
     ) -> ModelResponse | ExtendedModelResponse:
         """Send the model the view, summarizing its start first once the
         context reaches the threshold, or when the model refuses the view as
-        too long."""
+        too long, and taking attachments out of what is kept until it fits."""
         ensure_message_ids(request.messages)
-        transcript = self._transcript_target()
-        view = offload_view(
-            request.messages,
-            request.state,
-            max_length=self._offload.max_length,
-            transcript=transcript,
-            shell=shell_reads_transcripts(self._backend),
-        )
+        view = await self.view(request.messages, request.state)
         await read_ahead(view)
 
         system = [request.system_message] if request.system_message is not None else []
-        tokens = context_tokens(request.state, view, self._summarizer.counter, system)
+        cost = target_cost(
+            self._receives(request.model) if self._receives is not None else None,
+            self._page_tokens(request.model) if self._page_tokens is not None else None,
+        )
+        tokens = context_tokens(request.state, view, self._summarizer.counter, system, cost)
+        refusal: Exception | None = None
         if tokens < self._token_threshold:
             try:
                 return self._answered(await handler(request.override(messages=view)))
@@ -259,6 +292,7 @@ class CompactionMiddleware(AgentMiddleware):
                 if not is_context_overflow(exc):
                     raise
                 logger.warning("[Compaction] Context overflow, summarizing: %s", exc)
+                refusal = exc
         else:
             logger.info("[Compaction] Triggered: %d >= %d tokens", tokens, self._token_threshold)
 
@@ -268,8 +302,13 @@ class CompactionMiddleware(AgentMiddleware):
             else 0
         )
         if cutoff <= 0:
-            # Too few messages to summarize.
-            return self._answered(await handler(request.override(messages=view)))
+            # Too few messages to summarize: the attachments are all that can go.
+            response, removed, spared = await self._send_fitted(
+                request, handler, view, system, refusal=refusal, cost=cost
+            )
+            return self._answered(
+                response, self._removal(request.state, removed), spared=spared
+            )
 
         native: Native | None = None
         kind = native_kind(request.model) if self._native else None
@@ -278,10 +317,144 @@ class CompactionMiddleware(AgentMiddleware):
         if kind is not None and cut > 0:
             cutoff = cut
             native = functools.partial(self._provider_summary, request, handler)
-        compaction = await self._compact(request, view, cutoff, transcript, native)
-        response = await handler(request.override(messages=compaction.messages))
+        compaction = await self._compact(request, view, cutoff, self._transcript_target(), native)
+        # A refusal of the view says nothing of what the summary made room
+        # for, so its messages are fitted by estimate like any others.
+        response, removed, spared = await self._send_fitted(
+            request, handler, compaction.messages, system, cost=cost
+        )
         self._stamp_summary(response, compaction)
-        return self._answered(response, compaction.update(request.state))
+        update = compaction.update(request.state)
+        return self._answered(
+            response, {**update, **self._removal(update, removed)}, spared=spared
+        )
+
+    async def _send_fitted(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+        messages: list[AnyMessage],
+        system: list[Any],
+        *,
+        refusal: Exception | None = None,
+        cost: Callable[[Any], int] | None = None,
+    ) -> tuple[ModelResponse, set[str], int]:
+        """Send ``messages`` with as many of their attachments taken out as
+        it takes to fit. Returns the response, the ids of the messages that
+        lose theirs, and what the provider counted for the ones this send
+        still carried (see ``_measured_fit``).
+
+        Below the threshold is what fits, by estimate: the oldest go first,
+        since the newest are what the agent is working on. Left over it, the
+        next call would summarize again at once. A refusal means the estimate
+        fell short, so after one every attachment goes. ``refusal`` is one
+        ``messages`` already met as they are, which is not sent again.
+        """
+        removed: set[str] = set()
+        if refusal is None:
+            removed = self._to_remove(messages, system, everything=False, cost=cost)
+            try:
+                response = await handler(
+                    request.override(messages=self._without(messages, removed))
+                )
+            except Exception as exc:
+                if not is_context_overflow(exc):
+                    raise
+                refusal = exc
+            else:
+                more, spared = self._measured_fit(response, messages, removed, system, cost)
+                return response, removed | more, spared
+        everything = self._to_remove(messages, system, everything=True, cost=cost)
+        if everything == removed:
+            raise refusal
+        logger.warning("[Compaction] Context overflow, removing every attachment kept")
+        response = await handler(request.override(messages=self._without(messages, everything)))
+        return response, everything, 0
+
+    def _measured_fit(
+        self,
+        response: ModelResponse,
+        messages: list[AnyMessage],
+        removed: set[str],
+        system: list[Any],
+        cost: Callable[[Any], int] | None,
+    ) -> tuple[set[str], int]:
+        """The ids of the messages whose attachments go too after a send
+        fitted by estimate that the provider measured over the threshold, and
+        the tokens they took.
+
+        The estimate can fall short of the provider's count, which includes
+        the tool schemas and a PDF's real pages. Left over the threshold, the
+        next call would summarize again and remove nothing, and so would each
+        one after. The measurement corrects the estimate: each attachment
+        counts at its estimate times measured over estimated for the view
+        that was sent, the oldest going first until the excess is covered.
+        """
+        usage = _reported_usage(response)
+        if usage is None:
+            return set(), 0
+        _, input_tokens, output_tokens = usage
+        over = input_tokens + output_tokens - self._token_threshold
+        if over < 0:
+            return set(), 0
+        fitted = self._without(messages, removed)
+        estimate = self._summarizer.counter([*system, *fitted]) + attachment_tokens(fitted, cost)
+        if estimate <= 0:
+            return set(), 0
+        more: set[str] = set()
+        spared = 0
+        for msg in messages:
+            if over < 0:
+                break
+            if not msg.id or msg.id in removed:
+                continue
+            taken = round(attachment_tokens([msg], cost) * input_tokens / estimate)
+            if taken:
+                more.add(msg.id)
+                spared += taken
+                over -= taken
+        return more, spared
+
+    def _to_remove(
+        self,
+        messages: list[AnyMessage],
+        system: list[Any],
+        *,
+        everything: bool,
+        cost: Callable[[Any], int] | None = None,
+    ) -> set[str]:
+        """The ids of the messages in ``messages`` whose attachments go.
+
+        Only attachments the target is sent count: one it cannot read reaches
+        it as the strip's placeholder, whose guidance a removal would replace.
+        """
+        costs = [(msg.id, attachment_tokens([msg], cost)) for msg in messages]
+        costs = [(msg_id, tokens) for msg_id, tokens in costs if tokens and msg_id]
+        if everything:
+            return {msg_id for msg_id, _ in costs}
+        over = (
+            self._summarizer.counter([*system, *messages])
+            + attachment_tokens(messages, cost)
+            - self._token_threshold
+        )
+        removed: set[str] = set()
+        for msg_id, tokens in costs:
+            if over < 0:
+                break
+            removed.add(msg_id)
+            over -= tokens
+        return removed
+
+    @staticmethod
+    def _without(messages: list[AnyMessage], removed: set[str]) -> list[AnyMessage]:
+        return remove_attachments(messages, removed, pages=pdf_pages)
+
+    @staticmethod
+    def _removal(state: Mapping[str, Any], removed: set[str]) -> dict[str, Any]:
+        """The update recording ``removed`` beside what ``state`` holds."""
+        if not removed:
+            return {}
+        return {"_removed_attachment_ids": removed_attachments(state) | removed}
 
     async def _compact(
         self,
@@ -367,18 +540,19 @@ class CompactionMiddleware(AgentMiddleware):
                 return
 
     def _answered(
-        self, response: ModelResponse, update: dict[str, Any] | None = None
+        self, response: ModelResponse, update: dict[str, Any] | None = None, *, spared: int = 0
     ) -> ExtendedModelResponse:
         """``response``, with ``update`` and the state the next call reads:
-        the context size this call measured, and when the model answered,
-        which the next turn's Tier 1 measures its pause from."""
+        the context size this call measured, less the ``spared`` tokens of
+        attachments ``update`` takes out of the next one, and when the model
+        answered, which the next turn's Tier 1 measures its pause from."""
         input_tokens, output_tokens = self._extract_token_usage(response)
         return ExtendedModelResponse(
             model_response=response,
             command=Command(
                 update={
                     **(update or {}),
-                    "_cached_input_tokens": input_tokens,
+                    "_cached_input_tokens": max(input_tokens - spared, 0),
                     "_cached_output_tokens": output_tokens,
                     "_last_model_response_at": time.time(),
                 }
@@ -389,27 +563,21 @@ class CompactionMiddleware(AgentMiddleware):
         """The (input, output) tokens the newest AI message reports, emitted
         to the frontend with the threshold they fill and stamped with it for
         replay, or (0, 0) when none does."""
-        for msg in reversed(response.result or ()):
-            if not isinstance(msg, AIMessage):
-                continue
-            usage = extract_token_usage(msg)
-            input_tokens = usage.get("input_tokens", 0)
-            output_tokens = usage.get("output_tokens", 0)
-            if input_tokens > 0:
-                logger.debug(
-                    "[Compaction] Token usage: input=%d, output=%d", input_tokens, output_tokens
-                )
-                stamp_context_threshold(msg, self._token_threshold)
-                self._emit_context_signal(
-                    "token_usage",
-                    "complete",
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    total_tokens=input_tokens + output_tokens,
-                    threshold=self._token_threshold,
-                )
-                return (input_tokens, output_tokens)
-        return (0, 0)
+        usage = _reported_usage(response)
+        if usage is None:
+            return (0, 0)
+        msg, input_tokens, output_tokens = usage
+        logger.debug("[Compaction] Token usage: input=%d, output=%d", input_tokens, output_tokens)
+        stamp_context_threshold(msg, self._token_threshold)
+        self._emit_context_signal(
+            "token_usage",
+            "complete",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            threshold=self._token_threshold,
+        )
+        return (input_tokens, output_tokens)
 
     # =========================================================================
     # Tier 1: trimming old tool args and Read results after a long pause
@@ -518,6 +686,17 @@ class CompactionMiddleware(AgentMiddleware):
         main = copy.copy(self)
         main._notes_dir = notes_dir
         return main
+
+    async def view(self, messages: list[AnyMessage], state: Mapping[str, Any]) -> list[AnyMessage]:
+        """What this agent's model is sent of ``messages``: what the summary
+        trigger counts, and so what the scratchpad's fill counts too."""
+        return await offload_view(
+            messages,
+            state,
+            max_length=self._offload.max_length,
+            transcript=self._transcript_target(),
+            shell=shell_reads_transcripts(self._backend),
+        )
 
     def _transcript_target(self) -> TranscriptTarget | None:
         """This agent's transcript, or None where nothing serves one."""

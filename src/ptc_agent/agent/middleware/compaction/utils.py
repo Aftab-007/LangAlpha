@@ -10,7 +10,7 @@ import math
 import re
 import uuid
 from collections import OrderedDict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 import tiktoken
@@ -160,14 +160,16 @@ def count_tokens_tiktoken(messages: Iterable[MessageLikeRepresentation]) -> int:
 # Attachment estimates
 # =============================================================================
 
-#: What one PDF page is counted at. Anthropic documents 1,500 to 3,000 text
-#: tokens a page, and sends each page as an image besides (about 1,500 tokens
-#: for a letter page scaled to its 1.15 megapixel bound); OpenAI also reads a
-#: page as text plus image. The top of the text range covers a typical page
-#: with its image. A denser one runs past it, and the provider's refusal then
-#: sends the call to compaction anyway, which removes it. Gemini counts a page
-#: as its image alone (258 or 560 tokens), so there this summarizes early,
-#: which costs a summary rather than a failed call.
+#: What one PDF page is counted at where the target's own charge is not known
+#: (``get_pdf_page_tokens``). Anthropic documents 1,500 to 3,000 text tokens a
+#: page, and sends each page as an image besides (about 1,500 tokens for a
+#: letter page scaled to its 1.15 megapixel bound); OpenAI also reads a page as
+#: text plus image, and measured 3,230 a page on an image-heavy paper. The top
+#: of the text range covers a typical page with its image. A denser one runs
+#: past it, and the provider's count of that send corrects the estimate (see
+#: ``CompactionMiddleware._measured_fit``), or its refusal sends the call to
+#: compaction anyway. A vendor that charges far less, as Gemini does, is
+#: counted at its own charge, since this would take out pages it can carry.
 PDF_PAGE_TOKENS = 3_000
 
 #: Anthropic's per-image bound (1,568 px on the long edge, 1.15 megapixels,
@@ -185,27 +187,42 @@ _IMAGE_UNKNOWN_TOKENS = 1_600
 _IMAGE_HEADER_CHARS = 64 * 1024
 
 
-def attachment_tokens(messages: Iterable[Any]) -> int:
+def attachment_tokens(
+    messages: Iterable[Any], cost: Callable[[Any], int] | None = None
+) -> int:
     """What the image and PDF blocks in ``messages`` cost a provider.
 
     Apart from ``count_tokens_tiktoken``, which counts an attachment by its
     short label: that is what the summary model is sent once the attachments
     are saved to files, while a model reading the history is sent the bytes.
+    ``cost`` is what the target is charged for a block (``target_cost``);
+    None counts every attachment at the default rates.
     """
+    cost = cost or block_tokens
     total = 0
     for msg in messages:
         content = message_field(msg, "content")
         if isinstance(content, list):
-            total += sum(block_tokens(block) for block in content)
+            total += sum(cost(block) for block in content)
     return total
 
 
-def block_tokens(block: Any) -> int:
+def target_cost(
+    sent: Callable[[Any], bool] | None, page_tokens: int | None
+) -> Callable[[Any], int]:
+    """What a target is charged for a block: nothing for one it is not sent
+    as it is, which goes out as a placeholder of a few tokens, and a PDF page
+    at ``page_tokens``, or ``PDF_PAGE_TOKENS`` where that is not known."""
+    per_page = page_tokens or PDF_PAGE_TOKENS
+    return lambda block: block_tokens(block, per_page) if sent is None or sent(block) else 0
+
+
+def block_tokens(block: Any, page_tokens: int = PDF_PAGE_TOKENS) -> int:
     """One block's cost as an attachment, 0 for anything else."""
     kind = block_type(block)
     if kind in FILE_BLOCK_TYPES:
         # One that can't be read counts as a page.
-        return max(pdf_pages(block) or 1, 1) * PDF_PAGE_TOKENS
+        return max(pdf_pages(block) or 1, 1) * page_tokens
     if kind in IMAGE_BLOCK_TYPES:
         size = _image_size(block)
         if size is None:
@@ -881,10 +898,11 @@ def context_tokens(
     view: Sequence[AnyMessage],
     counter: TokenCounter,
     system: Sequence[Any] = (),
+    cost: Callable[[Any], int] | None = None,
 ) -> int:
     """The context ``view`` makes, as the summary trigger reads it: what the
     last call measured plus an estimate of what has been added since, else
-    an estimate of the whole of it.
+    an estimate of the whole of it. ``cost`` is as for ``attachment_tokens``.
 
     The measurement ends at the newest answer, which its output tokens
     count, so everything after it is new: the results of that answer's tool
@@ -895,13 +913,13 @@ def context_tokens(
     measured = measured_tokens(state)
     if measured is None:
         whole = [*system, *view]
-        return counter(whole) + attachment_tokens(whole)
+        return counter(whole) + attachment_tokens(whole, cost)
     answered = next(
         (i for i in range(len(view) - 1, -1, -1) if isinstance(view[i], AIMessage)),
         None,
     )
     added = view[answered + 1 :] if answered is not None else ()
-    return measured + (counter(added) + attachment_tokens(added) if added else 0)
+    return measured + (counter(added) + attachment_tokens(added, cost) if added else 0)
 
 
 def resolve_cutoff_index(messages: Sequence[AnyMessage], event: Mapping[str, Any]) -> int:
