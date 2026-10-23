@@ -37,21 +37,30 @@ MOVED_MODEL_KEYS: tuple[str, ...] = (
 GUIDANCE_LEVELS: tuple[str, ...] = ("lean", "detailed")
 DEFAULT_GUIDANCE: str = "detailed"
 
+#: Every compaction preset name, in ascending order of threshold. Names, not
+#: bundles: the bundles are agent config, and this module must stay importable
+#: from both sides without dragging one into the other.
+COMPACTION_PROFILE_NAMES: tuple[str, ...] = (
+    "aggressive",
+    "moderate",
+    "extended",
+    "economy",
+    "relaxed",
+    "spacious",
+    "expansive",
+    "maximal",
+)
+
 #: Context window (inclusive lower bound) -> compaction profile, widest first.
 #: A model that declares no profile of its own gets the one its window can
-#: afford: the presets were sized against these same bands, so this reads the
-#: intent back out rather than inventing a second policy. Names, not bundles —
-#: the bundles are agent config and this module must stay importable from both
-#: sides without dragging one into the other.
+#: afford. Deliberately short of what the window allows: a later trigger makes
+#: every call past it dearer, so a model whose provider is worth the room
+#: (Claude, GPT) declares a later profile in the manifest instead.
 COMPACTION_PROFILE_BANDS: tuple[tuple[int, str], ...] = (
-    (1_000_000, "relaxed"),
+    (1_000_000, "spacious"),
     (400_000, "extended"),
     (200_000, "moderate"),
     (0, "aggressive"),
-)
-
-COMPACTION_PROFILE_NAMES: tuple[str, ...] = tuple(
-    name for _, name in COMPACTION_PROFILE_BANDS
 )
 
 

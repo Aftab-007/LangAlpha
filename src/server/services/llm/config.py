@@ -231,13 +231,24 @@ async def load_user_context(
     config.skill_command_overrides = dict(bundle.command_overrides)
 
 
+#: The most of a model's window a compaction threshold may claim. The rest is
+#: the reply, the tool results that land before the next check, and the
+#: summary call itself, which reads past the threshold.
+_THRESHOLD_SHARE = (3, 4)
+
+
 def apply_compaction(config, tuning: Tuning, entry: dict[str, Any] | None) -> None:
-    """Apply the named compaction preset (aggressive/moderate/extended/relaxed).
+    """Apply the named compaction preset, capped to what the model's window
+    can hold.
 
     The user's choice wins; failing that the model answers for itself, by
     declaration or by the band its context window falls in. Only a model that
     states no window keeps the YAML default, which is one number for every
     model and so is right for almost none of them.
+
+    An account-wide preset reaches every model, so a 750k preset chosen for a
+    1M model also lands on a 400k one, where it would never trigger and every
+    long turn would compact only after the provider refused it.
     """
     from ptc_agent.config.agent import COMPACTION_PROFILES
 
@@ -250,6 +261,12 @@ def apply_compaction(config, tuning: Tuning, entry: dict[str, Any] | None) -> No
     for field, value in preset.items():
         setattr(config.compaction, field, value)
     config.compaction.profile = profile
+    context = (entry or {}).get("context")
+    if isinstance(context, int) and context > 0:
+        share, of = _THRESHOLD_SHARE
+        config.compaction.token_threshold = min(
+            config.compaction.token_threshold, context * share // of
+        )
 
 
 def apply_fetch_override(config) -> None:

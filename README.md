@@ -321,7 +321,7 @@ Three dials tune each model, set account-wide or per model in Settings:
 
 - **Prompt guidance.** Frontier models get a lean prompt; smaller models get a detailed one with worked examples and step-by-step procedures. Both come from one template, so they never drift apart.
 - **Reasoning effort.** One scale from `none` to `max`, written to each vendor's own parameter and stepped down to the nearest level a model offers. Override it for a single message from the composer.
-- **Compaction profile.** Four presets, from aggressive to relaxed, set how early a long thread is compacted. By default the model's context window picks one.
+- **Compaction profile.** Eight presets, from 100K to 750K tokens, set how early a long thread is compacted. By default Claude and GPT compact at 500K and other models at what their context window affords.
 
 | How you connect | Providers |
 | --- | --- |
