@@ -165,6 +165,30 @@ class ModelConfig:
         """
         return list(self._child_variants.get(provider, ()))
 
+    def shares_api_key(self, provider: str, other: str) -> bool:
+        """Whether a key issued for ``provider`` is also valid for ``other``.
+
+        A manifest family shares one key unless a variant declares
+        ``"own_api_key": true``: its vendor issues that variant's keys apart
+        from its parent's (a coding-plan key against the platform endpoint, or
+        one region's key against another's), so the other side rejects them.
+        Such a variant is the root of its own credential and its descendants
+        stay with it, which is why this walks up to the nearest declaring
+        ancestor rather than comparing the two flags.
+        """
+        return self._key_issuer(provider) == self._key_issuer(other)
+
+    def _key_issuer(self, provider: str) -> str:
+        seen: set[str] = set()
+        while provider not in seen:
+            seen.add(provider)
+            info = self._flat_providers.get(provider, {})
+            parent = info.get("parent_provider")
+            if info.get("own_api_key") is True or not parent:
+                return provider
+            provider = parent
+        return provider
+
     def get_display_name(self, provider: str) -> str:
         """Return display name, preferring own name then resolving through parent."""
         info = self.get_provider_info(provider)
