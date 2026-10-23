@@ -10,7 +10,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_deepseek import ChatDeepSeek
 from langchain_qwq import ChatQwen
 
-from .endpoints import is_official_openai_endpoint
+from .endpoints import anthropic_sdk_base_url, is_official_openai_endpoint
 from .model_spec import (
     ModelSpec,
     canonical_reasoning_efforts,
@@ -901,6 +901,12 @@ class LLM:
         # This will override max_tokens if explicitly set in model config
         filtered_params = {k: v for k, v in self.parameters.items() if k != "enable_caching"}
         params.update(filtered_params)
+
+        # After the parameters expansion, which can carry either alias. The
+        # stored URL is left as it is: it keys the route identity.
+        for url_key in ("base_url", "anthropic_api_url"):
+            if params.get(url_key):
+                params[url_key] = anthropic_sdk_base_url(params[url_key])
 
         # Merged after the parameters expansion so a parameters["default_headers"]
         # entry augments the provider-level headers instead of clobbering them.

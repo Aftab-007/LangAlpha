@@ -1,7 +1,7 @@
-"""Endpoint eligibility checks for provider-specific request features."""
+"""Endpoint checks and URL shaping for provider-specific requests."""
 
 import os
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 _OFFICIAL_OPENAI_HOST = "api.openai.com"
 
@@ -23,3 +23,20 @@ def is_official_openai_endpoint(base_url: str | None) -> bool:
         # as network location so the host comparison sees them.
         parsed = urlparse(f"//{url}")
     return (parsed.hostname or "").lower() == _OFFICIAL_OPENAI_HOST
+
+
+def anthropic_sdk_base_url(base_url: str | None) -> str | None:
+    """The base an Anthropic-SDK client needs for a saved base URL.
+
+    The SDK appends ``/v1/messages`` itself, so the ``.../v1`` shape that
+    OpenAI-style URLs take reaches ``/v1/v1/messages`` and 404s. Applied where a
+    client is built and never written back: the saved value also keys the
+    route's identity.
+    """
+    if not base_url:
+        return base_url
+    parts = urlsplit(base_url.strip())
+    path = parts.path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[: -len("/v1")].rstrip("/")
+    return urlunsplit(parts._replace(path=path))

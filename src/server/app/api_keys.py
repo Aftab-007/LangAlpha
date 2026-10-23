@@ -351,7 +351,9 @@ async def _test_anthropic_key(
     """Test an Anthropic API key. Try /models first, fall back to inference."""
     import httpx
 
-    base = (base_url or "https://api.anthropic.com").rstrip("/")
+    from src.llms.endpoints import anthropic_sdk_base_url
+
+    base = anthropic_sdk_base_url(base_url or "https://api.anthropic.com")
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
