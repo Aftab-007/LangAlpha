@@ -274,7 +274,7 @@ function FilePanel({
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [pageCounts, setPageCounts] = useState<Record<string, number>>({});
 
-  const { uploadProgress, uploadError, setUploadError, fileInputRef, isDragOver, handleFileInputChange, handleDragEnter, handleDragLeave, handleDragOver, handleDrop } =
+  const { uploadProgress, uploadSaving, cancelUpload, uploadError, setUploadError, fileInputRef, isDragOver, handleFileInputChange, handleDragEnter, handleDragLeave, handleDragOver, handleDrop } =
     useFileUpload({ workspaceId, onRefreshFiles });
 
   const setFileContent = useCallback((next: React.SetStateAction<string | null>) => {
@@ -791,7 +791,7 @@ function FilePanel({
         filesError={treeShown || !listingTab ? null : filesError}
         filesRestoreIncomplete={treeShown || !listingTab ? false : filesRestoreIncomplete}
         onRefreshFiles={onRefreshFiles}
-        busy={selection.deleteLoading || backup.backingUp}
+        busy={selection.deleteLoading || backup.backingUp || uploadSaving}
         backupResult={backup.backupOff ? null : backup.backupResult}
         // Said where the files are listed, and only to the folder's owner,
         // who is the one able to answer it.
@@ -934,8 +934,9 @@ function FilePanel({
               setContextMenu={setContextMenu}
               activeContextPath={contextMenu?.filePath ?? null}
               readOnly={readOnly}
-              uploadDisabled={uploadProgress !== null}
+              uploadDisabled={uploadProgress !== null || uploadSaving}
               onUpload={() => fileInputRef.current?.click()}
+              onCancelUpload={uploadProgress !== null ? cancelUpload : null}
               previews={previews.previews}
               onOpenPreview={openPreviewTab}
               onOpenMemory={stores ? openMemory : null}

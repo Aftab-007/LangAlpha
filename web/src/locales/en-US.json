@@ -2422,6 +2422,8 @@
     "expandPanel": "Expand panel",
     "collapsePanel": "Show chat",
     "uploadFile": "Upload file",
+    "cancelUpload": "Cancel upload",
+    "uploadSendFailed": "The file could not be sent. Check your connection and try again.",
     "backupFiles": "Backup files to database",
     "backupOff": "File backup is off for this computer.",
     "backupSummary_one": "Backed up 1 file",
