@@ -230,6 +230,8 @@ async def test_traversal_returns_uniform_404():
         "mcp_servers/server.py",
         ".system/config.json",
         "_internal/secret.txt",
+        # A transfer's partial or staged file at the folder root.
+        ".wsfiles-upload-00000000-0000-4000-8000-000000000001",
     ],
 )
 async def test_system_and_hidden_paths_return_404(mock_ws, _wd, mock_fp, blocked_path):
@@ -243,6 +245,21 @@ async def test_system_and_hidden_paths_return_404(mock_ws, _wd, mock_fp, blocked
     assert exc.value.status_code == 404
     # Blocked before the DB is ever consulted.
     mock_fp.get_file_content.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "path, hidden",
+    [
+        (".wsfiles-upload-abc", True),
+        ("/.wsfiles-3f2a9c", True),
+        ("data/.wsfiles-notes", False),
+        ("wsfiles-notes", False),
+    ],
+)
+def test_only_a_transfers_name_at_the_folder_root_is_hidden(path, hidden):
+    from src.server.app.workspace_files._shared import _is_always_hidden_path
+
+    assert _is_always_hidden_path(path) is hidden
 
 
 # --- Unknown workspace or unbound Home → uniform 404 ----------------------

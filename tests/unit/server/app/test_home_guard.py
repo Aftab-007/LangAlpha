@@ -62,6 +62,7 @@ ROUTES = [
         "/files/upload",
         {"params": {"path": "a.txt"}, "files": {"file": ("a.txt", b"x", "text/plain")}},
     ),
+    ("POST", "/files/uploads", {"json": {"path": "a.bin", "size": 1}}),
     ("POST", "/files/backup", {}),
     ("DELETE", "/files", {"json": {"paths": ["a.txt"]}}),
     ("GET", "/sandbox/stats", {}),
