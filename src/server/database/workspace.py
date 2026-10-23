@@ -1283,6 +1283,14 @@ async def update_workspace_status(
             await publish_status_change(
                 workspace_id, status, computer_id=result.get("computer_id")
             )
+            if _mirrors_to_computer(status) and result.get("computer_id"):
+                from src.server.services.computer_usage.transitions import (
+                    note_computer_status,
+                )
+
+                # The ledger guards on the computer's own status, so a mirror
+                # that never reached the machine changes no run.
+                await note_computer_status(result, status, conn=conn)
             return dict(result)
         return None
 

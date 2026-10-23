@@ -636,7 +636,10 @@ class ComputerSpecMixin:
                 await session.stop()
             if not gone:
                 await self._assert_spec_claim_owned(computer_id, claim_id)
+                # Daytona's metric history goes with the sandbox.
+                await self._fold_usage_before_delete(computer_id)
                 await self._destroy_sandbox(sandbox_id, binding=binding)
+                await self._end_replaced_usage_run(computer_id, sandbox_id)
             # The ref still names this sandbox, so its reading would pass for
             # the machine's at the new tier until the next start measures.
             await clear_computer_disk(computer_id, sandbox_id=sandbox_id)
@@ -770,6 +773,9 @@ class ComputerSpecMixin:
             # the row stopped and the next start rebuilds (claim -> restart ->
             # SandboxGone -> recover). 'error' would be terminal.
             claim.release_to = ComputerStatus.STOPPED
+            # Before the session's cleanup below, which deletes the sandbox and
+            # Daytona's metric history with it.
+            await self._fold_usage_before_delete(computer_id)
             # Force-evict the SessionManager entry: cleanup_session skips its
             # own pop when session.cleanup() raised, so the recover below must
             # not return the stale broken session.
@@ -780,6 +786,9 @@ class ComputerSpecMixin:
             # once the old one is confirmed gone, so the two never run, and
             # bill, side by side.
             await self._destroy_sandbox(locked_sandbox_id, binding=binding)
+            # The new sandbox binds only after its restore, none of which is
+            # the old one's.
+            await self._end_replaced_usage_run(computer_id, locked_sandbox_id)
             # A recover that fails leaves the ref on the destroyed sandbox.
             await clear_computer_disk(computer_id, sandbox_id=locked_sandbox_id)
             await self._recover_sandbox(
@@ -847,6 +856,8 @@ class ComputerSpecMixin:
                 computer_id
             ) or await self._machine_has_active_tasks(computer_id):
                 return False
+            # Before the session's cleanup, which deletes the sandbox.
+            await self._fold_usage_before_delete(computer_id)
             self._cancel_mcp_discovery(computer_id)
             await self._clear_session(computer_id)
             SessionManager.remove_session(computer_id)
