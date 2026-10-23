@@ -106,7 +106,7 @@ class TestKeyTest:
         "saved",
         ["https://example.test/anthropic/v1", "https://example.test/anthropic/v1/"],
     )
-    async def test_probe_does_not_double_the_version(self, monkeypatch, saved):
+    async def test_probe_does_not_double_the_version(self, saved):
         from src.server.app.api_keys import _test_anthropic_key
 
         seen = []
@@ -115,20 +115,15 @@ class TestKeyTest:
             seen.append(request.url.path)
             return httpx.Response(200, json={"data": [{"id": "m1"}]})
 
-        real = httpx.AsyncClient
-        monkeypatch.setattr(
-            httpx,
-            "AsyncClient",
-            lambda **kw: real(transport=httpx.MockTransport(handler), **kw),
+        result = await _test_anthropic_key(
+            "test-key", "m1", saved, 5.0, transport=httpx.MockTransport(handler)
         )
-
-        result = await _test_anthropic_key("test-key", "m1", saved, 5.0)
 
         assert seen == ["/anthropic/v1/models"]
         assert result == {"models_found": 1, "model": "m1"}
 
     @pytest.mark.asyncio
-    async def test_inference_fallback_posts_to_the_messages_path(self, monkeypatch):
+    async def test_inference_fallback_posts_to_the_messages_path(self):
         from src.server.app.api_keys import _test_anthropic_key
 
         seen = []
@@ -137,14 +132,13 @@ class TestKeyTest:
             seen.append((request.method, request.url.path))
             return httpx.Response(404 if request.method == "GET" else 200, json={})
 
-        real = httpx.AsyncClient
-        monkeypatch.setattr(
-            httpx,
-            "AsyncClient",
-            lambda **kw: real(transport=httpx.MockTransport(handler), **kw),
+        await _test_anthropic_key(
+            "test-key",
+            "m1",
+            "https://example.test/anthropic/v1",
+            5.0,
+            transport=httpx.MockTransport(handler),
         )
-
-        await _test_anthropic_key("test-key", "m1", "https://example.test/anthropic/v1", 5.0)
 
         assert seen == [
             ("GET", "/anthropic/v1/models"),
