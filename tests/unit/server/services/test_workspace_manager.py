@@ -2059,7 +2059,7 @@ class TestCleanupIdle:
 
         assert count == 1
         mock_stop.assert_awaited_once_with(
-            computer_id, unchanged_since=row["updated_at"]
+            computer_id, unchanged_since=row["updated_at"], reason="idle"
         )
         mock_computers.assert_awaited_once_with("running", limit=1000, offset=0)
 
@@ -2102,7 +2102,7 @@ class TestCleanupIdle:
             call("running", limit=1000, offset=1000),
         ]
         stop.assert_awaited_once_with(
-            str(eligible["computer_id"]), unchanged_since=eligible["updated_at"]
+            str(eligible["computer_id"]), unchanged_since=eligible["updated_at"], reason="idle"
         )
 
     @pytest.mark.asyncio
@@ -2134,7 +2134,7 @@ class TestCleanupIdle:
             assert await wm.cleanup_idle_workspaces() == 1
 
         mock_stop.assert_awaited_once_with(
-            short["computer_id"], unchanged_since=short["updated_at"]
+            short["computer_id"], unchanged_since=short["updated_at"], reason="idle"
         )
 
     @pytest.mark.asyncio
@@ -2180,7 +2180,7 @@ class TestCleanupIdle:
 
         assert count == stopped
         assert mock_stop.await_args_list == [
-            call(computer_id, unchanged_since=row["updated_at"])
+            call(computer_id, unchanged_since=row["updated_at"], reason="idle")
         ] * stopped
 
     @pytest.mark.asyncio
@@ -2286,7 +2286,7 @@ class TestCleanupIdle:
 
         mock_disable.assert_awaited_once_with(computer_id, False)
         mock_stop.assert_awaited_once_with(
-            computer_id, unchanged_since=disabled["updated_at"]
+            computer_id, unchanged_since=disabled["updated_at"], reason="idle"
         )
         assert count == 1
 
