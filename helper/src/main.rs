@@ -19,6 +19,7 @@ mod service;
 #[cfg(test)]
 mod tests;
 mod tunnel;
+mod update;
 
 use std::path::PathBuf;
 

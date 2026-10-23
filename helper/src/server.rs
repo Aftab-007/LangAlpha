@@ -21,6 +21,7 @@ use tracing::{info, warn};
 use crate::account::Account;
 use crate::login_env::LoginEnv;
 use crate::process::{self, Start};
+use crate::update::Busy;
 
 // Where each system keeps the SFTP server its sshd runs.
 const SFTP_SERVERS: &[&str] = &[
@@ -41,10 +42,11 @@ pub struct Machine {
     config: Arc<server::Config>,
     /// The deployment's key, the one login it lets in.
     authorized: PublicKey,
+    busy: Busy,
 }
 
 impl Machine {
-    pub fn new(account: Account, host_key: PrivateKey, authorized: PublicKey) -> Self {
+    pub fn new(account: Account, host_key: PrivateKey, authorized: PublicKey, busy: Busy) -> Self {
         let sftp_server = SFTP_SERVERS.iter().map(PathBuf::from).find(|p| p.is_file());
         if sftp_server.is_none() {
             warn!("No sftp-server on this machine; file transfer will be refused");
@@ -67,6 +69,7 @@ impl Machine {
             sftp_server,
             config: Arc::new(config),
             authorized,
+            busy,
         }
     }
 
@@ -111,13 +114,20 @@ impl Login {
             return Ok(());
         };
         session.channel_success(id)?;
-        tokio::spawn(process::run(
+        // A command holds off a restart for an update while it runs. SFTP does
+        // not: the backend keeps its channel open as long as the connection.
+        let busy = matches!(start, Start::Shell(_)).then(|| self.machine.busy.hold());
+        let run = process::run(
             channel,
             session.handle(),
             self.machine.clone(),
             self.port,
             start,
-        ));
+        );
+        tokio::spawn(async move {
+            let _busy = busy;
+            run.await
+        });
         Ok(())
     }
 }
@@ -177,7 +187,9 @@ impl server::Handler for Login {
         let Some(address) = loopback(host, port) else {
             return Ok(()); // dropping the reply refuses the channel
         };
+        let busy = self.machine.busy.hold();
         tokio::spawn(async move {
+            let _busy = busy;
             match TcpStream::connect(address).await {
                 Ok(mut tcp) => {
                     reply.accept().await;

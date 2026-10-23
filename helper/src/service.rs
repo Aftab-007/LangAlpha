@@ -20,20 +20,44 @@ use crate::folder::{Connection, Identity, Outcome, Paired, Request, State};
 use crate::pair::{self, LOCAL_FAILURE, PairError};
 use crate::server::Machine;
 use crate::tunnel::{self, Gateway};
+use crate::update::{self, Busy, Executable, Hold};
 
 // How often the folder is looked at for a request.
 const POLL: Duration = Duration::from_secs(1);
+// How often the executable is looked at for an update, and once one replaced
+// it, how often the helper looks for nothing under way and how long it waits
+// for that before it restarts anyway.
+const UPDATE_CHECK: Duration = Duration::from_secs(60);
+const IDLE_POLL: Duration = Duration::from_secs(1);
+const IDLE_PATIENCE: Duration = Duration::from_secs(60 * 60);
+// How long a pairing's outcome holds off that restart, so the app, which
+// reads `state` four times a second, sees it before a new helper writes
+// `state` without it.
+const OUTCOME_SEEN: Duration = Duration::from_secs(5);
 
-/// Serves the folder until told to stop.
+/// Serves the folder until told to stop, or until an update replaced this
+/// helper.
 pub async fn run(dir: &Path) -> Result<()> {
+    let executable = Executable::current();
     let identity = Arc::new(Identity::load(dir)?);
     let mut terminate = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
-    let mut service = Service::start(dir, identity);
+    let busy = Busy::default();
+    let mut service = Service::start(dir, identity, busy.clone());
+    let update = update::restart_due(executable, &busy, UPDATE_CHECK, IDLE_POLL, IDLE_PATIENCE);
     tokio::select! {
         () = service.serve() => {}
         _ = terminate.recv() => {}
         _ = interrupt.recv() => {}
+        () = update => {
+            // Not `stopped`, which tells the app remote control was turned
+            // off. The new helper writes `state` as it starts.
+            info!(
+                in_flight = busy.in_flight(),
+                "This helper was updated; exiting for launchd to start the new one"
+            );
+            return Ok(());
+        }
     }
     // launchd's stop when the service is turned off. The state says so, or it
     // would go on saying the tunnel is up.
@@ -51,12 +75,13 @@ struct Held {
 }
 
 impl Held {
-    fn start(paired: Paired, identity: &Identity) -> Result<Self> {
+    fn start(paired: Paired, identity: &Identity, busy: &Busy) -> Result<Self> {
         let gateway = Gateway::new(&paired, identity.tunnel_key.clone())?;
         let machine = Machine::new(
             identity.account.clone(),
             identity.host_key.clone(),
             paired.authorized()?,
+            busy.clone(),
         );
         let (publish, connection) = watch::channel(Connection::Connecting);
         let task = tokio::spawn(tunnel::hold(gateway, Arc::new(machine), publish));
@@ -74,12 +99,15 @@ impl Drop for Held {
     }
 }
 
-type Pairing = (String, JoinHandle<Result<Held, PairError>>);
+// With its hold on a restart for an update, taken as the request is claimed
+// and let go a while after it settles.
+type Pairing = (String, JoinHandle<Result<Held, PairError>>, Hold);
 
 /// The only writer of `state`.
 struct Service {
     dir: PathBuf,
     identity: Arc<Identity>,
+    busy: Busy,
     held: Option<Held>,
     // The connection and tunnel are read from `held` as it is written.
     state: State,
@@ -87,7 +115,7 @@ struct Service {
 }
 
 impl Service {
-    fn start(dir: &Path, identity: Arc<Identity>) -> Self {
+    fn start(dir: &Path, identity: Arc<Identity>, busy: Busy) -> Self {
         let mut state = State {
             connection: Connection::Unpaired,
             pairing_id: String::new(),
@@ -102,7 +130,7 @@ impl Service {
         }
         let held = Paired::load(dir).and_then(|paired| {
             paired
-                .map(|paired| Held::start(paired, &identity))
+                .map(|paired| Held::start(paired, &identity, &busy))
                 .transpose()
         });
         let held = held.unwrap_or_else(|e| {
@@ -112,6 +140,7 @@ impl Service {
         Self {
             dir: dir.to_path_buf(),
             identity,
+            busy,
             held,
             state,
             written: None,
@@ -125,8 +154,12 @@ impl Service {
             tokio::select! {
                 () = tokio::time::sleep(POLL), if pairing.is_none() => pairing = self.claim(),
                 result = finished(&mut pairing) => {
-                    if let Some((id, _)) = pairing.take() {
+                    if let Some((id, _, hold)) = pairing.take() {
                         self.settle(id, result);
+                        tokio::spawn(async move {
+                            tokio::time::sleep(OUTCOME_SEEN).await;
+                            drop(hold);
+                        });
                     }
                 }
                 () = changed(&mut self.held) => {}
@@ -142,8 +175,11 @@ impl Service {
                 self.state.pairing_id = id.clone();
                 self.state.pairing = Some(Outcome::Running);
                 let (identity, dir) = (self.identity.clone(), self.dir.clone());
-                let task = tokio::spawn(async move { pair_with(&url, &identity, &dir).await });
-                Some((id, task))
+                let busy = self.busy.clone();
+                let hold = busy.hold();
+                let task =
+                    tokio::spawn(async move { pair_with(&url, &identity, &dir, &busy).await });
+                Some((id, task, hold))
             }
             Err(unreadable) => {
                 warn!("Ignored a pairing request that could not be read");
@@ -202,9 +238,14 @@ impl Service {
 /// is held beside whatever the folder holds while the deployment checks it,
 /// and the record is replaced only once it has, so a pairing that fails
 /// leaves the machine as it was.
-async fn pair_with(url: &str, identity: &Identity, dir: &Path) -> Result<Held, PairError> {
+async fn pair_with(
+    url: &str,
+    identity: &Identity,
+    dir: &Path,
+    busy: &Busy,
+) -> Result<Held, PairError> {
     let offer = pair::offer(url, identity).await?;
-    let held = match Held::start(offer.paired.clone(), identity) {
+    let held = match Held::start(offer.paired.clone(), identity, busy) {
         Ok(held) => held,
         Err(e) => return Err(offer.stop(PairError::Local(e)).await),
     };
@@ -216,7 +257,7 @@ async fn pair_with(url: &str, identity: &Identity, dir: &Path) -> Result<Held, P
 /// Until the pairing under way ends; never, with none.
 async fn finished(pairing: &mut Option<Pairing>) -> Result<Held, PairError> {
     match pairing {
-        Some((_, task)) => task
+        Some((_, task, _)) => task
             .await
             .unwrap_or_else(|e| Err(PairError::Local(e.into()))),
         None => std::future::pending().await,
