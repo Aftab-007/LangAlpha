@@ -416,6 +416,225 @@ class TestFallbackChain:
         assert tried == ["sub-model-id", "primary-model"]
 
     @pytest.mark.asyncio
+    async def test_an_overflow_is_neither_retried_nor_moved_to_a_fallback(self, events):
+        # Every candidate is sent the same history; compaction, outside this
+        # middleware, is what makes it smaller.
+        client = _FakeModel("primary-model")
+        fb = _FakeModel("fallback-a")
+        mw = _make_middleware(client, fallbacks=[("fallback-a", fb)], compacts_overflow=True)
+        overflow = _status_error("prompt is too long: 250000 tokens", status=400)
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            raise overflow
+
+        with pytest.raises(Exception) as exc_info:
+            await mw.awrap_model_call(_FakeRequest(client), handler)
+        assert exc_info.value is overflow
+        assert tried == ["primary-model"]
+        assert getattr(overflow, RESILIENCE_TRACE_ATTR)["attempted_models"][0]["attempts"] == 1
+        assert _fallback_props(events) == []
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_that_overflows_hands_its_overflow_up(self, events):
+        client = _FakeModel("primary-model")
+        fb_a = _FakeModel("fallback-a")
+        fb_b = _FakeModel("fallback-b")
+        mw = _make_middleware(client, fallbacks=[("fallback-a", fb_a), ("fallback-b", fb_b)], compacts_overflow=True)
+        overflow = _status_error("maximum context length is 131072 tokens", status=400)
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            if req.model is client:
+                raise _status_error("model not found", status=404)
+            raise overflow
+
+        with pytest.raises(Exception) as exc_info:
+            await mw.awrap_model_call(_FakeRequest(client), handler)
+        assert exc_info.value is overflow
+        assert tried == ["primary-model", "fallback-a"]
+
+    @staticmethod
+    def _windowed(name, window):
+        model = _FakeModel(name)
+        model.profile = {"max_input_tokens": window}
+        return model
+
+    @pytest.mark.asyncio
+    async def test_an_overflow_moves_on_to_a_fallback_with_a_larger_window(self, events):
+        # The request fits a longer window as it is, so no summary is needed.
+        client = self._windowed("primary-model", 200_000)
+        small = self._windowed("fallback-small", 128_000)
+        large = self._windowed("fallback-large", 1_000_000)
+        mw = _make_middleware(
+            client,
+            fallbacks=[("fallback-small", small), ("fallback-large", large)],
+            compacts_overflow=True,
+        )
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            if req.model is large:
+                return "answered"
+            raise _status_error("prompt is too long: 250000 tokens", status=400)
+
+        assert await mw.awrap_model_call(_FakeRequest(client), handler) == "answered"
+        assert tried == ["primary-model", "fallback-large"]
+        assert [p["to_model"] for p in _fallback_props(events)] == ["fallback-large"]
+
+    @pytest.mark.asyncio
+    async def test_an_overflow_on_a_smaller_fallback_moves_on_to_a_larger_one(self, events):
+        client = self._windowed("primary-model", 1_000_000)
+        small = self._windowed("fallback-small", 128_000)
+        large = self._windowed("fallback-large", 1_000_000)
+        mw = _make_middleware(
+            client,
+            fallbacks=[("fallback-small", small), ("fallback-large", large)],
+            compacts_overflow=True,
+        )
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            if req.model is client:
+                raise _status_error("model not found", status=404)
+            if req.model is small:
+                raise _status_error("maximum context length is 131072 tokens", status=400)
+            return "answered"
+
+        assert await mw.awrap_model_call(_FakeRequest(client), handler) == "answered"
+        assert tried == ["primary-model", "fallback-small", "fallback-large"]
+
+    @pytest.mark.asyncio
+    async def test_an_overflow_with_no_larger_window_left_goes_to_compaction(self, events):
+        # A later failure of another kind does not hide it: the overflow is
+        # what compaction can act on.
+        client = self._windowed("primary-model", 200_000)
+        large = self._windowed("fallback-large", 1_000_000)
+        same = self._windowed("fallback-same", 200_000)
+        mw = _make_middleware(
+            client,
+            fallbacks=[("fallback-same", same), ("fallback-large", large)],
+            compacts_overflow=True,
+            max_retries=0,
+        )
+        overflow = _status_error("prompt is too long: 250000 tokens", status=400)
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            if req.model is large:
+                raise _status_error("overloaded", status=529)
+            raise overflow
+
+        with pytest.raises(Exception) as exc_info:
+            await mw.awrap_model_call(_FakeRequest(client), handler)
+        assert exc_info.value is overflow
+        assert tried == ["primary-model", "fallback-large"]
+
+    def test_a_sync_overflow_moves_on_to_a_larger_window_too(self, events):
+        client = self._windowed("primary-model", 200_000)
+        large = self._windowed("fallback-large", 1_000_000)
+        mw = _make_middleware(client, fallbacks=[("fallback-large", large)], compacts_overflow=True)
+        tried = []
+
+        def handler(req):
+            tried.append(req.model.model)
+            if req.model is large:
+                return "answered"
+            raise _status_error("prompt is too long", status=400)
+
+        assert mw.wrap_model_call(_FakeRequest(client), handler) == "answered"
+        assert tried == ["primary-model", "fallback-large"]
+
+    def test_a_sync_overflow_is_not_retried_either(self, events):
+        client = _FakeModel("primary-model")
+        mw = _make_middleware(client, fallbacks=[("fallback-a", _FakeModel("fallback-a"))], compacts_overflow=True)
+        tried = []
+
+        def handler(req):
+            tried.append(req.model.model)
+            raise _status_error("prompt is too long", status=400)
+
+        with pytest.raises(Exception, match="prompt is too long"):
+            mw.wrap_model_call(_FakeRequest(client), handler)
+        assert tried == ["primary-model"]
+
+    @staticmethod
+    def _built(compaction_enabled: bool, client, fallback):
+        from types import SimpleNamespace
+
+        from ptc_agent.agent.turn import TurnModel, build_model_resilience_middleware
+
+        cfg = SimpleNamespace(
+            fallback_llm_clients=[fallback],
+            fallback_llm_names=["fallback-a"],
+            llm=SimpleNamespace(fallback=None),
+            compaction=SimpleNamespace(enabled=compaction_enabled),
+        )
+        turn = TurnModel(client=client, name="primary-model", guidance="full")
+        return build_model_resilience_middleware(cfg, turn)
+
+    @pytest.mark.asyncio
+    async def test_without_compaction_an_overflow_still_moves_to_a_fallback(self, events):
+        # Nothing outside would make the request smaller, and a fallback with
+        # a longer window may take it as it is.
+        client, fb = _FakeModel("primary-model"), _FakeModel("fallback-a")
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            if req.model is client:
+                raise _status_error("prompt is too long: 250000 tokens", status=400)
+            return "answered"
+
+        for enabled, expected in ((False, ["primary-model", "fallback-a"]), (True, ["primary-model"])):
+            tried.clear()
+            mw = self._built(enabled, client, fb)
+            if enabled:
+                with pytest.raises(Exception, match="prompt is too long"):
+                    await mw.awrap_model_call(_FakeRequest(client), handler)
+            else:
+                assert await mw.awrap_model_call(_FakeRequest(client), handler) == "answered"
+            assert tried == expected
+
+    @pytest.mark.asyncio
+    async def test_without_compaction_a_statusless_overflow_is_not_retried(self, events):
+        # LangChain raises its overflow class with no status, which would
+        # otherwise read as retryable and repeat the same request.
+        from langchain_core.exceptions import ContextOverflowError
+
+        client, fb = _FakeModel("primary-model"), _FakeModel("fallback-a")
+        tried = []
+
+        async def handler(req):
+            tried.append(req.model.model)
+            if req.model is client:
+                raise ContextOverflowError("prompt is too long")
+            return "answered"
+
+        mw = self._built(False, client, fb)
+        assert await mw.awrap_model_call(_FakeRequest(client), handler) == "answered"
+        assert tried == ["primary-model", "fallback-a"]
+
+    def test_without_compaction_a_sync_overflow_still_moves_to_a_fallback(self, events):
+        client, fb = _FakeModel("primary-model"), _FakeModel("fallback-a")
+        tried = []
+
+        def handler(req):
+            tried.append(req.model.model)
+            if req.model is client:
+                raise _status_error("prompt is too long", status=400)
+            return "answered"
+
+        mw = self._built(False, client, fb)
+        assert mw.wrap_model_call(_FakeRequest(client), handler) == "answered"
+        assert tried == ["primary-model", "fallback-a"]
+
+    @pytest.mark.asyncio
     async def test_no_fallbacks_configured_raises_primary(self, events):
         client = _FakeModel("primary-model")
         mw = _make_middleware(client)
@@ -810,9 +1029,9 @@ class TestReasoningPayloadEscalation:
 
         async def handler(req):
             calls.append(req)
-            raise _status_error("prompt is too long: 250000 tokens", status=400)
+            raise _status_error("tools.0.input_schema: unsupported keyword", status=400)
 
-        with pytest.raises(Exception, match="prompt is too long"):
+        with pytest.raises(Exception, match="unsupported keyword"):
             await mw.awrap_model_call(_FakeRequest(client, self._history()), handler)
         assert len(calls) == 2
 

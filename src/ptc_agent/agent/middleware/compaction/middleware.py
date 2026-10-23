@@ -31,7 +31,6 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.config import get_config, get_stream_writer
@@ -46,6 +45,7 @@ from langchain.agents.middleware.types import (
     ModelResponse,
 )
 
+from src.llms.error_classification import is_context_overflow
 from src.llms.provider_compaction import (
     compaction_settings,
     kept_user_texts,
@@ -250,10 +250,12 @@ class CompactionMiddleware(AgentMiddleware):
         if tokens < self._token_threshold:
             try:
                 return self._answered(await handler(request.override(messages=view)))
-            except ContextOverflowError:
-                logger.warning(
-                    "[Compaction] ContextOverflowError caught, triggering emergency summarization"
-                )
+            except Exception as exc:
+                # Matched across providers, most of which LangChain does not
+                # classify as an overflow.
+                if not is_context_overflow(exc):
+                    raise
+                logger.warning("[Compaction] Context overflow, summarizing: %s", exc)
         else:
             logger.info("[Compaction] Triggered: %d >= %d tokens", tokens, self._token_threshold)
 
