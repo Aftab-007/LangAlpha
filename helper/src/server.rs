@@ -19,6 +19,7 @@ use tokio::net::TcpStream;
 use tracing::{info, warn};
 
 use crate::account::Account;
+use crate::login_env::LoginEnv;
 use crate::process::{self, Start};
 
 // Where each system keeps the SFTP server its sshd runs.
@@ -36,6 +37,7 @@ const SERVER_ID: &str = concat!("SSH-2.0-LangAlphaHelper_", env!("CARGO_PKG_VERS
 pub struct Machine {
     pub account: Account,
     pub sftp_server: Option<PathBuf>,
+    pub login_env: LoginEnv,
     config: Arc<server::Config>,
     /// The deployment's key, the one login it lets in.
     authorized: PublicKey,
@@ -60,6 +62,7 @@ impl Machine {
         };
         info!(account = %account.name, "Serving logins for this account");
         Self {
+            login_env: LoginEnv::new(account.clone()),
             account,
             sftp_server,
             config: Arc::new(config),

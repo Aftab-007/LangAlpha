@@ -1,12 +1,12 @@
 //! What one session channel runs, started and piped the way sshd does it for
-//! a session with no pty: the account's shell with `-c`, in a session of its
-//! own, from a clean environment, in the home folder.
+//! a session with no pty: a shell with `-c`, in a session of its own, from a
+//! clean environment, in the home folder.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 
@@ -18,11 +18,12 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 use tracing::debug;
 
+use crate::login_env;
 use crate::server::Machine;
 
 /// What a session channel asked to run.
 pub enum Start {
-    /// A command, through the account's shell.
+    /// A command, through `sh`.
     Shell(Vec<u8>),
     /// The system's SFTP server, at this path.
     Sftp(PathBuf),
@@ -40,7 +41,9 @@ pub async fn run(
 ) {
     let id = channel.id();
     let (rx, tx) = channel.split();
-    match spawn(start, &machine, port) {
+    // Before the command starts, as a login reads its shell files first.
+    let vars = machine.login_env.vars().await;
+    match spawn(start, &machine, &vars, port) {
         Ok(child) => pipe(child, rx, tx, handle, id).await,
         Err(e) => {
             // As a shell that cannot start its command: a message and 127.
@@ -54,15 +57,21 @@ pub async fn run(
     }
 }
 
-fn spawn(start: Start, machine: &Machine, port: u32) -> io::Result<Child> {
+fn spawn(
+    start: Start,
+    machine: &Machine,
+    vars: &[(OsString, OsString)],
+    port: u32,
+) -> io::Result<Child> {
     let account = &machine.account;
     let mut cmd = match start {
+        // `sh`, where sshd would use the account's shell: zsh reads
+        // `~/.zshenv` before every `-c` and fish its config, so what those
+        // export would reach the agent past `KEPT`. The backend sends plain sh,
+        // and `SHELL` still names the account's.
         Start::Shell(command) => {
-            let shell = &account.shell;
-            let mut cmd = Command::new(shell);
-            cmd.arg0(shell.file_name().unwrap_or(shell.as_os_str()))
-                .arg("-c")
-                .arg(OsStr::from_bytes(&command));
+            let mut cmd = Command::new("/bin/sh");
+            cmd.arg0("sh").arg("-c").arg(OsStr::from_bytes(&command));
             cmd
         }
         Start::Sftp(server) => Command::new(server),
@@ -75,10 +84,12 @@ fn spawn(start: Start, machine: &Machine, port: u32) -> io::Result<Child> {
         .env("LOGNAME", &account.name)
         .env("HOME", &account.home)
         .env("SHELL", &account.shell)
-        .env("PATH", DEFAULT_PATH)
         .env("MAIL", format!("/var/mail/{}", account.name))
         .env("SSH_CLIENT", format!("127.0.0.1 {port} 22"))
         .env("SSH_CONNECTION", format!("127.0.0.1 {port} 127.0.0.1 22"))
+        // What the shell files set, which names none of the above.
+        .envs(vars.iter().map(|(name, value)| (name, value)))
+        .env("PATH", login_env::path(vars, &login_path()))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -93,6 +104,12 @@ fn spawn(start: Start, machine: &Machine, port: u32) -> io::Result<Child> {
     });
     // Its own session, so the command and what it starts are one group the
     // backend can signal, apart from this process.
+    own_session(&mut cmd);
+    cmd.spawn()
+}
+
+/// Has `cmd` lead a session of its own, with no controlling terminal.
+pub(crate) fn own_session(cmd: &mut Command) {
     unsafe {
         cmd.pre_exec(|| {
             if libc::setsid() < 0 {
@@ -101,14 +118,52 @@ fn spawn(start: Start, machine: &Machine, port: u32) -> io::Result<Child> {
             Ok(())
         });
     }
-    cmd.spawn()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn login_path() -> String {
+    mac_path(Path::new("/"))
 }
 
 // What sshd sets before the shell's own startup files run.
-#[cfg(target_os = "macos")]
-const DEFAULT_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 #[cfg(not(target_os = "macos"))]
-const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/games";
+pub(crate) fn login_path() -> String {
+    "/usr/local/bin:/usr/bin:/bin:/usr/games".into()
+}
+
+/// The PATH Terminal has before the account's own startup files add to it:
+/// Homebrew's folders first, where its installer has the shell put them,
+/// then what `path_helper` reads from /etc/paths and /etc/paths.d, then
+/// sshd's list. sshd's list alone leaves out Homebrew and `/usr/local/bin`,
+/// so tools the user installed would not be found. Read for every command, so
+/// a tool installed while the helper runs is found too.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_path(root: &Path) -> String {
+    let mut found: Vec<String> = Vec::new();
+    if root.join("opt/homebrew/bin").is_dir() {
+        found.extend(["/opt/homebrew/bin".into(), "/opt/homebrew/sbin".into()]);
+    }
+    let mut lists = vec![root.join("etc/paths")];
+    if let Ok(entries) = std::fs::read_dir(root.join("etc/paths.d")) {
+        let mut named: Vec<PathBuf> = entries.filter_map(|e| Some(e.ok()?.path())).collect();
+        named.sort();
+        lists.extend(named);
+    }
+    for list in lists {
+        if let Ok(text) = std::fs::read_to_string(list) {
+            found.extend(
+                text.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(Into::into),
+            );
+        }
+    }
+    found.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(Into::into));
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|dir| seen.insert(dir.clone()));
+    found.join(":")
+}
 
 async fn pipe(
     mut child: Child,
@@ -230,5 +285,38 @@ fn signal_child(pid: Option<u32>, signal: &Sig) {
     };
     if let Some(pid) = pid {
         unsafe { libc::kill(pid as libc::pid_t, signo) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::mac_path;
+
+    #[test]
+    fn a_mac_login_finds_homebrew_and_what_installers_register() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("opt/homebrew/bin")).unwrap();
+        fs::create_dir_all(root.path().join("etc/paths.d")).unwrap();
+        fs::write(
+            root.path().join("etc/paths"),
+            "/usr/local/bin\n/usr/bin\n/bin\n/usr/sbin\n/sbin\n",
+        )
+        .unwrap();
+        fs::write(root.path().join("etc/paths.d/20-b"), "/usr/bin\n/b/bin\n").unwrap();
+        fs::write(root.path().join("etc/paths.d/10-a"), " /a/bin \n\n").unwrap();
+
+        assert_eq!(
+            mac_path(root.path()),
+            "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/a/bin:/b/bin"
+        );
+    }
+
+    #[test]
+    fn a_mac_with_nothing_registered_keeps_sshds_list() {
+        let root = tempfile::tempdir().unwrap();
+
+        assert_eq!(mac_path(root.path()), "/usr/bin:/bin:/usr/sbin:/sbin");
     }
 }

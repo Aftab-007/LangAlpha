@@ -127,16 +127,22 @@ async fn starts_from_a_clean_environment_in_home() -> Result<()> {
     let rig = Rig::new()?;
     let handle = rig.login().await?;
     // cargo sets CARGO_MANIFEST_DIR for this process; a login must not see it.
-    let script = r#"printf '%s\n' "$USER" "$HOME" "$SSH_CONNECTION" "$(pwd -P)" "${CARGO_MANIFEST_DIR-unset}""#;
+    let script = r#"printf '%s\n' "$USER" "$HOME" "$SSH_CONNECTION" "$(pwd -P)" "${CARGO_MANIFEST_DIR-unset}" "$SHELL" "$PATH""#;
     let ran = exec(&handle, RUNNER, script).await?;
     let account = &rig.machine.account;
     let home = fs::canonicalize(&account.home)?;
+    // What this machine's shell files put first, then a login's own list,
+    // with nothing a shell file run for the command itself added.
+    let vars = rig.machine.login_env.vars().await;
+    let path = crate::login_env::path(&vars, &crate::process::login_path());
     let expected = [
         account.name.clone(),
         account.home.display().to_string(),
         "127.0.0.1 50022 127.0.0.1 22".into(),
         home.display().to_string(),
         "unset".into(),
+        account.shell.display().to_string(),
+        path.to_string_lossy().into_owned(),
     ];
     assert_eq!(ran.stdout.lines().collect::<Vec<_>>(), expected);
     assert_eq!(ran.status, Some(0));
@@ -198,8 +204,14 @@ async fn leaves_a_command_running_when_its_channel_closes() -> Result<()> {
     channel.exec(true, command).await?;
     channel.close().await?;
     drop(handle);
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert_eq!(fs::read_to_string(&marker)?, "done\n");
+    // The first command waits on reading the shell files, which takes a
+    // runner's own a while.
+    let finished = tokio::time::timeout(Duration::from_secs(10), async {
+        while fs::read_to_string(&marker).ok().as_deref() != Some("done\n") {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+    finished.await.context("the command did not finish")?;
     Ok(())
 }
 
