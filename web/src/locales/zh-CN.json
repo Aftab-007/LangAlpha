@@ -1249,6 +1249,9 @@
     "sortBy": "排序",
     "activity": "活动时间",
     "custom": "自定义",
+    "sortRecent": "最近",
+    "allComputers": "所有计算机",
+    "filterByComputer": "按计算机筛选",
     "reorder": "排列",
     "dragToReorder": "拖拽排序",
     "pinToTop": "置顶",
@@ -1268,10 +1271,7 @@
     "quotaUnlimited": "无限制",
     "quotaNotOnPlan": "当前套餐不可用",
     "quotaUsedUp": "已达套餐上限",
-    "alwaysOnBadge": "常驻",
-    "alwaysOnBadgeTitle": "常驻：沙箱保持运行",
     "alwaysOnFailed": "无法更改常驻设置",
-    "tierBadgeTitle": "{{tier}} 沙箱规格",
     "tier": {
       "standard": "小型",
       "performance": "中型",
@@ -1336,6 +1336,7 @@
     "noWorkspacesFound": "未找到工作区",
     "welcomeTitle": "欢迎使用 LangAlpha",
     "welcomeDesc": "开始设置您的偏好或创建工作区。",
+    "welcomeDescCreate": "创建一个工作区，把一个项目的对话和文件放在一起。",
     "createWorkspace": "创建工作区",
     "failedLoadWorkspaces": "加载工作区失败，请刷新页面。",
     "invalidWorkspace": "无效工作区，请重试。",
@@ -1348,7 +1349,6 @@
     "loadingWorkspaces": "加载工作区中...",
     "backToThreads": "返回对话列表",
     "updated": "更新于 {{time}}",
-    "recently": "刚刚",
     "createNewWorkspace": "创建新工作区",
     "workspaceName": "工作区名称",
     "enterWorkspaceName": "输入工作区名称",
@@ -1410,6 +1410,10 @@
     "stop": "停止",
     "primaryBadge": "默认",
     "primaryBadgeTitle": "新工作区会创建在这台计算机上",
+    "badge": {
+      "mac": "Mac",
+      "ssh": "SSH"
+    },
     "makePrimary": {
       "button": "设为默认",
       "title": "将 {{name}} 设为默认？",
@@ -1514,6 +1518,7 @@
     },
     "disk": {
       "label": "存储",
+      "percent": "磁盘 {{percent}}%",
       "usage": "已用 {{used}}，共 {{total}}，剩余 {{free}}",
       "unknown": "尚未测量存储",
       "breakdown": "按工作区",

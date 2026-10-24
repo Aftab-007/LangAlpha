@@ -1251,6 +1251,9 @@
     "sortBy": "Sort by",
     "activity": "Activity",
     "custom": "Custom",
+    "sortRecent": "Recent",
+    "allComputers": "All computers",
+    "filterByComputer": "Filter by computer",
     "reorder": "Reorder",
     "dragToReorder": "Drag to reorder",
     "pinToTop": "Pin to top",
@@ -1270,10 +1273,7 @@
     "quotaUnlimited": "Unlimited",
     "quotaNotOnPlan": "Not on your plan",
     "quotaUsedUp": "Plan limit reached",
-    "alwaysOnBadge": "Always-on",
-    "alwaysOnBadgeTitle": "Always-on — sandbox stays running",
     "alwaysOnFailed": "Could not change always-on",
-    "tierBadgeTitle": "{{tier}} sandbox spec",
     "tier": {
       "standard": "Small",
       "performance": "Medium",
@@ -1338,6 +1338,7 @@
     "noWorkspacesFound": "No workspaces found",
     "welcomeTitle": "Welcome to LangAlpha",
     "welcomeDesc": "Get started by setting up your preferences or creating a workspace.",
+    "welcomeDescCreate": "Create a workspace to keep a project's threads and files together.",
     "createWorkspace": "Create Workspace",
     "failedLoadWorkspaces": "Failed to load workspaces. Please refresh the page.",
     "invalidWorkspace": "Invalid workspace. Please try again.",
@@ -1350,7 +1351,6 @@
     "loadingWorkspaces": "Loading workspaces...",
     "backToThreads": "Back to threads",
     "updated": "Updated {{time}}",
-    "recently": "recently",
     "createNewWorkspace": "Create New Workspace",
     "workspaceName": "Workspace Name",
     "enterWorkspaceName": "Enter workspace name",
@@ -1412,6 +1412,10 @@
     "stop": "Stop",
     "primaryBadge": "Primary",
     "primaryBadgeTitle": "New workspaces are created on this computer",
+    "badge": {
+      "mac": "Mac",
+      "ssh": "SSH"
+    },
     "makePrimary": {
       "button": "Make primary",
       "title": "Make {{name}} primary?",
@@ -1516,6 +1520,7 @@
     },
     "disk": {
       "label": "Storage",
+      "percent": "Disk {{percent}}%",
       "usage": "{{used}} of {{total}} used, {{free}} free",
       "unknown": "Storage not measured yet",
       "breakdown": "By workspace",

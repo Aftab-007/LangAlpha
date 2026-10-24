@@ -126,6 +126,10 @@ export interface Workspace {
   files_backed_up_at?: string | null;
   created_at?: string;
   updated_at?: string;
+  /** When the workspace was last used; null until it first is. The `activity`
+   *  order reads this, falling back to `updated_at`, which a rename, pin or
+   *  reorder also bumps. */
+  last_activity_at?: string | null;
   [key: string]: unknown;
 }
 

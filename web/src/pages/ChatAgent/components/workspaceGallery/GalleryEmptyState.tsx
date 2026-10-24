@@ -26,8 +26,11 @@ export function GalleryEmptyState({ isFiltered, onNewWorkspace }: GalleryEmptySt
       <p className="text-lg font-medium mb-2" style={{ color: 'var(--color-text-primary)' }}>
         {t('workspace.welcomeTitle')}
       </p>
-      <p className="text-sm mb-8" style={{ color: 'var(--color-text-tertiary)' }}>
-        {t('workspace.welcomeDesc')}
+      {/* Only names the profile when its button is here to back it. */}
+      <p className="text-sm mb-8 max-w-sm" style={{ color: 'var(--color-text-tertiary)' }}>
+        {welcomeOffer
+          ? t('workspace.welcomeDesc')
+          : t('workspace.welcomeDescCreate', "Create a workspace to keep a project's threads and files together.")}
       </p>
       <div className="flex flex-col sm:flex-row items-center gap-3">
         {welcomeOffer && (

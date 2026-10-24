@@ -30,9 +30,14 @@ export const TIER_ORDER: ResourceTier[] = ['standard', 'performance', 'max', 'xl
  */
 const BASE_TIERS: readonly ResourceTier[] = ['standard', 'performance', 'max'];
 
+/** The tier a value names, or null for a missing or unknown one. */
+export function knownTier(tier: unknown): ResourceTier | null {
+  return TIER_ORDER.find((id) => id === tier) ?? null;
+}
+
 /** Coerce an unknown/legacy tier value to a known tier (defaults to standard). */
 export function normalizeTier(tier: unknown): ResourceTier {
-  return TIER_ORDER.find((id) => id === tier) ?? 'standard';
+  return knownTier(tier) ?? 'standard';
 }
 
 /** Localized display name for a tier. */

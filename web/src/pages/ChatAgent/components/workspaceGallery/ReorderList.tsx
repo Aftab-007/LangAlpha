@@ -22,18 +22,27 @@ import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
 import { isHomeWorkspace } from '@/lib/homeWorkspace';
 import { queryKeys } from '@/lib/queryKeys';
 
+import type { Computer } from '@/types/api';
+
 import { reorderWorkspaces } from '../../utils/api';
+import { useComputers } from '../../hooks/useComputers';
 import { isEffectivelyPinned } from '../../hooks/useNavigationData';
+import { useThisMac } from '../../hooks/useRemoteControl';
+import { MachineSummary } from './MachineSummary';
+import { GALLERY_FRAME, REORDER_COLUMN } from './layout';
 import { getAllReorderWorkspaces } from './loadReorderWorkspaces';
 import type { WorkspaceRecord } from './types';
 
 interface SortableReorderRowProps {
   workspace: WorkspaceRecord;
+  /** The machine it lives on, so a row says where it is as the card does. */
+  computer: Computer | null;
+  isThisMac: boolean;
   disabled: boolean | { draggable: boolean; droppable: boolean };
 }
 
 /** Sortable row for reorder mode: a compact single-column list item. */
-function SortableReorderRow({ workspace, disabled }: SortableReorderRowProps) {
+function SortableReorderRow({ workspace, computer, isThisMac, disabled }: SortableReorderRowProps) {
   const label = useWorkspaceLabel();
   const {
     attributes,
@@ -92,6 +101,12 @@ function SortableReorderRow({ workspace, disabled }: SortableReorderRowProps) {
             {label(workspace)}
           </span>
         </div>
+        {/* Home is a system row: the machine under it is not what it stands for. */}
+        {!isHome && computer && (
+          <div className="mt-1">
+            <MachineSummary computer={computer} isThisMac={isThisMac} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -102,9 +117,11 @@ interface ReorderListProps {
   homeWorkspace: WorkspaceRecord | null;
   /** Done: `true` when a drag actually landed, which is what pins 'custom' sort. */
   onDone: (didReorder: boolean) => void;
+  /** Name each row's machine. Off with one computer, as in the gallery: it would say the same on every row. */
+  showMachines?: boolean;
 }
 
-export function ReorderList({ homeWorkspace, onDone }: ReorderListProps) {
+export function ReorderList({ homeWorkspace, onDone, showMachines = true }: ReorderListProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [rows, setRows] = useState<WorkspaceRecord[]>([]);
@@ -114,6 +131,12 @@ export function ReorderList({ homeWorkspace, onDone }: ReorderListProps) {
   const [isSaving, setIsSaving] = useState(false);
   const didReorderRef = useRef(false);
   const saveInFlightRef = useRef(false);
+  const { data: computerData } = useComputers();
+  const thisMac = useThisMac({ enabled: true });
+  const computersById = useMemo(
+    () => new Map((computerData?.computers ?? []).map((c) => [c.computer_id, c] as const)),
+    [computerData],
+  );
 
   // Reorder needs every row before it can write a complete ordering. Keep
   // paging until the server's total is satisfied instead of silently omitting
@@ -212,58 +235,67 @@ export function ReorderList({ homeWorkspace, onDone }: ReorderListProps) {
   };
 
   return (
+    // Full width like the grid it stands in for, so its scrollbar keeps to the
+    // window's edge; the list itself is a narrower column centred inside.
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="flex items-center justify-between px-1 pb-3 shrink-0">
-        <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-          {t('workspace.dragToReorder')}
-        </span>
-        <button
-          onClick={() => onDone(didReorderRef.current)}
-          disabled={isSaving}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-opacity hover:opacity-90"
-          style={{
-            backgroundColor: 'var(--color-btn-primary-bg)',
-            color: 'var(--color-btn-primary-text)',
-          }}
-        >
-          <Check className="h-4 w-4" />
-          {t('common.done')}
-        </button>
-      </div>
-      <div className="flex-1 min-h-0 overflow-y-auto px-1 pb-4">
-        {isLoading ? (
-          <div className="flex h-full items-center justify-center">
-            <Loader size={20} className="text-(--color-text-tertiary)" />
-          </div>
-        ) : isError ? (
-          <p className="px-4 py-8 text-center text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-            {t('workspace.failedLoadWorkspaces')}
-          </p>
-        ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragStart={(e) => setActiveId(String(e.active.id))}
-            onDragCancel={() => setActiveId(null)}
-            onDragEnd={handleDragEnd}
+      <div className={`shrink-0 overflow-hidden ${GALLERY_FRAME}`}>
+        <div className={`flex items-center justify-between px-1 pb-3 ${REORDER_COLUMN}`}>
+          <span className="text-sm font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+            {t('workspace.dragToReorder')}
+          </span>
+          <button
+            onClick={() => onDone(didReorderRef.current)}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-opacity hover:opacity-90"
+            style={{
+              backgroundColor: 'var(--color-btn-primary-bg)',
+              color: 'var(--color-btn-primary-text)',
+            }}
           >
-            <SortableContext items={sortedIds} strategy={verticalListSortingStrategy}>
-              {sortedRows.map((ws) => {
-                const crossBlock = !!activeWs && ws.workspace_id !== activeId &&
-                  isEffectivelyPinned(ws) !== isEffectivelyPinned(activeWs);
-                return (
-                  <SortableReorderRow
-                    key={ws.workspace_id}
-                    workspace={ws}
-                    disabled={isSaving || (crossBlock
-                      ? { draggable: false, droppable: true }
-                      : false)}
-                  />
-                );
-              })}
-            </SortableContext>
-          </DndContext>
-        )}
+            <Check className="h-4 w-4" />
+            {t('common.done')}
+          </button>
+        </div>
+      </div>
+      <div className={`flex-1 min-h-0 overflow-y-auto pb-4 ${GALLERY_FRAME}`}>
+        <div className={`flex min-h-full flex-col px-1 ${REORDER_COLUMN}`}>
+          {isLoading ? (
+            <div className="flex flex-1 items-center justify-center">
+              <Loader size={20} className="text-(--color-text-tertiary)" />
+            </div>
+          ) : isError ? (
+            <p className="px-4 py-8 text-center text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+              {t('workspace.failedLoadWorkspaces')}
+            </p>
+          ) : (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragStart={(e) => setActiveId(String(e.active.id))}
+              onDragCancel={() => setActiveId(null)}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext items={sortedIds} strategy={verticalListSortingStrategy}>
+                {sortedRows.map((ws) => {
+                  const crossBlock = !!activeWs && ws.workspace_id !== activeId &&
+                    isEffectivelyPinned(ws) !== isEffectivelyPinned(activeWs);
+                  const computer = showMachines && ws.computer_id ? computersById.get(ws.computer_id) ?? null : null;
+                  return (
+                    <SortableReorderRow
+                      key={ws.workspace_id}
+                      workspace={ws}
+                      computer={computer}
+                      isThisMac={!!computer && thisMac.of(computer) !== null}
+                      disabled={isSaving || (crossBlock
+                        ? { draggable: false, droppable: true }
+                        : false)}
+                    />
+                  );
+                })}
+              </SortableContext>
+            </DndContext>
+          )}
+        </div>
       </div>
     </div>
   );

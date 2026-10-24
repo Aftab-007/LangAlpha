@@ -1,17 +1,13 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Search, ArrowDownUp, GripVertical } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Loader } from '@/components/ui/loader';
 import { useParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
-import { motion, AnimatePresence } from '@/lib/framer';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Computer } from '@/types/api';
 import CreateWorkspaceModal from './CreateWorkspaceModal';
 import { DiskWarning, useDiskAlertComputer } from './DiskWarning';
 import RenameWorkspaceDialog from './RenameWorkspaceDialog';
-import MorphingPageDots from '../../../components/ui/morphing-page-dots';
-import { useWorkspaces } from '../../../hooks/useWorkspaces';
-import { getAllWorkspaces } from '../../../hooks/useAllWorkspaces';
+import { useAllWorkspaces } from '../../../hooks/useAllWorkspaces';
 import { queryKeys } from '../../../lib/queryKeys';
 import { renameWorkspace } from '../utils/api';
 import { useWorkspaceActions } from './workspaceActions';
@@ -19,42 +15,42 @@ import { isEffectivelyPinned } from '../hooks/useNavigationData';
 import { pinWorkspaceRow } from '../hooks/workspaceRowActions';
 import { useCreateWorkspace } from '../hooks/useCreateWorkspace';
 import { homeWorkspaceQuery } from '@/hooks/useHomeWorkspace';
+import { useNow } from '@/hooks/useNow';
 import { useWorkspaceLabel } from '@/hooks/useWorkspaceLabel';
+import { isHomeWorkspace } from '@/lib/homeWorkspace';
+import { safeLocalStorage } from '@/lib/utils';
 import { clearChatSession } from '../hooks/utils/chatSessionRestore';
 import { useWorkspaceMutation } from '../hooks/useWorkspaceMutation';
 import { useComputers } from '../hooks/useComputers';
+import { useThisMac } from '../hooks/useRemoteControl';
 import { openComputersPanel } from '../hooks/computerPanelStore';
+import { liveComputers } from '../utils/computerStatus';
 import { GalleryActions } from './workspaceGallery/GalleryActions';
 import { GalleryEmptyState } from './workspaceGallery/GalleryEmptyState';
+import { ALL_COMPUTERS, GALLERY_SORTS, GalleryToolbar, type GallerySort } from './workspaceGallery/GalleryToolbar';
+import { HomeStrip } from './workspaceGallery/HomeStrip';
+import { GALLERY_COLUMN, GALLERY_FRAME } from './workspaceGallery/layout';
 import { ReorderList } from './workspaceGallery/ReorderList';
 import { WorkspaceCard } from './workspaceGallery/WorkspaceCard';
-import { useGalleryPaging } from './workspaceGallery/useGalleryPaging';
 import type { WorkspaceRecord } from './workspaceGallery/types';
 
-const slideVariants = {
-  enter: (direction: number) => ({
-    x: direction > 0 ? 80 : -80,
-    opacity: 0,
-  }),
-  center: {
-    x: 0,
-    opacity: 1,
-  },
-  exit: (direction: number) => ({
-    x: direction > 0 ? -80 : 80,
-    opacity: 0,
-  }),
-};
+/**
+ * The order the user last picked, a per-browser convenience. Nothing stored,
+ * or a value this build does not know, reads as Recent; blocked storage just
+ * forgets on reload.
+ */
+const SORT_KEY = 'workspaceGallery.sort';
 
-const slideTransition = {
-  x: { type: 'spring' as const, stiffness: 400, damping: 35 },
-  opacity: { duration: 0.15 },
+const readSort = (): GallerySort => {
+  const stored = safeLocalStorage.getItem(SORT_KEY);
+  return GALLERY_SORTS.find((sort) => sort === stored) ?? 'activity';
 };
 
 /**
  * WorkspaceGallery Component
  *
- * Displays a gallery of workspaces as cards.
+ * Home as a strip, then every workspace as a card in one scrolled grid, each
+ * saying which machine it lives on and whether that machine is up.
  */
 
 interface WorkspaceGalleryProps {
@@ -66,24 +62,22 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   const { t } = useTranslation();
   const label = useWorkspaceLabel();
   const queryClient = useQueryClient();
+  const now = useNow();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  // Default to the manual ('custom') order so the gallery matches the in-chat
-  // nav panel, which always shows the user's drag order. With no manual reorder
-  // the server's custom sort falls back to updated_at DESC, so this looks
-  // identical to 'activity' until the user actually reorders. Activity/Name
-  // remain available via the Sort-by toggle.
-  const [sortBy, setSortBy] = useState<'activity' | 'name' | 'custom'>('custom');
+  const [computerFilter, setComputerFilter] = useState<string>(ALL_COMPUTERS);
+  // Most recent first until the user picks another order, and then theirs on
+  // every visit: each card says when it was last used, the time Recent sorts
+  // on. The drag order is one pick away, and reordering switches to it.
+  const [sortBy, setSortBy] = useState<GallerySort>(readSort);
   const [isReorderMode, setIsReorderMode] = useState(false);
   // Rename is the gallery's own dialog (the tree renames inline); duplicate,
-  // move and delete come from useWorkspaceActions below. Spec and always-on are the
-  // machine's and live in the Computers dialog.
+  // move and delete come from useWorkspaceActions below. Spec is the machine's
+  // and lives in the Computers dialog.
   const [renameTarget, setRenameTarget] = useState<WorkspaceRecord | null>(null);
   const { workspaceId: currentWorkspaceId } = useParams();
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const preSortByRef = useRef(sortBy); // sort mode before entering reorder
-  const isSearching = debouncedSearch.length > 0;
 
   // Home's query (idempotent POST, creates it if missing). The
   // reorder list shows the whole record, not just its id, so here it goes
@@ -93,103 +87,65 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     staleTime: 5 * 60_000,
   });
 
-  // Paging owns the page size, the page index and the window the list query
-  // reads. It holds no server state, so the page count is derived below from
-  // the total the query returns.
-  const paging = useGalleryPaging({ isSearching });
-
-  // Main workspace list query
+  // Every workspace, one scrolled list: search and the computer filter both
+  // narrow it here, so neither needs a query of its own. Waits for Home, which
+  // the first read may have to create.
   const {
-    data: pagedWsData,
-    isLoading: isPagedWsLoading,
-    error: pagedWsError,
-  } = useWorkspaces({
-    limit: paging.limit,
-    offset: paging.offset,
-    sortBy,
-    includeHome: true,
-    enabled: !isSearching && !isReorderMode && !isHomeLoading,
-  });
-
-  const allSearchWorkspaces = useQuery({
-    queryKey: queryKeys.workspaces.list({ view: 'search-all', sortBy, includeHome: true }),
-    queryFn: () => getAllWorkspaces(sortBy, true),
-    enabled: isSearching && !isReorderMode && !isHomeLoading,
-    staleTime: 30_000,
-  });
-
-  const wsData = isSearching
-    ? {
-        workspaces: allSearchWorkspaces.data ?? [],
-        total: allSearchWorkspaces.data?.length ?? 0,
-      }
-    : pagedWsData;
-  const isWsLoading = isSearching
-    ? allSearchWorkspaces.isLoading
-    : isPagedWsLoading;
-  const wsError = isSearching
-    ? allSearchWorkspaces.error
-    : pagedWsError;
-
-  const totalPages = Math.ceil((wsData?.total ?? 0) / paging.pageSize);
+    data: wsData,
+    isLoading: isWsLoading,
+    error: wsError,
+  } = useAllWorkspaces({ sortBy, includeHome: true, enabled: !isReorderMode && !isHomeLoading });
 
   // The machines behind the cards. The status fan-out itself is mounted at the
   // page root (ChatAgent), because the sandbox panel can start a machine too.
   const { data: computerData } = useComputers();
+  const computers = useMemo(() => liveComputers(computerData?.computers), [computerData]);
   const computersById = useMemo(() => {
     const byId = new Map<string, Computer>();
     for (const c of computerData?.computers ?? []) byId.set(c.computer_id, c);
     return byId;
   }, [computerData]);
-
-  // Derive workspace list from query data
-  const workspaces = useMemo((): WorkspaceRecord[] => {
-    return (wsData?.workspaces || []) as WorkspaceRecord[];
-  }, [wsData]);
-
   // The machine whose disk is worst, if any is past the warning line. One
   // banner, not one per machine: almost every user has a single computer.
   const alertComputer = useDiskAlertComputer(computerData?.computers);
+  // Which row is the Mac this desktop app runs on; null everywhere else.
+  const thisMac = useThisMac({ enabled: true });
+  const isThisMac = (computer: Computer) => thisMac.of(computer) !== null;
+
+  // A filter on a machine that has since gone, or with only one left, is no filter.
+  const filterHolds = computers.length > 1 && computers.some((c) => c.computer_id === computerFilter);
+  const activeFilter = filterHolds ? computerFilter : ALL_COMPUTERS;
+  const showMachines = computers.length > 1;
+  // And it is dropped once the list says so, rather than coming back if the
+  // machine count grows again. An empty list is one not read yet, not an answer.
+  if (computerFilter !== ALL_COMPUTERS && !filterHolds && computers.length > 0) {
+    setComputerFilter(ALL_COMPUTERS);
+  }
 
   // Clear saved chat session so tab-switching returns to workspace gallery
   useEffect(() => {
     clearChatSession();
   }, []);
 
-  /**
-   * Debounced search: update debouncedSearch after 300ms
-   */
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchQuery(value);
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-
-    if (value.length > 0) {
-      searchTimerRef.current = setTimeout(() => {
-        setDebouncedSearch(value);
-      }, 300);
-    } else {
-      setDebouncedSearch('');
-    }
-  }, []);
-
-  // Cleanup timers on unmount
-  useEffect(() => {
-    return () => {
-      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    };
-  }, []);
+  const scrollToTop = () => scrollRef.current?.scrollTo?.({ top: 0, behavior: 'smooth' });
 
   const createWorkspace = useCreateWorkspace();
+
+  /** Switch the order and remember it for the next visit. */
+  const pickSort = (sort: GallerySort) => {
+    setSortBy(sort);
+    safeLocalStorage.setItem(SORT_KEY, sort);
+  };
 
   /**
    * Pin/unpin from the card menu. The canonical row action owns the
    * refetch-then-unfreeze sequence (shared with the nav tree, so an unpin here
    * releases the sidebar's session freeze too); the gallery only adds its own
-   * presentation reaction — pinning re-sorts the list, so snap back to page 0.
+   * presentation reaction: pinning re-sorts the list, so show its top.
    */
   const handleTogglePin = (workspace: WorkspaceRecord) => {
     void pinWorkspaceRow(queryClient, workspace.workspace_id, !workspace.is_pinned, {
-      onAfterPin: paging.snapToFirstPage,
+      onAfterPin: scrollToTop,
     });
   };
 
@@ -213,19 +169,14 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     if (ok) setRenameTarget(null);
   };
 
-  // Duplicate / move / delete: one implementation, shared
-  // with the nav tree. Only the paging reactions are gallery-specific: a
-  // duplicate lands at the top, and a delete that empties the page steps back.
+  // Duplicate / move / delete: one implementation, shared with the nav tree.
+  // A duplicate lands at the top, so the gallery shows the top.
   const wsActions = useWorkspaceActions({
     currentWorkspaceId,
-    onAfterMutate: (op) => { if (op === 'duplicate') paging.snapToFirstPage(); },
-    onAfterDelete: (wsId) => {
-      const remainingOnPage = workspaces.filter((ws) => ws.workspace_id !== wsId).length;
-      if (remainingOnPage === 0) paging.stepBackPage();
-    },
+    onAfterMutate: (op) => { if (op === 'duplicate') scrollToTop(); },
   });
 
-  /** Enter reorder mode: the list takes over from the paginated grid. */
+  /** Enter reorder mode: the list takes over from the grid. */
   const enterReorderMode = () => {
     preSortByRef.current = sortBy;
     setIsReorderMode(true);
@@ -234,27 +185,27 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   /** Leave reorder mode; a drag that landed pins the manual order. */
   const exitReorderMode = (didReorder: boolean) => {
     setIsReorderMode(false);
-    setSortBy(didReorder ? 'custom' : preSortByRef.current);
-    paging.resetToFirstPage();
-    // Invalidate so paginated view refetches with correct sort order
+    if (didReorder) pickSort('custom');
+    else setSortBy(preSortByRef.current);
     queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.lists() });
   };
 
-  // Server handles sort order; the client only filters by search and enforces
-  // the ordering rule shared with the nav tree: the pinned block stays above
-  // unpinned rows, and Home counts as always-pinned (it isn't guaranteed to
-  // carry is_pinned in the DB). No Home-first hoist: within the pinned
-  // block Home competes on the server sort like any pinned workspace.
-  // Matched on the name the card shows, so a search finds Home as All workspaces.
-  const visibleWorkspaces = workspaces
-    .filter((workspace) =>
-      label(workspace).toLowerCase().includes(searchQuery.toLowerCase())
-    )
-    .sort((a, b) => {
-      const aPinned = isEffectivelyPinned(a) ? 1 : 0;
-      const bPinned = isEffectivelyPinned(b) ? 1 : 0;
-      return bPinned - aPinned; // stable sort: server order preserved within blocks
-    });
+  const rows = (wsData?.workspaces ?? []) as WorkspaceRecord[];
+  // Home is the strip, never a card. The list carries it when asked to; the
+  // Home query stands in until the list does.
+  const homeRow = rows.find((ws) => isHomeWorkspace(ws)) ?? (homeWs as WorkspaceRecord | null | undefined) ?? null;
+  const userRows = rows.filter((ws) => !isHomeWorkspace(ws));
+  const hasUserWorkspaces = userRows.length > 0;
+
+  // Server handles sort order; the client only narrows by search and machine
+  // and enforces the ordering rule shared with the nav tree: the pinned block
+  // stays above unpinned rows. Matched on the name the card shows.
+  const query = searchQuery.trim().toLowerCase();
+  const matches = (ws: WorkspaceRecord) => !query || label(ws).toLowerCase().includes(query);
+  const visibleWorkspaces = userRows
+    .filter((ws) => matches(ws) && (activeFilter === ALL_COMPUTERS || ws.computer_id === activeFilter))
+    .sort((a, b) => (isEffectivelyPinned(b) ? 1 : 0) - (isEffectivelyPinned(a) ? 1 : 0));
+  const showHome = !!homeRow && matches(homeRow);
 
   if (isWsLoading || isHomeLoading) {
     return (
@@ -277,7 +228,9 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     );
   }
 
-  if (wsError) {
+  // A failed refetch keeps the list it had: the full-screen error is only for
+  // a gallery with nothing to show.
+  if (wsError && !wsData) {
     return (
       <div className="h-full flex flex-col">
         <div className="chrome-drag-strip" aria-hidden="true" />
@@ -302,70 +255,64 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     );
   }
 
-  const hasWorkspaces = workspaces.length > 0;
-
-  const renderGrid = () => {
-    const skipAnim = paging.takeSkipInitialAnim();
+  const renderList = () => {
+    // A user with nothing but Home is welcomed, not shown a search box.
+    if (!hasUserWorkspaces) {
+      return (
+        <>
+          {homeRow && (
+            <HomeStrip workspace={homeRow} now={now} onSelect={onWorkspaceSelect} prefetchThreads={prefetchThreads} />
+          )}
+          <div className="flex flex-col items-center justify-center py-16 text-center enter-fade-up">
+            <GalleryEmptyState isFiltered={false} onNewWorkspace={() => setIsModalOpen(true)} />
+          </div>
+        </>
+      );
+    }
     return (
-    <AnimatePresence mode="wait" custom={paging.slideDirectionRef.current}>
-    {visibleWorkspaces.length === 0 ? (
-      <motion.div
-        key="empty"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.15 }}
-        className="flex flex-col items-center justify-center py-16"
-      >
-        <GalleryEmptyState
-          isFiltered={!!searchQuery}
-          onNewWorkspace={() => setIsModalOpen(true)}
-        />
-      </motion.div>
-    ) : (
-      <div
-        style={{ height: paging.gridHeightRef.current || undefined, overflow: 'hidden' }}
-        ref={(el) => {
-          if (el && visibleWorkspaces.length >= paging.pageSize) {
-            const h = el.scrollHeight;
-            if (!paging.gridHeightRef.current || h > paging.gridHeightRef.current) {
-              paging.gridHeightRef.current = h;
-              el.style.height = h + 'px';
-            }
-          }
-        }}
-      >
-        <motion.div
-          key={`page-${paging.currentPage}`}
-          custom={paging.slideDirectionRef.current}
-          variants={slideVariants}
-          initial={skipAnim ? false : "enter"}
-          animate="center"
-          exit="exit"
-          transition={slideTransition}
-          className="grid gap-3 md:grid-cols-2 md:gap-6 grid-cols-1 mb-3 md:mb-6"
-        >
-          {visibleWorkspaces.map((workspace, index) => (
-            <WorkspaceCard
-              key={workspace.workspace_id}
-              workspace={workspace}
-              computer={workspace.computer_id ? computersById.get(workspace.computer_id) : null}
-              index={index}
-              onSelect={onWorkspaceSelect}
-              onTogglePin={handleTogglePin}
-              onRenameStart={setRenameTarget}
-              onOpenComputer={(computerId) => openComputersPanel({ computerId })}
-              onDuplicate={wsActions.openDuplicate}
-              onMove={wsActions.openMove}
-              onDelete={wsActions.openDelete}
-              prefetchThreads={prefetchThreads}
-            />
-          ))}
-        </motion.div>
-      </div>
-    )}
-    </AnimatePresence>
-  );
+      <>
+        {showHome && homeRow && (
+          <HomeStrip workspace={homeRow} now={now} onSelect={onWorkspaceSelect} prefetchThreads={prefetchThreads} />
+        )}
+        {visibleWorkspaces.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16">
+            <GalleryEmptyState isFiltered onNewWorkspace={() => setIsModalOpen(true)} />
+          </div>
+        ) : (
+          // As many columns as fit at a readable card width: one on a phone,
+          // two on a small laptop, three from a 16-inch one up to the column's
+          // cap. Every row is as tall as the tallest, so the grid reads as one
+          // even field; a phone's single column keeps each card its own height.
+          <div className="grid grid-cols-1 gap-3 md:auto-rows-fr md:gap-4 md:grid-cols-[repeat(auto-fill,minmax(min(100%,23.75rem),1fr))]">
+            {visibleWorkspaces.map((workspace, index) => {
+              // With one computer the toolbar names it once; a line per card
+              // would only repeat it. With more, each card says which.
+              const computer = showMachines && workspace.computer_id
+                ? computersById.get(workspace.computer_id) ?? null
+                : null;
+              return (
+                <WorkspaceCard
+                  key={workspace.workspace_id}
+                  workspace={workspace}
+                  computer={computer}
+                  isThisMac={!!computer && isThisMac(computer)}
+                  now={now}
+                  index={index}
+                  onSelect={onWorkspaceSelect}
+                  onTogglePin={handleTogglePin}
+                  onRenameStart={setRenameTarget}
+                  onOpenComputer={(computerId) => openComputersPanel({ computerId })}
+                  onDuplicate={wsActions.openDuplicate}
+                  onMove={wsActions.openMove}
+                  onDelete={wsActions.openDelete}
+                  prefetchThreads={prefetchThreads}
+                />
+              );
+            })}
+          </div>
+        )}
+      </>
+    );
   };
 
   return (
@@ -377,139 +324,87 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
           The header below is centred and holds a title, so it is not the bar to
           hand the window -- a drag region over prose is text you cannot select. */}
       <div className="chrome-drag-strip" aria-hidden="true" />
-      {/* Header (desktop only) */}
-      <header
-        className="hidden md:flex w-full items-start mx-auto max-w-4xl shrink-0 px-8 pb-2 enter-fade-up"
-        style={{ paddingTop: 'calc(var(--page-top) - 4px)' }}
-      >
-        <div className="flex w-full items-center justify-between gap-4" style={{ minHeight: 36 }}>
-          <h1 className="text-2xl font-semibold title-font" style={{ color: 'var(--color-text-primary)' }}>
-            {t('workspace.workspaces')}
-          </h1>
-          {hasWorkspaces && (
+      {/* Everything above the grid. It clips nothing (its bands are padded
+          clear of their edges); the overflow is what lets it reserve the
+          scrollbar's lane, so its column lines up with the grid's. */}
+      <div className={`shrink-0 overflow-hidden ${GALLERY_FRAME}`}>
+        {/* Header (desktop only) */}
+        <header
+          className={`hidden md:flex items-start pb-2 enter-fade-up ${GALLERY_COLUMN}`}
+          style={{ paddingTop: 'calc(var(--page-top) - 4px)' }}
+        >
+          <div className="flex w-full items-center justify-between gap-4" style={{ minHeight: 36 }}>
+            <h1 className="text-2xl font-semibold title-font" style={{ color: 'var(--color-text-primary)' }}>
+              {t('workspace.workspaces')}
+            </h1>
             <GalleryActions
               onNewWorkspace={() => setIsModalOpen(true)}
               onOpenComputers={() => openComputersPanel()}
             />
-          )}
-        </div>
-      </header>
+          </div>
+        </header>
 
-      {/* Main Content */}
-      <main className="mx-auto mt-4 w-full flex-1 min-h-0 px-4 md:px-8 lg:mt-6 max-w-4xl flex flex-col pb-0">
-        {/* On a phone the two labeled actions do not fit beside the title,
-            so they take the row beneath it. */}
-        <div className="flex flex-col gap-3 mb-4 md:hidden">
-          <h1 className="text-xl font-semibold title-font" style={{ color: 'var(--color-text-primary)' }}>
-            {t('workspace.workspaces')}
-          </h1>
-          {hasWorkspaces && (
+        <div className={`mt-4 ${GALLERY_COLUMN}`}>
+          {/* On a phone the two labeled actions do not fit beside the title,
+              so they take the row beneath it. */}
+          <div className="flex flex-col gap-3 mb-4 md:hidden">
+            <h1 className="text-xl font-semibold title-font" style={{ color: 'var(--color-text-primary)' }}>
+              {t('workspace.workspaces')}
+            </h1>
             <GalleryActions
               stacked
               onNewWorkspace={() => setIsModalOpen(true)}
               onOpenComputers={() => openComputersPanel()}
             />
+          </div>
+
+          {alertComputer && !isReorderMode && (
+            <div className="px-1 pb-4 md:px-0 enter-fade-up">
+              <DiskWarning computer={alertComputer} />
+            </div>
+          )}
+
+          {hasUserWorkspaces && !isReorderMode && (
+            <div className="px-1 pb-4 md:px-0 enter-fade-up enter-fade-up-d1">
+              <GalleryToolbar
+                search={searchQuery}
+                onSearchChange={setSearchQuery}
+                computers={computers}
+                isThisMac={isThisMac}
+                computerFilter={activeFilter}
+                onComputerFilterChange={setComputerFilter}
+                sortBy={sortBy}
+                onSortChange={(sort) => {
+                  pickSort(sort);
+                  scrollToTop();
+                }}
+                onReorder={enterReorderMode}
+                onOpenComputer={(computerId) => openComputersPanel({ computerId })}
+              />
+            </div>
           )}
         </div>
+      </div>
 
-        {alertComputer && !isReorderMode && (
-          <div className="shrink-0 px-1 pb-4 enter-fade-up">
-            <DiskWarning computer={alertComputer} />
-          </div>
-        )}
-
-        {hasWorkspaces && !isReorderMode && (
-        <div className="shrink-0 flex flex-col gap-4 pb-4 md:pb-6 px-1 enter-fade-up enter-fade-up-d1">
-          {/* Search Bar */}
-          <div className="w-full">
-            {/* The pill rings for the field inside it: a ring drawn on the
-                field alone would cut this border and leave the icon outside
-                the indicator. `rings-within` in tokens.css owns the rule. */}
-            <div
-              className="rings-within owns-its-edge flex items-center gap-2 h-11 px-3 rounded-xl border transition-colors"
-              style={{
-                backgroundColor: 'var(--color-bg-input)',
-                borderColor: 'var(--color-border-muted)',
-              }}
-            >
-              <Search className="h-5 w-5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
-              <input
-                className="w-full bg-transparent text-base sm:text-sm"
-                style={{ color: 'var(--color-text-primary)' }}
-                placeholder={t('workspace.searchWorkspaces')}
-                value={searchQuery}
-                onChange={(e) => handleSearchChange(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Sort By + Reorder */}
-          <div className="flex w-full gap-4 justify-between items-center">
-            <div></div>
-            <div className="flex items-center gap-2.5">
-              <span className="text-sm hidden md:inline" style={{ color: 'var(--color-text-tertiary)' }}>
-                {t('workspace.sortBy')}
-              </span>
-              <button
-                onClick={() => {
-                  setSortBy((s) => s === 'activity' ? 'name' : s === 'name' ? 'custom' : 'activity');
-                  paging.resetToFirstPage();
-                }}
-                className="flex items-center gap-1 md:gap-1.5 px-2 md:px-3 py-1 h-9 rounded-lg border transition-colors hover:bg-foreground/5"
-                style={{ borderColor: 'var(--color-border-muted)', color: 'var(--color-text-tertiary)' }}
-              >
-                <ArrowDownUp className="h-4 w-4 md:hidden" />
-                <span className="text-sm">
-                  {sortBy === 'activity' ? t('workspace.activity') : sortBy === 'name' ? t('common.name') : t('workspace.custom')}
-                </span>
-              </button>
-              <button
-                onClick={enterReorderMode}
-                className="flex items-center gap-1.5 px-2 md:px-3 py-1 h-9 rounded-lg border transition-colors hover:bg-foreground/5"
-                style={{ borderColor: 'var(--color-border-muted)', color: 'var(--color-text-tertiary)' }}
-              >
-                <GripVertical className="h-4 w-4" />
-                <span className="text-sm hidden md:inline">{t('workspace.reorder')}</span>
-              </button>
-            </div>
+      {isReorderMode ? (
+        <ReorderList
+          homeWorkspace={(homeWs as WorkspaceRecord) ?? null}
+          onDone={exitReorderMode}
+          showMachines={showMachines}
+        />
+      ) : (
+        // Spans the full width so its scrollbar runs down the window's edge;
+        // the column is centred inside it.
+        <div
+          ref={scrollRef}
+          className={`flex-1 min-h-0 overflow-y-auto pb-8 ${GALLERY_FRAME}`}
+          data-testid="workspace-grid"
+        >
+          <div className={`flex flex-col gap-3 px-1 md:gap-4 md:px-0 ${GALLERY_COLUMN}`}>
+            {renderList()}
           </div>
         </div>
-        )}
-
-        {isReorderMode ? (
-          <ReorderList
-            homeWorkspace={(homeWs as WorkspaceRecord) ?? null}
-            onDone={exitReorderMode}
-          />
-        ) : (
-          /* -- Normal Mode: paginated grid -- */
-          <>
-            <div
-              ref={paging.setScrollContainer}
-              className="flex-1 min-h-0 overflow-hidden px-1"
-              {...paging.swipeHandlers(totalPages)}
-            >
-              {renderGrid()}
-            </div>
-
-            {/* Pagination dots -- always rendered to keep scroll container height stable;
-                hidden via visibility when not needed to prevent layout oscillation */}
-            <div
-              className="shrink-0 py-3"
-              style={{
-                visibility: (!isSearching && totalPages > 1) ? 'visible' : 'hidden',
-                pointerEvents: (!isSearching && totalPages > 1) ? 'auto' : 'none',
-              }}
-            >
-              <MorphingPageDots
-                totalPages={totalPages}
-                activeIndex={paging.currentPage}
-                onChange={paging.goToPage}
-              />
-            </div>
-          </>
-        )}
-      </main>
+      )}
 
       {/* Create Workspace Modal */}
       <CreateWorkspaceModal

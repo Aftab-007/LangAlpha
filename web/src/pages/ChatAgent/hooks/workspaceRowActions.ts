@@ -64,6 +64,25 @@ export function patchCachedWorkspace(
   return previous;
 }
 
+/**
+ * Take a deleted workspace out of every cached list, totals included, so no
+ * surface (gallery, sidebar, drawer) offers it while the refetch is in
+ * flight: a list read page by page can take a while to land.
+ */
+export function removeCachedWorkspace(queryClient: QueryClient, wsId: string): void {
+  queryClient.setQueriesData<CachedWorkspaceList | undefined>(
+    { queryKey: queryKeys.workspaces.lists() },
+    (prev) => {
+      if (!prev?.workspaces?.some((ws) => ws.workspace_id === wsId)) return prev;
+      return {
+        ...prev,
+        workspaces: prev.workspaces.filter((ws) => ws.workspace_id !== wsId),
+        ...(typeof prev.total === 'number' ? { total: Math.max(0, prev.total - 1) } : {}),
+      };
+    },
+  );
+}
+
 /** Restore a snapshot captured by patchCachedWorkspace. */
 export function rollbackCachedWorkspaces(queryClient: QueryClient, previous: WorkspaceQueriesSnapshot): void {
   previous.forEach(([key, data]) => queryClient.setQueryData(key as readonly unknown[], data));
