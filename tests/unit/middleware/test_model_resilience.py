@@ -768,6 +768,88 @@ class TestCompactionRequest:
         assert [name for name, _ in turn] == ["primary-model", "fallback-a"]
 
 
+class TestAsSent:
+    """A call only the primary reading that request can answer (the hand-off
+    of a summary only its provider can read) is retried, but never moved to a
+    fallback or sent again without its reasoning."""
+
+    @pytest.mark.asyncio
+    async def test_only_the_primary_is_tried(self, events):
+        from ptc_agent.agent.middleware.model_resilience import as_sent
+
+        client = _FakeModel("primary-model")
+        mw = _make_middleware(client, fallbacks=[("fallback-a", _FakeModel("fallback-a"))])
+        exc = _status_error("Error code: 404 - model not found", status=404)
+        calls = []
+
+        async def handler(req):
+            calls.append(req.model)
+            raise exc
+
+        with as_sent(), pytest.raises(Exception) as exc_info:
+            await mw.awrap_model_call(_FakeRequest(client), handler)
+
+        assert exc_info.value is exc
+        assert calls == [client]
+        assert _fallback_props(events) == []
+
+    @pytest.mark.asyncio
+    async def test_a_transient_error_is_still_retried(self, events):
+        from ptc_agent.agent.middleware.model_resilience import as_sent
+
+        client = _FakeModel("primary-model")
+        mw = _make_middleware(client, fallbacks=[("fallback-a", _FakeModel("fallback-a"))])
+        attempts = []
+
+        async def handler(req):
+            attempts.append(req.model)
+            if len(attempts) < 2:
+                raise _status_error("upstream 500", status=500)
+            return "ok"
+
+        with as_sent():
+            assert await mw.awrap_model_call(_FakeRequest(client), handler) == "ok"
+
+        assert attempts == [client, client]
+
+    @pytest.mark.asyncio
+    async def test_a_400_is_not_sent_again_without_reasoning(self, events):
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from ptc_agent.agent.middleware.model_resilience import as_sent
+
+        client = _FakeModel("primary-model", thinking={"type": "enabled"})
+        mw = _make_middleware(client)
+        thinking = {"type": "thinking", "thinking": "reasoned", "signature": "foreign"}
+        history = [HumanMessage("q"), AIMessage(content=[thinking, {"type": "text", "text": "a"}])]
+        exc = _status_error(TestReasoningPayloadEscalation.ERROR, status=400)
+        sent = []
+
+        async def handler(req):
+            sent.append(req.messages)
+            raise exc
+
+        with as_sent(), pytest.raises(Exception) as exc_info:
+            await mw.awrap_model_call(_FakeRequest(client, history), handler)
+
+        assert exc_info.value is exc
+        assert sent == [history]
+        assert events == []
+
+    def test_the_fallbacks_are_back_after_the_block(self):
+        from ptc_agent.agent.middleware.model_resilience import as_sent
+
+        client = _FakeModel("primary-model")
+        mw = _make_middleware(client, fallbacks=[("fallback-a", _FakeModel("fallback-a"))])
+
+        with as_sent():
+            inside = mw._candidates(_FakeRequest(client))
+        after = mw._candidates(_FakeRequest(client))
+
+        assert [name for name, _ in inside] == ["primary-model"]
+        assert [name for name, _ in after] == ["primary-model", "fallback-a"]
+
+
 class TestBuildFallbackPairs:
     class _Cfg:
         def __init__(self, clients=None, names=None, fallback=None):
