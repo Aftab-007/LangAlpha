@@ -1270,6 +1270,7 @@
     "quotaRemaining": "剩余 {{remaining}}/{{limit}}",
     "quotaUnlimited": "无限制",
     "quotaNotOnPlan": "当前套餐不可用",
+    "quotaNoneLeft": "已用完",
     "quotaUsedUp": "已达套餐上限",
     "alwaysOnFailed": "无法更改常驻设置",
     "tier": {
@@ -1394,10 +1395,10 @@
     "primaryPreparingOption": "{{name}}（默认，准备中）",
     "provider": {
       "label": "提供商",
-      "daytonaDesc": "停止后保留文件，正在运行的程序会结束。",
-      "e2bDesc": "停止后保留内存和正在运行的程序，恢复后从中断处继续。",
-      "dockerDesc": "在本机运行。",
-      "sshDesc": "任何可通过 SSH 登录的 Linux 服务器或 Mac。停止只会结束 Agent 的程序。",
+      "daytonaDesc": "基于容器的沙箱",
+      "e2bDesc": "微虚拟机（MicroVM）",
+      "dockerDesc": "在本机运行",
+      "sshDesc": "任何 Linux 服务器或 Mac",
       "sshLabel": "你的机器 (SSH)",
       "capReached": "已达上限"
     },
@@ -1629,7 +1630,7 @@
     },
     "remoteControl": {
       "cardTitle": "这台 Mac",
-      "cardDesc": "让 Agent 直接在这台 Mac 上工作，关闭 LangAlpha 后也不会中断。",
+      "cardDesc": "关闭 LangAlpha 后仍可工作",
       "alreadyAdded": "已添加",
       "title": "远程控制这台 Mac",
       "intro": "LangAlpha 的 Agent 将以 {{account}} 的身份在这台 Mac 上工作，拥有这个账户的全部权限。",

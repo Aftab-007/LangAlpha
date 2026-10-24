@@ -1272,6 +1272,7 @@
     "quotaRemaining": "{{remaining}} of {{limit}} left",
     "quotaUnlimited": "Unlimited",
     "quotaNotOnPlan": "Not on your plan",
+    "quotaNoneLeft": "None left",
     "quotaUsedUp": "Plan limit reached",
     "alwaysOnFailed": "Could not change always-on",
     "tier": {
@@ -1396,10 +1397,10 @@
     "primaryPreparingOption": "{{name}} (Primary, Preparing)",
     "provider": {
       "label": "Provider",
-      "daytonaDesc": "Stopping keeps your files. Running programs end.",
-      "e2bDesc": "Stopping keeps memory and running programs, so it picks up where it left off.",
-      "dockerDesc": "Runs on this machine.",
-      "sshDesc": "Any Linux server or Mac you can SSH into. Stopping ends only the agent's programs.",
+      "daytonaDesc": "Container-based sandbox",
+      "e2bDesc": "MicroVM",
+      "dockerDesc": "Runs on this machine",
+      "sshDesc": "Any Linux server or Mac",
       "sshLabel": "Your machine (SSH)",
       "capReached": "Limit reached"
     },
@@ -1632,7 +1633,7 @@
     },
     "remoteControl": {
       "cardTitle": "This Mac",
-      "cardDesc": "Let the agent work on this Mac, even while LangAlpha is closed.",
+      "cardDesc": "Works even with LangAlpha closed",
       "alreadyAdded": "Already added",
       "title": "Remote control of this Mac",
       "intro": "LangAlpha's agent will work on this Mac as {{account}}, with everything that account can do.",

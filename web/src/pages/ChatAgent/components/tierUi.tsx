@@ -109,9 +109,9 @@ interface TierRadioGroupProps {
   offer: TierOffer;
   value: ResourceTier;
   onChange: (tier: ResourceTier) => void;
-  /** Shown above the cards, and the group's accessible name. */
+  /** Shown above the rows, and the group's accessible name. */
   label: string;
-  /** Per-tier count quotas (platform mode only); null/undefined hides the capacity hint. */
+  /** Per-tier count quotas (platform mode only); null/undefined hides every quota note. */
   quota?: WorkspaceQuota | null;
   /**
    * The tier the computer is on now. It reads "Current" in place of a quota
@@ -122,10 +122,9 @@ interface TierRadioGroupProps {
 }
 
 /**
- * The tier picker, three across where the space allows and two by two for
- * four, which three across would leave one short. In platform mode
- * each elevated tier shows its remaining count quota and goes unselectable
- * when the plan excludes it or its quota is spent.
+ * The tier picker, one row per size. In platform mode each elevated size
+ * shows what is left of its own count quota, and goes unselectable when the
+ * plan excludes it or its quota is spent, saying which.
  */
 export function TierRadioGroup({
   offer,
@@ -150,20 +149,12 @@ export function TierRadioGroup({
       disabled: id !== currentTier && isTierBlocked(capacity),
     };
   });
-  return (
-    <RadioCardGroup
-      options={options}
-      value={value}
-      onChange={onChange}
-      label={label}
-      columns={options.length === 4 ? 2 : 3}
-    />
-  );
+  return <RadioCardGroup options={options} value={value} onChange={onChange} label={label} layout="rows" />;
 }
 
 /**
  * vCPU, RAM and disk, from the provider's config rather than the catalogs,
- * so the card says what the machine will be. None while that is unknown:
+ * so the row says what the machine will be. None while that is unknown:
  * a name with no numbers beats numbers that may be wrong.
  */
 function tierFacts(t: Translate, spec: ComputerTierSpec | undefined): string[] | undefined {
@@ -175,9 +166,12 @@ function tierFacts(t: Translate, spec: ComputerTierSpec | undefined): string[] |
   ];
 }
 
+/** Each size's own count: why it is blocked, or what is left of it. */
 function capacityNote(t: Translate, capacity: WorkspaceCapacity): string {
+  const reason = tierBlockReason(capacity);
+  if (reason === 'not_on_plan') return t('workspace.quotaNotOnPlan', 'Not on your plan');
+  if (reason === 'used_up') return t('workspace.quotaNoneLeft', 'None left');
   if (capacity.limit < 0) return t('workspace.quotaUnlimited', 'Unlimited');
-  if (capacity.limit === 0) return t('workspace.quotaNotOnPlan', 'Not on your plan');
   return t('workspace.quotaRemaining', '{{remaining}} of {{limit}} left', {
     remaining: Math.max(0, capacity.limit - capacity.used),
     limit: capacity.limit,
