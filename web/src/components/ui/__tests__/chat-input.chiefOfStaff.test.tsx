@@ -1,5 +1,5 @@
 /**
- * The composer's host passes a scope (All workspaces or a workspace), every
+ * The composer's host passes a scope (Chief of Staff or a workspace), every
  * conversation runs on the Default model, and the second model slot (the
  * Background model) is never shown. These pin that normalization and the
  * scope picker.
@@ -114,7 +114,7 @@ describe('ChatInput scope picker', () => {
     ChatInputRegistry.__resetForTests();
   });
 
-  it('starts on the Default model on All workspaces, never the background slot', () => {
+  it('starts on the Default model on the Chief of Staff, never the background slot', () => {
     renderInput();
     expect(screen.getByText('pill:model-alpha')).toBeInTheDocument();
 
@@ -127,7 +127,7 @@ describe('ChatInput scope picker', () => {
   it('offers a scope picker beside the Subagents switch, and no agent mode toggle', () => {
     renderInput();
     expect(screen.queryByText('PTC')).not.toBeInTheDocument();
-    expect(pill('All workspaces')).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(pill('Chief of Staff')).toHaveAttribute('aria-haspopup', 'dialog');
     expect(pill('Subagents')).toBeInTheDocument();
   });
 
@@ -137,30 +137,30 @@ describe('ChatInput scope picker', () => {
       onScopeChange: (scope) => calls.push(`scope:${scope}`),
       onWorkspaceChange: (id) => calls.push(`ws:${id}`),
     });
-    fireEvent.click(pill('All workspaces'));
+    fireEvent.click(pill('Chief of Staff'));
     fireEvent.click(pickerRow('Beta desk'));
     expect(calls).toEqual(['ws:ws-2', 'scope:workspace']);
   });
 
-  it('switches back to All workspaces from a workspace, keeping the Subagents switch', () => {
+  it('switches back to the Chief of Staff from a workspace, keeping the Subagents switch', () => {
     const onScopeChange = vi.fn();
     renderInput({ scope: 'workspace', onScopeChange });
     expect(pill('Subagents')).toBeInTheDocument();
     fireEvent.click(pill('Alpha desk'));
-    fireEvent.click(pickerRow('All workspaces'));
+    fireEvent.click(pickerRow('Chief of Staff'));
     expect(onScopeChange).toHaveBeenCalledWith('all');
   });
 
   it('names each section of the picker for a screen reader', () => {
     renderInput();
-    fireEvent.click(pill('All workspaces'));
+    fireEvent.click(pill('Chief of Staff'));
     const groups = within(screen.getByRole('menu')).getAllByRole('group');
-    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['All workspaces', 'Workspaces']);
+    expect(groups.map((g) => g.getAttribute('aria-label'))).toEqual(['Chief of Staff', 'Workspaces']);
   });
 
-  it('offers All workspaces to a user with no workspace yet', () => {
+  it('offers the Chief of Staff to a user with no workspace yet', () => {
     renderInput({ workspaces: [], selectedWorkspaceId: null, emptyWorkspacesHint: 'Make one first' });
-    fireEvent.click(pill('All workspaces'));
+    fireEvent.click(pill('Chief of Staff'));
     expect(screen.getByRole('dialog')).toHaveTextContent('Make one first');
   });
 
@@ -171,19 +171,19 @@ describe('ChatInput scope picker', () => {
       onScopeChange: (scope) => calls.push(`scope:${scope}`),
       onWorkspaceChange: (id) => calls.push(`ws:${id}`),
     });
-    pill('All workspaces').focus();
+    pill('Chief of Staff').focus();
     await user.keyboard('{Enter}');
-    await waitFor(() => expect(document.activeElement).toBe(pickerRow('All workspaces')));
+    await waitFor(() => expect(document.activeElement).toBe(pickerRow('Chief of Staff')));
     await user.keyboard('{ArrowDown}{ArrowDown}{Enter}');
     expect(calls).toEqual(['ws:ws-2', 'scope:workspace']);
     // A keyboard user keeps their place on the pill.
-    await waitFor(() => expect(document.activeElement).toBe(pill('All workspaces')));
+    await waitFor(() => expect(document.activeElement).toBe(pill('Chief of Staff')));
   });
 
   it('returns to the draft after a pick made with the pointer', async () => {
     const user = userEvent.setup();
     renderInput();
-    await user.click(pill('All workspaces'));
+    await user.click(pill('Chief of Staff'));
     await user.click(pickerRow('Beta desk'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await user.keyboard('hello');
@@ -195,7 +195,7 @@ describe('ChatInput scope picker', () => {
     renderInput();
     const draft = screen.getByRole('textbox');
     await user.click(draft);
-    await user.click(pill('All workspaces'));
+    await user.click(pill('Chief of Staff'));
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await waitFor(() => expect(document.activeElement).toBe(draft));
@@ -204,7 +204,7 @@ describe('ChatInput scope picker', () => {
   it('leaves the page live while open and closes on a press outside it', async () => {
     const user = userEvent.setup();
     renderInput();
-    await user.click(pill('All workspaces'));
+    await user.click(pill('Chief of Staff'));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(document.documentElement.style.overflow).not.toBe('hidden');
     await user.click(document.body);
@@ -214,8 +214,8 @@ describe('ChatInput scope picker', () => {
   it('closes when its pill is pressed again', async () => {
     const user = userEvent.setup();
     renderInput();
-    await user.click(pill('All workspaces'));
-    await user.click(pill('All workspaces'));
+    await user.click(pill('Chief of Staff'));
+    await user.click(pill('Chief of Staff'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
@@ -234,14 +234,14 @@ describe('ChatInput scope picker', () => {
     const user = userEvent.setup();
     const workspaces = Array.from({ length: 8 }, (_, i) => ({ workspace_id: `ws-${i}`, name: `Desk ${i}` }));
     renderInput({ workspaces: workspaces as ChatInputProps['workspaces'], selectedWorkspaceId: 'ws-0' });
-    await user.click(pill('All workspaces'));
+    await user.click(pill('Chief of Staff'));
     const search = screen.getByRole('searchbox');
     await user.click(search);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(document.activeElement).toBe(search);
   });
 
-  it("lists Home's skills on All workspaces, where the turn runs", async () => {
+  it("lists Home's skills on the Chief of Staff, where the turn runs", async () => {
     renderInput();
     await waitFor(() => {
       expect(getSkills).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId: 'home-1' }));

@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import {
   ChevronRight, Folder, FolderOpen, Pin,
   X, ChevronsDown, MoreHorizontal, SquarePen, Archive,
+  type LucideIcon,
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '../../../components/ui/dropdown-menu';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '../../../components/ui/hover-card';
@@ -33,6 +34,9 @@ import { WorkspaceMenuItems } from './workspaceActions';
 import type { WorkspaceActions } from './workspaceActions';
 import { clampWorkspaceName } from '../utils/workspaceName';
 import { useNavTree, type DragGate } from './navTreeKit';
+import { computerIdentity } from './ComputerBadge';
+import { FolderCommand, FolderTerminal } from './computerFolderIcons';
+import { useComputer } from '../hooks/useComputers';
 
 export interface ThreadEntry {
   thread_id: string;
@@ -51,14 +55,50 @@ export interface ThreadsData {
   total?: number;
 }
 
+interface RowMachine {
+  icon: LucideIcon;
+  title: string;
+}
+
+/**
+ * The machine a workspace row lives on, when the row should say so: a Mac or
+ * another machine reached over SSH, which is there only while that machine is
+ * on and holds the files itself. Still a folder, with the machine's mark in
+ * it: ⌘ for a Mac, >_ for SSH. A hosted sandbox is where workspaces live by
+ * default, so it keeps the plain folder.
+ */
+function useRowMachine(ws: NavWorkspace): RowMachine | null {
+  const { t } = useTranslation();
+  const id = typeof ws.computer_id === 'string' && !isHomeWorkspace(ws) ? ws.computer_id : null;
+  const { data: computer } = useComputer(id);
+  if (!computer) return null;
+  const identity = computerIdentity(t, computer, false);
+  if (identity.kind === 'hosted') return null;
+  return {
+    icon: identity.kind === 'ssh' ? FolderTerminal : FolderCommand,
+    title: t('nav.onComputer', { name: computer.name, kind: identity.label }),
+  };
+}
+
 /** The workspace row's leading glyph. Shared with the drag chip so a lifted
- *  section keeps the icon it had in the tree. */
-function workspaceGlyph(ws: NavWorkspace, expanded: boolean) {
+ *  section keeps the icon it had in the tree. A pin outranks the machine: it
+ *  says why the row sits on top, and the machine stays in the tooltip. */
+function workspaceGlyph(ws: NavWorkspace, expanded: boolean, machine: RowMachine | null) {
   const style = { color: 'var(--color-text-tertiary)' };
   const className = 'h-4 w-4 shrink-0';
   if (isHomeWorkspace(ws)) return <HomeRowIcon className={className} style={style} />;
-  if (ws.is_pinned) return <Pin className={className} style={style} />;
-  return expanded ? <FolderOpen className={className} style={style} /> : <Folder className={className} style={style} />;
+  const glyph = ws.is_pinned
+    ? <Pin className={className} style={style} />
+    : machine
+      ? <machine.icon className={className} style={style} />
+      : expanded ? <FolderOpen className={className} style={style} /> : <Folder className={className} style={style} />;
+  // The tooltip is for a pointer; the hidden text says it to a screen reader.
+  return machine ? (
+    <span className="flex shrink-0" title={machine.title}>
+      {glyph}
+      <span className="sr-only">{machine.title}</span>
+    </span>
+  ) : glyph;
 }
 
 // The disclosure chevron turns a quarter when its row opens. A CSS transition,
@@ -447,6 +487,7 @@ function WorkspaceTreeRowImpl({
   const wsId = ws.workspace_id;
   const isHome = isHomeWorkspace(ws);
   const isPinned = Boolean(ws.is_pinned);
+  const machine = useRowMachine(ws);
   const threads = threadsData?.threads || [];
   // Row-order signature for the thread rows' glide: rows re-measure only when
   // membership or order actually changes, not on every panel render.
@@ -475,7 +516,7 @@ function WorkspaceTreeRowImpl({
           onClick={handleRowClick}
           {...(isRenaming ? {} : dragHandleProps)}
         >
-          {workspaceGlyph(ws, isExpanded)}
+          {workspaceGlyph(ws, isExpanded, machine)}
           {isRenaming ? (
             <input
               data-nav-key="rename"
@@ -632,10 +673,11 @@ function WorkspaceTreeRowImpl({
 export function WorkspaceDragChip({ ws, expanded }: { ws: NavWorkspace; expanded: boolean }) {
   const { t } = useTranslation();
   const label = useWorkspaceLabel();
+  const machine = useRowMachine(ws);
   return (
     <div className="nav-panel nav-panel-drag-chip">
       <div className="nav-panel-row" style={{ paddingLeft: 10 }}>
-        {workspaceGlyph(ws, expanded)}
+        {workspaceGlyph(ws, expanded, machine)}
         <span className="text-sm font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>
           {label(ws) || t('nav.workspaceFallback')}
         </span>

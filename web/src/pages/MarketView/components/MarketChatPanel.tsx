@@ -91,7 +91,7 @@ interface MarketChatPanelProps {
   interval: string;
   scope: ComposerScope;
   onScopeChange: (scope: ComposerScope) => void;
-  /** The workspace the chat runs in: Home under All workspaces, else the
+  /** The workspace the chat runs in: Home under the Chief of Staff, else the
    *  selected one. Null until it resolves. */
   activeWorkspaceId: string | null;
   workspaces: Workspace[];
@@ -312,7 +312,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     [selections, liveSym, liveTf],
   );
 
-  // With no workspace to pick, the scope picker still offers All workspaces
+  // With no workspace to pick, the scope picker still offers the Chief of Staff
   // and says why the workspace list is empty.
   const emptyWorkspacesHint = workspaces.length === 0 ? t('agents.market.workspaceDisabledReason') : null;
 
@@ -448,7 +448,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   // contract as ChatAgent (no unseen dot for watched finishes, seen on open).
   useActiveThreadPublisher(threadId);
 
-  // All workspaces runs the default model, as the full agent does in a workspace.
+  // The Chief of Staff runs the default model, as the full agent does in a workspace.
   const threadModel = useThreadModel({ threadId, isLoading });
   const threadSubagents = useThreadSubagents({ threadId });
   const { toSend: subagentsToSend } = threadSubagents;
@@ -724,9 +724,9 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     stableThumbUp, stableThumbDown, stableWidgetSendPrompt, follow.reveal,
   ]);
 
-  // In All workspaces, carry the source thread/workspace into a PTC-agent
+  // In the Chief of Staff, carry the source thread/workspace into a PTC-agent
   // proposal so its "open in chat" deep-link lands back here. Null in a
-  // workspace, since only All workspaces hands work off to the workspaces.
+  // workspace, since only the Chief of Staff hands work off to the workspaces.
   // Memoized: a fresh object per render would defeat the memoized bubbles downstream.
   const dispatcherContext = useMemo(
     () =>

@@ -320,7 +320,7 @@ function ChatInput({
   const mentions = useMentions({ textareaRef, message, setMessage, workspaceFiles });
   // The workspace context scopes the slash menu: inside a workspace the
   // enabled-skill list is the workspace-effective one (workspace-scoped
-  // skills included, its disables applied). All workspaces runs in Home,
+  // skills included, its disables applied). The Chief of Staff runs in Home,
   // which loads its skills as any workspace does, so the menu lists Home's
   // rather than those of the workspace the picker remembers.
   const queryClient = useQueryClient();

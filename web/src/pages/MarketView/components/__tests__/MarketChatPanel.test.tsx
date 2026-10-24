@@ -152,7 +152,7 @@ import { userLocalStorage } from '@/lib/userStorage';
 
 type PanelProps = React.ComponentProps<typeof MarketChatPanel>;
 
-/** All workspaces, which runs in Home's row. */
+/** The Chief of Staff, which runs in Home's row. */
 const ALL: Partial<PanelProps> = { scope: 'all', activeWorkspaceId: 'home-ws' };
 
 const baseProps: PanelProps = {
@@ -740,7 +740,7 @@ describe('MarketChatPanel', () => {
       expect((h.handleSendMessage.mock.calls[0][3] as Record<string, unknown>).subagentsAllowed).toBeUndefined();
     });
 
-    it('rides an All workspaces send too', async () => {
+    it('rides a Chief of Staff send too', async () => {
       h.threadId = '__default__';
       renderPanel(ALL);
       await vi.waitFor(() => expect(ci.props).not.toBeNull());
@@ -759,7 +759,7 @@ describe('MarketChatPanel', () => {
     expect(screen.getByText(/no longer in the chat/i)).toBeInTheDocument();
   });
 
-  describe('All workspaces', () => {
+  describe('the Chief of Staff', () => {
     it("runs on Home's row", async () => {
       renderPanel(ALL);
       await screen.findByTestId('chat-input');

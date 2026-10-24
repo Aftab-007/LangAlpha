@@ -157,6 +157,7 @@
     "threadNeedsInput": "Waiting for your input",
     "threadUnseen": "Finished, not yet viewed",
     "untitledThread": "Untitled",
+    "onComputer": "On {{name}} · {{kind}}",
     "noConversations": "No conversations yet",
     "workspaceFallback": "Workspace",
     "collapseAgents": "Collapse agents",
@@ -1251,8 +1252,19 @@
     "sortBy": "Sort by",
     "activity": "Activity",
     "custom": "Custom",
-    "reorder": "Reorder",
-    "dragToReorder": "Drag to reorder",
+    "sortRecent": "Recent",
+    "allComputers": "All computers",
+    "filterByComputer": "Filter by computer",
+    "customSortHint": "Drag cards to arrange",
+    "dragInstructions": "To pick up a workspace, press Space. Use the arrow keys to move it, Space again to drop it, or Escape to cancel.",
+    "dragPickedUp": "Picked up {{name}}.",
+    "dragOver": "{{name}} is over {{over}}.",
+    "dragInPlace": "{{name}} is back in its place.",
+    "dragDropped": "{{name}} was dropped over {{over}}.",
+    "dragNotMoved": "{{name}} was dropped in its place.",
+    "dragCancelled": "Moving {{name}} was cancelled.",
+    "dragStillSaving": "{{name}} was not moved: the last move is still being saved.",
+    "reorderFailed": "Couldn't save the new order",
     "pinToTop": "Pin to top",
     "unpin": "Unpin",
     "rename": "Rename",
@@ -1269,11 +1281,9 @@
     "quotaRemaining": "{{remaining}} of {{limit}} left",
     "quotaUnlimited": "Unlimited",
     "quotaNotOnPlan": "Not on your plan",
+    "quotaNoneLeft": "None left",
     "quotaUsedUp": "Plan limit reached",
-    "alwaysOnBadge": "Always-on",
-    "alwaysOnBadgeTitle": "Always-on — sandbox stays running",
     "alwaysOnFailed": "Could not change always-on",
-    "tierBadgeTitle": "{{tier}} sandbox spec",
     "tier": {
       "standard": "Small",
       "performance": "Medium",
@@ -1336,8 +1346,16 @@
     "workspaceLimitReached": "You've reached your workspace limit.",
     "options": "Options",
     "noWorkspacesFound": "No workspaces found",
-    "welcomeTitle": "Welcome to LangAlpha",
-    "welcomeDesc": "Get started by setting up your preferences or creating a workspace.",
+    "noWorkspacesMatch": "No workspaces match “{{query}}”.",
+    "clearSearch": "Clear search",
+    "emptyTitle": "No workspaces yet",
+    "emptyDesc": "A workspace keeps a project's threads, files and computer together, with an Analyst of its own. Your Chief of Staff can set one up for you, or start one here.",
+    "cosRecent": "Recent",
+    "cosTryAsking": "Try asking",
+    "cosAllThreads": "All threads",
+    "cosStarter1": "What have my Analysts been working on this week?",
+    "cosStarter2": "Set up a workspace to track semiconductor breadth",
+    "cosStarter3": "What moved in my watchlist today, and why?",
     "createWorkspace": "Create Workspace",
     "failedLoadWorkspaces": "Failed to load workspaces. Please refresh the page.",
     "invalidWorkspace": "Invalid workspace. Please try again.",
@@ -1350,7 +1368,6 @@
     "loadingWorkspaces": "Loading workspaces...",
     "backToThreads": "Back to threads",
     "updated": "Updated {{time}}",
-    "recently": "recently",
     "createNewWorkspace": "Create New Workspace",
     "workspaceName": "Workspace Name",
     "enterWorkspaceName": "Enter workspace name",
@@ -1396,10 +1413,10 @@
     "primaryPreparingOption": "{{name}} (Primary, Preparing)",
     "provider": {
       "label": "Provider",
-      "daytonaDesc": "Stopping keeps your files. Running programs end.",
-      "e2bDesc": "Stopping keeps memory and running programs, so it picks up where it left off.",
-      "dockerDesc": "Runs on this machine.",
-      "sshDesc": "Any Linux server or Mac you can SSH into. Stopping ends only the agent's programs.",
+      "daytonaDesc": "Container-based sandbox",
+      "e2bDesc": "MicroVM",
+      "dockerDesc": "Runs on this machine",
+      "sshDesc": "Any Linux server or Mac",
       "sshLabel": "Your machine (SSH)",
       "capReached": "Limit reached"
     },
@@ -1412,6 +1429,10 @@
     "stop": "Stop",
     "primaryBadge": "Primary",
     "primaryBadgeTitle": "New workspaces are created on this computer",
+    "badge": {
+      "mac": "Mac",
+      "ssh": "SSH"
+    },
     "makePrimary": {
       "button": "Make primary",
       "title": "Make {{name}} primary?",
@@ -1516,6 +1537,7 @@
     },
     "disk": {
       "label": "Storage",
+      "percent": "Disk {{percent}}%",
       "usage": "{{used}} of {{total}} used, {{free}} free",
       "unknown": "Storage not measured yet",
       "breakdown": "By workspace",
@@ -1627,7 +1649,7 @@
     },
     "remoteControl": {
       "cardTitle": "This Mac",
-      "cardDesc": "Let the agent work on this Mac, even while LangAlpha is closed.",
+      "cardDesc": "Works even with LangAlpha closed",
       "alreadyAdded": "Already added",
       "title": "Remote control of this Mac",
       "intro": "LangAlpha's agent will work on this Mac as {{account}}, with everything that account can do.",
@@ -5893,8 +5915,7 @@
     "common": "Common"
   },
   "agents": {
-    "allWorkspaces": "All workspaces",
-    "allWorkspacesHint": "Your Chief of Staff answers here and hands deep work to each workspace's Analyst.",
+    "chiefOfStaffHint": "Coordinates the Analysts in every workspace and hands each task to the right one.",
     "home": "Home",
     "chiefOfStaff": "Chief of Staff",
     "analyst": "Analyst",
@@ -5910,10 +5931,10 @@
       "analystsHeading": "Handed off from this thread"
     },
     "inWorkspace": "In {{workspace}}",
-    "workspaceRequired": "Choose a workspace, or All workspaces.",
+    "workspaceRequired": "Choose your Chief of Staff or a workspace.",
     "widgets": {
-      "allWorkspacesDesc": "Ask anything. Your Chief of Staff handles it or hands it off.",
-      "tagAllWorkspaces": "all"
+      "chiefOfStaffDesc": "Coordinates the Analysts in every workspace. Ask here and it hands each task to the right one, then reports back.",
+      "tagChiefOfStaff": "home"
     },
     "models": {
       "defaultModel": "Default model",
@@ -5931,9 +5952,9 @@
       "defaultPlaceholder": "Select default model..."
     },
     "market": {
-      "missingThreadHint": "Don't see a thread? Threads belong to a workspace. Try All workspaces, or pick a different workspace.",
+      "missingThreadHint": "Don't see a thread? Threads belong to your Chief of Staff or to a workspace. Try your Chief of Staff, or pick a different workspace.",
       "workspaceDisabledReason": "Create a workspace in /chat to work in one",
-      "noWorkspaceToast": "Create a workspace first, or use All workspaces.",
+      "noWorkspaceToast": "Create a workspace first, or ask your Chief of Staff.",
       "setupFailed": "Couldn't open the workspace. Please try again."
     },
     "tour": {

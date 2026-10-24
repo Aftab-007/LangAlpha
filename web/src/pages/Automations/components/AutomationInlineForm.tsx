@@ -60,7 +60,7 @@ export default function AutomationInlineForm({
   const isEdit = !!opened.automation;
   const [form, setForm] = useState<FormState>(initialValues);
   const queryClient = useQueryClient();
-  // Reading Home's id for All workspaces, before the save starts.
+  // Reading Home's id for the Chief of Staff, before the save starts.
   const [placing, setPlacing] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   // The delivery entries the last save was refused over, until the delivery

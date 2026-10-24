@@ -82,12 +82,12 @@ function ConversationWidget({ instance }: WidgetRenderProps<ConversationConfig>)
   useWidgetContextExport(instance.id, {
     full: () => {
       const selectedWs = workspaces.find((w) => w.workspace_id === selectedWorkspaceId);
-      // The All workspaces scope ignores the workspace it last selected.
+      // The Chief of Staff scope ignores the workspace it last selected.
       const inAllWorkspaces = scope === 'all';
       const workspaceId = inAllWorkspaces ? null : selectedWorkspaceId;
-      const workspaceName = inAllWorkspaces ? t('agents.allWorkspaces') : selectedWs?.name;
+      const workspaceName = inAllWorkspaces ? t('agents.chiefOfStaff') : selectedWs?.name;
       const workspaceLine = inAllWorkspaces
-        ? 'Workspace: All workspaces'
+        ? 'Workspace: Chief of Staff (Home)'
         : `Workspace: ${selectedWs?.name ?? '(none)'} (${selectedWorkspaceId ?? 'unset'})`;
       const lines: string[] = [workspaceLine];
       if (recentThreads.length) {

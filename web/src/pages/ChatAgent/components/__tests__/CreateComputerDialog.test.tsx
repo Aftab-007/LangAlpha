@@ -142,6 +142,67 @@ describe('CreateComputerDialog, sizes', () => {
   });
 });
 
+describe('CreateComputerDialog, the size rows', () => {
+  // Pro: no Medium, one Large, each size counted on its own.
+  const PRO: WorkspaceQuota = {
+    performance: { used: 0, limit: 0 },
+    max: { used: 0, limit: 1 },
+    xlarge: { used: 0, limit: 0 },
+    always_on: null,
+    computers: { used: 1, limit: 2 },
+  };
+
+  it("sets each size on one row, and gives each its own count's note", async () => {
+    mockQuota.mockResolvedValue(PRO);
+    open();
+
+    await waitFor(() => expect(radio('Medium')).toBeDisabled());
+    const group = screen.getByRole('radiogroup', { name: 'Computer spec' });
+    expect(group).not.toHaveClass('@sm:grid-cols-2', '@md:grid-cols-3');
+    expect(radio('Small')).toHaveAccessibleDescription(/^1 vCPU\s*·\s*2 GB RAM\s*·\s*5 GB disk$/);
+    expect(radio('Medium')).toHaveAccessibleDescription(/^Not on your plan/);
+    expect(radio('Large')).toBeEnabled();
+    expect(radio('Large')).toHaveAccessibleDescription(/^1 of 1 left/);
+  });
+
+  it('reads None left at a size whose own count is spent, and only there', async () => {
+    mockQuota.mockResolvedValue({ ...PRO, performance: { used: 0, limit: 1 }, max: { used: 1, limit: 1 } });
+    open();
+
+    await waitFor(() => expect(radio('Large')).toBeDisabled());
+    expect(radio('Large')).toHaveAccessibleDescription(/^None left/);
+    expect(radio('Medium')).toBeEnabled();
+    expect(radio('Medium')).toHaveAccessibleDescription(/^1 of 1 left/);
+    expect(radio('Small')).toBeChecked();
+  });
+});
+
+describe('CreateComputerDialog, the providers', () => {
+  it('puts three providers in one row, the hosted ones first, each named plainly', async () => {
+    mockProviders.mockResolvedValue({ providers: [SSH, DAYTONA, E2B] });
+    open();
+
+    const group = await screen.findByRole('radiogroup', { name: 'Provider' });
+    expect(group).toHaveClass('@md:grid-cols-3');
+    expect(Array.from(group.querySelectorAll('input[type="radio"]')).map((r) => r.getAttribute('value'))).toEqual([
+      'daytona',
+      'e2b',
+      'ssh',
+    ]);
+    expect(radio('Daytona')).toHaveAccessibleDescription('Container-based sandbox');
+    expect(radio('E2B')).toHaveAccessibleDescription('MicroVM');
+    expect(radio('Your machine \\(SSH\\)')).toHaveAccessibleDescription(/^Preview\s*Any Linux server or Mac$/);
+  });
+
+  it('keeps two providers side by side', async () => {
+    open();
+
+    const group = await screen.findByRole('radiogroup', { name: 'Provider' });
+    expect(group).toHaveClass('@sm:grid-cols-2');
+    expect(group).not.toHaveClass('@md:grid-cols-3');
+  });
+});
+
 describe('CreateComputerDialog, a size on another provider', () => {
   // Each plan holds one computer at its top size and leaves the sizes below it out.
   const MAX_PLAN: WorkspaceQuota = {
