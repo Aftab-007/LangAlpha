@@ -103,10 +103,7 @@ function workspaceGlyph(ws: NavWorkspace, expanded: boolean, machine: RowMachine
 
 // The disclosure chevron turns a quarter when its row opens. A CSS transition,
 // so a remount renders at the resting angle and only a toggle turns it.
-const CHEVRON_CLASS = 'h-4 w-4 transition-transform duration-150 ease-[ease-out] motion-reduce:transition-none';
-
-// Row action buttons dip while pressed.
-const PRESS_CLASS = 'transition-transform duration-150 active:scale-[0.85] motion-reduce:transition-none';
+const CHEVRON_CLASS = 'h-4 w-4 transition-transform duration-fold';
 
 // Its own component so useTitleFade can run per row (hooks can't live in a map
 // callback). Fades softly when a live title rewrite lands (auto-title,
@@ -219,9 +216,6 @@ export function AgentRow({ agent, isSelected, isMobile, onSelectAgent, onRemoveA
   const { t } = useTranslation();
   const isMainAgent = agent.isMainAgent;
   const status = agent.status;
-  // Narrow agent-running flag; named distinctly from the panel's isActive
-  // prop (panel visibility) to avoid shadowing.
-  const isAgentActive = status === 'active';
 
   const rowLabel = sidebarAgentRowLabel(agent);
 
@@ -230,7 +224,7 @@ export function AgentRow({ agent, isSelected, isMobile, onSelectAgent, onRemoveA
       data-testid="agent-row"
       data-nav-key={`agent:${agent.id}`}
       data-agent-role={isMainAgent ? 'main' : 'sub'}
-      className={`nav-panel-agent-row group ${isAgentActive && !isMainAgent ? 'nav-panel-agent-pulse' : ''}${isSelected ? ' is-selected' : ''}`}
+      className={`nav-panel-agent-row group${isSelected ? ' is-selected' : ''}`}
       style={{ backgroundColor: isSelected ? 'var(--color-border-muted)' : undefined }}
       onClick={() => onSelectAgent(agent.id)}
     >
@@ -357,7 +351,7 @@ function ThreadTreeRowImpl({
             {isPinned && !isMobile && (
               <Pin
                 aria-hidden
-                className="h-3 w-3 ml-auto shrink-0 transition-opacity duration-150 group-hover:opacity-0"
+                className="h-3 w-3 ml-auto shrink-0 transition-opacity group-hover:opacity-0"
                 fill="currentColor"
                 style={{ color: 'var(--color-text-quaternary)' }}
               />
@@ -369,7 +363,7 @@ function ThreadTreeRowImpl({
                     type="button"
                     data-nav-key={`thread:${tid}:pin`}
                     onClick={(e) => { e.stopPropagation(); onPinThread(wsId, tid, !isPinned); }}
-                    className={`flex items-center justify-center p-0.5 rounded bg-transparent border-none cursor-pointer hover:bg-(--color-bg-hover) ${PRESS_CLASS}`}
+                    className="flex items-center justify-center p-0.5 rounded bg-transparent border-none cursor-pointer hover:bg-(--color-bg-hover) press"
                     title={isPinned ? t('nav.unpinThread') : t('nav.pinThread')}
                     aria-label={isPinned ? t('nav.unpinThread') : t('nav.pinThread')}
                   >
@@ -387,7 +381,7 @@ function ThreadTreeRowImpl({
                     type="button"
                     data-nav-key={`thread:${tid}:archive`}
                     onClick={(e) => { e.stopPropagation(); onArchiveThread(wsId, tid); }}
-                    className={`flex items-center justify-center p-0.5 rounded bg-transparent border-none cursor-pointer hover:bg-(--color-bg-hover) ${PRESS_CLASS}`}
+                    className="flex items-center justify-center p-0.5 rounded bg-transparent border-none cursor-pointer hover:bg-(--color-bg-hover) press"
                     title={t('nav.archiveThread')}
                     aria-label={t('nav.archiveThread')}
                   >

@@ -10,6 +10,7 @@ import { usePreferences } from '@/hooks/usePreferences';
 import { readTurnEndScroll } from '@/lib/turnEndScroll';
 import {
   readStreamingMode,
+  readToolCallLayout,
   readTurnDisplay,
   TranscriptDisplayContext,
   type TranscriptDisplay,
@@ -74,6 +75,7 @@ import { useTrayContents } from './chatView/useTrayContents';
 import { useTrayFold } from './chatView/useTrayFold';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { motion, AnimatePresence, type PanInfo } from '@/lib/framer';
+import { TWEEN } from '@/lib/motion';
 import { MobileBottomSheet } from '@/components/ui/mobile-bottom-sheet';
 
 
@@ -97,6 +99,7 @@ import { useToolCallAnnouncer } from './chatView/useToolCallAnnouncer';
 import { useNavPanel } from './chatView/useNavPanel';
 import { MobileNavDrawer } from './chatView/MobileNavDrawer';
 import { useChatScroll } from './chatView/useChatScroll';
+import { useStreamFollow } from './chatView/transcriptFollow';
 import { OlderHistoryRow } from './chatView/OlderHistoryRow';
 import { isTurnOpen, useTranscriptFollow } from './chatView/useTranscriptFollow';
 import { useSubagentTabs } from './chatView/useSubagentTabs';
@@ -176,6 +179,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const [activeAgentId, setActiveAgentId] = useState(
     initialTaskId ? `task:${initialTaskId}` : 'main'
   );
+  // The turns the main list has drawn running. Kept here, one view per
+  // thread, since that list unmounts while a subagent tab is open.
+  const [mainRanHere] = useState(() => new Set<number>());
   // Show system files in FilePanel (.agents/, code/, tools/, etc.)
   const [showSystemFiles, setShowSystemFiles] = useState(
     () => localStorage.getItem('filePanel.showSystemFiles') === 'true'
@@ -444,22 +450,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   });
   const {
     scrollAreaRef,
-    subagentScrollAreaRef,
+    transcriptFloorRef,
+    subagentScrollRoot,
+    subagentPane,
+    takeTabPlace,
     getScrollContainer,
-    withProgrammaticScroll,
     pinToBottom,
     saveScrollPosition,
     jumpPill,
-    scrollPositionsRef,
-    skipSubagentAutoScrollRef,
     activeAgentIdRef,
     isNearBottomRef,
-    isSubagentNearBottomRef,
     restoredForThreadRef,
     pinToMessage,
     revealFiles,
     revealMessage,
     holdPlace,
+    toTop,
     entryRestored,
     pinTargetRef,
   } = scroll;
@@ -480,7 +486,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // flip in Settings reaches them together and neither re-renders on the other's
   // account.
   const transcriptDisplay = useMemo<TranscriptDisplay>(
-    () => ({ turnDisplay: readTurnDisplay(preferences), streamingMode: readStreamingMode(preferences) }),
+    () => ({
+      turnDisplay: readTurnDisplay(preferences),
+      streamingMode: readStreamingMode(preferences),
+      toolCallLayout: readToolCallLayout(preferences),
+    }),
     [preferences],
   );
 
@@ -510,8 +520,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     resolveSubagentIdToAgentId,
     hydrateTaskTranscript,
     saveScrollPosition,
-    scrollPositionsRef,
-    skipSubagentAutoScrollRef,
     activeAgentIdRef,
     resolvedThreadIdRef,
   });
@@ -529,6 +537,18 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const subagentTurnLive = activeAgent
     ? !isTerminalStatus(deriveSubagentStatus({ status: activeAgent.status, messages: activeAgent.messages }))
     : false;
+  // The subagent transcript's follow: the market panel's, gliding while that
+  // turn runs, and opening where the reader left the tab, or at its end. Its
+  // pane is gone once main is shown, though its state clears a commit later.
+  // A tab opened onto a transcript still being fetched loads until its first
+  // message, which can land long after the opening's hold has lapsed.
+  const subagentShown = activeAgentId === 'main' ? null : subagentPane;
+  const { toTop: subagentToTop } = useStreamFollow(subagentShown?.scroller ?? null, subagentShown?.content ?? null, {
+    live: subagentTurnLive,
+    loading: !!activeAgent && (activeAgent.messages?.length ?? 0) === 0,
+    view: activeAgentId,
+    openAt: () => takeTabPlace(activeAgentId),
+  });
 
   // Publish this view's subagent registry to the global AppSidebar while it is
   // the visible ChatView. Same thread key as the drawer's `currentThreadId`
@@ -1162,10 +1182,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const handleTopBarTap = useCallback((e: React.MouseEvent) => {
     if (!isMobile) return;
     if ((e.target as HTMLElement).closest('button, a')) return;
-    const ref = activeAgentId === 'main' ? scrollAreaRef : subagentScrollAreaRef;
-    const container = getScrollContainer(ref);
-    if (container) withProgrammaticScroll(() => container.scrollTo({ top: 0, behavior: 'smooth' }), 'smooth');
-  }, [isMobile, activeAgentId, getScrollContainer, withProgrammaticScroll, scrollAreaRef, subagentScrollAreaRef]);
+    if (activeAgentId === 'main') toTop();
+    else subagentToTop();
+  }, [isMobile, activeAgentId, toTop, subagentToTop]);
 
 
 
@@ -1311,25 +1330,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // Screen-reader announcements for tool-call completions (polite live region).
   const recentlyCompletedAnnouncement = useToolCallAnnouncer(messages, chatRootDir);
 
-  // Auto-scroll subagent view when active subagent's messages change
-  // Uses the same smart-scroll logic: only scroll if user is near the bottom
-  // Skipped when restoring a saved scroll position after tab switch
-  useEffect(() => {
-    if (skipSubagentAutoScrollRef.current) {
-      skipSubagentAutoScrollRef.current = false;
-      return;
-    }
-    if (!isSubagentNearBottomRef.current) return;
-    if (!activeAgent || !subagentScrollAreaRef.current) return;
-    const scrollContainer = subagentScrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]') ||
-                           subagentScrollAreaRef.current.querySelector('.overflow-auto') ||
-                           subagentScrollAreaRef.current;
-    if (scrollContainer) {
-      setTimeout(() => {
-        scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'smooth' });
-      }, 0);
-    }
-  }, [activeAgent?.messages]);
 
   // When this view becomes active (thread switch or new thread):
   // 1. Inherit nav panel state from the shared signal so it stays open across switches
@@ -1561,48 +1561,56 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
               })()}
               {activeAgentId === 'main' ? (
                 <ScrollArea ref={scrollAreaRef} className={`h-full w-full${!isMobile && !rightPanelType ? ' chat-scroll-hide-scrollbar' : ''}`}>
-                  <div className={`${isMobile ? 'px-3 pt-3' : 'px-6 pt-4'} ${TRANSCRIPT_BOTTOM_PAD} flex justify-center`}>
-                    <div className="w-full max-w-3xl overflow-x-hidden">
-                      <OlderHistoryRow
-                        getRoot={getMainScrollRoot}
-                        status={olderHistoryStatus}
-                        canLoad={isActive && entryRestored && olderHistoryStatus === 'idle'}
-                        onLoad={loadOlderPage}
-                      />
-                      <MessageActionsProvider actions={messageActions}>
-                        {/* Above the list's chunk boundary: one batched
-                            dispatch-liveness query for every PTC card in the
-                            list, which a streamed frame does not re-render. */}
-                        <DispatchStatusProvider>
-                          <LiveMessageList
-                            store={liveMessages}
-                            isLoading={isLoading}
-                            isLoadingHistory={isLoadingHistory}
-                            starting={awaitingKickoff}
-                            feedbackByTurn={feedbackByTurn}
-                            dispatcherContext={dispatcherContext}
-                          />
-                        </DispatchStatusProvider>
-                      </MessageActionsProvider>
-                      <TranscriptStatus
-                        modelStatus={modelStatus}
-                        isLoading={isLoading}
-                        retired={threadModel.retired}
-                        workspaceStarting={displayWorkspaceStarting}
-                        turnHeld={turnHeld}
-                        isCompacting={isCompacting}
-                        compactionTokens={compactionTokens}
-                        queuedSend={queuedSend}
-                        threadId={feedThreadId}
-                        active={isActive}
-                      />
+                  {/* The floor a pinned send holds open under its reply
+                      (chatView/turnPin). Never a transition: the pin
+                      measures the floor it has just written, and a transition
+                      would hand it the old one for a frame and clamp an
+                      instant pin short. */}
+                  <div ref={transcriptFloorRef} data-transcript-floor="" className="transition-none">
+                    <div className={`${isMobile ? 'px-3 pt-3' : 'px-6 pt-4'} ${TRANSCRIPT_BOTTOM_PAD} flex justify-center`}>
+                      <div className="w-full max-w-3xl overflow-x-hidden">
+                        <OlderHistoryRow
+                          getRoot={getMainScrollRoot}
+                          status={olderHistoryStatus}
+                          canLoad={isActive && entryRestored && olderHistoryStatus === 'idle'}
+                          onLoad={loadOlderPage}
+                        />
+                        <MessageActionsProvider actions={messageActions}>
+                          {/* Above the list's chunk boundary: one batched
+                              dispatch-liveness query for every PTC card in the
+                              list, which a streamed frame does not re-render. */}
+                          <DispatchStatusProvider>
+                            <LiveMessageList
+                              store={liveMessages}
+                              isLoading={isLoading}
+                              isLoadingHistory={isLoadingHistory}
+                              starting={awaitingKickoff}
+                              feedbackByTurn={feedbackByTurn}
+                              dispatcherContext={dispatcherContext}
+                              ranHere={mainRanHere}
+                            />
+                          </DispatchStatusProvider>
+                        </MessageActionsProvider>
+                        <TranscriptStatus
+                          modelStatus={modelStatus}
+                          isLoading={isLoading}
+                          retired={threadModel.retired}
+                          workspaceStarting={displayWorkspaceStarting}
+                          turnHeld={turnHeld}
+                          isCompacting={isCompacting}
+                          compactionTokens={compactionTokens}
+                          queuedSend={queuedSend}
+                          threadId={feedThreadId}
+                          active={isActive}
+                        />
+                      </div>
                     </div>
                   </div>
                 </ScrollArea>
               ) : activeAgent && activeAgent.type === WORKFLOW_TASK_TYPE ? (
                 // Workflow run detail — a run has no transcript of its own;
                 // its progress console replaces the generic subagent layout.
-                <ScrollArea ref={subagentScrollAreaRef} className="h-full w-full">
+                <ScrollArea ref={subagentScrollRoot} className="h-full w-full">
                   <div className={`${isMobile ? 'px-3 pt-3' : 'px-6 pt-4'} ${TRANSCRIPT_BOTTOM_PAD} flex justify-center`}>
                     <div className="w-full max-w-3xl">
                       <WorkflowRunDetail
@@ -1622,7 +1630,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                   </div>
                 </ScrollArea>
               ) : activeAgent ? (
-                <ScrollArea ref={subagentScrollAreaRef} className="h-full w-full">
+                <ScrollArea ref={subagentScrollRoot} className="h-full w-full">
                   <div className={`${isMobile ? 'px-3 pt-3' : 'px-6 pt-4'} ${TRANSCRIPT_BOTTOM_PAD} flex justify-center`}>
                     <div className="w-full max-w-3xl space-y-2.5">
                       {/* Task description as header */}
@@ -1865,7 +1873,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             key="file"
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
-            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            transition={TWEEN.enter}
             // A chart pans with the same rightward swipe, so a chart tab closes by its button.
             drag={activeTabKind === 'chart' ? false : 'x'}
             dragConstraints={{ left: 0, right: 0 }}
@@ -1935,10 +1943,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
               ref={panelWrapperRef}
               initial={{ width: 0, opacity: 0 }}
               animate={{ width: rightPanelWidth, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
+              exit={{ width: 0, opacity: 0, transition: TWEEN.exit }}
               transition={(isDragging || dragJustEnded)
                 ? { duration: 0 }
-                : { duration: 0.25, ease: [0.22, 1, 0.36, 1] }
+                : TWEEN.fold
               }
               className="flex shrink-0 overflow-hidden"
             >

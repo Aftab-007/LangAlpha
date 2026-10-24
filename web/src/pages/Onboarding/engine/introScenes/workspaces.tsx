@@ -71,7 +71,7 @@ function GalleryHeader({
       <span
         className={cn(
           'flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1',
-          'transition-transform duration-150'
+          'transition-transform duration-press'
         )}
         style={{
           background: 'var(--color-btn-primary-bg)',
@@ -437,6 +437,7 @@ function UploadRow({ name, size, at }: { name: string; size: string; at: number 
               style={{
                 width: `${p * 100}%`,
                 background: 'var(--color-accent-primary)',
+                // eslint-disable-next-line no-restricted-syntax -- smooths the fill between the script's ticks, not a UI timing
                 transition: 'width 90ms linear',
               }}
             />
@@ -470,7 +471,7 @@ function CreateWorkspace() {
     <Camera shots={NEW_WS_SHOTS} pointer={NEW_WS_POINTER}>
       <div className="relative" style={VIEW}>
         {/* the gallery, dimmed behind the modal once it opens */}
-        <div style={{ opacity: open ? 0.45 : 1, transition: 'opacity 300ms ease' }}>
+        <div style={{ opacity: open ? 0.45 : 1, transition: 'opacity var(--motion-enter) var(--ease-out)' }}>
           <GalleryPage machine="running" pressNew={pressAt(now, NEW_WS.clickNew)} />
         </div>
         {/* the modal the click opens (`CreateWorkspaceModal`): name,
@@ -557,7 +558,7 @@ function CreateWorkspace() {
                 <span
                   className={cn(
                     'rounded-[4px] px-2 py-1 text-[8px] font-medium leading-none',
-                    'transition-transform duration-150'
+                    'transition-transform duration-press'
                   )}
                   style={{
                     background: 'var(--color-btn-primary-bg)',

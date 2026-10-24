@@ -47,6 +47,7 @@ import { withServerTotals, withoutServerTotals } from './utils/contextWindowEven
 import { BUSY_REFUSAL_KEYS, createForkRefusalRecovery, forkRefusalMessage, isBusyCode, isRecoverableRetryRefusal, isStaleForkRefusal, type BusyCode, type ForkCut } from './utils/forkRefusal';
 import { createEditDraftStore, sameDraftMessage, type EditDraft } from './utils/editDrafts';
 import { settleStoppedBubble } from '../session/stream/stopBubble';
+import { withoutPending } from '../session/stream/toolCallChunks';
 import { useMarketWatch } from './useMarketWatch';
 import { invalidateThreadWakeups } from './useWakeups';
 import { refreshComputersAfterTurn } from './useComputers';
@@ -96,6 +97,26 @@ export { finalizeTodoListProcessesInMessages, mapToolCallIdToAgentId } from './u
 interface UnstartedSend {
   userId: string | null;
   watermarkBefore: number | null;
+}
+
+/** Bubbles already on screen that a new message, and on a fork its reply,
+ * take over: a send parked during compaction or a refused steer going out
+ * again, or the ones an edit or regenerate draws in place of its cut while it
+ * reads the checkpoint it forks from. The new bubbles take their ids, so the
+ * list keeps them mounted and they do not play their entrance a second time.
+ * No user id when a fork draws none, and no reply for a send, whose reply
+ * opens a bubble of its own. */
+interface ShownBubbles {
+  userId?: string;
+  assistantId?: string;
+}
+
+/** A send going out again in place of one waiting on screen: a message parked
+ * during compaction, or a refused steer, which goes under the request key it
+ * was sent with. */
+interface Resend {
+  requestKey?: string;
+  shown?: ShownBubbles;
 }
 
 export function useChatMessages(
@@ -1701,7 +1722,7 @@ export function useChatMessages(
           for (const [id, val] of Object.entries(tcp)) {
             tp[id] = val.isInProgress ? { ...val, isInProgress: false, isComplete: true } : val;
           }
-          msgs[i] = { ...msgs[i], isStreaming: false, stopped: true, pendingToolCallChunks: {}, toolCallProcesses: tp };
+          msgs[i] = { ...withoutPending(msgs[i]), isStreaming: false, stopped: true, toolCallProcesses: tp };
           break;
         }
       }
@@ -1975,7 +1996,7 @@ export function useChatMessages(
     additionalContext: Record<string, unknown>[] | null = null,
     attachmentMeta: Record<string, unknown>[] | null = null,
     modelOptions: ModelOptions = {},
-    resendKey: string | null = null,
+    resend: Resend = {},
   ) => {
     const { widgetSnapshots, chartSelections } = modelOptions;
     // The refused-steer queue the steer belongs to, for a refusal to rejoin
@@ -1989,9 +2010,9 @@ export function useChatMessages(
     // answer was lost reuses the key and dedups against the accepted copy.
     // Other steers can be waiting on their answers too, and each keeps its own
     // key for its own re-send.
-    const requestKey = resendKey ?? requestKeyRef.current.take(sendFingerprint(threadId, message), { alongside: true });
+    const requestKey = resend.requestKey ?? requestKeyRef.current.take(sendFingerprint(threadId, message), { alongside: true });
     const userMessage: ChatMessage = {
-      ...createUserMessage(message, steeredTurn, attachmentMeta as AttachmentMeta[] | null, widgetSnapshots ?? null, chartSelections ?? null),
+      ...createUserMessage(message, steeredTurn, { attachments: attachmentMeta as AttachmentMeta[] | null, widgetSnapshots, chartSelections, id: resend.shown?.userId }),
       steering: true,
       requestKey,
       ...(currentRunIdRef.current ? { steeredRunId: currentRunIdRef.current } : {}),
@@ -2154,16 +2175,16 @@ export function useChatMessages(
     additionalContext: Record<string, unknown>[] | null,
     attachmentMeta: Record<string, unknown>[] | null,
     modelOptions: ModelOptions,
+    shown?: ShownBubbles,
   ): void => {
     const requestKey = requestKeyRef.current.take(sendFingerprint(threadId, message), { alongside: true });
     const waiting: ChatMessage = {
-      ...createUserMessage(
-        message,
-        newestTurn(liveMessages.get()) ?? undefined,
-        attachmentMeta as AttachmentMeta[] | null,
-        modelOptions.widgetSnapshots ?? null,
-        modelOptions.chartSelections ?? null,
-      ),
+      ...createUserMessage(message, newestTurn(liveMessages.get()) ?? undefined, {
+        attachments: attachmentMeta as AttachmentMeta[] | null,
+        widgetSnapshots: modelOptions.widgetSnapshots,
+        chartSelections: modelOptions.chartSelections,
+        id: shown?.userId,
+      }),
       steering: true,
       requestKey,
     };
@@ -2243,7 +2264,7 @@ export function useChatMessages(
     heldRetriesRef.current.set(bubbleId, { bubbleId, request: retryRequest(null, additionalContext), cut: null });
   };
 
-  const handleSendMessage = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, reasoningEffortOverride, fastModeOverride, hiddenOpener = false, threadTitle }: SendOptions = {}, resendKey: string | null = null) => {
+  const handleSendMessage = async (message: string, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, reasoningEffortOverride, fastModeOverride, hiddenOpener = false, threadTitle }: SendOptions = {}, resend: Resend = {}) => {
     const hasContent = message.trim() || (additionalContext && additionalContext.length > 0);
     if (!workspaceId || !hasContent) {
       return;
@@ -2271,13 +2292,11 @@ export function useChatMessages(
       // message is held, so replace any earlier optimistic bubble.
       const prevQueuedId = queuedSendRef.current?.messageId;
       // A placeholder: the send it becomes adds a bubble of its own.
-      const queuedMsg = createUserMessage(
-        message,
-        undefined,
-        attachmentMeta as AttachmentMeta[] | null,
-        widgetSnapshots ?? null,
-        chartSelections ?? null,
-      );
+      const queuedMsg = createUserMessage(message, undefined, {
+        attachments: attachmentMeta as AttachmentMeta[] | null,
+        widgetSnapshots,
+        chartSelections,
+      });
       const queuedMessage: ChatMessage = { ...queuedMsg, queued: true };
       // The subagents setting stays behind: compaction only runs on a thread
       // that exists, whose row a flip made since has already PATCHed, and the
@@ -2298,14 +2317,14 @@ export function useChatMessages(
     }
 
     // The resend of a refused steer is the queue's own; anything else waits behind it.
-    if (resendKey === null && notRunningSendsRef.current.length > 0) {
-      queueBehindRefused(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, reasoningEffortOverride, fastModeOverride });
+    if (resend.requestKey === undefined && notRunningSendsRef.current.length > 0) {
+      queueBehindRefused(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, reasoningEffortOverride, fastModeOverride }, resend.shown);
       return;
     }
 
     // If agent is already streaming, send as steering message
     if (isLoading) {
-      return handleSendSteering(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, reasoningEffortOverride, fastModeOverride }, resendKey);
+      return handleSendSteering(message, additionalContext, attachmentMeta, { model, reasoningEffort, fastMode, widgetSnapshots, chartSelections, subagentsAllowed, reasoningEffortOverride, fastModeOverride }, resend);
     }
 
     // Store model options so HITL resume can forward them
@@ -2315,13 +2334,12 @@ export function useChatMessages(
     // the first bubble of its turn: the replay knows that reply by the flag
     // it carries, since the empty query it stores draws no row to match.
     const turnIndex = newestKnownTurn() + 1;
-    const userMessage = hiddenOpener ? null : createUserMessage(
-      message,
-      turnIndex,
-      attachmentMeta as AttachmentMeta[] | null,
-      widgetSnapshots ?? null,
-      chartSelections ?? null,
-    );
+    const userMessage = hiddenOpener ? null : createUserMessage(message, turnIndex, {
+      attachments: attachmentMeta as AttachmentMeta[] | null,
+      widgetSnapshots,
+      chartSelections,
+      id: resend.shown?.userId,
+    });
     if (userMessage) recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
 
     // Check if this is a new conversation
@@ -2421,7 +2439,7 @@ export function useChatMessages(
     // retransmitted after a lost response (fingerprint match) — see
     // createRequestKeyTracker. A steer that found no turn running goes out
     // under the key it was sent with.
-    const requestKey = resendKey ?? requestKeyRef.current.take(sendFingerprint(effectiveThreadId, message));
+    const requestKey = resend.requestKey ?? requestKeyRef.current.take(sendFingerprint(effectiveThreadId, message));
     let wasDisconnected = false;
     const wasInterruptedRef = { current: false };
     const admission = trackPlainSend({
@@ -2591,11 +2609,12 @@ export function useChatMessages(
     setQueuedSend(false);
     const { message, additionalContext, attachmentMeta, modelOptions, messageId } = queued;
     // Drop the optimistic shimmer bubble; the send path re-adds the real one
-    // (steering shimmer if a turn is still running, else a normal user bubble).
+    // (steering shimmer if a turn is still running, else a normal user bubble)
+    // in its place, in the same batch.
     if (messageId) {
       setMessages((prev) => prev.filter((m) => m.id !== messageId));
     }
-    void handleSendMessage(message, additionalContext, attachmentMeta, modelOptions);
+    void handleSendMessage(message, additionalContext, attachmentMeta, modelOptions, { shown: { userId: messageId } });
     // Fires on isCompacting transitions. The send handler is captured from
     // the render where isCompacting went false — that render is the correct
     // moment to decide steer-vs-fresh. Handlers are omitted from
@@ -2621,8 +2640,9 @@ export function useChatMessages(
       if (seq < next.seq && gen === next.gen) return;
     }
     queue.shift();
+    // The send's bubble takes the waiting one's place, in the same batch.
     setMessages((prev) => prev.filter((m) => m.id !== next.steerId));
-    void handleSendMessage(next.message, next.additionalContext, next.attachmentMeta, next.modelOptions, next.requestKey);
+    void handleSendMessage(next.message, next.additionalContext, next.attachmentMeta, next.modelOptions, { requestKey: next.requestKey, shown: { userId: next.steerId } });
     // Fires when the view goes idle, a steer is answered or the workspace
     // arrives. The send handler is captured from that render, which is the
     // one that saw the view idle.
@@ -2930,9 +2950,10 @@ export function useChatMessages(
    * at a turn the transcript already shows, a send included, so its user
    * bubble stays as it is; `spent` counts the automatic resends before it,
    * and `send` is the send they resend while the server has kept none of it.
-   * `cut` is what a fork's refusal gives back.
+   * `cut` is what a fork's refusal gives back, and `shown` the bubbles the
+   * caller already drew in its place.
    */
-  const streamFromCheckpoint = useStableHandler(async (request: TurnRequest, truncateIndex: number, snapshot: readonly ChatMessage[], modelOptions: ModelOptions = {}, rerun: { spent: number; send?: UnstartedSend | null } | null = null, cut: ForkCut | null = null) => {
+  const streamFromCheckpoint = useStableHandler(async (request: TurnRequest, truncateIndex: number, snapshot: readonly ChatMessage[], modelOptions: ModelOptions = {}, { rerun, cut, shown }: { rerun?: { spent: number; send?: UnstartedSend | null }; cut?: ForkCut | null; shown?: ShownBubbles } = {}) => {
     const { message, checkpointId, forkFromTurn, retryOf } = request;
     const viaRetryEndpoint = retryOf !== null;
     // Callers check the slot is free: an edit or regenerate already holds it
@@ -2955,7 +2976,7 @@ export function useChatMessages(
     acquireStreamOwnership(threadId);
 
     // Truncate messages and add new user message (if editing) + assistant placeholder
-    const assistantMessageId = `assistant-${Date.now()}`;
+    const assistantMessageId = shown?.assistantId ?? `assistant-${Date.now()}`;
     // Edit/regenerate opens a fresh backend run.
     beginRun();
     // A fork truncates persisted turns > forkFromTurn server-side; pin the
@@ -2991,7 +3012,7 @@ export function useChatMessages(
       ...(rerunsHidden ? { hiddenOpener: true } : {}),
     };
     if (rerunsHidden) holdHiddenOpenerRetry(assistantMessageId, request.additionalContext);
-    const userMessage = message && !rerun ? createUserMessage(message, turnIndex) : null;
+    const userMessage = message && !rerun ? createUserMessage(message, turnIndex, { id: shown?.userId }) : null;
     // Another attempt at a send the server never stored keeps its message,
     // which takes the send's turn as it goes again.
     const before = snapshot[truncateIndex - 1];
@@ -3236,7 +3257,7 @@ export function useChatMessages(
         request,
         failedRunId: currentRunIdRef.current,
         resend: (next, truncateIndex, snapshot, nextSpent) => {
-          void streamFromCheckpoint(next, truncateIndex, snapshot, modelOptions, { spent: nextSpent, send }, cut);
+          void streamFromCheckpoint(next, truncateIndex, snapshot, modelOptions, { rerun: { spent: nextSpent, send }, cut });
         },
         holdRetry: (held) => {
           if (held) heldRetriesRef.current.set(held.bubbleId, { ...held, cut });
@@ -3268,6 +3289,7 @@ export function useChatMessages(
     cut: ForkCut,
     turnsData: ThreadTurns,
     modelOptions: ModelOptions,
+    shown: ShownBubbles,
   ) => {
     const turn = turnsData.turns.find((entry) => entry.turn_index >= turnIndex);
     if (!turn) {
@@ -3279,7 +3301,7 @@ export function useChatMessages(
       abandonForkPreflight(cut, 'Failed to process request');
       return;
     }
-    await streamFromCheckpoint(forkRequest(text, turn.edit_checkpoint_id, turnIndex), msgIndex, cut.transcript, modelOptions, null, cut);
+    await streamFromCheckpoint(forkRequest(text, turn.edit_checkpoint_id, turnIndex), msgIndex, cut.transcript, modelOptions, { cut, shown });
   };
 
   /**
@@ -3339,10 +3361,12 @@ export function useChatMessages(
     setIsLoading(true);
     setMessageError(null);
     setFallbackSuggestion(null);
+    const edited = createUserMessage(newContent, turnIndex);
+    const assistantId = `assistant-${Date.now()}`;
     setMessages((prev) => [
       ...prev.slice(0, msgIndex),
-      createUserMessage(newContent, turnIndex),
-      createAssistantMessage(`assistant-pending-${Date.now()}`, turnIndex),
+      edited,
+      createAssistantMessage(assistantId, turnIndex),
     ]);
 
     const turnsData = await getTurnCheckpoints();
@@ -3350,7 +3374,7 @@ export function useChatMessages(
       abandonForkPreflight(cut, 'Failed to process request');
       return;
     }
-    await streamEdit(newContent, turnIndex, msgIndex, cut, turnsData, modelOptions);
+    await streamEdit(newContent, turnIndex, msgIndex, cut, turnsData, modelOptions, { userId: edited.id, assistantId });
   // The slot helpers reach only refs and threadId.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveMessages, threadId, getTurnCheckpoints, streamFromCheckpoint, setMessages]);
@@ -3402,9 +3426,10 @@ export function useChatMessages(
     setIsLoading(true);
     setMessageError(null);
     setFallbackSuggestion(null);
+    const assistantId = `assistant-${Date.now()}`;
     setMessages((prev) => [
       ...prev.slice(0, truncateIndex),
-      createAssistantMessage(`assistant-pending-${Date.now()}`, turnIndex),
+      createAssistantMessage(assistantId, turnIndex),
     ]);
 
     const turnsData = await getTurnCheckpoints();
@@ -3419,7 +3444,7 @@ export function useChatMessages(
     const turn = turnsData.turns.find((entry) => entry.turn_index === turnIndex);
     if (turn) {
       // Truncate at the turn's first assistant bubble (keep everything before it, including user msg)
-      await streamFromCheckpoint(forkRequest(null, turn.regenerate_checkpoint_id, turnIndex), truncateIndex, transcript, modelOptions, null, cut);
+      await streamFromCheckpoint(forkRequest(null, turn.regenerate_checkpoint_id, turnIndex), truncateIndex, transcript, modelOptions, { cut, shown: { assistantId } });
       return;
     }
     if (!userMessage) {
@@ -3431,7 +3456,7 @@ export function useChatMessages(
     const held = heldRetriesRef.current.get(messageId);
     if (held) {
       heldRetriesRef.current.delete(messageId);
-      await streamFromCheckpoint(held.request, truncateIndex, transcript, modelOptions, { spent: 0 }, held.cut);
+      await streamFromCheckpoint(held.request, truncateIndex, transcript, modelOptions, { rerun: { spent: 0 }, cut: held.cut, shown: { assistantId } });
       return;
     }
     // Otherwise only its text is known here, which is the whole of it only
@@ -3440,8 +3465,9 @@ export function useChatMessages(
       abandonForkPreflight(cut, 'Failed to process request');
       return;
     }
-    // The message goes again in its own place, as an edit that keeps its text.
-    await streamEdit(userMessage.content, turnIndex, userIndex, cut, turnsData, modelOptions);
+    // The message goes again in its own place, as an edit that keeps its text,
+    // and its bubble, still on screen, keeps its id.
+    await streamEdit(userMessage.content, turnIndex, userIndex, cut, turnsData, modelOptions, { userId: userMessage.id, assistantId });
   // Same as handleEditMessage: the slot helpers reach only refs and threadId.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveMessages, threadId, getTurnCheckpoints, streamFromCheckpoint, setMessages]);
@@ -3466,7 +3492,7 @@ export function useChatMessages(
     if (bubbleId) heldRetriesRef.current.delete(bubbleId);
     // A held fork resend carries the fork it stands for, which a refusal of
     // it puts back.
-    await streamFromCheckpoint(request, truncateIndex, transcript, modelOptions, { spent: 0 }, held && request === held.request ? held.cut : null);
+    await streamFromCheckpoint(request, truncateIndex, transcript, modelOptions, { rerun: { spent: 0 }, cut: held && request === held.request ? held.cut : null });
   }, [liveMessages, streamFromCheckpoint]);
 
   // A PTC run's sandbox acquisition settles every folder on its computer, which

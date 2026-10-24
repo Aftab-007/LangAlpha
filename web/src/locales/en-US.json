@@ -199,6 +199,10 @@
     "streamingModeDesc": "Show text as it arrives, or reveal one paragraph at a time.",
     "streamingModeToken": "Continuous",
     "streamingModeParagraph": "By paragraph",
+    "toolCallLayout": "Tool calls",
+    "toolCallLayoutDesc": "Show each step as a row, or try the new status line: one line that names the current step.",
+    "toolCallLayoutRows": "Rows",
+    "toolCallLayoutStatus": "Status line",
     "tradingPermission": {
       "title": "Trading permission",
       "desc": "How the agent handles orders at your connected brokerages. Paper orders are not affected. What you tell the agent in a conversation can narrow this, but only this setting lets orders skip your approval.",
@@ -1787,6 +1791,20 @@
       "manageSubagents": "Manage subagents"
     },
     "moreTools": "More tools",
+    "composer": {
+      "remove": "Remove",
+      "attachFile": "Attach file",
+      "attachChart": "Attach chart screenshot",
+      "captureChart": "Capture chart",
+      "chartAlt": "Chart",
+      "send": "Send message",
+      "dropFiles": "Drop files to upload",
+      "uploading": "Uploading"
+    },
+    "mention": {
+      "noMatching": "No matching files",
+      "noFiles": "No files available"
+    },
     "widgetContext": {
       "inContext_one": "{{count}} in context",
       "inContext_other": "{{count}} in context",
@@ -2220,7 +2238,9 @@
       "speed": "Speed",
       "speedStandard": "Standard",
       "speedFast": "Fast",
-      "speedFastHint": "2× credit usage, priority service tier"
+      "speedFastHint": "2× credit usage, priority service tier",
+      "select": "Select model",
+      "fallbackName": "Model"
     },
     "voice": {
       "start": "Start voice input",
@@ -2319,6 +2339,36 @@
       "declined": "Workspace creation declined",
       "alwaysApprove": "Always allow",
       "alwaysApproveHint": "Create this and later workspaces without asking. Turn it off in Settings."
+    },
+    "secretaryConfirm": {
+      "deleteWorkspace": {
+        "title": "Delete Workspace",
+        "approved": "Workspace deleted",
+        "rejected": "Workspace deletion declined"
+      },
+      "stopWorkspace": {
+        "title": "Stop Workspace",
+        "approved": "Workspace stopped",
+        "rejected": "Workspace stop declined"
+      },
+      "deleteThread": {
+        "title": "Delete Thread",
+        "approved": "Thread deleted",
+        "rejected": "Thread deletion declined"
+      },
+      "workspaceLabel": "Workspace:",
+      "threadLabel": "Thread:",
+      "unknownId": "unknown",
+      "confirm": "Confirm",
+      "decline": "Decline"
+    },
+    "userQuestion": {
+      "answered": "Answered: {{answer}}",
+      "noAnswer": "(no answer)",
+      "skipped": "Question skipped",
+      "custom": "Custom:",
+      "submitCount": "Submit ({{n}})",
+      "customPlaceholder": "Or type a custom answer..."
     }
   },
   "context": {
@@ -3296,7 +3346,9 @@
       "fileEdit": "edited {{count}} file",
       "fileEdit_other": "edited {{count}} files",
       "generic": "ran {{count}} step",
-      "generic_other": "ran {{count}} steps"
+      "generic_other": "ran {{count}} steps",
+      "failed": "{{count}} failed",
+      "failed_other": "{{count}} failed"
     },
     "fileGroup": {
       "read": "Read {{count}} files",

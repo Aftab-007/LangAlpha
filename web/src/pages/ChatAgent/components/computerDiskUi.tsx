@@ -105,7 +105,7 @@ export function DiskBar({ disk, className }: DiskBarProps) {
       aria-valuetext={diskUsageLabel(t, disk, locale)}
     >
       <div
-        className="h-full rounded-full transition-[width] duration-300"
+        className="h-full rounded-full transition-[width] duration-fold"
         style={{ width: `${Math.round(ratio * 1000) / 10}%`, backgroundColor: diskLevelColor(disk.level) }}
       />
     </div>

@@ -22,7 +22,7 @@ export function GalleryActions({ onNewWorkspace, onOpenComputers, stacked = fals
     <div className={stacked ? 'grid w-full grid-cols-2 gap-2' : 'flex items-center gap-2'}>
       <button
         onClick={onOpenComputers}
-        className={`flex items-center gap-1.5 px-3 py-2 h-9 rounded-lg border transition-all hover:bg-foreground/5 active:scale-[0.985]${fill}`}
+        className={`flex items-center gap-1.5 px-3 py-2 h-9 rounded-lg border press hover:bg-foreground/5${fill}`}
         style={{
           borderColor: 'var(--color-border-muted)',
           color: 'var(--color-text-secondary)',
@@ -33,7 +33,7 @@ export function GalleryActions({ onNewWorkspace, onOpenComputers, stacked = fals
       </button>
       <button
         onClick={onNewWorkspace}
-        className={`flex items-center gap-1.5 ${pad} py-2 h-9 rounded-lg transition-all hover:opacity-90 active:scale-[0.985]${fill}`}
+        className={`flex items-center gap-1.5 ${pad} py-2 h-9 rounded-lg press hover:opacity-90${fill}`}
         style={{
           backgroundColor: 'var(--color-btn-primary-bg)',
           color: 'var(--color-btn-primary-text)',

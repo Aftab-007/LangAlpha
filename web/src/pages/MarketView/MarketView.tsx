@@ -24,6 +24,7 @@ import { useThreadSubagents } from '../ChatAgent/hooks/useThreadSubagents';
 import { useThreadTuning } from '../ChatAgent/hooks/useThreadTuning';
 import { ThreadNotices } from '../ChatAgent/components/chatView/ThreadNotices';
 import { motion, AnimatePresence } from '@/lib/framer';
+import { SPRING_DRAG, TWEEN } from '@/lib/motion';
 import CompanyOverviewPanel from './components/CompanyOverviewPanel';
 import { MobileBottomSheet } from '../../components/ui/mobile-bottom-sheet';
 import { MobileFabChat } from '../../components/ui/mobile-fab-chat';
@@ -684,8 +685,8 @@ function MarketViewInner() {
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
+                  exit={{ opacity: 0, transition: TWEEN.exit }}
+                  transition={TWEEN.quick}
                   className="fixed inset-0 z-40"
                   style={{ backgroundColor: 'var(--color-bg-overlay)' }}
                   onClick={() => setMobileTab(null)}
@@ -693,8 +694,8 @@ function MarketViewInner() {
                 <motion.div
                   initial={{ x: '100%' }}
                   animate={{ x: 0 }}
-                  exit={{ x: '100%' }}
-                  transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+                  exit={{ x: '100%', transition: TWEEN.exit }}
+                  transition={SPRING_DRAG}
                   className="fixed top-0 right-0 bottom-0 z-50 border-l"
                   style={{
                     width: '80vw',

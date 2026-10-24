@@ -19,6 +19,7 @@ import { wrapWidgetContext } from '../framework/snapshotSerializers';
 import { ConversationConfigSchema } from '../framework/configSchemas';
 import type { WidgetRenderProps } from '../types';
 import './ConversationWidget.css';
+import { STAGGER } from '@/lib/motion';
 
 type ConversationConfig = Record<string, never>;
 
@@ -135,7 +136,7 @@ function ConversationWidget({ instance }: WidgetRenderProps<ConversationConfig>)
         animate="show"
         variants={{
           hidden: {},
-          show: { transition: { staggerChildren: 0.07, delayChildren: 0.04 } },
+          show: { transition: { staggerChildren: STAGGER, delayChildren: STAGGER } },
         }}
       >
         <motion.div

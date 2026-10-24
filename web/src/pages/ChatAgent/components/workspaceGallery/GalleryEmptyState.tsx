@@ -42,7 +42,7 @@ export function GalleryEmptyState({ isFiltered, query, onClearSearch, onNewWorks
     );
   }
 
-  const secondary = 'flex h-9 items-center gap-2 rounded-lg border px-4 text-sm font-medium transition-all hover:bg-foreground/5 active:scale-[0.985]';
+  const secondary = 'flex h-9 items-center gap-2 rounded-lg border px-4 text-sm font-medium press hover:bg-foreground/5';
   const secondaryStyle = { borderColor: 'var(--color-border-default)', color: 'var(--color-text-primary)', backgroundColor: 'var(--color-bg-page)' };
   return (
     <div
