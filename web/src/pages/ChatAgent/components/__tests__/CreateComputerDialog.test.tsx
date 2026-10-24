@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { renderWithProviders } from '@/test/utils';
@@ -134,46 +134,23 @@ describe('CreateComputerDialog, sizes', () => {
   });
 
   it('says nothing of a plan lock Daytona cannot run anyway', async () => {
-    mockQuota.mockResolvedValue({ ...OPEN_QUOTA, xlarge: { used: 0, limit: 0 } });
+    mockQuota.mockResolvedValue({ ...MAX_PLAN, xlarge: { used: 0, limit: 0 } });
     open();
-    // The quota has landed once a size shows what is left of it.
-    await waitFor(() => expect(radio('Medium')).toHaveAccessibleDescription(/^Unlimited/));
+    // The quota has landed once the slot line shows.
+    await screen.findByTestId('tier-slot');
     expect(screen.queryByTestId('create-computer-plan-cta')).not.toBeInTheDocument();
   });
 });
 
 describe('CreateComputerDialog, the size rows', () => {
-  // Pro: no Medium, one Large, each size counted on its own.
-  const PRO: WorkspaceQuota = {
-    performance: { used: 0, limit: 0 },
-    max: { used: 0, limit: 1 },
-    xlarge: { used: 0, limit: 0 },
-    always_on: null,
-    computers: { used: 1, limit: 2 },
-  };
-
-  it("sets each size on one row, and gives each its own count's note", async () => {
-    mockQuota.mockResolvedValue(PRO);
+  it('sets each size on one row with its specs on one line', async () => {
     open();
 
-    await waitFor(() => expect(radio('Medium')).toBeDisabled());
-    const group = screen.getByRole('radiogroup', { name: 'Computer spec' });
+    const group = await screen.findByRole('radiogroup', { name: 'Computer spec' });
     expect(group).not.toHaveClass('@sm:grid-cols-2', '@md:grid-cols-3');
-    expect(radio('Small')).toHaveAccessibleDescription(/^1 vCPU\s*·\s*2 GB RAM\s*·\s*5 GB disk$/);
-    expect(radio('Medium')).toHaveAccessibleDescription(/^Not on your plan/);
-    expect(radio('Large')).toBeEnabled();
-    expect(radio('Large')).toHaveAccessibleDescription(/^1 of 1 left/);
-  });
-
-  it('reads None left at a size whose own count is spent, and only there', async () => {
-    mockQuota.mockResolvedValue({ ...PRO, performance: { used: 0, limit: 1 }, max: { used: 1, limit: 1 } });
-    open();
-
-    await waitFor(() => expect(radio('Large')).toBeDisabled());
-    expect(radio('Large')).toHaveAccessibleDescription(/^None left/);
-    expect(radio('Medium')).toBeEnabled();
-    expect(radio('Medium')).toHaveAccessibleDescription(/^1 of 1 left/);
-    expect(radio('Small')).toBeChecked();
+    await waitFor(() =>
+      expect(radio('Small')).toHaveAccessibleDescription(/^1 vCPU\s*·\s*2 GB RAM\s*·\s*5 GB disk$/),
+    );
   });
 });
 
@@ -203,16 +180,82 @@ describe('CreateComputerDialog, the providers', () => {
   });
 });
 
-describe('CreateComputerDialog, a size on another provider', () => {
-  // Each plan holds one computer at its top size and leaves the sizes below it out.
-  const MAX_PLAN: WorkspaceQuota = {
-    performance: { used: 0, limit: 0 },
-    max: { used: 0, limit: 0 },
-    xlarge: { used: 0, limit: 1 },
-    always_on: null,
-    computers: { used: 1, limit: 2 },
-  };
+// A plan has one slot for a computer bigger than Small, open at every size up
+// to its largest, and each size counts every computer held in it.
+const MAX_PLAN: WorkspaceQuota = {
+  performance: { used: 0, limit: 1 },
+  max: { used: 0, limit: 1 },
+  xlarge: { used: 0, limit: 1 },
+  always_on: null,
+  computers: { used: 1, limit: 2 },
+};
 
+describe('CreateComputerDialog, the larger slot', () => {
+  it('opens every size up to the top of a Max plan, and names the one slot once', async () => {
+    mockQuota.mockResolvedValue(MAX_PLAN);
+    const user = userEvent.setup();
+    open();
+    await user.click(await screen.findByRole('radio', { name: /^E2B/ }));
+
+    expect(await screen.findByTestId('tier-slot')).toHaveTextContent(
+      'Your plan includes 1 computer larger than Small.',
+    );
+    for (const name of ['Medium', 'Large', 'Extra Large']) {
+      expect(radio(name)).toBeEnabled();
+      // The slot is said once, under the sizes, rather than on each.
+      expect(radio(name)).toHaveAccessibleDescription(/^\d+ vCPU/);
+    }
+    expect(screen.queryByTestId('create-computer-plan-cta')).not.toBeInTheDocument();
+  });
+
+  it('reads none left at every larger size once one is held', async () => {
+    const held = { used: 1, limit: 1 };
+    mockQuota.mockResolvedValue({ ...MAX_PLAN, performance: held, max: held, xlarge: held });
+    const user = userEvent.setup();
+    open();
+    await user.click(await screen.findByRole('radio', { name: /^E2B/ }));
+
+    await waitFor(() => expect(radio('Medium')).toBeDisabled());
+    for (const name of ['Medium', 'Large', 'Extra Large']) {
+      expect(radio(name)).toBeDisabled();
+      expect(radio(name)).toHaveAccessibleDescription(/^None left/);
+    }
+    expect(screen.getByTestId('tier-slot')).toHaveTextContent("Your plan's computer larger than Small is in use.");
+    expect(radio('Small')).toBeChecked();
+  });
+
+  it('names the slot on Daytona too, which runs no Extra Large', async () => {
+    mockQuota.mockResolvedValue(MAX_PLAN);
+    open();
+
+    expect(await screen.findByTestId('tier-slot')).toHaveTextContent(
+      'Your plan includes 1 computer larger than Small.',
+    );
+    expect(tierValues()).toEqual(['standard', 'performance', 'max']);
+  });
+
+  it('has no slot line on a plan with no larger size, only the way to one', async () => {
+    const none = { used: 0, limit: 0 };
+    mockQuota.mockResolvedValue({ ...MAX_PLAN, performance: none, max: none, xlarge: none });
+    open();
+
+    await waitFor(() => expect(radio('Medium')).toBeDisabled());
+    expect(radio('Medium')).toHaveAccessibleDescription(/^Not on your plan/);
+    expect(screen.queryByTestId('tier-slot')).not.toBeInTheDocument();
+    expect(screen.getByTestId('create-computer-plan-cta')).toBeInTheDocument();
+  });
+
+  it('says nothing of the slot, on the line or the sizes, on an unlimited plan', async () => {
+    open();
+    await waitFor(() => expect(mockQuota).toHaveBeenCalled());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    expect(screen.queryByTestId('tier-slot')).not.toBeInTheDocument();
+    expect(radio('Medium')).toHaveAccessibleDescription(/^2 vCPU/);
+  });
+});
+
+describe('CreateComputerDialog, a size on another provider', () => {
   it('names Extra Large on E2B to a Max plan on Daytona, not an upgrade', async () => {
     mockQuota.mockResolvedValue(MAX_PLAN);
     const user = userEvent.setup();
@@ -220,7 +263,7 @@ describe('CreateComputerDialog, a size on another provider', () => {
 
     const hint = await screen.findByTestId('create-computer-tier-elsewhere');
     expect(hint).toHaveTextContent('Extra Large is available on E2B.');
-    expect(radio('Large')).toBeDisabled();
+    expect(radio('Large')).toBeEnabled();
     expect(screen.queryByTestId('create-computer-plan-cta')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Switch to E2B' }));
@@ -232,7 +275,8 @@ describe('CreateComputerDialog, a size on another provider', () => {
   });
 
   it('keeps the upgrade line when no other provider runs a bigger size the plan allows', async () => {
-    mockQuota.mockResolvedValue({ ...MAX_PLAN, performance: { used: 0, limit: 1 }, xlarge: { used: 0, limit: 0 } });
+    // Plus: Medium is its largest.
+    mockQuota.mockResolvedValue({ ...MAX_PLAN, max: { used: 0, limit: 0 }, xlarge: { used: 0, limit: 0 } });
     open();
 
     await waitFor(() => expect(radio('Large')).toBeDisabled());
@@ -272,10 +316,10 @@ describe('CreateComputerDialog, at the computer cap', () => {
 
   it('fails open when the count is unknown', async () => {
     mockProviders.mockResolvedValue({ providers: [DAYTONA, E2B, SSH] });
-    mockQuota.mockResolvedValue({ ...OPEN_QUOTA, computers: null });
+    mockQuota.mockResolvedValue({ ...MAX_PLAN, computers: null });
     open();
 
-    await waitFor(() => expect(radio('Medium')).toHaveAccessibleDescription(/^Unlimited/));
+    await screen.findByTestId('tier-slot');
     expect(radio('Daytona')).toBeEnabled();
     expect(radio('Daytona')).toBeChecked();
     expect(screen.getByRole('button', { name: 'Create computer' })).toBeEnabled();
