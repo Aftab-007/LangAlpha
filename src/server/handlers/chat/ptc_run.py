@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from langgraph.types import Command
 
 from ptc_agent.core.project_context import ProjectContext, run_with_project
+from src.config.settings import get_sse_keepalive_interval
 from src.server.app import setup
 from src.server.database.conversation.threads_read import (
     read_thread_subagents_allowed,
@@ -109,6 +110,12 @@ from src.server.services.llm.thread_model import NamedModel
 from .steering import open_with_steers_ahead
 from .run_stream_reader import stream_from_log
 from .detached import fire_and_forget as _fire_and_forget
+
+
+def _turn_held(data: dict) -> str:
+    """A ``turn_held`` frame. Id 0 like ``workspace_status``: it comes before
+    the run has a stream to resume, so no cursor counts it."""
+    return f"id: 0\nevent: turn_held\ndata: {json.dumps(data)}\n\n"
 
 
 async def _resolve_origin_meta(request, thread_id: str) -> dict:
@@ -269,9 +276,21 @@ async def astream_ptc_workflow(
         # registered anywhere yet; its row commits at START, below).
         if needs_startup:
             await manager.cancel_stale_workflow(thread_id)
+        from src.server.services.thread_mutation import ThreadMutationRunner
+
+        # A send held behind a thread mutation (a /compact, the hand-off at a
+        # model switch) is told why it waits, as a cold start is. Not a
+        # dispatch's primer or a steer probe, which read the first frame as
+        # their answer.
+        held_by = (
+            None
+            if dispatched or request.steer_only
+            else await ThreadMutationRunner.get_instance().holding_verb(thread_id)
+        )
         # Admit a fresh turn, steer the running one, or 409 — see
         # ``wait_or_steer``; who may steer at all is ``steer_allowed``.
-        ready, steering_event = await wait_or_steer(
+        admit = partial(
+            wait_or_steer,
             manager,
             thread_id,
             user_input,
@@ -288,6 +307,21 @@ async def astream_ptc_workflow(
                 request, dispatched=dispatched, steerable=steerable
             ),
         )
+        if held_by is None:
+            ready, steering_event = await admit()
+        else:
+            yield _turn_held({"status": "held", "reason": held_by})
+            waiting = asyncio.ensure_future(admit())
+            try:
+                # The wait can outlast an edge proxy's idle cutoff, so the
+                # stream shows it is alive until the turn is admitted.
+                beat = get_sse_keepalive_interval()
+                while not (await asyncio.wait({waiting}, timeout=beat))[0]:
+                    yield ":keepalive\n\n"
+                ready, steering_event = waiting.result()
+            finally:
+                waiting.cancel()
+            yield _turn_held({"status": "released"})
         if not ready:
             await scope.release_slot()
             # Release admission immediately — no workflow will register
