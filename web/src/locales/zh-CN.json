@@ -199,6 +199,10 @@
     "streamingModeDesc": "文字生成后即时显示，或每次显示一个完整段落。",
     "streamingModeToken": "连续显示",
     "streamingModeParagraph": "按段落",
+    "toolCallLayout": "工具调用",
+    "toolCallLayoutDesc": "每个步骤显示为一行，或试用新的状态行：只用一行显示当前步骤。",
+    "toolCallLayoutRows": "逐行",
+    "toolCallLayoutStatus": "状态行",
     "tradingPermission": {
       "title": "交易权限",
       "desc": "决定 Agent 如何处理你已连接券商的订单，模拟订单不受影响。你在对话中的要求可以进一步收紧这里的范围，但只有这项设置能让订单不经你批准就发出。",

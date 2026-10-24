@@ -199,6 +199,10 @@
     "streamingModeDesc": "Show text as it arrives, or reveal one paragraph at a time.",
     "streamingModeToken": "Continuous",
     "streamingModeParagraph": "By paragraph",
+    "toolCallLayout": "Tool calls",
+    "toolCallLayoutDesc": "Show each step as a row, or try the new status line: one line that names the current step.",
+    "toolCallLayoutRows": "Rows",
+    "toolCallLayoutStatus": "Status line",
     "tradingPermission": {
       "title": "Trading permission",
       "desc": "How the agent handles orders at your connected brokerages. Paper orders are not affected. What you tell the agent in a conversation can narrow this, but only this setting lets orders skip your approval.",

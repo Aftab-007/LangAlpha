@@ -10,6 +10,7 @@ import { usePreferences } from '@/hooks/usePreferences';
 import { readTurnEndScroll } from '@/lib/turnEndScroll';
 import {
   readStreamingMode,
+  readToolCallLayout,
   readTurnDisplay,
   TranscriptDisplayContext,
   type TranscriptDisplay,
@@ -481,7 +482,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // flip in Settings reaches them together and neither re-renders on the other's
   // account.
   const transcriptDisplay = useMemo<TranscriptDisplay>(
-    () => ({ turnDisplay: readTurnDisplay(preferences), streamingMode: readStreamingMode(preferences) }),
+    () => ({
+      turnDisplay: readTurnDisplay(preferences),
+      streamingMode: readStreamingMode(preferences),
+      toolCallLayout: readToolCallLayout(preferences),
+    }),
     [preferences],
   );
 
