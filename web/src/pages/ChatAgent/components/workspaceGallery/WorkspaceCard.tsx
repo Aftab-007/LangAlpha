@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { MoreHorizontal, Pin } from 'lucide-react';
 
 import { useTranslation } from 'react-i18next';
@@ -74,6 +74,9 @@ interface WorkspaceCardProps {
   onDelete: (workspace: WorkspaceRecord) => void;
   prefetchThreads?: (wsId: string) => void;
   index?: number;
+  /** Rise in with the gallery's first paint. Read once, at mount: a card a
+   *  search or a filter brings back later just appears. */
+  entrance?: boolean;
   /** From the grid: whether and by what the card drags, and how it is drawn mid-drag. */
   drag?: CardDrag;
 }
@@ -99,8 +102,10 @@ export function WorkspaceCard({
   onDelete,
   prefetchThreads,
   index,
+  entrance = true,
   drag = RESTING,
 }: WorkspaceCardProps) {
+  const [rises] = useState(entrance);
   const locale = useLocale();
   const isMobile = useIsMobile();
   const text = useWorkspaceText()(workspace);
@@ -121,7 +126,7 @@ export function WorkspaceCard({
   );
 
   const open = () => onSelect(workspace.workspace_id, text.name, workspace.status);
-  const { handle, state } = drag;
+  const { handle, state, dragging } = drag;
   const lifted = state === 'lifted';
   const placeholder = state === 'placeholder';
 
@@ -144,81 +149,88 @@ export function WorkspaceCard({
 
   return (
     <div
-      className={`relative group h-full${lifted ? '' : ' enter-fade-up'}`}
-      style={lifted ? undefined : { animationDelay: `${Math.min(index ?? 0, 12) * 40}ms` }}
+      className={`relative group h-full${rises && !lifted ? ' enter-fade-up' : ''}`}
+      style={rises && !lifted ? { animationDelay: `${Math.min(index ?? 0, 12) * 40}ms` } : undefined}
       data-testid={lifted ? 'workspace-card-lifted' : 'workspace-card'}
       data-drag-state={state === 'resting' ? undefined : state}
       onMouseEnter={!isMobile ? () => prefetchThreads?.(workspace.workspace_id) : undefined}
     >
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label={text.name}
-        {...handle?.props}
-        ref={handle?.ref}
-        onKeyDown={onKeyDown}
-        onClick={open}
-        className={[
-          'relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-xl py-3.5 pl-[18px] pr-4 md:px-5 md:py-4 transition-all ease-in-out',
-          lifted ? 'cursor-grabbing scale-[1.02] shadow-xl' : 'cursor-pointer hover:shadow-xs active:scale-[0.98]',
-          // A held finger lifts the card, so it must not also select its text
-          // or raise the system's callout.
-          handle ? 'touch-manipulation select-none [-webkit-touch-callout:none]' : '',
-          // The slot the lifted card left: its outline, and nothing in it.
-          placeholder ? '[&>*]:invisible' : '',
-        ].filter(Boolean).join(' ')}
-        style={placeholder ? {
-          background: 'transparent',
-          border: '1.5px dashed var(--color-border-default)',
-        } : {
-          background: 'var(--color-bg-card-gradient, linear-gradient(to bottom, var(--color-border-muted), var(--color-border-muted)))',
-          border: '1px solid var(--color-bg-card-border, var(--color-border-muted))',
-          backdropFilter: 'blur(8px)',
-          WebkitBackdropFilter: 'blur(8px)',
-        }}
-      >
-        {/* Where the menu always shows (a touch screen), the row leaves it its
-            corner and the time sits clear of it. */}
-        <div className="flex items-start gap-2 min-w-0 pointer-coarse:pr-9">
-          {workspace.is_pinned && (
-            <Pin className="mt-1 h-3.5 w-3.5 shrink-0 rotate-45" style={{ color: 'var(--color-text-tertiary)' }} />
-          )}
-          {/* One line at every width, so every card is the same height. */}
-          <div className="font-medium flex-1 min-w-0 line-clamp-1 break-words" style={{ color: 'var(--color-text-primary)' }} title={text.name}>
-            {text.name}
+      {/* What rises under the pointer: the card and its menu together, so the
+          menu stays in its corner and a pointer on it keeps the card up.
+          Mid-drag the cards hold still; only the lifted copy moves. */}
+      <div className={`relative h-full rounded-xl${state === 'resting' && !dragging ? ' hover-lift' : ''}`}>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={text.name}
+          {...handle?.props}
+          ref={handle?.ref}
+          onKeyDown={onKeyDown}
+          onClick={open}
+          className={[
+            'relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-xl py-3.5 pl-[18px] pr-4 md:px-5 md:py-4',
+            lifted
+              ? 'cursor-grabbing scale-[1.02] shadow-xl'
+              : 'cursor-pointer transition-transform duration-150 motion-safe:active:scale-[0.985]',
+            // A held finger lifts the card, so it must not also select its text
+            // or raise the system's callout.
+            handle ? 'touch-manipulation select-none [-webkit-touch-callout:none]' : '',
+            // The slot the lifted card left: its outline, and nothing in it.
+            placeholder ? '[&>*]:invisible' : '',
+          ].filter(Boolean).join(' ')}
+          style={placeholder ? {
+            background: 'transparent',
+            border: '1.5px dashed var(--color-border-default)',
+          } : {
+            background: 'var(--color-bg-card-gradient, linear-gradient(to bottom, var(--color-border-muted), var(--color-border-muted)))',
+            border: '1px solid var(--lift-edge, var(--color-bg-card-border, var(--color-border-muted)))',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+          }}
+        >
+          {/* Where the menu always shows (a touch screen), the row leaves it its
+              corner and the time sits clear of it. */}
+          <div className="flex items-start gap-2 min-w-0 pointer-coarse:pr-9">
+            {workspace.is_pinned && (
+              <Pin className="mt-1 h-3.5 w-3.5 shrink-0 rotate-45" style={{ color: 'var(--color-text-tertiary)' }} />
+            )}
+            {/* One line at every width, so every card is the same height. */}
+            <div className="font-medium flex-1 min-w-0 line-clamp-1 break-words" style={{ color: 'var(--color-text-primary)' }} title={text.name}>
+              {text.name}
+            </div>
+            {when && (
+              // Under a mouse the menu takes this corner on hover, so the time
+              // steps aside rather than sitting under it.
+              <span
+                className={`shrink-0 pt-0.5 text-xs whitespace-nowrap transition-opacity duration-150${state === 'resting' ? ' pointer-fine:group-hover:opacity-0 pointer-fine:group-focus-within:opacity-0' : ''}`}
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                {when}
+              </span>
+            )}
           </div>
-          {when && (
-            // Under a mouse the menu takes this corner on hover, so the time
-            // steps aside rather than sitting under it.
-            <span
-              className={`shrink-0 pt-0.5 text-xs whitespace-nowrap${state === 'resting' ? ' pointer-fine:group-hover:invisible pointer-fine:group-focus-within:invisible' : ''}`}
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
-              {when}
-            </span>
+          {/* The description always holds two lines, filled or not, so every
+              card is the same height and the machine line sits level. */}
+          <div className="text-sm line-clamp-2 min-h-[2lh]" style={{ color: 'var(--color-text-tertiary)' }}>
+            {text.description}
+          </div>
+          {computer && (
+            <div className="mt-auto pt-2.5">
+              <MachineSummary computer={computer} isThisMac={isThisMac} onOpen={onOpenComputer} />
+            </div>
           )}
         </div>
-        {/* The description always holds two lines, filled or not, so every
-            card is the same height and the machine line sits level. */}
-        <div className="text-sm line-clamp-2 min-h-[2lh]" style={{ color: 'var(--color-text-tertiary)' }}>
-          {text.description}
-        </div>
-        {computer && (
-          <div className="mt-auto pt-2.5">
-            <MachineSummary computer={computer} isThisMac={isThisMac} onOpen={onOpenComputer} />
+
+        {/* Outside the clickable card, and so outside the drag handle: a menu
+            item's click would otherwise bubble (through the portal) into opening
+            the workspace, and a press on the button into a drag. Under a mouse
+            it shows on hover; on a touch screen it stays, at the far right. */}
+        {state === 'resting' && (
+          <div className="absolute top-2.5 right-3 z-10 transition-opacity opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:top-2 pointer-coarse:right-2 pointer-coarse:opacity-100">
+            {menu}
           </div>
         )}
       </div>
-
-      {/* Outside the clickable card, and so outside what lifts it: a menu
-          item's click would otherwise bubble (through the portal) into opening
-          the workspace, and a press on the button into a drag. Under a mouse
-          it shows on hover; on a touch screen it stays, at the far right. */}
-      {state === 'resting' && (
-        <div className="absolute top-2.5 right-3 z-10 transition-opacity opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:top-2 pointer-coarse:right-2 pointer-coarse:opacity-100">
-          {menu}
-        </div>
-      )}
     </div>
   );
 }

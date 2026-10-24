@@ -130,6 +130,12 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     clearChatSession();
   }, []);
 
+  // The cards rise in once, when the gallery first shows them; the first
+  // entrance to finish ends that. A card a search or a filter brings back
+  // later just appears: replaying the staggered entrance there leaves holes in
+  // the grid until the late ones arrive.
+  const [introduced, setIntroduced] = useState(false);
+
   const scrollToTop = () => {
     for (const el of [pageRef.current, scrollRef.current]) el?.scrollTo?.({ top: 0, behavior: 'smooth' });
   };
@@ -293,6 +299,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
               isThisMac={!!computer && isThisMac(computer)}
               now={now}
               index={index}
+              entrance={!introduced}
               drag={drag}
               onSelect={onWorkspaceSelect}
               onTogglePin={handleTogglePin}
@@ -361,7 +368,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
             )}
 
             {hasUserWorkspaces && (
-              <div className="pb-4 enter-fade-up enter-fade-up-d1">
+              <div className="pb-3 enter-fade-up enter-fade-up-d1">
                 <GalleryToolbar
                   search={searchQuery}
                   onSearchChange={setSearchQuery}
@@ -382,17 +389,26 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
         </div>
 
         {/* From a laptop's width up, spans the full width so its scrollbar
-            runs down the window's edge; the column is centred inside. */}
+            runs down the window's edge; the column is centred inside. Its top
+            pad is the room a card rising under the pointer needs, which the
+            toolbar's gap gives up, so the first row is not clipped. */}
         <div
           ref={scrollRef}
-          className={`pb-8 md:flex-1 md:min-h-0 md:overflow-y-auto ${GALLERY_FRAME}`}
+          onAnimationEnd={introduced ? undefined : () => setIntroduced(true)}
+          className={`pt-1 pb-8 md:flex-1 md:min-h-0 md:overflow-y-auto ${GALLERY_FRAME}`}
           data-testid="workspace-grid"
         >
           <div className={`flex flex-col gap-3 md:gap-4 ${GALLERY_COLUMN}`}>
             {/* Home leads the list as a strip of its own. A search hides it like
                 any card; with nothing but Home there is no search to hide it. */}
             {homeRow && (showHome || !hasUserWorkspaces) && (
-              <HomeStrip workspace={homeRow} now={now} onSelect={onWorkspaceSelect} prefetchThreads={prefetchThreads} />
+              <HomeStrip
+                workspace={homeRow}
+                now={now}
+                entrance={!introduced}
+                onSelect={onWorkspaceSelect}
+                prefetchThreads={prefetchThreads}
+              />
             )}
             {renderList()}
           </div>
