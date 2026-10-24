@@ -34,7 +34,7 @@ from src.server.dependencies.usage_limits import (
     get_capacity_status,
     get_entitlement_statuses,
 )
-from src.server.app.background_starts import schedule_start
+from src.server.services.background_starts import schedule_start
 from src.server.app.status_stream import (
     SSE_HEADERS,
     sse_status_event,

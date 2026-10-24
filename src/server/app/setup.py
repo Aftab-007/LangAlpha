@@ -911,7 +911,7 @@ async def lifespan(app: FastAPI):
             # Drain in-flight warm tasks first so a task cancelled mid-Phase-2
             # reverts its 'starting' row to 'stopped' (CancelledError revert)
             # instead of being torn down abruptly and left wedged.
-            from src.server.app.background_starts import drain_start_tasks
+            from src.server.services.background_starts import drain_start_tasks
 
             await drain_start_tasks()
         except Exception as e:
