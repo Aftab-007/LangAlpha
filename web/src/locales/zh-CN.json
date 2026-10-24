@@ -1343,9 +1343,16 @@
     "workspaceLimitReached": "您的工作区数量已达上限。",
     "options": "选项",
     "noWorkspacesFound": "未找到工作区",
-    "welcomeTitle": "欢迎使用 LangAlpha",
-    "welcomeDesc": "开始设置您的偏好或创建工作区。",
-    "welcomeDescCreate": "创建一个工作区，把一个项目的对话和文件放在一起。",
+    "noWorkspacesMatch": "没有与“{{query}}”匹配的工作区。",
+    "clearSearch": "清除搜索",
+    "emptyTitle": "还没有工作区",
+    "emptyDesc": "工作区把一个项目的对话、文件和计算机放在一起，并配有专属的分析师。CoS Agent 可以帮你创建，也可以在这里新建。",
+    "cosRecent": "最近",
+    "cosTryAsking": "试着问问",
+    "cosAllThreads": "全部对话",
+    "cosStarter1": "这周我的分析师们都在做什么？",
+    "cosStarter2": "建一个工作区，跟踪半导体板块的广度",
+    "cosStarter3": "我的自选股今天有什么异动？为什么？",
     "createWorkspace": "创建工作区",
     "failedLoadWorkspaces": "加载工作区失败，请刷新页面。",
     "invalidWorkspace": "无效工作区，请重试。",
@@ -5798,7 +5805,7 @@
     "common": "常用"
   },
   "agents": {
-    "chiefOfStaffHint": "快速问题亲自回答，深度任务交给各工作区的分析师。",
+    "chiefOfStaffHint": "统筹所有工作区的分析师，把每项任务交给合适的那一位。",
     "home": "Home",
     "chiefOfStaff": "CoS Agent",
     "analyst": "分析师",
@@ -5816,7 +5823,7 @@
     "inWorkspace": "在 {{workspace}} 中",
     "workspaceRequired": "请选择 CoS Agent 或一个工作区。",
     "widgets": {
-      "chiefOfStaffDesc": "随时提问：在这里处理，或交给合适的分析师。",
+      "chiefOfStaffDesc": "统筹所有工作区的分析师。在这里提问，它会把每项任务交给合适的分析师，并向你汇报。",
       "tagChiefOfStaff": "Home"
     },
     "models": {

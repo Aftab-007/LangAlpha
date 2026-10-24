@@ -27,8 +27,9 @@ import { openComputersPanel } from '../hooks/computerPanelStore';
 import { liveComputers } from '../utils/computerStatus';
 import { GalleryActions } from './workspaceGallery/GalleryActions';
 import { GalleryEmptyState } from './workspaceGallery/GalleryEmptyState';
+import { Kicker } from './workspaceGallery/Kicker';
 import { ALL_COMPUTERS, GALLERY_SORTS, GalleryToolbar, type GallerySort } from './workspaceGallery/GalleryToolbar';
-import { HomeStrip } from './workspaceGallery/HomeStrip';
+import { ChiefOfStaffCard } from './workspaceGallery/ChiefOfStaffCard';
 import { CardGrid } from './workspaceGallery/CardGrid';
 import { GALLERY_COLUMN, GALLERY_FRAME, GALLERY_PAGE } from './workspaceGallery/layout';
 import { useGalleryReorder } from './workspaceGallery/useGalleryReorder';
@@ -50,8 +51,8 @@ const readSort = (): GallerySort => {
 /**
  * WorkspaceGallery Component
  *
- * Home as a strip, then every workspace as a card in one scrolled grid, each
- * saying which machine it lives on and whether that machine is up.
+ * The Chief of Staff's card, then every workspace as a card in one scrolled
+ * grid, each saying which machine it lives on and whether that machine is up.
  */
 
 interface WorkspaceGalleryProps {
@@ -80,7 +81,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   const pageRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  // Home's query (idempotent POST, creates it if missing). The strip
+  // Home's query (idempotent POST, creates it if missing). The Chief of Staff's card
   // shows the whole record, not just its id, so here it goes stale after five
   // minutes rather than never.
   const { data: homeWs, isLoading: isHomeLoading } = useQuery({
@@ -188,8 +189,8 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   });
 
   const rows = (wsData?.workspaces ?? []) as WorkspaceRecord[];
-  // Home is the strip, never a card. The list carries it when asked to; the
-  // Home query stands in until the list does.
+  // Home is the Chief of Staff's card, never one in the grid. The list carries
+  // it when asked to; the Home query stands in until the list does.
   const homeRow = rows.find((ws) => isHomeWorkspace(ws)) ?? (homeWs as WorkspaceRecord | null | undefined) ?? null;
   const userRows = rows.filter((ws) => !isHomeWorkspace(ws));
   const hasUserWorkspaces = userRows.length > 0;
@@ -202,7 +203,10 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   const visibleWorkspaces = userRows
     .filter((ws) => matches(ws) && (activeFilter === ALL_COMPUTERS || ws.computer_id === activeFilter))
     .sort((a, b) => (isEffectivelyPinned(b) ? 1 : 0) - (isEffectivelyPinned(a) ? 1 : 0));
-  const showHome = !!homeRow && matches(homeRow);
+  // A search is for workspaces: the Chief of Staff steps aside while one runs,
+  // rather than stand over the results as if it were one. With no workspaces
+  // left there is no search box to clear a query, so it comes back.
+  const showChief = !!homeRow && (!query || !hasUserWorkspaces);
   // A card names its machine only when the cards listed sit on more than one:
   // a second computer with nothing listed on it, or a filter down to one
   // machine, would otherwise put the same line on every card. The toolbar
@@ -268,15 +272,20 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     // A user with nothing but Home is welcomed, not shown a search box.
     if (!hasUserWorkspaces) {
       return (
-        <div className="flex flex-col items-center justify-center py-16 text-center enter-fade-up">
+        <div className={introduced ? undefined : 'enter-fade-up'}>
           <GalleryEmptyState isFiltered={false} onNewWorkspace={() => setIsModalOpen(true)} />
         </div>
       );
     }
     if (visibleWorkspaces.length === 0) {
       return (
-        <div className="flex flex-col items-center justify-center py-16">
-          <GalleryEmptyState isFiltered onNewWorkspace={() => setIsModalOpen(true)} />
+        <div className="py-16">
+          <GalleryEmptyState
+            isFiltered
+            query={searchQuery.trim()}
+            onClearSearch={() => setSearchQuery('')}
+            onNewWorkspace={() => setIsModalOpen(true)}
+          />
         </div>
       );
     }
@@ -398,19 +407,26 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
           className={`pt-1 pb-8 md:flex-1 md:min-h-0 md:overflow-y-auto ${GALLERY_FRAME}`}
           data-testid="workspace-grid"
         >
-          <div className={`flex flex-col gap-3 md:gap-4 ${GALLERY_COLUMN}`}>
-            {/* Home leads the list as a strip of its own. A search hides it like
-                any card; with nothing but Home there is no search to hide it. */}
-            {homeRow && (showHome || !hasUserWorkspaces) && (
-              <HomeStrip
+          <div className={GALLERY_COLUMN}>
+            {showChief && homeRow && (
+              <ChiefOfStaffCard
                 workspace={homeRow}
                 now={now}
                 entrance={!introduced}
-                onSelect={onWorkspaceSelect}
+                onOpenThreads={onWorkspaceSelect}
                 prefetchThreads={prefetchThreads}
               />
             )}
-            {renderList()}
+            {/* Under the Chief of Staff the workspaces take a labeled section of
+                their own; alone, under a search, they need no label. */}
+            <div className={showChief ? 'mt-6 md:mt-7' : undefined}>
+              {showChief && (
+                <Kicker className="mb-2.5">
+                  {hasUserWorkspaces ? `${t('workspace.workspaces')} · ${visibleWorkspaces.length}` : t('workspace.workspaces')}
+                </Kicker>
+              )}
+              {renderList()}
+            </div>
           </div>
         </div>
       </div>

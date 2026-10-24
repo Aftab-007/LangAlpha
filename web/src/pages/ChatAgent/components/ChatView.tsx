@@ -1286,18 +1286,23 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // Used by the ContextOverflowPill click handoff: dashboard → /chat with
   // queued widget cards but no auto-send. And by Plugins → Subagents' "Create
   // with the agent", which hands it a sentence to finish rather than send.
-  const composerReseedRef = useRef(false);
+  // And by the Chief of Staff's starter questions.
+  // Once per navigation, not once per view: an unsent __default__ view is
+  // kept while the user goes back to the gallery, and the next starter lands
+  // on the same one. Only the view on screen takes it, since every cached
+  // view reads the same location.
+  const reseededKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (composerReseedRef.current) return;
+    if (!isActive || reseededKeyRef.current === location.key) return;
     const navState = location.state as LocationState | null;
     const snaps = navState?.widgetSnapshots;
     const draft = navState?.draftMessage;
     if ((!snaps?.length && !draft) || navState?.initialMessage) return;
-    composerReseedRef.current = true;
+    reseededKeyRef.current = location.key;
     snaps?.forEach((s) => chatInputRef.current?.addWidgetSnapshot(s));
     if (draft) chatInputRef.current?.setValue(draft);
     navigate(location.pathname, { replace: true, state: { ...navState, widgetSnapshots: undefined, draftMessage: undefined } });
-  }, [location.state, location.pathname, navigate]);
+  }, [isActive, location.key, location.state, location.pathname, navigate]);
 
 
 

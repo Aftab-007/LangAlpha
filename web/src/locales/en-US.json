@@ -1345,9 +1345,16 @@
     "workspaceLimitReached": "You've reached your workspace limit.",
     "options": "Options",
     "noWorkspacesFound": "No workspaces found",
-    "welcomeTitle": "Welcome to LangAlpha",
-    "welcomeDesc": "Get started by setting up your preferences or creating a workspace.",
-    "welcomeDescCreate": "Create a workspace to keep a project's threads and files together.",
+    "noWorkspacesMatch": "No workspaces match “{{query}}”.",
+    "clearSearch": "Clear search",
+    "emptyTitle": "No workspaces yet",
+    "emptyDesc": "A workspace keeps a project's threads, files and computer together, with an Analyst of its own. Your Chief of Staff can set one up for you, or start one here.",
+    "cosRecent": "Recent",
+    "cosTryAsking": "Try asking",
+    "cosAllThreads": "All threads",
+    "cosStarter1": "What have my Analysts been working on this week?",
+    "cosStarter2": "Set up a workspace to track semiconductor breadth",
+    "cosStarter3": "What moved in my watchlist today, and why?",
     "createWorkspace": "Create Workspace",
     "failedLoadWorkspaces": "Failed to load workspaces. Please refresh the page.",
     "invalidWorkspace": "Invalid workspace. Please try again.",
@@ -5907,7 +5914,7 @@
     "common": "Common"
   },
   "agents": {
-    "chiefOfStaffHint": "Answers quick questions itself and hands deep work to each workspace's Analyst.",
+    "chiefOfStaffHint": "Coordinates the Analysts in every workspace and hands each task to the right one.",
     "home": "Home",
     "chiefOfStaff": "Chief of Staff",
     "analyst": "Analyst",
@@ -5925,7 +5932,7 @@
     "inWorkspace": "In {{workspace}}",
     "workspaceRequired": "Choose your Chief of Staff or a workspace.",
     "widgets": {
-      "chiefOfStaffDesc": "Ask anything. Handled here, or handed to the right Analyst.",
+      "chiefOfStaffDesc": "Coordinates the Analysts in every workspace. Ask here and it hands each task to the right one, then reports back.",
       "tagChiefOfStaff": "home"
     },
     "models": {
