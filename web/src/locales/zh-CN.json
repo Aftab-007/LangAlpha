@@ -5784,8 +5784,7 @@
     "common": "常用"
   },
   "agents": {
-    "allWorkspaces": "所有工作区",
-    "allWorkspacesHint": "Chief of Staff Agent 在这里回答，并把深度任务交给各工作区的分析师。",
+    "chiefOfStaffHint": "快速问题亲自回答，深度任务交给各工作区的分析师。",
     "home": "Home",
     "chiefOfStaff": "CoS Agent",
     "analyst": "分析师",
@@ -5801,10 +5800,10 @@
       "analystsHeading": "由此对话交办"
     },
     "inWorkspace": "在 {{workspace}} 中",
-    "workspaceRequired": "请选择一个工作区，或选择所有工作区。",
+    "workspaceRequired": "请选择 CoS Agent 或一个工作区。",
     "widgets": {
-      "allWorkspacesDesc": "随时提问，Chief of Staff Agent 会亲自处理或分派给分析师。",
-      "tagAllWorkspaces": "全部"
+      "chiefOfStaffDesc": "随时提问：在这里处理，或交给合适的分析师。",
+      "tagChiefOfStaff": "Home"
     },
     "models": {
       "defaultModel": "默认模型",
@@ -5822,9 +5821,9 @@
       "defaultPlaceholder": "选择默认模型..."
     },
     "market": {
-      "missingThreadHint": "找不到对话？对话按工作区归属。请尝试所有工作区，或选择其他工作区。",
+      "missingThreadHint": "找不到对话？对话归属于 CoS Agent 或某个工作区。请试试 CoS Agent，或选择其他工作区。",
       "workspaceDisabledReason": "在 /chat 中创建工作区后即可在其中工作",
-      "noWorkspaceToast": "请先创建工作区，或使用所有工作区。",
+      "noWorkspaceToast": "请先创建工作区，或直接问 CoS Agent。",
       "setupFailed": "无法打开工作区，请重试。"
     },
     "tour": {

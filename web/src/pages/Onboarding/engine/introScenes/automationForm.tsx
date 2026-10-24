@@ -303,7 +303,7 @@ export function MoreToggle({ open, summary }: { open: boolean; summary: string }
 export function useSummary(): string {
   const { t } = useTranslation();
   return [
-    t('agents.allWorkspaces'),
+    t('agents.chiefOfStaff'),
     t('automation.continueExisting'),
     t('automation.noDelivery'),
     t('automation.stopsAfter', { count: 3 }),

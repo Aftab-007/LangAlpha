@@ -5893,8 +5893,7 @@
     "common": "Common"
   },
   "agents": {
-    "allWorkspaces": "All workspaces",
-    "allWorkspacesHint": "Your Chief of Staff answers here and hands deep work to each workspace's Analyst.",
+    "chiefOfStaffHint": "Answers quick questions itself and hands deep work to each workspace's Analyst.",
     "home": "Home",
     "chiefOfStaff": "Chief of Staff",
     "analyst": "Analyst",
@@ -5910,10 +5909,10 @@
       "analystsHeading": "Handed off from this thread"
     },
     "inWorkspace": "In {{workspace}}",
-    "workspaceRequired": "Choose a workspace, or All workspaces.",
+    "workspaceRequired": "Choose your Chief of Staff or a workspace.",
     "widgets": {
-      "allWorkspacesDesc": "Ask anything. Your Chief of Staff handles it or hands it off.",
-      "tagAllWorkspaces": "all"
+      "chiefOfStaffDesc": "Ask anything. Handled here, or handed to the right Analyst.",
+      "tagChiefOfStaff": "home"
     },
     "models": {
       "defaultModel": "Default model",
@@ -5931,9 +5930,9 @@
       "defaultPlaceholder": "Select default model..."
     },
     "market": {
-      "missingThreadHint": "Don't see a thread? Threads belong to a workspace. Try All workspaces, or pick a different workspace.",
+      "missingThreadHint": "Don't see a thread? Threads belong to your Chief of Staff or to a workspace. Try your Chief of Staff, or pick a different workspace.",
       "workspaceDisabledReason": "Create a workspace in /chat to work in one",
-      "noWorkspaceToast": "Create a workspace first, or use All workspaces.",
+      "noWorkspaceToast": "Create a workspace first, or ask your Chief of Staff.",
       "setupFailed": "Couldn't open the workspace. Please try again."
     },
     "tour": {

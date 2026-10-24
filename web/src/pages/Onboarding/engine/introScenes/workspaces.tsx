@@ -125,7 +125,7 @@ interface Desk {
 /**
  * A card in the gallery (`WorkspaceCard`): name, one line of description,
  * the machine it runs on with that machine's state, and when it was updated.
- * All workspaces is the flat elevated card with the home glyph and no
+ * The Chief of Staff is the flat elevated card with Home's glyph and no
  * machine line; every other card sits on the card fill.
  */
 function GalleryCard({
@@ -208,7 +208,7 @@ function GalleryCard({
 /** The gallery, kept calm: the cards come in, the one machine they share
     starts (each card's machine line turns at once), then two of them read
     as updated today as agents finish work in them. Sorted by activity:
-    All workspaces, the pinned card, then the most recently updated. */
+    The Chief of Staff, the pinned card, then the most recently updated. */
 const GRID = {
   cards: [150, 230, 310, 390, 470, 550],
   starting: 2000,
@@ -264,8 +264,8 @@ function GalleryPage({
 }) {
   const { t } = useTranslation();
   const home: Desk = {
-    name: t('agents.allWorkspaces'),
-    description: t('agents.widgets.allWorkspacesDesc'),
+    name: t('agents.chiefOfStaff'),
+    description: t('agents.widgets.chiefOfStaffDesc'),
     updated: GRID.today,
   };
   return (

@@ -130,7 +130,7 @@ export interface Automation {
   last_run_at: string | null;
 
   instruction: string;
-  /** Where it runs: Home's id for All workspaces, else that workspace's. */
+  /** Where it runs: Home's id for the Chief of Staff, else that workspace's. */
   workspace_id: string | null;
   llm_model: string | null;
 
@@ -161,7 +161,7 @@ export interface AutomationPayload {
   trigger_config?: PriceTriggerConfig;
   next_run_at?: string;
   instruction: string;
-  /** Home's id for All workspaces, else the workspace's. */
+  /** Home's id for the Chief of Staff, else the workspace's. */
   workspace_id: string;
   thread_strategy: Automation['thread_strategy'];
   max_failures: number;

@@ -463,7 +463,7 @@ export function Inspector({ which, pressEdit }: { which: 'brief' | 'alert'; pres
       <Kicker>
         {[
           t(brief ? 'automation.stateScheduled' : 'automation.stateWatching'),
-          t('agents.allWorkspaces'),
+          t('agents.chiefOfStaff'),
         ].join(' · ')}
       </Kicker>
       <div

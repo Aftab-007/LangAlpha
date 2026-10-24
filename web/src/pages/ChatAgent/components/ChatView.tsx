@@ -141,7 +141,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // workspaces that wrote them.
   const isHome = isHomeWorkspace(workspaceRecord);
   // Home is named for what it stands for.
-  const workspaceName = (isHome ? t('agents.allWorkspaces') : workspaceRecord?.name) || initialWorkspaceName || '';
+  const workspaceName = (isHome ? t('agents.chiefOfStaff') : workspaceRecord?.name) || initialWorkspaceName || '';
 
   // The model a navigation's first message goes out with, captured at mount:
   // ChatAgent keeps up to five ChatViews rendered at once (display:none, not
