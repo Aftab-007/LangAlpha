@@ -157,6 +157,7 @@
     "threadNeedsInput": "Waiting for your input",
     "threadUnseen": "Finished, not yet viewed",
     "untitledThread": "Untitled",
+    "onComputer": "On {{name}} · {{kind}}",
     "noConversations": "No conversations yet",
     "workspaceFallback": "Workspace",
     "collapseAgents": "Collapse agents",

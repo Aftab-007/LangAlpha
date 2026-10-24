@@ -157,6 +157,7 @@
     "threadNeedsInput": "等待您的输入",
     "threadUnseen": "已完成，尚未查看",
     "untitledThread": "未命名",
+    "onComputer": "位于 {{name}} · {{kind}}",
     "noConversations": "暂无会话",
     "workspaceFallback": "工作区",
     "collapseAgents": "收起 Agent",
