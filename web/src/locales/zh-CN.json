@@ -3303,7 +3303,8 @@
       "search": "执行 {{count}} 次搜索",
       "fileRead": "读取 {{count}} 个文件",
       "fileEdit": "编辑 {{count}} 个文件",
-      "generic": "运行 {{count}} 个步骤"
+      "generic": "运行 {{count}} 个步骤",
+      "failed": "{{count}} 项失败"
     },
     "fileGroup": {
       "read": "读取 {{count}} 个文件",
