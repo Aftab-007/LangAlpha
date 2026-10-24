@@ -62,13 +62,19 @@ from ptc_agent.agent.middleware.compaction.between_turns import Ask, HandOff, as
 from ptc_agent.agent.middleware.compaction.types import CompactionState, OffloadSettings
 from ptc_agent.agent.middleware.compaction.compact import (
     Compaction,
-    Native,
     NativeAnswer,
+    Own,
     Summarizer,
+)
+from ptc_agent.agent.middleware.compaction.summarize import (
+    is_other_model,
+    summary_text,
 )
 from ptc_agent.agent.middleware.compaction.summary_request import (
     HANDOFF_SUMMARY_PROMPT,
     NATIVE_SUMMARY_PROMPT,
+    SELF_SUMMARY_PROMPT,
+    finished_summary,
 )
 from ptc_agent.agent.middleware.compaction.utils import (
     attachment_tokens,
@@ -121,7 +127,6 @@ logger = logging.getLogger(__name__)
 # the next pass rather than hold the turn.
 _COVERAGE_TIMEOUT_S = 5.0
 
-
 @contextmanager
 def _unstreamed() -> Iterator[None]:
     """Tag the model calls made inside ``nostream``. The model node calls the
@@ -150,6 +155,10 @@ def _user_texts(messages: Sequence[AnyMessage]) -> list[str]:
         elif human_kind(message) in ("plain", "steering"):
             texts.append(message.text)
     return texts
+
+
+def _last_ai(response: ModelResponse) -> AIMessage | None:
+    return next((m for m in reversed(response.result or ()) if isinstance(m, AIMessage)), None)
 
 
 def _reported_usage(response: ModelResponse) -> tuple[AIMessage, int, int] | None:
@@ -208,6 +217,7 @@ class CompactionMiddleware(AgentMiddleware):
         backend: SandboxBackend | None = None,
         workspace_id: str | None = None,
         native: bool = True,
+        self_summary: bool = True,
         receives: Callable[[Any], Callable[[Any], bool]] | None = None,
         page_tokens: Callable[[Any], int | None] | None = None,
     ) -> None:
@@ -225,6 +235,8 @@ class CompactionMiddleware(AgentMiddleware):
                 reach the transcript before anything points at it.
             native: Whether a provider that can compact the conversation
                 itself does.
+            self_summary: Whether the agent's model writes a summary from its
+                own request (see ``_writes_own``).
             receives: Which attachment blocks a call to a model is sent as
                 they are (``MultimodalStripMiddleware.receives``). The strip
                 sits inside this middleware and turns the rest into short
@@ -242,6 +254,7 @@ class CompactionMiddleware(AgentMiddleware):
         self._backend = backend
         self._workspace_id = workspace_id
         self._native = native
+        self._self_summary_on = self_summary
         self._receives = receives
         self._page_tokens = page_tokens
         # The notes folder this agent's summaries name; see with_scratchpad_notes.
@@ -277,6 +290,7 @@ class CompactionMiddleware(AgentMiddleware):
             backend=backend,
             workspace_id=workspace_id,
             native=settings.native and config.feature_enabled("provider_compaction"),
+            self_summary=settings.self_summary,
             receives=receives,
             page_tokens=page_tokens,
         )
@@ -358,16 +372,35 @@ class CompactionMiddleware(AgentMiddleware):
         view: list[AnyMessage],
         cutoff: int,
     ) -> Compaction:
-        """Summarize ``view`` before ``cutoff``, by the agent's provider where
-        it compacts the conversation itself."""
-        native: Native | None = None
-        kind = native_kind(request.model) if self._native else None
+        """Summarize ``view`` before ``cutoff``, first by the agent's own
+        model: its provider compacting the conversation where it can, else the
+        model writing the summary itself (see ``_writes_own``). A provider
+        that could compact but is told not to leaves it to the summarizer, as
+        the setting says."""
+        own: Own | None = None
+        kind = native_kind(request.model)
         # Claude reads its block only where the kept turns can follow it.
         cut = provider_cutoff(view, cutoff) if kind == "anthropic" else cutoff
-        if kind is not None and cut > 0:
+        if kind is not None and self._native and cut > 0:
             cutoff = cut
-            native = functools.partial(self._provider_summary, request, handler)
-        return await self._compact(request, view, cutoff, self._transcript_target(), native)
+            own = functools.partial(self._provider_summary, request, handler)
+        elif kind is None and self._writes_own(request):
+            own = functools.partial(self._self_summary, request, handler)
+        return await self._compact(request, view, cutoff, self._transcript_target(), own)
+
+    def _writes_own(self, request: ModelRequest) -> bool:
+        """Whether the agent's model writes the summary from its own request.
+
+        It reads the conversation from its provider's cache, with the system
+        prompt, tools and reasoning the transcript summarizer leaves out, and
+        the summarizer stays the fallback. Its request is about half again the
+        transcript's size, so on a cache gone cold it costs that much more;
+        that is taken for the warm case, the common one. A model picked for
+        compaction is the user's choice, and writes it instead.
+        """
+        return self._self_summary_on and not is_other_model(
+            self._summarizer.model, request.model
+        )
 
     async def _between_turns(
         self,
@@ -414,9 +447,7 @@ class CompactionMiddleware(AgentMiddleware):
                     tool_choice="none",
                 )
             )
-        message = next(
-            (m for m in reversed(response.result or ()) if isinstance(m, AIMessage)), None
-        )
+        message = _last_ai(response)
         _log_usage("hand-off", message)
         text = message.text.strip() if message is not None and not message.tool_calls else ""
         written = with_summary_text(head, text) if text else None
@@ -557,9 +588,9 @@ class CompactionMiddleware(AgentMiddleware):
         view: list[AnyMessage],
         cutoff: int,
         transcript: TranscriptTarget | None,
-        native: Native | None = None,
+        own: Own | None = None,
     ) -> Compaction:
-        """Summarize ``view`` before ``cutoff``, by ``native`` when given,
+        """Summarize ``view`` before ``cutoff``, by ``own`` when given,
         this agent's model being the fallback (see ``Summarizer.compact``).
 
         Start is outside the try, so a start that fails opened no window. A
@@ -583,7 +614,7 @@ class CompactionMiddleware(AgentMiddleware):
                 progress=lambda tokens: self._emit_context_signal(
                     "summary_progress", "progress", summary_tokens=tokens
                 ),
-                native=native,
+                own=own,
             )
         except BaseException as e:
             self._emit_context_signal("summarize", "error", error=str(e))
@@ -613,15 +644,43 @@ class CompactionMiddleware(AgentMiddleware):
             response = await handler(
                 request.override(messages=to_summarize, model_settings=settings)
             )
-        message = next(
-            (m for m in reversed(response.result or ()) if isinstance(m, AIMessage)), None
-        )
+        message = _last_ai(response)
         _log_usage("provider summary", message)
         answer = native_answer(message, _user_texts(to_summarize))
         if message is None or answer is None:
             stop = (message.response_metadata or {}).get("stop_reason") if message else None
             raise ValueError(f"no compaction (stop reason {stop})")
         return NativeAnswer(answer, (message.response_metadata or {}).get(ORIGIN_KEY))
+
+    @staticmethod
+    async def _self_summary(
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+        to_summarize: list[AnyMessage],
+    ) -> str:
+        """The agent's model writing the summary of ``to_summarize`` as text,
+        asked in the last user message of its own request.
+
+        Sent through ``handler`` with the turn's tools and settings unchanged,
+        so the request opens on the prefix the provider has cached; none may
+        be called. It goes to this model as sent: a fallback model would read
+        none of it from a cache, and the summarizer is the fallback here. It
+        stays out of the turn's message stream. A summary that stops before
+        its closing line was cut off, and counts as none.
+        """
+        with as_sent(), _unstreamed():
+            response = await handler(
+                request.override(messages=[*to_summarize, HumanMessage(SELF_SUMMARY_PROMPT)])
+            )
+        message = _last_ai(response)
+        _log_usage("self summary", message)
+        if message is None or message.tool_calls:
+            raise ValueError("no reply" if message is None else "called a tool")
+        text = finished_summary(summary_text(message))
+        if text is None:
+            stop = (message.response_metadata or {}).get("stop_reason")
+            raise ValueError(f"no closing line (stop reason {stop})")
+        return text
 
     @staticmethod
     def _stamp_summary(response: ModelResponse, compaction: Compaction) -> None:

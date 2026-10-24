@@ -98,9 +98,10 @@ class NativeAnswer(NamedTuple):
     origin: str | None
 
 
-#: The agent's provider summarizing the messages it is given itself, raising
-#: when it writes no summary.
-Native = Callable[[list[AnyMessage]], Awaitable[NativeAnswer]]
+#: The agent's own model summarizing the messages it is given, from its own
+#: request: its provider's compaction, or the summary it writes as text.
+#: Raises when it writes no summary.
+Own = Callable[[list[AnyMessage]], Awaitable[NativeAnswer | str]]
 
 
 @dataclass(frozen=True)
@@ -187,13 +188,13 @@ class Summarizer:
         notes_dir: str | None = None,
         window: Window,
         progress: Progress | None = None,
-        native: Native | None = None,
+        own: Own | None = None,
     ) -> Compaction:
         """Summarize ``view`` before ``cutoff``, ``messages`` being the
         agent's checkpoint list (what ``window`` trimmed of it aside), by
-        ``native`` when given (the agent's provider compacting the messages
-        itself), else from this model, then the next one (see ``_next``),
-        then the server (see ``summarize``).
+        ``own`` when given (the agent's own model, from its own request),
+        else from this model, then the next one (see ``_next``), then the
+        server (see ``summarize``).
 
         The transcript is saved first: the summary cites its turn files and
         ends pointing at it only if that save lands and ``workspace_id``'s
@@ -234,11 +235,9 @@ class Summarizer:
             window=window,
         )
         try:
-            # The provider gets the summary model's share, leaving the
+            # The agent's model gets the summary model's share, leaving the
             # summarizer a real call when it writes none.
-            summary = await _native_summary(
-                native, to_summarize, server, remaining * FIRST_SHARE
-            )
+            summary = await _own_summary(own, to_summarize, server, remaining * FIRST_SHARE)
             remaining = budget - (time.monotonic() - started)
             summary = summary or await awrite_summary(
                 model=self.model,
@@ -277,23 +276,25 @@ class Summarizer:
         return agent_model
 
 
-async def _native_summary(
-    native: Native | None,
+async def _own_summary(
+    own: Own | None,
     to_summarize: list[AnyMessage],
     server: Callable[..., Summary],
     budget: float,
 ) -> Summary | None:
-    """``native``'s summary within ``budget``, or None for the summarizer to
+    """``own``'s summary within ``budget``, or None for the summarizer to
     write one: only a cancellation escapes, as in ``awrite_summary``. An
     answer only its provider can read takes ``server``'s digest as its text."""
-    if native is None:
+    if own is None:
         return None
     try:
         async with asyncio.timeout(budget):
-            written = await native(to_summarize)
+            written = await own(to_summarize)
     except Exception as e:
-        logger.warning("[Compaction] provider compaction failed (%s: %s)", type(e).__name__, e)
+        logger.warning("[Compaction] own model's summary failed (%s: %s)", type(e).__name__, e)
         return None
+    if isinstance(written, str):
+        return Summary(written, "self", to_summarize)
     text = readable_text(written.answer)
     if text is not None:
         covered = to_summarize

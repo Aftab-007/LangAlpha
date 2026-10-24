@@ -86,6 +86,11 @@ class CompactionConfig(BaseModel):
     #: feature gates it when the middleware is built.
     native: bool = True
 
+    #: Whether a model whose provider does not compact the conversation
+    #: writes its own summary, from its cached request, with the transcript
+    #: summarizer as the fallback (see ``CompactionMiddleware._writes_own``).
+    self_summary: bool = True
+
 
 # Named presets that bundle the two user-facing compaction knobs
 # (token_threshold, keep_messages). Applied at request time in
