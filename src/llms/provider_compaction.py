@@ -276,6 +276,17 @@ def adopt(
     return adopted if changed else None
 
 
+def replays(message: AnyMessage, model: Any) -> bool:
+    """Whether ``model`` is sent the provider's answer ``message`` carries,
+    rather than its text (see :func:`adopt`)."""
+    kind = native_kind(model)
+    if kind is None:
+        return False
+    route = (getattr(model, "metadata", None) or {}).get("provider_route")
+    route = route if isinstance(route, str) and route else None
+    return _native(message, _native_lineage(route), kind) is not None
+
+
 def _native(message: AnyMessage, lineage: str, kind: NativeKind) -> list[AnyMessage] | None:
     carried = _carried(message)
     if carried is None:

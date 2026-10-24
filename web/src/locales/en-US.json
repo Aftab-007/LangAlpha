@@ -1863,6 +1863,7 @@
       "pickFailed": "Couldn't change this thread's model",
       "retired": "{{model}} is no longer available. This thread now uses {{fallback}}.",
       "offer": "This thread uses {{model}}. New threads start on {{defaultModel}}.",
+      "handoff": "OpenAI compacted part of this thread into a summary only its models can read. The previous model is writing it out for {{model}}, so your next message may take a little longer to start.",
       "makeDefault": "Make {{model}} my default"
     },
     "backgroundTasksRunning": "Background tasks are still running",
@@ -2120,6 +2121,10 @@
     "compacting": "Compacting conversation...",
     "compactingTokens": "{{value}} tokens written",
     "offloading": "Offloading context...",
+    "turnHeld": {
+      "handoff": "Waiting for the previous model to write out its summary...",
+      "other": "Waiting for the current operation on this conversation to finish..."
+    },
     "compactionStopped": "Compaction stopped",
     "queuedSend": "Message queued — sends when compaction finishes",
     "automationWaiting": "{{name}} is due. It runs when this turn ends.",

@@ -1858,6 +1858,7 @@
       "pickFailed": "无法更改此对话的模型",
       "retired": "{{model}} 已不再可用，此对话现在使用 {{fallback}}。",
       "offer": "此对话使用 {{model}}，新对话默认使用 {{defaultModel}}。",
+      "handoff": "OpenAI 已将此对话的一部分压缩成只有其模型能读取的摘要。之前的模型正在为 {{model}} 把它写成文字，下一条消息可能要稍等片刻才会开始。",
       "makeDefault": "将 {{model}} 设为默认"
     },
     "backgroundTasksRunning": "后台任务仍在运行",
@@ -2113,6 +2114,10 @@
     "compacting": "正在压缩对话...",
     "compactingTokens": "已生成 {{value}} tokens",
     "offloading": "正在转存上下文...",
+    "turnHeld": {
+      "handoff": "正在等待上一个模型写出摘要...",
+      "other": "正在等待此对话上的当前操作完成..."
+    },
     "compactionStopped": "压缩已停止",
     "queuedSend": "消息已排队 — 压缩完成后将自动发送",
     "automationWaiting": "“{{name}}”已到运行时间，将在本轮结束后运行。",

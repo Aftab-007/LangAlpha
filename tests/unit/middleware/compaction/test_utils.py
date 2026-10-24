@@ -846,3 +846,69 @@ class TestAttachmentEstimates:
         assert utils.context_tokens(state, view, counter) == 1_050 + 10 + 4 * utils.PDF_PAGE_TOKENS
         # Unmeasured, the whole view is estimated, attachments included.
         assert utils.context_tokens({}, view, counter) == 30 + 4 * utils.PDF_PAGE_TOKENS
+
+
+class TestWithSummaryText:
+    """A summary only its provider can read, written out as text by its model
+    for a model of another provider (the hand-off at a model switch)."""
+
+    NOTES = "\n\nYour notes are in .agents/scratchpad/abc/note/."
+
+    def _opaque(self) -> HumanMessage:
+        from ptc_agent.agent.middleware.compaction.utils import build_summary_message
+
+        return build_summary_message(
+            "a digest",
+            None,
+            original_message_count=12,
+            source="provider",
+            skills=["dcf-model"],
+            notes=self.NOTES,
+            native={"items": [{"type": "compaction", "encrypted_content": "opaque"}]},
+            origin="openai",
+        )
+
+    def test_the_text_replaces_the_summary_and_the_note_stays_after_it(self):
+        from ptc_agent.agent.middleware.compaction.types import CONTEXT_SUMMARY_PREFIX
+        from ptc_agent.agent.middleware.compaction.utils import (
+            parse_summary_message,
+            with_summary_text,
+        )
+
+        opaque = self._opaque()
+        after = opaque.content[len(CONTEXT_SUMMARY_PREFIX) + len("a digest") :]
+
+        written = with_summary_text(opaque, "Goal: chart AAPL.")
+
+        assert written.content == f"{CONTEXT_SUMMARY_PREFIX}Goal: chart AAPL.{after}"
+        assert "dcf-model" in after and after.endswith(self.NOTES)
+        assert parse_summary_message(written) == "Goal: chart AAPL."
+
+    def test_it_is_the_same_summary_handed_off(self):
+        """The id is kept, so the marker that names the summary still finds
+        it; the provider is sent its sidecar, which stays as it was."""
+        from ptc_agent.agent.middleware.compaction.utils import handed_off, with_summary_text
+        from src.llms.provider_compaction import SIDECAR_KEY
+
+        opaque = self._opaque()
+
+        written = with_summary_text(opaque, "Goal: chart AAPL.")
+
+        assert written.id == opaque.id
+        assert written.additional_kwargs[SIDECAR_KEY] == opaque.additional_kwargs[SIDECAR_KEY]
+        assert written.additional_kwargs["lc_source"] == "summarization"
+        assert written.additional_kwargs["summarize_complete"] == {
+            "summary_length": len("Goal: chart AAPL."),
+            "original_message_count": 12,
+            "source": "provider",
+            "handed_off": True,
+        }
+        assert handed_off(written)
+        assert not handed_off(opaque)
+        assert opaque.content.startswith("[Context Summary]")
+        assert "Goal" not in opaque.content
+
+    def test_a_message_not_built_as_a_summary_is_none(self):
+        from ptc_agent.agent.middleware.compaction.utils import with_summary_text
+
+        assert with_summary_text(HumanMessage("plain"), "text") is None

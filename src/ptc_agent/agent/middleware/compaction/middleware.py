@@ -10,7 +10,8 @@ on the one before.
   transcript file that keeps them and stale Read results are hidden.
 - Tier 2: when the context reaches its threshold, or the model refuses it
   as too long, the start of the view is summarized (see ``compact``), and
-  the attachments in what it keeps are taken out until it fits.
+  the attachments in what it keeps are taken out until it fits; and between
+  turns when the user asks (see ``between_turns``).
 - The window: on the main agent, at each pass through ``before_agent``, the
   runs a summary stands in for are trimmed from the checkpoint once the
   server holds them (see ``window``).
@@ -49,6 +50,7 @@ from langchain.agents.middleware.types import (
 from src.llms.error_classification import is_context_overflow
 from src.llms.provider_compaction import (
     compaction_settings,
+    is_opaque,
     kept_user_texts,
     native_answer,
     native_kind,
@@ -56,6 +58,7 @@ from src.llms.provider_compaction import (
 from src.llms.token_counter import extract_token_usage
 
 from ptc_agent.agent.state import ensure_message_ids
+from ptc_agent.agent.middleware.compaction.between_turns import Ask, HandOff, asked
 from ptc_agent.agent.middleware.compaction.types import CompactionState, OffloadSettings
 from ptc_agent.agent.middleware.compaction.compact import (
     Compaction,
@@ -63,18 +66,23 @@ from ptc_agent.agent.middleware.compaction.compact import (
     NativeAnswer,
     Summarizer,
 )
-from ptc_agent.agent.middleware.compaction.summary_request import NATIVE_SUMMARY_PROMPT
+from ptc_agent.agent.middleware.compaction.summary_request import (
+    HANDOFF_SUMMARY_PROMPT,
+    NATIVE_SUMMARY_PROMPT,
+)
 from ptc_agent.agent.middleware.compaction.utils import (
     attachment_tokens,
     context_tokens,
     find_group_safe_cutoff,
     get_effective_messages,
+    handed_off,
     pdf_pages,
     provider_cutoff,
     read_ahead,
     stamp_compaction_summary,
     stamp_context_threshold,
     target_cost,
+    with_summary_text,
 )
 from ptc_agent.agent.middleware.compaction.offloading import (
     is_idle,
@@ -91,6 +99,7 @@ from ptc_agent.agent.middleware.compaction.window import (
     trim,
     window_cut,
 )
+from ptc_agent.agent.middleware.model_resilience import as_sent
 from ptc_agent.agent.middleware.reasoning_compat import ORIGIN_KEY
 from ptc_agent.agent.transcript import TranscriptTarget, Window
 from ptc_agent.agent.transcript.classify import human_kind, is_summary_message
@@ -154,6 +163,19 @@ def _reported_usage(response: ModelResponse) -> tuple[AIMessage, int, int] | Non
         if input_tokens > 0:
             return msg, input_tokens, usage.get("output_tokens", 0)
     return None
+
+
+def _log_usage(call: str, message: AIMessage | None) -> None:
+    """Log what a call the turn's stream never shows read from the cache."""
+    usage = (message.usage_metadata if message is not None else None) or {}
+    details = usage.get("input_token_details") or {}
+    logger.info(
+        "[Compaction] %s: %s in, %s cached, %s out",
+        call,
+        usage.get("input_tokens"),
+        details.get("cache_read"),
+        usage.get("output_tokens"),
+    )
 
 
 def _summary_fields(compaction: Compaction) -> dict[str, Any]:
@@ -271,10 +293,17 @@ class CompactionMiddleware(AgentMiddleware):
     ) -> ModelResponse | ExtendedModelResponse:
         """Send the model the view, summarizing its start first once the
         context reaches the threshold, or when the model refuses the view as
-        too long, and taking attachments out of what is kept until it fits."""
+        too long, and taking attachments out of what is kept until it fits.
+        A call made between turns (``between_turns``) is answered with what
+        it asks instead."""
         ensure_message_ids(request.messages)
         view = await self.view(request.messages, request.state)
         await read_ahead(view)
+        between = asked()
+        if between is not None:
+            between.answer = await self._between_turns(request, handler, view, between.ask)
+            between.answered = True
+            return ModelResponse(result=[])
 
         system = [request.system_message] if request.system_message is not None else []
         cost = target_cost(
@@ -310,14 +339,7 @@ class CompactionMiddleware(AgentMiddleware):
                 response, self._removal(request.state, removed), spared=spared
             )
 
-        native: Native | None = None
-        kind = native_kind(request.model) if self._native else None
-        # Claude reads its block only where the kept turns can follow it.
-        cut = provider_cutoff(view, cutoff) if kind == "anthropic" else cutoff
-        if kind is not None and cut > 0:
-            cutoff = cut
-            native = functools.partial(self._provider_summary, request, handler)
-        compaction = await self._compact(request, view, cutoff, self._transcript_target(), native)
+        compaction = await self._summarize(request, handler, view, cutoff)
         # A refusal of the view says nothing of what the summary made room
         # for, so its messages are fitted by estimate like any others.
         response, removed, spared = await self._send_fitted(
@@ -328,6 +350,79 @@ class CompactionMiddleware(AgentMiddleware):
         return self._answered(
             response, {**update, **self._removal(update, removed)}, spared=spared
         )
+
+    async def _summarize(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+        view: list[AnyMessage],
+        cutoff: int,
+    ) -> Compaction:
+        """Summarize ``view`` before ``cutoff``, by the agent's provider where
+        it compacts the conversation itself."""
+        native: Native | None = None
+        kind = native_kind(request.model) if self._native else None
+        # Claude reads its block only where the kept turns can follow it.
+        cut = provider_cutoff(view, cutoff) if kind == "anthropic" else cutoff
+        if kind is not None and cut > 0:
+            cutoff = cut
+            native = functools.partial(self._provider_summary, request, handler)
+        return await self._compact(request, view, cutoff, self._transcript_target(), native)
+
+    async def _between_turns(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+        view: list[AnyMessage],
+        ask: Ask,
+    ) -> Compaction | HumanMessage | None:
+        """What a call between turns asks for (see ``between_turns``)."""
+        if isinstance(ask, HandOff):
+            return await self._hand_off(request, handler, view)
+        if len(view) <= ask.keep_messages:
+            raise ValueError(
+                f"Not enough messages to compact. Have {len(view)}, "
+                f"need more than {ask.keep_messages} to preserve."
+            )
+        cutoff = find_group_safe_cutoff(view, len(view) - ask.keep_messages)
+        if cutoff <= 0:
+            raise ValueError("Cannot determine valid cutoff point for compaction")
+        return await self._summarize(request, handler, view, cutoff)
+
+    @staticmethod
+    async def _hand_off(
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+        view: list[AnyMessage],
+    ) -> HumanMessage | None:
+        """The view's opening summary written out by the agent's model, when
+        it is one only that model's provider can read, else None.
+
+        The summary goes out as the provider's own answer (``adopt``, inside
+        ``handler``), from the provider's cache, and the model writes it out
+        as text. Tools stay bound so the prefix is the one the cache holds;
+        none may be called. Only this model reading that answer can write it,
+        so a failure is never moved to a fallback model or retried without it.
+        """
+        head = view[0] if view and is_summary_message(view[0]) else None
+        if not isinstance(head, HumanMessage) or not is_opaque(head) or handed_off(head):
+            return None
+        with as_sent():
+            response = await handler(
+                request.override(
+                    messages=[head, HumanMessage(HANDOFF_SUMMARY_PROMPT)],
+                    tool_choice="none",
+                )
+            )
+        message = next(
+            (m for m in reversed(response.result or ()) if isinstance(m, AIMessage)), None
+        )
+        _log_usage("hand-off", message)
+        text = message.text.strip() if message is not None and not message.tool_calls else ""
+        written = with_summary_text(head, text) if text else None
+        if written is None:
+            raise ValueError("the model wrote no hand-off summary")
+        return written
 
     async def _send_fitted(
         self,
@@ -521,6 +616,7 @@ class CompactionMiddleware(AgentMiddleware):
         message = next(
             (m for m in reversed(response.result or ()) if isinstance(m, AIMessage)), None
         )
+        _log_usage("provider summary", message)
         answer = native_answer(message, _user_texts(to_summarize))
         if message is None or answer is None:
             stop = (message.response_metadata or {}).get("stop_reason") if message else None
