@@ -1127,6 +1127,41 @@ def summary_source(message: Any) -> str | None:
     return stamp.get("source") if isinstance(stamp, dict) else None
 
 
+def handed_off(message: Any) -> bool:
+    """Whether a summary only its provider can read has been written out as
+    text by its model, so its text is a summary rather than a digest."""
+    stamp = (getattr(message, "additional_kwargs", None) or {}).get("summarize_complete")
+    return isinstance(stamp, dict) and stamp.get("handed_off") is True
+
+
+def with_summary_text(message: HumanMessage, text: str) -> HumanMessage | None:
+    """``message``, a summary message, with ``text`` in place of its summary
+    and everything after it (the transcript pointer, the notes) kept; None for
+    a message not built by ``build_summary_message``.
+
+    The id is kept, so the marker that names the summary still finds it. What
+    the provider is sent in its place is the sidecar, which stays as it was.
+    """
+    content = message.content if isinstance(message.content, str) else ""
+    if not content.startswith(CONTEXT_SUMMARY_PREFIX):
+        return None
+    after = content[len(CONTEXT_SUMMARY_PREFIX) + len(parse_summary_message(message)) :]
+    stamp = message.additional_kwargs.get("summarize_complete") or {}
+    return message.model_copy(
+        update={
+            "content": f"{CONTEXT_SUMMARY_PREFIX}{text}{after}",
+            "additional_kwargs": {
+                **message.additional_kwargs,
+                "summarize_complete": {
+                    **stamp,
+                    "summary_length": len(text),
+                    "handed_off": True,
+                },
+            },
+        }
+    )
+
+
 def parse_summary_message(message: HumanMessage) -> str:
     """Recover the raw summary text from a ``build_summary_message`` message."""
     content = message.content if isinstance(message.content, str) else ""

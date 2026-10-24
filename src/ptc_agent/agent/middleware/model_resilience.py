@@ -22,6 +22,9 @@ import asyncio
 import math
 import random
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -54,6 +57,21 @@ logger = structlog.get_logger(__name__)
 RESILIENCE_TRACE_ATTR = "__model_resilience__"
 
 _ERROR_SUMMARY_MAX_CHARS = 300
+
+_as_sent: ContextVar[bool] = ContextVar("model_resilience_as_sent", default=False)
+
+
+@contextmanager
+def as_sent() -> Iterator[None]:
+    """Model calls made inside go to the primary as sent, retried but never
+    moved to a fallback or stripped of reasoning: for an answer only that
+    model reading that request can give, such as a summary of what only its
+    provider can read."""
+    token = _as_sent.set(True)
+    try:
+        yield
+    finally:
+        _as_sent.reset(token)
 
 
 def _last_message_id(request: ModelRequest) -> str | None:
@@ -375,7 +393,7 @@ class ModelResilienceMiddleware(AgentMiddleware):
         # A compaction request asks the primary's provider for its own
         # summary; another model would answer it as a turn, and the caller
         # has a summarizer of its own to fall back to.
-        if is_compaction_request(request.model_settings):
+        if is_compaction_request(request.model_settings) or _as_sent.get():
             return [primary]
         if self.primary_client is None or request.model is self.primary_client:
             target = self.primary_name
@@ -451,7 +469,12 @@ class ModelResilienceMiddleware(AgentMiddleware):
             retryable = False
         if retryable and attempts <= self.max_retries:
             return status, _Recovery(delay=self._calculate_delay(attempts - 1))
-        if not escalated and status == 400 and not is_mid_stream_error(exc):
+        if (
+            not escalated
+            and status == 400
+            and not is_mid_stream_error(exc)
+            and not _as_sent.get()
+        ):
             stripped = self._escalate_reasoning(req)
             if stripped is not None:
                 return status, _Recovery(request=stripped)
