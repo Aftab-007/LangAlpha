@@ -24,6 +24,7 @@ from .model_spec import (
 )
 from .preferences import compaction_profile_for
 from .pricing_utils import get_price_tier
+from .provider_compaction import native_compaction_kind
 from .reasoning import apply_reasoning_effort
 from .reasoning_lineage import ROUTE_ENDPOINT_SEP
 from .task_costs import task_cost
@@ -259,6 +260,12 @@ class ModelConfig:
             profile = self.get_compaction_profile(model_name)
             if profile:
                 entry["compaction_profile"] = profile
+            # Whose compaction the model takes, so the settings offer the
+            # choice only where it does something and name that provider's
+            # trade-off. Absent means its provider cannot compact for it.
+            native = native_compaction_kind(model_info, provider_info)
+            if native:
+                entry["native_compaction"] = native
             # Cost tier (1-5) derived live from canonical providers.json pricing —
             # not stored in models.json, so it auto-syncs when prices change.
             price_tier = get_price_tier(model_info.get("model_id", model_name), provider)

@@ -83,8 +83,13 @@ beforeEach(() => {
   });
 });
 
+// Both fetches: until the sizes land, the next size up is assumed to have
+// more disk, so a banner judged on the quota alone can offer a change.
 async function settled() {
-  await waitFor(() => expect(mockQuota).toHaveBeenCalled());
+  await waitFor(() => {
+    expect(mockQuota).toHaveBeenCalled();
+    expect(mockProviders).toHaveBeenCalled();
+  });
   await act(async () => {});
 }
 

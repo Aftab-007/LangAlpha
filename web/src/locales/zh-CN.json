@@ -384,8 +384,13 @@
       "deep": "深度"
     },
     "compactionProfile": "压缩预设",
-    "compactionProfileDesc": "用于控制压缩触发与保留的预设组合。保持系统默认时，每个模型会自动匹配与其上下文窗口相称的预设。",
+    "compactionProfileDesc": "用于控制压缩触发与保留的预设组合。保持系统默认时，每个模型使用各自的预设：Claude 和 GPT 为 500k，其他模型按其上下文窗口匹配。",
     "compactionProfileUseDefault": "使用系统默认",
+    "nativeCompaction": "服务商压缩",
+    "nativeCompactionOn": "开启",
+    "nativeCompactionOff": "关闭",
+    "nativeCompactionAnthropicDesc": "压缩时由 Claude 自己总结对话，因此它在保留下来的轮次里仍能保留自己的推理过程。这份摘要可以直接阅读，切换到其他模型后，新模型读取的也是它。",
+    "nativeCompactionOpenAIDesc": "OpenAI 会把对话压缩成一份加密摘要，只有 OpenAI 的模型能读取，无论通过 API 还是 ChatGPT 登录。压缩卡片显示的是对话的简要记录，而不是摘要。若把这个对话切换到其他服务商的模型，它拿到的是这份记录而不是摘要，会丢失早先工具结果中的细节。",
     "compactionProfilePreset": "{{tokens}}k tokens · 保留 {{keep}} 条",
     "compactionProfiles": {
       "aggressive": {
@@ -398,11 +403,27 @@
       },
       "extended": {
         "label": "扩展",
-        "description": "保留更多上下文。适合 400k–1M 上下文模型。"
+        "description": "保留更多上下文。适合 400k 上下文模型。"
+      },
+      "economy": {
+        "label": "经济",
+        "description": "控制在 272k 以内，超过后 OpenAI 会按长上下文价格计费整个请求。"
       },
       "relaxed": {
         "label": "宽松",
-        "description": "最大化上下文。适合 1M 上下文模型。"
+        "description": "在 1M 上下文模型上留出更多空间再压缩。"
+      },
+      "spacious": {
+        "label": "充裕",
+        "description": "适合在 1M 上下文模型上进行长时间会话。"
+      },
+      "expansive": {
+        "label": "广阔",
+        "description": "用到 1M 窗口的一半才压缩。线程越长，每次调用成本越高。"
+      },
+      "maximal": {
+        "label": "最大",
+        "description": "占用 1M 窗口的大部分。每次调用成本最高；仅适合 1M 上下文模型。"
       }
     },
     "modelTuning": {
