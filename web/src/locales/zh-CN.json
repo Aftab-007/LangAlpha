@@ -1276,8 +1276,6 @@
     "copyNameTaken": "名为“{{name}}”的工作区刚刚被创建，请重试。",
     "folderMoving": "该工作区的文件夹正在移动，请稍后再重命名。",
     "changeSpec": "更改规格",
-    "quotaRemaining": "剩余 {{remaining}}/{{limit}}",
-    "quotaUnlimited": "无限制",
     "quotaNotOnPlan": "当前套餐不可用",
     "quotaNoneLeft": "已用完",
     "quotaUsedUp": "已达套餐上限",
@@ -1417,6 +1415,11 @@
       "sshDesc": "任何 Linux 服务器或 Mac",
       "sshLabel": "你的机器 (SSH)",
       "capReached": "已达上限"
+    },
+    "largerSlot": {
+      "open_other": "你的套餐可使用 {{count}} 台比{{small}}更大的计算机。",
+      "partly_other": "你的套餐可使用 {{count}} 台比{{small}}更大的计算机，还剩 {{remaining}} 台。",
+      "inUse_other": "你的套餐中比{{small}}更大的计算机名额已用完。"
     },
     "newComputer": "新建计算机",
     "create": "创建计算机",

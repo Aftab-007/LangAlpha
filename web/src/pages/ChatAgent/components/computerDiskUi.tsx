@@ -63,8 +63,9 @@ export function largerDiskTiers(tier: ResourceTier, offer: TierOffer): ResourceT
 
 /**
  * The size a low disk points to: the smallest with more disk that the plan
- * allows, so a Pro plan on Small is sent to Large past the Medium it lacks.
- * Null when the provider runs none or the plan allows none.
+ * allows. Null when the provider runs none or the plan allows none. For a
+ * computer already bigger than Small, pass the quota through
+ * `quotaForSpecChange`, or the slot it holds reads as taken.
  */
 export function diskUpgradeTier(
   tier: ResourceTier,

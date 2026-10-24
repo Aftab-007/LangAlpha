@@ -1278,8 +1278,6 @@
     "copyNameTaken": "A workspace named \"{{name}}\" was created at the same moment. Try again.",
     "folderMoving": "This workspace's folder is being moved. Try renaming it again in a moment.",
     "changeSpec": "Change spec",
-    "quotaRemaining": "{{remaining}} of {{limit}} left",
-    "quotaUnlimited": "Unlimited",
     "quotaNotOnPlan": "Not on your plan",
     "quotaNoneLeft": "None left",
     "quotaUsedUp": "Plan limit reached",
@@ -1419,6 +1417,14 @@
       "sshDesc": "Any Linux server or Mac",
       "sshLabel": "Your machine (SSH)",
       "capReached": "Limit reached"
+    },
+    "largerSlot": {
+      "open_one": "Your plan includes {{count}} computer larger than {{small}}.",
+      "open_other": "Your plan includes {{count}} computers larger than {{small}}.",
+      "partly_one": "Your plan includes {{count}} computer larger than {{small}}, {{remaining}} left.",
+      "partly_other": "Your plan includes {{count}} computers larger than {{small}}, {{remaining}} left.",
+      "inUse_one": "Your plan's computer larger than {{small}} is in use.",
+      "inUse_other": "Your plan's {{count}} computers larger than {{small}} are in use."
     },
     "newComputer": "New computer",
     "create": "Create computer",
