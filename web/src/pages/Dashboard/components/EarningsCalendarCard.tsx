@@ -1,8 +1,10 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { ChevronRight, X, Calendar } from 'lucide-react';
 import { motion, AnimatePresence } from '@/lib/framer';
+import { TWEEN } from '@/lib/motion';
+import { SwapCell } from '@/components/ui/crossfade';
 import { useBackdropDismiss } from '@/hooks/useDialogA11y';
 import { useLocale } from '@/hooks/useLocale';
 import { useNow } from '@/hooks/useNow';
@@ -160,6 +162,13 @@ function EarningsModal({ earnings, onClose }: EarningsModalProps) {
   }, [dateGroups, todayStr]);
 
   const [activeDate, setActiveDate] = useState(defaultDate);
+  const itemsRef = useRef<HTMLDivElement>(null);
+  // The dates dissolve in one cell at the same scroll offset, so the next one
+  // opens at its top rather than out of view below a short list.
+  const selectDate = (date: string) => {
+    if (date !== activeDate) itemsRef.current?.scrollTo({ top: 0 });
+    setActiveDate(date);
+  };
 
   const activeItems = useMemo(
     () => dateGroups.find((g) => g.date === activeDate)?.items || [],
@@ -186,7 +195,8 @@ function EarningsModal({ earnings, onClose }: EarningsModalProps) {
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20, transition: TWEEN.exit }}
+        transition={TWEEN.enter}
         className="w-full max-w-4xl max-h-[80vh] rounded-3xl overflow-hidden shadow-2xl flex flex-col relative border"
         style={{
           backgroundColor: 'var(--color-bg-elevated)',
@@ -224,7 +234,7 @@ function EarningsModal({ earnings, onClose }: EarningsModalProps) {
             return (
               <button
                 key={group.date}
-                onClick={() => setActiveDate(group.date)}
+                onClick={() => selectDate(group.date)}
                 className="flex flex-col items-center px-4 py-2 rounded-xl text-xs font-medium transition-all shrink-0 min-w-[72px] border"
                 style={{
                   backgroundColor: isActive
@@ -258,29 +268,25 @@ function EarningsModal({ earnings, onClose }: EarningsModalProps) {
         {/* Divider */}
         <div className="mx-6 border-b shrink-0" style={{ borderColor: 'var(--color-border-muted)' }} />
 
-        {/* Items grid */}
-        <div className="overflow-y-auto flex-1 p-6">
-          <AnimatePresence mode="wait">
+        {/* Items grid. A change of date dissolves in one grid cell, so the
+            list is never replaced through an empty frame. */}
+        <div ref={itemsRef} className="overflow-y-auto flex-1 p-6">
+          <SwapCell
+            as="div"
+            className="items-start"
+            appear
+            shift={{ y: 8 }}
+            swapKey={activeItems.length === 0 ? 'empty' : activeDate}
+          >
             {activeItems.length === 0 ? (
-              <motion.p
-                key="empty"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+              <p
                 className="text-sm py-8 text-center"
                 style={{ color: 'var(--color-text-secondary)' }}
               >
                 {t('dashboard.earningsCalendarCard.emptyOnDate')}
-              </motion.p>
+              </p>
             ) : (
-              <motion.div
-                key={activeDate}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"
-              >
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {activeItems.map((item, i) => (
                   <div
                     key={item.symbol + item.date + i}
@@ -316,9 +322,9 @@ function EarningsModal({ earnings, onClose }: EarningsModalProps) {
                     </div>
                   </div>
                 ))}
-              </motion.div>
+              </div>
             )}
-          </AnimatePresence>
+          </SwapCell>
         </div>
       </motion.div>
     </motion.div>

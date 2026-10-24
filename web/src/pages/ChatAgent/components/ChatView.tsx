@@ -74,6 +74,7 @@ import { useTrayContents } from './chatView/useTrayContents';
 import { useTrayFold } from './chatView/useTrayFold';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { motion, AnimatePresence, type PanInfo } from '@/lib/framer';
+import { TWEEN } from '@/lib/motion';
 import { MobileBottomSheet } from '@/components/ui/mobile-bottom-sheet';
 
 
@@ -1865,7 +1866,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
             key="file"
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
-            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            transition={TWEEN.enter}
             // A chart pans with the same rightward swipe, so a chart tab closes by its button.
             drag={activeTabKind === 'chart' ? false : 'x'}
             dragConstraints={{ left: 0, right: 0 }}
@@ -1935,10 +1936,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
               ref={panelWrapperRef}
               initial={{ width: 0, opacity: 0 }}
               animate={{ width: rightPanelWidth, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
+              exit={{ width: 0, opacity: 0, transition: TWEEN.exit }}
               transition={(isDragging || dragJustEnded)
                 ? { duration: 0 }
-                : { duration: 0.25, ease: [0.22, 1, 0.36, 1] }
+                : TWEEN.fold
               }
               className="flex shrink-0 overflow-hidden"
             >

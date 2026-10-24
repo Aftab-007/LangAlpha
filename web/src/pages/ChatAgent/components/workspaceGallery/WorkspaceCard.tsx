@@ -150,7 +150,7 @@ export function WorkspaceCard({
   return (
     <div
       className={`relative group h-full${rises && !lifted ? ' enter-fade-up' : ''}`}
-      style={rises && !lifted ? { animationDelay: `${Math.min(index ?? 0, 12) * 40}ms` } : undefined}
+      style={rises && !lifted ? { animationDelay: `calc(var(--motion-stagger) * ${Math.min(index ?? 0, 5)})` } : undefined}
       data-testid={lifted ? 'workspace-card-lifted' : 'workspace-card'}
       data-drag-state={state === 'resting' ? undefined : state}
       onMouseEnter={!isMobile ? () => prefetchThreads?.(workspace.workspace_id) : undefined}
@@ -171,7 +171,7 @@ export function WorkspaceCard({
             'relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-xl py-3.5 pl-[18px] pr-4 md:px-5 md:py-4',
             lifted
               ? 'cursor-grabbing scale-[1.02] shadow-xl'
-              : 'cursor-pointer transition-transform duration-150 motion-safe:active:scale-[0.985]',
+              : 'cursor-pointer press',
             // A held finger lifts the card, so it must not also select its text
             // or raise the system's callout.
             handle ? 'touch-manipulation select-none [-webkit-touch-callout:none]' : '',
@@ -202,7 +202,7 @@ export function WorkspaceCard({
               // Under a mouse the menu takes this corner on hover, so the time
               // steps aside rather than sitting under it.
               <span
-                className={`shrink-0 pt-0.5 text-xs whitespace-nowrap transition-opacity duration-150${state === 'resting' ? ' pointer-fine:group-hover:opacity-0 pointer-fine:group-focus-within:opacity-0' : ''}`}
+                className={`shrink-0 pt-0.5 text-xs whitespace-nowrap transition-opacity duration-quick${state === 'resting' ? ' pointer-fine:group-hover:opacity-0 pointer-fine:group-focus-within:opacity-0' : ''}`}
                 style={{ color: 'var(--color-text-tertiary)' }}
               >
                 {when}

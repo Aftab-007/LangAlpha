@@ -130,7 +130,7 @@ export function ChiefOfStaffCard({ workspace, now, entrance = true, onOpenThread
               type="button"
               data-testid="chief-of-staff-new-thread"
               onClick={() => newThread()}
-              className="flex h-8 items-center gap-1.5 rounded-lg px-3.5 text-sm font-medium transition-all hover:opacity-90 active:scale-[0.985]"
+              className="flex h-8 items-center gap-1.5 rounded-lg px-3.5 text-sm font-medium press hover:opacity-90"
               style={{ backgroundColor: 'var(--color-btn-primary-bg)', color: 'var(--color-btn-primary-text)' }}
             >
               <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -146,7 +146,7 @@ export function ChiefOfStaffCard({ workspace, now, entrance = true, onOpenThread
                 className="group flex items-center gap-1 text-sm text-(--color-text-secondary) transition-colors hover:text-(--color-text-primary)"
               >
                 {t('workspace.cosAllThreads')}
-                <ChevronRight className="h-3.5 w-3.5 transition-transform duration-150 motion-safe:group-hover:translate-x-0.5" aria-hidden="true" />
+                <ChevronRight className="h-3.5 w-3.5 transition-transform duration-quick motion-safe:group-hover:translate-x-0.5" aria-hidden="true" />
               </button>
             )}
           </div>
@@ -170,7 +170,7 @@ export function ChiefOfStaffCard({ workspace, now, entrance = true, onOpenThread
                       {/* A question cut short says nothing, so it wraps where a title truncates. */}
                       <span className="min-w-0 flex-1 py-2 leading-snug">{t(key)}</span>
                       <ArrowUpRight
-                        className="h-3.5 w-3.5 shrink-0 transition-transform duration-150 motion-safe:group-hover:-translate-y-px motion-safe:group-hover:translate-x-px"
+                        className="h-3.5 w-3.5 shrink-0 transition-transform duration-quick motion-safe:group-hover:-translate-y-px motion-safe:group-hover:translate-x-px"
                         style={{ color: 'var(--color-text-tertiary)' }}
                         aria-hidden="true"
                       />
