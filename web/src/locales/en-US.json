@@ -1787,6 +1787,20 @@
       "manageSubagents": "Manage subagents"
     },
     "moreTools": "More tools",
+    "composer": {
+      "remove": "Remove",
+      "attachFile": "Attach file",
+      "attachChart": "Attach chart screenshot",
+      "captureChart": "Capture chart",
+      "chartAlt": "Chart",
+      "send": "Send message",
+      "dropFiles": "Drop files to upload",
+      "uploading": "Uploading"
+    },
+    "mention": {
+      "noMatching": "No matching files",
+      "noFiles": "No files available"
+    },
     "widgetContext": {
       "inContext_one": "{{count}} in context",
       "inContext_other": "{{count}} in context",
@@ -2220,7 +2234,9 @@
       "speed": "Speed",
       "speedStandard": "Standard",
       "speedFast": "Fast",
-      "speedFastHint": "2× credit usage, priority service tier"
+      "speedFastHint": "2× credit usage, priority service tier",
+      "select": "Select model",
+      "fallbackName": "Model"
     },
     "voice": {
       "start": "Start voice input",

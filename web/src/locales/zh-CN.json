@@ -1781,6 +1781,20 @@
       "manageSubagents": "管理子 Agent"
     },
     "moreTools": "更多工具",
+    "composer": {
+      "remove": "移除",
+      "attachFile": "添加附件",
+      "attachChart": "附加图表截图",
+      "captureChart": "截取图表",
+      "chartAlt": "图表",
+      "send": "发送消息",
+      "dropFiles": "拖放文件以上传",
+      "uploading": "上传中"
+    },
+    "mention": {
+      "noMatching": "无匹配文件",
+      "noFiles": "暂无可用文件"
+    },
     "widgetContext": {
       "inContext_one": "{{count}} 项上下文",
       "inContext_other": "{{count}} 项上下文",
@@ -2210,7 +2224,9 @@
       "speed": "速度",
       "speedStandard": "标准",
       "speedFast": "快速",
-      "speedFastHint": "消耗 2 倍积分，优先服务层级"
+      "speedFastHint": "消耗 2 倍积分，优先服务层级",
+      "select": "选择模型",
+      "fallbackName": "模型"
     },
     "voice": {
       "start": "开启语音输入",
