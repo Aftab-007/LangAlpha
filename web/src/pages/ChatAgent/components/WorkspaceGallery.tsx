@@ -207,11 +207,23 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   // rather than stand over the results as if it were one. With no workspaces
   // left there is no search box to clear a query, so it comes back.
   const showChief = !!homeRow && (!query || !hasUserWorkspaces);
-  // A card names its machine only when the cards listed sit on more than one:
-  // a second computer with nothing listed on it, or a filter down to one
-  // machine, would otherwise put the same line on every card. The toolbar
-  // still offers the filter once there are two.
-  const showMachines = new Set(visibleWorkspaces.flatMap((ws) => (ws.computer_id ? [ws.computer_id] : []))).size > 1;
+  // A card names its machine only when it is not on the usual one: the
+  // primary computer, or the one holding the most workspaces when the primary
+  // holds none. Most cards then carry no line and the few that live elsewhere
+  // stand out, where a line on every card would repeat one name down the grid.
+  // Read off the whole list, so a search does not move it; a filter down to
+  // one machine names it in the toolbar, so no card repeats it either.
+  const held = new Map<string, number>();
+  for (const ws of userRows) if (ws.computer_id) held.set(ws.computer_id, (held.get(ws.computer_id) ?? 0) + 1);
+  const primaryId = computers.find((c) => c.is_primary)?.computer_id;
+  // Ties go to the lower id, so a sort or new activity never moves it.
+  const usualComputerId = primaryId && held.has(primaryId)
+    ? primaryId
+    : [...held].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0];
+  const machineOf = (ws: WorkspaceRecord) =>
+    activeFilter === ALL_COMPUTERS && ws.computer_id && ws.computer_id !== usualComputerId
+      ? computersById.get(ws.computer_id) ?? null
+      : null;
   // Cards drag in the Custom order over the whole list: a search or a filter
   // leaves cards out, and an order read off part of the list has no place for
   // them. And they hold still while the list is read again, the last order's
@@ -298,9 +310,7 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
         onMove={reorder.drop}
         label={label}
         renderCard={(workspace, index, drag) => {
-          const computer = showMachines && workspace.computer_id
-            ? computersById.get(workspace.computer_id) ?? null
-            : null;
+          const computer = machineOf(workspace);
           return (
             <WorkspaceCard
               workspace={workspace}
