@@ -46,15 +46,24 @@ from ptc_agent.agent.middleware.compaction.summarize import (
     preparer,
     server_summary,
 )
+from ptc_agent.agent.middleware.compaction.measure import (
+    estimate_for,
+    keep_cutoff,
+    keep_tokens_for,
+)
 from ptc_agent.agent.middleware.compaction.utils import (
     build_compaction_event,
     build_summary_message,
     compacted_skills,
     count_tokens_tiktoken,
-    find_group_safe_cutoff,
     get_effective_messages,
     partition_at_cutoff,
+    read_ahead,
     summarized_span,
+    target_cost,
+)
+from ptc_agent.agent.middleware.file_operations.multimodal_strip import (
+    MultimodalStripMiddleware,
 )
 from ptc_agent.agent.middleware.compaction.model import resolve_compaction_client
 from ptc_agent.agent.middleware.compaction.notes import anotes_pointer
@@ -87,6 +96,9 @@ logger = logging.getLogger(__name__)
 #: that crossed it, however large its last tool result, usually reaches it
 #: whole.
 _SUMMARY_HEADROOM = 50_000
+
+#: The refusal of a /compact whose view is no longer than what a summary keeps.
+NOTHING_TO_COMPACT = "Nothing to compact yet: the conversation fits in what compaction keeps."
 
 
 class NativeAnswer(NamedTuple):
@@ -357,13 +369,12 @@ async def compact_messages(
     config: AgentConfig,
     *,
     thread_id: str,
-    keep_messages: int = 5,
     backend: SandboxBackend | None = None,
     workspace_id: str | None = None,
     notes_dir: str | None = None,
 ) -> Compaction:
-    """Manual /compact: summarize all but the last ``keep_messages`` of the
-    view, ``messages`` being the thread's checkpoint list and ``state`` its
+    """Manual /compact: summarize all but the tail automatic compaction
+    keeps of the view, ``messages`` being the thread's checkpoint list and ``state`` its
     values. The user's main model is tried when the summary model fails.
     ``notes_dir`` is the thread's scratchpad notes folder when the
     scratchpad feature is on.
@@ -385,23 +396,32 @@ async def compact_messages(
         transcript=transcript,
         shell=shell_reads_transcripts(backend),
     )
-    if len(view) <= keep_messages:
-        raise ValueError(
-            f"Not enough messages to compact. Have {len(view)}, "
-            f"need more than {keep_messages} to preserve."
-        )
-    cutoff = find_group_safe_cutoff(view, len(view) - keep_messages)
+    summarizer = Summarizer.for_agent(config)
+    main = _main_client(config)
+    settings = config.compaction
+    # The cutoff counts attachments, on the server's loop, as the strip the
+    # agent runs judges them for its model, as the automatic path does.
+    await read_ahead(view)
+    strip = MultimodalStripMiddleware.for_config(config)
+    cost = target_cost(strip.receives(main), strip.pdf_page_tokens(main))
+    cutoff = keep_cutoff(
+        view,
+        tokens=keep_tokens_for(
+            main, settings.keep_tokens, settings.claude_keep_tokens, settings.token_threshold
+        ),
+        estimate=estimate_for(main, summarizer.counter, cost),
+    )
     if cutoff <= 0:
-        raise ValueError("Cannot determine valid cutoff point for compaction")
+        raise ValueError(NOTHING_TO_COMPACT)
 
-    return await Summarizer.for_agent(config).compact(
+    return await summarizer.compact(
         messages,
         view,
         cutoff,
         backend=backend,
         workspace_id=workspace_id,
         transcript=transcript,
-        fallback=_main_client(config),
+        fallback=main,
         thread_id=thread_id,
         notes_dir=notes_dir,
         window=Window.of(state),

@@ -61,10 +61,20 @@ from ptc_agent.agent.state import ensure_message_ids
 from ptc_agent.agent.middleware.compaction.between_turns import Ask, HandOff, asked
 from ptc_agent.agent.middleware.compaction.types import CompactionState, OffloadSettings
 from ptc_agent.agent.middleware.compaction.compact import (
+    NOTHING_TO_COMPACT,
     Compaction,
     NativeAnswer,
     Own,
     Summarizer,
+)
+from ptc_agent.agent.middleware.compaction.measure import (
+    ContextReading,
+    Estimate,
+    context_tokens,
+    estimate_for,
+    keep_cutoff,
+    keep_tokens_for,
+    stamp_context_growth,
 )
 from ptc_agent.agent.middleware.compaction.summarize import (
     is_other_model,
@@ -78,8 +88,6 @@ from ptc_agent.agent.middleware.compaction.summary_request import (
 )
 from ptc_agent.agent.middleware.compaction.utils import (
     attachment_tokens,
-    context_tokens,
-    find_group_safe_cutoff,
     get_effective_messages,
     handed_off,
     pdf_pages,
@@ -126,6 +134,7 @@ logger = logging.getLogger(__name__)
 # boundaries, which takes tens of milliseconds; past this the trim waits for
 # the next pass rather than hold the turn.
 _COVERAGE_TIMEOUT_S = 5.0
+
 
 @contextmanager
 def _unstreamed() -> Iterator[None]:
@@ -212,7 +221,8 @@ class CompactionMiddleware(AgentMiddleware):
         summarizer: Summarizer,
         *,
         token_threshold: int,
-        keep_messages: int,
+        keep_tokens: int,
+        claude_keep_tokens: int | None = None,
         offload: OffloadSettings = OffloadSettings(),
         backend: SandboxBackend | None = None,
         workspace_id: str | None = None,
@@ -226,7 +236,10 @@ class CompactionMiddleware(AgentMiddleware):
             summarizer: Writes the summaries, and counts the tokens that
                 trigger one.
             token_threshold: The context size that triggers a summary.
-            keep_messages: The newest messages a summary leaves out.
+            keep_tokens: How much of the newest history a summary leaves
+                out, word for word (see ``keep_cutoff``).
+            claude_keep_tokens: The same for a Claude model, whose tokens
+                hold less text; None keeps ``keep_tokens``.
             offload: Tier 1 settings.
             backend: The sandbox, which holds the transcript and the
                 attachments a summary saves. None for a build without a
@@ -249,7 +262,10 @@ class CompactionMiddleware(AgentMiddleware):
         super().__init__()
         self._summarizer = summarizer
         self._token_threshold = token_threshold
-        self._keep_messages = keep_messages
+        self._keep_tokens = keep_tokens
+        self._claude_keep_tokens = (
+            keep_tokens if claude_keep_tokens is None else claude_keep_tokens
+        )
         self._offload = offload
         self._backend = backend
         self._workspace_id = workspace_id
@@ -285,7 +301,8 @@ class CompactionMiddleware(AgentMiddleware):
         return cls(
             Summarizer.for_agent(config),
             token_threshold=settings.token_threshold,
-            keep_messages=settings.keep_messages,
+            keep_tokens=settings.keep_tokens,
+            claude_keep_tokens=settings.claude_keep_tokens,
             offload=OffloadSettings.from_config(settings),
             backend=backend,
             workspace_id=workspace_id,
@@ -320,15 +337,14 @@ class CompactionMiddleware(AgentMiddleware):
             return ModelResponse(result=[])
 
         system = [request.system_message] if request.system_message is not None else []
-        cost = target_cost(
-            self._receives(request.model) if self._receives is not None else None,
-            self._page_tokens(request.model) if self._page_tokens is not None else None,
-        )
-        tokens = context_tokens(request.state, view, self._summarizer.counter, system, cost)
+        estimate = self._estimate(request.model)
+        reading = await context_tokens(request.state, view, estimate, system)
+        tokens = reading.tokens
         refusal: Exception | None = None
         if tokens < self._token_threshold:
             try:
-                return self._answered(await handler(request.override(messages=view)))
+                response = await handler(request.override(messages=view))
+                return self._answered(response, reading=reading)
             except Exception as exc:
                 # Matched across providers, most of which LangChain does not
                 # classify as an overflow.
@@ -339,15 +355,11 @@ class CompactionMiddleware(AgentMiddleware):
         else:
             logger.info("[Compaction] Triggered: %d >= %d tokens", tokens, self._token_threshold)
 
-        cutoff = (
-            find_group_safe_cutoff(view, len(view) - self._keep_messages)
-            if len(view) > self._keep_messages
-            else 0
-        )
+        cutoff = self._cutoff(view, request.model)
         if cutoff <= 0:
-            # Too few messages to summarize: the attachments are all that can go.
+            # All of it is the kept tail: the attachments are all that can go.
             response, removed, spared = await self._send_fitted(
-                request, handler, view, system, refusal=refusal, cost=cost
+                request, handler, view, system, estimate, refusal=refusal
             )
             return self._answered(
                 response, self._removal(request.state, removed), spared=spared
@@ -357,7 +369,7 @@ class CompactionMiddleware(AgentMiddleware):
         # A refusal of the view says nothing of what the summary made room
         # for, so its messages are fitted by estimate like any others.
         response, removed, spared = await self._send_fitted(
-            request, handler, compaction.messages, system, cost=cost
+            request, handler, compaction.messages, system, estimate
         )
         self._stamp_summary(response, compaction)
         update = compaction.update(request.state)
@@ -402,6 +414,25 @@ class CompactionMiddleware(AgentMiddleware):
             self._summarizer.model, request.model
         )
 
+    def _cost(self, model: Any) -> Callable[[Any], int] | None:
+        """What an attachment costs on a call to ``model`` (``target_cost``)."""
+        return target_cost(
+            self._receives(model) if self._receives is not None else None,
+            self._page_tokens(model) if self._page_tokens is not None else None,
+        )
+
+    def _estimate(self, model: Any) -> Estimate:
+        """How what no call to ``model`` measured is counted (``counter_for``),
+        its attachments as the model is charged for them."""
+        return estimate_for(model, self._summarizer.counter, self._cost(model))
+
+    def _cutoff(self, view: list[AnyMessage], model: Any) -> int:
+        """Where a summary of ``view`` for ``model`` ends (``keep_cutoff``)."""
+        tokens = keep_tokens_for(
+            model, self._keep_tokens, self._claude_keep_tokens, self._token_threshold
+        )
+        return keep_cutoff(view, tokens=tokens, estimate=self._estimate(model))
+
     async def _between_turns(
         self,
         request: ModelRequest,
@@ -412,14 +443,9 @@ class CompactionMiddleware(AgentMiddleware):
         """What a call between turns asks for (see ``between_turns``)."""
         if isinstance(ask, HandOff):
             return await self._hand_off(request, handler, view)
-        if len(view) <= ask.keep_messages:
-            raise ValueError(
-                f"Not enough messages to compact. Have {len(view)}, "
-                f"need more than {ask.keep_messages} to preserve."
-            )
-        cutoff = find_group_safe_cutoff(view, len(view) - ask.keep_messages)
+        cutoff = self._cutoff(view, request.model)
         if cutoff <= 0:
-            raise ValueError("Cannot determine valid cutoff point for compaction")
+            raise ValueError(NOTHING_TO_COMPACT)
         return await self._summarize(request, handler, view, cutoff)
 
     @staticmethod
@@ -461,9 +487,9 @@ class CompactionMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
         messages: list[AnyMessage],
         system: list[Any],
+        estimate: Estimate,
         *,
         refusal: Exception | None = None,
-        cost: Callable[[Any], int] | None = None,
     ) -> tuple[ModelResponse, set[str], int]:
         """Send ``messages`` with as many of their attachments taken out as
         it takes to fit. Returns the response, the ids of the messages that
@@ -478,7 +504,7 @@ class CompactionMiddleware(AgentMiddleware):
         """
         removed: set[str] = set()
         if refusal is None:
-            removed = self._to_remove(messages, system, everything=False, cost=cost)
+            removed = self._to_remove(messages, system, estimate, everything=False)
             try:
                 response = await handler(
                     request.override(messages=self._without(messages, removed))
@@ -488,9 +514,9 @@ class CompactionMiddleware(AgentMiddleware):
                     raise
                 refusal = exc
             else:
-                more, spared = self._measured_fit(response, messages, removed, system, cost)
+                more, spared = self._measured_fit(response, messages, removed, system, estimate)
                 return response, removed | more, spared
-        everything = self._to_remove(messages, system, everything=True, cost=cost)
+        everything = self._to_remove(messages, system, estimate, everything=True)
         if everything == removed:
             raise refusal
         logger.warning("[Compaction] Context overflow, removing every attachment kept")
@@ -503,7 +529,7 @@ class CompactionMiddleware(AgentMiddleware):
         messages: list[AnyMessage],
         removed: set[str],
         system: list[Any],
-        cost: Callable[[Any], int] | None,
+        estimate: Estimate,
     ) -> tuple[set[str], int]:
         """The ids of the messages whose attachments go too after a send
         fitted by estimate that the provider measured over the threshold, and
@@ -524,8 +550,8 @@ class CompactionMiddleware(AgentMiddleware):
         if over < 0:
             return set(), 0
         fitted = self._without(messages, removed)
-        estimate = self._summarizer.counter([*system, *fitted]) + attachment_tokens(fitted, cost)
-        if estimate <= 0:
+        estimated = estimate([*system, *fitted])
+        if estimated <= 0:
             return set(), 0
         more: set[str] = set()
         spared = 0
@@ -534,7 +560,7 @@ class CompactionMiddleware(AgentMiddleware):
                 break
             if not msg.id or msg.id in removed:
                 continue
-            taken = round(attachment_tokens([msg], cost) * input_tokens / estimate)
+            taken = round(attachment_tokens([msg], estimate.cost) * input_tokens / estimated)
             if taken:
                 more.add(msg.id)
                 spared += taken
@@ -545,24 +571,20 @@ class CompactionMiddleware(AgentMiddleware):
         self,
         messages: list[AnyMessage],
         system: list[Any],
+        estimate: Estimate,
         *,
         everything: bool,
-        cost: Callable[[Any], int] | None = None,
     ) -> set[str]:
         """The ids of the messages in ``messages`` whose attachments go.
 
         Only attachments the target is sent count: one it cannot read reaches
         it as the strip's placeholder, whose guidance a removal would replace.
         """
-        costs = [(msg.id, attachment_tokens([msg], cost)) for msg in messages]
+        costs = [(msg.id, attachment_tokens([msg], estimate.cost)) for msg in messages]
         costs = [(msg_id, tokens) for msg_id, tokens in costs if tokens and msg_id]
         if everything:
             return {msg_id for msg_id, _ in costs}
-        over = (
-            self._summarizer.counter([*system, *messages])
-            + attachment_tokens(messages, cost)
-            - self._token_threshold
-        )
+        over = estimate([*system, *messages]) - self._token_threshold
         removed: set[str] = set()
         for msg_id, tokens in costs:
             if over < 0:
@@ -695,13 +717,21 @@ class CompactionMiddleware(AgentMiddleware):
                 return
 
     def _answered(
-        self, response: ModelResponse, update: dict[str, Any] | None = None, *, spared: int = 0
+        self,
+        response: ModelResponse,
+        update: dict[str, Any] | None = None,
+        *,
+        spared: int = 0,
+        reading: ContextReading | None = None,
     ) -> ExtendedModelResponse:
         """``response``, with ``update`` and the state the next call reads:
         the context size this call measured, less the ``spared`` tokens of
         attachments ``update`` takes out of the next one, and when the model
-        answered, which the next turn's Tier 1 measures its pause from."""
-        input_tokens, output_tokens = self._extract_token_usage(response)
+        answered, which the next turn's Tier 1 measures its pause from.
+        ``reading`` is the trigger's reading of the view this call was sent
+        as it was, which its growth is stamped from; a call that was sent a
+        summary or a fitted view has none."""
+        input_tokens, output_tokens = self._extract_token_usage(response, reading)
         return ExtendedModelResponse(
             model_response=response,
             command=Command(
@@ -714,16 +744,21 @@ class CompactionMiddleware(AgentMiddleware):
             ),
         )
 
-    def _extract_token_usage(self, response: ModelResponse) -> tuple[int, int]:
+    def _extract_token_usage(
+        self, response: ModelResponse, reading: ContextReading | None = None
+    ) -> tuple[int, int]:
         """The (input, output) tokens the newest AI message reports, emitted
         to the frontend with the threshold they fill and stamped with it for
-        replay, or (0, 0) when none does."""
+        replay, and with its growth from ``reading``, or (0, 0) when none
+        does."""
         usage = _reported_usage(response)
         if usage is None:
             return (0, 0)
         msg, input_tokens, output_tokens = usage
         logger.debug("[Compaction] Token usage: input=%d, output=%d", input_tokens, output_tokens)
         stamp_context_threshold(msg, self._token_threshold)
+        if reading is not None:
+            stamp_context_growth(msg, reading, input_tokens)
         self._emit_context_signal(
             "token_usage",
             "complete",

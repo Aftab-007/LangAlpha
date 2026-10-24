@@ -396,14 +396,14 @@
       "deep": "Deep"
     },
     "compactionProfile": "Compaction Profile",
-    "compactionProfileDesc": "Bundled preset for compaction trigger and retention. Leave on system default and each model gets its own: 500k for Claude and GPT, and what the context window affords for the rest.",
+    "compactionProfileDesc": "When a conversation compacts. Leave on system default and each model gets its own: 500k for Claude and GPT, and what the context window affords for the rest.",
     "compactionProfileUseDefault": "Use system default",
     "nativeCompaction": "Provider compaction",
     "nativeCompactionOn": "On",
     "nativeCompactionOff": "Off",
     "nativeCompactionAnthropicDesc": "Claude summarizes the conversation itself when it compacts, so it keeps its reasoning in the turns it keeps. Its summary is readable, and a model you switch to reads the same one.",
     "nativeCompactionOpenAIDesc": "OpenAI compacts the conversation into an encrypted summary that only OpenAI models can read, through the API or a ChatGPT login. The compaction card shows a plain record of the conversation instead. Switch the thread to another provider's model and it gets that record, not the summary, so it loses detail from earlier tool results.",
-    "compactionProfilePreset": "{{tokens}}k tokens · keep {{keep}}",
+    "compactionProfilePreset": "{{tokens}}k tokens",
     "compactionProfiles": {
       "aggressive": {
         "label": "Aggressive",

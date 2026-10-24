@@ -394,14 +394,14 @@
       "deep": "深度"
     },
     "compactionProfile": "压缩预设",
-    "compactionProfileDesc": "用于控制压缩触发与保留的预设组合。保持系统默认时，每个模型使用各自的预设：Claude 和 GPT 为 500k，其他模型按其上下文窗口匹配。",
+    "compactionProfileDesc": "决定对话何时压缩。保持系统默认时，每个模型使用各自的预设：Claude 和 GPT 为 500k，其他模型按其上下文窗口匹配。",
     "compactionProfileUseDefault": "使用系统默认",
     "nativeCompaction": "服务商压缩",
     "nativeCompactionOn": "开启",
     "nativeCompactionOff": "关闭",
     "nativeCompactionAnthropicDesc": "压缩时由 Claude 自己总结对话，因此它在保留下来的轮次里仍能保留自己的推理过程。这份摘要可以直接阅读，切换到其他模型后，新模型读取的也是它。",
     "nativeCompactionOpenAIDesc": "OpenAI 会把对话压缩成一份加密摘要，只有 OpenAI 的模型能读取，无论通过 API 还是 ChatGPT 登录。压缩卡片显示的是对话的简要记录，而不是摘要。若把这个对话切换到其他服务商的模型，它拿到的是这份记录而不是摘要，会丢失早先工具结果中的细节。",
-    "compactionProfilePreset": "{{tokens}}k tokens · 保留 {{keep}} 条",
+    "compactionProfilePreset": "{{tokens}}k tokens",
     "compactionProfiles": {
       "aggressive": {
         "label": "激进",
