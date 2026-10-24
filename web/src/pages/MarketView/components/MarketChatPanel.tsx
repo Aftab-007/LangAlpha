@@ -28,7 +28,7 @@ import { useThreadSubagents } from '../../ChatAgent/hooks/useThreadSubagents';
 import { useThreadTuning } from '../../ChatAgent/hooks/useThreadTuning';
 import { ThreadNotices } from '../../ChatAgent/components/chatView/ThreadNotices';
 import { DispatchStatusProvider } from '../../ChatAgent/hooks/usePTCDispatchStatus';
-import { useStreamFollow } from '../../ChatAgent/components/chatView/streamFollow';
+import { useStreamFollow } from '../../ChatAgent/components/chatView/transcriptFollow';
 import { useTranscriptFollow } from '../../ChatAgent/components/chatView/useTranscriptFollow';
 import { useActiveThreadPublisher } from '@/lib/threadLifecycle/useActiveThreadPublisher';
 import { appendPathSuffix, getPreviewUrl, summarizeThread, offloadThread } from '../../ChatAgent/utils/api';
@@ -299,7 +299,10 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
   // Set when the user stops a running turn, so the input placeholder reflects it.
   const [wasStopped, setWasStopped] = useState(false);
 
-  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  // The transcript's scroller and its content, as elements for its follow:
+  // the content mounts only once there is a transcript to show.
+  const [messagesContainer, setMessagesContainer] = useState<HTMLDivElement | null>(null);
+  const [transcript, setTranscript] = useState<HTMLDivElement | null>(null);
 
   // The user's confirmed chart selections (region / price level). Render a chip
   // per selection that still matches the live chart instance — selections drawn
@@ -474,13 +477,12 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     queryClient.invalidateQueries({ queryKey: queryKeys.threads.byWorkspace(activeWorkspaceId) });
   }, [threadId, symbol, activeWorkspaceId, setSearchParams, queryClient]);
 
-  const transcriptRef = useRef<HTMLDivElement | null>(null);
   const showTranscript = messages.length > 0 || isLoading || isLoadingHistory;
-  const follow = useStreamFollow(messagesContainerRef, transcriptRef, showTranscript, isLoading || isLoadingHistory);
+  const follow = useStreamFollow(messagesContainer, transcript, { live: isLoading, loading: isLoadingHistory });
   const { handleSendMessage, handleEditMessage, handleRegenerate, handleRetry } = useTranscriptFollow(
     chat,
     follow,
-    () => messagesContainerRef.current,
+    () => messagesContainer,
     readTurnEndScroll(preferences),
   );
 
@@ -763,7 +765,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
     fontSize: '0.75rem',
     fontWeight: 500,
     cursor: 'pointer',
-    transition: 'background 0.15s, border-color 0.15s, color 0.15s',
+    transition: 'background var(--motion-quick) var(--ease-out), border-color var(--motion-quick) var(--ease-out), color var(--motion-quick) var(--ease-out)',
   };
   const headerBtnHover = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.currentTarget.style.background = 'var(--color-bg-hover)';
@@ -840,7 +842,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
 
       {/* Messages */}
       <div
-        ref={messagesContainerRef}
+        ref={setMessagesContainer}
         style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}
       >
         {!showTranscript ? (
@@ -856,7 +858,7 @@ function ChatBody(props: ChatBodyProps): React.ReactElement {
             )}
           </div>
         ) : (
-          <div ref={transcriptRef} style={{ padding: '16px 24px', maxWidth: '100%' }}>
+          <div ref={setTranscript} style={{ padding: '16px 24px', maxWidth: '100%' }}>
             <ChartSurfaceContext value={chartSurface}>
               <SubagentTelemetryContext value={subagentTelemetry}>
                 <MessageActionsProvider actions={messageActions}>
