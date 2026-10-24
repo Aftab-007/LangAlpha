@@ -43,6 +43,23 @@ READ_UNSATISFIABLE = 6
 # sandbox, so a read stays well under that; larger files go through the
 # provider's file download instead.
 EXEC_READ_MAX_BYTES = 64 * 1024 * 1024
+# Room in an exec's output for the path line ahead of the file's base64.
+_EXEC_READ_HEADROOM = 64 * 1024
+
+
+def _exec_read_max(runtime: Any) -> int:
+    """The largest file a whole read prints within ``runtime``'s exec output.
+
+    An SSH exec keeps its first 32 MiB, so a file between that and
+    ``EXEC_READ_MAX_BYTES`` would arrive cut, fail to decode and answer as
+    missing. ``base64`` prints 4 characters per 3 bytes, 76 to a line.
+    """
+    cap = getattr(runtime, "exec_output_cap", None)
+    if not isinstance(cap, int):
+        return EXEC_READ_MAX_BYTES
+    fits = (cap - _EXEC_READ_HEADROOM) * 3 * 76 // (4 * 77)
+    return min(EXEC_READ_MAX_BYTES, fits)
+
 
 # ``realpath -m`` for a machine without it whose ``readlink -f`` needs every
 # component to exist (macOS), where a path not yet written would read as
@@ -365,13 +382,15 @@ def contained_read_command(
     roots: Sequence[str],
     denied_roots: Sequence[str] = (),
     byte_range: tuple[int, int] | None = None,
+    read_max: int | None = None,
 ) -> str:
     """``byte_range`` is ``(offset, length)``: the read prints the file's
     version line and the sandbox clock, then its first ``UTF8_SNIFF_BYTES`` and
     at most ``length`` bytes from ``offset``, each base64 on a line of its own,
     then the version line again. It skips the size limit, since a range is how
     a file of any size gets read, and ``head`` stopping at the end clamps the
-    tail.
+    tail. ``read_max`` lowers a whole read's limit for a runtime that keeps
+    less output than ``EXEC_READ_MAX_BYTES`` prints.
     """
     setup, patterns = _root_lines(roots)
     if not patterns:
@@ -394,8 +413,9 @@ def contained_read_command(
         else ""
     )
     if byte_range is None:
+        limit = EXEC_READ_MAX_BYTES if read_max is None else read_max
         read = [
-            f'sz=$(wc -c < "$tt"); [ "$sz" -le {EXEC_READ_MAX_BYTES} ] ',
+            f'sz=$(wc -c < "$tt"); [ "$sz" -le {limit} ] ',
             f'|| {{ printf %s "$sz"; exit {READ_TOO_LARGE}; }}; ',
             'base64 < "$tt"',
         ]
@@ -463,6 +483,7 @@ async def _contained_read(
                 roots=roots,
                 denied_roots=denied_roots,
                 byte_range=byte_range,
+                read_max=_exec_read_max(runtime),
             ),
             timeout=_PROBE_TIMEOUT_S,
         )
