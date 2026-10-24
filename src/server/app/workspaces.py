@@ -925,7 +925,7 @@ async def refresh_workspace(
         # rather than spelling a fourth variant of this 503 here.
         raise
     except Exception as e:
-        # Everything else answers as _acquire_sandbox does, never with the raw
+        # Everything else answers as acquire_sandbox does, never with the raw
         # text: this is the same call, and its exceptions quote provider URLs
         # and sandbox ids.
         raise sandbox_failure_http(e) from None

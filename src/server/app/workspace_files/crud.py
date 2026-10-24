@@ -56,15 +56,26 @@ from .file_refs import (
 )
 from src.server.models.workspace import served_from_mirror
 
-from ._containment import (
+from src.server.services.workspace_file_containment import (
     FileTooLargeToServe,
     contained_absolute_path,
     contained_sandbox_paths,
     contained_listing_path,
     contained_sandbox_path,
     is_within,
+    normalize_requested_path,
     read_contained_sandbox_file,
 )
+from src.server.services.workspace_files import (
+    HOME_NOT_ON_COMPUTER_REASON,
+    acquire_sandbox_to_change,
+    contained_target,
+    owned_workspace_on_computer,
+    owner_layout,
+    previous_dir_names_of,
+    record_fs_bytes,
+)
+
 from ._shared import (
     held_bytes_budget,
     streamed_download_budget,
@@ -74,20 +85,13 @@ from ._shared import (
     _is_utf8,
     MAX_UPLOAD_BYTES,
     _CACHEABLE_IMAGE_TYPES,
-    _acquire_sandbox_to_change,
     _decode_file_text,
-    owner_layout,
     owner_work_dir,
-    previous_dir_names_of,
     previous_roots_of,
     _is_always_hidden_path,
     _is_binary,
-    HOME_NOT_ON_COMPUTER_REASON,
     _is_hidden_path,
-    owned_workspace_on_computer,
     _is_system_path,
-    _normalize_requested_path,
-    _record_fs_bytes,
     _requested_hidden_ok,
     _requested_system_ok,
     _to_client_path,
@@ -106,26 +110,6 @@ _UNSAVED_LISTED = 100
 
 
 router = APIRouter(prefix="/api/v1/workspaces", tags=["Workspace Files"])
-
-
-async def _contained_target(
-    sandbox: Any, path: str, work_dir: str, previous_dirs: Sequence[str] = ()
-) -> str:
-    """The canonical absolute path a route may act on, or 404.
-
-    Two folds the sandbox handle cannot do for a route: the request path folds
-    into *this* workspace's folder rather than the computer root the handle
-    carries, and the result is canonicalised inside the sandbox so a symlink
-    into a sibling's folder is judged on where it lands. 404 rather than 403
-    throughout: a path that escapes is not told whether its target exists.
-    """
-    candidate = contained_absolute_path(path, work_dir, previous_dirs)
-    if candidate is None or not sandbox.validate_path(candidate):
-        raise HTTPException(status_code=404, detail="File not found")
-    canonical = await contained_sandbox_path(sandbox, candidate, work_dir=work_dir)
-    if canonical is None or not is_within(work_dir, canonical):
-        raise HTTPException(status_code=404, detail="File not found")
-    return canonical
 
 
 async def _read_contained_target(
@@ -198,7 +182,7 @@ async def list_workspace_files(
     if not auto_start and served_from_mirror(workspace.get("status")):
         file_tree = await FilePersistenceService.get_file_tree(workspace_id)
         # Filter by path prefix if specified
-        normalized_path = _normalize_requested_path(path, work_dir, previous_dirs)
+        normalized_path = normalize_requested_path(path, work_dir, previous_dirs)
         if normalized_path:
             file_tree = [
                 f
@@ -226,7 +210,7 @@ async def list_workspace_files(
             "source": "database",
         }
 
-    async with _acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
+    async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
         # Fast path: return empty list if sandbox is still initializing and wait_for_sandbox=False
         # This allows CLI autocomplete to populate later without blocking startup
         if not wait_for_sandbox and not sandbox.is_ready():
@@ -294,7 +278,7 @@ async def _live_listing(
 
         files.append(client_path)
 
-    requested_norm = _normalize_requested_path(path, work_dir, previous_dirs)
+    requested_norm = normalize_requested_path(path, work_dir, previous_dirs)
     return await _with_virtual_files(files, requested_norm, workspace["user_id"])
 
 
@@ -376,7 +360,7 @@ async def resolve_workspace_file(
         paths = [f["path"] for f in file_tree if f["path"].rsplit("/", 1)[-1] == name]
         source = "database"
     else:
-        async with _acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
+        async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
             if not sandbox.is_ready():
                 return {
                     "status": "unavailable",
@@ -435,7 +419,7 @@ async def read_workspace_file(
     # running, stopped, or never started.
     work_dir = owner_work_dir(workspace)
     previous_dirs = previous_dir_names_of(workspace)
-    normalized_for_virtual = _normalize_requested_path(path, work_dir, previous_dirs)
+    normalized_for_virtual = normalize_requested_path(path, work_dir, previous_dirs)
     virtual = _virtual_file(normalized_for_virtual)
     if virtual:
         text_content = await _load_virtual_file(
@@ -461,7 +445,7 @@ async def read_workspace_file(
 
     # DB fallback for stopped workspaces
     if served_from_mirror(workspace.get("status")):
-        normalized_path = _normalize_requested_path(path, work_dir, previous_dirs)
+        normalized_path = normalize_requested_path(path, work_dir, previous_dirs)
         if not normalized_path:
             raise HTTPException(status_code=400, detail="File path is required")
 
@@ -504,7 +488,7 @@ async def read_workspace_file(
             "source": "database",
         }
 
-    async with _acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
+    async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
         work_dir = owner_work_dir(workspace)
         previous_dirs = previous_dir_names_of(workspace)
 
@@ -545,7 +529,7 @@ async def read_workspace_file(
 
     mime = resolve_content_type(client_path, default="text/plain")
 
-    _record_fs_bytes("read", len(raw_bytes))
+    record_fs_bytes("read", len(raw_bytes))
 
     return {
         "workspace_id": workspace_id,
@@ -589,7 +573,7 @@ async def write_workspace_file(
     # generic write endpoint cannot enforce safely.
     work_dir = owner_work_dir(workspace)
     previous_dirs = previous_dir_names_of(workspace)
-    virtual = _virtual_file(_normalize_requested_path(path, work_dir, previous_dirs))
+    virtual = _virtual_file(normalize_requested_path(path, work_dir, previous_dirs))
     if virtual:
         raise HTTPException(status_code=400, detail=virtual.read_only)
 
@@ -597,11 +581,11 @@ async def write_workspace_file(
     if len(content_bytes) > MAX_WRITE_BYTES:
         raise HTTPException(status_code=413, detail="File content too large (max 10MB)")
 
-    async with _acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
+    async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
         work_dir = owner_work_dir(workspace)
         previous_dirs = previous_dir_names_of(workspace)
 
-        normalized = await _contained_target(sandbox, path, work_dir, previous_dirs)
+        normalized = await contained_target(sandbox, path, work_dir, previous_dirs)
 
         # ``awrite_file_text`` takes this path's write lock for the write itself.
         ok = await sandbox.awrite_file_text(normalized, body.content)
@@ -631,7 +615,7 @@ async def write_workspace_file(
         except Exception:
             pass
 
-    _record_fs_bytes("write", len(content_bytes))
+    record_fs_bytes("write", len(content_bytes))
 
     return {
         "workspace_id": workspace_id,
@@ -763,7 +747,7 @@ async def download_workspace_file(
 
     # Virtual files come from the DB, as in /files/read: on the sandbox their
     # folder links out to the file mount, and the stored copy has no row for them.
-    virtual_path = _normalize_requested_path(path, work_dir, previous_dirs)
+    virtual_path = normalize_requested_path(path, work_dir, previous_dirs)
     virtual = _virtual_file(virtual_path)
     if virtual:
         text = await _load_virtual_file(virtual, virtual_path, x_user_id)
@@ -774,7 +758,7 @@ async def download_workspace_file(
 
     # DB fallback for stopped workspaces
     if served_from_mirror(workspace.get("status")):
-        normalized_path = _normalize_requested_path(path, work_dir, previous_dirs)
+        normalized_path = normalize_requested_path(path, work_dir, previous_dirs)
         if not normalized_path:
             raise HTTPException(status_code=400, detail="File path is required")
 
@@ -801,7 +785,7 @@ async def download_workspace_file(
         # with the response; a settle moving the folder between two chunks
         # would end the download.
         sandbox, workspace = await folder.enter_async_context(
-            _acquire_sandbox_to_change(workspace_id, x_user_id)
+            acquire_sandbox_to_change(workspace_id, x_user_id)
         )
         work_dir = owner_work_dir(workspace)
         previous_dirs = previous_dir_names_of(workspace)
@@ -836,7 +820,7 @@ async def download_workspace_file(
             vault_secrets = await get_vault_secrets_for_redaction(workspace["user_id"])
             content = get_redactor().redact_bytes(content, vault_secrets=vault_secrets)
 
-        _record_fs_bytes("download", len(content))
+        record_fs_bytes("download", len(content))
 
         return _build_download_response(content, filename, mime, request, disposition)
 
@@ -887,7 +871,7 @@ async def _stream_large_file(
         if stream is None:
             raise HTTPException(status_code=404, detail="File not found")
         held.push_async_callback(stream.aclose)
-        _record_fs_bytes("download", too_large.size)
+        record_fs_bytes("download", too_large.size)
         return _StreamedDownload(
             _kept_alive(_exactly(stream, too_large.size), workspace_id, sandbox),
             held=held.pop_all(),
@@ -923,11 +907,11 @@ async def workspace_file_download_url(
 
     # A virtual file is rendered from its rows when downloaded, so there is no
     # stored object to link to.
-    if _virtual_file(_normalize_requested_path(path, work_dir, previous_dirs)):
+    if _virtual_file(normalize_requested_path(path, work_dir, previous_dirs)):
         return {"url": None}
 
     if served_from_mirror(workspace.get("status")):
-        normalized_path = _normalize_requested_path(path, work_dir, previous_dirs)
+        normalized_path = normalize_requested_path(path, work_dir, previous_dirs)
         if not normalized_path:
             raise HTTPException(status_code=400, detail="File path is required")
         if _is_always_hidden_path(normalized_path):
@@ -935,12 +919,12 @@ async def workspace_file_download_url(
         return {"url": await mirror_download_link(workspace, normalized_path)}
 
     # Held through the export too, which reads the file by path.
-    async with _acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
+    async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
         layout = owner_layout(workspace)
         work_dir = layout.workspace
         previous_dirs = previous_dir_names_of(workspace)
         try:
-            canonical = await _contained_target(sandbox, path, work_dir, previous_dirs)
+            canonical = await contained_target(sandbox, path, work_dir, previous_dirs)
         except HTTPException:
             # This check is the project folder's; reads also admit shared tiers
             # outside it. /files/download applies the read policy and refuses the
@@ -977,7 +961,7 @@ async def upload_workspace_file(
             detail=f"Cannot upload files — workspace is {workspace.get('status')}. Wait for it to be running.",
         )
 
-    async with _acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
+    async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
         work_dir = owner_work_dir(workspace)
         previous_dirs = previous_dir_names_of(workspace)
 
@@ -986,11 +970,11 @@ async def upload_workspace_file(
             raise HTTPException(status_code=400, detail="Destination path is required")
         # The same refusal as write: an upload would land a sandbox file the
         # virtual route shadows, so it would read as saved and change nothing.
-        virtual = _virtual_file(_normalize_requested_path(dest, work_dir, previous_dirs))
+        virtual = _virtual_file(normalize_requested_path(dest, work_dir, previous_dirs))
         if virtual:
             raise HTTPException(status_code=400, detail=virtual.read_only)
 
-        normalized = await _contained_target(sandbox, dest, work_dir, previous_dirs)
+        normalized = await contained_target(sandbox, dest, work_dir, previous_dirs)
 
         # Accept only what the next backup could actually store. This route
         # buffers the body, so its own ceiling applies too, and whichever is
@@ -1013,7 +997,7 @@ async def upload_workspace_file(
         raise HTTPException(status_code=500, detail="Upload failed")
 
     client_path = _to_client_path(sandbox, normalized, work_dir)
-    _record_fs_bytes("upload", len(content))
+    record_fs_bytes("upload", len(content))
     return {
         "workspace_id": workspace_id,
         "path": client_path,
@@ -1060,7 +1044,7 @@ async def backup_workspace_files(
 
     # Held like a file change: a folder moved mid-scan reads as missing, and
     # the sync reports that as a clean pass.
-    async with _acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
+    async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
         try:
             result = await FilePersistenceService.sync_to_db(
                 workspace_id, sandbox, layout=owner_layout(workspace)
@@ -1155,7 +1139,7 @@ async def get_backup_status(
     # Sandbox is running: compare sandbox files against DB. Not ready, folder
     # moving or a failed scan all return DB-only info.
     try:
-        async with _acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
+        async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
             sandbox_meta = await FilePersistenceService.list_sandbox_files(
                 sandbox, layout=owner_layout(workspace)
             )
@@ -1222,7 +1206,7 @@ async def delete_workspace_files(
             detail=f"Cannot delete files — workspace is {workspace.get('status')}. Wait for it to be running.",
         )
 
-    async with _acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
+    async with acquire_sandbox_to_change(workspace_id, x_user_id) as (sandbox, workspace):
         work_dir = owner_work_dir(workspace)
         previous_dirs = previous_dir_names_of(workspace)
 

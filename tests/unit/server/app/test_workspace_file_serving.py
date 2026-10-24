@@ -43,9 +43,9 @@ _WSMGR_PATCH = "src.server.app.workspace_files.serve.WorkspaceManager"
 # The row the route re-reads after a live read, to prove the folder the read
 # went to was still this workspace's.
 _RECHECK_PATCH = "src.server.app.workspace_files._shared.db_get_workspace"
-# The serve root is resolved in the shared helpers, so a test about resolving
-# it patches the manager they read the computer root from, not the route's.
-_SHARED_WSMGR_PATCH = "src.server.app.workspace_files._shared.WorkspaceManager"
+# The serve root is resolved in the file service, so a test about resolving
+# it patches the manager the service reads the computer root from, not the route's.
+_LAYOUT_WSMGR_PATCH = "src.server.services.workspace_files.WorkspaceManager"
 _RENDER_PATCH = "src.server.services.pdf_render.render_workspace_pdf"
 _PDF_INTERNAL_BASE = "http://127.0.0.1:8000"
 _GRANT_KEY = b"k" * 32
@@ -289,7 +289,7 @@ _ROOTED_ROUTES = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", _ROOTED_ROUTES, ids=["serve", "pdf"])
-@patch(_SHARED_WSMGR_PATCH)
+@patch(_LAYOUT_WSMGR_PATCH)
 @patch(_DBWS_PATCH, new_callable=AsyncMock)
 async def test_workspace_that_names_no_folder_returns_uniform_404(
     mock_ws, mock_mgr, route
