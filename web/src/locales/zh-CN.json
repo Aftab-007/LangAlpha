@@ -2325,6 +2325,36 @@
       "declined": "已拒绝创建工作区",
       "alwaysApprove": "始终允许",
       "alwaysApproveHint": "这次及以后创建工作区都不再询问，可在设置中关闭。"
+    },
+    "secretaryConfirm": {
+      "deleteWorkspace": {
+        "title": "删除工作区",
+        "approved": "工作区已删除",
+        "rejected": "已拒绝删除工作区"
+      },
+      "stopWorkspace": {
+        "title": "停止工作区",
+        "approved": "工作区已停止",
+        "rejected": "已拒绝停止工作区"
+      },
+      "deleteThread": {
+        "title": "删除对话",
+        "approved": "对话已删除",
+        "rejected": "已拒绝删除对话"
+      },
+      "workspaceLabel": "工作区：",
+      "threadLabel": "对话：",
+      "unknownId": "未知",
+      "confirm": "确认",
+      "decline": "拒绝"
+    },
+    "userQuestion": {
+      "answered": "已回答：{{answer}}",
+      "noAnswer": "（无回答）",
+      "skipped": "已跳过问题",
+      "custom": "自定义：",
+      "submitCount": "提交（{{n}}）",
+      "customPlaceholder": "或输入自定义回答..."
     }
   },
   "context": {

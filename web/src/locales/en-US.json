@@ -2335,6 +2335,36 @@
       "declined": "Workspace creation declined",
       "alwaysApprove": "Always allow",
       "alwaysApproveHint": "Create this and later workspaces without asking. Turn it off in Settings."
+    },
+    "secretaryConfirm": {
+      "deleteWorkspace": {
+        "title": "Delete Workspace",
+        "approved": "Workspace deleted",
+        "rejected": "Workspace deletion declined"
+      },
+      "stopWorkspace": {
+        "title": "Stop Workspace",
+        "approved": "Workspace stopped",
+        "rejected": "Workspace stop declined"
+      },
+      "deleteThread": {
+        "title": "Delete Thread",
+        "approved": "Thread deleted",
+        "rejected": "Thread deletion declined"
+      },
+      "workspaceLabel": "Workspace:",
+      "threadLabel": "Thread:",
+      "unknownId": "unknown",
+      "confirm": "Confirm",
+      "decline": "Decline"
+    },
+    "userQuestion": {
+      "answered": "Answered: {{answer}}",
+      "noAnswer": "(no answer)",
+      "skipped": "Question skipped",
+      "custom": "Custom:",
+      "submitCount": "Submit ({{n}})",
+      "customPlaceholder": "Or type a custom answer..."
     }
   },
   "context": {
