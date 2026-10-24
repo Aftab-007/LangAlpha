@@ -196,6 +196,11 @@ def select_model(
     user_fallback = model_pref.get("fallback_models")
     if user_fallback is not None:
         config.llm.fallback = user_fallback
+    # Repeats only: the turn's own model stays, since a subagent on another
+    # model may still fall back to it. The resilience middleware drops
+    # whichever model a request targets.
+    if config.llm.fallback:
+        config.llm.fallback = config.llm.fallbacks_for(None)
 
     return ModelSelection(
         effective_model=slot_model(config.llm, slot),
