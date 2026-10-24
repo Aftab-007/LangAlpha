@@ -50,6 +50,10 @@ export async function getAllWorkspaces(
   }
 }
 
+/** The cache key `useAllWorkspaces` keeps a list under, for a writer that patches it. */
+export const allWorkspacesKey = (sortBy: string, includeHome: boolean) =>
+  queryKeys.workspaces.list({ view: 'all', sortBy, includeHome });
+
 /**
  * Every workspace, page by page, for a surface that lists or counts all of
  * them: one page stops at 100, and a count read off a truncated list is wrong
@@ -58,7 +62,7 @@ export async function getAllWorkspaces(
  */
 export function useAllWorkspaces({ sortBy = 'custom', includeHome = false, enabled = true }: { sortBy?: string; includeHome?: boolean; enabled?: boolean } = {}) {
   return useQuery({
-    queryKey: queryKeys.workspaces.list({ view: 'all', sortBy, includeHome }),
+    queryKey: allWorkspacesKey(sortBy, includeHome),
     queryFn: async () => {
       const workspaces = await getAllWorkspaces(sortBy, includeHome);
       return { workspaces, total: workspaces.length };

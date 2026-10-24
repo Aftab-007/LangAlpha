@@ -29,8 +29,9 @@ import { GalleryActions } from './workspaceGallery/GalleryActions';
 import { GalleryEmptyState } from './workspaceGallery/GalleryEmptyState';
 import { ALL_COMPUTERS, GALLERY_SORTS, GalleryToolbar, type GallerySort } from './workspaceGallery/GalleryToolbar';
 import { HomeStrip } from './workspaceGallery/HomeStrip';
-import { GALLERY_COLUMN, GALLERY_FRAME } from './workspaceGallery/layout';
-import { ReorderList } from './workspaceGallery/ReorderList';
+import { CardGrid } from './workspaceGallery/CardGrid';
+import { GALLERY_COLUMN, GALLERY_FRAME, GALLERY_PAGE } from './workspaceGallery/layout';
+import { useGalleryReorder } from './workspaceGallery/useGalleryReorder';
 import { WorkspaceCard } from './workspaceGallery/WorkspaceCard';
 import type { WorkspaceRecord } from './workspaceGallery/types';
 
@@ -68,20 +69,20 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   const [computerFilter, setComputerFilter] = useState<string>(ALL_COMPUTERS);
   // Most recent first until the user picks another order, and then theirs on
   // every visit: each card says when it was last used, the time Recent sorts
-  // on. The drag order is one pick away, and reordering switches to it.
+  // on. Custom is the order the cards are dragged into.
   const [sortBy, setSortBy] = useState<GallerySort>(readSort);
-  const [isReorderMode, setIsReorderMode] = useState(false);
   // Rename is the gallery's own dialog (the tree renames inline); duplicate,
   // move and delete come from useWorkspaceActions below. Spec is the machine's
   // and lives in the Computers dialog.
   const [renameTarget, setRenameTarget] = useState<WorkspaceRecord | null>(null);
   const { workspaceId: currentWorkspaceId } = useParams();
+  // The page scrolls as one below a laptop's width, and only the grid above it.
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const preSortByRef = useRef(sortBy); // sort mode before entering reorder
 
-  // Home's query (idempotent POST, creates it if missing). The
-  // reorder list shows the whole record, not just its id, so here it goes
-  // stale after five minutes rather than never.
+  // Home's query (idempotent POST, creates it if missing). The strip
+  // shows the whole record, not just its id, so here it goes stale after five
+  // minutes rather than never.
   const { data: homeWs, isLoading: isHomeLoading } = useQuery({
     ...homeWorkspaceQuery(queryClient),
     staleTime: 5 * 60_000,
@@ -94,7 +95,10 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     data: wsData,
     isLoading: isWsLoading,
     error: wsError,
-  } = useAllWorkspaces({ sortBy, includeHome: true, enabled: !isReorderMode && !isHomeLoading });
+    isFetching: isWsFetching,
+    isPlaceholderData,
+  } = useAllWorkspaces({ sortBy, includeHome: true, enabled: !isHomeLoading });
+  const reorder = useGalleryReorder();
 
   // The machines behind the cards. The status fan-out itself is mounted at the
   // page root (ChatAgent), because the sandbox panel can start a machine too.
@@ -115,7 +119,6 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
   // A filter on a machine that has since gone, or with only one left, is no filter.
   const filterHolds = computers.length > 1 && computers.some((c) => c.computer_id === computerFilter);
   const activeFilter = filterHolds ? computerFilter : ALL_COMPUTERS;
-  const showMachines = computers.length > 1;
   // And it is dropped once the list says so, rather than coming back if the
   // machine count grows again. An empty list is one not read yet, not an answer.
   if (computerFilter !== ALL_COMPUTERS && !filterHolds && computers.length > 0) {
@@ -127,7 +130,9 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     clearChatSession();
   }, []);
 
-  const scrollToTop = () => scrollRef.current?.scrollTo?.({ top: 0, behavior: 'smooth' });
+  const scrollToTop = () => {
+    for (const el of [pageRef.current, scrollRef.current]) el?.scrollTo?.({ top: 0, behavior: 'smooth' });
+  };
 
   const createWorkspace = useCreateWorkspace();
 
@@ -176,20 +181,6 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     onAfterMutate: (op) => { if (op === 'duplicate') scrollToTop(); },
   });
 
-  /** Enter reorder mode: the list takes over from the grid. */
-  const enterReorderMode = () => {
-    preSortByRef.current = sortBy;
-    setIsReorderMode(true);
-  };
-
-  /** Leave reorder mode; a drag that landed pins the manual order. */
-  const exitReorderMode = (didReorder: boolean) => {
-    setIsReorderMode(false);
-    if (didReorder) pickSort('custom');
-    else setSortBy(preSortByRef.current);
-    queryClient.invalidateQueries({ queryKey: queryKeys.workspaces.lists() });
-  };
-
   const rows = (wsData?.workspaces ?? []) as WorkspaceRecord[];
   // Home is the strip, never a card. The list carries it when asked to; the
   // Home query stands in until the list does.
@@ -206,6 +197,18 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     .filter((ws) => matches(ws) && (activeFilter === ALL_COMPUTERS || ws.computer_id === activeFilter))
     .sort((a, b) => (isEffectivelyPinned(b) ? 1 : 0) - (isEffectivelyPinned(a) ? 1 : 0));
   const showHome = !!homeRow && matches(homeRow);
+  // A card names its machine only when the cards listed sit on more than one:
+  // a second computer with nothing listed on it, or a filter down to one
+  // machine, would otherwise put the same line on every card. The toolbar
+  // still offers the filter once there are two.
+  const showMachines = new Set(visibleWorkspaces.flatMap((ws) => (ws.computer_id ? [ws.computer_id] : []))).size > 1;
+  // Cards drag in the Custom order over the whole list: a search or a filter
+  // leaves cards out, and an order read off part of the list has no place for
+  // them. And they hold still while the list is read again, the last order's
+  // list standing in for this one's included: a drop then would move from an
+  // order the read is about to replace (a reorder just made in the sidebar).
+  const canDrag = sortBy === 'custom' && !query && activeFilter === ALL_COMPUTERS;
+  const refreshing = sortBy === 'custom' && (isWsFetching || isPlaceholderData);
 
   if (isWsLoading || isHomeLoading) {
     return (
@@ -259,59 +262,50 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
     // A user with nothing but Home is welcomed, not shown a search box.
     if (!hasUserWorkspaces) {
       return (
-        <>
-          {homeRow && (
-            <HomeStrip workspace={homeRow} now={now} onSelect={onWorkspaceSelect} prefetchThreads={prefetchThreads} />
-          )}
-          <div className="flex flex-col items-center justify-center py-16 text-center enter-fade-up">
-            <GalleryEmptyState isFiltered={false} onNewWorkspace={() => setIsModalOpen(true)} />
-          </div>
-        </>
+        <div className="flex flex-col items-center justify-center py-16 text-center enter-fade-up">
+          <GalleryEmptyState isFiltered={false} onNewWorkspace={() => setIsModalOpen(true)} />
+        </div>
+      );
+    }
+    if (visibleWorkspaces.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center py-16">
+          <GalleryEmptyState isFiltered onNewWorkspace={() => setIsModalOpen(true)} />
+        </div>
       );
     }
     return (
-      <>
-        {showHome && homeRow && (
-          <HomeStrip workspace={homeRow} now={now} onSelect={onWorkspaceSelect} prefetchThreads={prefetchThreads} />
-        )}
-        {visibleWorkspaces.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16">
-            <GalleryEmptyState isFiltered onNewWorkspace={() => setIsModalOpen(true)} />
-          </div>
-        ) : (
-          // As many columns as fit at a readable card width: one on a phone,
-          // two on a small laptop, three from a 16-inch one up to the column's
-          // cap. Every row is as tall as the tallest, so the grid reads as one
-          // even field; a phone's single column keeps each card its own height.
-          <div className="grid grid-cols-1 gap-3 md:auto-rows-fr md:gap-4 md:grid-cols-[repeat(auto-fill,minmax(min(100%,23.75rem),1fr))]">
-            {visibleWorkspaces.map((workspace, index) => {
-              // With one computer the toolbar names it once; a line per card
-              // would only repeat it. With more, each card says which.
-              const computer = showMachines && workspace.computer_id
-                ? computersById.get(workspace.computer_id) ?? null
-                : null;
-              return (
-                <WorkspaceCard
-                  key={workspace.workspace_id}
-                  workspace={workspace}
-                  computer={computer}
-                  isThisMac={!!computer && isThisMac(computer)}
-                  now={now}
-                  index={index}
-                  onSelect={onWorkspaceSelect}
-                  onTogglePin={handleTogglePin}
-                  onRenameStart={setRenameTarget}
-                  onOpenComputer={(computerId) => openComputersPanel({ computerId })}
-                  onDuplicate={wsActions.openDuplicate}
-                  onMove={wsActions.openMove}
-                  onDelete={wsActions.openDelete}
-                  prefetchThreads={prefetchThreads}
-                />
-              );
-            })}
-          </div>
-        )}
-      </>
+      <CardGrid
+        workspaces={visibleWorkspaces}
+        canDrag={canDrag}
+        saving={reorder.isSaving}
+        refreshing={refreshing}
+        onMove={reorder.drop}
+        label={label}
+        renderCard={(workspace, index, drag) => {
+          const computer = showMachines && workspace.computer_id
+            ? computersById.get(workspace.computer_id) ?? null
+            : null;
+          return (
+            <WorkspaceCard
+              workspace={workspace}
+              computer={computer}
+              isThisMac={!!computer && isThisMac(computer)}
+              now={now}
+              index={index}
+              drag={drag}
+              onSelect={onWorkspaceSelect}
+              onTogglePin={handleTogglePin}
+              onRenameStart={setRenameTarget}
+              onOpenComputer={(computerId) => openComputersPanel({ computerId })}
+              onDuplicate={wsActions.openDuplicate}
+              onMove={wsActions.openMove}
+              onDelete={wsActions.openDelete}
+              prefetchThreads={prefetchThreads}
+            />
+          );
+        }}
+      />
     );
   };
 
@@ -324,87 +318,86 @@ function WorkspaceGallery({ onWorkspaceSelect, prefetchThreads }: WorkspaceGalle
           The header below is centred and holds a title, so it is not the bar to
           hand the window -- a drag region over prose is text you cannot select. */}
       <div className="chrome-drag-strip" aria-hidden="true" />
-      {/* Everything above the grid. It clips nothing (its bands are padded
-          clear of their edges); the overflow is what lets it reserve the
-          scrollbar's lane, so its column lines up with the grid's. */}
-      <div className={`shrink-0 overflow-hidden ${GALLERY_FRAME}`}>
-        {/* Header (desktop only) */}
-        <header
-          className={`hidden md:flex items-start pb-2 enter-fade-up ${GALLERY_COLUMN}`}
-          style={{ paddingTop: 'calc(var(--page-top) - 4px)' }}
-        >
-          <div className="flex w-full items-center justify-between gap-4" style={{ minHeight: 36 }}>
-            <h1 className="text-2xl font-semibold title-font" style={{ color: 'var(--color-text-primary)' }}>
-              {t('workspace.workspaces')}
-            </h1>
-            <GalleryActions
-              onNewWorkspace={() => setIsModalOpen(true)}
-              onOpenComputers={() => openComputersPanel()}
-            />
-          </div>
-        </header>
-
-        <div className={`mt-4 ${GALLERY_COLUMN}`}>
-          {/* On a phone the two labeled actions do not fit beside the title,
-              so they take the row beneath it. */}
-          <div className="flex flex-col gap-3 mb-4 md:hidden">
-            <h1 className="text-xl font-semibold title-font" style={{ color: 'var(--color-text-primary)' }}>
-              {t('workspace.workspaces')}
-            </h1>
-            <GalleryActions
-              stacked
-              onNewWorkspace={() => setIsModalOpen(true)}
-              onOpenComputers={() => openComputersPanel()}
-            />
-          </div>
-
-          {alertComputer && !isReorderMode && (
-            <div className="px-1 pb-4 md:px-0 enter-fade-up">
-              <DiskWarning computer={alertComputer} />
-            </div>
-          )}
-
-          {hasUserWorkspaces && !isReorderMode && (
-            <div className="px-1 pb-4 md:px-0 enter-fade-up enter-fade-up-d1">
-              <GalleryToolbar
-                search={searchQuery}
-                onSearchChange={setSearchQuery}
-                computers={computers}
-                isThisMac={isThisMac}
-                computerFilter={activeFilter}
-                onComputerFilterChange={setComputerFilter}
-                sortBy={sortBy}
-                onSortChange={(sort) => {
-                  pickSort(sort);
-                  scrollToTop();
-                }}
-                onReorder={enterReorderMode}
-                onOpenComputer={(computerId) => openComputersPanel({ computerId })}
+      <div ref={pageRef} className={GALLERY_PAGE} data-testid="gallery-page">
+        {/* Everything above the grid. From a laptop's width up it holds still
+            and clips nothing (its bands are padded clear of their edges); the
+            overflow is what lets it reserve the scrollbar's lane, so its
+            column lines up with the grid's. */}
+        <div className={`shrink-0 md:overflow-hidden ${GALLERY_FRAME}`}>
+          {/* Header (desktop only) */}
+          <header
+            className={`hidden md:flex items-start pb-2 enter-fade-up ${GALLERY_COLUMN}`}
+            style={{ paddingTop: 'calc(var(--page-top) - 4px)' }}
+          >
+            <div className="flex w-full items-center justify-between gap-4" style={{ minHeight: 36 }}>
+              <h1 className="text-2xl font-semibold title-font" style={{ color: 'var(--color-text-primary)' }}>
+                {t('workspace.workspaces')}
+              </h1>
+              <GalleryActions
+                onNewWorkspace={() => setIsModalOpen(true)}
+                onOpenComputers={() => openComputersPanel()}
               />
             </div>
-          )}
-        </div>
-      </div>
+          </header>
 
-      {isReorderMode ? (
-        <ReorderList
-          homeWorkspace={(homeWs as WorkspaceRecord) ?? null}
-          onDone={exitReorderMode}
-          showMachines={showMachines}
-        />
-      ) : (
-        // Spans the full width so its scrollbar runs down the window's edge;
-        // the column is centred inside it.
+          <div className={`mt-4 ${GALLERY_COLUMN}`}>
+            {/* Below a laptop's width the two labeled actions do not fit beside
+                the title, so they take the row beneath it, in equal halves. */}
+            <div className="flex flex-col gap-3 mb-4 md:hidden">
+              <h1 className="text-xl font-semibold title-font" style={{ color: 'var(--color-text-primary)' }}>
+                {t('workspace.workspaces')}
+              </h1>
+              <GalleryActions
+                stacked
+                onNewWorkspace={() => setIsModalOpen(true)}
+                onOpenComputers={() => openComputersPanel()}
+              />
+            </div>
+
+            {alertComputer && (
+              <div className="pb-4 enter-fade-up">
+                <DiskWarning computer={alertComputer} />
+              </div>
+            )}
+
+            {hasUserWorkspaces && (
+              <div className="pb-4 enter-fade-up enter-fade-up-d1">
+                <GalleryToolbar
+                  search={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  computers={computers}
+                  isThisMac={isThisMac}
+                  computerFilter={activeFilter}
+                  onComputerFilterChange={setComputerFilter}
+                  sortBy={sortBy}
+                  onSortChange={(sort) => {
+                    pickSort(sort);
+                    scrollToTop();
+                  }}
+                  onOpenComputer={(computerId) => openComputersPanel({ computerId })}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* From a laptop's width up, spans the full width so its scrollbar
+            runs down the window's edge; the column is centred inside. */}
         <div
           ref={scrollRef}
-          className={`flex-1 min-h-0 overflow-y-auto pb-8 ${GALLERY_FRAME}`}
+          className={`pb-8 md:flex-1 md:min-h-0 md:overflow-y-auto ${GALLERY_FRAME}`}
           data-testid="workspace-grid"
         >
-          <div className={`flex flex-col gap-3 px-1 md:gap-4 md:px-0 ${GALLERY_COLUMN}`}>
+          <div className={`flex flex-col gap-3 md:gap-4 ${GALLERY_COLUMN}`}>
+            {/* Home leads the list as a strip of its own. A search hides it like
+                any card; with nothing but Home there is no search to hide it. */}
+            {homeRow && (showHome || !hasUserWorkspaces) && (
+              <HomeStrip workspace={homeRow} now={now} onSelect={onWorkspaceSelect} prefetchThreads={prefetchThreads} />
+            )}
             {renderList()}
           </div>
         </div>
-      )}
+      </div>
 
       {/* Create Workspace Modal */}
       <CreateWorkspaceModal

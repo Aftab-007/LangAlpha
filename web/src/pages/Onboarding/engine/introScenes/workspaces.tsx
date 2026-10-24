@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, GripVertical, Pin, Plus, Search, Server, Upload, X } from 'lucide-react';
+import { FileText, Pin, Plus, Search, Server, Upload, X } from 'lucide-react';
 import { HomeRowIcon } from '@/hooks/useHomeWorkspace';
 import { useLocale } from '@/hooks/useLocale';
 import { shortMonthDay } from '@/lib/format';
@@ -284,7 +284,6 @@ function GalleryPage({
           {t('workspace.sortBy')}
         </span>
         <OutlineButton>{t('workspace.activity')}</OutlineButton>
-        <OutlineButton icon={GripVertical}>{t('workspace.reorder')}</OutlineButton>
       </div>
       <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2">
         {[home, ...GRID.desks].map((desk, i) => (

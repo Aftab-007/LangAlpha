@@ -34,7 +34,7 @@ const DND_MEASURING = { droppable: { strategy: MeasuringStrategy.Always } };
 // and an inline literal rebuilt the drag context on every render of the
 // panel, which re-rendered every sortable workspace row through it. The
 // activation distance keeps plain clicks toggling expand/collapse instead of
-// starting a drag (the gallery's reorder mode uses the same).
+// starting a drag (the gallery's cards use the same distance).
 const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } };
 
 function TreeRoot({ ids, onDragStart, onDragEnd, onDragCancel, clampOverlay, overlay, children }: TreeRootProps) {

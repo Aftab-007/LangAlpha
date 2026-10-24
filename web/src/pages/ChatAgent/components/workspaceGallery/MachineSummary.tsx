@@ -1,8 +1,8 @@
 /**
- * One quiet line about the machine a workspace lives on, drawn only when the
- * user has more than one to tell apart: whether it is up, its kind, its name,
- * and the badge's words the name does not already say. Shared by the gallery
- * card and the reorder list, so the two read a machine the same way.
+ * One quiet line about the machine a workspace lives on, drawn on a gallery
+ * card only when the cards sit on more than one machine to tell apart: whether
+ * it is up, its kind, its name, and the badge's words the name does not
+ * already say.
  *
  * A running machine is just its green dot; any other state is also spelled
  * out, since that is the one worth reading. The disk is the machine's, so it

@@ -42,8 +42,10 @@ export function ComputerChip({ computer, isThisMac, onOpen, className, style }: 
     >
       {/* The glyph names the state for a screen reader; the word after is for the eye. */}
       <ComputerStatusIndicator status={computer.status} preparing={preparing} glyphSize={10} glyphOnly className="shrink-0" />
-      <span className="truncate">{computer.name}</span>
-      <ComputerBadge computer={computer} isThisMac={isThisMac} name={computer.name} />
+      <span className="min-w-0 truncate">{computer.name}</span>
+      {/* A phone's line is shared with sort: the name is what says which
+          machine, so the badge gives way there rather than the name. */}
+      <ComputerBadge computer={computer} isThisMac={isThisMac} name={computer.name} className="max-sm:hidden" />
       {!running && (
         <span
           className="shrink-0 whitespace-nowrap text-xs"

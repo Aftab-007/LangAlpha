@@ -3,7 +3,7 @@
  * the app sets one and the row names it. "Daytona · Small", "E2B · Large",
  * "This Mac", "Mac", "SSH".
  *
- * Kept apart from any one surface so the gallery card, the reorder list and,
+ * Kept apart from any one surface so the gallery card, the toolbar chip and,
  * later, the thread page and the sidebar all name a machine the same way.
  */
 import { Cloud, Laptop, Terminal, type LucideIcon } from 'lucide-react';

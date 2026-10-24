@@ -1,10 +1,13 @@
 /**
  * The gallery's one toolbar row: search, the computer (a chip naming the one
- * there is, or a filter once there are two), sort, reorder.
- * On a phone the search takes the first line and the three controls the next;
- * on a wide screen it stops at a field's width and the controls stay beside it.
+ * there is, or a filter once there are two), sort. Custom is the order cards
+ * are dragged into, and its menu item says so.
+ * Below a laptop's width the search takes the first line and the controls the
+ * next, filling it; on a wide screen the search stops at a field's width and
+ * the controls stay beside it.
  */
-import { ArrowDownUp, Check, ChevronDown, GripVertical, Search, Server } from 'lucide-react';
+import { useId } from 'react';
+import { ArrowDownUp, Check, ChevronDown, Search, Server } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -44,7 +47,6 @@ interface GalleryToolbarProps {
   onComputerFilterChange: (computerId: string) => void;
   sortBy: GallerySort;
   onSortChange: (sort: GallerySort) => void;
-  onReorder: () => void;
   /** Open the Computers dialog on a machine, from the one-computer chip. */
   onOpenComputer: (computerId: string) => void;
 }
@@ -58,10 +60,10 @@ export function GalleryToolbar({
   onComputerFilterChange,
   sortBy,
   onSortChange,
-  onReorder,
   onOpenComputer,
 }: GalleryToolbarProps) {
   const { t } = useTranslation();
+  const customHintId = useId();
   const sortLabels: Record<GallerySort, string> = {
     activity: t('workspace.sortRecent', 'Recent'),
     name: t('common.name'),
@@ -96,9 +98,9 @@ export function GalleryToolbar({
           computer={computers[0]}
           isThisMac={isThisMac(computers[0])}
           onOpen={onOpenComputer}
-          // On a phone it shares the second line with sort and reorder, and its
-          // name gives way rather than pushing them onto a third.
-          className={`${CONTROL} min-w-0 max-w-[22rem] flex-1 basis-0 md:flex-none md:basis-auto`}
+          // Below a laptop's width it fills the second line beside sort, and its
+          // name gives way rather than pushing sort onto a third.
+          className={`${CONTROL} min-w-0 flex-1 basis-0 md:max-w-[22rem] md:flex-none md:basis-auto`}
           style={CONTROL_STYLE}
         />
       )}
@@ -108,13 +110,13 @@ export function GalleryToolbar({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className={`${CONTROL} min-w-0 max-w-[14rem]`}
+              className={`${CONTROL} min-w-0 flex-1 basis-0 md:max-w-[14rem] md:flex-none md:basis-auto`}
               style={CONTROL_STYLE}
               aria-label={`${t('workspace.filterByComputer', 'Filter by computer')}: ${filterLabel}`}
               data-testid="computer-filter"
             >
               <Server className="h-4 w-4 shrink-0" />
-              <span className="truncate">{filterLabel}</span>
+              <span className="min-w-0 flex-1 truncate text-left">{filterLabel}</span>
               <ChevronDown className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
             </button>
           </DropdownMenuTrigger>
@@ -143,7 +145,7 @@ export function GalleryToolbar({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className={CONTROL}
+            className={`${CONTROL} shrink-0`}
             style={CONTROL_STYLE}
             aria-label={`${t('workspace.sortBy')}: ${sortLabels[sortBy]}`}
             data-testid="gallery-sort"
@@ -156,32 +158,35 @@ export function GalleryToolbar({
         <DropdownMenuContent align="end" className="min-w-40">
           <DropdownMenuRadioGroup value={sortBy} onValueChange={(v) => onSortChange(v as GallerySort)}>
             {GALLERY_SORTS.map((id) => (
-              <DropdownMenuRadioItem key={id} value={id}>
-                <Mark on={sortBy === id} />
-                {sortLabels[id]}
+              <DropdownMenuRadioItem
+                key={id}
+                value={id}
+                className="items-start"
+                // The hint is read as a description, so the item's name stays the order's.
+                aria-label={sortLabels[id]}
+                aria-describedby={id === 'custom' ? customHintId : undefined}
+              >
+                <Mark on={sortBy === id} className="mt-0.5" />
+                {id === 'custom' ? (
+                  <span className="flex flex-col">
+                    <span>{sortLabels[id]}</span>
+                    <span id={customHintId} className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                      {t('workspace.customSortHint')}
+                    </span>
+                  </span>
+                ) : sortLabels[id]}
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
-
-      <button
-        type="button"
-        onClick={onReorder}
-        className={CONTROL}
-        style={CONTROL_STYLE}
-        aria-label={t('workspace.reorder')}
-        title={t('workspace.reorder')}
-      >
-        <GripVertical className="h-4 w-4" />
-      </button>
     </div>
   );
 }
 
 /** The chosen row's check, in the column the other rows leave empty. */
-function Mark({ on }: { on: boolean }) {
-  return <Check className="h-3.5 w-3.5 shrink-0" style={{ opacity: on ? 1 : 0 }} aria-hidden="true" />;
+function Mark({ on, className = '' }: { on: boolean; className?: string }) {
+  return <Check className={`h-3.5 w-3.5 shrink-0 ${className}`} style={{ opacity: on ? 1 : 0 }} aria-hidden="true" />;
 }
 
 export default GalleryToolbar;
