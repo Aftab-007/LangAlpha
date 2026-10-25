@@ -180,10 +180,11 @@ function Main() {
   return (
     <div className="main">
       <NetworkBanner />
-      {/* Keyed on the section so a new one mounts fresh and fades in. */}
+      {/* Keyed on the section so a new one mounts fresh. It swaps in at once:
+          the page under it draws in its final frame, and a fade over that
+          only delays it. */}
       <div
         key={pageKey}
-        className="route-fade-in"
         // `minHeight: 0` is what lets flex actually shrink this when the
         // banner takes part of the column. A flex item defaults to
         // `min-height: auto`, so without it a tall route (the dashboard grid)
