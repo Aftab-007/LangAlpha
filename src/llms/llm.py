@@ -239,6 +239,10 @@ class ModelConfig:
             # be one of these for the model to be usable (absence = no gate).
             if "oauth_plans" in model_info:
                 entry["oauth_plans"] = model_info["oauth_plans"]
+            # The name the provider knows it by, where that is not the key: an
+            # entry the user saves for it under another connection sends this.
+            if model_info.get("model_id") and model_info["model_id"] != model_name:
+                entry["model_id"] = model_info["model_id"]
             # Optional editorial metadata for the model-detail flyout. Additive —
             # only surfaced for models that authored it in models.json; the
             # frontend renders only the rows that are present. `display_name` is
@@ -549,8 +553,9 @@ class LLM:
         self.model = spec.model_id  # Use model_id for API calls
         self.provider = spec.provider
 
-        # System serving: route through platform proxy when no BYOK key
-        if not api_key and spec.system_provider:
+        # System serving: route through platform proxy when no BYOK key. An
+        # empty key is still the user's (a keyless endpoint of theirs).
+        if api_key is None and spec.system_provider:
             self.provider = spec.system_provider
 
         # Deep copy: reasoning-effort overrides mutate nested dicts (e.g.
@@ -702,7 +707,7 @@ class LLM:
         - "oauth"    — user-provided OAuth token
         - "platform" — system key (platform pays, credits deducted)
         """
-        if self.api_key_override is not None and self.api_key_override != "":
+        if self.api_key_override is not None:
             if self.provider_info.get("access_type") == "oauth":
                 return "oauth"
             return "byok"
@@ -819,11 +824,12 @@ class LLM:
     def _resolve_api_key(self) -> str:
         """Resolve API key: BYOK override > env var > local fallback.
 
-        Empty-string overrides are accepted for local providers (LM Studio,
-        Ollama, vLLM, etc.) where no real key is required.
+        An empty override is a user's keyless endpoint (LM Studio, Ollama, vLLM)
+        and gets the placeholder, never the deployment's key: the user chose
+        where the request goes, so the env key would be sent to their server.
         """
-        if self.api_key_override is not None and self.api_key_override != "":
-            return self.api_key_override
+        if self.api_key_override is not None:
+            return self.api_key_override or "EMPTY"
         if self.env_key:
             key = os.getenv(self.env_key)
             if key:
