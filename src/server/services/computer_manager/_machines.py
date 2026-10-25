@@ -811,11 +811,7 @@ class MachineLifecycleMixin:
                         f"{project_binding.workspace_id} after binding: {e}"
                     )
             if reconnected:
-                # The disk outlived the stop, but it still holds the threads
-                # deleted or gone idle meanwhile, and no worker's attach will
-                # look again: projects stay attached across a stop on the
-                # same sandbox. The bring-up job reconciles each one.
-                await self._queue_reconnect_syncs(computer_id, session.sandbox)
+                await self._on_session_attached(computer_id, session, resumed=True)
             self._record_sync(computer_id)
             if not reconnected:
                 # What starts with the machine (an always-on app) reads market
@@ -848,14 +844,6 @@ class MachineLifecycleMixin:
         await publish_computer_status_change(
             computer_id, ComputerStatus.STARTING, extra={"stage": stage}
         )
-
-    async def _queue_reconnect_syncs(self, computer_id: str, sandbox: Any) -> None:
-        """Queue every project on a resumed sandbox; the restore step finds
-        nothing deferred on a warm disk, so each costs only its sync."""
-        for workspace_id in await get_live_workspace_ids_for_computer(computer_id):
-            self._queue_bring_up(
-                computer_id, workspace_id, sandbox, sandbox.working_dir, urgent=False
-            )
 
     async def _revert_machine_start(self, computer_id: str) -> None:
         """CAS only from starting so failure cannot stop a machine another worker moved."""

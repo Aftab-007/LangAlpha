@@ -12,7 +12,7 @@ import logging
 import time
 from collections.abc import Callable, Collection
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, NamedTuple, Optional
 
 from ptc_agent.core.sandbox.runtime import RuntimeState, SandboxTransientError
 from ptc_agent.core.session import Session
@@ -27,6 +27,7 @@ from src.server.database.computer import (
 from src.server.database.conversation import forget_workspace_exists
 from src.server.database.home_workspace import is_home_row
 from src.server.database.workspace import (
+    ACTIVE_WORK_DELETE_REFUSAL,
     MOVING_DELETE_REFUSAL,
     SERVER_OWNED_CONFIG_KEYS,
     WorkspaceBusyError,
@@ -62,6 +63,15 @@ from src.server.services.computer_manager._types import (
 from src.server.services.persistence.file import FilePersistenceService
 
 logger = logging.getLogger(__name__)
+
+
+class IdleWindow(NamedTuple):
+    """When the idle sweep stops a running computer if nothing more counts as
+    activity, and the idle timeout that time is its last activity plus."""
+
+    stop_at: datetime
+    timeout_s: int
+
 
 # How many consecutive idle-stop failures on one machine before the sweep stops
 # trying it, and for how long. Without this a machine that cannot be stopped
@@ -397,10 +407,21 @@ class WorkspaceManager(ComputerManager):
             # move instead; the delete's own transaction checks again.
             if await workspace_is_moving(workspace_id):
                 raise WorkspaceBusyError(MOVING_DELETE_REFUSAL)
+            # Before its commands are ended below, which a delete refused for
+            # a live run would otherwise have stopped for nothing.
+            if await workspace_has_active_work(workspace_id):
+                raise WorkspaceBusyError(ACTIVE_WORK_DELETE_REFUSAL)
 
             logger.info(f"Deleting workspace {workspace_id}")
 
             retired = False
+
+            # Ended here, before the last backup reads the folder: a command
+            # left running would keep writing into a folder that is going,
+            # and report into a project that is gone.
+            from src.server.services.commands.control import end_workspace_commands
+
+            await end_workspace_commands(workspace_id)
 
             try:
                 # The project's last mirror sync, before anything on the
@@ -563,28 +584,16 @@ class WorkspaceManager(ComputerManager):
             ):
                 continue
 
-            # A machine nothing has stamped, such as one a migration carried
-            # over, has been idle since its row last changed. Skipping it left
-            # the row 'running' for good once the provider stopped the sandbox:
-            # short of the user stopping it, nothing else moves a running row.
-            last_activity = computer.get("last_activity_at") or computer.get(
-                "updated_at"
-            )
-            if not last_activity:
-                continue
-
-            # Handle timezone-aware comparison
-            if last_activity.tzinfo is None:
-                last_activity = last_activity.replace(tzinfo=timezone.utc)
-
-            idle_seconds = (now - last_activity).total_seconds()
             try:
-                idle_timeout = self._idle_timeout_for(computer)
+                window = self._idle_window(computer)
             except ValueError as e:
                 # Settings the stop could not build a provider from either.
                 self._note_idle_reap_failure(computer_id, e)
                 continue
-            if idle_seconds <= idle_timeout:
+            if window is None:
+                continue
+            idle_seconds = window.timeout_s + (now - window.stop_at).total_seconds()
+            if now <= window.stop_at:
                 continue
 
             # Skip machines that still have an active agent workflow. The gate
@@ -638,6 +647,44 @@ class WorkspaceManager(ComputerManager):
             ):
                 completed += 1
         return completed
+
+    def _idle_window(self, computer: Dict[str, Any]) -> Optional[IdleWindow]:
+        """When the sweep stops this running computer if nothing more counts
+        as activity, and the idle timeout that time comes from; None for a
+        row with no stamp at all.
+
+        A machine nothing has stamped, such as one a migration carried over,
+        has been idle since its row last changed. Skipping it left the row
+        'running' for good once the provider stopped the sandbox: short of
+        the user stopping it, nothing else moves a running row.
+
+        Raises:
+            ValueError: The computer's provider settings are unreadable.
+        """
+        last_activity = computer.get("last_activity_at") or computer.get("updated_at")
+        if not last_activity:
+            return None
+        if last_activity.tzinfo is None:
+            last_activity = last_activity.replace(tzinfo=timezone.utc)
+        idle_timeout = self._idle_timeout_for(computer)
+        return IdleWindow(last_activity + timedelta(seconds=idle_timeout), idle_timeout)
+
+    def idle_stop_window(self, computer: Dict[str, Any]) -> Optional[IdleWindow]:
+        """``_idle_window`` for a reader outside the sweep, such as the
+        background command watcher keeping a computer up: None where the sweep
+        never stops the machine.
+
+        An always-on flag exempts it. The sweep exempts exactly the flagged
+        machines once it has reconciled them, since it clears the flag of one
+        whose owner lost the entitlement before it reaps; a machine whose
+        settings no provider can be built from is never stopped either.
+        """
+        if computer.get("is_always_on"):
+            return None
+        try:
+            return self._idle_window(computer)
+        except ValueError:
+            return None
 
     def _idle_timeout_for(self, computer: Dict[str, Any]) -> int:
         """Seconds idle before the sweep stops this computer.
