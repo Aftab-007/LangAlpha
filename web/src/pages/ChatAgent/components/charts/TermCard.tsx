@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import { percentMove } from './termChange';
 import { CardNarrowContext, useCardNarrow, useTermPanel } from './termContext';
 import './termCard.css';
+import './termCardStyles.css';
 
 /** Below this, a card's full layout (three columns of figures, a table's
  *  every column) no longer fits its column. */

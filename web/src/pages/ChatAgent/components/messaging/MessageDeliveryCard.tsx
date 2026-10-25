@@ -4,6 +4,7 @@ import { Paperclip } from 'lucide-react';
 import type { InlineCardProps } from '../charts/cardReaders';
 import { FaviconImg } from '../charts/FaviconImg';
 import '../charts/termCard.css';
+import '../charts/termCardStyles.css';
 import { DeliveryStatusWord } from './deliveryStatusUi';
 import {
   deliveredFileCount,

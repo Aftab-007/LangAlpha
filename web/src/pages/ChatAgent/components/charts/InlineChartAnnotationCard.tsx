@@ -28,6 +28,7 @@ import { useChartSurface } from '../../contexts/ChartSurfaceContext';
 import { text, type InlineCardProps } from './cardReaders';
 import '../messageList/TurnFileCards.css';
 import './turnFileTerm.css';
+import './termCardStyles.css';
 
 const TEXT_COLOR = 'var(--color-text-tertiary)';
 const ACCENT = 'var(--color-accent-primary)';

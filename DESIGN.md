@@ -120,6 +120,30 @@ never substitutes for it.
   (`web/src/pages/ChatAgent/components/taskStatusUi.tsx`); surfaces declare
   overrides there instead of restating ladders.
 
+## Data cards
+
+A tool call that returns data (a quote, a chart, a filing, an order) lands in
+the transcript as a card and opens a detail panel in the same language
+(`web/src/pages/ChatAgent/components/charts/TermCard.tsx`, `TermPanel.tsx`).
+The reader picks one of three styles in Settings, per device
+(`web/src/lib/cardStyle.ts`, stamped on `<html>` as `data-card-style`):
+
+- **Balanced**, the default: Terminal's frame, its title set into the top edge,
+  with words in the text face, figures in mono and tags as pills. Data reads as
+  data beside the filled cards a reply opens (files, dashboards).
+- **Quiet**: the same type and marks in the platform's own card, filled, its
+  title inside, on the warm grays.
+- **Terminal**: the unfilled frame with mono throughout, bracket tags, dashed
+  rules and dotted leaders, on a cool palette (the `--color-term-*` tokens) so
+  a figure reads as data against the warm page.
+
+Terminal is the cards' own stylesheets. Balanced and Quiet live in
+`charts/termCardStyles.css` and only take marks away, so all three share one
+layout and one set of components. A new card takes its words from the kit's
+classes (`term-label`, `term-caps`, `term-fill`; `term-code` for an identifier
+that stays mono), never from an inline `text-transform`, or the quieter styles
+cannot reach it.
+
 ## Motion
 
 Motion says something changed: it arrived, left, opened, closed or was pressed.

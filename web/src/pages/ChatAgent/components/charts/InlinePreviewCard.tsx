@@ -17,6 +17,7 @@ import { shareLinkHref } from '../../utils/api/shareLinks';
 import { finite, text, type InlineCardProps } from './cardReaders';
 import '../messageList/TurnFileCards.css';
 import './turnFileTerm.css';
+import './termCardStyles.css';
 
 // Module-level deduplication: share a single in-flight health check per (workspaceId, port)
 const inflightChecks = new Map<string, Promise<{ reachable: boolean; checked_at: number }>>();
