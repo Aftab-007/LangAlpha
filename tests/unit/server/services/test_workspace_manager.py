@@ -25,7 +25,7 @@ from ptc_agent.core.sandbox.runtime import (
 from src.server.database.workspace_folders import WorkspaceFolderMoving
 from src.server.models.computer import ComputerStatus
 from src.server.services.computer_errors import SpecChangeLostError, UnknownResourceTier
-from src.server.services.computer_manager._types import ComputerBinding
+from src.server.services.computer_manager._types import ComputerBinding, MachineTarget
 
 # Imported for its side effect: this module binds ``platform_secrets_active`` by
 # value at import time, and the hot-resync tests below patch that name on its
@@ -48,6 +48,12 @@ from tests.unit.server.services.conftest import (
 
 
 _STUB_COMPUTER_ID = "11111111-1111-1111-1111-111111111111"
+_SSH_TARGET = {
+    "host": "macbook-pro",
+    "port": 22,
+    "username": "dev",
+    "tunnel": "tunnel-old",
+}
 
 _LIFECYCLE = "src.server.services.computer_manager._lifecycle"
 _MACHINES = "src.server.services.computer_manager._machines"
@@ -4980,16 +4986,101 @@ class TestStatusRoutesToDbFallback:
         ).session = _make_mock_session()  # on 'sandbox-abc'
         wm._session_computer["ws-1"] = _STUB_COMPUTER_ID
 
+        target = MachineTarget(kind="daytona")
         assert (
-            wm.get_session_if_ready("ws-1", expected_sandbox_id="sandbox-abc")
+            wm.get_session_if_ready(
+                "ws-1", expected_sandbox_id="sandbox-abc", target=target
+            )
             is not None
         )
         # The machine was rebound to a replacement sandbox.
         assert (
-            wm.get_session_if_ready("ws-1", expected_sandbox_id="sandbox-xyz") is None
+            wm.get_session_if_ready(
+                "ws-1", expected_sandbox_id="sandbox-xyz", target=target
+            )
+            is None
         )
         # A half-known binding is an inconsistency, not a licence to serve.
-        assert wm.get_session_if_ready("ws-1", expected_sandbox_id=None) is None
+        assert (
+            wm.get_session_if_ready("ws-1", expected_sandbox_id=None, target=target)
+            is None
+        )
+
+    @staticmethod
+    def _ssh_session(root: str = "/Users/dev/langalpha"):
+        from ptc_agent.config.core import SSHConfig
+
+        session = _make_mock_session()  # on 'sandbox-abc'
+        session.config.filesystem.working_directory = root
+        session.config.sandbox.ssh = SSHConfig.model_validate(_SSH_TARGET)
+        return session
+
+    def test_get_session_if_ready_declines_an_ssh_handle_a_repair_left_behind(self):
+        """A reinstall or reconnect on another worker keeps the computer's id
+        on the machine, so only the row's root and target tell this worker its
+        handle reaches the old folder or the machine as it was paired before."""
+        wm = WorkspaceManager(_make_config())
+        wm._machine(_STUB_COMPUTER_ID).session = self._ssh_session()
+        wm._session_computer["ws-1"] = _STUB_COMPUTER_ID
+
+        def ready(**row):
+            computer = {
+                "kind": "ssh",
+                "root_dir": "/Users/dev/langalpha",
+                "provider_config": _SSH_TARGET,
+                **row,
+            }
+            return wm.get_session_if_ready(
+                "ws-1",
+                expected_sandbox_id="sandbox-abc",
+                target=MachineTarget.of_computer(computer),
+            )
+
+        assert ready() is not None
+        assert ready(root_dir="/Users/dev/langalpha-2") is None
+        assert ready(provider_config={**_SSH_TARGET, "tunnel": "tunnel-new"}) is None
+        assert ready(provider_config={**_SSH_TARGET, "host": "mac-mini"}) is None
+
+    def test_get_session_if_ready_checks_no_target_off_ssh(self):
+        """Only an ssh computer's root and target change under its id."""
+        wm = WorkspaceManager(_make_config())
+        wm._machine(_STUB_COMPUTER_ID).session = self._ssh_session()
+        wm._session_computer["ws-1"] = _STUB_COMPUTER_ID
+
+        target = MachineTarget(
+            kind="daytona",
+            root_dir="/home/daytona",
+            provider_config={"host": "elsewhere"},
+        )
+        assert (
+            wm.get_session_if_ready(
+                "ws-1", expected_sandbox_id="sandbox-abc", target=target
+            )
+            is not None
+        )
+
+    def test_the_warm_handle_is_fenced_on_the_rows_computer_root(self):
+        """The file and share routes fence on the computer columns the
+        workspace row already joins, with no read of their own."""
+        from src.server.app.workspace_files.serve import warm_sandbox
+
+        wm = WorkspaceManager.get_instance(config=_make_config())
+        session = self._ssh_session()
+        wm._machine(_STUB_COMPUTER_ID).session = session
+        wm._session_computer["ws-1"] = _STUB_COMPUTER_ID
+        try:
+            running = {
+                "status": "running",
+                "sandbox_id": "sandbox-abc",
+                "computer_kind": "ssh",
+                "computer_root_dir": "/Users/dev/langalpha",
+                "computer_provider_config": _SSH_TARGET,
+            }
+            assert warm_sandbox(running, "ws-1") is session.sandbox
+            moved = {**running, "computer_root_dir": "/Users/dev/langalpha-2"}
+            assert warm_sandbox(moved, "ws-1") is None
+        finally:
+            WorkspaceManager.reset_instance()
 
     def test_the_warm_handle_is_fenced_on_the_rows_sandbox_id(self):
         """The share routes do no DB round-trip of their own, so the row they

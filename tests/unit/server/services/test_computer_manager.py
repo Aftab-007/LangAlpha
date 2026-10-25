@@ -4204,6 +4204,58 @@ class TestAFailedStartRevokesWhatItWrote(_Base):
             manager._revoke_data_token.assert_not_awaited()
 
 
+class TestALazyStartKeepsWhyBeforeItReverts(_Base):
+    """The revert publishes stopped, and a client reads the row on that frame,
+    so the failure is on the row before the status write, not after it."""
+
+    @staticmethod
+    def _lazy(manager, failure):
+        manager._machine_if_known = MagicMock(
+            return_value=SimpleNamespace(pending_lazy_sync=True)
+        )
+        return manager._revert_unpromoted_lazy_start(
+            _make_binding(computer_id="comp-1"), failure=failure
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("target", "unwind"),
+        [
+            (
+                f"{_LIFECYCLE}.update_computer_status",
+                lambda m, f: m._release_lost_lazy_start(
+                    "comp-1", "sandbox-abc", failure=f, kind="ssh"
+                ),
+            ),
+            (f"{_LIFECYCLE}.update_workspace_status", _lazy),
+        ],
+        ids=["lost-lazy-start", "lazy-phase-2"],
+    )
+    async def test_the_failure_is_recorded_before_the_stopped_write(
+        self, target, unwind
+    ):
+        manager = _make_manager()
+        manager._revoke_data_token = AsyncMock()
+        order: list[str] = []
+        failure = RuntimeError("boom")
+
+        async def _record(computer_id, exc, *, kind):
+            assert (computer_id, exc) == ("comp-1", failure)
+            order.append("record")
+
+        async def _status(*_a, **_k):
+            order.append("stopped")
+            return {"status": "stopped"}
+
+        with (
+            patch(f"{_LIFECYCLE}.record_start_failure", AsyncMock(side_effect=_record)),
+            patch(target, AsyncMock(side_effect=_status)),
+        ):
+            await unwind(manager, failure)
+
+        assert order == ["record", "stopped"]
+
+
 class TestFreshBuildSettlesEachRestoreAfterTheBind(_Base):
     """A fresh build restores every project before the bind, when no row names
     the new sandbox yet, so each restore's flag clear matches nothing. The
