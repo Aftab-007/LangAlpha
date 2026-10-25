@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { mergeCustomModelsForSlug, type CustomModelEntry } from '../mergeCustomModelsForSlug';
+import type { CustomModelEntry } from '@/components/model/types';
+import { mergeProviderModels, replaceProviderModels, withoutProvider } from '../customModels';
 
 const cm = (name: string, provider: string, extra: Partial<CustomModelEntry> = {}): CustomModelEntry => ({
   name,
@@ -9,24 +10,16 @@ const cm = (name: string, provider: string, extra: Partial<CustomModelEntry> = {
   ...extra,
 });
 
-describe('mergeCustomModelsForSlug', () => {
+describe('mergeProviderModels', () => {
   it('appends new entries when the slug has no prior entries', () => {
-    const merged = mergeCustomModelsForSlug({
-      existing: [cm('claude-5', 'anthropic')],
-      slug: 'my-openrouter',
-      newForSlug: [cm('gpt-5.4', 'my-openrouter'), cm('llama-4', 'my-openrouter')],
-    });
+    const merged = mergeProviderModels([cm('claude-5', 'anthropic')], 'my-openrouter', [cm('gpt-5.4', 'my-openrouter'), cm('llama-4', 'my-openrouter')]);
 
     expect(merged.map((m) => m.name).sort()).toEqual(['claude-5', 'gpt-5.4', 'llama-4']);
   });
 
   it('preserves other-slug entries untouched', () => {
     const other = cm('claude-5', 'anthropic', { input_modalities: ['text'] });
-    const merged = mergeCustomModelsForSlug({
-      existing: [other, cm('old-model', 'my-openrouter')],
-      slug: 'my-openrouter',
-      newForSlug: [cm('gpt-5.4', 'my-openrouter')],
-    });
+    const merged = mergeProviderModels([other, cm('old-model', 'my-openrouter')], 'my-openrouter', [cm('gpt-5.4', 'my-openrouter')]);
 
     const claude = merged.find((m) => m.name === 'claude-5')!;
     expect(claude).toBe(other); // same object reference — unchanged
@@ -35,11 +28,7 @@ describe('mergeCustomModelsForSlug', () => {
 
   it('preserves existing-slug entries when their name is NOT in the new batch', () => {
     const keeper = cm('user-added', 'my-openrouter', { model_id: 'custom-id-xyz' });
-    const merged = mergeCustomModelsForSlug({
-      existing: [keeper],
-      slug: 'my-openrouter',
-      newForSlug: [cm('gpt-5.4', 'my-openrouter')],
-    });
+    const merged = mergeProviderModels([keeper], 'my-openrouter', [cm('gpt-5.4', 'my-openrouter')]);
 
     expect(merged).toHaveLength(2);
     const kept = merged.find((m) => m.name === 'user-added')!;
@@ -50,11 +39,7 @@ describe('mergeCustomModelsForSlug', () => {
     const existingCollide = cm('gpt-5.4', 'my-openrouter', { model_id: 'stale-id' });
     const newEntry = cm('gpt-5.4', 'my-openrouter', { model_id: 'fresh-id', input_modalities: ['text', 'image'] });
 
-    const merged = mergeCustomModelsForSlug({
-      existing: [existingCollide],
-      slug: 'my-openrouter',
-      newForSlug: [newEntry],
-    });
+    const merged = mergeProviderModels([existingCollide], 'my-openrouter', [newEntry]);
 
     expect(merged).toHaveLength(1);
     expect(merged[0]).toBe(newEntry);
@@ -63,23 +48,30 @@ describe('mergeCustomModelsForSlug', () => {
 
   it('handles empty new batch by preserving all existing entries', () => {
     const existing = [cm('a', 'my-openrouter'), cm('b', 'my-openrouter')];
-    const merged = mergeCustomModelsForSlug({
-      existing,
-      slug: 'my-openrouter',
-      newForSlug: [],
-    });
+    const merged = mergeProviderModels(existing, 'my-openrouter', []);
 
     expect(merged).toEqual(existing);
   });
 
   it('handles empty existing by returning just the new batch', () => {
-    const merged = mergeCustomModelsForSlug({
-      existing: [],
-      slug: 'my-openrouter',
-      newForSlug: [cm('gpt-5.4', 'my-openrouter')],
-    });
+    const merged = mergeProviderModels([], 'my-openrouter', [cm('gpt-5.4', 'my-openrouter')]);
 
     expect(merged).toHaveLength(1);
     expect(merged[0].name).toBe('gpt-5.4');
+  });
+});
+
+describe('replaceProviderModels', () => {
+  it("replaces one provider's entries and keeps every other provider's", () => {
+    const other = cm('claude-5', 'anthropic');
+    const next = [cm('b', 'mine')];
+    expect(replaceProviderModels([other, cm('a', 'mine')], 'mine', next)).toEqual([other, ...next]);
+  });
+});
+
+describe('withoutProvider', () => {
+  it("drops only that provider's entries", () => {
+    const other = cm('claude-5', 'anthropic');
+    expect(withoutProvider([other, cm('a', 'mine')], 'mine')).toEqual([other]);
   });
 });
