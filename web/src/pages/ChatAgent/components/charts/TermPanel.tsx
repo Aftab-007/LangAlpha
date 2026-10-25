@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowUpRight, Check, Copy } from 'lucide-react';
+import { copyText } from '@/lib/clipboard';
 import { TermCard } from './TermCard';
 import { TermPanelContext, useTermPanel } from './termContext';
 import './termPanel.css';
@@ -79,7 +80,7 @@ export function TermCopy({ text }: { text: string }): React.ReactElement {
   // Confirmed once the write lands (it rejects when the document has lost
   // focus); a second copy restarts the one timer rather than racing it.
   const copy = (): void => {
-    navigator.clipboard.writeText(text).then(() => {
+    copyText(text).then(() => {
       setCopied(true);
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => setCopied(false), COPIED_MS);
