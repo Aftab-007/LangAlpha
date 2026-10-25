@@ -1979,7 +1979,25 @@
       "tasksRunning_one": "{{count}} task · {{running}} running",
       "tasksRunning_other": "{{count}} tasks · {{running}} running",
       "tasksHeading": "From this thread",
+      "commandsHeading": "Running in the background",
       "show": "Show this thread's work"
+    },
+    "commands": {
+      "chip_one": "{{count}} command running",
+      "chip_other": "{{count}} commands running",
+      "pickedUp_one": "The Agent picks this up when it finishes.",
+      "pickedUp_other": "The Agent picks each one up when it finishes.",
+      "inBackground": "In background {{duration}}",
+      "completedIn": "Completed in {{duration}}",
+      "failedAfter": "Failed after {{duration}}",
+      "stoppedAfter": "Stopped after {{duration}}",
+      "stoppedEarlyAfter": "Stopped early after {{duration}}",
+      "completed": "Completed",
+      "failed": "Failed",
+      "stopped": "Stopped",
+      "stoppedEarly": "Stopped early",
+      "stopLabel": "Stop {{name}}",
+      "stopFailed": "Couldn't stop it. Try again."
     },
     "provenance": {
       "fromChiefOfStaff": "From Chief of Staff",
@@ -1995,7 +2013,8 @@
       "couldntFinish": "couldn't finish",
       "stopped": "was stopped",
       "taskFinished": "finished",
-      "taskFailed": "failed"
+      "taskFailed": "failed",
+      "commandStoppedEarly": "stopped early"
     },
     "taskCard": {
       "statusRunning": "Running",
@@ -3253,6 +3272,7 @@
       "executeCode": "Execute Code",
       "thinking": "Thinking",
       "taskOutput": "Task Output",
+      "threadStatus": "Thread Status",
       "automations": "Automations",
       "createAutomation": "Create Automation",
       "manageAutomation": "Manage Automation",
@@ -3357,6 +3377,7 @@
       "waitingForSubagent": "waiting for subagent...",
       "fetchingTaskOutput": "fetching task output...",
       "checkingAutomations": "checking automations...",
+      "checkingThreadStatus": "checking what is running...",
       "creatingName": "creating {{name}}...",
       "creatingAutomation": "creating automation...",
       "actionAutomation": "{{action}} automation...",

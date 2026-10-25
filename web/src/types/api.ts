@@ -1,5 +1,7 @@
 /** Core API types — User, Workspace, Thread, and response wrappers */
 
+import type { CommandFailureReason, CommandTool } from './commands';
+
 // --- User ---
 
 export interface User {
@@ -606,6 +608,18 @@ export type ReportSource =
       kind: 'task'; task_id: string; display_id: string; description?: string; failed: boolean;
       /** The subagent's role. Absent on reports from before it was kept. */
       subagent_type?: string;
+    }
+  /** A Bash or ExecuteCode call in this thread that ran on in the background
+   *  and has now ended. Of the stops, only the user's reports. */
+  | {
+      kind: 'command_report'; command_id: string; tool: CommandTool; description?: string | null;
+      status: 'completed' | 'failed' | 'stopped';
+      /** Why a failed one failed; `after_turn_limit` is one stopped an hour
+       *  after its turn ended, which reads as stopped early. */
+      failure_reason?: CommandFailureReason | null;
+      /** The call it started from, whose tool card the report opens; null
+       *  for a command whose call had no id. */
+      tool_call_id?: string | null;
     };
 
 export interface ThreadMetadata {
