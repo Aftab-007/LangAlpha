@@ -17,3 +17,13 @@ export function slugifyModelName(input: string): string {
     .replace(/^[^a-z0-9]+/, '')
     .slice(0, 63);
 }
+
+/**
+ * The name a provider of the user's own is saved under. The server's rule for
+ * it is narrower than a model's (`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$` in
+ * `src/server/app/users.py`), so the separators a model name keeps become
+ * dashes here.
+ */
+export function slugifyProviderName(input: string): string {
+  return slugifyModelName(input).replace(/[.:/]+/g, '-');
+}

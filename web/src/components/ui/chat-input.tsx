@@ -9,6 +9,7 @@ import { useEffectiveTuning, useModelProfileWriter } from '@/hooks/useModelProfi
 import { useFeatureEnabled } from '@/hooks/useFeatures';
 import { homeWorkspaceQuery } from '@/hooks/useHomeWorkspace';
 import { useAllModels } from '@/hooks/useAllModels';
+import { useLapsedSignIn } from '@/hooks/useLapsedSignIn';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useQuickAccessModels } from '@/hooks/useQuickAccessModels';
 import { useSeededModel } from '@/hooks/useSeededModel';
@@ -198,6 +199,7 @@ function ChatInput({
   const { preferences, isLoaded: preferencesRead } = usePreferences();
   const marketWatchEnabled = useFeatureEnabled('market_watch');
   const { validModelNames, metadata: modelMetadata, isLoading: modelsLoading } = useAllModels();
+  const lapsedSignIn = useLapsedSignIn();
   const otherPref = (preferences as Record<string, Record<string, unknown>> | null)?.other_preference;
   const [message, setMessage] = useState('');
   const { attachedFiles, setAttachedFiles, isDragging, handleFiles, restoreFiles, removeFile, onDragEnter, onDragOver, onDragLeave, onDrop, handlePaste } = useFileAttachments({ disabled });
@@ -861,6 +863,7 @@ function ChatInput({
                 fastMode={resolvedFastMode}
                 onFastModeChange={handleFastModeChange}
                 isCodexModel={isCodexModel}
+                needsSignIn={(m) => lapsedSignIn(m) !== null}
                 reasoningEfforts={reasoningEfforts}
                 dropdownDirection={dropdownDirection}
                 container={chatContainer}

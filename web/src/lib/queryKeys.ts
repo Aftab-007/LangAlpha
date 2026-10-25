@@ -33,8 +33,19 @@ export const queryKeys = {
   },
   oauth: {
     all:    ['oauth'],
-    codex:  () => [...queryKeys.oauth.all, 'codex'],
-    claude: () => [...queryKeys.oauth.all, 'claude'],
+    /** One subscription's status, by its short name (`SubscriptionKey`). */
+    status: (key: string) => [...queryKeys.oauth.all, key],
+  },
+  // What each connected key or subscription can run, read from the provider's
+  // own list. `q` narrows a searched list (OpenRouter); '' is the whole list.
+  providerModels: {
+    all:       ['providerModels'],
+    /** Every answer for one provider, searched or whole: a refresh replaces them all. */
+    availableFor: (provider: string) => [...queryKeys.providerModels.all, 'available', provider],
+    available: (provider: string, q = '') => [...queryKeys.providerModels.availableFor(provider), q],
+    local:     (provider: string) => [...queryKeys.providerModels.all, 'local', provider],
+    /** A custom endpoint not yet saved: what it lists for this key. */
+    endpoint:  (format: string, baseUrl: string, apiKey: string) => [...queryKeys.providerModels.all, 'endpoint', format, baseUrl, apiKey],
   },
   workspaces: {
     all:    ['workspaces'],
