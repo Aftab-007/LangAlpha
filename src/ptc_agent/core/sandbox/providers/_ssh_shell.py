@@ -19,12 +19,7 @@ from ptc_agent.core.paths import (
     WorkspaceLayout,
 )
 from ptc_agent.core.sandbox.providers import _ssh_bootstrap as bootstrap
-from ptc_agent.core.sandbox.providers._exec_sessions import (
-    EXEC_MARK,
-    GROUP_MARK_SH,
-    SESSION_FUNCTIONS_SH,
-    ps_start_sh,
-)
+from ptc_agent.core.sandbox.providers._proc_sh import EXEC_MARK, PROC_SH, ps_start_sh
 from ptc_agent.core.sandbox.providers.ssh_errors import SSHConnectError
 
 # The login shell parses only this line. Its quoted part holds no ' or \, which
@@ -609,8 +604,8 @@ SESSION_SH = _proc_or_ps(_SESSION_LINUX_SH, _SESSION_PS_SH)
 # time, so a stop never signals a pid that has since gone to someone else,
 # and exports them as the mark that proves a group it left is its own.
 # macOS's bash 3.2 has no $BASHPID, so the leader learns its pid as the parent
-# of a process it execs, and with no /proc its start time is ps's, as ``st``
-# reads it (``_exec_sessions``).
+# of a process it execs, and with no /proc its start time is ps's, as
+# ``pstart`` reads it (``_proc_sh``).
 _PIDFILE_SH = (
     "__la_me=${BASHPID:-$(exec sh -c 'echo $PPID')}; "
     'if { read -r __la_s < "/proc/$__la_me/stat"; } 2>/dev/null; then '
@@ -700,20 +695,6 @@ def kill_group_script(computer_dir: str, pgid: int, *, root: bool) -> str:
     )
 
 
-def code_run_command(path: str, payload: str) -> str:
-    """Write base64 *payload* to *path* and run it, removing the file however
-    the run ends.
-
-    A timeout or a cancel ends the group with a TERM, which the trap turns into
-    an exit so the EXIT trap still runs; only the KILL after the grace skips it.
-    """
-    return (
-        f"__la_py={shlex.quote(path)}; "
-        "trap 'rm -f -- \"$__la_py\"' EXIT; trap 'exit 143' TERM HUP INT; "
-        f'printf %s {payload} | base64 -d > "$__la_py" || exit 1; python3 "$__la_py"'
-    )
-
-
 # -- Stopping -------------------------------------------------------------------
 
 # ``la_sup ROOT`` prints the login's processes running the MCP supervisor of
@@ -747,14 +728,16 @@ _SUPERVISOR_SH = _proc_or_ps(_SUPERVISOR_LINUX_SH, _SUPERVISOR_PS_SH)
 def stop_script(cdir: str, *, root: bool, computer_root: str = "") -> str:
     """Mark the computer stopped and end every process group it left.
 
-    A group is signalled only while its leader is the process recorded, or
-    once the leader is gone, while a member carries the command's mark
-    (``GROUP_MARK_SH``). Records from before a reboot name nothing alive, and
-    their ids may be anyone's now, so they are dropped unsignalled. ``root``
-    ends only the records ``exec_as_root`` left, and prints nothing;
-    otherwise ``has-root`` says such records remain. Given ``computer_root``,
-    the computer's MCP supervisor and the servers in its session end too,
-    however it was started.
+    A group is signalled only while it is proven the record's (``psig``):
+    its leader is the process recorded, a zombie one included, or a member
+    carries the command's mark. Records from before a reboot name nothing alive, and their ids may
+    be anyone's now, so they are dropped unsignalled. ``root`` ends only the
+    records ``exec_as_root`` left, and prints nothing; otherwise ``has-root``
+    says such records remain. Given ``computer_root``, the computer's MCP
+    supervisor and the servers in its session end too, however it was
+    started, and so do its detached jobs (``sandbox/jobs``), which leave the
+    session of the exec that started them. A job's record stays, so it reads
+    as having vanished.
     """
     supervisor = ""
     if root:
@@ -765,6 +748,7 @@ def stop_script(cdir: str, *, root: bool, computer_root: str = "") -> str:
         records = '"$d"/sessions/run-*/*/*.pid "$d"/execs/[0-9]*'
         cleanup = 'rm -rf "$d"/sessions/run-*; rm -f "$d"/execs/[0-9]*'
         if computer_root:
+            records += f" {shlex.quote(computer_root)}/{SandboxLayout.SYSTEM_JOBS_DIR}/*/pid"
             supervisor = (
                 f"  for pid in $(la_sup {shlex.quote(computer_root)}); do\n"
                 '    S="$S $(la_sid "$pid")"; kill -"$1" -- "-$pid"; kill -"$1" "$pid"; n=1\n'
@@ -782,21 +766,21 @@ def stop_script(cdir: str, *, root: bool, computer_root: str = "") -> str:
         )
     return f"""d={shlex.quote(cdir)}
 [ -d "$d" ] || exit 0
-{mark}{SESSION_FUNCTIONS_SH}{GROUP_MARK_SH}
-{SESSION_SH}{_SUPERVISOR_SH if supervisor else ""}S= P=
+{mark}{PROC_SH}{SESSION_SH}{_SUPERVISOR_SH if supervisor else ""}S= P=
 sig() {{
   n=0
   for f in {records}; do
     [ -e "$f" ] || continue
     {{ read -r pid start < "$f"; }} 2>/dev/null
     case $pid in ""|*[!0-9]*) continue;; esac
-    now=$(st "$pid")
-    if [ "$now" = "$start" ]; then
-      S="$S $(la_sid "$pid")"; kill -"$1" -- "-$pid"; kill -"$1" "$pid"; n=1
-    elif [ -z "$now" ] && case " $P " in *" $pid "*) ;; *) ours "$pid" "$pid-$start";; esac; then
-      # Proven on the TERM round and trusted on the KILL round a second
-      # later: what outlived the TERM may carry no mark of its own.
-      P="$P $pid"; S="$S $(la_sid "$pid")"; kill -"$1" -- "-$pid" && n=1
+    # Proven on the TERM round and trusted on the KILL round a second later,
+    # while its pid names no process, not even a zombie: what outlived the
+    # TERM may carry no mark of its own. A group's session is read before the
+    # signal, while the group still has it.
+    if case " $P " in *" $pid "*) [ -z "$(pstart "$pid" z)" ];; *) false;; esac; then
+      kill -"$1" "-$pid" && n=1
+    else
+      s=$(la_sid "$pid"); if psig "$1" "$pid" "$start" z; then P="$P $pid"; S="$S $s"; n=1; fi
     fi
   done 2>/dev/null
 {supervisor}  for s in $S; do la_sk "$1" "$s" && n=1; done

@@ -17,6 +17,8 @@ import iconRoboSing from '../../../assets/img/icon-robo-sing.png';
 import { parseDisplayableResults, buildRichResultMap, resolveSnippet } from './webSearchUtils';
 import { isDirectToolName } from '../utils/directTools';
 import { DirectToolDetail } from './mcp/DirectToolDetail';
+import { ToolCallCommandState } from './commands/CommandState';
+import { isCommandTool } from './commands/commandWords';
 
 // --- Public types ---
 
@@ -284,12 +286,16 @@ function CodeToolDisplay({ toolName, toolCallProcess, rawContent }: CodeToolDisp
   const { t } = useTranslation();
   const [inputExpanded, setInputExpanded] = useState(false);
   const input = formatToolInput(toolName, toolCallProcess.toolCall?.args);
+  const toolCallId = toolCallProcess.toolCall?.id;
 
   let displayContent = rawContent || t('toolArtifact.noResultContent');
   if (toolName === 'ExecuteCode') displayContent = displayContent.replace(/^SUCCESS\n?/, '');
 
   return (
     <div className="space-y-4">
+      {/* The output of a call that moved to the background says only that
+          it did; where its command stands now leads the card. */}
+      {isCommandTool(toolName) && toolCallId && <ToolCallCommandState toolCallId={toolCallId} className="px-1" />}
       {input && (
         <div>
           <button

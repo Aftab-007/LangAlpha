@@ -1971,7 +1971,25 @@
       "tasksRunning_one": "{{count}} 个任务 · {{running}} 个运行中",
       "tasksRunning_other": "{{count}} 个任务 · {{running}} 个运行中",
       "tasksHeading": "来自此对话",
+      "commandsHeading": "后台运行中",
       "show": "显示此对话的工作"
+    },
+    "commands": {
+      "chip_one": "{{count}} 个命令运行中",
+      "chip_other": "{{count}} 个命令运行中",
+      "pickedUp_one": "运行结束后，Agent 会接着处理。",
+      "pickedUp_other": "每个运行结束后，Agent 都会接着处理。",
+      "inBackground": "后台运行 {{duration}}",
+      "completedIn": "已完成，用时 {{duration}}",
+      "failedAfter": "已失败，用时 {{duration}}",
+      "stoppedAfter": "已停止，用时 {{duration}}",
+      "stoppedEarlyAfter": "已提前停止，用时 {{duration}}",
+      "completed": "已完成",
+      "failed": "已失败",
+      "stopped": "已停止",
+      "stoppedEarly": "已提前停止",
+      "stopLabel": "停止{{name}}",
+      "stopFailed": "未能停止，请重试。"
     },
     "provenance": {
       "fromChiefOfStaff": "来自 CoS Agent",
@@ -1987,7 +2005,8 @@
       "couldntFinish": "未能完成",
       "stopped": "已被停止",
       "taskFinished": "已完成",
-      "taskFailed": "已失败"
+      "taskFailed": "已失败",
+      "commandStoppedEarly": "已提前停止"
     },
     "taskCard": {
       "statusRunning": "运行中",
@@ -3224,6 +3243,7 @@
       "executeCode": "执行代码",
       "thinking": "思考",
       "taskOutput": "任务输出",
+      "threadStatus": "对话状态",
       "automations": "自动化",
       "createAutomation": "创建自动化",
       "manageAutomation": "管理自动化",
@@ -3328,6 +3348,7 @@
       "waitingForSubagent": "等待子 Agent...",
       "fetchingTaskOutput": "获取任务输出...",
       "checkingAutomations": "检查自动化...",
+      "checkingThreadStatus": "查看运行中的工作...",
       "creatingName": "创建 {{name}}...",
       "creatingAutomation": "创建自动化...",
       "actionAutomation": "{{action}} 自动化...",
