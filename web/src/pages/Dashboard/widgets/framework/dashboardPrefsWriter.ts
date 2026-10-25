@@ -27,8 +27,7 @@ export const BROADCAST_CHANNEL = 'dashboard-prefs';
  *    wholesale, and a `next` computed without ever seeing the real prefs
  *    would erase the user's saved layout (irreversible — no prefs undo).
  *
- * Used by `useDashboardPrefs.flush()` (debounced widget edits) and
- * `DashboardRouter.onModeChange()` (mode toggle).
+ * Used by `useDashboardPrefs.flush()` (debounced widget edits).
  */
 export function useDashboardPrefsWriter() {
   const updatePrefs = useUpdatePreferences();
@@ -63,7 +62,10 @@ export function useDashboardPrefsWriter() {
       if (fresh === undefined && opts?.fallbackOther === undefined) return false;
       updatePrefs.mutate(
         {
-          other_preference: { dashboard: next },
+          // `mode` is not read since v2. It is written for a tab still on a
+          // build from before it, which reads any record without
+          // `mode: 'custom'` as Classic and would show (and save) that page.
+          other_preference: { dashboard: { ...next, mode: 'custom' } },
         },
         {
           onSuccess: () => {

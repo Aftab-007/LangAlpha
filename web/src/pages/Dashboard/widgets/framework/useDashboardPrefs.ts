@@ -5,20 +5,12 @@ import { useToast } from '@/components/ui/use-toast';
 import { queryKeys } from '@/lib/queryKeys';
 import { BROADCAST_CHANNEL, useDashboardPrefsWriter } from './dashboardPrefsWriter';
 import { migrateDashboardPrefs } from './migrations';
-import { getPreset, type PresetId } from '../presets';
-import { DASHBOARD_PREFS_VERSION, type DashboardPrefs } from '../types';
+import { defaultLayout, getPreset, type PresetId } from '../presets';
+import type { DashboardPrefs } from '../types';
 
 const HISTORY_CAP = 3;
 const DEBOUNCE_MS = 800;
 
-function emptyPrefs(): DashboardPrefs {
-  return {
-    version: DASHBOARD_PREFS_VERSION,
-    mode: 'classic',
-    widgets: [],
-    layouts: {},
-  };
-}
 
 /** Dashboard prefs live inside `other_preference.dashboard` to fit the backend's 4-column schema. */
 function readDashboardPrefs(preferences: unknown): Partial<DashboardPrefs> | null {
@@ -27,13 +19,14 @@ function readDashboardPrefs(preferences: unknown): Partial<DashboardPrefs> | nul
 }
 
 export function useDashboardPrefs() {
-  const { preferences, isLoading } = usePreferences();
+  const { preferences, isLoading, isLoaded } = usePreferences();
   const { writeDashboardPrefs, isPending } = useDashboardPrefsWriter();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const raw = readDashboardPrefs(preferences);
-  const stored = useMemo<DashboardPrefs>(() => migrateDashboardPrefs(raw) ?? emptyPrefs(), [raw]);
+  const saved = useMemo(() => migrateDashboardPrefs(raw), [raw]);
+  const stored = useMemo<DashboardPrefs>(() => saved ?? defaultLayout(), [saved]);
 
   const [local, setLocal] = useState<DashboardPrefs>(stored);
   const storedRef = useRef<DashboardPrefs>(stored);
@@ -143,14 +136,33 @@ export function useDashboardPrefs() {
     [writeDashboardPrefs, preferences, runReplay, toast]
   );
 
+  /**
+   * `adjust` marks a change the page makes on its own (a layout clamped to
+   * its widgets' bounds, a cell fitted to its content) rather than one the
+   * reader made. On a saved layout it saves like any other; on the unsaved
+   * default it stays on the page, so viewing the default never writes it, and
+   * the reader's first edit saves it whole.
+   */
   const update = useCallback(
-    (patch: Partial<DashboardPrefs> | ((prev: DashboardPrefs) => DashboardPrefs), opts?: { immediate?: boolean }) => {
-      // Cold-cache gate: drop edits before the initial GET resolves so we
-      // don't build `next` from `{}` and overwrite the user's saved dashboard
-      // (the server replaces the dashboard key wholesale).
-      if (isLoading) return;
+    (
+      patch: Partial<DashboardPrefs> | ((prev: DashboardPrefs) => DashboardPrefs),
+      opts?: { immediate?: boolean; adjust?: boolean },
+    ) => {
+      const apply = (prev: DashboardPrefs) => (typeof patch === 'function' ? patch(prev) : { ...prev, ...patch });
+      // Nothing is saved until the saved copy has been read: the page shows
+      // the default while it loads and after a read that failed, and a write
+      // built on that would replace the saved dashboard once a later read
+      // lands (the server replaces the dashboard key wholesale). The page
+      // still answers (a widget's tab switches), and the saved copy replaces
+      // it when a read lands. An adjustment to the unsaved default joins an
+      // edit waiting to save or still saving, or the copy taken back once
+      // that write settles would leave it out.
+      if (!isLoaded || (opts?.adjust && !saved && pendingTimer.current === null && !isPending)) {
+        setLocal(apply);
+        return;
+      }
       setLocal((prev) => {
-        const next = typeof patch === 'function' ? patch(prev) : { ...prev, ...patch };
+        const next = apply(prev);
         if (pendingTimer.current) window.clearTimeout(pendingTimer.current);
         if (opts?.immediate) {
           // Treat immediate writes as "no debounce queued" so a follow-up
@@ -169,7 +181,7 @@ export function useDashboardPrefs() {
         return next;
       });
     },
-    [flush, isLoading]
+    [flush, isLoaded, isPending, saved]
   );
 
   useEffect(
@@ -177,20 +189,6 @@ export function useDashboardPrefs() {
       if (pendingTimer.current) window.clearTimeout(pendingTimer.current);
     },
     []
-  );
-
-  const setMode = useCallback(
-    (mode: 'classic' | 'custom') => {
-      update((prev) => {
-        // First flip to custom with no widgets → seed Morning Brief
-        if (mode === 'custom' && prev.widgets.length === 0) {
-          const preset = getPreset('morning-brief');
-          return { ...prev, mode, widgets: preset.widgets, layouts: preset.layouts };
-        }
-        return { ...prev, mode };
-      }, { immediate: true });
-    },
-    [update]
   );
 
   const applyPreset = useCallback(
@@ -203,7 +201,6 @@ export function useDashboardPrefs() {
         ].slice(0, HISTORY_CAP);
         return {
           ...prev,
-          mode: 'custom',
           widgets: preset.widgets,
           layouts: preset.layouts,
           history,
@@ -221,7 +218,8 @@ export function useDashboardPrefs() {
     prefs: local,
     stored: storedRef.current,
     isLoading,
-    setMode,
+    /** Whether the saved copy has been read, so an edit can be saved. */
+    editable: isLoaded,
     update,
     applyPreset,
     resetToDefault,

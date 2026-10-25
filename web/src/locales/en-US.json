@@ -499,13 +499,10 @@
     "prefIncompleteMsg": "Your preference information is not complete. Please complete your preferences to get the best experience with the agent.",
     "ignoreFor24h": "Ignore for 24 hours",
     "proceed": "Proceed",
-    "watchlist": "Watchlist",
-    "layoutToggle": {
-      "groupAria": "Dashboard layout",
-      "classic": "Classic",
-      "custom": "Custom",
+    "header": {
       "editLayout": "Edit layout",
-      "exitEditLayout": "Exit edit layout"
+      "exitEditLayout": "Exit edit layout",
+      "emailLabel": "Email"
     },
     "widgets": {
       "common": {
@@ -1100,19 +1097,6 @@
         "noContent": "(no preview content)"
       }
     },
-    "classic": {
-      "marketOverview": "Market Overview",
-      "editHoldingTitle": "Edit holding — {{symbol}}",
-      "quantityLabel": "Quantity *",
-      "quantityPlaceholder": "e.g. 10.5",
-      "averageCostLabel": "Average Cost Per Share *",
-      "averageCostPlaceholder": "e.g. 175.50",
-      "notesLabel": "Notes",
-      "notesPlaceholder": "Optional",
-      "cancel": "Cancel",
-      "save": "Save",
-      "emailLabel": "Email"
-    },
     "brief": {
       "eyebrow": "AI Generated Insight",
       "personalizedBrief": "Personalized Brief",
@@ -1149,28 +1133,6 @@
       "notFound": "Insight not found",
       "allSources_one": "All Sources ({{count}})",
       "allSources_other": "All Sources ({{count}})"
-    },
-    "portfolio": {
-      "createTitle": "Create My Portfolio",
-      "colSymbol": "Symbol",
-      "colName": "Name",
-      "colPrice": "Price",
-      "colChange": "Change"
-    },
-    "portfolioWatchlistCard": {
-      "stock": "Stock",
-      "shares": "{{qty}} shares",
-      "sharesHidden": "*** shares",
-      "edit": "Edit",
-      "delete": "Delete",
-      "headerWatchlist": "Watchlist",
-      "headerPortfolio": "Portfolio",
-      "tabWatch": "Watch",
-      "tabHoldings": "Holdings",
-      "netAssetValue": "Net Asset Value",
-      "netAssetValueByCurrency": "Net Asset Value by Currency",
-      "addSymbol": "Add Symbol",
-      "addTransaction": "Add Transaction"
     },
     "addWatchlistDialog": {
       "titleSearch": "Add Watchlist Item",
@@ -1212,16 +1174,6 @@
       "alertQuantityInvalid": "Please enter a valid quantity greater than 0.",
       "alertAverageCostInvalid": "Please enter a valid average cost greater than 0."
     },
-    "earningsCalendarCard": {
-      "viewAll": "View All",
-      "close": "Close",
-      "sectionRecent": "Recent",
-      "sectionUpcoming": "Upcoming",
-      "emptyPeriod": "No earnings in this period",
-      "emptyOnDate": "No earnings on this date",
-      "stockCount_one": "{{count}} stock",
-      "stockCount_other": "{{count}} stocks"
-    },
     "chatInputCard": {
       "suggestion1": "Summarize Apple's earnings",
       "suggestion2": "Compare TSLA vs BYD",
@@ -1229,29 +1181,6 @@
       "suggestion4": "Analyze my portfolio risk",
       "placeholderMobile": "Ask AI about market trends...",
       "placeholderDesktop": "Ask AI about market trends, specific stocks, or portfolio analysis..."
-    },
-    "newsFeedCard": {
-      "tabMarket": "Market Pulse",
-      "tabPortfolio": "Your Portfolio",
-      "tabWatchlist": "Your Watchlist",
-      "rangeAll": "All",
-      "range1h": "1H",
-      "range6h": "6H",
-      "range24h": "24H",
-      "range7d": "7D",
-      "tickerPlaceholder": "Ticker...",
-      "emptyFilters": "No news matching your filters",
-      "emptyMarket": "No market news available",
-      "emptyPortfolio": "Add stocks to your portfolio to see relevant news here",
-      "emptyWatchlist": "Add stocks to your watchlist to see relevant news here",
-      "emptyDefault": "No news available"
-    },
-    "watchlistCard": {
-      "createTitle": "Create watchlist",
-      "colSymbol": "Symbol",
-      "colName": "Name",
-      "colPrice": "Price",
-      "colChange": "Change"
     }
   },
   "workspace": {
@@ -4142,7 +4071,7 @@
     "announce": {
       "dashCustom": {
         "modalTitle": "Customizable dashboard",
-        "modalBody": "Switch your dashboard to Custom mode to rearrange, resize, and add widgets — then attach any of them to chat."
+        "modalBody": "Click the pencil on your dashboard to rearrange, resize, and add widgets, then attach any of them to chat."
       }
     },
     "whatsNew": {
