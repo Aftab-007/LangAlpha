@@ -13,6 +13,7 @@ import { AlertTriangle, Check, Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
+import { copyText } from '@/lib/clipboard';
 import { CheckboxChoice } from '@/components/ui/choice';
 import { Input } from '@/components/ui/input';
 import { Loader } from '@/components/ui/loader';
@@ -32,7 +33,7 @@ function CopyBox({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
