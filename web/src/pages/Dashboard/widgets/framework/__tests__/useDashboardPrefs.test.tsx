@@ -12,6 +12,25 @@ const mockMutate = vi.fn();
 const mockToast = vi.fn();
 const mutationState = { isPending: false };
 
+type WriteCallbacks = { onSuccess?: () => void; onError?: (err: unknown) => void };
+/** A `mutateAsync` whose promise settles when a test calls the write's
+ *  callbacks, as the real one settles alongside them. */
+function settledBy(record: (payload: unknown, opts: WriteCallbacks) => void) {
+  return (payload: unknown, opts?: WriteCallbacks) =>
+    new Promise<void>((resolve, reject) => {
+      record(payload, {
+        onSuccess: () => {
+          opts?.onSuccess?.();
+          resolve();
+        },
+        onError: (err) => {
+          opts?.onError?.(err);
+          reject(err);
+        },
+      });
+    });
+}
+
 vi.mock('@/hooks/usePreferences', () => ({
   usePreferences: () => ({
     preferences: prefsState.current,
@@ -20,7 +39,8 @@ vi.mock('@/hooks/usePreferences', () => ({
   }),
 }));
 vi.mock('@/hooks/useUpdatePreferences', () => ({
-  useUpdatePreferences: () => ({ mutate: mockMutate, isPending: mutationState.isPending }),
+  PREFERENCE_MUTATION_KEY: ['user-preferences'],
+  useUpdatePreferences: () => ({ mutateAsync: settledBy(mockMutate), isPending: mutationState.isPending }),
 }));
 vi.mock('@/components/ui/use-toast', () => ({
   useToast: () => ({ toast: mockToast, dismiss: vi.fn(), toasts: [] }),
@@ -35,6 +55,14 @@ import { DASHBOARD_PREFS_VERSION } from '../../types';
  * returns. The writer's cold-cache check reads this cache, not the hook
  * snapshot, so they have to stay in sync for writes to be accepted.
  */
+/** A preferences write in the mutation cache that never settles. */
+function startWrite(queryClient: QueryClient, variables: unknown): void {
+  void queryClient
+    .getMutationCache()
+    .build(queryClient, { mutationKey: ['user-preferences'], mutationFn: () => new Promise(() => {}) })
+    .execute(variables);
+}
+
 function makePrimedClient(): QueryClient {
   // gcTime: Infinity so seeded data survives vi.advanceTimersByTime() ticks.
   // The default test client's gcTime: 0 collects unobserved queries the
@@ -203,9 +231,14 @@ describe('useDashboardPrefs', () => {
     expect(payload.other_preference.dashboard.layouts.md).toEqual([]);
   });
 
-  it('saves an adjustment to the unsaved default made while an edit is saving', () => {
-    mockMutate.mockImplementation(() => {
+  it('saves an adjustment made while an edit is saving once that edit lands', () => {
+    let land = () => {};
+    mockMutate.mockImplementation((_payload, opts: { onSuccess: () => void }) => {
       mutationState.isPending = true;
+      land = () => {
+        mutationState.isPending = false;
+        opts.onSuccess();
+      };
     });
     const { result, rerender } = renderHookWithProviders(() => useDashboardPrefs(), { queryClient: makePrimedClient() });
     act(() => {
@@ -218,12 +251,90 @@ describe('useDashboardPrefs', () => {
     act(() => {
       vi.advanceTimersByTime(1000);
     });
+    // Nothing is sent under a write still saving.
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    act(() => land());
+    rerender();
     expect(mockMutate).toHaveBeenCalledTimes(2);
     const payload = mockMutate.mock.calls[1][0] as {
       other_preference: { dashboard: { layouts: Record<string, unknown>; lastBreakpoint?: string } };
     };
     expect(payload.other_preference.dashboard.lastBreakpoint).toBe('md');
     expect(payload.other_preference.dashboard.layouts.md).toEqual([]);
+  });
+
+  it('holds an adjustment made before the page sees its write start', () => {
+    // The write is in the mutation cache at once, but the observer's
+    // `isPending` has not reached a render yet.
+    prefsState.current = {
+      other_preference: {
+        dashboard: { version: DASHBOARD_PREFS_VERSION, widgets: [{ id: 'saved-1', type: 'news.feed', config: {} }], layouts: {} },
+      },
+    };
+    const queryClient = makePrimedClient();
+    mockMutate.mockImplementation((payload) => {
+      startWrite(queryClient, payload);
+    });
+    const { result } = renderHookWithProviders(() => useDashboardPrefs(), { queryClient });
+    act(() => {
+      result.current.applyPreset('trader');
+    });
+    act(() => {
+      result.current.update((prev) => ({ ...prev, layouts: { ...prev.layouts, md: [] } }), { adjust: true });
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves an adjustment to a saved layout while another preference is saving', () => {
+    prefsState.current = {
+      other_preference: {
+        dashboard: { version: DASHBOARD_PREFS_VERSION, widgets: [{ id: 'saved-1', type: 'news.feed', config: {} }], layouts: {} },
+      },
+    };
+    const queryClient = makePrimedClient();
+    startWrite(queryClient, { other_preference: { theme: 'light' } });
+    const { result } = renderHookWithProviders(() => useDashboardPrefs(), { queryClient });
+    act(() => {
+      result.current.update((prev) => ({ ...prev, layouts: { ...prev.layouts, md: [] } }), { adjust: true });
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops an adjustment made while an edit is saving when that edit is rejected', () => {
+    const widgets = [{ id: 'saved-1', type: 'news.feed', config: {} }];
+    prefsState.current = {
+      other_preference: { dashboard: { version: DASHBOARD_PREFS_VERSION, widgets, layouts: {} } },
+    };
+    let reject = () => {};
+    mockMutate.mockImplementation((_payload, opts: { onError: () => void }) => {
+      mutationState.isPending = true;
+      reject = () => {
+        mutationState.isPending = false;
+        opts.onError();
+      };
+    });
+    const { result, rerender } = renderHookWithProviders(() => useDashboardPrefs(), { queryClient: makePrimedClient() });
+    act(() => {
+      result.current.applyPreset('trader');
+    });
+    rerender();
+    act(() => {
+      result.current.update((prev) => ({ ...prev, layouts: { ...prev.layouts, md: [] } }), { adjust: true });
+    });
+    act(() => reject());
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    // The rejected preset is not sent again under the adjustment.
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    expect(result.current.prefs.widgets.map((w) => w.id)).toEqual(['saved-1']);
   });
 
   it('saves an adjustment to a saved layout', () => {
@@ -248,6 +359,23 @@ describe('useDashboardPrefs', () => {
       result.current.update({ lastBreakpoint: 'md' });
     });
     expect(mockMutate).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves an edit still waiting on its debounce when the page is left', () => {
+    const { result, unmount } = renderHookWithProviders(() => useDashboardPrefs(), {
+      queryClient: makePrimedClient(),
+    });
+    act(() => {
+      result.current.update({ lastBreakpoint: 'md' });
+    });
+    unmount();
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    const payload = mockMutate.mock.calls[0][0] as { other_preference: { dashboard: { lastBreakpoint?: string } } };
+    expect(payload.other_preference.dashboard.lastBreakpoint).toBe('md');
     act(() => {
       vi.advanceTimersByTime(800);
     });
@@ -287,6 +415,32 @@ describe('useDashboardPrefs', () => {
     });
     expect(mockToast).toHaveBeenCalledTimes(1);
     expect(mockToast.mock.calls[0][0]).toMatchObject({ variant: 'destructive' });
+  });
+
+  it('takes the saved layout back when a write is rejected', () => {
+    // The rollback lands while the write still counts as pending, and the
+    // refetch after it holds the same copy: only the write settling says so.
+    const widgets = [{ id: 'saved-1', type: 'news.feed', config: {} }];
+    prefsState.current = {
+      other_preference: { dashboard: { version: DASHBOARD_PREFS_VERSION, widgets, layouts: {} } },
+    };
+    let reject = () => {};
+    mockMutate.mockImplementation((_payload, opts: { onError: () => void }) => {
+      mutationState.isPending = true;
+      reject = () => {
+        mutationState.isPending = false;
+        opts.onError();
+      };
+    });
+    const { result, rerender } = renderHookWithProviders(() => useDashboardPrefs(), { queryClient: makePrimedClient() });
+    act(() => {
+      result.current.update({ widgets: [] }, { immediate: true });
+    });
+    rerender();
+    expect(result.current.prefs.widgets).toEqual([]);
+    act(() => reject());
+    rerender();
+    expect(result.current.prefs.widgets.map((w) => w.id)).toEqual(['saved-1']);
   });
 
   it('caps history at 3 prior layouts on repeated applyPreset', () => {
@@ -392,15 +546,38 @@ describe('useDashboardPrefs — BroadcastChannel', () => {
     expect(channels.every((c) => c.closed)).toBe(true);
   });
 
-  it('postMessages "updated" on flush success', () => {
+  it('postMessages "updated" on flush success', async () => {
     mockMutate.mockImplementation((_payload, opts: { onSuccess: () => void }) => {
       opts.onSuccess();
     });
     const { result } = renderHookWithProviders(() => useDashboardPrefs(), { queryClient: makePrimedClient() });
-    act(() => {
+    await act(async () => {
       result.current.update({ lastBreakpoint: 'md' }, { immediate: true });
     });
     expect(getWriterChannel()?.posted).toEqual([{ type: 'updated' }]);
+  });
+
+  it('tells other tabs about an edit saved as the page is left', async () => {
+    let succeed: () => void = () => {};
+    mockMutate.mockImplementation((_payload, opts: { onSuccess: () => void }) => {
+      succeed = opts.onSuccess;
+    });
+    const { result, unmount } = renderHookWithProviders(() => useDashboardPrefs(), {
+      queryClient: makePrimedClient(),
+    });
+    act(() => {
+      result.current.update({ lastBreakpoint: 'md' });
+    });
+    unmount();
+    const before = (globalThis as unknown as { __testChannels: TestChannel[] }).__testChannels.length;
+    await act(async () => {
+      succeed();
+    });
+    const channels = (globalThis as unknown as { __testChannels: TestChannel[] }).__testChannels;
+    const opened = channels.slice(before);
+    expect(opened).toHaveLength(1);
+    expect(opened[0].posted).toEqual([{ type: 'updated' }]);
+    expect(opened[0].closed).toBe(true);
   });
 
   it('onmessage invalidates the prefs query when no edit is in flight', () => {

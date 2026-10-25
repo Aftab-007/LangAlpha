@@ -11,7 +11,8 @@ const getPreferences = vi.fn(() => Promise.reject(new Error('503')));
 
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@/hooks/useUpdatePreferences', () => ({
-  useUpdatePreferences: () => ({ mutate: vi.fn(), isPending: false }),
+  PREFERENCE_MUTATION_KEY: ['user-preferences'],
+  useUpdatePreferences: () => ({ mutateAsync: () => new Promise(() => {}), isPending: false }),
 }));
 vi.mock('../utils/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/api')>()),

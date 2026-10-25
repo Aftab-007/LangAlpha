@@ -40,7 +40,14 @@ vi.mock('@/hooks/usePreferences', () => ({
   }),
 }));
 vi.mock('@/hooks/useUpdatePreferences', () => ({
-  useUpdatePreferences: () => ({ mutate: mockMutate, isPending: false }),
+  PREFERENCE_MUTATION_KEY: ['user-preferences'],
+  useUpdatePreferences: () => ({
+    mutateAsync: (...args: unknown[]) => {
+      mockMutate(...args);
+      return new Promise(() => {});
+    },
+    isPending: false,
+  }),
 }));
 // A read that never answers, for the cold-cache case.
 vi.mock('../utils/api', async (importOriginal) => ({

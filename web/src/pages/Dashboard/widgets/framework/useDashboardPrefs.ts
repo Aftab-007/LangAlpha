@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePreferences } from '@/hooks/usePreferences';
+import { PREFERENCE_MUTATION_KEY } from '@/hooks/useUpdatePreferences';
 import { useToast } from '@/components/ui/use-toast';
 import { queryKeys } from '@/lib/queryKeys';
 import { BROADCAST_CHANNEL, useDashboardPrefsWriter } from './dashboardPrefsWriter';
@@ -18,6 +19,11 @@ function readDashboardPrefs(preferences: unknown): Partial<DashboardPrefs> | nul
   return prefs?.other_preference?.dashboard ?? null;
 }
 
+/** Whether a preferences write carries the dashboard, as its variables show. */
+function isDashboardWrite(variables: unknown): boolean {
+  return readDashboardPrefs(variables) !== null;
+}
+
 export function useDashboardPrefs() {
   const { preferences, isLoading, isLoaded } = usePreferences();
   const { writeDashboardPrefs, isPending } = useDashboardPrefsWriter();
@@ -30,23 +36,29 @@ export function useDashboardPrefs() {
 
   const [local, setLocal] = useState<DashboardPrefs>(stored);
   const storedRef = useRef<DashboardPrefs>(stored);
-  const ownWriteInFlightRef = useRef(false);
-
-  useEffect(() => {
-    storedRef.current = stored;
-    if (ownWriteInFlightRef.current) {
-      ownWriteInFlightRef.current = false;
-      return;
-    }
-    setLocal(stored);
-  }, [stored]);
-
   const pendingTimer = useRef<number | null>(null);
+  // An adjustment made while a write is saving, kept on the page until that
+  // write lands (see `update`).
+  const heldAdjust = useRef(false);
   const bcRef = useRef<BroadcastChannel | null>(null);
-  // isPending changes mid-effect-cycle; read it through an effect event so the
-  // BroadcastChannel onmessage handler reads the latest value without
-  // tearing down + rebuilding the channel on every mutation transition.
-  const isMutating = useEffectEvent(() => isPending);
+  // Whether a dashboard write is saving. The observer's `isPending` reaches a
+  // render a beat after the write starts (TanStack batches its notifications),
+  // and the grid can adjust a layout in between; the mutation cache knows at
+  // once. Only dashboard writes count: another preference saving says nothing
+  // about this layout, and holding for it would save a default only viewed.
+  const writing = useCallback(
+    () =>
+      isPending ||
+      queryClient.isMutating({
+        mutationKey: PREFERENCE_MUTATION_KEY,
+        predicate: (mutation) => isDashboardWrite(mutation.state.variables),
+      }) > 0,
+    [isPending, queryClient],
+  );
+  // Read by the BroadcastChannel handler through an effect event, so it sees
+  // the latest answer without the channel being rebuilt as writes come and go.
+  const writingNow = useEffectEvent(() => writing());
+
   // Deferred-replay: a broadcast that arrives during a pending edit can't be
   // applied immediately (refetching mid-edit would race the response). Set
   // this flag instead and run the invalidate after the current edit settles
@@ -74,7 +86,7 @@ export function useDashboardPrefs() {
     bcRef.current = chan;
     chan.onmessage = (e: MessageEvent) => {
       if ((e.data as { type?: string } | null)?.type !== 'updated') return;
-      if (pendingTimer.current === null && !isMutating()) {
+      if (pendingTimer.current === null && !writingNow()) {
         queryClient.invalidateQueries({ queryKey: queryKeys.user.preferences() });
       } else {
         // Defer until the current edit settles — runs from either the flush
@@ -90,7 +102,6 @@ export function useDashboardPrefs() {
 
   const flush = useCallback(
     (next: DashboardPrefs) => {
-      ownWriteInFlightRef.current = true;
       // Dev-only size trap: catches widget configs that bloat the prefs
       // blob before we ship them. The prefs are PATCHed as one payload,
       // so a widget with a 50-symbol array full of objects can balloon
@@ -108,17 +119,18 @@ export function useDashboardPrefs() {
           /* ignore sizing errors in dev */
         }
       }
-      const accepted = writeDashboardPrefs(next, {
+      writeDashboardPrefs(next, {
         // undefined = cold (writer refuses); null = warm, no saved prefs yet.
         fallbackOther: preferences === null
           ? undefined
           : ((preferences as { other_preference?: Record<string, unknown> }).other_preference ?? null),
         onSuccess: runReplay,
         onError: () => {
-          // Server rejected the write. Clear the sync guard so the invalidate
-          // → refetch in useUpdatePreferences can reconcile local state back to
-          // the server copy, and tell the user their change didn't stick.
-          ownWriteInFlightRef.current = false;
+          // Server rejected the write. The refetch after it settles brings the
+          // server copy back over local; tell the user their change didn't stick.
+          // An adjustment held for it goes too: the grid makes it again on
+          // the layout it is given back.
+          heldAdjust.current = false;
           toast({
             variant: 'destructive',
             title: 'Couldn’t save dashboard',
@@ -127,14 +139,31 @@ export function useDashboardPrefs() {
           runReplay();
         },
       });
-      if (!accepted) {
-        // Cold-cache refusal — undo the sync-skip guard so the next render
-        // can reconcile local back to the server copy when the GET resolves.
-        ownWriteInFlightRef.current = false;
-      }
     },
     [writeDashboardPrefs, preferences, runReplay, toast]
   );
+
+  // While an edit waits on its debounce or its write, local is ahead of the
+  // server copy, and every write echoes back twice (the optimistic patch, then
+  // the refetch after it settles). Adopting an echo then would roll back an
+  // edit made since: a fitted widget's height snapped back to the height an
+  // earlier write carried. Once nothing is queued, the next copy is current,
+  // and it is taken again as a write settles: a rejected one rolls the cache
+  // back while it still counts as pending, and its refetch, holding the same
+  // copy, need not change `stored` again.
+  const saveLocal = useEffectEvent(() => flush(local));
+  useEffect(() => {
+    storedRef.current = stored;
+    if (pendingTimer.current !== null || writing()) return;
+    // A held adjustment still standing means the write landed (a rejected one
+    // drops it), so it is saved now, on top of that write.
+    if (heldAdjust.current) {
+      heldAdjust.current = false;
+      saveLocal();
+      return;
+    }
+    setLocal(stored);
+  }, [stored, writing]);
 
   /**
    * `adjust` marks a change the page makes on its own (a layout clamped to
@@ -154,13 +183,25 @@ export function useDashboardPrefs() {
       // built on that would replace the saved dashboard once a later read
       // lands (the server replaces the dashboard key wholesale). The page
       // still answers (a widget's tab switches), and the saved copy replaces
-      // it when a read lands. An adjustment to the unsaved default joins an
-      // edit waiting to save or still saving, or the copy taken back once
-      // that write settles would leave it out.
-      if (!isLoaded || (opts?.adjust && !saved && pendingTimer.current === null && !isPending)) {
+      // it when a read lands.
+      if (!isLoaded) {
         setLocal(apply);
         return;
       }
+      // An adjustment joins an edit waiting to save. With none waiting, it
+      // is not saved on its own while a write is saving: it waits for that
+      // write and is saved if it lands, so a rejected write is never sent
+      // again under it. On the unsaved default it stays on the page.
+      if (opts?.adjust && pendingTimer.current === null) {
+        const held = writing();
+        if (held) heldAdjust.current = true;
+        if (held || !saved) {
+          setLocal(apply);
+          return;
+        }
+      }
+      // What is saved next is the page as it stands, held adjustment included.
+      heldAdjust.current = false;
       setLocal((prev) => {
         const next = apply(prev);
         if (pendingTimer.current) window.clearTimeout(pendingTimer.current);
@@ -181,12 +222,19 @@ export function useDashboardPrefs() {
         return next;
       });
     },
-    [flush, isLoaded, isPending, saved]
+    [flush, isLoaded, saved, writing]
   );
 
+  // An edit still waiting on its debounce is saved when the page is left, not
+  // dropped: a switch to another page unmounts this one, and the write goes
+  // on without it. The page is the edit at that point, as nothing else
+  // changes it while one waits.
   useEffect(
     () => () => {
-      if (pendingTimer.current) window.clearTimeout(pendingTimer.current);
+      if (pendingTimer.current === null) return;
+      window.clearTimeout(pendingTimer.current);
+      pendingTimer.current = null;
+      saveLocal();
     },
     []
   );
