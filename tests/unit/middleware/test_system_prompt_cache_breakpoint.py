@@ -1,6 +1,6 @@
-"""OpenAI prompt-cache breakpoint placement across the middleware chain.
+"""System-prompt cache breakpoint placement (OpenAI, Claude over OpenRouter) across the middleware chain.
 
-Mirror of test_prompt_cache_breakpoint.py for OpenAIPromptCachingMiddleware:
+Mirror of test_prompt_cache_breakpoint.py for SystemPromptCacheMiddleware:
 verifies the breakpoint marker lands on the static prefix's own block, that
 the per-thread baseline block appended by inner middleware takes a marker of
 its own, that breakpoint 4 lands on the turn row in the message list rather
@@ -23,7 +23,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from ptc_agent.agent.middleware._utils import append_to_system_message
-from ptc_agent.agent.middleware.openai_prompt_caching import OpenAIPromptCachingMiddleware
+from ptc_agent.agent.middleware.system_prompt_caching import SystemPromptCacheMiddleware
 from ptc_agent.agent.middleware.runtime_context import (
     ENVELOPE_CLOSE,
     ENVELOPE_OPEN,
@@ -141,7 +141,7 @@ def _build_chain(captured: dict):
     return _compose_middleware(
         [
             AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
-            OpenAIPromptCachingMiddleware(),
+            SystemPromptCacheMiddleware(),
             BaselineContextMiddleware(session=None, guidance="lean"),
             TailEnvelopeMiddleware(now=NOW, guidance="lean"),
         ],
@@ -295,8 +295,10 @@ class TestOpenAIPromptCacheBreakpoint:
 
     def test_string_system_message_converted_to_tagged_block(self):
         """A plain-string system message becomes a single tagged text block."""
-        mw = OpenAIPromptCachingMiddleware()
-        tagged = mw._tag_system_message(SystemMessage(content="Static prompt."))
+        mw = SystemPromptCacheMiddleware()
+        tagged = mw._tag_system_message(
+            SystemMessage(content="Static prompt."), "prompt_cache_breakpoint", {"mode": "explicit"}
+        )
         assert tagged.content == [
             {
                 "type": "text",
@@ -313,8 +315,10 @@ class TestOpenAIPromptCacheBreakpoint:
             reasoning={"effort": "medium", "summary": "auto"},
             prompt_cache_options={"mode": "implicit"},
         )
-        mw = OpenAIPromptCachingMiddleware()
-        sys_msg = mw._tag_system_message(SystemMessage(content="Static prompt."))
+        mw = SystemPromptCacheMiddleware()
+        sys_msg = mw._tag_system_message(
+            SystemMessage(content="Static prompt."), "prompt_cache_breakpoint", {"mode": "explicit"}
+        )
         sys_msg = append_to_system_message(sys_msg, "dynamic context")
 
         payload = model._get_request_payload([sys_msg, HumanMessage("hi")])
@@ -325,3 +329,39 @@ class TestOpenAIPromptCacheBreakpoint:
         parts = system_item["content"]
         assert parts[0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
         assert "prompt_cache_breakpoint" not in parts[1]
+
+
+class TestOpenRouterClaudeBreakpoints:
+    """OpenRouter forwards ``cache_control`` to Anthropic, which caches nothing
+    without it; every other model there caches on its own and is left alone."""
+
+    @pytest.mark.asyncio
+    async def test_claude_takes_cache_control_on_all_three_boundaries(self):
+        from langchain_openrouter import ChatOpenRouter
+
+        captured: dict = {}
+        model = ChatOpenRouter(model="anthropic/claude-haiku-5.5", api_key="test")
+
+        await _build_chain(captured)(
+            _make_model_request("Static system prompt.", model, await _turn_rows())
+        )
+
+        marker = {"type": "ephemeral"}
+        content = captured["req"].system_message.content
+        assert [block.get("cache_control") for block in content] == [marker, marker]
+        assert captured["req"].messages[-1].content[-1]["cache_control"] == marker
+
+    @pytest.mark.asyncio
+    async def test_other_vendors_get_no_marker(self):
+        from langchain_openrouter import ChatOpenRouter
+
+        captured: dict = {}
+        model = ChatOpenRouter(model="openai/gpt-oss-120b", api_key="test")
+
+        await _build_chain(captured)(
+            _make_model_request("Static system prompt.", model, await _turn_rows())
+        )
+
+        content = captured["req"].system_message.content
+        blocks = content if isinstance(content, list) else []
+        assert not any("cache_control" in b or "prompt_cache_breakpoint" in b for b in blocks)
