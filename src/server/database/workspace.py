@@ -1234,9 +1234,12 @@ async def update_workspace_status(
 
         stopped_at_clause = ", stopped_at = %(now)s" if status == "stopped" else ""
         if _mirrors_to_computer(status):
-            # As in update_computer_status: running ends any host outage.
+            # As in update_computer_status: running ends any host outage and
+            # the last start's failure.
             running_clause = (
-                ", host_unavailable_since = NULL" if status == "running" else ""
+                ", host_unavailable_since = NULL, start_failure = NULL"
+                if status == "running"
+                else ""
             )
             always_on_guard = (
                 "\n                  AND c.is_always_on = %(expected_always_on)s"
