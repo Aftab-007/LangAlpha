@@ -91,6 +91,7 @@ class ComputerManager(
         # asyncio holds weak task refs; retain publishes until PUBLISH completes.
         self._status_publish_tasks: set[asyncio.Task] = set()
         self._prune_tasks: set[asyncio.Task] = set()
+        self._facts_tasks: set[asyncio.Task] = set()
 
         # Cache one classifier per backend: SDK error shapes differ and constructing
         # a provider for every failed teardown leaks HTTP clients.

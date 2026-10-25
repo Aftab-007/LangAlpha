@@ -23,6 +23,7 @@ from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
+from ptc_agent.core.paths import SandboxLayout
 from src.server.database import pool
 from src.server.database.home_workspace import is_home_row
 from src.server.database.pool import get_db_connection
@@ -45,7 +46,7 @@ MOVING_DIR = "_internal/moving"
 # One pass holds the folder lock, and the acquisition waiting on it, until it
 # ends; the rest of a long backlog clears on later acquisitions.
 TOMBSTONES_PER_PASS = 200
-LEFTOVERS_DIR = "_internal/leftovers"
+LEFTOVERS_DIR = SandboxLayout.LEFTOVERS_DIR
 PREVIOUS_DIR_NAMES_MAX = 8
 # The layout the folder-per-workspace split landed in; older machines keep
 # files at the root, where no folder of theirs can move.

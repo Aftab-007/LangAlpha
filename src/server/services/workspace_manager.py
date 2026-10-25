@@ -10,7 +10,7 @@ project rather than a machine: creating one and deleting one.
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -24,6 +24,7 @@ from src.server.database.computer import (
     get_computers_by_status,
     update_computer_status,
 )
+from src.server.database.conversation import forget_workspace_exists
 from src.server.database.home_workspace import is_home_row
 from src.server.database.workspace import (
     MOVING_DELETE_REFUSAL,
@@ -34,7 +35,9 @@ from src.server.database.workspace import (
     create_workspace_on_computer,
     delete_workspace as db_delete_workspace,
     files_restore_offered,
+    get_live_workspace_ids_for_computer,
     get_pending_workspace_folder_cleanups,
+    workspace_has_active_work,
     workspace_is_moving,
 )
 from src.server.database.workspace_folders import (
@@ -47,8 +50,14 @@ from src.server.models.computer import ComputerStatus
 from src.server.services.computer_errors import (
     ComputerNotFoundError,
     ComputerPreparingError,
+    ComputerRemovalRefused,
+    Retirement,
 )
 from src.server.services.computer_manager import ComputerManager
+from src.server.services.computer_manager._types import (
+    WorkspaceNotFound,
+    WorkspaceNotOnComputer,
+)
 from src.server.services.persistence.file import FilePersistenceService
 
 logger = logging.getLogger(__name__)
@@ -333,6 +342,7 @@ class WorkspaceManager(ComputerManager):
         workspace_id: str,
         *,
         delete_files: bool = False,
+        on_computer: Optional[str] = None,
     ) -> bool:
         """
         Delete a workspace: the project only, never its machine by itself.
@@ -351,12 +361,21 @@ class WorkspaceManager(ComputerManager):
         Args:
             workspace_id: Workspace UUID
             delete_files: The owner asked for the folder on their machine to go too.
+            on_computer: Only from this computer; a workspace a move has
+                taken elsewhere is left alone.
 
         Returns:
             True if deleted successfully
+
+        Raises:
+            WorkspaceNotFound: It is deleted already, or not on ``on_computer``.
+            WorkspaceBusyError: A move or a turn holds it.
+            ValueError: It is Home, or has no computer.
         """
         binding = await self.resolve_binding(workspace_id)
         computer_id = binding.computer_id
+        if on_computer is not None and str(computer_id) != str(on_computer):
+            raise WorkspaceNotFound(workspace_id, computer_id=on_computer)
         try:
             owners_machine = not binding.provider.recreatable
         except ValueError:
@@ -366,7 +385,7 @@ class WorkspaceManager(ComputerManager):
         async with self._observed_lock(computer_id, "workspace.delete"):
             workspace = await self.workspace_row(workspace_id)
             if not workspace:
-                raise ValueError(f"Workspace {workspace_id} not found")
+                raise WorkspaceNotFound(workspace_id)
             if is_home_row(workspace):
                 # Here rather than only at the route: an agent's tool deletes
                 # through this method too.
@@ -419,6 +438,9 @@ class WorkspaceManager(ComputerManager):
         from src.server.services.wakeups import cancel as wakeups_cancel
 
         await wakeups_cancel.cancel_on_workspace_delete(workspace_id)
+        # Every delete, whoever asked for it (the route, the agent's tool, a
+        # removed computer's workspaces), so the next thread write reads the row.
+        await forget_workspace_exists(workspace_id)
 
         if not retired:
             # Its proxied previews stop now rather than at expiry; a retired
@@ -429,6 +451,74 @@ class WorkspaceManager(ComputerManager):
             await revoke(binding.provider_ref)
 
         return True
+
+    async def remove_computer_with_workspaces(
+        self,
+        computer_id: str,
+        named: Collection[str] = (),
+        *,
+        delete_files: bool = False,
+    ) -> list[str]:
+        """Remove a computer its owner no longer wants, deleting the workspaces
+        on it first, and answer the ones deleted.
+
+        ``named`` are the workspaces its owner was shown, and every one on it
+        must be among them, so an empty computer needs none. What would refuse
+        the remove anyway is asked first (``removal_held``), so a refusal
+        deletes nothing: the primary, a transition, a workspace not named, a
+        workspace a move holds or a run is working in, and Home, which no
+        delete takes. A named one no longer on it is left alone, and is not
+        among those answered, so the client forgets only what went. Each goes
+        as its own delete would take it, so a machine the user brought keeps
+        its folders unless ``delete_files``. On a provider that builds machines
+        the last delete retires the computer, which is this removal done.
+
+        Raises:
+            ComputerRemovalRefused: nothing was deleted, or something landed
+                on it meanwhile, and ``deleted`` names the workspaces already
+                gone; ``code`` says why.
+            ValueError: there is no such computer, or it is already gone.
+        """
+        computer = await get_computer(computer_id)
+        if computer is None:
+            raise ValueError(f"Computer {computer_id} not found")
+        held = self.removal_held(computer)
+        workspace_ids = await get_live_workspace_ids_for_computer(computer_id)
+        shown = {str(i) for i in named}
+        for workspace_id in workspace_ids if held is None else ():
+            row = await self.workspace_row(workspace_id)
+            if str(workspace_id) not in shown or (row and is_home_row(row)):
+                held = Retirement.HAS_WORKSPACES
+            elif await workspace_is_moving(workspace_id) or await workspace_has_active_work(
+                workspace_id
+            ):
+                held = Retirement.BUSY
+            if held is not None:
+                break
+        if held is not None:
+            raise ComputerRemovalRefused(held)
+        deleted: list[str] = []
+        for workspace_id in workspace_ids:
+            try:
+                await self.delete_workspace(
+                    workspace_id, delete_files=delete_files, on_computer=computer_id
+                )
+            except WorkspaceBusyError:
+                # A move or a run that started since the check above.
+                raise ComputerRemovalRefused(Retirement.BUSY, deleted=deleted) from None
+            except (WorkspaceNotFound, WorkspaceNotOnComputer):
+                # Deleted by another request since the list was read, or
+                # moved off this computer.
+                continue
+            deleted.append(str(workspace_id))
+        if workspace_ids and await get_computer(computer_id) is None:
+            return deleted
+        try:
+            await self.remove_computer(computer_id)
+        except ComputerRemovalRefused as e:
+            # A workspace landed on it meanwhile; the ones deleted stay so.
+            raise ComputerRemovalRefused(e.code, deleted=deleted) from None
+        return deleted
 
     async def cleanup_idle_workspaces(self) -> int:
         """Stop computers that have gone quiet, and reconcile always-on.
@@ -755,3 +845,4 @@ def prune_if_archived_soon(thread_id: str) -> None:
     manager = WorkspaceManager.current()
     if manager is not None:
         manager.prune_if_archived_soon(thread_id)
+

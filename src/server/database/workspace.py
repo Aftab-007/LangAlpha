@@ -1564,6 +1564,13 @@ async def workspace_is_moving(workspace_id: str, *, conn=None) -> bool:
         return bool((await cur.fetchone())["moving"])
 
 
+async def workspace_has_active_work(workspace_id: str) -> bool:
+    """Whether a run is in progress on any of the workspace's threads, which
+    its delete would refuse; read unlocked, for a caller asking before it starts."""
+    async with _ws_cursor() as cur:
+        return await workspace_has_live_runs(cur, workspace_id)
+
+
 async def lock_run_workspace(conn, thread_id: str) -> None:
     """Serialize admission with deletion and moves across workers until START commits."""
     async with conn.cursor(row_factory=dict_row) as cur:
