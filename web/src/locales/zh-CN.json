@@ -1723,7 +1723,8 @@
       "cardTitlePc": "这台电脑",
       "windowsSoon": "即将支持 Windows",
       "needsApp": "需要桌面应用",
-      "needsAppHint": "要添加这台 Mac，请<download>下载桌面应用</download>，并在应用中打开此表单。"
+      "needsAppHint": "要添加这台 Mac，请<download>下载桌面应用</download>，并在应用中打开此表单。",
+      "anotherMacHint": "要添加另一台 Mac，请在那台 Mac 上<download>下载桌面应用</download>，并在应用中打开此表单。"
     },
     "card": {
       "spec": "配置",
@@ -1740,6 +1741,62 @@
       "details": "详情",
       "storage": "存储",
       "previewPending": "连接后显示"
+    },
+    "startFailure": {
+      "lead": "无法启动。",
+      "reinstall": "重新安装…",
+      "reconnect": "重新连接…"
+    },
+    "restartRefused": {
+      "folderMarked": "该文件夹属于另一台计算机，可能来自另一个 LangAlpha 账户或服务器。",
+      "folderOwned": "你的另一台计算机正在使用该文件夹。移除那台计算机即可释放该文件夹。",
+      "notStopped": "这台计算机正在启动或运行中。请在它停止后重试。",
+      "specInProgress": "这台计算机正在更改配置。请在完成后重试。",
+      "unanswered": "该机器没有响应。请确认它已开机并已连接，然后重试。",
+      "reinstallFailed": "无法重新安装这台计算机，请重试。",
+      "reconnectFailed": "无法重新连接这台计算机，请重试。"
+    },
+    "reinstall": {
+      "title": "重新安装 {{name}}",
+      "desc": "选择这台计算机在其机器上使用的文件夹。设置完成后它会重新启动。",
+      "folderLabel": "文件夹",
+      "takeBack": "收回该文件夹",
+      "takeBackDesc": "继续使用 {{folder}}。如果另一台计算机正在使用它，那台计算机将无法再在这台机器上工作。文件夹中的文件会保留。",
+      "takeBackOwned": "继续使用 {{folder}}。另一台计算机正在使用它，可能来自另一个 LangAlpha 账户或服务器。那台计算机将无法再在这台机器上工作。文件夹中的文件会保留。",
+      "newFolder": "使用新文件夹",
+      "newFolderDesc": "在这台机器上的另一个文件夹中重新开始。旧文件夹保持原样。",
+      "newFolderLabel": "新文件夹",
+      "newFolderBackup": "工作区文件会从备份中恢复。",
+      "newFolderNoBackup": "这台计算机未开启备份，工作区文件会留在 {{folder}} 中。如有需要，请自行复制过去。",
+      "takeNew": "使用此文件夹",
+      "takeBackAgainNote": "收回后，那台计算机将无法再在其中工作。其中的文件会保留。",
+      "takeBackAgain": "从那台计算机收回",
+      "takeNewNote": "使用后，那台计算机将无法再在其中工作。其中的文件会保留。你也可以输入其他文件夹。",
+      "submit": "重新安装",
+      "submitting": "正在重新安装..."
+    },
+    "reconnect": {
+      "title": "重新连接 {{name}}",
+      "desc": "将这台计算机重新连接到它的机器。它的文件夹和工作区保持不变。",
+      "pairIntro": "以 {{username}} 身份在该机器上运行：",
+      "folderKept": "工作区仍保存在 {{folder}} 中。",
+      "onThatMac": "{{name}} 由其 Mac 上的 LangAlpha 应用连接。请在那台 Mac 上打开 LangAlpha，并在那里选择重新连接。",
+      "otherMac": "这台 Mac 已是 {{other}}。要重新连接 {{name}}，请在它所在的 Mac 上打开 LangAlpha，并在那里选择重新连接。",
+      "takeBackNote": "{{folder}} 是这台计算机的文件夹。收回后，另一台计算机将无法再在其中工作。其中的文件会保留。",
+      "submit": "重新连接",
+      "submitting": "正在重新连接...",
+      "moveToMac": "移到这台 Mac",
+      "moveToMachine": "移到这台机器",
+      "notThisMac": "这台 Mac 不是 {{name}} 原来所在的 Mac：它的文件夹和文件不在这里。工作区文件会从备份恢复；从未备份的内容仍留在原来的 Mac 上。",
+      "notThisMachine": "这不是 {{name}} 原来所在的机器：它的文件夹和文件不在这里。工作区文件会从备份恢复；从未备份的内容仍留在原来的机器上。",
+      "notThisMacNoBackup": "这台 Mac 不是 {{name}} 原来所在的 Mac：它的文件夹和文件不在这里。这台计算机未开启备份，工作区文件会留在原来的 Mac 上；之前备份过的工作区会提供恢复该备份的选项。",
+      "notThisMachineNoBackup": "这不是 {{name}} 原来所在的机器：它的文件夹和文件不在这里。这台计算机未开启备份，工作区文件会留在原来的机器上；之前备份过的工作区会提供恢复该备份的选项。",
+      "folderRestored": "工作区会从备份恢复到 {{folder}}。",
+      "moveDesc": "把这台计算机移到下面这台机器。确认后它会在那里启动。",
+      "keepBothMacNote": "如要两台都保留，可将这台 Mac 添加为一台独立的计算机，再在 {{name}} 原来所在的 Mac 上重新连接它。",
+      "keepBothNote": "如要两台都保留，可将这台机器添加为一台独立的计算机，再将 {{name}} 重新连接到原来的机器。",
+      "addThisMac": "将这台 Mac 添加为新计算机",
+      "addThisMachine": "将这台机器添加为新计算机"
     }
   },
   "thread": {
