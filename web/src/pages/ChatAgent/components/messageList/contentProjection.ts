@@ -129,8 +129,7 @@ function shareProjection(next: ContentProjection, prev: ContentProjection | unde
  * change (see `shareProjection`). */
 export function projectContent(input: ContentInput, prev?: ContentProjection): ContentProjection {
   // A hidden tool is dropped here too, or it would show as preparing until
-  // it landed and vanished. Only by its name, which a route that streams
-  // arguments alone (Anthropic's) does not send, so there it still shows.
+  // it landed and vanished.
   const preparingToolCall = preparingCallsOf(input.pendingToolCallChunks, input.toolCallProcesses, HIDDEN_TOOL_CALL_NAMES);
   const { blocks, nextExpiry, pinnedLive, pinnedSettledAt } = buildRenderBlocks(groupSegments(input.segments), {
     ...input, preparing: preparingToolCall !== null,
