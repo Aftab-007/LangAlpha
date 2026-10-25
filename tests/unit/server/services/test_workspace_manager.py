@@ -4299,6 +4299,116 @@ class TestOnStateObservedForwarding:
         cached.initialize_lazy.assert_not_awaited()
 
 
+class TestARestartOnItsOwnSandboxResyncsEveryWorkspace:
+    """A stop leaves every workspace attached to the sandbox it ran on, so
+    only the restart can queue their bring-ups: the threads deleted while it
+    was stopped are still on its disk. A lazy restart has no runtime until its
+    Phase 2, so it queues them there, once, after it promotes the start."""
+
+    def setup_method(self):
+        WorkspaceManager.reset_instance()
+
+    def teardown_method(self):
+        WorkspaceManager.reset_instance()
+
+    def _make_manager(self):
+        manager = WorkspaceManager.get_instance(config=_make_config())
+        manager._sync_sandbox_assets = AsyncMock()
+        manager._maybe_migrate_sandbox = AsyncMock(return_value=None)
+        manager._queue_reconnect_syncs_soon = MagicMock()
+        return manager
+
+    def _stopped(self, manager, mock_claim, mock_session_mgr, mock_get_ws, *, stamp):
+        ws_id = str(uuid.uuid4())
+        manager._compute_sandbox_config_hash = MagicMock(return_value="current")
+        mock_get_ws.return_value = _make_workspace(
+            workspace_id=ws_id, status="stopped", config={"sandbox_config_hash": stamp}
+        )
+        mock_claim.return_value = _claimed_computer(ws_id)
+        session = _make_mock_session(initialized=False)
+        session.sandbox.is_ready = MagicMock(return_value=True)
+        session.sandbox.has_failed = MagicMock(return_value=False)
+        mock_session_mgr.get_session.return_value = session
+        return ws_id, session
+
+    @pytest.mark.asyncio
+    @cm_patch("db_get_workspace")
+    @cm_patch("SessionManager")
+    @cm_patch("update_workspace_activity")
+    @patch(f"{_LIFECYCLE}.update_workspace_status", new_callable=AsyncMock)
+    @patch("src.server.services.computer_manager._machines.try_claim_computer_for_start", new_callable=AsyncMock)
+    async def test_a_lazy_restart_queues_them_once_its_start_is_promoted(
+        self, mock_claim, mock_status, mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        manager = self._make_manager()
+        ws_id, session = self._stopped(
+            manager, mock_claim, mock_session_mgr, mock_get_ws, stamp="current"
+        )
+        machine = manager._machine(_STUB_COMPUTER_ID)
+        promoted = []
+        manager._queue_reconnect_syncs_soon.side_effect = lambda *_, **__: promoted.append(
+            not machine.pending_lazy_sync
+        )
+
+        await manager.get_session_for_workspace(ws_id, user_id="user-1")
+
+        session.initialize_lazy.assert_awaited_once()
+        manager._queue_reconnect_syncs_soon.assert_called_once_with(
+            _STUB_COMPUTER_ID, session.sandbox, opened=ws_id
+        )
+        assert promoted == [True]
+
+    @pytest.mark.asyncio
+    @cm_patch("db_get_workspace")
+    @cm_patch("SessionManager")
+    @cm_patch("update_workspace_activity")
+    @patch(f"{_LIFECYCLE}.update_workspace_status", new_callable=AsyncMock)
+    @patch("src.server.services.computer_manager._machines.try_claim_computer_for_start", new_callable=AsyncMock)
+    async def test_a_restart_forced_to_a_full_init_queues_them_as_it_attaches(
+        self, mock_claim, mock_status, mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        manager = self._make_manager()
+        ws_id, session = self._stopped(
+            manager, mock_claim, mock_session_mgr, mock_get_ws, stamp="old"
+        )
+
+        await manager.get_session_for_workspace(ws_id, user_id="user-1")
+
+        session.initialize.assert_awaited_once()
+        manager._queue_reconnect_syncs_soon.assert_called_once_with(
+            _STUB_COMPUTER_ID, session.sandbox, opened=ws_id
+        )
+
+    @pytest.mark.asyncio
+    @cm_patch("db_get_workspace")
+    @cm_patch("SessionManager")
+    @cm_patch("update_workspace_activity")
+    @patch(f"{_LIFECYCLE}.update_workspace_status", new_callable=AsyncMock)
+    @patch("src.server.services.computer_manager._machines.try_claim_computer_for_start", new_callable=AsyncMock)
+    async def test_a_cancel_in_the_listing_leaves_the_restart_running(
+        self, mock_claim, mock_status, mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        """The listing runs once the row reads running; inside the start, a
+        cancel there would unwind its claim and mark a live computer stopped."""
+        manager = self._make_manager()
+        del manager._queue_reconnect_syncs_soon
+        ws_id, _session = self._stopped(
+            manager, mock_claim, mock_session_mgr, mock_get_ws, stamp="old"
+        )
+
+        with patch(
+            "src.server.services.computer_manager._bringup.get_live_workspace_ids_for_computer",
+            AsyncMock(side_effect=asyncio.CancelledError),
+        ) as listing:
+            await manager.get_session_for_workspace(ws_id, user_id="user-1")
+            await asyncio.sleep(0)
+
+        listing.assert_awaited_once()
+        assert "stopped" not in [
+            c.kwargs.get("status") for c in mock_status.await_args_list
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 error narrowing + _clear_session helper (Fix 2)
 # ---------------------------------------------------------------------------
