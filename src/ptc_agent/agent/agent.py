@@ -118,7 +118,6 @@ from ptc_agent.agent.prompts import (
 )
 from ptc_agent.agent.subagents.assembly import compile_subagents, task_middleware
 from ptc_agent.agent.tools import (
-    create_bash_output_tool,
     create_execute_bash_tool,
     create_execute_code_tool,
     create_filesystem_tools,
@@ -144,10 +143,12 @@ from src.tools.market_watch import watch_market
 from src.tools.chart_annotation import CHART_ANNOTATION_TOOLS
 from src.tools.messaging import build_messaging_tools, messaging_enabled
 from src.tools.wakeups.tool import build_schedule_wakeup_tool
+from src.tools.thread_status.tool import build_thread_status_tool
 from ptc_agent.config import AgentConfig
 from ptc_agent.core.mcp_registry import MCPRegistry
 from ptc_agent.core.sandbox import PTCSandbox
 from ptc_agent.core.sandbox.livefs_mount import CallContext
+from ptc_agent.agent.tools.command_handoff import HandOff
 
 from ptc_agent.agent.turn import build_model_resilience_middleware, turn_model
 
@@ -391,8 +392,24 @@ class PTCAgent:
         # The folders only the file tools reach, which Bash and code refuse.
         file_tools_only = (SandboxLayout.CHANNELS_DIR,) if gates.channels else ()
 
+        # The main agent's Bash and ExecuteCode hand a command still running at
+        # their wait to the thread, which needs a thread, a user and a
+        # workspace to record it under; without them a call waits until its
+        # command ends, as a subagent's does.
+        hand_off = (
+            HandOff(
+                thread_id=thread_id,
+                user_id=str(user_id),
+                workspace_id=workspace_id_for_memory,
+                wakeups=wakeups_on,
+            )
+            if thread_id and user_id and workspace_id_for_memory
+            else None
+        )
+
         # Create the execute_code tool for MCP invocation. The builders are
-        # kept for a subagent limited to some servers, which gets its own.
+        # kept for the subagents, which get their own: theirs wait until a run
+        # ends, and one limited to some servers gets a copy of its own.
         code_tool = partial(
             create_execute_code_tool,
             backend,
@@ -402,7 +419,7 @@ class PTCAgent:
             call_context=call_context,
             file_tools_only=file_tools_only,
         )
-        execute_code_tool = code_tool()
+        execute_code_tool = code_tool(hand_off=hand_off)
 
         # Create the Bash tool for shell command execution
         shell_tool = partial(
@@ -413,8 +430,12 @@ class PTCAgent:
             call_context=call_context,
             file_tools_only=file_tools_only,
         )
-        bash_tool = shell_tool()
-        bash_output_tool = create_bash_output_tool(backend, call_context=call_context)
+        bash_tool = shell_tool(hand_off=hand_off)
+        # A subagent already runs in the background, so its calls wait for
+        # their commands instead of handing them off: nothing reports back to
+        # a subagent that may have finished.
+        sub_code_tool = code_tool()
+        sub_bash_tool = shell_tool()
 
         # Create the preview URL tool for sandbox service previews
         workspace_id = project.workspace_id if project else ""
@@ -423,8 +444,10 @@ class PTCAgent:
         # Create the show widget tool for inline HTML visualizations
         show_widget_tool = create_show_widget_tool(backend)
 
-        # Start with base tools
-        tools: list[Any] = [execute_code_tool, bash_tool, bash_output_tool, preview_url_tool, show_widget_tool]
+        # The tools the main agent and its subagents share. Each binds its own
+        # ExecuteCode and Bash ahead of them: the main agent's hand off, a
+        # subagent's wait (sub_code_tool, sub_bash_tool).
+        shared_tools: list[Any] = [preview_url_tool, show_widget_tool]
 
         # Opt-in while the tool is on its way out: a default build binds no
         # todo tool, so neither the main agent nor a subagent that lists the
@@ -432,7 +455,7 @@ class PTCAgent:
         todo_tools: list[Any] = (
             [TodoWrite] if self.config.feature_enabled("todo_write") else []
         )
-        tools.extend(todo_tools)
+        shared_tools.extend(todo_tools)
 
         # Create custom filesystem tools (override deepagents middleware tools).
         # `filesystem_backend` is the composite when a store is wired; otherwise
@@ -452,7 +475,7 @@ class PTCAgent:
             edit_file,  # overrides middleware edit_file
             *search_tools,
         ]
-        tools.extend(filesystem_tools)
+        shared_tools.extend(filesystem_tools)
         # A subagent's own Read, Write and Edit, over a view whose memory
         # refuses writes. Glob and Grep never write, so they are shared.
         subagent_files = subagent_backend(filesystem_backend, workspace_layout)
@@ -472,8 +495,8 @@ class PTCAgent:
         web_search_tool = search_tool(
             provider=self.config.search_api, depth=self.config.search_depth
         )
-        tools.append(web_search_tool)
-        tools.append(web_fetch_tool)
+        shared_tools.append(web_search_tool)
+        shared_tools.append(web_fetch_tool)
 
         # Site-crawl tools (PTC-only): experimental opt-in feature, further
         # tier-gated at resolve time. The factory returns [] when the crawl
@@ -481,7 +504,7 @@ class PTCAgent:
         crawl_tools: list[Any] = []
         if self.config.feature_enabled("site_crawl"):
             crawl_tools = create_crawl_tools(filesystem_backend)
-            tools.extend(crawl_tools)
+            shared_tools.extend(crawl_tools)
 
         finance_tools = [
             get_sec_filing,  # SEC filing extraction (10-K, 10-Q, 8-K)
@@ -494,7 +517,7 @@ class PTCAgent:
         ]
         if self.config.feature_enabled("market_watch"):
             finance_tools.append(watch_market)  # Market watch start/stop (live price injection)
-        tools.extend(finance_tools)
+        shared_tools.extend(finance_tools)
 
         # --- Build shared middleware (for both main agent and subagents) ---
         shared_middleware: list[Any] = []
@@ -649,8 +672,8 @@ class PTCAgent:
                 role,
                 sandbox=sandbox,
                 mcp_registry=mcp_registry,
-                execute_code=execute_code_tool,
-                bash=bash_tool,
+                execute_code=sub_code_tool,
+                bash=sub_bash_tool,
                 filesystem=subagent_filesystem_tools,
                 web=[web_search_tool, web_fetch_tool],
                 finance=finance_tools,
@@ -685,11 +708,13 @@ class PTCAgent:
         )
         main_only_middleware.append(background_middleware)
         if not disable_subagents:
-            tools.extend(background_middleware.tools)
+            shared_tools.extend(background_middleware.tools)
 
         ask_user_middleware = AskUserMiddleware()
         main_only_middleware.append(ask_user_middleware)
-        tools.extend(ask_user_middleware.tools)
+        shared_tools.extend(ask_user_middleware.tools)
+
+        tools: list[Any] = [execute_code_tool, bash_tool, *shared_tools]
 
         if role == "chief_of_staff":
             from src.tools.secretary.approvals import StandingApprovalMiddleware
@@ -918,7 +943,7 @@ class PTCAgent:
             task_middleware(
                 subagents,
                 model=turn.client,
-                tools=tools,
+                tools=[sub_code_tool, sub_bash_tool, *shared_tools],
                 middleware=subagent_middleware,
                 registry=background_middleware.registry,
                 checkpointer=checkpointer,
@@ -971,6 +996,18 @@ class PTCAgent:
         # thread, and a subagent has no thread of its own to come back to.
         if wakeups_on:
             tools.append(build_schedule_wakeup_tool())
+
+        # What will report back to the thread, main agent only for the same
+        # reason: a subagent's own commands wait, and its result covers them.
+        if thread_id:
+            tools.append(
+                build_thread_status_tool(
+                    thread_id=thread_id,
+                    user_id=str(user_id) if user_id else None,
+                    analysts=role == "chief_of_staff",
+                    registry=_bg_registry,
+                )
+            )
 
         # Main agent middleware (includes SubAgentMiddleware + main_only)
         # Ordering matters for prompt caching:
