@@ -1734,6 +1734,48 @@ class TestDeleteWorkspace:
         wm._remove_workspace_folder.assert_not_awaited()
         wm._teardown_machine.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    @patch(
+        "src.server.services.workspace_manager.db_delete_workspace",
+        new_callable=AsyncMock,
+    )
+    @cm_patch("db_get_workspace", new_callable=AsyncMock)
+    async def test_a_workspace_with_a_live_run_is_refused_before_its_commands_end(
+        self, mock_db_get, mock_db_delete
+    ):
+        """The delete's own transaction refuses it anyway, so ending its
+        background commands first would stop them for a delete that never
+        happens."""
+        from src.server.database.workspace import (
+            ACTIVE_WORK_DELETE_REFUSAL,
+            WorkspaceBusyError,
+        )
+
+        ws_id = str(uuid.uuid4())
+        mock_db_get.return_value = _make_workspace(
+            workspace_id=ws_id, status="running", dir_name="test-ab12"
+        )
+        wm = WorkspaceManager(_make_config())
+        wm.backup_project_files = AsyncMock()
+
+        with (
+            patch(
+                "src.server.services.workspace_manager.workspace_has_active_work",
+                AsyncMock(return_value=True),
+            ) as busy,
+            patch(
+                "src.server.services.commands.control.end_workspace_commands",
+                AsyncMock(),
+            ) as end_commands,
+        ):
+            with pytest.raises(WorkspaceBusyError, match=ACTIVE_WORK_DELETE_REFUSAL):
+                await wm.delete_workspace(ws_id)
+
+        busy.assert_awaited_once_with(ws_id)
+        end_commands.assert_not_awaited()
+        wm.backup_project_files.assert_not_awaited()
+        mock_db_delete.assert_not_awaited()
+
 
 class TestDeleteOnASharedMachine:
     """Deleting a project takes the project, never the machine under a sibling.
