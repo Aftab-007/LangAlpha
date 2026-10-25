@@ -1262,6 +1262,9 @@
     "sortRecent": "最近",
     "allComputers": "所有计算机",
     "filterByComputer": "按计算机筛选",
+    "manageComputers": "管理计算机…",
+    "manageComputerMenu": "管理计算机…",
+    "newComputerMenu": "新建计算机…",
     "customSortHint": "拖动卡片来排列",
     "dragInstructions": "按空格键拿起工作区，用方向键移动，再按空格键放下，按 Esc 取消。",
     "dragPickedUp": "已拿起 {{name}}。",
@@ -1393,7 +1396,9 @@
     "filesUploaded": "已上传 {{count}} 个文件",
     "filesFailed": "· {{count}} 个失败",
     "openWorkspace": "打开工作区",
-    "fileTooLarge": "{{name}} 太大了（{{size}} MB），无法上传。"
+    "fileTooLarge": "{{name}} 太大了（{{size}} MB），无法上传。",
+    "cosWorksOn": "运行于",
+    "cosComputerHint": "{{name}}在你的默认计算机上工作，使用工作区旁的 Home 文件夹。将另一台计算机设为默认后，它会随之迁移。"
   },
   "computer": {
     "computers": "计算机",
@@ -1401,6 +1406,7 @@
     "loading": "正在加载计算机",
     "empty": "还没有计算机。创建第一个工作区时会自动建一台。",
     "nameLabel": "名称",
+    "nameFromMachine": "默认使用机器的名称",
     "namePlaceholderCloud": "云端计算机",
     "namePlaceholderLocal": "本地计算机",
     "tierLabel": "计算机规格",
@@ -1411,8 +1417,11 @@
     "capPlanLimited": "需要比当前套餐更多的计算机？",
     "tierElsewhere": "{{tier}}可在 {{provider}} 上使用。",
     "switchProvider": "切换到 {{provider}}",
+    "takeOverFolder": "接管此文件夹",
+    "takeOverFolderNote": "另一台计算机将不再使用它，其中的文件会保留。",
     "computerLabel": "计算机",
     "computerHint": "同一台计算机上的工作区共用它的磁盘，并会一起启动和停止。",
+    "nameWithSource": "{{name}} · {{source}}",
     "primaryOption": "{{name}}（默认）",
     "preparingOption": "{{name}}（准备中）",
     "primaryPreparingOption": "{{name}}（默认，准备中）",
@@ -1475,7 +1484,25 @@
     "removeTitle": "移除 {{name}}？",
     "removeBody": "它的沙箱和磁盘上的所有内容都会被删除，此操作无法撤销。",
     "removeBodyOwnMachine": "我们将停止使用这台机器，并移除在上面为它设置的内容。{{folder}} 中的文件会保留。",
+    "removeBodyOwnMachineDelete": "我们将停止使用这台机器，并删除 LangAlpha 放在上面的内容。",
+    "alsoDeleteFiles": "同时从这台机器上删除 LangAlpha 的文件",
+    "alsoDeleteFilesHint": "删除 {{folder}}（包括其中各工作区的文件夹），以及 ~/.langalpha 中约 3 GB 的运行环境（如果没有其他计算机在使用）。你自己放进 {{folder}} 的文件会保留。机器需要处于连接状态。",
+    "filesDeleted": "已从这台机器上删除它的文件。",
+    "filesRootKept": "{{folder}} 中有你自己的文件，因此保留。",
+    "filesRuntimeKept": "~/.langalpha 仍被其他计算机使用，因此保留。",
+    "filesUnreached": "无法连接这台机器，它的文件仍在原处。",
+    "filesFailed": "未能删完这台机器上的文件。",
     "removeConfirm": "移除计算机",
+    "removeWithWorkspaces_one": "移除计算机和工作区",
+    "removeWithWorkspaces_other": "移除计算机和 {{count}} 个工作区",
+    "removeWorkspaces_one": "这个工作区会一并删除：",
+    "removeWorkspaces_other": "这 {{count}} 个工作区会一并删除：",
+    "removeWorkspacesMore_one": "还有 {{count}} 个",
+    "removeWorkspacesMore_other": "还有 {{count}} 个",
+    "removeWorkspacesAcknowledgeOne": "我了解 {{name}} 及其中的对话将被永久删除",
+    "removeWorkspacesAcknowledge_other": "我了解这 {{count}} 个工作区及其中的对话将被永久删除",
+    "removeWorkspacesLoading": "正在查找它上面的工作区…",
+    "removeWorkspacesFailed": "无法读取它上面的工作区。请关闭后重试。",
     "removing": "移除中...",
     "removeKey": "从 ~/.ssh/authorized_keys 中移除我们的密钥",
     "keyRemoved": "我们的密钥也已从 ~/.ssh/authorized_keys 中移除。",
@@ -1486,15 +1513,13 @@
     "removed": "已移除 {{name}}",
     "removeFailed": "无法移除这台计算机，请重试。",
     "removeBlocked": {
-      "workspaces_one": "删除它上面的 {{count}} 个工作区后即可移除。",
-      "workspaces_other": "删除它上面的 {{count}} 个工作区后即可移除。",
       "specChange": "规格更改完成后即可移除。",
       "starting": "启动完成后即可移除。",
       "stopping": "停止后即可移除。"
     },
     "removeRefused": {
       "primary": "默认计算机无法移除。",
-      "hasWorkspaces": "请先删除这台计算机上的工作区。",
+      "hasWorkspaces": "它上面有一个未列出的工作区。请查看列表后重试。",
       "busy": "这台计算机正忙，请稍后再试。"
     },
     "manageComputer": "管理 {{name}}",
@@ -1506,8 +1531,17 @@
       "offConfirm": "停止备份",
       "failed": "无法更改文件备份设置"
     },
+    "machine": {
+      "system": "系统",
+      "processor": "处理器",
+      "cores": "核心数",
+      "memory": "内存",
+      "folder": "文件夹",
+      "gb": "{{count}} GB"
+    },
     "prepare": {
       "sandbox": "正在创建沙箱",
+      "runtime": "正在安装运行环境",
       "tools": "正在安装工具",
       "finishing": "正在完成设置",
       "step": "{{step}}（{{index}}/{{total}}）",
@@ -1685,7 +1719,27 @@
       "asAccount": "以 {{account}} 身份",
       "notConnected": "未连接",
       "paused": "远程控制已暂停，可在 LangAlpha 菜单中恢复。",
-      "removeTurnsOff": "这台 Mac 上的远程控制也会随之关闭。"
+      "removeTurnsOff": "这台 Mac 上的远程控制也会随之关闭。",
+      "cardTitlePc": "这台电脑",
+      "windowsSoon": "即将支持 Windows",
+      "needsApp": "需要桌面应用",
+      "needsAppHint": "要添加这台 Mac，请<download>下载桌面应用</download>，并在应用中打开此表单。"
+    },
+    "card": {
+      "spec": "配置",
+      "changeSpec": "更改",
+      "workspaces": "工作区",
+      "disk": "磁盘",
+      "position": "{{n}} / {{total}}",
+      "previous": "上一台计算机",
+      "next": "下一台计算机",
+      "newOwn": "云端计算机，或通过 SSH 连接你已有的机器。",
+      "newCloud": "再添一台云端计算机，让工作在单独的机器上进行。",
+      "add": "添加计算机",
+      "ownMachine": "自有机器",
+      "details": "详情",
+      "storage": "存储",
+      "previewPending": "连接后显示"
     }
   },
   "thread": {
@@ -3947,6 +4001,14 @@
         "models": {
           "title": "选择模型",
           "desc": "设置默认模型，连接模型服务商。"
+        },
+        "desktopApp": {
+          "title": "下载桌面应用",
+          "desc": "在独立窗口中使用 LangAlpha；在 Mac 上还能把这台 Mac 用作计算机。"
+        },
+        "remoteControl": {
+          "title": "开启远程控制",
+          "desc": "让 Agent 在这台 Mac 上工作，关闭 LangAlpha 后仍可继续。"
         },
         "integrations": {
           "title": "连接聊天应用",

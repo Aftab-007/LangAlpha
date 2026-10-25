@@ -368,16 +368,13 @@ export function ReadySummary({
   step,
   ready,
   busy,
-  nameMaxLength,
 }: {
   step: SshReadyStep;
   ready: SshReady;
   busy: boolean;
-  nameMaxLength: number;
 }) {
   const { t } = useTranslation();
   const locale = useLocale();
-  const nameId = useId();
   const folderId = useId();
   const backupHintId = useId();
   const { target, probe } = ready;
@@ -438,20 +435,6 @@ export function ReadySummary({
         </div>
         {facts.length > 0 && <span>{facts.join(' · ')}</span>}
         {access && <span>{access}</span>}
-      </div>
-
-      <div className="flex flex-col gap-1">
-        <label htmlFor={nameId} style={labelStyle}>{t('computer.nameLabel', 'Name')}</label>
-        <Input
-          id={nameId}
-          value={step.name}
-          maxLength={nameMaxLength}
-          onChange={(e) => step.setName(e.target.value)}
-          disabled={busy}
-          autoComplete="off"
-          spellCheck={false}
-          style={inputStyle}
-        />
       </div>
 
       {step.folderOpen ? (
@@ -531,7 +514,7 @@ export function PreviewNotice({ children, className, testId }: { children: React
   );
 }
 
-export function SshSetup({ state, busy, nameMaxLength }: { state: SshSetupState; busy: boolean; nameMaxLength: number }) {
+export function SshSetup({ state, busy }: { state: SshSetupState; busy: boolean }) {
   const { t } = useTranslation();
   return (
     <div data-testid="ssh-setup">
@@ -542,7 +525,7 @@ export function SshSetup({ state, busy, nameMaxLength }: { state: SshSetupState;
         )}
       </PreviewNotice>
       {state.ready ? (
-        <ReadySummary step={state.readyStep} ready={state.ready} busy={busy} nameMaxLength={nameMaxLength} />
+        <ReadySummary step={state.readyStep} ready={state.ready} busy={busy} />
       ) : state.view === 'pairing' ? (
         <PairingView state={state} busy={busy} focusTarget={state.setEntry} />
       ) : (
