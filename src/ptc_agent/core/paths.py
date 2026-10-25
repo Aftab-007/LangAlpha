@@ -118,6 +118,10 @@ class SandboxLayout:
     SYSTEM_DIR: ClassVar[str] = ".system"
     SYSTEM_CODE_DIR: ClassVar[str] = ".system/code"
     SYSTEM_TRACE_DIR: ClassVar[str] = ".system/trace"
+    # Detached commands' state (pid, exit code), one directory each. Kept by
+    # the computer rather than a workspace folder, so a folder renamed while a
+    # command runs never makes it look lost.
+    SYSTEM_JOBS_DIR: ClassVar[str] = ".system/jobs"
 
     # Runtime paths must remain hidden from agents and denied by path validation.
     INTERNAL_DIR: ClassVar[str] = "_internal"
@@ -237,6 +241,10 @@ class SandboxLayout:
     @property
     def system_trace(self) -> str:
         return self.join(self.SYSTEM_TRACE_DIR)
+
+    @property
+    def system_jobs(self) -> str:
+        return self.join(self.SYSTEM_JOBS_DIR)
 
     @property
     def internal(self) -> str:
