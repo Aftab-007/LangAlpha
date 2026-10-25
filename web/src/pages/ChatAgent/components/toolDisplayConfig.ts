@@ -4,6 +4,7 @@ import {
   FilePlus, FileText, FilePen, FolderSearch, SquareChevronRight, Wrench,
   Newspaper, Brain, User, FileBarChart, Clock, ClipboardList, Zap, Settings, Terminal,
   Sparkles, BookText, BookMarked, BookPlus, PenLine, Eye, Plug, Send, Contact, AlarmClock,
+  Layers, ArrowUpDown,
 } from 'lucide-react';
 import {
   classifyAgentPath, topicFromMemoryKey, type AgentPathInfo, type UserDataEntity,
@@ -65,6 +66,8 @@ export const TOOL_DISPLAY_CONFIG: Record<string, ToolDisplayEntry> = {
   get_market_indices:       { displayName: 'Market Indices',       i18nKey: 'marketIndices',       icon: BarChart3 },
   get_sector_performance:   { displayName: 'Sector Performance',   i18nKey: 'sectorPerformance',   icon: PieChart },
   screen_stocks:            { displayName: 'Stock Screener',       i18nKey: 'stockScreener',       icon: Search },
+  get_options_chain:        { displayName: 'Options Chain',        i18nKey: 'optionsChain',        icon: Layers },
+  get_market_movers:        { displayName: 'Market Movers',        i18nKey: 'marketMovers',        icon: ArrowUpDown },
   // Market watch (live price injection) — one tool, action="watch"/"unwatch"
   watch_market:             { displayName: 'Watch Market',         i18nKey: 'watchMarket',         icon: Eye },
   // The agent's own follow-ups: set, cancel or list them, or end a check quietly
@@ -308,6 +311,13 @@ export function getInProgressText(rawToolName: string, toolCall: ToolCall | unde
       return tr?.('fetchingSectorData') ?? 'fetching sector data...';
     case 'screen_stocks':
       return tr?.('screeningStocks') ?? 'screening stocks...';
+    case 'get_options_chain':
+      return args?.underlying
+        ? (tr?.('fetchingSymbolOptions', { symbol: args.underlying }) ?? `fetching ${args.underlying} options...`)
+        : (tr?.('fetchingOptions') ?? 'fetching options...');
+    case 'get_market_movers':
+      if (args?.direction === 'losers') return tr?.('fetchingLosers') ?? 'fetching top losers...';
+      return tr?.('fetchingGainers') ?? 'fetching top gainers...';
     case 'watch_market': {
       if (args?.action === 'unwatch') return tr?.('unwatchingMarket') ?? 'stopping market watch...';
       if (args?.action === 'cancel') return tr?.('cancellingPriceTargets') ?? 'cancelling price targets...';

@@ -3034,7 +3034,7 @@
     "profitMargins": "Profit Margins",
     "epsActualVsEstimate": "EPS: Actual vs Estimate",
     "cashFlowQuarterly": "Cash Flow (Quarterly)",
-    "openInMarketView": "Open in Market View ↗",
+    "openInMarketView": "Open in Market View",
     "revenue": "Revenue",
     "netIncome": "Net Income",
     "grossMargin": "Gross Margin",
@@ -3147,8 +3147,6 @@
     "resultSavedToFilesystem": "The full result has been saved to the workspace filesystem.",
     "openFullResult": "Open full result",
     "preview": "Preview",
-    "nSearchResults": "{{count}} result for \"{{query}}\"",
-    "nSearchResults_other": "{{count}} results for \"{{query}}\"",
     "untitled": "Untitled",
     "nReasoning": "{{count}} reasoning",
     "thoughtFor": "thought for {{duration}}",
@@ -3211,7 +3209,9 @@
       "user": "Account",
       "sendMessage": "Send Message",
       "messageTargets": "Message Targets",
-      "scheduleWakeup": "Wakeups"
+      "scheduleWakeup": "Wakeups",
+      "optionsChain": "Options Chain",
+      "marketMovers": "Market Movers"
     },
     "completed": {
       "activatedSkill": "Activated skill",
@@ -3307,7 +3307,11 @@
       "sendingTo": "sending to {{app}}...",
       "sendingMessage": "sending message...",
       "listingMessageTargets": "listing message targets...",
-      "processing": "processing..."
+      "processing": "processing...",
+      "fetchingSymbolOptions": "fetching {{symbol}} options...",
+      "fetchingOptions": "fetching options...",
+      "fetchingGainers": "fetching top gainers...",
+      "fetchingLosers": "fetching top losers..."
     },
     "preparing": {
       "writingCode": "writing code{{size}}...",
@@ -3470,6 +3474,11 @@
       "orderReceipt": {
         "viewInOrders": "View in Orders",
         "openAt": "Open in {{vendor}}"
+      },
+      "orderTerm": {
+        "limit": "Limit",
+        "avgFill": "Avg fill",
+        "stop": "Stop"
       }
     },
     "messageDelivery": {
@@ -3491,6 +3500,76 @@
       "message": "Message",
       "files": "Files",
       "sentEarlier": "Sent earlier"
+    },
+    "termHead": {
+      "sym": "Sym",
+      "name": "Name",
+      "last": "Last",
+      "change": "Chg",
+      "mktCap": "Mkt cap",
+      "dayRange": "Day range",
+      "extended": "Ext hrs",
+      "filed": "Filed",
+      "items": "Items",
+      "press": "Press",
+      "asOf": "As of",
+      "filing": "Filing",
+      "strike": "Strike",
+      "exp": "Exp",
+      "type": "Type",
+      "vol": "Vol"
+    },
+    "annualReport": "Annual report",
+    "quarterlyReport": "Quarterly report",
+    "filedOn": "Filed {{date}}",
+    "source": "Source",
+    "edgarLink": "EDGAR ↗",
+    "filingCount": "{{count}} filing",
+    "filingCount_other": "{{count}} filings",
+    "nDays": "{{count}} day",
+    "nDays_other": "{{count}} days",
+    "pressReleaseShort": "PR",
+    "nMoreResults": "+{{count}} more result",
+    "nMoreResults_other": "+{{count}} more results",
+    "nTotalItems": "{{count}} total",
+    "automationStatus": {
+      "active": "Active",
+      "paused": "Paused",
+      "failed": "Failed",
+      "completed": "Completed",
+      "disabled": "Disabled",
+      "created": "Created",
+      "executing": "Running"
+    },
+    "termRange": {
+      "day": "Day",
+      "week52": "52 wk"
+    },
+    "quote": "Quote",
+    "optionsChain": "Options Chain",
+    "options": "Options",
+    "optionType": {
+      "call": "Call",
+      "put": "Put"
+    },
+    "optionTypes": {
+      "call": "Calls",
+      "put": "Puts"
+    },
+    "expiresOn": "Exp {{date}}",
+    "expiration": "Expiry",
+    "contract": "Contract",
+    "change": "Change",
+    "nMoreContracts": "+{{count}} more contract",
+    "nMoreContracts_other": "+{{count}} more contracts",
+    "noOptionsData": "No options data available",
+    "topGainers": "Top Gainers",
+    "topLosers": "Top Losers",
+    "marketMovers": "Market Movers",
+    "noMoversData": "No movers data available",
+    "optionsOfType": {
+      "call": "Options · Calls",
+      "put": "Options · Puts"
     }
   },
   "setup": {
