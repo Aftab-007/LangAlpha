@@ -47,6 +47,7 @@ from src.server.database.workspace_folders import (
 )
 from src.server.database.workspace_names import checked_workspace_name
 from src.server.models.computer import ComputerStatus
+from src.server.services.path_lock_coordination import STOP_HEARTBEAT_UNAVAILABLE_RECOVERY_S
 from src.server.services.computer_errors import (
     ComputerNotFoundError,
     ComputerPreparingError,
@@ -67,6 +68,8 @@ logger = logging.getLogger(__name__)
 # repeats its error every cycle for as long as the process lives.
 _IDLE_REAP_FAILURE_LIMIT = 3
 _IDLE_REAP_BACKOFF_SECONDS = 3600.0
+# Past a provider stop's own bound, for one reconcile of a stuck stop.
+STUCK_STOP_RECONCILE_TIMEOUT_S = 150.0
 
 
 class WorkspaceManager(ComputerManager):
@@ -772,8 +775,49 @@ class WorkspaceManager(ComputerManager):
 
         return reverted
 
+    async def reap_stuck_stopping_computers(self) -> int:
+        """Settle computers a stop left in 'stopping' with no stopper alive.
+
+        A worker that dies mid-stop (a deploy, a crash) leaves the row
+        'stopping', and only a start or a workspace's bring-up used to ask the
+        provider about it: a machine with neither stayed 'stopping', which
+        refuses both its start and its removal. Each row past a provider
+        stop's bound goes through the reconcile a start runs, which leaves a
+        stopper still renewing its heartbeat be and settles the rest from the
+        provider's state.
+
+        Returns:
+            Number of computers no longer 'stopping'.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            seconds=STOP_HEARTBEAT_UNAVAILABLE_RECOVERY_S
+        )
+        settled = 0
+        for computer in await get_computers_by_status("stopping", limit=1000):
+            updated_at = computer.get("updated_at")
+            if not updated_at:
+                continue
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            if updated_at > cutoff:
+                continue
+            computer_id = str(computer["computer_id"])
+            try:
+                # A dark machine answers within its dial timeout; this bounds
+                # one that never does, so the rest are still reached.
+                async with asyncio.timeout(STUCK_STOP_RECONCILE_TIMEOUT_S):
+                    after = await self.reconcile_stopping_computer(computer_id)
+            except Exception as e:
+                logger.warning(f"Could not settle stuck stop of computer {computer_id}: {e!r}")
+                continue
+            if after is not None and after.get("status") != ComputerStatus.STOPPING:
+                logger.info(f"Settled computer {computer_id}, stuck in 'stopping', as {after.get('status')!r}")
+                settled += 1
+        return settled
+
     async def start_cleanup_task(self) -> None:
-        """Start the background cleanup task, and the left-folder and usage sweeps beside it.
+        """Start the background cleanup task, and the left-folder, usage and
+        stuck-stop sweeps beside it.
 
         Both sweeps dial machines or providers, any of which may be dark or
         slow, so each runs in a loop of its own rather than ahead of idle
@@ -813,6 +857,17 @@ class WorkspaceManager(ComputerManager):
                 except Exception as e:
                     logger.error(f"Error in left-folder sweep loop: {e}")
 
+        async def stuck_stopping_loop():
+            while not self._shutdown:
+                try:
+                    await asyncio.sleep(self.cleanup_interval)
+                    if not self._shutdown:
+                        await self.reap_stuck_stopping_computers()
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"Error in stuck-stop sweep loop: {e}")
+
         async def usage_loop():
             # First at once, so a deploy opens runs for the computers already
             # running rather than a cycle later.
@@ -829,6 +884,7 @@ class WorkspaceManager(ComputerManager):
         self._cleanup_task = asyncio.create_task(cleanup_loop())
         self._left_folders_task = asyncio.create_task(left_folders_loop())
         self._usage_task = asyncio.create_task(usage_loop())
+        self._stuck_stopping_task = asyncio.create_task(stuck_stopping_loop())
         logger.info("Workspace cleanup task started")
 
 
