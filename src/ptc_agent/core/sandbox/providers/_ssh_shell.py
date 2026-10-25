@@ -12,7 +12,12 @@ import re
 import shlex
 from collections.abc import Iterable, Mapping
 
-from ptc_agent.core.paths import SandboxLayout
+from ptc_agent.core.paths import (
+    EXEC_SCRIPT_PREFIX,
+    LEFTOVERS_TRASH_PREFIX,
+    SandboxLayout,
+    WorkspaceLayout,
+)
 from ptc_agent.core.sandbox.providers import _ssh_bootstrap as bootstrap
 from ptc_agent.core.sandbox.providers._exec_sessions import (
     EXEC_MARK,
@@ -150,6 +155,141 @@ def home_shared_script(sandbox_ids: Iterable[str]) -> str:
     )
 
 
+# A tunnel's folder in ``~/.langalpha`` holds this, which takes the folder and
+# the tunnel away again; the runtime's uninstall leaves such a folder to it.
+TUNNEL_UNINSTALL_SCRIPT = "uninstall.sh"
+
+# What LangAlpha makes at the top of a root besides workspace folders, the
+# internal folder aside: what it holds is the owner's in part.
+_ROOT_SETUP = (
+    SandboxLayout.AGENTS_DIR,
+    SandboxLayout.MCP_SERVERS_DIR,
+    SandboxLayout.SYSTEM_DIR,
+)
+# Made at the root by every start, empty unless the agent wrote there: it goes
+# only empty.
+_ROOT_DATA = WorkspaceLayout.DATA_DIR
+
+
+def uninstall_script(root: str, sandbox_id: str) -> str:
+    """Deletes what LangAlpha set up on the machine for a removed computer,
+    its owner having asked: its folders in *root*, the root once nothing
+    else is in it, and the login's runtime once no computer is left on it.
+
+    Run after the computer's own folder under ``~/.langalpha`` is gone. Only a
+    root marked as this computer's is touched, any other kept as it is, and in
+    it only names LangAlpha makes: files the owner put there stay, and the folders the root folder
+    script set aside for them (theirs that stood in a workspace folder's way,
+    a deleted workspace's they kept) go back to the root's top. One that
+    cannot, its name taken there, keeps the leftovers folder and so the root.
+    A root kept keeps its mark too, naming a computer that is gone, which
+    lets the next computer claim the folder as LangAlpha's rather than refuse
+    it as the owner's. The root is read and emptied under the claims' hold,
+    so a computer added there meanwhile is not emptied with it.
+    The runtime stays for any other computer whose folder is on the login, of
+    this deployment or another, for a root inside it, and while an install
+    holds its lock, which the uninstall takes too. Everything else in ``~/.langalpha`` goes,
+    including what the agent put there itself (a browser it downloaded), but a
+    tunnel's folder, which stays for its own uninstall. A ``python3.X`` link
+    an older install left in ``~/.local/bin`` goes with the runtime it points
+    into. Both are moved out of their names, then deleted detached, so a
+    runtime of a few GB does not hold the removal up. Prints ``root kept`` and
+    ``runtime kept`` for what stays, and exits 1 when anything it set out to
+    delete or put back did not go.
+    """
+    q = shlex.quote
+    state = f'"$HOME"/{q(bootstrap.STATE_DIR)}'
+    setup = " ".join(q(n) for n in _ROOT_SETUP)
+    trash_prefix = q(LEFTOVERS_TRASH_PREFIX)
+    return (
+        f"r={q(root.rstrip('/'))}; me={q(sandbox_id)}\n"
+        f's={state}; c="$HOME"/{q(_COMPUTERS)}\n'
+        f'i="$r"/{q(SandboxLayout.INTERNAL_DIR)}; l="$r"/{q(SandboxLayout.LEFTOVERS_DIR)}\n'
+        f'm="$r"/{q(ROOT_MARKER)}; f=0\n'
+        # A trash beside the folder it empties, on its disk, so moving into
+        # it is a rename; deleted in place where none can be made.
+        "trash() {\n"
+        '  t=$(mktemp -d "$1/.langalpha-removing.XXXXXX" 2>/dev/null) || t=\n'
+        "}\n"
+        "drop() {\n"
+        '  [ -e "$1" ] || [ -L "$1" ] || return 0\n'
+        '  if [ -n "$t" ]; then mv -- "$1" "$t"/ 2>/dev/null && return 0; fi\n'
+        '  rm -rf -- "$1" && return 0\n'
+        "  f=1; return 1\n"
+        "}\n"
+        "gone() {\n"
+        '  [ -n "$t" ] && nohup rm -rf -- "$t" >/dev/null 2>&1 &\n'
+        "}\n"
+        f"{bootstrap.LOCK_SH}"
+        f"{_CLAIM_HOLD}"
+        'o=; { read -r o < "$m"; } 2>/dev/null\n'
+        'if [ -d "$r" ] && [ ! -L "$r" ] && [ -n "$o" ] && [ "$o" = "$me" ]; then\n'
+        # A root that is a disk of its own empties into a trash on that disk,
+        # since one beside it would make every move a copy; such a root can
+        # never go itself, so it is kept. Its mount point ends df's line,
+        # spaces and all.
+        '  case "$(df -P -- "$r" 2>/dev/null | sed -n 2p)" in\n'
+        '    *" $r") trash "$r" ;;\n'
+        '    *) trash "$(dirname -- "$r")" ;;\n'
+        "  esac\n"
+        "  k=0\n"
+        '  for x in "$l"/* "$l"/.[!.]* "$l"/..?*; do\n'
+        '    [ -e "$x" ] || [ -L "$x" ] || continue\n'
+        '    b=${x##*/}\n'
+        # A removal's trash, deleting itself, and a copy aside cut short,
+        # whose folder is still where it was.
+        f'    case "$b" in {trash_prefix}*) continue ;; *.copying) drop "$x"; continue ;; esac\n'
+        '    if [ -e "$r/$b" ] || [ -L "$r/$b" ]; then k=1\n'
+        '    elif ! mv -- "$x" "$r/$b"; then k=1; f=1; fi\n'
+        "  done\n"
+        f'  for n in {setup}; do drop "$r/$n"; done\n'
+        '  if [ "$k" = 0 ]; then drop "$i"; else\n'
+        '    for x in "$i"/* "$i"/.[!.]* "$i"/..?*; do\n'
+        '      [ -e "$x" ] || [ -L "$x" ] || continue\n'
+        '      [ "$x" = "$l" ] || drop "$x"\n'
+        "    done\n"
+        "  fi\n"
+        f'  for x in "$r"/{q(EXEC_SCRIPT_PREFIX)}*.py; do drop "$x"; done\n'
+        f'  rmdir -- "$r"/{q(_ROOT_DATA)} 2>/dev/null\n'
+        "  gone\n"
+        # Finder's view settings, left in any folder a Mac has shown, are
+        # no file of the owner's.
+        f'  if [ -n "$(ls -A -- "$r" | grep -vxF -e {q(ROOT_MARKER)} -e .DS_Store | head -n 1)" ]; then echo root kept\n'
+        '  else rm -f -- "$m" "$r"/.DS_Store; rmdir -- "$r" 2>/dev/null || echo root kept; fi\n'
+        # Not this computer's (its mark gone, or another's): left as it is.
+        'elif [ -e "$r" ] || [ -L "$r" ]; then echo root kept\n'
+        "fi\n"
+        'rmdir -- "$h" 2>/dev/null\n'
+        'if [ -d "$s" ] && [ ! -L "$s" ]; then\n'
+        # The install's lock, so none starts, or is part done, while the
+        # runtime goes; under it, a ``.install.*`` left is a dead install's.
+        f'  u=; {{ exec 9>>"$s"/{q(bootstrap.LOCK_FILE)}; }} 2>/dev/null && lock 5 || u=install\n'
+        # A root in the runtime's folder is the owner's to keep.
+        '  [ -n "$u" ] || case "$r/" in "$s"/*) u=root ;; esac\n'
+        '  [ -n "$u" ] || u=$(ls -A -- "$c" 2>/dev/null | grep -vxF -- "$me" | head -n 1)\n'
+        '  if [ -n "$u" ]; then echo runtime kept; else\n'
+        '    trash "$HOME"\n'
+        '    for x in "$HOME"/.local/bin/python3*; do\n'
+        '      [ -L "$x" ] || continue\n'
+        '      case "$(readlink -- "$x")" in "$s"/python/*) rm -f -- "$x" || f=1 ;; esac\n'
+        "    done\n"
+        '    for x in "$s"/* "$s"/.[!.]* "$s"/..?*; do\n'
+        '      [ -e "$x" ] || [ -L "$x" ] || continue\n'
+        f'      case "$x" in "$c"|"$s"/{q(bootstrap.LOCK_FILE)}) continue ;; esac\n'
+        f'      [ -f "$x"/{q(TUNNEL_UNINSTALL_SCRIPT)} ] || drop "$x"\n'
+        "    done\n"
+        # A computer whose folder arrived since the read keeps its folder,
+        # and the lock its install waits on.
+        '    drop "$c/$me"; rmdir -- "$c" 2>/dev/null\n'
+        f'    [ -e "$c" ] || rm -f -- "$s"/{q(bootstrap.LOCK_FILE)}\n'
+        "    gone\n"
+        '    rmdir -- "$s" 2>/dev/null\n'
+        "  fi\n"
+        "fi\n"
+        '[ "$f" = 0 ]\n'
+    )
+
+
 def read_state_script(cdir: str) -> str:
     """Prints 1 when the computer is marked running on this boot, else 0."""
     return f"d={shlex.quote(cdir)}; {state_sh('$d')}echo $__la_up\n"
@@ -269,6 +409,22 @@ def env_file(env: Mapping[str, str], home: str, root: str) -> str:
 ROOT_MARKER = ".langalpha-root"
 
 
+# One claim of a root at a time on the login, from the look at the folder to
+# the mark: two starts that both found it free would each mark it, and an
+# uninstall taking a root's folders out holds it too, so no claim lands
+# between its look at the mark and what it deletes. Held in ``$c``, the
+# computers folder. A claim takes moments, so a hold older than that was cut
+# off; one still held after the wait is exit 15, inside the command's timeout.
+_CLAIM_HOLD = (
+    'h="$c/.claiming"; n=0; mkdir -p -- "$c" || exit 9\n'
+    'until mkdir -- "$h" 2>/dev/null; do\n'
+    '  n=$((n + 1)); [ "$n" -le 20 ] || exit 15\n'
+    '  if [ -n "$(find "$h" -prune -mmin +2 2>/dev/null)" ]; then rmdir -- "$h" 2>/dev/null; else sleep 1; fi\n'
+    "done\n"
+    "trap 'rmdir -- \"$h\" 2>/dev/null' EXIT; trap 'exit 1' HUP INT TERM\n"
+)
+
+
 def root_dir_script(path: str, *, computers: str, computer_id: str | None) -> str:
     """Exit 0 when *path* is, or can become, this computer's own root folder.
 
@@ -302,18 +458,7 @@ def root_dir_script(path: str, *, computers: str, computer_id: str | None) -> st
         make = 'mkdir -p -- "$w" 2>/dev/null && claim'
         sudo = 'sudo -n install -d -o "$(id -un)" -g "$(id -gn)" -- "$w"'
         claim = "claim"
-        # One claim at a time on the login, from the look at the folder to
-        # the mark: two starts that both found it free would each mark it.
-        # A claim takes moments, so a hold older than that was cut off; one
-        # still held after the wait is exit 15, inside the command's timeout.
-        hold = (
-            'l="$c/.claiming"; n=0; mkdir -p -- "$c" || exit 9\n'
-            'until mkdir -- "$l" 2>/dev/null; do\n'
-            '  n=$((n + 1)); [ "$n" -le 20 ] || exit 15\n'
-            '  if [ -n "$(find "$l" -prune -mmin +2 2>/dev/null)" ]; then rmdir -- "$l" 2>/dev/null; else sleep 1; fi\n'
-            "done\n"
-            "trap 'rmdir -- \"$l\" 2>/dev/null' EXIT; trap 'exit 1' HUP INT TERM\n"
-        )
+        hold = _CLAIM_HOLD
     return (
         f"w={shlex.quote(path)}; c={shlex.quote(computers)}; "
         f'me={shlex.quote(computer_id or "")}; m="$w/{ROOT_MARKER}"; o=\n'
@@ -409,6 +554,16 @@ def root_dir_error(
         )
     return SSHConnectError("root_dir", f"{message} {choose}")
 
+
+
+def folder_marked_message(path: str, host: str) -> str:
+    """The refusal of a folder another computer marked. The client offers the
+    take-over itself, so a build without the offer reads it as whole."""
+    return (
+        f"{path} on {host} is the folder of a LangAlpha computer this account "
+        "does not have, perhaps one from another account or an earlier "
+        "install. Choose a new or empty folder."
+    )
 
 # -- Process groups and sessions ------------------------------------------------
 
