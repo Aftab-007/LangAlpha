@@ -1264,6 +1264,9 @@
     "sortRecent": "Recent",
     "allComputers": "All computers",
     "filterByComputer": "Filter by computer",
+    "manageComputers": "Manage computers…",
+    "manageComputerMenu": "Manage computer…",
+    "newComputerMenu": "New computer…",
     "customSortHint": "Drag cards to arrange",
     "dragInstructions": "To pick up a workspace, press Space. Use the arrow keys to move it, Space again to drop it, or Escape to cancel.",
     "dragPickedUp": "Picked up {{name}}.",
@@ -1395,7 +1398,9 @@
     "filesUploaded": "{{count}} file(s) uploaded",
     "filesFailed": "· {{count}} failed",
     "openWorkspace": "Open Workspace",
-    "fileTooLarge": "{{name}} is too large to upload ({{size}} MB)."
+    "fileTooLarge": "{{name}} is too large to upload ({{size}} MB).",
+    "cosWorksOn": "Works on",
+    "cosComputerHint": "{{name}} works on your primary computer, in a Home folder beside your workspaces. Make another computer primary and it moves there."
   },
   "computer": {
     "computers": "Computers",
@@ -1403,6 +1408,7 @@
     "loading": "Loading computers",
     "empty": "No computers yet. Your first workspace creates one.",
     "nameLabel": "Name",
+    "nameFromMachine": "Defaults to the machine's name",
     "namePlaceholderCloud": "Cloud computer",
     "namePlaceholderLocal": "Local computer",
     "tierLabel": "Computer spec",
@@ -1413,8 +1419,11 @@
     "capPlanLimited": "Need more computers than your plan includes?",
     "tierElsewhere": "{{tier}} is available on {{provider}}.",
     "switchProvider": "Switch to {{provider}}",
+    "takeOverFolder": "Take over this folder",
+    "takeOverFolderNote": "The other computer stops working in it. The files in it stay.",
     "computerLabel": "Computer",
     "computerHint": "Workspaces on one computer share its disk and start and stop together.",
+    "nameWithSource": "{{name}} · {{source}}",
     "primaryOption": "{{name}} (Primary)",
     "preparingOption": "{{name}} (Preparing)",
     "primaryPreparingOption": "{{name}} (Primary, Preparing)",
@@ -1480,7 +1489,25 @@
     "removeTitle": "Remove {{name}}?",
     "removeBody": "Its sandbox and everything on its disk are deleted. This can't be undone.",
     "removeBodyOwnMachine": "We stop using this machine and remove what we set up there for it. Your files in {{folder}} stay.",
+    "removeBodyOwnMachineDelete": "We stop using this machine and delete what LangAlpha put there.",
+    "alsoDeleteFiles": "Also delete LangAlpha's files from this machine",
+    "alsoDeleteFilesHint": "Deletes {{folder}}, its workspaces' folders included, and LangAlpha's runtime in ~/.langalpha (about 3 GB) unless another computer uses it. Files you put in {{folder}} yourself stay. The machine has to be connected.",
+    "filesDeleted": "Its files were deleted from the machine.",
+    "filesRootKept": "{{folder}} stays, since it holds files of yours.",
+    "filesRuntimeKept": "~/.langalpha stays, since another computer uses it.",
+    "filesUnreached": "We could not reach the machine, so its files are still there.",
+    "filesFailed": "We could not finish deleting its files from the machine.",
     "removeConfirm": "Remove computer",
+    "removeWithWorkspaces_one": "Remove computer and workspace",
+    "removeWithWorkspaces_other": "Remove computer and {{count}} workspaces",
+    "removeWorkspaces_one": "This workspace is deleted with it:",
+    "removeWorkspaces_other": "These {{count}} workspaces are deleted with it:",
+    "removeWorkspacesMore_one": "and {{count}} more",
+    "removeWorkspacesMore_other": "and {{count}} more",
+    "removeWorkspacesAcknowledgeOne": "I understand {{name}} and its threads are deleted for good",
+    "removeWorkspacesAcknowledge_other": "I understand these {{count}} workspaces and their threads are deleted for good",
+    "removeWorkspacesLoading": "Finding the workspaces on it...",
+    "removeWorkspacesFailed": "Couldn't read the workspaces on it. Close this and try again.",
     "removing": "Removing...",
     "removeKey": "Remove our key from ~/.ssh/authorized_keys",
     "keyRemoved": "We also removed our key from ~/.ssh/authorized_keys.",
@@ -1491,15 +1518,13 @@
     "removed": "{{name}} removed",
     "removeFailed": "Couldn't remove this computer. Try again.",
     "removeBlocked": {
-      "workspaces_one": "Delete its workspace to remove it.",
-      "workspaces_other": "Delete its {{count}} workspaces to remove it.",
       "specChange": "You can remove it once the spec change finishes.",
       "starting": "You can remove it once it has started.",
       "stopping": "You can remove it once it has stopped."
     },
     "removeRefused": {
       "primary": "Your primary computer can't be removed.",
-      "hasWorkspaces": "Delete the workspaces on this computer first.",
+      "hasWorkspaces": "A workspace not listed here is on it now. Check the list and try again.",
       "busy": "This computer is busy. Try again in a moment."
     },
     "manageComputer": "Manage {{name}}",
@@ -1511,8 +1536,17 @@
       "offConfirm": "Stop backing up",
       "failed": "Couldn't change file backup"
     },
+    "machine": {
+      "system": "System",
+      "processor": "Processor",
+      "cores": "Cores",
+      "memory": "Memory",
+      "folder": "Folder",
+      "gb": "{{count}} GB"
+    },
     "prepare": {
       "sandbox": "Creating the sandbox",
+      "runtime": "Installing the runtime",
       "tools": "Installing tools",
       "finishing": "Finishing setup",
       "step": "{{step}} ({{index}} of {{total}})",
@@ -1691,7 +1725,27 @@
       "asAccount": "as {{account}}",
       "notConnected": "Not connected",
       "paused": "Remote control is paused. Resume it from the LangAlpha menu.",
-      "removeTurnsOff": "Remote control on this Mac turns off too."
+      "removeTurnsOff": "Remote control on this Mac turns off too.",
+      "cardTitlePc": "This PC",
+      "windowsSoon": "Windows support is coming soon",
+      "needsApp": "Needs the desktop app",
+      "needsAppHint": "To add this Mac, <download>get the desktop app</download> and open this form there."
+    },
+    "card": {
+      "spec": "Spec",
+      "changeSpec": "Change",
+      "workspaces": "Workspaces",
+      "disk": "Disk",
+      "position": "{{n}} / {{total}}",
+      "previous": "Previous computer",
+      "next": "Next computer",
+      "newOwn": "A cloud computer, or a machine you already have, reached over SSH.",
+      "newCloud": "Another cloud computer, for work you want kept on its own machine.",
+      "add": "Add a computer",
+      "ownMachine": "Own machine",
+      "details": "Details",
+      "storage": "Storage",
+      "previewPending": "Drawn once it's reached"
     }
   },
   "thread": {
@@ -3992,6 +4046,14 @@
         "models": {
           "title": "Choose your models",
           "desc": "Pick default models and connect providers."
+        },
+        "desktopApp": {
+          "title": "Get the desktop app",
+          "desc": "LangAlpha in a window of its own, and on a Mac, your Mac as a computer."
+        },
+        "remoteControl": {
+          "title": "Turn on remote control",
+          "desc": "Let the agent work on this Mac, even with LangAlpha closed."
         },
         "integrations": {
           "title": "Connect a chat app",

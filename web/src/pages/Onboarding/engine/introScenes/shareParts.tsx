@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, Copy, ExternalLink, FileDown, Link2, Lock, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ease, useSceneTime } from './clock';
-import { Appear, Loader } from './kit';
+import { Appear, Loader, Scrim } from './kit';
 
 /* The share controls, as the share scene draws them: the chat header's
    popover that shares a conversation (`ShareButton`), the dialog that shares
@@ -231,10 +231,7 @@ export function ShareDialog({
   const done = t >= copied;
   const ready = t >= listed;
   return (
-    <div
-      className="absolute inset-0 flex items-center justify-center"
-      style={{ background: 'var(--color-bg-overlay-strong)', opacity: Math.min(p * 1.6, 1) }}
-    >
+    <Scrim className="flex items-center justify-center" opacity={Math.min(p * 1.6, 1)}>
       <div
         className="relative flex flex-col gap-[8px] rounded-[4px] border p-[12px] shadow-lg"
         style={{
@@ -367,7 +364,7 @@ export function ShareDialog({
           </div>
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }
 

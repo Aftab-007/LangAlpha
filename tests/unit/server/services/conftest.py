@@ -53,7 +53,10 @@ def _no_workspace_moving():
     with patch(
         "src.server.services.workspace_manager.workspace_is_moving",
         AsyncMock(return_value=False),
-    ) as moving:
+    ) as moving, patch(
+        "src.server.services.workspace_manager.workspace_has_active_work",
+        AsyncMock(return_value=False),
+    ):
         yield moving
 
 

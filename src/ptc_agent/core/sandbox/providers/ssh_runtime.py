@@ -35,7 +35,7 @@ from typing import Any
 import asyncssh
 import structlog
 
-from ptc_agent.core.paths import SandboxLayout
+from ptc_agent.core.paths import EXEC_SCRIPT_PREFIX, SandboxLayout
 from ptc_agent.core.sandbox.providers import _ssh_bootstrap as bootstrap
 from ptc_agent.core.sandbox.providers._ssh_authorized_key import (
     admits,
@@ -779,7 +779,7 @@ class SSHRuntime(ExecSessionRuntime):
         timeout: int = 300,
     ) -> CodeRunResult:
         link = await self._link()
-        script = f"{self._working_dir}/_exec_{uuid.uuid4().hex[:8]}.py"
+        script = f"{self._working_dir}/{EXEC_SCRIPT_PREFIX}{uuid.uuid4().hex[:8]}.py"
         payload = base64.b64encode(build_code_wrapper(code).encode()).decode()
         # The command travels on stdin, so the script rides inside it at any
         # size. The turn's own directory is reached by the shipped

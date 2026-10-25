@@ -235,6 +235,29 @@ html {
   /* Dot-grid retired from work surfaces — kept barely-visible for empty states. */
   --color-dot-grid: rgba(255, 255, 255, 0.05);
 
+  /* Machine drawings (Computers dialog, machineArt/). An illustration carries
+     its own shading (DESIGN.md § Illustrations): lit from the upper left, a
+     top and four side shades, hairlines in three weights, a soft contact
+     shadow. Glass stays near black in both themes, as a screen does. */
+  --color-art-ground: #191919;
+  --color-art-top: #2A2A2A;
+  --color-art-s3: #252525;
+  --color-art-s2: #212121;
+  --color-art-s1: #1D1D1D;
+  --color-art-s0: #191919;
+  --color-art-line-hi: #D4D4D4;
+  --color-art-line-mid: #707074;
+  --color-art-line-lo: #48484C;
+  --color-art-line-faint: #333336;
+  --color-art-dot: rgba(230, 230, 230, 0.3);
+  --color-art-mesh: rgba(230, 230, 230, 0.75);
+  --color-art-port: #0D0D0E;
+  --color-art-glass: #121214;
+  --color-art-halo: rgba(0, 0, 0, 0.8);
+  --color-art-glare: rgba(255, 255, 255, 0.035);
+  --color-art-term-ink: #C9C8C4;
+  --color-art-term-prompt: #7FBF8E;
+
   /* Identity tiles (Plugins rows): a name hashes to one of these eight muted
      tints, so every server/skill/plugin keeps a recognizable mark across
      surfaces. Identity is meaning — the one sanctioned hue system outside
@@ -420,6 +443,22 @@ html {
   --color-status-modified-glow: rgba(180, 83, 9, 0.15);
 
   --color-dot-grid: rgba(31, 31, 30, 0.05);
+
+  --color-art-ground: #FCFCFB;
+  --color-art-top: #FFFFFF;
+  --color-art-s3: #F4F4F1;
+  --color-art-s2: #EDEDEA;
+  --color-art-s1: #E5E5E2;
+  --color-art-s0: #DCDCD9;
+  --color-art-line-hi: #26262A;
+  --color-art-line-mid: #8A8A8F;
+  --color-art-line-lo: #B4B4B8;
+  --color-art-line-faint: #D4D4D6;
+  --color-art-dot: rgba(58, 58, 62, 0.3);
+  --color-art-mesh: rgba(58, 58, 62, 0.75);
+  --color-art-port: #2B2B2E;
+  --color-art-glass: #121214;
+  --color-art-halo: rgba(138, 138, 128, 0.3);
 
   /* Identity tiles — same hues as dark, tuned for the white page: slightly
      denser fills, darker monograms. */

@@ -124,6 +124,7 @@ EXPECTED_RELATIVE = {
     "EGRESS_RELAY_FILE": "_internal/.egress_relay.json",
     "VAULT_SECRETS_FILE": "_internal/.vault_secrets.json",
     "MCP_CHECK_PREFIX": "_internal/.mcp_check_",
+    "LEFTOVERS_DIR": "_internal/leftovers",
 }
 
 # The workspace tier, relative to the workspace folder rather than the root.
