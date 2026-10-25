@@ -131,5 +131,3 @@ export function isLastingRefusal(err: unknown): boolean {
 export function retryUnlessClientError(failureCount: number, err: unknown): boolean {
   return failureCount < 2 && !isClientError(err);
 }
-
-// --- Workspaces ---
