@@ -10,6 +10,7 @@ import './index.css'
 // Side-effect import: the modality listeners have to be running before the
 // first click, not from whichever overlay happens to load first.
 import './lib/inputModality'
+import { applyCardStyle, getCardStyle } from './lib/cardStyle'
 import { Toaster } from './components/ui/toaster'
 import { StaleBuildBoundary } from './components/StaleBuildBoundary'
 
@@ -23,6 +24,8 @@ const queryClient = new QueryClient({
     },
   },
 })
+
+applyCardStyle(getCardStyle())
 
 // Nothing renders until the active locale's catalog is in, or the first paint
 // shows raw keys. A catalog that fails leaves #root to index.html's pre-boot
