@@ -410,9 +410,13 @@ class CompactionMiddleware(AgentMiddleware):
         cut = provider_cutoff(view, cutoff) if kind == "anthropic" and not rebuild else cutoff
         if kind is not None and self._native and cut > 0:
             cutoff = cut
-            own = functools.partial(self._provider_summary, request, handler)
+            own = functools.partial(
+                self._provider_summary, request, handler, notes=self._notes_dir is not None
+            )
         elif kind is None and self._writes_own(request):
-            own = functools.partial(self._self_summary, request, handler)
+            own = functools.partial(
+                self._self_summary, request, handler, notes=self._notes_dir is not None
+            )
         return await self._compact(request, view, cutoff, self._transcript_target(), own)
 
     def _writes_own(self, request: ModelRequest) -> bool:
@@ -457,7 +461,7 @@ class CompactionMiddleware(AgentMiddleware):
     ) -> Compaction | HumanMessage | None:
         """What a call between turns asks for (see ``between_turns``)."""
         if isinstance(ask, HandOff):
-            return await self._hand_off(request, handler, view)
+            return await self._hand_off(request, handler, view, notes=self._notes_dir is not None)
         cutoff = self._cutoff(view, request.model)
         if cutoff <= 0:
             raise ValueError(NOTHING_TO_COMPACT)
@@ -468,6 +472,8 @@ class CompactionMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
         view: list[AnyMessage],
+        *,
+        notes: bool,
     ) -> HumanMessage | None:
         """The view's opening summary written out by the agent's model, when
         it is one only that model's provider can read, else None.
@@ -481,7 +487,7 @@ class CompactionMiddleware(AgentMiddleware):
         head = view[0] if view and is_summary_message(view[0]) else None
         if not isinstance(head, HumanMessage) or not is_opaque(head) or handed_off(head):
             return None
-        prompt = summary_prompt("handoff", keeps_turns(view[1:]))
+        prompt = summary_prompt("handoff", keeps_turns(view[1:]), notes)
         with as_sent():
             response = await handler(
                 request.override(
@@ -543,6 +549,8 @@ class CompactionMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
         to_summarize: list[AnyMessage],
         kept: bool,
+        *,
+        notes: bool,
     ) -> NativeAnswer:
         """The agent's provider compacting ``to_summarize`` itself, with the
         summary prompt in place of its own where it takes one (Claude), the
@@ -559,7 +567,7 @@ class CompactionMiddleware(AgentMiddleware):
         settings = compaction_settings(
             request.model,
             request.model_settings,
-            summary_prompt("native", kept),
+            summary_prompt("native", kept, notes),
         )
         with as_sent(), _unstreamed():
             response = await handler(
@@ -579,6 +587,8 @@ class CompactionMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
         to_summarize: list[AnyMessage],
         kept: bool,
+        *,
+        notes: bool,
     ) -> str:
         """The agent's model writing the summary of ``to_summarize`` as text,
         asked in the last user message of its own request.
@@ -595,7 +605,7 @@ class CompactionMiddleware(AgentMiddleware):
                 request.override(
                     messages=[
                         *to_summarize,
-                        HumanMessage(summary_prompt("self", kept)),
+                        HumanMessage(summary_prompt("self", kept, notes)),
                     ]
                 )
             )

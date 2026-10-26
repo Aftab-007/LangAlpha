@@ -164,10 +164,24 @@ write.
     )
 
 
-def _pair(prompt: Callable[[str], str], kept: str, no_tail: str) -> tuple[str, str]:
-    """A family's prompt for a summary that keeps turns after it, and for one
-    that keeps none (``keeps_turns``)."""
-    return prompt(kept), prompt(no_tail)
+_NO_TAIL_STATE = """What you write is the only record of where the work stands, so record its
+current state exactly: the last step completed, what was in progress and how
+far it got, any tool result or decision still pending, any question to the
+user still open, and the user's latest request in their own words."""
+
+
+_NO_TAIL_NOTES = """Your checkpoint notes are the one exception: where a note already records one
+of these details, cite it by the note's file name, and its section if the note
+has sections, instead of restating it. Then name the details to read back from
+each note before continuing."""
+
+
+def _family(prompt: Callable[[str], str], kept: str, no_tail: str) -> tuple[str, str, str]:
+    """A family's prompt for a summary that keeps turns after it, for one that
+    keeps none (``keeps_turns``), and for one that keeps none in a thread
+    with checkpoint notes, which keep some of that state already."""
+    state = f"{no_tail}\n{_NO_TAIL_STATE}"
+    return prompt(kept), prompt(state), prompt(f"{state}\n{_NO_TAIL_NOTES}")
 
 
 _SUMMARY_OPEN, _SUMMARY_END = "<summary>", "</summary>"
@@ -186,7 +200,7 @@ _SELF_SUMMARY_RULES = (
 
 SummaryKind = Literal["transcript", "native", "self", "handoff"]
 
-_NATIVE = _pair(
+_NATIVE = _family(
     _native_prompt,
     """The most recent messages are not above: they stay in context, word for word,
 right after your summary, so the work may have moved on from where this
@@ -196,8 +210,8 @@ not as still to do.""",
 so describe the work as it stands where this conversation ends.""",
 )
 
-_PROMPTS: dict[SummaryKind, tuple[str, str]] = {
-    "transcript": _pair(
+_PROMPTS: dict[SummaryKind, tuple[str, str, str]] = {
+    "transcript": _family(
         _transcript_prompt,
         """The most recent messages are not in this history: they stay in context, word
 for word, right after your summary, so the work may have moved on from where
@@ -207,8 +221,8 @@ not as still to do.""",
 your summary, so describe the work as it stands where this history ends.""",
     ),
     "native": _NATIVE,
-    "self": (_NATIVE[0] + _SELF_SUMMARY_RULES, _NATIVE[1] + _SELF_SUMMARY_RULES),
-    "handoff": _pair(
+    "self": tuple(prompt + _SELF_SUMMARY_RULES for prompt in _NATIVE),
+    "handoff": _family(
         _handoff_prompt,
         """The messages that came after the compacted summary stay in context, word for
 word, right after yours, so the work may have moved on from where it ends.
@@ -219,13 +233,16 @@ what you write: describe the work as it stands where the summary ends.""",
 }
 
 
-def summary_prompt(kind: SummaryKind, keeps: bool) -> str:
+def summary_prompt(kind: SummaryKind, keeps: bool, notes: bool = False) -> str:
     """The instructions for a summary written by ``kind``: the transcript
     summarizer, the agent's provider compacting in place, the agent's model
     writing it as text, or that model writing out a summary only its provider
-    can read. ``keeps`` says whether turns stay after it (``keeps_turns``)."""
-    kept, no_tail = _PROMPTS[kind]
-    return kept if keeps else no_tail
+    can read. ``keeps`` says whether turns stay after it (``keeps_turns``), and
+    ``notes`` whether the thread keeps checkpoint notes (the scratchpad)."""
+    kept, no_tail, with_notes = _PROMPTS[kind]
+    if keeps:
+        return kept
+    return with_notes if notes else no_tail
 
 
 DEFAULT_SUMMARY_PROMPT = summary_prompt("transcript", True)

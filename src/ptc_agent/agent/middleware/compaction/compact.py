@@ -274,7 +274,7 @@ class Summarizer:
 
         async def render(trimmed: list[AnyMessage]) -> list[AnyMessage]:
             trimmed = await aoffload_base64_content(backend, trimmed, thread_id=thread_id)
-            return build_summary_request(summary_prompt("transcript", kept), trimmed, turns)
+            return build_summary_request(summary_prompt("transcript", kept, notes=bool(notes_dir)), trimmed, turns)
 
         remaining = budget - (time.monotonic() - started)
         # The notes are listed beside the summary and within its budget, so

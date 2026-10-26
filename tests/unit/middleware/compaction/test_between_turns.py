@@ -62,15 +62,14 @@ def _model(*answers: AIMessage) -> GenericFakeChatModel:
     return GenericFakeChatModel(messages=iter(answers))
 
 
-def _agent(model, *, summary="the summarizer's summary", compaction=True, keep_tokens=2):
+def _agent(model, *, summary="the summarizer's summary", compaction=True, keep_tokens=2, notes_dir=None):
     sent = _Sent()
     middleware = []
     if compaction:
         summarizer = Summarizer(_model(AIMessage(summary)), limit=100_000, counter=len)
         # Never past the threshold: only an ask summarizes.
-        middleware.append(
-            CompactionMiddleware(summarizer, token_threshold=10**9, keep_tokens=keep_tokens)
-        )
+        compaction_mw = CompactionMiddleware(summarizer, token_threshold=10**9, keep_tokens=keep_tokens)
+        middleware.append(compaction_mw.with_scratchpad_notes(notes_dir) if notes_dir else compaction_mw)
     agent = create_agent(model=model, tools=[], middleware=[*middleware, sent])
     return agent, sent
 
@@ -187,16 +186,18 @@ class TestHandOff:
         assert watcher.started == 1
         assert watcher.ended == 1
 
-    async def test_a_summary_no_turn_came_after_is_written_out_as_where_the_work_stands(self):
+    @pytest.mark.parametrize("notes_dir", [None, "/workspace/.agents/scratchpad/thread01/note"], ids=["notes off", "notes on"])
+    async def test_a_summary_no_turn_came_after_is_written_out_as_where_the_work_stands(self, notes_dir):
         head = _opaque()
-        agent, sent = _agent(_model(AIMessage("Goal: chart AAPL.")))
+        agent, sent = _agent(_model(AIMessage("Goal: chart AAPL.")), notes_dir=notes_dir)
         thread = _summarized(head)
         thread["_summarization_event"] = {"summary_message": head, "cutoff_index": len(_history())}
 
         await ask_between_turns(agent, thread, HandOff(), thread_id="t-1")
 
         (request,) = sent.requests
-        assert [m.content for m in request.messages] == [head.content, summary_prompt("handoff", False)]
+        prompt = summary_prompt("handoff", False, notes=notes_dir is not None)
+        assert [m.content for m in request.messages] == [head.content, prompt]
 
     async def test_the_agents_model_writes_out_a_summary_only_its_provider_can_read(self):
         head = _opaque()

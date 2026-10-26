@@ -62,18 +62,19 @@ def _offline(monkeypatch):
     monkeypatch.setattr(mw_module, "get_stream_writer", lambda: lambda payload: None)
 
 
-def _agent(saver: InMemorySaver, system: str, data_tool):
+def _agent(saver: InMemorySaver, system: str, data_tool, notes_dir: str | None = None):
+    compaction = CompactionMiddleware(
+        Summarizer(GenericFakeChatModel(messages=iter([])), limit=100_000),
+        token_threshold=THRESHOLD,
+        keep_tokens=THRESHOLD // 3,
+        claude_keep_tokens=THRESHOLD // 3,
+    )
     return create_agent(
         model=anthropic_model(),
         tools=[data_tool],
         system_prompt=system,
         middleware=[
-            CompactionMiddleware(
-                Summarizer(GenericFakeChatModel(messages=iter([])), limit=100_000),
-                token_threshold=THRESHOLD,
-                keep_tokens=THRESHOLD // 3,
-                claude_keep_tokens=THRESHOLD // 3,
-            ),
+            compaction.with_scratchpad_notes(notes_dir) if notes_dir else compaction,
             AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
             ToolSurfaceMiddleware(),
             SystemPinMiddleware(),
@@ -111,8 +112,9 @@ async def _pin(saver: InMemorySaver) -> dict:
     return state.values.get(STATE_SYSTEM_PIN) or {}
 
 
+@pytest.mark.parametrize("notes_dir", [None, "/workspace/.agents/scratchpad/thread01/note"], ids=["notes off", "notes on"])
 @pytest.mark.asyncio
-async def test_a_deploy_reaches_the_thread_through_a_summary_that_keeps_no_turns(monkeypatch):
+async def test_a_deploy_reaches_the_thread_through_a_summary_that_keeps_no_turns(monkeypatch, notes_dir):
     wire = Wire(
         [
             _measured(reply(1, tool=("get_data", {"query": "a"})), 2_000),
@@ -127,10 +129,10 @@ async def test_a_deploy_reaches_the_thread_through_a_summary_that_keeps_no_turns
         ]
     ).install(monkeypatch)
     saver = InMemorySaver()
-    await _agent(saver, "Prompt A.", get_data_a).ainvoke({"messages": [HumanMessage("Get a.")]}, CFG)
-    await _agent(saver, "Prompt B.", get_data_b).ainvoke({"messages": [HumanMessage("Get b.")]}, CFG)
+    await _agent(saver, "Prompt A.", get_data_a, notes_dir).ainvoke({"messages": [HumanMessage("Get a.")]}, CFG)
+    await _agent(saver, "Prompt B.", get_data_b, notes_dir).ainvoke({"messages": [HumanMessage("Get b.")]}, CFG)
     assert (await _pin(saver)).get("stale") is True
-    await _agent(saver, "Prompt B.", get_data_b).ainvoke({"messages": [HumanMessage("Get c.")]}, CFG)
+    await _agent(saver, "Prompt B.", get_data_b, notes_dir).ainvoke({"messages": [HumanMessage("Get c.")]}, CFG)
 
     assert len(wire.payloads) == 7
     assert kept_breaks(wire) == []
@@ -145,7 +147,7 @@ async def test_a_deploy_reaches_the_thread_through_a_summary_that_keeps_no_turns
     # The summary's own request is on the old render and summarizes every
     # turn, the thinking in it included; the call after it is on the new one.
     assert is_compaction_request(summary)
-    assert summary["extra_body"]["compaction"]["instructions"] == summary_prompt("native", False)
+    assert summary["extra_body"]["compaction"]["instructions"] == summary_prompt("native", False, notes=notes_dir is not None)
     assert thinking_count(summary) == 4
     assert "Prompt B." in _system(after) and "Prompt A." not in _system(after)
     assert _unmarked(after["tools"])[0]["input_schema"]["required"] == ["query", "limit"]
