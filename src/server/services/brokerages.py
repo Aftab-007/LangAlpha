@@ -82,7 +82,8 @@ BROKERAGES: tuple[Brokerage, ...] = (
         site="interactivebrokers.com",
         description=(
             "Interactive Brokers account: portfolio, positions, account "
-            "performance, market data, and draft orders the user confirms in "
+            "performance, market data, saved screeners, live stock and "
+            "single-leg option orders, and draft orders the user confirms in "
             "IBKR before anything is placed."
         ),
         exclusive_connection=True,
@@ -94,10 +95,11 @@ BROKERAGES: tuple[Brokerage, ...] = (
         site="webull.com",
         description=(
             "Webull brokerage account: balances, positions and buying power, "
-            "order history, watchlists, real-time quotes, and instrument "
-            "reference data. Reads only: nothing here places, previews or "
-            "stages an order. Covers equities, options, futures, event "
-            "contracts and crypto."
+            "order history, watchlists, real-time quotes, instrument reference "
+            "data, fundamentals, news, and insider and institutional holdings, "
+            "and draft orders for stocks, options, futures and crypto that the "
+            "user confirms in the Webull app before anything is placed. Covers "
+            "equities, options, futures, event contracts and crypto."
         ),
     ),
     Brokerage(
@@ -112,8 +114,8 @@ BROKERAGES: tuple[Brokerage, ...] = (
             "moomoo brokerage account: balances, positions, and order history, "
             "real-time quotes and order book, option chains and volatility, "
             "company fundamentals and analyst research, stock and IPO "
-            "screeners, and order placement. Covers US, Greater China, Japan "
-            "and Southeast Asia."
+            "screeners, and order placement for stocks, options, futures and "
+            "crypto. Covers US, Greater China, Japan and Southeast Asia."
         ),
     ),
 )

@@ -28,11 +28,12 @@ from src.server.services.brokerage_capabilities import (
     group_of_tool,
     groups_for,
     is_always_denied,
+    order_modes,
     order_tool,
     required_groups,
     tools_for,
 )
-from src.server.services.brokerage_orders import ibkr, moomoo, robinhood
+from src.server.services.brokerage_orders import ibkr, moomoo, robinhood, webull
 from src.server.services.brokerages import brokerage_names
 
 VENDORS = sorted(_CURATION)
@@ -167,6 +168,19 @@ def test_the_two_tools_a_prefix_rule_misfiles() -> None:
     assert "provide_customer_feedback" in UNCURATED["ibkr"]
 
 
+def test_a_tool_sits_with_the_objects_it_reads_or_changes() -> None:
+    """Saved things are granted as a whole: reading an alert and changing one
+    are one switch, and a chart's indicators go with its layout."""
+    for tool in ("get_alert_log", "mark_alerts_read", "update_alert"):
+        assert group_of_tool("robinhood", tool) == "alerts"
+    for tool in ("get_legend_layouts", "set_legend_chart_settings", "add_legend_indicator"):
+        assert group_of_tool("robinhood", tool) == "charts"
+    # A whole combo order in, the margin it would use out: a what-if, which the
+    # single-leg capacity read beside it is not.
+    assert group_of_tool("moomoo", "account_combo_trading_info") == "order_preview"
+    assert group_of_tool("moomoo", "account_trading_info") == "account"
+
+
 def test_placing_an_order_takes_the_trading_group() -> None:
     for vendor, tool in (
         ("moomoo", "trading_order_place"),
@@ -174,31 +188,42 @@ def test_placing_an_order_takes_the_trading_group() -> None:
         # Crypto rides the same rung as equity: the group answers what the
         # action costs, not what it trades.
         ("robinhood", "place_crypto_order"),
+        ("ibkr", "submit_order"),
+        # It releases a submit, a modify or a cancel to the market.
+        ("ibkr", "answer_order_question"),
     ):
         without = [k for k in group_keys_for(vendor) if k != "trading"]
         assert tool not in tools_for(vendor, without)
         assert tool in tools_for(vendor, ["account", "trading"])
 
 
-@pytest.mark.parametrize("vendor", ["ibkr", "webull"])
-def test_a_broker_that_places_nothing_is_never_asked_about_trading(
-    vendor: str,
-) -> None:
-    """Neither publishes a tool that places an order, so the toggle would lie."""
-    assert "trading" not in group_keys_for(vendor)
+def test_a_broker_whose_order_tools_we_hold_back_is_never_asked_about_trading() -> None:
+    """Every Webull order tool stages, so the live toggle would grant nothing
+    and would read as though it did."""
+    assert "trading" not in group_keys_for("webull")
 
 
-def test_webull_has_no_rung_at_all() -> None:
-    """Read-only by the vendor's own line, not by our reading of a tool list.
+def test_ibkr_offers_live_orders_beside_its_staged_ones() -> None:
+    """IBKR's live tools read back through ``get_order_status``, in account,
+    so they file under the gated live rung with account access beside them."""
+    assert {"staged_orders", "trading"} <= set(group_keys_for("ibkr"))
+    assert required_groups("ibkr", "trading") == ("account",)
+    for tool in ("submit_order", "modify_order", "cancel_order", "answer_order_question"):
+        assert group_of_tool("ibkr", tool) == "trading"
+        assert not is_always_denied("ibkr", tool)
+    assert UNCURATED["ibkr"] == ("provide_customer_feedback",)
 
-    Webull's consent screen offers account, order query, market data and
-    instruments, and no trading capability, so the write scope is not grantable
-    and nothing published places, previews or stages an order. IBKR by contrast
-    stops one rung down rather than at zero, with a staged order a human submits.
+
+def test_webull_stops_at_staged() -> None:
+    """The vendor's line, not our reading of a tool list.
+
+    Every Webull order tool writes an instruction a person sends from Webull's
+    own client, so the one rung it has is staged, and every order tool it
+    publishes is a staged one.
     """
     rungs = {g.key for g in GROUPS if g.rung}
-    assert not rungs & set(group_keys_for("webull"))
-    assert "staged_orders" in set(group_keys_for("ibkr")) & rungs
+    assert rungs & set(group_keys_for("webull")) == {"staged_orders"}
+    assert order_modes("webull") == (OrderMode.STAGED,)
 
 
 @pytest.mark.parametrize("vendor", VENDORS)
@@ -246,13 +271,14 @@ def test_declining_trading_still_refuses_the_tools_that_place_orders() -> None:
         ("moomoo", "trading_order_place"),
         ("robinhood", "place_equity_order"),
         ("robinhood", "place_crypto_order"),
+        ("ibkr", "submit_order"),
     ):
         without = [k for k in group_keys_for(vendor) if k != "trading"]
         assert tool in denied_tools(vendor, without)
         assert tool not in denied_tools(vendor, group_keys_for(vendor))
 
 
-@pytest.mark.parametrize("vendor", ["moomoo", "robinhood"])
+@pytest.mark.parametrize("vendor", ["ibkr", "moomoo", "robinhood"])
 def test_live_orders_stored_without_account_access_are_not_in_force(
     vendor: str,
 ) -> None:
@@ -353,7 +379,11 @@ def _status_read(vendor: str, entry: OrderTool) -> str:
     if vendor == "robinhood":
         return robinhood._STATUS_TOOLS[entry.asset_class][0]
     if vendor == "ibkr":
-        return ibkr.LIST_INSTRUCTIONS
+        return {OrderMode.LIVE: ibkr.ORDER_STATUS, OrderMode.STAGED: ibkr.LIST_INSTRUCTIONS}[
+            entry.mode
+        ]
+    if vendor == "webull":
+        return webull.LIST_PENDING
     raise AssertionError(f"name the read {vendor}'s adapter settles an order with")
 
 

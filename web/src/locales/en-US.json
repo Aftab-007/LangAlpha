@@ -2153,7 +2153,11 @@
       "checkingWakeups": "checking wakeups...",
       "endingQuietly": "ending the check...",
       "orderPartialCancelled": "{{order}}: {{filled}} of {{qty}} filled, then cancelled",
-      "orderFailed": "{{order}} failed"
+      "orderFailed": "{{order}} failed",
+      "orderPartialExpired": "{{order}}: {{filled}} of {{qty}} filled, then expired",
+      "orderExpired": "{{order}} expired",
+      "orderConfirmed": "{{order}} confirmed at the broker",
+      "orderHandedOff": "{{order}} left the broker's instruction list"
     },
     "missingWorkspaceOrThread": "Missing workspace or thread information",
     "accessDeniedTitle": "You don't have access to this conversation",
@@ -3449,9 +3453,14 @@
         "partiallyFilled": "Partially filled",
         "filled": "Filled",
         "cancelled": "Cancelled",
+        "expired": "Expired at the brokerage",
         "handedOff": "Left the brokerage's instruction list, so it was sent, deleted or expired there. The brokerage does not say which; the account's orders show what was sent.",
         "handedOffStaged": "Left {{vendor}}'s instruction list, so it was sent, deleted or expired in {{vendor}}. {{vendor}} does not say which; the account's orders show what was sent.",
         "handedOffStagedUnnamed": "Left the brokerage's instruction list, so it was sent, deleted or expired there. The brokerage does not say which; the account's orders show what was sent.",
+        "expiredStaged": "Expired in {{vendor}} before it was confirmed",
+        "expiredStagedUnnamed": "Expired at the brokerage before it was confirmed",
+        "handedOffConfirmedStaged": "Confirmed in {{vendor}} and sent there as an order. The account's orders show how it trades.",
+        "handedOffConfirmedStagedUnnamed": "Confirmed at the brokerage and sent there as an order. The account's orders show how it trades.",
         "rejectedByVendor": "Rejected by the brokerage",
         "failed": "Failed before the brokerage answered",
         "unknown": "Outcome unknown"
@@ -3469,7 +3478,9 @@
         "partiallyFilled": "Partial fill",
         "filled": "Filled",
         "cancelled": "Cancelled",
+        "expired": "Expired",
         "handedOff": "Handed off",
+        "handedOffConfirmed": "Confirmed",
         "rejectedByVendor": "Broker rejected",
         "failed": "Failed",
         "unknown": "Unknown"
@@ -4749,6 +4760,7 @@
       "open": "Open at the broker",
       "filled": "Filled",
       "cancelled": "Cancelled",
+      "expired": "Expired",
       "handedOff": "Handed off",
       "rejected": "Rejected",
       "failed": "Failed"
@@ -4823,7 +4835,11 @@
         },
         "alerts": {
           "label": "Price alerts",
-          "desc": "Read your price alerts, and create or delete them."
+          "desc": "Read your price alerts and the ones that fired, and create, change or delete them."
+        },
+        "charts": {
+          "label": "Saved charts",
+          "desc": "Read your saved chart layouts, and change their settings and the indicators on them."
         },
         "account": {
           "label": "Account and positions",
