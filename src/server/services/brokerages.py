@@ -114,8 +114,8 @@ BROKERAGES: tuple[Brokerage, ...] = (
             "moomoo brokerage account: balances, positions, and order history, "
             "real-time quotes and order book, option chains and volatility, "
             "company fundamentals and analyst research, stock and IPO "
-            "screeners, and order placement. Covers US, Greater China, Japan "
-            "and Southeast Asia."
+            "screeners, and order placement for stocks, options, futures and "
+            "crypto. Covers US, Greater China, Japan and Southeast Asia."
         ),
     ),
 )
