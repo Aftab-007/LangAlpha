@@ -511,8 +511,9 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
 # stricter than the groups -- everything else it blocks, a capability toggle can
 # unblock.
 #
-# IBKR's submits a feature request in the user's name, which is not a thing an
-# analysis turn should be able to do on its own. moomoo's crypto tools place,
+# IBKR's submits a feature request in the user's name, and Webull's publish a
+# post or a comment to its community in the user's name: none of that is a thing
+# an analysis turn should be able to do on its own. moomoo's crypto tools place,
 # change and cancel real orders, but the order adapter reads only moomoo's
 # equity order shape: behind the gate they would be approved and recorded
 # without anyone knowing what they are, and left ungrouped they would reach the
@@ -523,6 +524,10 @@ UNCURATED: dict[str, tuple[str, ...]] = {
         "crypto_account_cancel_order",
         "crypto_account_create_order",
         "crypto_account_modify_order",
+    ),
+    "webull": (
+        "create_community_comment",
+        "create_community_post",
     ),
 }
 
