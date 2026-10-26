@@ -35,6 +35,10 @@ from src.server.services.mcp_descriptions.keys import (
     platform_model,
     server_digest,
 )
+from src.server.services.mcp_descriptions.prompts import (
+    PROFILE_SYSTEM_PROMPT,
+    profile_user_prompt,
+)
 from src.server.services.mcp_descriptions.prompt_text import users_own_words
 from src.server.services.mcp_descriptions.schema import PROFILE_PROMPT_VERSION, ServerProfile
 from src.utils.concurrency import cancel_and_join
@@ -107,8 +111,6 @@ async def run_job(job: dict[str, Any], llm_service: Any) -> bool:
     A user who connects into a brokerage scope while the description lands may
     have resolved their workspace before it committed, and missed the bump
     inside it, so the owners are read again once it has landed."""
-    from src.server.services.mcp_descriptions import prompts
-
     scope = Scope.parse(job["scope_key"])
     described = described_tools(scope, list(job["tools"] or []))
     digest = server_digest(described)
@@ -119,8 +121,8 @@ async def run_job(job: dict[str, Any], llm_service: Any) -> bool:
     label = brokerage_by_name(scope.brokerage).label if scope.brokerage else job["server_name"]
     profile = await llm_service.complete(
         user_id=user_id,
-        system_prompt=prompts.PROFILE_SYSTEM_PROMPT,
-        user_prompt=prompts.profile_user_prompt(label, described),
+        system_prompt=PROFILE_SYSTEM_PROMPT,
+        user_prompt=profile_user_prompt(label, described),
         response_schema=ServerProfile,
         slot="background",
     )

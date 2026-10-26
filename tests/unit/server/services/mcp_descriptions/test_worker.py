@@ -4,7 +4,6 @@ the owners' refresh in one step."""
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -77,17 +76,10 @@ class FakeLLM:
 
 @pytest.fixture
 def env(monkeypatch):
-    import src.server.services.mcp_descriptions as pkg
-
     db, llm = FakeDB(), FakeLLM()
     monkeypatch.setattr(worker, "db", db)
     monkeypatch.setattr(jobs, "db", db)
     monkeypatch.setattr(worker, "platform_model", lambda: "platform-model")
-    prompts = SimpleNamespace(
-        PROFILE_SYSTEM_PROMPT="system",
-        profile_user_prompt=lambda label, tools: json.dumps([t["name"] for t in tools]),
-    )
-    monkeypatch.setattr(pkg, "prompts", prompts, raising=False)
     return SimpleNamespace(db=db, llm=llm)
 
 
