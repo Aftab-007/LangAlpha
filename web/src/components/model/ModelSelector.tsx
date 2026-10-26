@@ -154,7 +154,7 @@ export function ModelSelector({
               <optgroup key={provider} label={display}>
                 {modelList.map((m) => {
                   const payer = payers?.[m]
-                  const suffix = payer ? ` · ${payerLabel(t, payer, metadata?.[m]?.provider)}` : ""
+                  const suffix = payer ? ` · ${payerLabel(t, payer)}` : ""
                   return (
                     <option key={m} value={m}>
                       {name(m)}{suffix}

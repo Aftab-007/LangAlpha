@@ -1,8 +1,10 @@
 import { useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { getAvailableModels } from '@/api/model';
 import { getModelDisplayName } from '@/components/ui/chat-input.helpers';
 import type { ModelMetadataEntry } from '@/hooks/useFilteredModels';
+import { payerLabel, payerOfBilling } from '@/lib/modelPayer';
 import { CACHE_ONLY_META, queryKeys } from '@/lib/queryKeys';
 
 /**
@@ -13,22 +15,43 @@ import { CACHE_ONLY_META, queryKeys } from '@/lib/queryKeys';
  * will do.
  */
 export function useModelName(): (id: string) => string {
-  const metadata = useCachedMetadata();
+  const metadata = useModelMetadata();
   return useCallback((id: string) => getModelDisplayName(id, metadata), [metadata]);
 }
 
-/** A model's provider, read the same way, for the payer named beside it. */
-export function useModelProvider(): (id: string) => string | undefined {
-  const metadata = useCachedMetadata();
-  return useCallback((id: string) => metadata?.[id]?.provider, [metadata]);
+/** The catalog's model entries, read the same way: undefined until the
+ *  composer has loaded them. */
+export function useModelMetadata(): Record<string, ModelMetadataEntry> | undefined {
+  return useCachedModels().data?.model_metadata;
 }
 
-function useCachedMetadata(): Record<string, ModelMetadataEntry> | undefined {
-  const { data } = useQuery({
+function useCachedModels() {
+  return useQuery({
     queryKey: queryKeys.models.all,
     queryFn: getAvailableModels,
     enabled: false,
     meta: CACHE_ONLY_META,
   });
-  return (data as { model_metadata?: Record<string, ModelMetadataEntry> } | undefined)?.model_metadata;
+}
+
+/** Who pays for a call on `model`, as its tag reads, from the `billing_type`
+ *  a stream event reported; undefined where the event names no payer. The
+ *  event's `provider`, the one the call went through, wins over the catalog's:
+ *  a model the user added on a sign-in may share another provider's name. */
+export function usePaidByLabel(): (
+  paidBy: string | undefined, model: string, provider?: string,
+) => string | undefined {
+  const { t } = useTranslation();
+  const { data } = useCachedModels();
+  return useCallback((paidBy: string | undefined, model: string, provider?: string) => {
+    const entry = data?.model_metadata?.[model];
+    // The route's own access, where the event names it: a model the user added
+    // on a local server is in no catalog entry, or in a built-in's it shadows.
+    const route = provider ? data?.provider_catalog?.find((p) => p.provider === provider) : undefined;
+    const payer = payerOfBilling(
+      paidBy,
+      provider ? { ...entry, provider, ...(route ? { access_type: route.access_type } : {}) } : entry,
+    );
+    return payer ? payerLabel(t, payer) : undefined;
+  }, [t, data]);
 }

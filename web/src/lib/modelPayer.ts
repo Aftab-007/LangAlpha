@@ -14,15 +14,32 @@ import { SERVER_KEY, isOwnKey } from '@/lib/ownKey';
 import type { KeyCandidates } from '@/components/model/types';
 import type { PlatformModelsResponse } from '@/types/platform';
 
-export type Payer = 'subscription' | 'own_key' | 'credits' | 'server_key';
+/**
+ * A subscription carries the provider it signs in to, so its tag can name the
+ * plan and two sign-ins stay apart; every key of the user's pays alike, and so
+ * does the deployment. Kept a string so payers compare, group and key maps as
+ * values.
+ */
+export type Payer = 'own_key' | 'credits' | 'server_key' | `subscription:${string}`;
 
-/** The i18n key of each payer's badge. */
-const PAYER_LABEL_KEYS: Record<Payer, string> = {
-  subscription: 'payer.subscription',
-  own_key: 'payer.ownKey',
-  credits: 'payer.credits',
-  server_key: 'payer.serverKey',
-};
+const SUBSCRIPTION = 'subscription:';
+
+/** The payer of a model on the sign-in to `provider`, the model's own. */
+export const subscriptionPayer = (provider = ''): Payer => `${SUBSCRIPTION}${provider}`;
+
+export const isSubscription = (payer: Payer | undefined): payer is `subscription:${string}` =>
+  !!payer?.startsWith(SUBSCRIPTION);
+
+/** The deployment, when it pays: credits on a hosted account, its own key on
+ *  a self-hosted one. */
+export const deploymentPayer = (): Payer => (isPlatformMode ? 'credits' : 'server_key');
+
+export const paidByDeployment = (payer: Payer | undefined): boolean =>
+  payer === 'credits' || payer === 'server_key';
+
+/** The user's own key or sign-in pays. */
+export const paidByUser = (payer: Payer | undefined): boolean =>
+  payer === 'own_key' || isSubscription(payer);
 
 // The plan a sign-in draws on, named as its maker sells it. A bare
 // "Subscription" beside "Credits" reads as the user's LangAlpha plan, which is
@@ -33,16 +50,21 @@ const SUBSCRIPTION_PLANS: Record<string, string> = {
   'grok-oauth': 'Grok',
 };
 
-/** A payer's badge text. `provider` is the model's, which names the plan a
- *  subscription draws on; a sign-in this list does not know keeps the
- *  generic word. */
+const PAYER_LABEL_KEYS = {
+  own_key: 'payer.ownKey',
+  credits: 'payer.credits',
+  server_key: 'payer.serverKey',
+} as const;
+
+/** A payer's badge text. A sign-in this list does not know keeps the generic
+ *  word. */
 export function payerLabel(
   t: (key: string, opts?: Record<string, unknown>) => string,
   payer: Payer,
-  provider?: string,
 ): string {
-  const plan = payer === 'subscription' && provider ? SUBSCRIPTION_PLANS[provider] : undefined;
-  return plan ? t('payer.plan', { plan }) : t(PAYER_LABEL_KEYS[payer]);
+  if (!isSubscription(payer)) return t(PAYER_LABEL_KEYS[payer]);
+  const plan = SUBSCRIPTION_PLANS[payer.slice(SUBSCRIPTION.length)];
+  return plan ? t('payer.plan', { plan }) : t('payer.subscription');
 }
 
 /** What a payer reads off a model's manifest entry. */
@@ -52,24 +74,44 @@ export interface PayerModel {
   tier?: number;
 }
 
-export interface PayerContext {
-  /** The plan answer, already merged with the user's own connections; null
-   *  when there is none (self-hosted, or the service did not answer). */
-  platform: PlatformModelsResponse | null;
+export interface OwnKeyContext {
   configured: readonly ConfiguredProvider[];
   byokEnabled: boolean;
   keyCandidates: Record<string, KeyCandidates>;
 }
 
-/** The provider slugs holding a key of the user's, and the ones whose key was
- *  saved with a base URL, which serves whichever model it is found for. */
-function ownKeys({ configured, byokEnabled }: PayerContext) {
+export interface PayerContext extends OwnKeyContext {
+  /** The plan answer, already merged with the user's own connections; null
+   *  when there is none (self-hosted, or the service did not answer). */
+  platform: PlatformModelsResponse | null;
+}
+
+/**
+ * Whether one of the user's own keys serves a provider's models, as the
+ * server's walk decides (`walk_byok_candidates`, `key_fits`): a key under one
+ * of the provider's slugs that shares its credential, or any of its slugs when
+ * the key was saved with a base URL, which wins over the model's endpoint.
+ * `anyKey` takes every slug, for a model the user added, whose client is built
+ * against whichever slug holds the key.
+ *
+ * Read off the keys the user saved, the store that walk reads, and none while
+ * their keys are switched off, as the server reads none without `is_byok`.
+ * Not the plan answer's `byok_providers`: that is another service's list, and
+ * merging it with ours does not drop it when the switch is off.
+ */
+export function ownKeyRule({ configured, byokEnabled, keyCandidates }: OwnKeyContext) {
   const own = byokEnabled
     ? configured.filter((p) => p.access_type !== 'oauth' && isOwnKey(p))
     : [];
+  const keyed = new Set(own.map((p) => p.provider));
+  const pointed = new Set(own.filter((p) => p.base_url).map((p) => p.provider));
   return {
-    keyed: new Set(own.map((p) => p.provider)),
-    pointed: new Set(own.filter((p) => p.base_url).map((p) => p.provider)),
+    /** Whether a key is saved under this very slug. */
+    holds: (slug: string) => keyed.has(slug),
+    serves: (provider: string, anyKey = false) => {
+      const { slugs, shared } = keyCandidates[provider] ?? { slugs: [provider], shared: [provider] };
+      return (anyKey ? slugs : shared).some((s) => keyed.has(s)) || slugs.some((s) => pointed.has(s));
+    },
   };
 }
 
@@ -78,28 +120,32 @@ function ownKeys({ configured, byokEnabled }: PayerContext) {
  * payer is one nothing serves (locked on the plan, a self-hosted model the
  * deployment holds no key for) or a local server, which nobody pays.
  *
- * `custom` names a model that only the user's own key runs: one they added,
- * whose provider is `provider` here.
+ * `custom` is the name of a model the user added, whose provider is
+ * `provider` here. Only their own credential runs one, so without a key that
+ * serves it (none saved, or their keys switched off) it has no payer, as the
+ * server builds no client for it.
  */
 export function payerResolver(ctx: PayerContext) {
-  const { keyed, pointed } = ownKeys(ctx);
+  const ownKey = ownKeyRule(ctx);
   const served = new Set(
     ctx.configured.filter((p) => p.masked_key === SERVER_KEY).map((p) => p.provider),
   );
-  const signIns = new Set(
-    ctx.configured.filter((p) => p.access_type === 'oauth').map((p) => p.provider),
-  );
-  const ownKeyServes = (provider: string, anyKey: boolean) => {
-    const { slugs, shared } = ctx.keyCandidates[provider] ?? { slugs: [provider], shared: [provider] };
-    return (anyKey ? slugs : shared).some((s) => keyed.has(s)) || slugs.some((s) => pointed.has(s));
-  };
-
-  return (meta: PayerModel | undefined, provider: string, custom = false): Payer | undefined => {
-    if (meta?.access_type === 'oauth') return 'subscription';
+  const byAccess = (access: ConfiguredProvider['access_type']) =>
+    new Set(ctx.configured.filter((p) => p.access_type === access).map((p) => p.provider));
+  const signIns = byAccess('oauth');
+  const locals = byAccess('local');
+  return (meta: PayerModel | undefined, provider: string, custom?: string): Payer | undefined => {
+    // A model the user added runs on its own route, whatever built-in it
+    // shadows: their sign-in, their local server, or a key of theirs, saved
+    // under the model's own name or one its provider's key serves.
+    if (custom !== undefined) {
+      if (signIns.has(provider)) return subscriptionPayer(provider);
+      if (locals.has(provider)) return undefined;
+      return ownKey.holds(custom) || ownKey.serves(provider, true) ? 'own_key' : undefined;
+    }
+    if (meta?.access_type === 'oauth') return subscriptionPayer(provider);
     if (meta?.access_type === 'local') return undefined;
-    // A model the user added on a subscription runs on its sign-in.
-    if (custom) return signIns.has(provider) ? 'subscription' : 'own_key';
-    if (ownKeyServes(provider, false)) return 'own_key';
+    if (ownKey.serves(provider)) return 'own_key';
     if (isPlatformMode) {
       const { platform } = ctx;
       // No plan answer fails open, as the model filter does.
@@ -110,10 +156,14 @@ export function payerResolver(ctx: PayerContext) {
   };
 }
 
-/** The badge for a payer the server reported on the wire (`billing_type`). */
-export function payerOfBilling(billing: unknown): Payer | undefined {
-  if (billing === 'oauth') return 'subscription';
+/** The payer the server reported on the wire (`billing_type`), read with the
+ *  model's catalog entry: the wire does not name a sign-in, which the model's
+ *  provider names, and it calls a local server's keyless call "platform",
+ *  where nobody pays. */
+export function payerOfBilling(billing: unknown, model?: PayerModel): Payer | undefined {
+  if (model?.access_type === 'local') return undefined;
+  if (billing === 'oauth') return subscriptionPayer(model?.provider);
   if (billing === 'byok') return 'own_key';
-  if (billing === 'platform') return isPlatformMode ? 'credits' : 'server_key';
+  if (billing === 'platform') return deploymentPayer();
   return undefined;
 }

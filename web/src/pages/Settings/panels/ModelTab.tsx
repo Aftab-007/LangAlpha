@@ -16,12 +16,14 @@ import { AccountTuningDefaults } from '@/components/model/AccountTuningDefaults'
 import { DefaultModelScopeChoice } from '@/components/model/DefaultModelScopeChoice';
 import { useDefaultModelChange } from '@/hooks/useDefaultModelChange';
 import { useAllModels } from '@/hooks/useAllModels';
-import { useQuickAccessModels } from '@/hooks/useQuickAccessModels';
+import { useFavoriteModels } from '@/hooks/useFavoriteModels';
 import { modelLabel, modelMatches } from '@/lib/modelLabel';
 import { Trans, useTranslation } from 'react-i18next';
 import { ModelAccessSection } from './ModelAccessSection';
 import { BACKGROUND_AUTO, backgroundDefaultChoice, modelPrefs, readDefaultModelScope, splitPreferenceWrite } from '@/lib/modelPreferences';
 import { useModelSlotCopy } from '@/components/model/useModelSlotCopy';
+import { paidByDeployment, paidByUser } from '@/lib/modelPayer';
+import { PayerBadge } from '@/components/model/PayerBadge';
 import type { ModelSlot, DefaultModelScope, PreferencePatch, PreferencesLike } from '@/lib/modelPreferences';
 
 type ModelTabMode = 'simple' | 'advanced';
@@ -99,7 +101,7 @@ export function ModelTab() {
   // stayed in other_preference.
   const mPref = modelPrefs(prefsData);
   const otherPref = (prefsData as PreferencesLike | null)?.other_preference ?? {};
-  const quickAccess = useQuickAccessModels();
+  const favorites = useFavoriteModels();
   // Every name the catalog still carries, access aside. A fallback the user
   // temporarily cannot reach is still configured; one the manifest dropped is
   // not, and _resolve_fallback_clients skips it without saying so, leaving the
@@ -117,13 +119,18 @@ export function ModelTab() {
     ? storedFallbacks
     : storedFallbacks.filter((m) => catalogNames.has(m));
   // The deployment's list, not one the user saved, keeps a turn their plan or
-  // key pays for off the deployment: those of its models run only on turns
-  // the deployment already pays for. Saving the list makes them the user's.
-  const deploymentOnlyFallbacks = useMemo(() => new Set(
-    mPref.fallback_models == null
-      ? fallbackModels.filter((m) => payers[m] === 'credits' || payers[m] === 'server_key')
-      : [],
-  ), [mPref.fallback_models, fallbackModels, payers]);
+  // key pays for off the deployment: of its models, only those a key or
+  // sign-in of theirs runs take such a turn. One with no payer here, above
+  // the plan or a local server, is skipped there too. Saving the list makes
+  // them the user's.
+  const deploymentOnlyFallbacks = new Set(
+    mPref.fallback_models == null ? fallbackModels.filter((m) => !paidByUser(payers[m])) : [],
+  );
+  // Once saved, those models are the user's choice and catch every turn, the
+  // ones their plan or key pays for included, which the list no longer shows.
+  const savedCrossesPayer = mPref.fallback_models != null
+    && fallbackModels.some((m) => paidByDeployment(payers[m]))
+    && Object.values(payers).some(paidByUser);
 
   // While the question is open each select shows the model the answer would
   // write, and a cancel puts both back on the saved ones.
@@ -259,7 +266,7 @@ export function ModelTab() {
             </Select>
           </div>
 
-          {/* Quick-access models — compact strip */}
+          {/* Favorite models, the picker's first tab */}
           <div ref={modelPickerRef} style={{ marginTop: '16px' }}>
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
@@ -269,7 +276,7 @@ export function ModelTab() {
               {t('settings.starredModelsDesc')}
             </p>
             <div className="flex flex-wrap items-center gap-1.5">
-              {quickAccess.models.map((key) => (
+              {favorites.models.map((key) => (
                 <span
                   key={key}
                   className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs"
@@ -280,9 +287,10 @@ export function ModelTab() {
                   }}
                 >
                   {modelLabel(key, modelMetadata)}
+                  <PayerBadge payer={payers[key]} />
                   <button
                     type="button"
-                    onClick={() => quickAccess.remove(key)}
+                    onClick={() => favorites.remove(key)}
                     className="ml-0.5 hover:opacity-70"
                     style={{ color: 'var(--color-text-tertiary)' }}
                     aria-label={t('settings.removeModel', { model: modelLabel(key, modelMetadata) })}
@@ -344,12 +352,12 @@ export function ModelTab() {
                         {displayName}
                       </div>
                       {filtered.map((m) => {
-                        const isStarred = quickAccess.models.includes(m);
+                        const isStarred = favorites.models.includes(m);
                         return (
                           <button
                             key={m}
                             type="button"
-                            onClick={() => (isStarred ? quickAccess.remove(m) : quickAccess.add(m))}
+                            onClick={() => (isStarred ? favorites.remove(m) : favorites.add(m))}
                             className="w-full flex items-center justify-between px-2 py-1.5 rounded-md text-xs transition-colors"
                             style={{
                               color: 'var(--color-text-primary)',
@@ -358,7 +366,10 @@ export function ModelTab() {
                             onMouseEnter={(e) => { if (!isStarred) e.currentTarget.style.backgroundColor = 'var(--color-bg-elevated)'; }}
                             onMouseLeave={(e) => { if (!isStarred) e.currentTarget.style.backgroundColor = 'transparent'; }}
                           >
-                            <span>{modelLabel(m, modelMetadata)}</span>
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span className="truncate">{modelLabel(m, modelMetadata)}</span>
+                              <PayerBadge payer={payers[m]} />
+                            </span>
                             {isStarred && <Pin className="h-3 w-3 shrink-0" style={{ color: 'var(--color-accent-primary)' }} />}
                           </button>
                         );
@@ -451,6 +462,11 @@ export function ModelTab() {
                     reason: t(isPlatformMode ? 'settings.payerOrder.skipped' : 'settings.payerOrder.skippedSelfHosted'),
                   }}
                 />
+                {savedCrossesPayer && (
+                  <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {t('settings.payerOrder.savedNote')}
+                  </p>
+                )}
                 {deploymentOnlyFallbacks.size > 0 && (
                   <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
                     {t('settings.payerOrder.skippedNote')}{' '}

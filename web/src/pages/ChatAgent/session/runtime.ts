@@ -84,10 +84,6 @@ export interface HistoryRuntime {
   workspaceId: string;
   threadId: string;
   t: Translate;
-  /** A manifest model key as the composer names it. */
-  modelName: (id: string) => string;
-  /** The provider of a manifest model key, which names a subscription's plan. */
-  modelProvider: (id: string) => string | undefined;
   updateTodoListCard: ((todoData: Record<string, unknown>, isNew?: boolean) => void) | null;
   // stable (setters)
   setMessages: SetMessages;
@@ -136,10 +132,6 @@ export interface StreamRuntime {
   workspaceId: string;
   threadId: string;
   t: Translate;
-  /** A manifest model key as the composer names it. */
-  modelName: (id: string) => string;
-  /** The provider of a manifest model key, which names a subscription's plan. */
-  modelProvider: (id: string) => string | undefined;
   updateSubagentCard: CardUpdater | null;
   onWorkspaceCreated: ((info: { workspaceId: string; question: string }) => void) | null;
   onFileArtifact: ((event: SSEEvent) => void) | null;

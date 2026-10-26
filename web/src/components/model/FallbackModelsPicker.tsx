@@ -118,7 +118,7 @@ export function FallbackModelsPicker({
             }}
           >
             {modelLabel(m, metadata)}
-            <PayerBadge payer={payers?.[m]} provider={metadata?.[m]?.provider} />
+            <PayerBadge payer={payers?.[m]} />
             <button
               type="button"
               onClick={() => handleRemove(m)}
@@ -210,7 +210,7 @@ export function FallbackModelsPicker({
                       }}
                     >
                       <span>{modelLabel(m, metadata)}</span>
-                      <PayerBadge payer={payers?.[m]} provider={metadata?.[m]?.provider} className="ml-auto" />
+                      <PayerBadge payer={payers?.[m]} className="ml-auto" />
                       {isSelected && (
                         <Pin
                           className="h-3 w-3 shrink-0"

@@ -30,15 +30,18 @@ export function ModelMark({ provider, className }: { provider: string | undefine
 }
 
 /**
- * A model's mark and its name, the brand word the mark stands for dropped
- * from the name. A screen reader, which skips the mark, still hears it.
+ * A model's mark and its name. `short` drops the brand word the mark stands
+ * for, where room is tight (the composer's pill); a screen reader, which skips
+ * the mark, still hears it. A list keeps full names, which is where models of
+ * one maker are told apart.
  */
-export function MarkedModelName({ provider, name, nameClassName }: {
+export function MarkedModelName({ provider, name, nameClassName, short = false }: {
   provider: string | undefined;
   name: string;
   nameClassName?: string;
+  short?: boolean;
 }) {
-  const { shown, brand } = nameBesideMark(name, provider);
+  const { shown, brand } = short ? nameBesideMark(name, provider) : { shown: name, brand: undefined };
   return (
     <>
       <ModelMark provider={provider} />

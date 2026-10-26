@@ -303,7 +303,7 @@ export async function loadConversationHistory(
           const order = event._eventId != null
             ? Number(event._eventId)
             : (currentActivePairState ? ++currentActivePairState.contentOrderCounter : 0);
-          const segment = buildModelFallbackSegment(event, rt.t, rt.modelName, rt.modelProvider, order);
+          const segment = buildModelFallbackSegment(event, rt.t, order);
           rt.setMessages((prev) => updateMessage(prev, msgId, (msg) => {
             if (msg.role !== 'assistant') return msg;
             return appendNotificationSegmentOnce(msg as AssistantMessage, segment);

@@ -1,5 +1,5 @@
 import { Trans } from 'react-i18next';
-import { isPlatformMode } from '@/config/hostMode';
+import { deploymentPayer } from '@/lib/modelPayer';
 import { cn } from '@/lib/utils';
 import { PayerBadge } from './PayerBadge';
 
@@ -15,7 +15,7 @@ export function PayerOrder({ className }: { className?: string }) {
         i18nKey="settings.payerOrder.rule"
         components={{
           ownKey: <PayerBadge payer="own_key" />,
-          deployment: <PayerBadge payer={isPlatformMode ? 'credits' : 'server_key'} />,
+          deployment: <PayerBadge payer={deploymentPayer()} />,
         }}
       />
     </p>
