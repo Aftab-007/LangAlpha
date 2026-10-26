@@ -82,7 +82,8 @@ BROKERAGES: tuple[Brokerage, ...] = (
         site="interactivebrokers.com",
         description=(
             "Interactive Brokers account: portfolio, positions, account "
-            "performance, market data, and draft orders the user confirms in "
+            "performance, market data, saved screeners, live stock and "
+            "single-leg option orders, and draft orders the user confirms in "
             "IBKR before anything is placed."
         ),
         exclusive_connection=True,
