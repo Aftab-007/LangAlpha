@@ -41,6 +41,10 @@ export type BrandArt = {
   /** A glyph with no ground of its own, so there is no edge to round, and a
    *  rounded box would only cut off whatever reaches its corners. */
   bare?: boolean;
+  /** The brand word a model's name opens with that the mark says already,
+   *  dropped from the name drawn beside it (`nameBesideMark`). Only where the
+   *  rest is a family name: "Claude Opus 5.5", not "Grok 4.7". */
+  brand?: string;
 };
 
 /*
@@ -53,7 +57,7 @@ export type BrandArt = {
 const mark = (src: string, ink = false): BrandArt => ({ src, ink, bare: true });
 
 const OPENAI = mark(iconOpenai, true);
-const ANTHROPIC = mark(iconAnthropic, true);
+const ANTHROPIC: BrandArt = { ...mark(iconAnthropic, true), brand: 'Claude' };
 const OPENROUTER = mark(iconOpenrouter, true);
 const ZAI = mark(iconZai, true);
 const MINIMAX = mark(iconMinimax);
@@ -151,4 +155,15 @@ export function bundleArt(bundle: { icon_url?: string | null }): BrandArt | unde
   // The manifest decides, not the name.
   if (!bundle.icon_url) return undefined;
   return { src: `${baseURL}${bundle.icon_url}` };
+}
+
+/**
+ * A model's name as drawn beside its maker's mark: without the brand word the
+ * mark already shows, when one is registered and what is left still starts
+ * with a word, so a name never shrinks to a bare version number.
+ */
+export function nameBesideMark(name: string, provider: string | undefined): { shown: string; brand?: string } {
+  const brand = provider ? llmProviderArt(provider)?.brand : undefined;
+  const rest = brand && name.startsWith(`${brand} `) ? name.slice(brand.length + 1) : '';
+  return /^\p{L}/u.test(rest) ? { shown: rest, brand } : { shown: name };
 }

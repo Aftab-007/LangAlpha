@@ -11,6 +11,9 @@ import { getModelDisplayName } from './chat-input.helpers';
 import { EFFORT_LABELS, effortLabelFor } from '@/lib/modelTuning';
 import { derivePrimaryModels } from './chat-input.models';
 import type { ModelMetadataEntry } from '@/hooks/useFilteredModels';
+import { PayerBadge } from '@/components/model/PayerBadge';
+import { MarkedModelName } from '@/components/model/ModelMark';
+import type { Payer } from '@/lib/modelPayer';
 
 type ModelMetadata = Record<string, ModelMetadataEntry>;
 
@@ -32,7 +35,11 @@ function TriggerBody({
   const { t } = useTranslation();
   return (
     <>
-      <span className="min-w-0 max-w-[120px] truncate">{getModelDisplayName(selectedModel, metadata) || t('chat.modelSelector.fallbackName')}</span>
+      <MarkedModelName
+        provider={selectedModel ? metadata?.[selectedModel]?.provider : undefined}
+        name={getModelDisplayName(selectedModel, metadata) || t('chat.modelSelector.fallbackName')}
+        nameClassName="min-w-0 max-w-[120px] truncate"
+      />
       {effortLabel && (
         <span className="flex-none" style={{ color: 'var(--color-text-tertiary)' }}>{effortLabel}</span>
       )}
@@ -154,9 +161,10 @@ function SettingOption({
 
 /** One model in a picker list. Unlike a setting option, choosing a model is a
  *  commitment rather than an adjustment, so the menu closes behind it. */
-function ModelOption({ model, metadata, selected, hint, onPick }: {
+function ModelOption({ model, metadata, payer, selected, hint, onPick }: {
   model: string;
   metadata?: ModelMetadata;
+  payer?: Payer;
   selected: boolean;
   /** Why a send on it would be refused, said beside its name. */
   hint?: string;
@@ -164,7 +172,14 @@ function ModelOption({ model, metadata, selected, hint, onPick }: {
 }) {
   return (
     <DropdownMenuItem variant="setting" onSelect={onPick} style={{ color: 'var(--color-text-primary)' }}>
-      <span className="min-w-0 truncate">{getModelDisplayName(model, metadata)}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        <MarkedModelName
+          provider={metadata?.[model]?.provider}
+          name={getModelDisplayName(model, metadata)}
+          nameClassName="min-w-0 truncate"
+        />
+      </span>
+      <PayerBadge payer={payer} />
       {(hint || selected) && (
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {hint && <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{hint}</span>}
@@ -184,6 +199,7 @@ function ModelOption({ model, metadata, selected, hint, onPick }: {
 export function ChatInputModelMenu({
   selectedModel,
   metadata,
+  payers,
   onSelectModel,
   threadModels,
   validModelNames,
@@ -204,6 +220,8 @@ export function ChatInputModelMenu({
   selectedModel: string | null;
   /** Supplies authored display names; a model without one gets a derived name. */
   metadata?: ModelMetadata;
+  /** Who pays for a turn on each model, badged beside its name. */
+  payers?: Record<string, Payer>;
   onSelectModel: (model: string) => void;
   threadModels: string[];
   /** Gates thread history — a model can be revoked after a turn used it. */
@@ -281,7 +299,7 @@ export function ChatInputModelMenu({
       <DropdownMenuContent
         align="end"
         side={dropdownDirection === 'down' ? 'bottom' : 'top'}
-        className="w-60"
+        className="w-72"
         container={isMobile ? container : undefined}
         data-click-outside-ignore
         onClick={(e) => e.stopPropagation()}
@@ -289,7 +307,7 @@ export function ChatInputModelMenu({
       >
         {/* Thread models */}
         {primaryModels.map((m) => (
-          <ModelOption key={m} model={m} metadata={metadata} selected={m === selectedModel} hint={hintFor(m)} onPick={() => onSelectModel(m)} />
+          <ModelOption key={m} model={m} metadata={metadata} payer={payers?.[m]} selected={m === selectedModel} hint={hintFor(m)} onPick={() => onSelectModel(m)} />
         ))}
         {(reasoningEfforts.length > 0 || isCodexModel) && (
           <DropdownMenuSeparator style={{ backgroundColor: 'var(--color-border-muted)' }} />
@@ -349,11 +367,11 @@ export function ChatInputModelMenu({
           onToggle={() => setShowMoreModels((v) => !v)}
           isMobile={isMobile}
           quiet
-          contentClass="w-60"
+          contentClass="w-72"
         >
           {moreModelsItems.length > 0 ? (
             moreModelsItems.map((m) => (
-              <ModelOption key={m} model={m} metadata={metadata} selected={m === selectedModel} hint={hintFor(m)} onPick={() => onSelectModel(m)} />
+              <ModelOption key={m} model={m} metadata={metadata} payer={payers?.[m]} selected={m === selectedModel} hint={hintFor(m)} onPick={() => onSelectModel(m)} />
             ))
           ) : (
             <DropdownMenuItem

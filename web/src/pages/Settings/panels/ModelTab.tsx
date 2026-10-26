@@ -9,6 +9,8 @@ import { PREFERENCE_MUTATION_KEY, useUpdatePreferences } from '@/hooks/useUpdate
 import { ModelTierConfig } from '@/components/model/ModelTierConfig';
 import { ModelSelector } from '@/components/model/ModelSelector';
 import { FallbackModelsPicker } from '@/components/model/FallbackModelsPicker';
+import { PayerOrder } from '@/components/model/PayerOrder';
+import { isPlatformMode } from '@/config/hostMode';
 import { PerModelMatrix } from '@/components/model/PerModelMatrix';
 import { AccountTuningDefaults } from '@/components/model/AccountTuningDefaults';
 import { DefaultModelScopeChoice } from '@/components/model/DefaultModelScopeChoice';
@@ -60,7 +62,7 @@ export function ModelTab() {
   const tierAllows = useSearchTierAllows();
   const { preferences: prefsData } = usePreferences();
   const { mutate } = useUpdatePreferences();
-  const { models: visibleModels, metadata: modelMetadata, modelAccessMap, systemDefaults: hookSystemDefaults, validModelNames, rawModels, isLoading: modelsLoading, compactionProfiles, searchProviders } = useAllModels();
+  const { models: visibleModels, metadata: modelMetadata, payers, systemDefaults: hookSystemDefaults, validModelNames, rawModels, isLoading: modelsLoading, compactionProfiles, searchProviders } = useAllModels();
   const { t } = useTranslation();
   const modelSlotCopy = useModelSlotCopy();
 
@@ -114,6 +116,14 @@ export function ModelTab() {
   const fallbackModels = modelsLoading || catalogNames.size === 0
     ? storedFallbacks
     : storedFallbacks.filter((m) => catalogNames.has(m));
+  // The deployment's list, not one the user saved, keeps a turn their plan or
+  // key pays for off the deployment: those of its models run only on turns
+  // the deployment already pays for. Saving the list makes them the user's.
+  const deploymentOnlyFallbacks = useMemo(() => new Set(
+    mPref.fallback_models == null
+      ? fallbackModels.filter((m) => payers[m] === 'credits' || payers[m] === 'server_key')
+      : [],
+  ), [mPref.fallback_models, fallbackModels, payers]);
 
   // While the question is open each select shows the model the answer would
   // write, and a cancel puts both back on the saved ones.
@@ -225,10 +235,11 @@ export function ModelTab() {
             onPrimaryModelChange={setDefault('default')}
             backgroundModel={shownDefault('background')}
             onBackgroundModelChange={setDefault('background')}
-            modelAccess={modelAccessMap}
+            payers={payers}
             auto={autoModels}
           />
           {defaultQuestion && <DefaultModelScopeChoice className="mt-4" {...defaultQuestion} />}
+          <PayerOrder className="mt-4" />
 
           <div className="flex flex-col gap-1.5" style={{ marginTop: '16px' }}>
             <label htmlFor="default-model-scope" className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
@@ -395,7 +406,7 @@ export function ModelTab() {
                   onChange={(v) => write({ fetch_model: v || null })}
                   models={visibleModels}
                   placeholder={modelSlotCopy.defaultsToBackground}
-                  modelAccess={modelAccessMap}
+                  payers={payers}
                   metadata={modelMetadata}
                 />
                 <ModelSelector
@@ -411,7 +422,7 @@ export function ModelTab() {
                   })}
                   models={visibleModels}
                   placeholder={modelSlotCopy.defaultsToConversation}
-                  modelAccess={modelAccessMap}
+                  payers={payers}
                   metadata={modelMetadata}
                 />
                 {/* A subagent's model is the subagent's own setting, kept with
@@ -434,7 +445,24 @@ export function ModelTab() {
                   onChange={(list) => write({ fallback_models: list })}
                   models={visibleModels}
                   metadata={modelMetadata}
+                  payers={payers}
+                  skipped={{
+                    models: deploymentOnlyFallbacks,
+                    reason: t(isPlatformMode ? 'settings.payerOrder.skipped' : 'settings.payerOrder.skippedSelfHosted'),
+                  }}
                 />
+                {deploymentOnlyFallbacks.size > 0 && (
+                  <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {t('settings.payerOrder.skippedNote')}{' '}
+                    <button
+                      type="button"
+                      onClick={() => write({ fallback_models: fallbackModels })}
+                      className="underline underline-offset-2 hover:text-[var(--color-text-primary)]"
+                    >
+                      {t('settings.payerOrder.useAlways')}
+                    </button>
+                  </p>
+                )}
               </div>
             </div>
           </>

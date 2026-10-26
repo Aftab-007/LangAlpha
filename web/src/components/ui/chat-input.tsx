@@ -199,7 +199,7 @@ function ChatInput({
   const isMobile = useIsMobile();
   const { preferences, isLoaded: preferencesRead } = usePreferences();
   const marketWatchEnabled = useFeatureEnabled('market_watch');
-  const { validModelNames, metadata: modelMetadata, isLoading: modelsLoading } = useAllModels();
+  const { validModelNames, metadata: modelMetadata, payers, isLoading: modelsLoading } = useAllModels();
   const lapsedSignIn = useLapsedSignIn();
   const otherPref = (preferences as Record<string, Record<string, unknown>> | null)?.other_preference;
   const [message, setMessage] = useState('');
@@ -855,6 +855,7 @@ function ChatInput({
               <ChatInputModelMenu
                 selectedModel={pillModel}
                 metadata={modelMetadata}
+                payers={payers}
                 onSelectModel={handlePickModel}
                 threadModels={threadModelsProp}
                 validModelNames={validModelNames}

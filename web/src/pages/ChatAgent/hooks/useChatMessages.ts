@@ -9,6 +9,7 @@ import type React from 'react';
 import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { useModelName, useModelProvider } from '@/hooks/useModelName';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { useHomeTimezone } from '@/hooks/useHomeTimezone';
@@ -134,6 +135,8 @@ export function useChatMessages(
   readComposerOptions: (() => ModelOptions | undefined) | null = null,
 ) {
   const { t } = useTranslation();
+  const modelName = useModelName();
+  const modelProvider = useModelProvider();
   const queryClient = useQueryClient();
 
   // User locale/timezone — prefer saved preference, fall back to browser detection
@@ -689,6 +692,8 @@ export function useChatMessages(
     workspaceId,
     threadId,
     t,
+    modelName,
+    modelProvider,
     updateSubagentCard,
     updateTodoListCard,
     onWorkspaceCreated,

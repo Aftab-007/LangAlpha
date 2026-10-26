@@ -5,7 +5,7 @@
  * and the opt-out rule are stated and tested once.
  */
 import { isModelAvailable } from '@/components/ui/chat-input.models';
-import type { ModelAccess } from '@/types/platform';
+import type { Payer } from '@/lib/modelPayer';
 
 /** A stored list of model names. Preferences are free-form JSON, so anything
  *  else reads as no list rather than reaching a label lookup. */
@@ -17,21 +17,19 @@ export function modelList(value: unknown): string[] {
 
 /**
  * The listed models the user reaches through their own key or a connected
- * account, in catalog order.
+ * account, in catalog order: every listed model credits do not pay for.
  *
- * Read from the access map the badges use. Without a platform there is no
- * map, and every listed model is already one of these: the list then carries
- * only the providers the user configured and the models they added.
+ * Read from the payers the badges show. On a self-hosted deployment that is
+ * every listed model, the deployment's keys and local servers included: the
+ * list carries only the providers the user configured and the models they
+ * added.
  */
 export function ownModelNames(
   models: Record<string, { models?: string[] }>,
-  accessMap: Record<string, ModelAccess> | undefined,
+  payers: Record<string, Payer>,
 ): string[] {
   const names = Object.values(models).flatMap((group) => group.models ?? []);
-  const own = accessMap
-    ? names.filter((m) => accessMap[m] === 'byok' || accessMap[m] === 'oauth')
-    : names;
-  return [...new Set(own)];
+  return [...new Set(names.filter((m) => payers[m] !== 'credits'))];
 }
 
 export interface QuickAccessParams {

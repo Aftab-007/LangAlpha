@@ -431,11 +431,12 @@
     "selectModel": "选择模型…",
     "autoModel": "自动（{{model}}）",
     "noModelsAvailable": "暂无可用模型",
-    "modelAccess": {
-      "platform": "平台",
-      "byok": "BYOK",
-      "oauth": "OAuth",
-      "locked": "未解锁"
+    "payerOrder": {
+      "rule": "标签显示由谁付费。<ownKey /> 优先于 <deployment />。",
+      "skipped": "仅在消耗积分的对话中使用",
+      "skippedSelfHosted": "仅在使用服务器密钥的对话中使用",
+      "skippedNote": "淡色的备用模型不会用于你自己付费的对话。",
+      "useAlways": "所有对话都使用"
     },
     "approvals": "审批",
     "autoApproveHandoffs": "交给分析师前不再询问",
@@ -1870,6 +1871,7 @@
     "modelRetrying": "{{model}} 出错 — 正在重试（{{attempt}}/{{total}}）…",
     "modelFallingBack": "正在回退到 {{model}}…",
     "modelFallbackNotification": "{{from}} 失败 — 已切换到 {{to}}",
+    "modelFallbackNotificationPaid": "{{from}} 失败 — 已切换到 {{to}}（{{payer}}）",
     "modelFallbackAttempts_other": "尝试 {{count}} 次",
     "viewErrorDetail": "查看错误",
     "hideErrorDetail": "隐藏错误",
@@ -6003,6 +6005,14 @@
       "handoff": "已交给分析师",
       "taskHandoff": "任务已交给分析师"
     }
+  },
+  "payer": {
+    "subscription": "订阅",
+    "plan": "{{plan}} 订阅",
+    "ownKey": "你的密钥",
+    "credits": "LangAlpha 积分",
+    "serverKey": "服务器密钥",
+    "locked": "未解锁"
   },
   "modelAccess": {
     "title": "模型接入",

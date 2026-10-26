@@ -5,6 +5,8 @@ import type { ProviderModelsData } from "./types"
 import type { ModelMetadataEntry } from "@/hooks/useFilteredModels"
 import { modelLabel, modelMatches } from "@/lib/modelLabel"
 import { useModelSlotCopy } from "./useModelSlotCopy"
+import { PayerBadge } from "./PayerBadge"
+import type { Payer } from "@/lib/modelPayer"
 
 // ---------------------------------------------------------------------------
 // Fallback models picker — add/remove from accessible models
@@ -16,6 +18,8 @@ export function FallbackModelsPicker({
   models,
   filterProviders,
   metadata,
+  payers,
+  skipped,
 }: {
   selected: string[]
   onChange: (models: string[]) => void
@@ -23,6 +27,11 @@ export function FallbackModelsPicker({
   filterProviders?: string[]
   /** Optional model metadata: chips and rows print its display_name */
   metadata?: Record<string, ModelMetadataEntry>
+  /** Who pays for each model. A fallback only runs on the payer of the turn
+   *  it stands in for, so the badge says which turns it can serve. */
+  payers?: Record<string, Payer>
+  /** Listed but not run on every turn, shown faded; the reason is its title. */
+  skipped?: { models: ReadonlySet<string>; reason: string }
 }) {
   const { t } = useTranslation()
   const copy = useModelSlotCopy()
@@ -100,13 +109,16 @@ export function FallbackModelsPicker({
           <span
             key={m}
             className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs"
+            title={skipped?.models.has(m) ? skipped.reason : undefined}
             style={{
               background: "var(--color-bg-surface)",
               border: "1px solid var(--color-border-default)",
               color: "var(--color-text-secondary)",
+              opacity: skipped?.models.has(m) ? 0.5 : undefined,
             }}
           >
             {modelLabel(m, metadata)}
+            <PayerBadge payer={payers?.[m]} provider={metadata?.[m]?.provider} />
             <button
               type="button"
               onClick={() => handleRemove(m)}
@@ -181,7 +193,7 @@ export function FallbackModelsPicker({
                       key={m}
                       type="button"
                       onClick={() => handleToggle(m)}
-                      className="w-full flex items-center justify-between px-2 py-1.5 rounded-md text-xs transition-colors"
+                      className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors"
                       style={{
                         color: isSelected
                           ? "var(--color-accent-light)"
@@ -198,6 +210,7 @@ export function FallbackModelsPicker({
                       }}
                     >
                       <span>{modelLabel(m, metadata)}</span>
+                      <PayerBadge payer={payers?.[m]} provider={metadata?.[m]?.provider} className="ml-auto" />
                       {isSelected && (
                         <Pin
                           className="h-3 w-3 shrink-0"

@@ -117,6 +117,8 @@ export async function loadOlderHistoryPage(
     workspaceId: rt.workspaceId,
     threadId: request.threadId,
     t: rt.t,
+    modelName: rt.modelName,
+    modelProvider: rt.modelProvider,
     updateTodoListCard: null,
     setMessages: (next) => {
       local = typeof next === 'function' ? next(local) : next;

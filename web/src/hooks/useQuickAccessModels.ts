@@ -1,5 +1,4 @@
 import { useCallback } from 'react';
-import { isPlatformMode } from '@/config/hostMode';
 import { splitPreferenceWrite, type PreferencesLike } from '@/lib/modelPreferences';
 import { deriveQuickAccessModels, modelList, ownModelNames } from '@/lib/quickAccessModels';
 import { useAllModels } from './useAllModels';
@@ -26,7 +25,7 @@ const HIDDEN_KEY = 'hidden_quick_access_models';
  */
 export function useQuickAccessModels(exclude: string[] = []) {
   const { preferences, isLoaded } = usePreferences();
-  const { models: visibleModels, modelAccessMap, validModelNames } = useAllModels();
+  const { models: visibleModels, payers, validModelNames } = useAllModels();
   const { mutate } = useUpdatePreferences();
   const defaultModel = useDefaultModel();
 
@@ -44,10 +43,7 @@ export function useQuickAccessModels(exclude: string[] = []) {
     // would fall back to it.
     preferredModel: defaultModel,
     starredModels: starred,
-    // On a platform the access map is what says which models are the user's
-    // own; until it loads (or if it fails) none are known, rather than every
-    // listed model the way a deployment without a platform reads them.
-    ownModels: isPlatformMode && !modelAccessMap ? [] : ownModelNames(visibleModels, modelAccessMap),
+    ownModels: ownModelNames(visibleModels, payers),
     hiddenModels: hidden,
     validModelNames,
     excludeModels: exclude,

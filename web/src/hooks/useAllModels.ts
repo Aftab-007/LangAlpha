@@ -1,16 +1,17 @@
 import { useMemo } from 'react';
 import { useModels } from './useModels';
 import { usePreferences } from './usePreferences';
-import { getModelAccess, usePlatformModels, useModelAccessMap } from './usePlatformModels';
-import { buildVisibleModels, augmentPlatformWithLocal } from './useFilteredModels';
+import { getModelAccess, usePlatformModels } from './usePlatformModels';
+import { buildVisibleModels, augmentPlatformWithLocal, customPairKey } from './useFilteredModels';
 import type { BuildVisibleModelsResult, ModelMetadataEntry } from './useFilteredModels';
 import { useConfiguredProviders } from './useConfiguredProviders';
 import { useMissingModels } from './useProviderModels';
 import { isPlatformMode } from '@/config/hostMode';
 import type { ProviderModelsData, CustomModelEntry } from '@/components/model/types';
 import type { ModelsResponse } from '@/api/model';
-import type { PlatformModelsResponse, ModelAccess } from '@/types/platform';
+import type { PlatformModelsResponse } from '@/types/platform';
 import { modelPrefs } from '@/lib/modelPreferences';
+import { payerResolver, type Payer } from '@/lib/modelPayer';
 
 export interface SystemDefaults {
   default_model?: string;
@@ -65,8 +66,9 @@ export interface UseAllModelsResult {
   metadata: Record<string, ModelMetadataEntry>;
   /** Pre-filter models (all models before access/tier gating). */
   rawModels: Record<string, ProviderModelsData>;
-  /** Model-name → access status map for badge display (undefined when no platform). */
-  modelAccessMap: Record<string, ModelAccess> | undefined;
+  /** Who pays for a turn on each listed model, the badge beside its name.
+   *  A model nothing serves, or a local server, has none. */
+  payers: Record<string, Payer>;
   /** The models the plan holds back, by provider: listed in a picker, but
    *  not pickable. */
   lockedModels: Record<string, ProviderModelsData>;
@@ -191,12 +193,26 @@ export function useAllModels(): UseAllModelsResult {
     return names;
   }, [visible.rawModels, prefsLoaded, preferences]);
 
-  const modelAccessMap = useModelAccessMap(
-    visible.models,
-    visible.metadata,
-    platform,
-    visible.customPairs,
-  );
+  const payers = useMemo(() => {
+    const payerOf = payerResolver({
+      platform,
+      configured: configuredProviders,
+      byokEnabled,
+      keyCandidates: modelsData?.key_candidates ?? {},
+    });
+    const out: Record<string, Payer> = {};
+    for (const [group, data] of Object.entries(visible.models)) {
+      for (const m of data.models ?? []) {
+        const meta = visible.metadata[m];
+        // A model the user added under a provider of theirs runs through that
+        // provider's key, whatever built-in it shares a name with.
+        const custom = visible.customPairs.has(customPairKey(group, m));
+        const payer = payerOf(meta, custom ? group : (meta?.provider ?? group), custom);
+        if (payer) out[m] = payer;
+      }
+    }
+    return out;
+  }, [visible, platform, configuredProviders, byokEnabled, modelsData]);
 
   const lockedModels = useMemo(() => {
     const { rawModels, validModelNames, metadata } = visible;
@@ -255,7 +271,7 @@ export function useAllModels(): UseAllModelsResult {
     models: visible.models,
     metadata: visible.metadata,
     rawModels: visible.rawModels,
-    modelAccessMap,
+    payers,
     lockedModels,
     offPlanModels,
     platform,

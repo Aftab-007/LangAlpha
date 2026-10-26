@@ -577,7 +577,7 @@ export const createStreamEventProcessor = (rt: StreamRuntime, deps: StreamRouter
         const order = event._eventId != null
           ? Number(event._eventId)
           : ++refs.contentOrderCounterRef.current;
-        const segment = buildModelFallbackSegment(event, rt.t, order);
+        const segment = buildModelFallbackSegment(event, rt.t, rt.modelName, rt.modelProvider, order);
         rt.setMessages((prev) => updateMessage(prev, assistantMessageId, (msg) => {
           if (msg.role !== 'assistant') return msg;
           return appendNotificationSegmentOnce(msg as AssistantMessage, segment);

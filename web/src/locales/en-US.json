@@ -433,11 +433,12 @@
     "selectModel": "Select a model...",
     "autoModel": "Auto ({{model}})",
     "noModelsAvailable": "No models available",
-    "modelAccess": {
-      "platform": "platform",
-      "byok": "BYOK",
-      "oauth": "OAuth",
-      "locked": "locked"
+    "payerOrder": {
+      "rule": "Tags show who pays. <ownKey /> comes before <deployment />.",
+      "skipped": "Runs only on turns paid with credits",
+      "skippedSelfHosted": "Runs only on turns on the server's key",
+      "skippedNote": "Faded ones skip turns you pay for yourself.",
+      "useAlways": "Use on every turn"
     },
     "approvals": "Approvals",
     "autoApproveHandoffs": "Hand off work without asking",
@@ -1876,6 +1877,7 @@
     "modelRetrying": "{{model}} error — retrying ({{attempt}}/{{total}})…",
     "modelFallingBack": "Falling back to {{model}}…",
     "modelFallbackNotification": "{{from}} failed — switched to {{to}}",
+    "modelFallbackNotificationPaid": "{{from}} failed — switched to {{to}} ({{payer}})",
     "modelFallbackAttempts_one": "{{count}} attempt",
     "modelFallbackAttempts_other": "{{count}} attempts",
     "viewErrorDetail": "View error",
@@ -6119,6 +6121,14 @@
       "handoff": "handed to an analyst",
       "taskHandoff": "task handed to an analyst"
     }
+  },
+  "payer": {
+    "subscription": "Subscription",
+    "plan": "{{plan}} plan",
+    "ownKey": "Your key",
+    "credits": "LangAlpha credits",
+    "serverKey": "Server key",
+    "locked": "locked"
   },
   "modelAccess": {
     "title": "Model access",

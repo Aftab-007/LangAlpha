@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, X } from 'lucide-react';
+import { useModelName } from '@/hooks/useModelName';
 import type { FallbackSuggestion } from '../../session/types';
 
 /* Model-fallback suggestion: the model the user sent with
@@ -23,6 +24,7 @@ export function FallbackSuggestionPill({
   onDismiss: () => void;
 }): React.ReactElement | null {
   const { t } = useTranslation();
+  const name = useModelName();
   if (!(fallbackSuggestion && !isLoading && fallbackSuggestion.toModel !== composerModel)) {
     return null;
   }
@@ -40,8 +42,8 @@ export function FallbackSuggestionPill({
       <AlertTriangle aria-hidden="true" className="h-4 w-4 shrink-0" style={{ color: 'var(--color-warning)' }} />
       <span className="flex-1 min-w-0">
         {t('chat.modelTroubleSuggestion', {
-          from: fallbackSuggestion.fromModel,
-          to: fallbackSuggestion.toModel,
+          from: name(fallbackSuggestion.fromModel),
+          to: name(fallbackSuggestion.toModel),
         })}
       </span>
       <button
@@ -53,7 +55,7 @@ export function FallbackSuggestionPill({
           color: 'var(--color-btn-primary-text)',
         }}
       >
-        {t('chat.switchToModel', { model: fallbackSuggestion.toModel })}
+        {t('chat.switchToModel', { model: name(fallbackSuggestion.toModel) })}
       </button>
       <button
         type="button"

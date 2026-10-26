@@ -5,6 +5,7 @@
  */
 
 import type { ChatMessage, AssistantMessage, NotificationSegment } from '@/types/chat';
+import { payerLabel, payerOfBilling } from '@/lib/modelPayer';
 import type { TodoItem } from '@/types/sse';
 import { INTERRUPT_CARD_BUCKETS } from '../../session/interrupts/buckets';
 import type { ToolCallAgentIndex } from '../../session/subagents/historyStore';
@@ -35,10 +36,15 @@ function collectRenderedInterruptIds(messages: ChatMessage[]): Set<string> {
 function buildModelFallbackSegment(
   event: Record<string, unknown>,
   t: (key: string, opts?: Record<string, unknown>) => string,
+  modelName: (id: string) => string,
+  modelProvider: (id: string) => string | undefined,
   order: number,
 ): NotificationSegment {
-  const fromModel = (event.from_model as string) || '';
-  const toModel = (event.to_model as string) || '';
+  const fromModel = modelName((event.from_model as string) || '');
+  const toModel = modelName((event.to_model as string) || '');
+  // A switch can move the turn onto another payer, so the notice names who
+  // pays for the model it moved to.
+  const payer = payerOfBilling(event.to_paid_by);
   const errText = typeof event.error === 'string' ? event.error.trim() : '';
   const statusCode = typeof event.status_code === 'number' ? event.status_code : null;
   const attempts = typeof event.attempts_on_from === 'number' ? event.attempts_on_from : null;
@@ -48,7 +54,9 @@ function buildModelFallbackSegment(
   const detail = [metaBits.join(' · '), errText].filter(Boolean).join('\n') || undefined;
   const segment: NotificationSegment = {
     type: 'notification',
-    content: t('chat.modelFallbackNotification', { from: fromModel, to: toModel }),
+    content: payer
+      ? t('chat.modelFallbackNotificationPaid', { from: fromModel, to: toModel, payer: payerLabel(t, payer, modelProvider((event.to_model as string) || '')) })
+      : t('chat.modelFallbackNotification', { from: fromModel, to: toModel }),
     order,
   };
   if (detail) {
