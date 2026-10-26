@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from ptc_agent.agent.middleware.compaction.notes import NotesDueState
 from ptc_agent.agent.middleware.compaction.types import CompactionState
+from ptc_agent.agent.middleware.file_operations.multimodal_strip import ImageSideState
 from ptc_agent.agent.middleware.runtime_context.frozen_prompt import SystemPinState
 from ptc_agent.agent.middleware.skills.middleware import LoadedSkillsState
 from ptc_agent.agent.middleware.subagent_switch import SubagentSwitchState
-from ptc_agent.agent.middleware.thinking_binding import UnsentThinkingState
 from ptc_agent.agent.middleware.tool_surface import ToolSurfaceState
 from ptc_agent.agent.middleware.wakeups import WakeupCancelNoticeState
 from ptc_agent.agent.state import DeltaAgentState
@@ -32,7 +32,7 @@ class MainAgentState(
     ToolSurfaceState,
     SystemPinState,
     WakeupCancelNoticeState,
-    UnsentThinkingState,
+    ImageSideState,
     DeltaAgentState,
 ):
     """The main agent's checkpointed state; see the module docstring."""
