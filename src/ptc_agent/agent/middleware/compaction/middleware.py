@@ -7,7 +7,9 @@ on the one before.
 
 - Tier 1: at a turn start after a long pause, when the provider's prompt
   cache has expired, large tool arguments are cut to a pointer at the
-  transcript file that keeps them and stale Read results are hidden.
+  transcript file that keeps them and stale Read results are hidden, never
+  ahead of thinking a later call is checked against (see ``select_offloads``).
+  Off unless the operator turns it on (see ``OffloadSettings.idle_seconds``).
 - Tier 2: when the context reaches its threshold, or the model refuses it
   as too long, the start of the view is summarized (see ``compact``), all of
   it at a turn start while the thread's system prompt is stale, so the call

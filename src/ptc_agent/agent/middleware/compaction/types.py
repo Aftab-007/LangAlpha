@@ -68,8 +68,9 @@ class OffloadSettings:
     #: The longest string argument left whole.
     max_length: int = 2000
     #: How long since the model last answered a turn must start for Tier 1
-    #: to run there; None turns automatic Tier 1 off.
-    idle_seconds: float | None = 90 * 60
+    #: to run there; None, the default, turns automatic Tier 1 off (see
+    #: ``CompactionConfig``).
+    idle_seconds: float | None = None
 
     @classmethod
     def from_config(cls, config: CompactionConfig) -> OffloadSettings:
