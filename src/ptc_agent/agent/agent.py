@@ -90,7 +90,7 @@ from ptc_agent.agent.middleware.background_subagent.workflow.prebuilt import (
     get_prebuilt_workflows,
 )
 from ptc_agent.agent.middleware.image_capture import ImageCaptureMiddleware
-from ptc_agent.agent.middleware.openai_prompt_caching import OpenAIPromptCachingMiddleware
+from ptc_agent.agent.middleware.system_prompt_caching import SystemPromptCacheMiddleware
 from ptc_agent.agent.middleware.runtime_context import (
     FrozenPromptMiddleware,
     TailEnvelopeMiddleware,
@@ -871,7 +871,7 @@ class PTCAgent:
                 multimodal_strip,
                 multimodal_read,
                 AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
-                OpenAIPromptCachingMiddleware(),
+                SystemPromptCacheMiddleware(),
                 EmptyToolCallRetryMiddleware(),
                 PatchToolCallsMiddleware(),
                 # Innermost: carries the turn's rows in the shape this model
@@ -1009,8 +1009,9 @@ class PTCAgent:
         # Main agent middleware (includes SubAgentMiddleware + main_only)
         # Ordering matters for prompt caching:
         #   - AnthropicPromptCachingMiddleware (cache_control) and
-        #     OpenAIPromptCachingMiddleware (prompt_cache_breakpoint) each place
-        #     their provider's breakpoint on the last system message block they
+        #     SystemPromptCacheMiddleware (prompt_cache_breakpoint for OpenAI,
+        #     cache_control for Claude over OpenRouter) each place their
+        #     provider's breakpoint on the last system message block they
         #     see, which is the static prompt's own: the skills manifest and the
         #     MCP roster ride in the baseline now. Each no-ops for other
         #     providers.
@@ -1066,7 +1067,7 @@ class PTCAgent:
                 multimodal_strip,
                 multimodal_read,
                 AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
-                OpenAIPromptCachingMiddleware(),
+                SystemPromptCacheMiddleware(),
                 # Market watch (main agent only): contributes the
                 # <market-watch> price stamp as a per-call row on the request,
                 # which the tail envelope renders. Must stay OUTSIDE
