@@ -57,6 +57,7 @@ from src.server.services.computer_errors import (
 )
 from src.server.services.computer_manager import ComputerManager
 from src.server.services.computer_manager._types import (
+    MachineTarget,
     WorkspaceNotFound,
     WorkspaceNotOnComputer,
 )
@@ -295,7 +296,9 @@ class WorkspaceManager(ComputerManager):
             return None
         provider_ref = str(computer["provider_ref"])
         session = self.get_session_if_ready(
-            workspace_id, expected_sandbox_id=provider_ref
+            workspace_id,
+            expected_sandbox_id=provider_ref,
+            target=MachineTarget.of_computer(computer),
         )
         if session is not None:
             return session
