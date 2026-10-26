@@ -78,6 +78,11 @@ STATE_BASELINE = "runtime_baseline"
 NOW = datetime(2026, 4, 5, 19, 42, tzinfo=UTC)
 
 
+def _unrendered(epoch: BaselineEpoch) -> dict[str, str]:
+    """A block renderer for an epoch no thinking is bound to, which never states a section."""
+    return {}
+
+
 def _rows(update: dict) -> list:
     """The durable rows a turn-boundary read wrote into history."""
     return [m for m in update.get("messages") or [] if is_runtime_update_message(m)]
@@ -708,7 +713,7 @@ class TestCrossWriterChanges:
             text="original",
         )
         advanced, updates = advance_epoch(
-            epoch, Observations(now=NOW, reads=(read,))
+            epoch, Observations(now=NOW, reads=(read,)), _unrendered
         )
 
         assert len(updates) == 1
@@ -1114,7 +1119,9 @@ class TestProfileFollowsTheGoldenRule:
         epoch = BaselineEpoch.from_state(
             {"profile": frozen.to_state(), "observed": {"profile": frozen.sha()}}
         )
-        assert advance_epoch(epoch, Observations(now=NOW, profile=frozen)) == (None, [])
+        assert advance_epoch(
+            epoch, Observations(now=NOW, profile=frozen), _unrendered
+        ) == (None, [])
 
 
 class TestSupersession:

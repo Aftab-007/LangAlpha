@@ -239,8 +239,20 @@ def _item_text(item: Mapping[str, Any]) -> str:
 def sidecar(answer: Mapping[str, Any], origin: str | None, text: str) -> dict[str, Any]:
     """What a summary message carries for :func:`adopt`: the provider's
     answer (see :func:`native_answer`), the route that wrote it, and ``text``,
-    sent after it."""
+    sent after it (see :func:`carried_text`)."""
     return {**answer, "origin": origin, "text": text}
+
+
+def carried_text(message: AnyMessage) -> str | None:
+    """The text a summary carrying a provider's answer has beside it (the
+    transcript pointer, the skills to reload, the notes pointer), or None.
+
+    OpenAI's items are sent with it after them. Claude's block is sent alone:
+    the turns it keeps must follow it with nothing between, or their thinking
+    is no longer valid, so this text is for a message after those turns.
+    """
+    text = (_carried(message) or {}).get("text")
+    return text if isinstance(text, str) and text else None
 
 
 def is_opaque(message: AnyMessage) -> bool:
