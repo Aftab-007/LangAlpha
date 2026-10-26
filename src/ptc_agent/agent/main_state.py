@@ -15,6 +15,7 @@ from ptc_agent.agent.middleware.compaction.notes import NotesDueState
 from ptc_agent.agent.middleware.compaction.types import CompactionState
 from ptc_agent.agent.middleware.skills.middleware import LoadedSkillsState
 from ptc_agent.agent.middleware.subagent_switch import SubagentSwitchState
+from ptc_agent.agent.middleware.thinking_binding import UnsentThinkingState
 from ptc_agent.agent.middleware.wakeups import WakeupCancelNoticeState
 from ptc_agent.agent.state import DeltaAgentState
 
@@ -27,6 +28,7 @@ class MainAgentState(
     SubagentSwitchState,
     LoadedSkillsState,
     WakeupCancelNoticeState,
+    UnsentThinkingState,
     DeltaAgentState,
 ):
     """The main agent's checkpointed state; see the module docstring."""
