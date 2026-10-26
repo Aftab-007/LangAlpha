@@ -108,6 +108,7 @@ from typing import Any, Literal
 from langchain_core.messages import SystemMessage
 from langchain_openai.chat_models.base import BaseChatOpenAI
 
+from src.llms.anthropic_betas import client_betas
 from src.llms.endpoints import OFFICIAL_ANTHROPIC_HOST, url_host
 from src.llms.reasoning_lineage import ROUTE_ENDPOINT_SEP
 
@@ -127,17 +128,22 @@ RUNTIME_CONTEXT_SOURCE = "runtime_context"
 
 _OFFICIAL_OPENAI_HOST = "api.openai.com"
 
-#: The first Claude generation, as ``(major, minor)``, that accepts
-#: ``role: "system"`` inside ``messages`` on the official host: Opus 4.8. Every
-#: model released since does, and every earlier one the host still serves answers
-#: 400. A cutoff rather than a list, so a new release needs no edit here. It
-#: stays because a custom model can still name a Claude 4 id the host refuses.
-_ANTHROPIC_MIDTURN_SYSTEM_SINCE = (4, 8)
+#: The first generation of each Claude family, as ``(major, minor)``, that
+#: accepts ``role: "system"`` inside ``messages`` on the official host: Opus from
+#: 4.8, Sonnet and Haiku from 5.5 (Sonnet 5 refuses it), Fable and Mythos from
+#: 5. A cutoff per family rather than a list of ids, so a later release in a
+#: family needs no edit here; a family not named fails closed onto the
+#: user-message fallback.
+_ANTHROPIC_MIDTURN_SYSTEM_SINCE = {
+    "opus": (4, 8),
+    "sonnet": (5, 5),
+    "haiku": (5, 5),
+    "fable": (5, 0),
+    "mythos": (5, 0),
+}
 
 #: ``claude-<family>-<major>[-<minor>]``, matched once the date suffix is gone.
-#: The pair is compared across families because the line falls in the same place
-#: for all of them: every id below 4.8 refuses the role, whatever its family.
-_CLAUDE_GENERATION = re.compile(r"claude-[a-z]+-(\d+)(?:-(\d+))?")
+_CLAUDE_GENERATION = re.compile(r"claude-([a-z]+)-(\d+)(?:-(\d+))?")
 
 #: Third-party hosts speaking the Anthropic Messages protocol that were proven
 #: on live calls to place the entry at its own position, read it as the newest
@@ -348,8 +354,9 @@ def _accepts_midturn_system(model_id: Any) -> bool:
     generation = _CLAUDE_GENERATION.fullmatch(_DATE_SUFFIX.sub("", model_id))
     if generation is None:
         return False
-    major, minor = generation.groups(default="0")
-    return (int(major), int(minor)) >= _ANTHROPIC_MIDTURN_SYSTEM_SINCE
+    family, major, minor = generation.groups(default="0")
+    since = _ANTHROPIC_MIDTURN_SYSTEM_SINCE.get(family)
+    return since is not None and (int(major), int(minor)) >= since
 
 
 def _any_model(_model_id: Any) -> bool:
@@ -378,14 +385,7 @@ TOOL_CHANGE_BLOCK_TYPES = ("tool_addition", "tool_removal")
 INLINE_TOOLS_BETA = "inline-tools-2026-09-15"
 
 
-def carries_tool_changes(model: Any) -> bool:
-    """Whether *model* takes ``tool_addition`` / ``tool_removal`` on the system channel.
-
-    The official host only, on the models whose profile says they serve
-    mid-conversation tool changes: a compatible host that places a system entry
-    is no evidence it reads the blocks inside one, and an entry it misreads
-    turns tools on or off without the model knowing.
-    """
+def _official_system_channel(model: Any) -> bool:
     try:
         from langchain_anthropic import ChatAnthropic
     except ImportError:  # pragma: no cover - langchain_anthropic is a hard dep
@@ -394,7 +394,19 @@ def carries_tool_changes(model: Any) -> bool:
         isinstance(model, ChatAnthropic)
         and resolve_operator_channel(model) == "system"
         and _resolved_host(getattr(model, "anthropic_api_url", None)) == OFFICIAL_ANTHROPIC_HOST
-        and bool((getattr(model, "profile", None) or {}).get("mid_conversation_tools"))
+    )
+
+
+def carries_tool_changes(model: Any) -> bool:
+    """Whether *model* takes ``tool_addition`` / ``tool_removal`` on the system channel.
+
+    The official host only, on the models whose profile says they serve
+    mid-conversation tool changes: a compatible host that places a system entry
+    is no evidence it reads the blocks inside one, and an entry it misreads
+    turns tools on or off without the model knowing.
+    """
+    return _official_system_channel(model) and bool(
+        (getattr(model, "profile", None) or {}).get("mid_conversation_tools")
     )
 
 
@@ -406,6 +418,23 @@ def tool_change_betas(requested: list[str] | None = None) -> list[str]:
     """
     betas = list(requested or [])
     return betas if INLINE_TOOLS_BETA in betas else [*betas, INLINE_TOOLS_BETA]
+
+
+#: The beta a turn-scoped system message (``clear_at``) needs. Declared in the
+#: manifest's ``additional_betas`` of the models that serve it, so it rides the
+#: client's own header on every request.
+TURN_SCOPED_BETA = "mid-conversation-system-clear-at-2026-08-21"
+
+
+def carries_turn_scoped(model: Any) -> bool:
+    """Whether *model* takes turn-scoped system messages on the system channel.
+
+    The same models as the channel itself, on the hosts that serve it, and
+    only where the client's own header already sends the beta: the request
+    never adds one, since a call's betas replace the header rather than
+    adding to it.
+    """
+    return _official_system_channel(model) and TURN_SCOPED_BETA in client_betas(model)
 
 
 # --------------------------------------------------------------------------
@@ -439,7 +468,11 @@ def operator_system_entry(message: SystemMessage) -> dict[str, Any] | None:
                 blocks.append(dict(block))
     if not blocks:
         return None
-    return {"role": "system", "content": blocks}
+    entry: dict[str, Any] = {"role": "system", "content": blocks}
+    clear_at = (message.additional_kwargs or {}).get("clear_at")
+    if clear_at:
+        entry["clear_at"] = clear_at
+    return entry
 
 
 # --------------------------------------------------------------------------
@@ -505,6 +538,7 @@ def _splice_operator_entries(
                 entry is not None
                 and formatted
                 and formatted[-1].get("role") == "system"
+                and formatted[-1].get("clear_at") == entry.get("clear_at")
             ):
                 # Two writers' entries met; one entry is the shape the wire
                 # rule allows, and both are history, so the join is the same
@@ -536,14 +570,24 @@ def _joined(entry: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
     """*entry* with *other*'s blocks after its own."""
     content = entry["content"]
     blocks = [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
-    return {"role": "system", "content": [*blocks, *other["content"]]}
+    return {**entry, "content": [*blocks, *other["content"]]}
 
 
 def _placeable(formatted: list[dict[str, Any]], index: int) -> bool:
-    """Whether Anthropic accepts the system entry at *index* where it stands."""
-    after_user = index > 0 and formatted[index - 1].get("role") == "user"
-    is_last = index == len(formatted) - 1
-    return after_user and (is_last or formatted[index + 1].get("role") == "assistant")
+    """Whether Anthropic accepts the system entry at *index* where it stands.
+
+    Consecutive system entries are judged as one section, so the rule looks
+    past the entry's system neighbours to the turns around the section.
+    """
+    start = index
+    while start > 0 and formatted[start - 1].get("role") == "system":
+        start -= 1
+    end = index
+    while end + 1 < len(formatted) and formatted[end + 1].get("role") == "system":
+        end += 1
+    after_user = start > 0 and formatted[start - 1].get("role") == "user"
+    is_last = end == len(formatted) - 1
+    return after_user and (is_last or formatted[end + 1].get("role") == "assistant")
 
 
 def _as_reminder_turn(entry: dict[str, Any]) -> dict[str, Any]:

@@ -45,7 +45,7 @@ from ptc_agent.agent.middleware.runtime_context import (
     MemoSource,
     MemoryTierSource,
     Observations,
-    TailEnvelopeMiddleware,
+    RowCarrierMiddleware,
     TurnContextMiddleware,
     advance_epoch,
     is_runtime_update_message,
@@ -1774,9 +1774,7 @@ class TestBreakpointBudget:
             [
                 AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
                 mw,
-                TailEnvelopeMiddleware(
-                    now=datetime(2026, 4, 5, 19, 42, tzinfo=UTC), guidance="lean"
-                ),
+                RowCarrierMiddleware(),
             ],
             capture,
         )
@@ -1836,9 +1834,7 @@ class TestBreakpointBudget:
             captured["request"] = request
             return MagicMock()
 
-        tail = TailEnvelopeMiddleware(
-            now=datetime(2026, 4, 5, 19, 42, tzinfo=UTC), guidance="lean"
-        )
+        tail = RowCarrierMiddleware()
         request = _request({**state, **second}, rows=await _turn_row())
         request = request.override(messages=[*request.messages, *_rows(second)])
         await tail.awrap_model_call(request, capture)

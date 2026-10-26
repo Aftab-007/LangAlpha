@@ -94,7 +94,7 @@ from ptc_agent.agent.middleware.system_prompt_caching import SystemPromptCacheMi
 from ptc_agent.agent.middleware.tool_surface import ToolSurfaceMiddleware
 from ptc_agent.agent.middleware.runtime_context import (
     FrozenPromptMiddleware,
-    TailEnvelopeMiddleware,
+    RowCarrierMiddleware,
     TimeUpToolStopMiddleware,
     TurnContext,
     TurnContextMiddleware,
@@ -878,11 +878,7 @@ class PTCAgent:
                 PatchToolCallsMiddleware(),
                 # Innermost: carries the turn's rows in the shape this model
                 # accepts and pins the tail breakpoint on the last block.
-                TailEnvelopeMiddleware(
-                    now=request_time,
-                    guidance=turn.guidance,
-                    model_name=turn.name or None,
-                ),
+                RowCarrierMiddleware(),
                 ReasoningCompatibilityMiddleware(),
                 # Last, so it sits innermost in every subagent built on this
                 # stack: it captures the tool calls of the response the model
@@ -1028,10 +1024,9 @@ class PTCAgent:
         #     a resumed turn follows its anchor, and inside compaction, so it
         #     sees the summary each call is sent with and drops the reminders
         #     that summary answered.
-        #   - TailEnvelopeMiddleware is innermost overall. It carries this
-        #     turn's rows, appends an envelope only when the call has a
-        #     market_watch stamp, and pins the tail cache breakpoint, so
-        #     nothing may be appended after it.
+        #   - RowCarrierMiddleware is innermost overall. It carries this
+        #     turn's rows and pins the tail cache breakpoint, so nothing may
+        #     be appended after it.
         # On the wire that is: tools (bp1), static system (bp2), baseline block
         # (bp3), messages ending in the turn's rows (bp4), the four Anthropic
         # allows.
@@ -1070,21 +1065,25 @@ class PTCAgent:
                 multimodal_read,
                 AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
                 SystemPromptCacheMiddleware(),
-                # Market watch (main agent only): contributes the
-                # <market-watch> price stamp as a per-call row on the request,
-                # which the tail envelope renders. Must stay OUTSIDE
-                # TailEnvelopeMiddleware, which reads that key.
-                *(
-                    [MarketWatchMiddleware()]
-                    if self.config.feature_enabled("market_watch")
-                    else []
-                ),
                 ToolSurfaceMiddleware(),
                 EmptyToolCallRetryMiddleware(),
                 PatchToolCallsMiddleware(),
                 context.turn,
                 context.baseline,
                 notes_rows,
+                # Market watch (main agent only): writes the <market-watch>
+                # price stamp into history as a row when prices move. Its
+                # before_model runs after every other row writer, so a turn's
+                # stamp follows its anchor.
+                *(
+                    [
+                        MarketWatchMiddleware(
+                            guidance=turn.guidance, model_name=turn.name or None
+                        )
+                    ]
+                    if self.config.feature_enabled("market_watch")
+                    else []
+                ),
                 context.tail,
                 ReasoningCompatibilityMiddleware(),
             ]

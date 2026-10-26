@@ -19,7 +19,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from ptc_agent.agent.middleware.reasoning_compat import ReasoningCompatibilityMiddleware
-from ptc_agent.agent.middleware.runtime_context.tail import TailEnvelopeMiddleware
+from ptc_agent.agent.middleware.runtime_context.tail import RowCarrierMiddleware
 from ptc_agent.agent.middleware.runtime_context.turn import TurnContextMiddleware
 from ptc_agent.agent.middleware.skills import SkillsMiddleware
 from ptc_agent.agent.middleware.skills.registry import SkillDefinition
@@ -80,7 +80,7 @@ def _agent(model_name: str, saver: InMemorySaver, tools: list, *, skills: bool =
             *([SkillsMiddleware(skill_registry={"charts": _CHARTS}, inject_manifest=False)] if skills else []),
             AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
             ToolSurfaceMiddleware(),
-            TailEnvelopeMiddleware(),
+            RowCarrierMiddleware(),
             ReasoningCompatibilityMiddleware(),
         ],
         checkpointer=saver,

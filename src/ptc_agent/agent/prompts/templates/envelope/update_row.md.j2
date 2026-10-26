@@ -70,6 +70,10 @@
    anchor, already prose with its own stamp, so a header would only label the
    clock with a second copy of the time.
 
+   A `market_watch` row (`turn.MARKET_WATCH_ROW_KIND`) renders bare too: its
+   text is the whole live-price block, framing included, rendered once through
+   `envelope/updates.md.j2` when the stamp was written.
+
    A `wakeup_cancelled` row (`turn.WAKEUP_CANCELLED_ROW_KIND`) says the user
    cancelled wakeups the agent set, or turned wakeups off. It renders bare
    too: its text is already the whole notice, and it compares nothing with a
@@ -87,7 +91,7 @@
    State only, so it renders the same at both guidance levels. The standing
    rules for reading a row are static prose in the system prefix. #}
 {% if update %}
-{% if update.kind in ("turn_opened", "wakeup_cancelled") %}
+{% if update.kind in ("turn_opened", "wakeup_cancelled", "market_watch") %}
 {{ update.text }}
 {% elif update.kind == "subagents_switched" %}
 {% if update.provenance.get("allowed") is false %}

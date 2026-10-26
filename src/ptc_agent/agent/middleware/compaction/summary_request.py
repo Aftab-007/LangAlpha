@@ -79,6 +79,7 @@ Guidelines:
 - Omit categories that have no content
 - Be concise but comprehensive
 - Use natural prose or bullet points as appropriate
+- Record a reading from a live feed, such as a price or a market status, with the time it was taken, as its value at that time rather than the current one
 </instructions>
 
 <output_format>
