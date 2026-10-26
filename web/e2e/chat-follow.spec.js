@@ -227,7 +227,12 @@ test.describe('streaming follow', () => {
   test('lets a reader leave by a notch taken before the glide is seen', async ({ page }) => {
     // Measured from where the view was before the write, the notch would read
     // as a move down.
-    await interceptFollow(page, 1, 'vp.scrollTop = top - 12; window.__nudgedTop = vp.scrollTop;');
+    // A notch comes with its wheel event, as the reader's input would.
+    await interceptFollow(page, 1, `
+      vp.dispatchEvent(new WheelEvent('wheel', { deltaY: -12, bubbles: true }));
+      vp.scrollTop = top - 12;
+      window.__nudgedTop = vp.scrollTop;
+    `);
     await page.waitForTimeout(1000);
     const nudged = await page.evaluate(() => window.__nudgedTop);
     const after = await view(page);
