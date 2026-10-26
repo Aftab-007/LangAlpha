@@ -497,13 +497,10 @@
     "prefIncompleteMsg": "您的偏好信息尚未完善。请完善偏好设置以获得最佳体验。",
     "ignoreFor24h": "24小时内忽略",
     "proceed": "继续",
-    "watchlist": "自选",
-    "layoutToggle": {
-      "groupAria": "仪表板布局",
-      "classic": "经典",
-      "custom": "自定义",
+    "header": {
       "editLayout": "编辑布局",
-      "exitEditLayout": "退出编辑"
+      "exitEditLayout": "退出编辑",
+      "emailLabel": "邮箱"
     },
     "widgets": {
       "common": {
@@ -1098,19 +1095,6 @@
         "noContent": "（无预览内容）"
       }
     },
-    "classic": {
-      "marketOverview": "市场概览",
-      "editHoldingTitle": "编辑持仓 — {{symbol}}",
-      "quantityLabel": "数量 *",
-      "quantityPlaceholder": "例如：10.5",
-      "averageCostLabel": "每股平均成本 *",
-      "averageCostPlaceholder": "例如：175.50",
-      "notesLabel": "备注",
-      "notesPlaceholder": "可选",
-      "cancel": "取消",
-      "save": "保存",
-      "emailLabel": "邮箱"
-    },
     "brief": {
       "eyebrow": "AI 生成洞察",
       "personalizedBrief": "个性化简报",
@@ -1147,28 +1131,6 @@
       "notFound": "未找到该洞察",
       "allSources_one": "全部来源 ({{count}})",
       "allSources_other": "全部来源 ({{count}})"
-    },
-    "portfolio": {
-      "createTitle": "创建我的投资组合",
-      "colSymbol": "标的",
-      "colName": "名称",
-      "colPrice": "价格",
-      "colChange": "涨跌幅"
-    },
-    "portfolioWatchlistCard": {
-      "stock": "股票",
-      "shares": "{{qty}} 股",
-      "sharesHidden": "*** 股",
-      "edit": "编辑",
-      "delete": "删除",
-      "headerWatchlist": "自选股",
-      "headerPortfolio": "投资组合",
-      "tabWatch": "自选",
-      "tabHoldings": "持仓",
-      "netAssetValue": "净资产",
-      "netAssetValueByCurrency": "按币种净资产价值",
-      "addSymbol": "添加标的",
-      "addTransaction": "添加交易"
     },
     "addWatchlistDialog": {
       "titleSearch": "添加自选股",
@@ -1210,16 +1172,6 @@
       "alertQuantityInvalid": "请输入大于 0 的有效数量。",
       "alertAverageCostInvalid": "请输入大于 0 的有效平均成本。"
     },
-    "earningsCalendarCard": {
-      "viewAll": "查看全部",
-      "close": "关闭",
-      "sectionRecent": "近期",
-      "sectionUpcoming": "即将公布",
-      "emptyPeriod": "该时段暂无财报",
-      "emptyOnDate": "当日暂无财报",
-      "stockCount_one": "{{count}} 只标的",
-      "stockCount_other": "{{count}} 只标的"
-    },
     "chatInputCard": {
       "suggestion1": "总结苹果公司的财报",
       "suggestion2": "对比 TSLA 与 BYD",
@@ -1227,29 +1179,6 @@
       "suggestion4": "分析我的投资组合风险",
       "placeholderMobile": "向 AI 询问市场趋势……",
       "placeholderDesktop": "向 AI 询问市场趋势、特定股票或投资组合分析……"
-    },
-    "newsFeedCard": {
-      "tabMarket": "市场动态",
-      "tabPortfolio": "我的持仓",
-      "tabWatchlist": "我的自选",
-      "rangeAll": "全部",
-      "range1h": "1小时",
-      "range6h": "6小时",
-      "range24h": "24小时",
-      "range7d": "7天",
-      "tickerPlaceholder": "股票代码……",
-      "emptyFilters": "没有符合筛选条件的新闻",
-      "emptyMarket": "暂无市场新闻",
-      "emptyPortfolio": "添加股票到持仓以查看相关新闻",
-      "emptyWatchlist": "添加股票到自选以查看相关新闻",
-      "emptyDefault": "暂无新闻"
-    },
-    "watchlistCard": {
-      "createTitle": "创建自选股",
-      "colSymbol": "标的",
-      "colName": "名称",
-      "colPrice": "价格",
-      "colChange": "涨跌幅"
     }
   },
   "workspace": {
@@ -4097,7 +4026,7 @@
     "announce": {
       "dashCustom": {
         "modalTitle": "可自定义的仪表盘",
-        "modalBody": "将仪表盘切换到自定义模式，即可重新排列、调整大小并添加小组件，还能将它们附加到对话中。"
+        "modalBody": "点击仪表盘上的铅笔图标，即可重新排列、调整大小并添加小组件，还能将它们附加到对话中。"
       }
     },
     "whatsNew": {

@@ -1,15 +1,12 @@
 import type { ReactNode } from 'react';
 import {
   ArrowRight,
-  Briefcase,
-  ChevronRight,
+  CalendarDays,
   Clock,
   Eye,
   Newspaper,
   Plus,
   Sparkles,
-  TrendingUp,
-  type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocale } from '@/hooks/useLocale';
@@ -17,11 +14,12 @@ import { grouped2, relativeTime, shortMonthDay, signedFixed2 } from '@/lib/forma
 import { cn } from '@/lib/utils';
 import { PAST, ease, useSceneTime } from './clock';
 import { Appear, Region, rv, signColor } from './kit';
-import { changeAt, INDICES, WATCH, Spark } from './dashboardParts';
+import { changeAt, INDICES, WATCH, Spark, Widget } from './dashboardParts';
 
-/* The classic dashboard page, drawn in miniature: index cards, the watchlist
-   card and the news column. Shared by the scenes that show the page. Quotes,
-   headlines and symbols are invented. */
+/* The dashboard page in its default arrangement (the Morning brief preset),
+   drawn in miniature: the markets overview, the brief and news on the left,
+   the watchlist and earnings on the right, each widget as its card draws it. Shared by the scenes that show the
+   page. Quotes, headlines and symbols are invented. */
 /* eslint-disable react-refresh/only-export-components -- shared parts:
    scene components plus data and style helpers */
 
@@ -39,7 +37,7 @@ export const GRID = {
   length: 7600,
 };
 
-/* ── classic page ──────────────────────────────────────────────────────── */
+/* ── the page ──────────────────────────────────────────────────────────── */
 
 /** One index card: name, price and change in mono, the day's line in the
     change's color. `reach`/`slid` drive the line on the live page. */
@@ -107,7 +105,7 @@ export function WatchRow({ row, live = false }: { row: (typeof WATCH)[number]; l
           {row.sym}
         </span>
         <span className="text-[5px] leading-none" style={{ color: 'var(--color-text-secondary)' }}>
-          {tr('dashboard.portfolioWatchlistCard.stock')}
+          {tr('dashboard.widgets.holdings.stock')}
         </span>
       </span>
       <span className="ml-auto flex flex-col items-end gap-[2px]">
@@ -155,7 +153,7 @@ export function AddSymbol() {
       style={{ borderColor: 'var(--color-border-default)', color: 'var(--color-text-secondary)' }}
     >
       <Plus className="h-[7px] w-[7px]" />
-      {t('dashboard.portfolioWatchlistCard.addSymbol')}
+      {t('dashboard.widgets.portfolioWatchlist.addSymbol')}
     </span>
   );
 }
@@ -248,10 +246,11 @@ export function BriefSummary({ className }: { className?: string }) {
 }
 
 /**
- * The brief card on the Classic page (`AIDailyBriefCard`): the eyebrow and
+ * The brief widget at rest (`AIDailyBriefCard`): the eyebrow and
  * when it was written, the headline, the summary, its topics, then the two
  * buttons at the foot, with the card's newspaper mark in the corner. On the
- * live page each part enters in turn from `at`, as the card's parts do.
+ * live page each part enters in turn from `at`, as the card's parts do,
+ * into room the card holds for it, so the news under the card stays put.
  */
 function BriefCard({ at }: { at: number }) {
   const { t } = useTranslation();
@@ -278,18 +277,18 @@ function BriefCard({ at }: { at: number }) {
           })}
         </span>
       </span>
-      <Appear at={at}>
+      <Appear at={at} reserve>
         <BriefHeadline className="block pr-7 text-[9px]" />
       </Appear>
-      <Appear at={at + GRID.briefPer}>
+      <Appear at={at + GRID.briefPer} reserve>
         <BriefSummary className="block text-[6px]" />
       </Appear>
-      <Appear at={at + 2 * GRID.briefPer} className="flex flex-wrap gap-[3px]">
+      <Appear at={at + 2 * GRID.briefPer} reserve className="flex flex-wrap gap-[3px]">
         {INSIGHT.topics.map((topic) => (
           <TopicPill key={topic.text} {...topic} />
         ))}
       </Appear>
-      <Appear at={at + 3 * GRID.briefPer} className="mt-auto flex justify-end gap-1">
+      <Appear at={at + 3 * GRID.briefPer} reserve className="mt-auto flex justify-end gap-1">
         <span
           className={cn(btn, 'border')}
           style={{
@@ -500,32 +499,49 @@ export function EarningsRow({ row }: { row: (typeof EARNINGS)[number] }) {
   );
 }
 
-const NEWS_TABS: { icon: LucideIcon; label: string }[] = [
-  { icon: TrendingUp, label: 'dashboard.newsFeedCard.tabMarket' },
-  { icon: Briefcase, label: 'dashboard.newsFeedCard.tabPortfolio' },
-  { icon: Eye, label: 'dashboard.newsFeedCard.tabWatchlist' },
-];
+/** The watchlist widget's Watch / Holdings switch, Watch on: uppercase
+    pills on a tinted track. */
+function WatchTabs() {
+  const { t } = useTranslation();
+  return (
+    <span className="flex rounded-full p-px" style={{ background: 'var(--color-bg-tag)' }}>
+      {(['tabWatch', 'tabHoldings'] as const).map((tab, i) => (
+        <span
+          key={tab}
+          className="rounded-full px-[2px] py-[2px] text-[4px] uppercase leading-none"
+          style={{
+            background: i === 0 ? 'var(--color-bg-card)' : 'transparent',
+            color: i === 0 ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+          }}
+        >
+          {t(`dashboard.widgets.portfolioWatchlist.${tab}`)}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** The earnings widget's look-ahead window, as its header's right end shows
+    it at the default two weeks. */
+const EARNINGS_DAYS = 14;
 
 /**
- * The Classic page under the header: title, index cards, then the brief and
- * news on the left and the watchlist and earnings on the right. `live` plays
- * the script (the brief comes in part by part, the index lines trace in and
- * keep taking points, quotes tick); otherwise it sits on the finished frame.
+ * The page under the header, as the default layout lays it out (Morning
+ * brief preset): the markets overview across the top, then two columns that
+ * stack independently, the brief over news in eight of the twelve columns and
+ * the watchlist over earnings in the other four. Widgets at rest draw no frame
+ * of their own, so each shows as its card. `live` plays the script (the brief
+ * comes in part by part, the index lines trace in and keep taking points,
+ * quotes tick); otherwise it sits on the finished frame.
  */
-export function ClassicBody({ live = false }: { live?: boolean }) {
+export function PageBody({ live = false }: { live?: boolean }) {
   const { t: tr } = useTranslation();
   const now = useSceneTime();
   const t = live ? now : Number.POSITIVE_INFINITY;
   const slid = GRID.shifts.reduce((s, at) => s + ease(t, at, GRID.shiftDur), 0);
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <span
-        className="intro-rv mb-1.5 text-[11px] font-bold leading-none"
-        style={{ ...rv(0.05), color: 'var(--color-text-primary)' }}
-      >
-        {tr('dashboard.classic.marketOverview')}
-      </span>
-      <div className="intro-rv grid grid-cols-5 gap-1.5" style={rv(0.1)}>
+      <div className="intro-rv grid grid-cols-5 gap-1.5" style={rv(0.05)}>
         {INDICES.map((index, i) => (
           <IndexCard
             key={index.name}
@@ -536,99 +552,67 @@ export function ClassicBody({ live = false }: { live?: boolean }) {
           />
         ))}
       </div>
-      {/* brief and watchlist side by side, then news and earnings under them */}
-      <div className="mt-1.5 grid min-h-0 grid-cols-[3fr_2fr] content-start gap-1.5">
-        {/* the AI brief; on the live page its parts enter in turn */}
-        <BriefCard at={live ? GRID.brief : PAST} />
-        <Region delay={0.32} className="flex min-w-0 flex-col p-2">
-          <div className="mb-1 flex items-center justify-between gap-1">
-            <span
-              className="text-[8px] font-bold leading-none"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
-              {tr('dashboard.portfolioWatchlistCard.headerWatchlist')}
-            </span>
-            <span
-              className="flex rounded-[4px] p-[1.5px]"
-              style={{ background: 'var(--color-bg-tag)' }}
-            >
-              {['tabWatch', 'tabHoldings'].map((label, i) => (
-                <span
-                  key={label}
-                  className="rounded-[3px] px-1 py-[2px] text-[5px] font-medium leading-none"
-                  style={{
-                    background: i === 0 ? 'var(--color-bg-elevated)' : 'transparent',
-                    color: i === 0 ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-                  }}
-                >
-                  {tr(`dashboard.portfolioWatchlistCard.${label}`)}
-                </span>
+      <div className="mt-1.5 grid min-h-0 grid-cols-[2fr_1fr] items-start gap-1.5">
+        {/* the brief, news under it */}
+        <div className="flex min-w-0 flex-col gap-1.5">
+          {/* the AI brief; on the live page its parts enter in turn */}
+          <BriefCard at={live ? GRID.brief : PAST} />
+          <Widget
+            icon={Newspaper}
+            title={tr('dashboard.widgets.newsFeed.title')}
+            header={tr('dashboard.widgets.newsFeed.header', {
+              label: tr('dashboard.widgets.newsFeed.tab_market'),
+            })}
+            count="24"
+            delay={0.3}
+          >
+            {NEWS.slice(0, 3).map((item) => (
+              <NewsRow key={item.title} item={item} />
+            ))}
+          </Widget>
+        </div>
+        {/* the watchlist, earnings under it */}
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Widget
+            icon={Eye}
+            title={tr('dashboard.widgets.portfolioWatchlist.title')}
+            header={tr('dashboard.widgets.portfolioWatchlist.headerWatchlist')}
+            aside={<WatchTabs />}
+            delay={0.32}
+          >
+            <span className="flex flex-col">
+              {WATCH.map((row) => (
+                <WatchRow key={row.sym} row={row} live={live} />
               ))}
             </span>
-          </div>
-          {WATCH.map((row) => (
-            <WatchRow key={row.sym} row={row} live={live} />
-          ))}
-          <AddSymbol />
-        </Region>
-        {/* news and earnings, the next row down */}
-        <Region delay={0.3} className="flex min-w-0 flex-col gap-1 p-2">
-          <div
-            className="flex border-b pb-1.5"
-            style={{ borderColor: 'var(--color-border-muted)' }}
+            <AddSymbol />
+          </Widget>
+          <Widget
+            icon={CalendarDays}
+            title={tr('dashboard.widgets.earningsCalendar.title')}
+            header={tr('dashboard.widgets.earningsCalendar.header')}
+            count={String(EARNINGS.length)}
+            aside={
+              <span
+                className="text-[4.5px] uppercase leading-none tracking-wider"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                {tr('dashboard.widgets.earningsCalendar.windowLabel', { days: EARNINGS_DAYS })}
+              </span>
+            }
+            delay={0.4}
           >
             <span
-              className="flex gap-[2px] rounded-[4px] p-[2px]"
-              style={{ background: 'var(--color-bg-tag)' }}
-            >
-              {NEWS_TABS.map(({ icon: Icon, label }, i) => (
-                <span
-                  key={label}
-                  className={
-                    'flex items-center gap-[2px] rounded-[3px] px-1 py-[2px] text-[5px] ' +
-                    'font-medium leading-none'
-                  }
-                  style={{
-                    background: i === 0 ? 'var(--color-bg-elevated)' : 'transparent',
-                    color: i === 0 ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-                  }}
-                >
-                  <Icon className="h-[6px] w-[6px]" />
-                  {tr(label)}
-                </span>
-              ))}
-            </span>
-          </div>
-          {NEWS.slice(0, 3).map((item) => (
-            <NewsRow key={item.title} item={item} />
-          ))}
-        </Region>
-        <Region delay={0.4} className="flex min-w-0 flex-col gap-1.5 p-2">
-          <span className="flex items-center justify-between gap-1">
-            <span
-              className="text-[8px] font-bold leading-none"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
-              {tr('dashboard.widgets.earningsCalendar.title')}
-            </span>
-            <span
-              className="flex items-center text-[5px] leading-none"
+              className="px-0.5 text-[4.5px] font-bold uppercase leading-none tracking-wider"
               style={{ color: 'var(--color-text-secondary)' }}
             >
-              {tr('dashboard.earningsCalendarCard.viewAll')}
-              <ChevronRight className="h-[6px] w-[6px]" />
+              {tr('dashboard.widgets.earningsCalendar.bucket_nextWeek')}
             </span>
-          </span>
-          <span
-            className="px-0.5 text-[4.5px] font-bold uppercase leading-none tracking-wider"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            {tr('dashboard.earningsCalendarCard.sectionUpcoming')}
-          </span>
-          {EARNINGS.map((row) => (
-            <EarningsRow key={row.sym} row={row} />
-          ))}
-        </Region>
+            {EARNINGS.map((row) => (
+              <EarningsRow key={row.sym} row={row} />
+            ))}
+          </Widget>
+        </div>
       </div>
     </div>
   );

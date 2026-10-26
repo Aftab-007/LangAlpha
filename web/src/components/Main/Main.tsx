@@ -14,7 +14,7 @@ import type { AppSection } from '@/lib/appRoutes';
 // network fetch. Keyed by every section `APP_SECTIONS` names, so a link the
 // chat routes in place always has a page here.
 const routeChunks = {
-  dashboard: () => import('../../pages/Dashboard/DashboardRouter'),
+  dashboard: () => import('../../pages/Dashboard/Dashboard'),
   chat: () => import('../../pages/ChatAgent/ChatAgent'),
   market: () => import('../../pages/MarketView/MarketView'),
   news: () => import('../../pages/Detail/NewsDetailPage'),
