@@ -3519,7 +3519,7 @@ class TestAStartAttachesItsOwnProject(_Base):
     KEY = ("ws-a", "sandbox-abc")
 
     @staticmethod
-    async def _start(manager, session, *, stats, synced=True):
+    async def _start(manager, session, *, stats, synced=True, restored=True):
         @asynccontextmanager
         async def held(_workspace_id):
             yield "alpha-1a2b"
@@ -3536,7 +3536,7 @@ class TestAStartAttachesItsOwnProject(_Base):
             ("_apply_session_mcp", AsyncMock(return_value=None)),
             ("_freeze_tool_view", MagicMock()),
             ("_sync_sandbox_assets", AsyncMock(return_value=object() if synced else None)),
-            ("_maybe_restore_files", AsyncMock(return_value=True)),
+            ("_maybe_restore_files", AsyncMock(return_value=restored)),
             ("_held_workspace_folder", held),
             ("_record_sync", MagicMock()),
         )
@@ -3632,6 +3632,23 @@ class TestAStartAttachesItsOwnProject(_Base):
         await self._start(manager, session, stats=ReconcileStats(link_failed=True))
 
         assert self.KEY in manager._projects_attached
+
+    @pytest.mark.asyncio
+    async def test_a_restore_check_that_failed_withdraws_the_key_a_stop_left(self):
+        """A stop on this sandbox leaves the project attached; trusting that
+        key after the start's check failed would skip the restore that queues
+        its bring-up, so the attach that follows runs it instead."""
+        from src.server.services.user_skills.reconcile import ReconcileStats
+
+        manager = _make_manager()
+        session = _make_session()
+        manager._projects_attached[self.KEY] = None
+
+        await self._start(manager, session, stats=ReconcileStats(), restored=False)
+
+        assert self.KEY not in manager._projects_attached
+        _, restore = await self._attach(manager, session)
+        restore.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

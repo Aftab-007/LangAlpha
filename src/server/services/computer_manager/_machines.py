@@ -811,7 +811,7 @@ class MachineLifecycleMixin:
                         f"{project_binding.workspace_id} after binding: {e}"
                     )
             if reconnected:
-                await self._on_session_attached(computer_id, session, resumed=True)
+                self._on_session_attached(computer_id, session, resumed=True)
             self._record_sync(computer_id)
             if not reconnected:
                 # What starts with the machine (an always-on app) reads market

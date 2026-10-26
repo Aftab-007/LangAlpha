@@ -812,6 +812,10 @@ class SessionLifecycleMixin:
                         )
                         await update_workspace_activity(workspace_id)
                         machine.pending_lazy_sync = False
+                        # After the promotion, so the start is usable first.
+                        self._queue_reconnect_syncs_soon(
+                            computer_id, session.sandbox, opened=workspace_id
+                        )
                 elif mcp_changed or (
                     skills_signature is not None
                     and session.skills_signature != skills_signature
@@ -1298,7 +1302,7 @@ class SessionLifecycleMixin:
                     self._drop_session(computer_id)
                 raise
             did_init = True
-            await self._on_session_attached(computer_id, session, resumed=False)
+            self._on_session_attached(computer_id, session, resumed=False)
 
         self._put_session(computer_id, session, workspace_id=workspace_id)
         return session, did_init
@@ -1567,7 +1571,11 @@ class SessionLifecycleMixin:
                 # Refresh activity so idle cleanup cannot act on a stale timestamp.
                 await update_workspace_activity(workspace_id)
                 logger.info(f"Workspace {workspace_id} restarted successfully")
-            await self._on_session_attached(computer_id, session, resumed=False)
+            # A lazy start has no runtime yet to queue the siblings' syncs on;
+            # its Phase 2 queues them once it promotes the start.
+            self._on_session_attached(
+                computer_id, session, resumed=not lazy_init, opened=workspace_id
+            )
             # Lazy timing covers initiation, not background readiness; still record it
             # to keep lazy starts represented in the latency histogram.
             safe_record(
