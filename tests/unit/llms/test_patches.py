@@ -400,6 +400,42 @@ class TestCompactionBlockStream:
         assert chunk.response_metadata["context_management"] == {"applied_edits": []}
 
 
+class TestHeaderBetas:
+    """A request that names betas keeps the client's own: they replace its
+    header, which on the OAuth route authenticates the call."""
+
+    HEADER = "oauth-2025-04-20,thinking-binding-controls-2026-08-01"
+
+    def _client(self):
+        from langchain_anthropic import ChatAnthropic
+
+        from src.llms.patches import _patch_langchain_anthropic_header_betas
+
+        _patch_langchain_anthropic_header_betas()
+        return ChatAnthropic(
+            model="claude-opus-5-5", api_key="sk-ant-test", default_headers={"anthropic-beta": self.HEADER}
+        )
+
+    def test_a_call_time_list_keeps_the_header(self):
+        from langchain_core.messages import HumanMessage
+
+        payload = self._client()._get_request_payload([HumanMessage("hi")], betas=["inline-tools-2026-09-15"])
+        assert payload["betas"] == [*self.HEADER.split(","), "inline-tools-2026-09-15"]
+
+    def test_a_beta_langchain_adds_keeps_the_header(self):
+        from langchain_core.messages import HumanMessage
+
+        server = {"type": "url", "url": "https://mcp.example.com/sse", "name": "example"}
+        payload = self._client()._get_request_payload([HumanMessage("hi")], mcp_servers=[server])
+        assert payload["betas"] == [*self.HEADER.split(","), "mcp-client-2025-11-20"]
+
+    def test_a_request_naming_no_betas_goes_out_on_the_header(self):
+        from langchain_core.messages import HumanMessage
+
+        payload = self._client()._get_request_payload([HumanMessage("hi")])
+        assert not payload.get("betas")
+
+
 class TestOpenAICompactionTrigger:
     """The compaction marker becomes the trigger item OpenAI compacts on, in
     the request the model builds anyway, Codex's included."""

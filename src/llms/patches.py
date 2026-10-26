@@ -185,3 +185,38 @@ def _patch_langchain_openai_compaction_trigger():
         BaseChatOpenAI._get_request_payload = _patched
     except Exception as e:
         logger.warning(f"Failed to patch langchain_openai compaction trigger: {e}")
+
+
+def _patch_langchain_anthropic_header_betas():
+    """Keep the client's own betas on a request that names betas.
+
+    A request's ``betas`` replace the ``anthropic-beta`` header the client was
+    built with (anthropic 0.120 sends them as that header), and
+    langchain-anthropic 1.7.6 adds one there by itself for some tools, content
+    and settings. Either way the header's betas would be gone from the call:
+    on the OAuth route what authenticates it, and the manifest's, which let
+    ``thinking.block_binding`` and turn-scoped system messages through. So
+    they lead the list, ahead of the client's ``betas`` field, which a
+    call-time list replaces too.
+    """
+    try:
+        from langchain_anthropic.chat_models import ChatAnthropic
+
+        original = ChatAnthropic._get_request_payload
+        if getattr(original, "_keeps_header_betas", False):
+            return
+
+        @functools.wraps(original)
+        def _patched(self, input_, *, stop=None, **kwargs):
+            payload = original(self, input_, stop=stop, **kwargs)
+            if payload.get("betas"):
+                headers = self.default_headers or {}
+                header = next((v for k, v in headers.items() if k.lower() == "anthropic-beta"), "")
+                own = [b.strip() for b in str(header).split(",") if b.strip()]
+                payload["betas"] = list(dict.fromkeys([*own, *(self.betas or []), *payload["betas"]]))
+            return payload
+
+        _patched._keeps_header_betas = True
+        ChatAnthropic._get_request_payload = _patched
+    except Exception as e:
+        logger.warning(f"Failed to patch langchain_anthropic header betas: {e}")
