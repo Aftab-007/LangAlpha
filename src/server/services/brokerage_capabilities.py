@@ -180,7 +180,8 @@ _BY_KEY: dict[str, CapabilityGroup] = {g.key: g for g in GROUPS}
 
 # Tool names exactly as the vendor publishes them, which is what the relay
 # compares against. Counted against live discovery: moomoo 88, Robinhood 67,
-# IBKR 34, Webull 71, one of IBKR's deliberately left out.
+# IBKR 45, Webull 71 before its October tools, and ``UNCURATED`` names the
+# ones deliberately left out.
 _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
     "moomoo": {
         "market_data": (
@@ -395,6 +396,13 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "get_watchlist",
             "get_watchlists",
         ),
+        # Screeners the user saved in IBKR's own client, listed, read and run.
+        # Building or changing one is not published.
+        "scanners": (
+            "get_saved_screener",
+            "list_saved_screeners",
+            "run_saved_screener",
+        ),
         "alerts": (
             "create_alert",
             "delete_alert",
@@ -409,9 +417,20 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "get_account_positions",
             "get_account_summary",
             "get_account_trades",
+            # Whether this consent may place live orders at all, which IBKR
+            # decides per account and reports here.
+            "get_flow_type",
+            # Both read the user's own orders: the rules can be asked for an
+            # order being modified, and the status is how a live order settles.
+            "get_order_rules",
+            "get_order_status",
             "get_pa_allocation",
             "get_pa_performance_all_periods",
         ),
+        # A what-if: cost, commission and margin impact against the real
+        # account, persisting nothing. IBKR's own word is that a preview
+        # "never places an order".
+        "order_preview": ("preview_order",),
         "staged_orders": (
             "create_order_instruction",
             "delete_order_instruction",
@@ -517,9 +536,17 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
 # change and cancel real orders, but the order adapter reads only moomoo's
 # equity order shape: behind the gate they would be approved and recorded
 # without anyone knowing what they are, and left ungrouped they would reach the
-# sandbox with no gate at all.
+# sandbox with no gate at all. IBKR's live order tools are the same case until
+# its order adapter reads them: ``answer_order_question`` is what releases a
+# submit, modify or cancel to the market, so it is one of them.
 UNCURATED: dict[str, tuple[str, ...]] = {
-    "ibkr": ("provide_customer_feedback",),
+    "ibkr": (
+        "answer_order_question",
+        "cancel_order",
+        "modify_order",
+        "provide_customer_feedback",
+        "submit_order",
+    ),
     "moomoo": (
         "crypto_account_cancel_order",
         "crypto_account_create_order",
@@ -629,8 +656,8 @@ _ORDER_TOOLS: dict[str, dict[str, OrderTool]] = {
 def groups_for(brokerage: str | None) -> tuple[CapabilityGroup, ...]:
     """The consent toggles to offer for a brokerage, in display order.
 
-    Only groups the vendor actually has tools for: IBKR publishes nothing that
-    places an order, so it is never asked about trading.
+    Only groups the vendor actually has tools for: a vendor none of whose order
+    tools we carry is never asked about trading.
     """
     curated = _CURATION.get(brokerage) if brokerage else None
     if not curated:
