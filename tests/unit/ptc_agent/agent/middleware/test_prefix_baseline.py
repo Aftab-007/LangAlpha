@@ -11,6 +11,7 @@ still reach the model, as rows.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,6 +26,7 @@ from ptc_agent.agent.main_state import MainAgentState
 from ptc_agent.agent.middleware.compaction import middleware as mw_module
 from ptc_agent.agent.middleware.compaction.compact import Summarizer
 from ptc_agent.agent.middleware.compaction.middleware import CompactionMiddleware
+from ptc_agent.agent.middleware.compaction.notes import ThreadScratchpad
 from ptc_agent.agent.middleware.reasoning_compat import ReasoningCompatibilityMiddleware
 from ptc_agent.agent.middleware.runtime_context.baseline import BaselineContextMiddleware
 from ptc_agent.agent.middleware.runtime_context.frozen_prompt import STATE_SYSTEM_PIN, SystemPinMiddleware
@@ -326,3 +328,78 @@ async def test_a_compaction_that_keeps_thinking_restates_the_block_and_keeps_the
     assert "second purpose" in restated
     assert "tool_result" in json.dumps(after[-2])
     assert "third purpose" in _messages(wire.payloads[8])
+
+class _Notes:
+    """A sandbox whose notes folder holds one note, so a summary carries the
+    pointer to it."""
+
+    livefs = None
+    transcripts = None
+
+    def normalize_path(self, path: str) -> str:
+        return path
+
+    async def aglob(self, pattern: str, path: str = "/"):
+        return SimpleNamespace(matches=[{"path": f"{path}/nvda.md"}], error=None)
+
+
+POINTER = "Your checkpoint notes for this thread are in"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("moved", [True, False], ids=["agent-md-moved", "nothing-to-restate"])
+async def test_the_answer_from_a_summary_reads_its_note_once_and_later_calls_keep_it(monkeypatch, moved):
+    """Claude's block goes alone, so the summary's note follows the turns it
+    kept. The call answering from the summary is sent it, the note stays in
+    history ahead of that answer, and the baseline's restatement after it
+    leaves the note out, or is not filed when nothing else is left to
+    restate: every call sends the note exactly once, where it first went."""
+    monkeypatch.setattr(mw_module, "get_stream_writer", lambda: lambda payload: None)
+    scratchpad = ThreadScratchpad.resolve(
+        SimpleNamespace(feature_enabled=lambda name: name == "scratchpad"), "/home/workspace/acme", THREAD
+    )
+    wire = Wire(
+        [
+            _measured(reply(1, text="Hello."), 2_000),
+            _measured(reply(2, text="Noted."), 7_000),
+            _measured(reply(3, tool=("get_data", {"query": "a"})), 7_100),
+            _measured(reply(4, tool=("get_data", {"query": "b"})), 7_200),
+            _measured(reply(5, tool=("get_data", {"query": "c"})), 9_990),
+            _compaction,
+            _measured(reply(7, tool=("get_data", {"query": "d"})), 4_000),
+            _measured(reply(8, text="Done."), 4_100),
+            _measured(reply(9, text="Still done."), 4_200),
+        ]
+    ).install(monkeypatch)
+    saver = InMemorySaver()
+    first = "# Notes\nfirst purpose" if moved else "# Notes\nsecond purpose"
+    turns = (
+        (first, "Hi."),
+        ("# Notes\nsecond purpose", "Change the purpose."),
+        ("# Notes\nsecond purpose", "Look at NVDA."),
+        ("# Notes\nsecond purpose", "And now?"),
+    )
+    for agent_md, text in turns:
+        compaction = CompactionMiddleware(
+            Summarizer(GenericFakeChatModel(messages=iter([])), limit=100_000),
+            token_threshold=THRESHOLD,
+            keep_tokens=THRESHOLD // 3,
+            claude_keep_tokens=THRESHOLD // 3,
+            backend=_Notes(),
+        ).with_scratchpad_notes(scratchpad.notes_dir)
+        await _agent(saver, Sources(agent_md), compaction=compaction).ainvoke(
+            {"messages": [HumanMessage(text)]}, _cfg()
+        )
+
+    assert "compaction" in wire.payloads[5].get("extra_body", {})
+    answered = wire.payloads[6]["messages"]
+    assert POINTER in json.dumps(answered[-1])
+    assert "tool_result" in json.dumps(answered[-2])
+    assert [_messages(p).count(POINTER) for p in wire.payloads[6:]] == [1, 1, 1]
+    after = json.dumps(wire.payloads[7]["messages"][-1])
+    if moved:
+        assert "second purpose" in after
+        assert "summarized" not in after
+    else:
+        assert "tool_result" in after
+    assert kept_breaks(wire) == []

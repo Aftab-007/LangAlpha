@@ -27,7 +27,7 @@ from ptc_agent.agent.middleware.compaction import (
 )
 from ptc_agent.agent.middleware.compaction.compact import Summarizer
 from ptc_agent.agent.middleware.compaction.middleware import CompactionMiddleware
-from ptc_agent.agent.middleware.compaction.summary_request import HANDOFF_SUMMARY_PROMPT
+from ptc_agent.agent.middleware.compaction.summary_request import summary_prompt
 from ptc_agent.agent.middleware.compaction.utils import (
     build_summary_message,
     handed_off,
@@ -187,6 +187,17 @@ class TestHandOff:
         assert watcher.started == 1
         assert watcher.ended == 1
 
+    async def test_a_summary_no_turn_came_after_is_written_out_as_where_the_work_stands(self):
+        head = _opaque()
+        agent, sent = _agent(_model(AIMessage("Goal: chart AAPL.")))
+        thread = _summarized(head)
+        thread["_summarization_event"] = {"summary_message": head, "cutoff_index": len(_history())}
+
+        await ask_between_turns(agent, thread, HandOff(), thread_id="t-1")
+
+        (request,) = sent.requests
+        assert [m.content for m in request.messages] == [head.content, summary_prompt("handoff", False)]
+
     async def test_the_agents_model_writes_out_a_summary_only_its_provider_can_read(self):
         head = _opaque()
         agent, sent = _agent(_model(AIMessage("  Goal: chart AAPL. Progress: data pulled.\n")))
@@ -195,7 +206,7 @@ class TestHandOff:
 
         (request,) = sent.requests
         assert request.tool_choice == "none"
-        assert [m.content for m in request.messages] == [head.content, HANDOFF_SUMMARY_PROMPT]
+        assert [m.content for m in request.messages] == [head.content, summary_prompt("handoff", True)]
         assert request.messages[0] is head
         # Only this model reading that answer can write it: no fallback, no
         # retry without it.

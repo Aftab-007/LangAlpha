@@ -2006,3 +2006,19 @@ class TestTheChannelsParagraph:
 
         assert BaselineEpoch.from_state(epoch.to_state()).channels_enabled is True
         assert "channels_enabled" not in BaselineEpoch().to_state()
+
+
+def test_a_summary_written_before_the_block_went_alone_restates_nothing():
+    """Its text already rides with the block, so restating it after the kept
+    turns would send it twice."""
+    from ptc_agent.agent.middleware.runtime_context.baseline import _compaction_note
+    from src.llms.provider_compaction import SIDECAR_KEY
+
+    def event(**marker):
+        carried = {"block": {"type": "compaction", "content": "x"}, "origin": "anthropic"}
+        carried |= {"text": "pointers", **marker}
+        summary = HumanMessage("[Context Summary] s", additional_kwargs={SIDECAR_KEY: carried})
+        return {"summary_message": summary}
+
+    assert _compaction_note(event(alone=True)) == "pointers"
+    assert _compaction_note(event()) is None

@@ -51,6 +51,7 @@ from ptc_agent.agent.middleware.runtime_context.durable import (
     messages_in_view,
     rows_in_view,
 )
+from ptc_agent.agent.middleware.thinking_binding import holds_bound_thinking
 from ptc_agent.agent.middleware.runtime_context.epoch import (
     MEMO_DISPLAY_CAP,
     MEMORY_TIERS,
@@ -79,6 +80,7 @@ from ptc_agent.agent.middleware.runtime_context.restate import (
     SECTION_MEMO,
     SECTION_PROFILE,
     SECTION_WORKSPACE,
+    note_sent,
 )
 from ptc_agent.agent.middleware.runtime_context.state import STATE_BASELINE, state_get
 from ptc_agent.agent.middleware.runtime_context.templates import render_template
@@ -86,7 +88,6 @@ from ptc_agent.agent.middleware.runtime_context.turn import (
     NON_CHANGE_ROW_KINDS,
     NOTICE_ROW_KINDS,
 )
-from ptc_agent.agent.middleware.thinking_binding import holds_bound_thinking
 from ptc_agent.agent.roles import AgentRole
 from ptc_agent.agent.tools.context_file_policy import MAX_AGENT_MD_SIZE, MAX_MEMORY_BLOCK_SIZE
 from ptc_agent.core.paths import (
@@ -415,6 +416,8 @@ class BaselineContextMiddleware(AgentMiddleware):
             self._read_sources(state), self._memo_count()
         )
         event = state_get(state, "_summarization_event")
+        summary = event.get("summary_message") if isinstance(event, dict) else None
+        sent = note_sent(messages_in_view(state), getattr(summary, "id", None))
         return Observations(
             now=datetime.now(tz=UTC),
             workspace=self._workspace,
@@ -434,7 +437,8 @@ class BaselineContextMiddleware(AgentMiddleware):
             channels_enabled=self._switches.channels,
             wakeups_enabled=self._switches.wakeups,
             thinking_bound=holds_bound_thinking(messages_in_view(state)),
-            compaction_note=_compaction_note(event),
+            compaction_note=None if sent else _compaction_note(event),
+            compaction_note_sent=sent,
             role=self._role,
         )
 
@@ -797,21 +801,10 @@ def _unseen_compaction(state: Any) -> bool:
 
 
 def _compaction_note(event: Any) -> str | None:
-    """What the newest summary leaves for the turns after it to read, if anything.
+    """What the newest summary leaves for the turns after it to read, if anything."""
+    from src.llms.provider_compaction import deferred_text
 
-    Only a summary carrying Claude's compaction block has one: that block is
-    sent alone, since the kept turns must follow it with nothing between, so
-    its text (the transcript, skills and notes pointers) is restated after
-    them. Every other summary sends that text itself.
-    """
-    from src.llms.provider_compaction import SIDECAR_KEY, carried_text
-
-    message = event.get("summary_message") if isinstance(event, dict) else None
-    sidecar = (getattr(message, "additional_kwargs", None) or {}).get(SIDECAR_KEY)
-    if not isinstance(sidecar, dict) or not isinstance(sidecar.get("block"), dict):
-        return None
-    note = carried_text(message)
-    return note if note and note.strip() else None
+    return deferred_text(event.get("summary_message") if isinstance(event, dict) else None)
 
 
 async def _read_sandbox_text(session: Any, relative_path: str) -> str | None:

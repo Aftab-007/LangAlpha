@@ -9,15 +9,19 @@ of an epoch's block, keyed as ``SECTION_*`` and by source kind.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from ptc_agent.agent.middleware.runtime_context.changes import (
     UPDATE_SCHEMA_VERSION,
     sha256_text,
 )
-from ptc_agent.agent.middleware.runtime_context.durable import DurableUpdate
+from ptc_agent.agent.middleware.runtime_context.durable import (
+    DurableUpdate,
+    runtime_update_from_message,
+)
 from ptc_agent.agent.middleware.runtime_context.harness_blocks import (
     harness_block_for,
 )
@@ -163,12 +167,43 @@ def restated_row(
         provenance["gone"] = labels
     if after_summary and obs.compaction_note:
         provenance["note"] = obs.compaction_note
+    if after_summary and obs.compaction_note_sent:
+        provenance["note_sent"] = True
     return DurableUpdate(
         kind=RESTATED_ROW_KIND,
         schema_version=UPDATE_SCHEMA_VERSION,
         text="\n\n".join(sections),
         provenance=provenance,
         created_at=obs.now,
+    )
+
+
+def summary_note_row(note: str, summary_id: str | None, now: datetime) -> DurableUpdate:
+    """The row taking a summary's note to the call that answers from it.
+
+    Claude's block is sent alone, so the note follows the turns it kept; sent
+    with that call and kept in history ahead of its answer, it reaches the
+    model at once and is sent the same way on every later call. It reads as
+    the restatement row a summary with nothing to restate files.
+    """
+    return DurableUpdate(
+        kind=RESTATED_ROW_KIND,
+        schema_version=UPDATE_SCHEMA_VERSION,
+        text="",
+        provenance={"source": "harness", "after": "summary", "note": note, "summary": summary_id},
+        created_at=now,
+    )
+
+
+def note_sent(messages: Sequence[Any], summary_id: str | None) -> bool:
+    """Whether ``messages`` already carry the note of the summary ``summary_id``."""
+    if summary_id is None:
+        return False
+    return any(
+        (update := runtime_update_from_message(message)) is not None
+        and update.kind == RESTATED_ROW_KIND
+        and update.provenance.get("summary") == summary_id
+        for message in messages
     )
 
 

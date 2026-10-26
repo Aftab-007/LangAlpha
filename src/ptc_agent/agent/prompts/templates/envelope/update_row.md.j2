@@ -134,7 +134,9 @@ The frozen blocks were rebuilt at this turn
 Every change row above this one is folded into the blocks now, so the blocks are current, and an earlier row that says to trust it over a block no longer applies. {{ update.text }}{% if update.provenance.still_in_force %} The exception is a row about {{ update.provenance.still_in_force | join(", ") }}: that read did not answer at this rebuild, so such a row still applies over its block until a later row replaces it.{% endif %}
 {% elif update.kind == "baseline_restated" %}
 {% set gone = update.provenance.get("gone") or [] %}
-{% if update.provenance.get("after") == "summary" %}
+{% if update.provenance.get("after") == "summary" and update.provenance.get("note_sent") %}
+Rows from before the summary that said what changed in your system prompt may be gone with it, so this row restates every block there that no longer matches its frozen copy. Each block below is current as of this row and replaces its frozen copy and every earlier row about it. A block this row does not name still matches its frozen copy, unless a later row says otherwise. A later row for the same block supersedes this one.
+{% elif update.provenance.get("after") == "summary" %}
 The conversation before this point was summarized
 {% if update.provenance.get("note") %}
 

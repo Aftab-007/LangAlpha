@@ -5,7 +5,7 @@ attachments cut."""
 import base64
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
@@ -13,7 +13,10 @@ from langgraph.config import get_config
 
 from ptc_agent.core.paths import WorkspaceLayout
 from ptc_agent.agent.middleware.file_operations.multimodal_strip import remove_attachments
+from ptc_agent.agent.middleware.reasoning_compat import message_lineage
 from src.llms.attachment_payload import FILE_BLOCK_TYPES
+from src.llms.reasoning_lineage import ANTHROPIC_LINEAGE
+from src.llms.reasoning_payload import is_reasoning_block, strip_reasoning
 from ptc_agent.agent.middleware.compaction.types import OffloadSettings, TRUNCATABLE_TOOLS
 from ptc_agent.agent.middleware.compaction.utils import (
     get_effective_messages,
@@ -68,6 +71,65 @@ def recorded_offloads(state: Mapping[str, Any]) -> Offloads:
 
 def removed_attachments(state: Mapping[str, Any]) -> set[str]:
     return set(state.get("_removed_attachment_ids") or ())
+
+
+def unsent_thinking(state: Mapping[str, Any]) -> set[str]:
+    return set(state.get("_unsent_thinking_ids") or ())
+
+
+def _checked_thinking(msg: AnyMessage) -> bool:
+    """Whether ``msg`` is an answer whose thinking is checked against
+    everything sent before it: Anthropic's own, which a model with preserved
+    thinking drops, or refuses, once anything ahead of it changed. Another
+    lineage's reasoning reaches Anthropic stripped anyway."""
+    return (
+        isinstance(msg, AIMessage)
+        and isinstance(msg.content, list)
+        and any(is_reasoning_block(block) for block in msg.content)
+        and message_lineage(msg) == ANTHROPIC_LINEAGE
+    )
+
+
+def checked_thinking_end(messages: Sequence[AnyMessage]) -> int:
+    """Where what can be edited without invalidating thinking starts in
+    ``messages``: right after the last answer whose thinking is checked, 0
+    when none is."""
+    return next(
+        (i + 1 for i in range(len(messages) - 1, -1, -1) if _checked_thinking(messages[i])),
+        0,
+    )
+
+
+def thinking_after(messages: Sequence[AnyMessage], edited: Collection[str]) -> set[str]:
+    """The ids of the answers in ``messages`` whose thinking an edit of the
+    ``edited`` ones invalidates: every checked one after the first of them.
+
+    Leaving thinking out from the end of the history is valid, so leaving it
+    out from the first edited message on keeps what comes before it.
+    """
+    first = next((i for i, msg in enumerate(messages) if msg.id in edited), None)
+    if first is None:
+        return set()
+    return {msg.id for msg in messages[first + 1 :] if msg.id and _checked_thinking(msg)}
+
+
+def without_thinking(messages: list[AnyMessage], ids: Collection[str]) -> list[AnyMessage]:
+    """``messages`` with the reasoning of the answers ``ids`` names taken out,
+    the original list when nothing changed. An answer left empty goes, as
+    ``strip_reasoning`` says."""
+    if not ids:
+        return messages
+    result: list[AnyMessage] = []
+    changed = False
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.id in ids:
+            stripped = strip_reasoning(msg)
+            changed = changed or stripped is not msg
+            if stripped is None:
+                continue
+            msg = stripped
+        result.append(msg)
+    return result if changed else messages
 
 
 def record_offloads(state: Mapping[str, Any], args: set[str], reads: set[str]) -> dict[str, Any]:
@@ -154,7 +216,9 @@ async def offload_view(
     # A removed PDF's placeholder gives its page count, which a block with no
     # stamp is parsed for.
     await read_ahead(msg for msg in view if getattr(msg, "id", None) in removed)
-    return remove_attachments(view, removed, pages=pdf_pages)
+    return without_thinking(
+        remove_attachments(view, removed, pages=pdf_pages), unsent_thinking(state)
+    )
 
 
 def apply_recorded_offloads(

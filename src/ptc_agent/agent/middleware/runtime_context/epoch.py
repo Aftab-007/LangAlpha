@@ -505,6 +505,9 @@ class Observations:
     # What the newest summary leaves for the turns after it to read, carried
     # by the row filed once that summary is seen. None when it leaves nothing.
     compaction_note: str | None = None
+    # Whether the call that answered from that summary was sent its note
+    # already, so the rows after it restate without it.
+    compaction_note_sent: bool = False
     # The role this turn's agent runs in, for the rows whose wording differs
     # by role.
     role: AgentRole = "analyst"
