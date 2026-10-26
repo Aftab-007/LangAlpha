@@ -26,11 +26,15 @@ from langchain_openai import ChatOpenAI
 from src.llms.extension import ChatAnthropicOAuth, ChatCodexOpenAI
 from src.llms.llm import LLM
 from src.llms.operator_channel import (
+    OPERATOR_CHANNEL_KEY,
+    INLINE_TOOLS_BETA,
     anthropic_serves_midturn_system,
     build_operator_message,
+    carries_tool_changes,
     is_operator_system_message,
     operator_request,
     resolve_operator_channel,
+    tool_change_betas,
 )
 from src.llms.vendor.langchain_zai import ChatZai
 
@@ -617,6 +621,73 @@ def test_an_assistant_turn_the_formatter_drops_does_not_count():
         ]
     )
     assert [m["role"] for m in payload["messages"]] == ["user", "user", "user", "system"]
+
+
+# ---------------------------------------------------------------------------
+# Mid-conversation tool changes
+# ---------------------------------------------------------------------------
+
+_ADD = {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "draw_chart"}}
+
+
+def _tool_change(*blocks):
+    return SystemMessage(
+        content=list(blocks),
+        additional_kwargs={OPERATOR_CHANNEL_KEY: "system", "lc_source": "tool_change"},
+    )
+
+
+def test_a_tool_change_reaches_the_wire_in_its_own_entry():
+    payload = _payload([SystemMessage("base prompt"), HumanMessage("hi"), _tool_change(_ADD)])
+    assert payload["messages"][-1] == {"role": "system", "content": [_ADD]}
+
+
+def test_entries_that_meet_are_joined_into_one():
+    """A row and a tool change written at the same point go out as one system
+    entry, the shape the wire rule allows, in the order they were written."""
+    payload = _payload(
+        [
+            SystemMessage("base prompt"),
+            HumanMessage("hi"),
+            build_operator_message("row", "system"),
+            _tool_change(_ADD),
+            AIMessage("answer"),
+        ]
+    )
+    assert payload["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": [{"type": "text", "text": "row"}, _ADD]},
+        {"role": "assistant", "content": "answer"},
+    ]
+
+
+def test_a_tool_change_the_wire_cannot_place_is_not_sent():
+    """A user turn has no form for a tool change, so an entry of nothing else
+    that no assistant turn follows is left out rather than refused."""
+    payload = _payload(
+        [SystemMessage("base prompt"), HumanMessage("hi"), _tool_change(_ADD), HumanMessage("again")]
+    )
+    assert [m["role"] for m in payload["messages"]] == ["user", "user"]
+
+
+def _official(model: str = "claude-opus-5-5", **kwargs):
+    return _anthropic("anthropic-test", model=model, **kwargs)
+
+
+def test_tool_changes_ride_the_official_host_on_a_model_that_serves_them():
+    with provider_entry("anthropic-test", {"sdk": "anthropic", "operator_channel": "system"}):
+        assert carries_tool_changes(_official()) is True
+        assert carries_tool_changes(_official("claude-sonnet-5")) is False
+        assert carries_tool_changes(_official(base_url="https://api.deepseek.com/anthropic")) is False
+    with provider_entry("anthropic-test", {"sdk": "anthropic"}):
+        assert carries_tool_changes(_official()) is False
+    assert carries_tool_changes(_openai()) is False
+
+
+def test_tool_change_betas_add_inline_tools_once():
+    assert tool_change_betas() == [INLINE_TOOLS_BETA]
+    assert tool_change_betas(["compact-2026-09-04"]) == ["compact-2026-09-04", INLINE_TOOLS_BETA]
+    assert tool_change_betas([INLINE_TOOLS_BETA]) == [INLINE_TOOLS_BETA]
 
 
 def test_bridge_is_installed_once_and_idle_outside_the_window():

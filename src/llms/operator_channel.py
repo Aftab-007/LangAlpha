@@ -366,6 +366,49 @@ _ANTHROPIC_SYSTEM_HOSTS: dict[str, Callable[[Any], bool]] = {
 
 
 # --------------------------------------------------------------------------
+# Mid-conversation tool changes
+# --------------------------------------------------------------------------
+
+#: System content blocks that turn a declared tool on or off from their
+#: position onward.
+TOOL_CHANGE_BLOCK_TYPES = ("tool_addition", "tool_removal")
+
+#: The beta a request carrying a tool change goes out with: it covers a tool
+#: named by reference and one defined in the message alike.
+INLINE_TOOLS_BETA = "inline-tools-2026-09-15"
+
+
+def carries_tool_changes(model: Any) -> bool:
+    """Whether *model* takes ``tool_addition`` / ``tool_removal`` on the system channel.
+
+    The official host only, on the models whose profile says they serve
+    mid-conversation tool changes: a compatible host that places a system entry
+    is no evidence it reads the blocks inside one, and an entry it misreads
+    turns tools on or off without the model knowing.
+    """
+    try:
+        from langchain_anthropic import ChatAnthropic
+    except ImportError:  # pragma: no cover - langchain_anthropic is a hard dep
+        return False
+    return (
+        isinstance(model, ChatAnthropic)
+        and resolve_operator_channel(model) == "system"
+        and _resolved_host(getattr(model, "anthropic_api_url", None)) == OFFICIAL_ANTHROPIC_HOST
+        and bool((getattr(model, "profile", None) or {}).get("mid_conversation_tools"))
+    )
+
+
+def tool_change_betas(requested: list[str] | None = None) -> list[str]:
+    """The ``betas`` a request carrying a tool change sends: *requested*, the
+    betas the call already asked for, and :data:`INLINE_TOOLS_BETA`. The
+    client's own header joins them on the way out (see
+    ``src.llms.patches._patch_langchain_anthropic_header_betas``).
+    """
+    betas = list(requested or [])
+    return betas if INLINE_TOOLS_BETA in betas else [*betas, INLINE_TOOLS_BETA]
+
+
+# --------------------------------------------------------------------------
 # Anthropic wire entry
 # --------------------------------------------------------------------------
 
@@ -375,7 +418,8 @@ def operator_system_entry(message: SystemMessage) -> dict[str, Any] | None:
 
     None when nothing survives, matching the stock hoist's own rule that empty
     text blocks are not accepted: a carrier with no text is dropped rather than
-    sent as a malformed message.
+    sent as a malformed message. Tool-change blocks are kept as they are, since
+    a mid-conversation entry is the one place the API reads them.
     """
     blocks: list[dict[str, Any]] = []
     content = message.content
@@ -391,6 +435,8 @@ def operator_system_entry(message: SystemMessage) -> dict[str, Any] | None:
                 text = block.get("text", "")
                 if isinstance(text, str) and text.strip():
                     blocks.append(dict(block))
+            elif isinstance(block, dict) and block.get("type") in TOOL_CHANGE_BLOCK_TYPES:
+                blocks.append(dict(block))
     if not blocks:
         return None
     return {"role": "system", "content": blocks}
@@ -455,16 +501,42 @@ def _splice_operator_entries(
         formatted.extend(run_formatted)
         if cut < len(msgs):
             entry = operator_system_entry(msgs[cut])
-            if entry is not None:
+            if (
+                entry is not None
+                and formatted
+                and formatted[-1].get("role") == "system"
+            ):
+                # Two writers' entries met; one entry is the shape the wire
+                # rule allows, and both are history, so the join is the same
+                # on every call.
+                formatted[-1] = _joined(formatted[-1], entry)
+                if spliced[-1:] != [len(formatted) - 1]:
+                    spliced.append(len(formatted) - 1)
+            elif entry is not None:
                 spliced.append(len(formatted))
                 formatted.append(entry)
         start = cut + 1
     # In order, so an entry moved into a user turn counts as the user turn
     # in front of the next one.
+    dropped = 0
     for index in spliced:
-        if not _placeable(formatted, index):
-            formatted[index] = _as_reminder_turn(formatted[index])
+        index -= dropped
+        if _placeable(formatted, index):
+            continue
+        turn = _as_reminder_turn(formatted[index])
+        if turn["content"]:
+            formatted[index] = turn
+        else:
+            del formatted[index]
+            dropped += 1
     return system, formatted
+
+
+def _joined(entry: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+    """*entry* with *other*'s blocks after its own."""
+    content = entry["content"]
+    blocks = [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+    return {"role": "system", "content": [*blocks, *other["content"]]}
 
 
 def _placeable(formatted: list[dict[str, Any]], index: int) -> bool:
@@ -478,13 +550,16 @@ def _as_reminder_turn(entry: dict[str, Any]) -> dict[str, Any]:
     """*entry* as a user turn, each text block in ``<system-reminder>`` tags.
 
     The API combines it with an adjacent user turn, so it reads as the
-    reminder block the carrier writes for a model without the channel.
+    reminder block the carrier writes for a model without the channel. A
+    tool-change block has no user-turn form and is left out, so an entry of
+    nothing else comes back empty and is not sent.
     """
     return {
         "role": "user",
         "content": [
             {**block, "text": f"<system-reminder>\n{block['text']}\n</system-reminder>"}
             for block in entry["content"]
+            if block.get("type") == "text"
         ],
     }
 

@@ -91,6 +91,7 @@ from ptc_agent.agent.middleware.background_subagent.workflow.prebuilt import (
 )
 from ptc_agent.agent.middleware.image_capture import ImageCaptureMiddleware
 from ptc_agent.agent.middleware.system_prompt_caching import SystemPromptCacheMiddleware
+from ptc_agent.agent.middleware.tool_surface import ToolSurfaceMiddleware
 from ptc_agent.agent.middleware.runtime_context import (
     FrozenPromptMiddleware,
     TailEnvelopeMiddleware,
@@ -872,6 +873,7 @@ class PTCAgent:
                 multimodal_read,
                 AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
                 SystemPromptCacheMiddleware(),
+                ToolSurfaceMiddleware(),
                 EmptyToolCallRetryMiddleware(),
                 PatchToolCallsMiddleware(),
                 # Innermost: carries the turn's rows in the shape this model
@@ -1077,6 +1079,7 @@ class PTCAgent:
                     if self.config.feature_enabled("market_watch")
                     else []
                 ),
+                ToolSurfaceMiddleware(),
                 EmptyToolCallRetryMiddleware(),
                 PatchToolCallsMiddleware(),
                 context.turn,

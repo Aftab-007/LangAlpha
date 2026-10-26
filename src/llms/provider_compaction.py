@@ -51,8 +51,9 @@ _CODEX_HOST = "chatgpt.com"
 KEPT_USER_TOKENS = 64_000
 
 # The keys the API takes back. A streamed block also carries ``index``, and
-# an echo of any other key is a 400.
-_BLOCK_KEYS = ("type", "content", "signature")
+# an echo of any other key is a 400. ``tool_changes`` is under the signature,
+# so a block that recorded one is sent back with it.
+_BLOCK_KEYS = ("type", "content", "signature", "tool_changes")
 
 
 #: Whose compaction a client takes, which decides the request and the answer.
@@ -285,6 +286,23 @@ def replays(message: AnyMessage, model: Any) -> bool:
     route = (getattr(model, "metadata", None) or {}).get("provider_route")
     route = route if isinstance(route, str) and route else None
     return _native(message, _native_lineage(route), kind) is not None
+
+
+def replayed_tool_changes(message: AnyMessage, model: Any) -> list[dict[str, Any]]:
+    """The net tool changes the API re-applies at ``message`` for ``model``.
+
+    A compaction block records the ``tool_addition`` / ``tool_removal`` blocks
+    of the turns it summarized in its ``tool_changes``, and the API applies
+    them again where the block is adopted. Empty when ``model`` is not sent
+    the block (see :func:`adopt`) or the block records none.
+    """
+    if not replays(message, model):
+        return []
+    block = (_carried(message) or {}).get("block")
+    changes = block.get("tool_changes") if isinstance(block, dict) else None
+    if not isinstance(changes, list):
+        return []
+    return [change for change in changes if isinstance(change, dict)]
 
 
 def _native(message: AnyMessage, lineage: str, kind: NativeKind) -> list[AnyMessage] | None:
