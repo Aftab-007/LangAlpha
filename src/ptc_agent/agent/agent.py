@@ -92,6 +92,7 @@ from ptc_agent.agent.middleware.background_subagent.workflow.prebuilt import (
 from ptc_agent.agent.middleware.image_capture import ImageCaptureMiddleware
 from ptc_agent.agent.middleware.system_prompt_caching import SystemPromptCacheMiddleware
 from ptc_agent.agent.middleware.tool_surface import ToolSurfaceMiddleware
+from ptc_agent.agent.middleware.runtime_context.frozen_prompt import SystemPinMiddleware
 from ptc_agent.agent.middleware.runtime_context import (
     FrozenPromptMiddleware,
     RowCarrierMiddleware,
@@ -879,6 +880,7 @@ class PTCAgent:
                 # Innermost: carries the turn's rows in the shape this model
                 # accepts and pins the tail breakpoint on the last block.
                 RowCarrierMiddleware(),
+                SystemPinMiddleware(),
                 ReasoningCompatibilityMiddleware(),
                 # Last, so it sits innermost in every subagent built on this
                 # stack: it captures the tool calls of the response the model
@@ -890,7 +892,7 @@ class PTCAgent:
             if m is not None
         ]
 
-        # The turn row, the per-thread baseline and the tail envelope, wired
+        # The turn row, the per-thread baseline and the row carrier, wired
         # for the main agent: the baseline is agent.md, the memory indices, the
         # memo pointer and the user's identity + steering. A subagent's
         # baseline is its definition's (SubagentContext): the profile, its
@@ -1027,6 +1029,9 @@ class PTCAgent:
         #   - RowCarrierMiddleware is innermost overall. It carries this
         #     turn's rows and pins the tail cache breakpoint, so nothing may
         #     be appended after it.
+        #   - SystemPinMiddleware sits inside every middleware that writes the
+        #     system message, so what it keeps for the thread is the whole
+        #     message, baseline included. It touches no message.
         # On the wire that is: tools (bp1), static system (bp2), baseline block
         # (bp3), messages ending in the turn's rows (bp4), the four Anthropic
         # allows.
@@ -1072,19 +1077,17 @@ class PTCAgent:
                 context.baseline,
                 notes_rows,
                 # Market watch (main agent only): writes the <market-watch>
-                # price stamp into history as a row when prices move. Its
-                # before_model runs after every other row writer, so a turn's
-                # stamp follows its anchor.
+                # price stamp into history as a row before each model call
+                # while a watched venue is open, re-stamping the cached block
+                # between fetches. Its before_model runs after every other row
+                # writer, so a turn's stamp follows its anchor.
                 *(
-                    [
-                        MarketWatchMiddleware(
-                            guidance=turn.guidance, model_name=turn.name or None
-                        )
-                    ]
+                    [MarketWatchMiddleware(guidance=turn.guidance)]
                     if self.config.feature_enabled("market_watch")
                     else []
                 ),
                 context.tail,
+                SystemPinMiddleware(),
                 ReasoningCompatibilityMiddleware(),
             ]
             if m is not None

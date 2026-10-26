@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from ptc_agent.agent.middleware.compaction.notes import NotesDueState
 from ptc_agent.agent.middleware.compaction.types import CompactionState
+from ptc_agent.agent.middleware.runtime_context.frozen_prompt import SystemPinState
 from ptc_agent.agent.middleware.skills.middleware import LoadedSkillsState
 from ptc_agent.agent.middleware.subagent_switch import SubagentSwitchState
 from ptc_agent.agent.middleware.thinking_binding import UnsentThinkingState
@@ -29,6 +30,7 @@ class MainAgentState(
     SubagentSwitchState,
     LoadedSkillsState,
     ToolSurfaceState,
+    SystemPinState,
     WakeupCancelNoticeState,
     UnsentThinkingState,
     DeltaAgentState,
