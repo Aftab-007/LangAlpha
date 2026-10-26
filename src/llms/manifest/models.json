@@ -1,40 +1,4 @@
 {
-  "gpt-5.6-terra": {
-    "prompt_guidance": "lean",
-    "model_id": "gpt-5.6-terra",
-    "provider": "openai",
-    "display_name": "GPT-5.6 Terra",
-    "visible": true,
-    "speed": 3,
-    "intelligence": 3,
-    "context": 1050000,
-    "compaction_profile": "expansive",
-    "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-    ],
-    "parameters": {
-      "reasoning": {
-        "summary": "auto"
-      },
-      "prompt_cache_options": {
-        "mode": "implicit"
-      }
-    },
-    "reasoning": {
-      "efforts": [
-        "none",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "default": "medium",
-      "write": "parameters.reasoning.effort"
-    }
-  },
   "gpt-6.1-terra": {
     "prompt_guidance": "lean",
     "model_id": "gpt-6.1-terra",
@@ -858,29 +822,6 @@
       "write": "parameters.reasoning.effort"
     }
   },
-  "kimi-k3": {
-    "prompt_guidance": "lean",
-    "model_id": "kimi-k3",
-    "provider": "moonshot",
-    "display_name": "Kimi K3",
-    "visible": true,
-    "speed": 1,
-    "intelligence": 4,
-    "context": 1000000,
-    "input_modalities": [
-      "text",
-      "image"
-    ],
-    "reasoning": {
-      "efforts": [
-        "low",
-        "high",
-        "max"
-      ],
-      "default": "high",
-      "write": "parameters.output_config.effort"
-    }
-  },
   "kimi-k3.1-pro": {
     "prompt_guidance": "lean",
     "model_id": "kimi-k3.1-pro",
@@ -981,43 +922,6 @@
         "low",
         "medium",
         "high"
-      ],
-      "default": "medium",
-      "write": "parameters.reasoning.effort"
-    }
-  },
-  "gpt-5.6-terra-oauth": {
-    "prompt_guidance": "lean",
-    "model_id": "gpt-5.6-terra",
-    "provider": "codex-oauth",
-    "display_name": "GPT-5.6 Terra (OAuth)",
-    "visible": true,
-    "speed": 3,
-    "intelligence": 3,
-    "context": 1050000,
-    "compaction_profile": "expansive",
-    "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-    ],
-    "parameters": {
-      "reasoning": {
-        "summary": "auto"
-      },
-      "include": [
-        "reasoning.encrypted_content"
-      ],
-      "store": false
-    },
-    "reasoning": {
-      "efforts": [
-        "none",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
       ],
       "default": "medium",
       "write": "parameters.reasoning.effort"
