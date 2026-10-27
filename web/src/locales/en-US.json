@@ -2,10 +2,10 @@
   "common": {
     "submit": "Submit",
     "staleBuild": {
-      "title": "This tab is out of date with the server",
-      "description": "The server is serving a different build than this tab loaded. Reload to switch to it.",
-      "blockedTitle": "This page could not load",
-      "blockedDescription": "The app changed while this tab was open. Reload to continue.",
+      "title": "A new version is available",
+      "description": "Reload now to update. Your agents keep working.",
+      "blockedTitle": "This page needs a reload",
+      "blockedDescription": "LangAlpha was updated while this tab was open. Reload to continue.",
       "reload": "Reload"
     },
     "networkBanner": {
