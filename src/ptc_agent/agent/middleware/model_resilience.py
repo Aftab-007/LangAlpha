@@ -183,12 +183,17 @@ def _model_display_name(model: Any) -> str:
     return type(model).__name__
 
 
-def _manifest_name(model: Any) -> str | None:
-    """The models.json name ``LLM.get_llm()`` stamped on a client, which is
-    the namespace fallback names are in; None for an unstamped client."""
+# The ``billing_type`` of a call the user's own credential pays for.
+_OWN_BILLING = frozenset({"byok", "oauth"})
+
+
+def _stamped(model: Any, key: str) -> str | None:
+    """A fact ``LLM.get_llm()`` stamped in a client's metadata: its models.json
+    name (``manifest_model``), the namespace fallback names are in, or who
+    pays (``billing_type``). None for an unstamped client."""
     metadata = getattr(model, "metadata", None)
-    stamped = metadata.get("manifest_model") if isinstance(metadata, dict) else None
-    return stamped if isinstance(stamped, str) and stamped else None
+    value = metadata.get(key) if isinstance(metadata, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def _window(model: Any) -> int | None:
@@ -283,6 +288,7 @@ class ModelResilienceMiddleware(AgentMiddleware):
         max_delay: float = 60.0,
         jitter: bool = True,
         compacts_overflow: bool = False,
+        users_fallbacks: bool = False,
     ) -> None:
         super().__init__()
         self.primary_name = primary_name
@@ -290,6 +296,8 @@ class ModelResilienceMiddleware(AgentMiddleware):
         # Repeats only; the model a request targets is dropped per request,
         # as the instance is shared into subagents on other models.
         self.fallbacks = _distinct(list(fallbacks or []), None)
+        # Whether the fallbacks are a list the user saved (see _on_its_payer).
+        self.users_fallbacks = users_fallbacks
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.initial_delay = initial_delay
@@ -367,6 +375,7 @@ class ModelResilienceMiddleware(AgentMiddleware):
         self,
         record: _AttemptRecord,
         to_model: str,
+        to_client: Any,
         request: ModelRequest,
         *,
         from_is_primary: bool,
@@ -384,6 +393,15 @@ class ModelResilienceMiddleware(AgentMiddleware):
             "status_code": record.status_code,
             "attempts_on_from": record.attempts,
         }
+        # A switch can change who pays, so the notice says who pays for the
+        # model it moved to.
+        if (paid_by := _stamped(to_client, "billing_type")) is not None:
+            props["to_paid_by"] = paid_by
+            # The provider the call went through. A model the user added on a
+            # sign-in may share its name with another provider's model, so the
+            # name alone does not say which plan pays.
+            if (provider := _stamped(to_client, "pricing_provider")) is not None:
+                props["to_provider"] = provider
         try:
             from langgraph.graph.ui import push_ui_message
 
@@ -485,8 +503,23 @@ class ModelResilienceMiddleware(AgentMiddleware):
             target = self.primary_name
         else:
             # A subagent on its own model, which may be one of the fallbacks.
-            target = _manifest_name(request.model)
-        return [primary, *_distinct(self.fallbacks, target)]
+            target = _stamped(request.model, "manifest_model")
+        return [primary, *self._on_its_payer(request.model, _distinct(self.fallbacks, target))]
+
+    def _on_its_payer(
+        self, model: Any, fallbacks: list[tuple[str, Any]]
+    ) -> list[tuple[str, Any]]:
+        """A call the user's own key or subscription pays for moves onto the
+        platform's key only through fallbacks the user saved.
+
+        The turn's fallbacks were built for the main model, so on a turn the
+        platform pays for they may run on its key; a subagent on a model of the
+        user's own would otherwise fail over onto credits.
+        """
+        if self.users_fallbacks or _stamped(model, "billing_type") not in _OWN_BILLING:
+            return fallbacks
+        return [(name, client) for name, client in fallbacks
+                if _stamped(client, "billing_type") != "platform"]
 
     def _classify(self, exc: Exception) -> tuple[int | None, bool]:
         status = extract_status_code(exc)
@@ -642,9 +675,11 @@ class ModelResilienceMiddleware(AgentMiddleware):
                     continue
             following = self._next_tried(request, candidates, index, refused_at)
             if following is not None:
+                to_model, to_client = candidates[following]
                 self._emit_fallback(
                     records[-1],
-                    candidates[following][0],
+                    to_model,
+                    to_client,
                     request,
                     from_is_primary=index == 0,
                 )
@@ -697,9 +732,11 @@ class ModelResilienceMiddleware(AgentMiddleware):
                     continue
             following = self._next_tried(request, candidates, index, refused_at)
             if following is not None:
+                to_model, to_client = candidates[following]
                 self._emit_fallback(
                     records[-1],
-                    candidates[following][0],
+                    to_model,
+                    to_client,
                     request,
                     from_is_primary=index == 0,
                 )
