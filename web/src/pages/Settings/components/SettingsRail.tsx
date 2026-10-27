@@ -5,7 +5,7 @@ import { Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isDesktopShell } from '@/lib/desktop';
 import { isImeComposing } from '@/lib/ime';
-import { GROUPS, SECTIONS, searchableSettings, type Section, type SettingEntry } from '../sections';
+import { GROUPS, SECTIONS, searchableSettings, sectionShown, type Section, type SettingEntry } from '../sections';
 
 /**
  * The page's navigation: a search over every setting, then the sections in
@@ -168,7 +168,7 @@ export function SettingsRail({ section }: { section: Section }) {
           {GROUPS.map((group) => (
             <div key={group.labelKey} className="settings-rail-group">
               <div className="settings-rail-label">{t(group.labelKey)}</div>
-              {group.sections.map((s) => {
+              {group.sections.filter(sectionShown).map((s) => {
                 const Icon = SECTIONS[s].icon;
                 const current = s === section;
                 return (

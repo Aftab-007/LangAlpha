@@ -4,12 +4,15 @@ import {
   CandlestickChart,
   CircleUser,
   Cpu,
+  CreditCard,
   FlaskConical,
   MessageSquare,
   Palette,
   PieChart,
+  Plug,
   SlidersHorizontal,
 } from 'lucide-react';
+import { isPlatformMode } from '@/config/hostMode';
 import { TRADING_PERMISSION_ANCHOR } from '@/lib/tradingPermission';
 
 interface SectionMeta {
@@ -17,6 +20,8 @@ interface SectionMeta {
   /** What the section holds, in a line under its title. */
   descKey: string;
   icon: ComponentType<{ className?: string }>;
+  /** Points into the hosted account console, which a self-hosted build has none of. */
+  platformOnly?: boolean;
 }
 
 /**
@@ -27,21 +32,29 @@ interface SectionMeta {
 export const SECTIONS = {
   account: { labelKey: 'settings.section.account', descKey: 'settings.definition.account', icon: CircleUser },
   preferences: { labelKey: 'settings.section.preferences', descKey: 'settings.definition.preferences', icon: PieChart },
+  plan: { labelKey: 'settings.section.plan', descKey: 'settings.definition.plan', icon: CreditCard, platformOnly: true },
   general: { labelKey: 'settings.section.general', descKey: 'settings.definition.general', icon: SlidersHorizontal },
   appearance: { labelKey: 'settings.section.appearance', descKey: 'settings.definition.appearance', icon: Palette },
   chat: { labelKey: 'settings.section.chat', descKey: 'settings.definition.chat', icon: MessageSquare },
   agent: { labelKey: 'settings.section.agent', descKey: 'settings.definition.agent', icon: Bot },
   model: { labelKey: 'settings.section.model', descKey: 'settings.definition.model', icon: Cpu },
+  integrations: { labelKey: 'settings.section.integrations', descKey: 'settings.definition.integrations', icon: Plug, platformOnly: true },
   trading: { labelKey: 'settings.section.trading', descKey: 'settings.definition.trading', icon: CandlestickChart },
   experiments: { labelKey: 'settings.section.experiments', descKey: 'settings.definition.experiments', icon: FlaskConical },
 } satisfies Record<string, SectionMeta>;
 
 export type Section = keyof typeof SECTIONS;
 
+/** Whether this build draws the section. */
+export function sectionShown(section: Section): boolean {
+  const meta: SectionMeta = SECTIONS[section];
+  return isPlatformMode || !meta.platformOnly;
+}
+
 export const GROUPS: readonly { labelKey: string; sections: readonly Section[] }[] = [
-  { labelKey: 'settings.group.account', sections: ['account', 'preferences'] },
+  { labelKey: 'settings.group.account', sections: ['account', 'preferences', 'plan'] },
   { labelKey: 'settings.group.app', sections: ['general', 'appearance', 'chat'] },
-  { labelKey: 'settings.group.agent', sections: ['agent', 'model', 'trading'] },
+  { labelKey: 'settings.group.agent', sections: ['agent', 'model', 'integrations', 'trading'] },
   { labelKey: 'settings.group.labs', sections: ['experiments'] },
 ];
 
@@ -68,6 +81,9 @@ export const SETTINGS = {
   logout: { section: 'account', anchor: 'sign-out', labelKey: 'settings.logout', descKey: 'settings.logoutDesc' },
   investingAnswers: { section: 'preferences', anchor: 'investing-profile', labelKey: 'settings.investingAnswers', descKey: 'settings.preferencesDesc' },
   resetPreferences: { section: 'preferences', anchor: 'reset-preferences', labelKey: 'settings.resetPreferences', descKey: 'settings.resetPreferencesDesc' },
+  plan: { section: 'plan', anchor: 'plan', labelKey: 'settings.planUsage.plan', descKey: 'settings.planUsage.planDesc' },
+  usage: { section: 'plan', anchor: 'usage', labelKey: 'settings.planUsage.usage', descKey: 'settings.planUsage.usageDesc' },
+  billing: { section: 'plan', anchor: 'billing', labelKey: 'settings.planUsage.billing', descKey: 'settings.planUsage.billingDesc' },
   language: { section: 'general', anchor: 'language', labelKey: 'settings.locale', descKey: 'settings.localeDesc' },
   timezone: { section: 'general', anchor: 'timezone', labelKey: 'settings.timezone', descKey: 'settings.timezoneDesc' },
   linkTarget: { section: 'general', anchor: 'link-target', labelKey: 'settings.shareLinkOpen', descKey: 'settings.shareLinkOpenDesc', desktopOnly: true },
@@ -93,6 +109,8 @@ export const SETTINGS = {
   accountDefaults: { section: 'model', anchor: 'account-defaults', labelKey: 'settings.modelTuning.sectionDefaults', advanced: true },
   perModel: { section: 'model', anchor: 'per-model', labelKey: 'settings.modelTuning.perModel', descKey: 'settings.modelTuning.perModelDesc', advanced: true },
   routing: { section: 'model', anchor: 'routing', labelKey: 'settings.modelTuning.sectionRouting', descKey: 'settings.fallbackModels', advanced: true },
+  chatApps: { section: 'integrations', anchor: 'chat-apps', labelKey: 'settings.integrations.chatApps', descKey: 'settings.integrations.chatAppsDesc' },
+  connectedApps: { section: 'integrations', anchor: 'connected-apps', labelKey: 'settings.integrations.connectedApps', descKey: 'settings.integrations.connectedAppsDesc' },
   tradingPermission: { section: 'trading', anchor: TRADING_PERMISSION_ANCHOR, labelKey: 'settings.tradingPermission.title', descKey: 'settings.tradingPermission.desc' },
   experiments: { section: 'experiments', anchor: 'experiments', labelKey: 'settings.experiments', descKey: 'settings.experimentsIntro' },
 } satisfies Record<string, SettingEntry>;
@@ -107,7 +125,7 @@ export function settingAt(hash: string): SettingEntry | undefined {
 
 /** Every setting the search can find on this surface. */
 export function searchableSettings(desktop: boolean): SettingEntry[] {
-  return ENTRIES.filter((entry) => desktop || !entry.desktopOnly);
+  return ENTRIES.filter((entry) => (desktop || !entry.desktopOnly) && sectionShown(entry.section));
 }
 
 function asSection(param: string | null): Section | null {
@@ -122,5 +140,5 @@ function asSection(param: string | null): Section | null {
  * `?tab=preferences`) still opens on it.
  */
 export function readSection(params: URLSearchParams, hash: string): Section {
-  return settingAt(hash)?.section ?? asSection(params.get('tab')) ?? 'account';
+  return [settingAt(hash)?.section, asSection(params.get('tab'))].find((s) => s && sectionShown(s)) ?? 'account';
 }

@@ -15,6 +15,8 @@ import { AgentPanel } from './panels/AgentPanel';
 import { ModelsPanel } from './panels/ModelsPanel';
 import { TradingPermissionSection } from './panels/TradingPermissionSection';
 import { ExperimentsPanel } from './panels/ExperimentsPanel';
+import { PlanPanel } from './panels/PlanPanel';
+import { IntegrationsPanel } from './panels/IntegrationsPanel';
 import { SettingsRail } from './components/SettingsRail';
 import { readSection, SECTIONS, type Section } from './sections';
 import './Settings.css';
@@ -44,11 +46,13 @@ function SectionBody({ section }: { section: Section }) {
   switch (section) {
     case 'account': return <AccountPanel />;
     case 'preferences': return <InvestingProfilePanel />;
+    case 'plan': return <PlanPanel />;
     case 'general': return <GeneralPanel />;
     case 'appearance': return <AppearancePanel />;
     case 'chat': return <ChatPanel />;
     case 'agent': return <AgentPanel />;
     case 'model': return <ModelsPanel />;
+    case 'integrations': return <IntegrationsPanel />;
     case 'trading': return <TradingPermissionSection />;
     case 'experiments': return <ExperimentsPanel />;
   }

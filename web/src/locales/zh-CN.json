@@ -121,6 +121,7 @@
     "automations": "自动化",
     "settings": "设置",
     "account": "用量与套餐",
+    "integrations": "集成",
     "newChat": "新对话",
     "workspaces": "工作区",
     "workspaceGallery": "工作区总览",
@@ -445,22 +446,26 @@
     "section": {
       "account": "个人资料",
       "preferences": "投资画像",
+      "plan": "套餐与用量",
       "general": "通用",
       "appearance": "外观",
       "chat": "对话",
       "agent": "行为",
       "model": "模型",
+      "integrations": "集成",
       "trading": "交易",
       "experiments": "实验功能"
     },
     "definition": {
       "account": "你的姓名、头像和登录。",
       "preferences": "你告诉 Agent 的投资方式，让它的研究更贴合你。",
+      "plan": "你的套餐、积分和账单，在 LangAlpha 账户中管理。",
       "general": "语言、时区和应用内引导。",
       "appearance": "主题、字号和数据卡片的样式。",
       "chat": "回复如何呈现，以及 Agent 工作时对话里显示什么。",
       "agent": "Agent 如何作答、哪些操作无需询问，以及如何搜索网页。",
       "model": "你可用的模型，以及 Agent 实际使用的模型。",
+      "integrations": "在聊天应用中与你的 Agent 对话，并管理用你的账户登录的应用。",
       "trading": "Agent 在你的券商账户中下单的权限范围。",
       "experiments": "正式发布前可以抢先试用的功能。"
     },
@@ -495,7 +500,30 @@
     "defaultModels": "默认模型",
     "defaultModelsDesc": "新对话和后台任务使用的模型。",
     "experimentsGroup": "可用的实验功能",
-    "outputFormatDesc": "默认以文字作答。选择 HTML 后，较深入的回答会生成包含图表、表格和交互视图的图文报告，生成稍慢，消耗的积分也更多。"
+    "outputFormatDesc": "默认以文字作答。选择 HTML 后，较深入的回答会生成包含图表、表格和交互视图的图文报告，生成稍慢，消耗的积分也更多。",
+    "planUsage": {
+      "plan": "套餐",
+      "planDesc": "你的套餐包含什么、费用多少。",
+      "current": "你当前使用的是 {{plan}} 套餐。",
+      "change": "更改套餐",
+      "usage": "用量",
+      "usageDesc": "今天和本月用掉的积分，可按天或按对话查看。",
+      "viewUsage": "查看用量",
+      "billing": "账单",
+      "billingDesc": "付款方式、发票和取消订阅。",
+      "manageBilling": "管理账单"
+    },
+    "integrations": {
+      "chatApps": "聊天应用",
+      "chatAppsDesc": "在 Slack、Discord、Telegram 或飞书中给你的 Agent 发消息，并让自动化把结果发到那里。",
+      "connected": "已连接",
+      "notConnected": "未连接",
+      "setUp": "设置",
+      "manage": "管理",
+      "open": "打开",
+      "connectedApps": "已连接的应用",
+      "connectedAppsDesc": "你用 LangAlpha 账户登录过的应用。"
+    }
   },
   "dashboard": {
     "title": "LangAlpha",
@@ -2869,6 +2897,7 @@
     "deliveryClearDefault": "清除工作区默认",
     "deliveryOptionsUnavailable": "无法加载聊天",
     "deliveryNoApps": "未连接应用",
+    "deliveryConnectApp": "连接聊天应用",
     "deliveryDefaultBusy": "正忙，请重试。",
     "deliveryDefaultUnavailable": "暂不可用，请稍后重试。",
     "deliveryDefaultFailed": "无法设为默认。",

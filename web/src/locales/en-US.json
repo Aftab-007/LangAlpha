@@ -121,6 +121,7 @@
     "automations": "Automations",
     "settings": "Settings",
     "account": "Usage & Plan",
+    "integrations": "Integrations",
     "newChat": "New chat",
     "workspaces": "Workspaces",
     "workspaceGallery": "Workspace gallery",
@@ -447,22 +448,26 @@
     "section": {
       "account": "Profile",
       "preferences": "Investing profile",
+      "plan": "Plan & usage",
       "general": "General",
       "appearance": "Appearance",
       "chat": "Chat",
       "agent": "Behavior",
       "model": "Models",
+      "integrations": "Integrations",
       "trading": "Trading",
       "experiments": "Experiments"
     },
     "definition": {
       "account": "Your name, photo and sign-in.",
       "preferences": "What you told the agent about how you invest, so its research fits you.",
+      "plan": "Your plan, your credits and billing, managed in your LangAlpha account.",
       "general": "Language, timezone and the in-app guides.",
       "appearance": "Theme, text size and how data cards look.",
       "chat": "How replies come in and what the chat shows while the agent works.",
       "agent": "How the agent answers, what it may do without asking, and how it searches the web.",
       "model": "The models you can reach and the ones the agent runs on.",
+      "integrations": "Talk to your agent from your chat apps, and manage the apps signed in with your account.",
       "trading": "How far the agent may go with orders at your brokerages.",
       "experiments": "Early features you can try before they ship."
     },
@@ -497,7 +502,30 @@
     "defaultModels": "Default models",
     "defaultModelsDesc": "The models new conversations and background work run on.",
     "experimentsGroup": "Available experiments",
-    "outputFormatDesc": "Text answers by default. HTML turns in-depth answers into a visual report with charts, tables and interactive views; it takes a little longer and uses more credits."
+    "outputFormatDesc": "Text answers by default. HTML turns in-depth answers into a visual report with charts, tables and interactive views; it takes a little longer and uses more credits.",
+    "planUsage": {
+      "plan": "Plan",
+      "planDesc": "What your plan includes and what it costs.",
+      "current": "You're on the {{plan}} plan.",
+      "change": "Change plan",
+      "usage": "Usage",
+      "usageDesc": "Credits used today and this month, by day and by thread.",
+      "viewUsage": "View usage",
+      "billing": "Billing",
+      "billingDesc": "Payment method, invoices and cancellation.",
+      "manageBilling": "Manage billing"
+    },
+    "integrations": {
+      "chatApps": "Chat apps",
+      "chatAppsDesc": "Message your agent from Slack, Discord, Telegram or Feishu, and have automations send their results there.",
+      "connected": "Connected",
+      "notConnected": "Not connected",
+      "setUp": "Set up",
+      "manage": "Manage",
+      "open": "Open",
+      "connectedApps": "Connected apps",
+      "connectedAppsDesc": "Apps you've signed in to with your LangAlpha account."
+    }
   },
   "dashboard": {
     "title": "LangAlpha",
@@ -2887,6 +2915,7 @@
     "deliveryClearDefault": "Clear workspace default",
     "deliveryOptionsUnavailable": "Couldn't load chats",
     "deliveryNoApps": "No apps connected",
+    "deliveryConnectApp": "Connect a chat app",
     "deliveryDefaultBusy": "Busy. Try again.",
     "deliveryDefaultUnavailable": "Unavailable. Try again shortly.",
     "deliveryDefaultFailed": "Couldn't set the default.",
