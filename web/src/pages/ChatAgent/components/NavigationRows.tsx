@@ -737,6 +737,7 @@ function WorkspaceTreeRowImpl({
                   onClick={(e) => e.stopPropagation()}
                   onPointerDown={(e) => e.stopPropagation()}
                   onKeyDown={(e) => {
+                    if (isImeComposing(e)) return;
                     if (e.key === 'Enter') { e.preventDefault(); rename.onCommit(); }
                     else if (e.key === 'Escape') { e.preventDefault(); rename.onCancel(); }
                   }}
