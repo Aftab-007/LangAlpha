@@ -16,24 +16,24 @@ import { patchThreadRows, rollbackThreadRows } from '@/lib/threadRowActions';
 import { patchThreadTitle } from '@/lib/threadListCache';
 import { threadGalleryQuery } from '../utils/threadGalleryQuery';
 import { useWorkspace } from '../../../hooks/useWorkspace';
-import { scrollMemory, useScrollMemory } from '@/lib/scrollMemory';
+import { useScrollMemory } from '@/lib/scrollMemory';
 import ThreadCard from './ThreadCard';
-import DeleteConfirmModal from './DeleteConfirmModal';
 import RenameThreadModal from './RenameThreadModal';
 import { useArchiveThreadConfirm } from './threadArchiveAction';
+import { useThreadDeleteConfirm } from './threadDeleteAction';
+import { deleteThreadRow } from '../hooks/deleteThreadRow';
 import ChatInput from '../../../components/ui/chat-input';
 import type { ChatInputHandle } from '../../../components/ui/chat-input';
 import { attachmentsToContexts } from '../utils/fileUpload';
 import FilePanel, { SYSTEM_DIR_PREFIXES } from './FilePanel';
 import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
 import SandboxSettingsPanel from './SandboxSettingsPanel';
-import { deleteThread, updateThreadTitle, updateThread } from '../utils/api';
+import { updateThreadTitle, updateThread } from '../utils/api';
 import { isValidUuid } from '../utils/uuid';
 import { WorkspaceProvider } from '../contexts/WorkspaceContext';
 import { useComputerFolders } from '../hooks/useComputerFolders';
 import { usePanelFiles } from './chatView/usePanelFiles';
 import { usePanelAsks, usePanelLinkOpen } from './chatView/usePanelLinks';
-import { getStoredThreadId, removeStoredThreadId } from '../hooks/utils/threadStorage';
 import { saveChatSession } from '../hooks/utils/chatSessionRestore';
 import iconComputerLight from '../../../assets/img/icon-computer.svg';
 import iconComputerDark from '../../../assets/img/icon-computer-dark.svg';
@@ -70,11 +70,6 @@ interface ThreadRecord {
   is_shared?: boolean;
   first_query_content?: string;
   [key: string]: unknown;
-}
-
-interface DeleteModalState {
-  isOpen: boolean;
-  thread: ThreadRecord | null;
 }
 
 interface RenameModalState {
@@ -181,9 +176,6 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
   // that view: it loads as placeholders, not as "no threads".
   const isLoading = isThreadsLoading || (isPlaceholderData && threads.length === 0);
   const error = threadError && !accessDenied && !wsNotFound ? t('thread.failedLoadThreads') : null;
-  const [deleteModal, setDeleteModal] = useState<DeleteModalState>({ isOpen: false, thread: null });
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [renameModal, setRenameModal] = useState<RenameModalState>({ isOpen: false, thread: null });
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -357,73 +349,18 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
   /**
    * Handles delete icon click - opens confirmation modal
    */
+  const { requestDelete, dialog: deleteConfirmDialog } = useThreadDeleteConfirm();
   const handleDeleteClick = useCallback((thread: Record<string, unknown>) => {
-    setDeleteModal({ isOpen: true, thread: thread as ThreadRecord });
-    setDeleteError(null);
-  }, []);
-
-  /**
-   * Handles confirmed thread deletion
-   */
-  const handleConfirmDelete = async () => {
-    if (!deleteModal.thread) return;
-
-    const threadToDelete = deleteModal.thread;
-    const threadId = threadToDelete.thread_id;
-
-    if (!threadId) {
-      console.error('No thread ID found in thread object:', threadToDelete);
-      setDeleteError(t('thread.invalidThread'));
-      return;
-    }
-
-    setIsDeleting(true);
-    setDeleteError(null);
-
-    try {
-      await deleteThread(threadId);
-
-      scrollMemory.forget(`thread:${threadId}`);
-
-      // Clean up localStorage: remove thread ID for deleted thread
-      if (workspaceId) {
-        // Check if the deleted thread is the currently stored thread for this workspace
-        if (getStoredThreadId(workspaceId) === threadId) {
-          removeStoredThreadId(workspaceId);
-        }
-      }
-
-      // Drop the row from every cached list for this workspace (this gallery's
-      // pages and the sidebar's), totals included, then reconcile.
-      patchThreadRows(queryClient, queryKeys.threads.byWorkspace(workspaceId), (rows) =>
-        rows.some((th) => th.thread_id === threadId) ? rows.filter((th) => th.thread_id !== threadId) : rows,
-      );
-      queryClient.invalidateQueries({ queryKey: queryKeys.threads.byWorkspace(workspaceId) });
-
+    const { thread_id: threadId, title, thread_index: index } = thread as ThreadRecord;
+    if (!threadId) return;
+    requestDelete(title || `Thread ${index !== undefined ? index + 1 : ''}`, async () => {
+      await deleteThreadRow(queryClient, workspaceId, threadId);
       // If the deleted thread is currently active, navigate back to thread gallery
       if (currentThreadId === threadId) {
         navigate(isValidUuid(workspaceId) ? `/chat/${workspaceId}` : '/chat');
       }
-
-      // Close modal
-      setDeleteModal({ isOpen: false, thread: null });
-    } catch (err: any) { // TODO: type properly
-      console.error('Error deleting thread:', err);
-      const errorMessage = err.response?.data?.detail || err.message || t('thread.failedDeleteThread');
-      setDeleteError(errorMessage);
-      // Keep modal open so user can see the error
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  /**
-   * Handles canceling deletion
-   */
-  const handleCancelDelete = () => {
-    setDeleteModal({ isOpen: false, thread: null });
-    setDeleteError(null);
-  };
+    });
+  }, [requestDelete, queryClient, workspaceId, currentThreadId, navigate]);
 
   /**
    * Handles rename icon click - opens rename modal
@@ -971,16 +908,7 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
         )}
       </AnimatePresence>
 
-      {/* Delete Confirmation Modal */}
-      <DeleteConfirmModal
-        isOpen={deleteModal.isOpen}
-        workspaceName={deleteModal.thread?.title || `Thread ${deleteModal.thread?.thread_index !== undefined ? (deleteModal.thread.thread_index as number) + 1 : ''}`}
-        onConfirm={handleConfirmDelete}
-        onCancel={handleCancelDelete}
-        isDeleting={isDeleting}
-        error={deleteError}
-        itemType="thread"
-      />
+      {deleteConfirmDialog}
 
       {/* Archive-while-running confirmation (opens only for a live thread) */}
       {archiveConfirmDialog}
