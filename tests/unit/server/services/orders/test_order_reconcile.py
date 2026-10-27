@@ -1654,3 +1654,74 @@ def test_only_an_ibkr_staged_instruction_ends_by_leaving_the_list(vendor, action
     assert adapter_for(vendor).absent_status(str(action)) is None
     expected = AttemptStatus.HANDED_OFF if action is OrderAction.STAGE else None
     assert adapter_for("ibkr").absent_status(str(action)) is expected
+
+
+class _RobinhoodApprovals(FakeClient):
+    """Robinhood with two account spellings, and approvals read only by the alphanumeric one."""
+
+    def __init__(self, states):
+        super().__init__()
+        self.states = states
+
+    async def call_tool(self, name, args):
+        self.calls.append((name, dict(args)))
+        if name == "get_accounts":
+            data = {"accounts": [{"account_number": "5QR00001", "rhs_account_number": "812345678"}]}
+        elif args.get("account_number") != "5QR00001":
+            return SimpleNamespace(
+                content=[SimpleNamespace(text="API error 400: invalid account_number")],
+                structured_content=None,
+            )
+        else:
+            data = {
+                "approvals": [
+                    {"approval_id": i, "state": self.states[i]} for i in args["approval_ids"]
+                ]
+            }
+        return SimpleNamespace(
+            content=[SimpleNamespace(text=json.dumps({"data": data}))], structured_content=None
+        )
+
+
+def _crypto_approval_row(attempt_id: str, approval_id: str):
+    adapter = adapter_for("robinhood")
+    order = adapter.parse_request(
+        "place_crypto_order",
+        {
+            "rhs_account_number": "812345678",
+            "symbol": "BTC",
+            "side": "buy",
+            "type": "market",
+            "dollar_amount": "100.00",
+        },
+    )
+    return {
+        **_row(attempt_id, AttemptStatus.PENDING_CONFIRM, approval_id),
+        "server": "robinhood",
+        "vendor": "robinhood",
+        "tool": "place_crypto_order",
+        "mode": "live",
+        "account_ref": "812345678",
+        "order_json": order.to_json(),
+        "route": {"approval_id": approval_id},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_crypto_approval_settles_through_the_account_it_was_placed_under():
+    """Each approval is read in the account the approvals read takes, and two on
+    one account are not folded into one read by the accounts call they share."""
+    ledger = FakeLedger(
+        [_crypto_approval_row("a1", "apr-1"), _crypto_approval_row("a2", "apr-2")]
+    )
+    client = _RobinhoodApprovals({"apr-1": "approved", "apr-2": "declined"})
+
+    report = await _run(ledger, adapter_for("robinhood"), client, vendor="robinhood")
+
+    assert [c for c in client.calls if c[0] == "get_trade_approvals"] == [
+        ("get_trade_approvals", {"account_number": "5QR00001", "approval_ids": ["apr-1"]}),
+        ("get_trade_approvals", {"account_number": "5QR00001", "approval_ids": ["apr-2"]}),
+    ]
+    assert report.moved == 2
+    assert ledger.rows["a1"]["status"] == "handed_off"
+    assert ledger.rows["a2"]["status"] == "cancelled"

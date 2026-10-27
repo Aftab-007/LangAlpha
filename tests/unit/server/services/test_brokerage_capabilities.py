@@ -20,6 +20,7 @@ from src.server.services.brokerage_capabilities import (
     _BY_KEY,
     _CURATION,
     _ORDER_TOOLS,
+    OrderAction,
     OrderMode,
     OrderTool,
     denied_tools,
@@ -370,20 +371,34 @@ def test_the_order_map_is_read_folded_like_every_other_gate(vendor: str) -> None
     assert order_tool(None, "trading_order_place") is None
 
 
-def _status_read(vendor: str, entry: OrderTool) -> str:
-    """The read a vendor's adapter settles an order of this kind with."""
+def _status_reads(vendor: str, tool: str, entry: OrderTool) -> tuple[str, ...]:
+    """The reads a vendor's adapter settles an order of this kind with."""
     if vendor == "moomoo":
-        return {OrderMode.LIVE: moomoo.LIVE_HISTORY, OrderMode.PAPER: moomoo.PAPER_HISTORY}[
+        return ({OrderMode.LIVE: moomoo.LIVE_HISTORY, OrderMode.PAPER: moomoo.PAPER_HISTORY}[
             entry.mode
-        ]
+        ],)
     if vendor == "robinhood":
-        return robinhood._STATUS_TOOLS[entry.asset_class][0]
+        # Any of them can wait on the customer's approval instead, which only
+        # the approvals read settles.
+        if tool == robinhood.DECLINE:
+            return (robinhood.APPROVALS_READ,)
+        if tool in (robinhood.ADVANCED_PLACE, robinhood.ADVANCED_CANCEL):
+            return (robinhood.ADVANCED_READ, robinhood.APPROVALS_READ)
+        if entry.asset_class == "crypto":
+            # A crypto approval names its account by the number the approvals
+            # read does not take, so the accounts read comes first.
+            return (
+                robinhood._STATUS_TOOLS["crypto"][0],
+                robinhood.ACCOUNTS_READ,
+                robinhood.APPROVALS_READ,
+            )
+        return (robinhood._STATUS_TOOLS[entry.asset_class][0], robinhood.APPROVALS_READ)
     if vendor == "ibkr":
-        return {OrderMode.LIVE: ibkr.ORDER_STATUS, OrderMode.STAGED: ibkr.LIST_INSTRUCTIONS}[
+        return ({OrderMode.LIVE: ibkr.ORDER_STATUS, OrderMode.STAGED: ibkr.LIST_INSTRUCTIONS}[
             entry.mode
-        ]
+        ],)
     if vendor == "webull":
-        return webull.LIST_PENDING
+        return (webull.LIST_PENDING,)
     raise AssertionError(f"name the read {vendor}'s adapter settles an order with")
 
 
@@ -398,7 +413,28 @@ def test_no_grant_passes_an_order_it_cannot_settle(vendor: str) -> None:
         for granted in combinations(keys, size):
             denied = denied_tools(vendor, granted)
             for tool, entry in _ORDER_TOOLS[vendor].items():
-                read = _status_read(vendor, entry)
-                assert tool in denied or read not in denied, (
-                    f"{vendor} granting {granted} passes {tool} but refuses {read}"
-                )
+                for read in _status_reads(vendor, tool, entry):
+                    assert tool in denied or read not in denied, (
+                        f"{vendor} granting {granted} passes {tool} but refuses {read}"
+                    )
+
+
+def test_robinhood_advanced_orders_and_approvals_are_gated_orders():
+    """Placing or cancelling an advanced order and declining a pending trade
+    approval are live order actions behind the gate; the reads beside them are
+    account reads, and an advanced order's review places nothing."""
+    assert order_tool("robinhood", "place_advanced_order") == OrderTool(
+        OrderAction.PLACE, OrderMode.LIVE, "equity"
+    )
+    assert order_tool("robinhood", "cancel_advanced_order") == OrderTool(
+        OrderAction.CANCEL, OrderMode.LIVE, "equity"
+    )
+    assert order_tool("robinhood", "decline_trade_approval") == OrderTool(
+        OrderAction.CANCEL, OrderMode.LIVE
+    )
+    for tool in ("place_advanced_order", "cancel_advanced_order", "decline_trade_approval"):
+        assert group_of_tool("robinhood", tool) == "trading"
+        assert not is_always_denied("robinhood", tool)
+    for tool in ("get_advanced_orders", "get_trade_approvals", "get_trade_approval_setting"):
+        assert group_of_tool("robinhood", tool) == "account"
+    assert group_of_tool("robinhood", "review_advanced_order") == "order_preview"
