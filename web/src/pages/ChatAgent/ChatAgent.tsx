@@ -18,6 +18,7 @@ import { isValidUuid } from './utils/uuid';
 import { shouldLeaveThreadRoute } from './utils/threadRouteGuard';
 import ChatView from './components/ChatView';
 import ComputersDialogHost from './components/ComputersDialogHost';
+import { closeComputerSpec, closeComputersPanel } from './hooks/computerPanelStore';
 import './ChatAgent.css';
 
 const WorkspaceGallery = React.lazy(() => import('./components/WorkspaceGallery'));
@@ -70,6 +71,13 @@ function ChatAgent(): React.ReactElement | null {
   // opening a finished thread stamps the durable seen cursor.
   useActiveThreadPublisher(threadId);
 
+  // The Computers dialogs mount with this page, so leaving the section (a
+  // back gesture skips their close) must close them too; left open, they
+  // would come back on the next visit and hold the stale-build reload.
+  useEffect(() => () => {
+    closeComputersPanel();
+    closeComputerSpec();
+  }, []);
 
   // Session restore: when landing at /chat (gallery) with a saved session,
   // navigate to the deep route. This creates the natural history stack:

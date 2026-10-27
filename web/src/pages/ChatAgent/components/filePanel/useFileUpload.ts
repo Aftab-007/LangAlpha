@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
+import { holdReload } from '@/lib/reloadHolds';
 import { uploadToWorkspace, UploadSendError } from '../../utils/workspaceUpload';
 
 function uploadErrorMessage(err: unknown, file: globalThis.File, t: TFunction): string {
@@ -44,6 +45,7 @@ export function useFileUpload({ workspaceId, onRefreshFiles }: {
     setUploadError(null);
     setUploadSaving(false);
     setUploadProgress(0);
+    const release = holdReload();
     try {
       await uploadToWorkspace(workspaceId, file, {
         signal: ctrl.signal,
@@ -65,6 +67,7 @@ export function useFileUpload({ workspaceId, onRefreshFiles }: {
         setUploadError(uploadErrorMessage(err, file, t));
       }
     } finally {
+      release();
       uploadRef.current = null;
       setUploadProgress(null);
       setUploadSaving(false);

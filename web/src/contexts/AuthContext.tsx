@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
-import { publishSession, sessionAdopter, clearAuthToken } from '../lib/authToken';
+import { publishSession, sessionAdopter, clearAuthToken, authGeneration } from '../lib/authToken';
+import { trackRequest } from '../lib/reloadHolds';
 import { queryKeys } from '../lib/queryKeys';
 import { AUTH_BROADCAST_CHANNEL, OAUTH_POPUP_WINDOW_NAME, OAUTH_POPUP_FEATURES } from '../lib/oauthPopup';
 import { resetNavPanelExpansion } from '@/pages/ChatAgent/components/navExpansionStore';
@@ -122,6 +123,9 @@ function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
     if (!sess) return;
     if (_syncPromise) return _syncPromise;
     _syncPromise = (async () => {
+      // Outside the API client, so the stale-build reload a section switch
+      // takes would not wait for it, and a load after sign-in does not sync.
+      const settle = trackRequest(authGeneration());
       try {
         const token = sess.access_token;
         const meta = sess.user?.user_metadata ?? {};
@@ -155,6 +159,7 @@ function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
       } catch (err) {
         console.error('[auth] syncUser failed:', err);
       } finally {
+        settle();
         _syncPromise = null;
       }
     })();

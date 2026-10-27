@@ -11,6 +11,7 @@ import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
+import { holdReload } from '@/lib/reloadHolds';
 import { useHomeTimezone } from '@/hooks/useHomeTimezone';
 import { useStableHandler } from '@/hooks/useStableHandler';
 import { useUser } from '@/hooks/useUser';
@@ -2446,6 +2447,10 @@ export function useChatMessages(
     });
     currentMessageRef.current = assistantMessageId;
 
+    // A new thread's create round-trip comes before the send, and the message
+    // lives only in this page until the send's own hold takes over, so the
+    // stale-build reload a section switch takes waits for it too.
+    const releaseCreate = holdReload();
     const created = await ensureThreadId({
       threadId,
       workspaceId,
@@ -2461,7 +2466,7 @@ export function useChatMessages(
       setThreadId,
       wasStoppedRef,
       signal: abortController.signal,
-    });
+    }).finally(releaseCreate);
     // Stopped during the pre-create round-trip: stopWorkflow already finalized
     // the UI — starting the run now would resurrect it.
     if (created.aborted) return;
