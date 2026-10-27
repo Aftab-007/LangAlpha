@@ -154,14 +154,14 @@ const AccountMenu: React.FC<AccountMenuProps> = ({ variant = 'rail' }) => {
         >
           {/* The expanded trigger is a full row already carrying this avatar and
               this name, so repeating them here stacks the same identity twice.
-              Collapsed, the trigger is a bare circle and this block is the only
+              Collapsed, the trigger is a bare avatar and this block is the only
               place the account is named at all. The email is what neither
               trigger shows, so the row variant keeps that line and nothing else. */}
           {variant === 'rail' && (displayName || email) && (
             <>
               <div className="flex items-center gap-2.5 px-2.5 py-1.5">
                 <div
-                  className="h-9 w-9 rounded-full flex items-center justify-center overflow-hidden shrink-0"
+                  className="h-9 w-9 rounded-lg flex items-center justify-center overflow-hidden shrink-0"
                   style={{ backgroundColor: 'var(--color-accent-soft)' }}
                 >
                   {avatarUrl && !avatarError ? (
