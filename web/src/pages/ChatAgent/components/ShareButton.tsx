@@ -1,10 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { Share2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import type { ThreadShareStatus } from '../../../types/api';
+import { useThreadShareStatus } from '../hooks/useThreadShareStatus';
 import { ThreadSharePanel } from './ThreadSharePanel';
 
 interface ShareButtonProps {
@@ -22,15 +22,10 @@ export default function ShareButton({ threadId, initialIsShared = false, workspa
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
-  // What the panel last reported, kept per thread so the button never shows
-  // the previous thread's state after the view moves on.
-  const [known, setKnown] = useState<{ threadId: string; isShared: boolean } | null>(null);
-
-  const handleStatus = useCallback((status: ThreadShareStatus) => {
-    setKnown({ threadId, isShared: status.is_shared === true });
-  }, [threadId]);
-
-  const isShared = known?.threadId === threadId ? known.isShared : initialIsShared;
+  // The thread's cached status, shared with every share panel; the thread
+  // load's answer stands in until it arrives.
+  const { data } = useThreadShareStatus(threadId);
+  const isShared = data ? data.is_shared === true : initialIsShared;
 
   // Radix owns dismissal: Escape and an outside press close it, and a keyboard
   // close hands focus back to the trigger.
@@ -66,9 +61,7 @@ export default function ShareButton({ threadId, initialIsShared = false, workspa
         <ThreadSharePanel
           key={threadId}
           threadId={threadId}
-          initialIsShared={isShared}
           workspaceId={workspaceId}
-          onStatusChange={handleStatus}
         />
       </PopoverContent>
     </Popover>

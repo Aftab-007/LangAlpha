@@ -151,6 +151,13 @@
     "pinThread": "Pin",
     "unpinThread": "Unpin",
     "archiveThread": "Archive",
+    "openInNewTab": "Open in new tab",
+    "pinToTop": "Pin to top",
+    "renameThread": "Rename",
+    "threadTitle": "Thread title",
+    "shareThread": "Share…",
+    "linkCopied": "Link copied",
+    "copyLinkFailed": "Could not copy the link",
     "threadUpdated": "Updated",
     "threadCreated": "Created",
     "threadTurns": "Turns",
@@ -1744,7 +1751,8 @@
     "sharedInWorkspace": "Shared in this workspace",
     "sharedOn": "Shared {{date}}",
     "stop": "Stop",
-    "signInForChart": "Sign in to open the live chart."
+    "signInForChart": "Sign in to open the live chart.",
+    "statusLoadFailed": "Couldn't load the sharing settings."
   },
   "shareLink": {
     "title": "Share {{file}}",

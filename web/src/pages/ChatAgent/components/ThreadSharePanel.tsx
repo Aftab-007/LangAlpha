@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type ElementType } from 'react';
+import { useState, useCallback, type ElementType } from 'react';
 import { Copy, Check, Link2, Lock, FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/components/ui/use-toast';
@@ -7,7 +7,8 @@ import { shortMonthDay } from '@/lib/format';
 import { useCopyShareLink } from '@/hooks/useCopyShareLink';
 import { useLocale } from '@/hooks/useLocale';
 import { useSharedLinks, useShareLinkMutations } from '@/hooks/useShareLink';
-import { getThreadShareStatus, updateThreadSharing } from '../utils/api';
+import { useQueryClient } from '@tanstack/react-query';
+import { saveThreadSharing, useThreadShareStatus } from '../hooks/useThreadShareStatus';
 import { shareConflictIn } from '../utils/api/shareLinks';
 import type { ShareLink, ThreadShareStatus, ThreadSharePermissions } from '../../../types/api';
 
@@ -88,90 +89,53 @@ function SharedInWorkspace({ workspaceId }: { workspaceId: string }) {
 
 interface ThreadSharePanelProps {
   threadId: string;
-  /** Shown until the fresh status arrives. */
-  initialIsShared?: boolean;
   /** The workspace whose shared files the panel lists; null hides the list. */
   workspaceId?: string | null;
-  /** Every status the server reports, so a host can mirror whether the thread is shared. */
-  onStatusChange?: (status: ThreadShareStatus) => void;
   /** What the heading renders as: a dialog passes its title so the dialog is named by it. */
   Heading?: ElementType;
 }
 
 /**
  * A thread's public link: the share toggle, the URL to copy, and what visitors
- * may open. The status is read fresh on mount, so a host mounts it only while
- * it is shown (the chat header's popover, the sidebar's share dialog), keyed
- * by the thread.
+ * may open. The status is the thread's one cached entry, read again as the
+ * panel opens, so a host mounts it only while it is shown (the chat header's
+ * popover, the sidebar's share dialog), keyed by the thread.
  */
 export function ThreadSharePanel({
   threadId,
-  initialIsShared = false,
   workspaceId = null,
-  onStatusChange,
   Heading = 'span',
 }: ThreadSharePanelProps) {
   const { t } = useTranslation();
-  const [loading, setLoading] = useState(true);
-  const [shareState, setShareState] = useState<ThreadShareStatus | null>(null);
   const [copied, setCopied] = useState(false);
   const [updating, setUpdating] = useState(false);
 
-  const applyStatus = useCallback((status: ThreadShareStatus) => {
-    setShareState(status);
-    onStatusChange?.(status);
-  }, [onStatusChange]);
+  const queryClient = useQueryClient();
+  const { data: shareState, isPending, isError, refetch } = useThreadShareStatus(threadId, { refetchOnMount: 'always' });
 
-  useEffect(() => {
-    if (!threadId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const status = await getThreadShareStatus(threadId);
-        if (!cancelled) applyStatus(status);
-      } catch (e) {
-        console.error('Failed to fetch share status:', e);
-      }
-      if (!cancelled) setLoading(false);
-    })();
-    return () => { cancelled = true; };
-  }, [threadId, applyStatus]);
-
-  const handleToggleShare = useCallback(async (enabled: boolean) => {
+  const save = useCallback(async (body: Pick<ThreadShareStatus, 'is_shared' | 'permissions'>) => {
     setUpdating(true);
     try {
-      const result = await updateThreadSharing(threadId, {
-        is_shared: enabled,
-        permissions: shareState?.permissions || { allow_files: false, allow_download: false },
-      });
-      applyStatus(result);
+      await saveThreadSharing(queryClient, threadId, body);
     } catch (e) {
       console.error('Failed to update sharing:', e);
     }
     setUpdating(false);
-  }, [threadId, shareState, applyStatus]);
+  }, [queryClient, threadId]);
 
-  const handlePermissionChange = useCallback(async (key: keyof ThreadSharePermissions, value: boolean) => {
-    const currentPerms = shareState?.permissions || {};
-    const newPerms = { ...currentPerms, [key]: value };
+  const handleToggleShare = (enabled: boolean) => save({
+    is_shared: enabled,
+    permissions: shareState?.permissions || { allow_files: false, allow_download: false },
+  });
 
+  const handlePermissionChange = (key: keyof ThreadSharePermissions, value: boolean) => {
+    const newPerms = { ...shareState?.permissions, [key]: value };
     // If disabling files, also disable download
     if (key === 'allow_files' && !value) {
       newPerms.allow_download = false;
     }
-
-    setUpdating(true);
-    try {
-      const result = await updateThreadSharing(threadId, {
-        is_shared: true,
-        permissions: newPerms,
-      });
-      applyStatus(result);
-    } catch (e) {
-      console.error('Failed to update permissions:', e);
-    }
-    setUpdating(false);
-  }, [threadId, shareState, applyStatus]);
+    return save({ is_shared: true, permissions: newPerms });
+  };
 
   const handleCopy = useCallback(() => {
     if (!shareState?.share_url) return;
@@ -179,16 +143,39 @@ export function ThreadSharePanel({
     copyText(fullUrl).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }, (e) => {
+      console.error('Failed to copy share link:', e);
+      toast({ description: t('filePanel.shareLinkFailed'), variant: 'destructive' });
     });
-  }, [shareState]);
+  }, [shareState, t]);
 
-  const isShared = shareState ? shareState.is_shared === true : initialIsShared;
+  const isShared = shareState?.is_shared === true;
   const permissions = shareState?.permissions || {};
 
-  if (loading) {
+  if (isPending) {
     return (
       <div className="px-4 py-6 text-center">
+        <Heading className="sr-only">{t('share.shareConversation')}</Heading>
         <span className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>{t('common.loading')}</span>
+      </div>
+    );
+  }
+
+  // Without the status the toggle would show a guess, and turning it on would
+  // send default permissions over the thread's own.
+  if (isError && !shareState) {
+    return (
+      <div className="px-4 py-6 text-center space-y-2">
+        <Heading className="sr-only">{t('share.shareConversation')}</Heading>
+        <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>{t('share.statusLoadFailed')}</p>
+        <button
+          type="button"
+          onClick={() => void refetch()}
+          className="text-xs hover:underline"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {t('common.retry')}
+        </button>
       </div>
     );
   }
@@ -209,6 +196,10 @@ export function ThreadSharePanel({
         </div>
         {/* Toggle */}
         <button
+          type="button"
+          role="switch"
+          aria-checked={isShared}
+          aria-label={t('share.shareConversation')}
           onClick={() => handleToggleShare(!isShared)}
           disabled={updating}
           className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors"

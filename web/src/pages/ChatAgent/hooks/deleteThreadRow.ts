@@ -1,4 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
+import { markThreadDeleted } from '@/lib/deletedThreads';
 import { queryKeys } from '@/lib/queryKeys';
 import { scrollMemory } from '@/lib/scrollMemory';
 import { patchThreadRows } from '@/lib/threadRowActions';
@@ -7,8 +8,9 @@ import { getStoredThreadId, removeStoredThreadId } from './utils/threadStorage';
 
 /**
  * Delete a thread and forget it everywhere the client kept it: the scroll
- * position, the workspace's remembered thread, and every cached thread list
- * (the gallery's pages, the sidebar's, the dashboard's recent threads). Throws
+ * position, the workspace's remembered thread, every cached thread list (the
+ * gallery's pages, the sidebar's, the dashboard's recent threads), and its
+ * cached chat view and history entries (lib/deletedThreads). Throws
  * when the server refuses, leaving all of it in place.
  */
 export async function deleteThreadRow(
@@ -17,6 +19,7 @@ export async function deleteThreadRow(
   threadId: string,
 ): Promise<void> {
   await deleteThread(threadId);
+  markThreadDeleted(threadId);
   scrollMemory.forget(`thread:${threadId}`);
   if (workspaceId && getStoredThreadId(workspaceId) === threadId) removeStoredThreadId(workspaceId);
   patchThreadRows(queryClient, queryKeys.threads.all, (rows) =>
