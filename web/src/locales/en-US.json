@@ -3487,6 +3487,7 @@
       },
       "orderOutcome": {
         "orderId": "Order id",
+        "approvalId": "Approval ID",
         "filled": "Filled quantity",
         "avgFillPrice": "Average fill price",
         "fill": "Fill",
@@ -4749,6 +4750,7 @@
       "account": "Account",
       "tool": "Tool",
       "vendorOrderId": "Broker order",
+      "approvalId": "Approval ID",
       "attemptId": "Attempt",
       "parent": "Replaces",
       "parentCancel": "Cancels",

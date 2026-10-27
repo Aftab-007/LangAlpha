@@ -241,7 +241,7 @@ def _order_row(outcome: dict, **over) -> dict:
         ),
         (
             {"outcome": "confirmed"},
-            f"Your staged order was confirmed at the brokerage and sent there as a live order:"
+            f"Your order was confirmed at the brokerage and sent there as a live order:"
             f" {ORDER} (order 7712045), at 10:31 EDT. Its fills show in the brokerage's own"
             " orders.",
         ),

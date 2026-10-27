@@ -69,8 +69,9 @@ BROKERAGES: tuple[Brokerage, ...] = (
         url="https://agent.robinhood.com/mcp/trading",
         site="robinhood.com",
         description=(
-            "Robinhood brokerage account: balances, positions, order history, "
-            "instrument lookup, and order placement."
+            "Robinhood brokerage account: balances, positions, order history "
+            "and tax lots, instrument lookup, price alerts, saved scans, Legend "
+            "chart setups, trade approval status, and order placement."
         ),
         native_callback_only=True,
         exclusive_connection=True,

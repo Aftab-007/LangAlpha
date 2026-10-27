@@ -194,7 +194,13 @@ function Body({
         <DetailField label={t('orders.detail.tool')}>
           {order.tool || none}
         </DetailField>
-        <DetailField label={t('orders.detail.vendorOrderId')}>
+        <DetailField
+          label={t(
+            order.vendor_order_id && order.vendor_order_id === order.route?.approval_id
+              ? 'orders.detail.approvalId'
+              : 'orders.detail.vendorOrderId',
+          )}
+        >
           {order.vendor_order_id || none}
         </DetailField>
         <DetailField label={t('orders.detail.attemptId')}>

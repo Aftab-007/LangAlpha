@@ -143,6 +143,16 @@ describe('what a staged order is called', () => {
     );
   });
 
+  it('says a live order the user approved at the broker was confirmed there', () => {
+    expect(orderStatusLabel('handed_off', 'live', 'Robinhood', true)).toEqual({
+      key: 'toolArtifact.directTool.orderStatus.handedOffConfirmedStaged',
+      params: { vendor: 'Robinhood' },
+    });
+    expect(orderStatusShortLabel('handed_off', 'live', true)).toBe(
+      'toolArtifact.directTool.orderStatusShort.handedOffConfirmed',
+    );
+  });
+
   // Nobody cancelled it, so it must never read as cancelled.
   it('says an expired instruction expired before it was confirmed', () => {
     expect(orderStatusLabel('expired', 'staged', 'Webull')).toEqual({

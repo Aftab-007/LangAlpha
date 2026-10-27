@@ -69,6 +69,9 @@ export interface OrderOutcomeView {
   failure: { message: string | null; code: string | null } | null;
   fill: OrderPart[];
   orderId: string | null;
+  /** The id names an approval the order is waiting on, not an order: a
+   *  broker that asks the customer first has no order to name yet. */
+  orderIdIsApproval: boolean;
 }
 
 /**
@@ -139,13 +142,15 @@ export function orderOutcomeView(
   const message = text(outcome.failure?.message) ?? text(outcome.failure?.kind);
   const code = text(outcome.failure?.code);
   const orderId = text(outcome.vendor_order_id);
+  const shownId = orderId && orderId !== text(order?.target_ref) ? orderId : null;
   return {
     decisionMessage: text(outcome.decision_message),
     failure: message || code ? { message, code } : null,
     fill,
     // A cancel answers with the id of the order it cancelled, which the ticket
     // already names; saying it a second time reads as a second order.
-    orderId: orderId && orderId !== text(order?.target_ref) ? orderId : null,
+    orderId: shownId,
+    orderIdIsApproval: !!shownId && shownId === text(outcome.route?.approval_id),
   };
 }
 

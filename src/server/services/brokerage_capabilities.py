@@ -182,7 +182,7 @@ GROUPS: tuple[CapabilityGroup, ...] = (
 _BY_KEY: dict[str, CapabilityGroup] = {g.key: g for g in GROUPS}
 
 # Tool names exactly as the vendor publishes them, which is what the relay
-# compares against. Counted against live discovery: moomoo 105, Robinhood 85,
+# compares against. Counted against live discovery: moomoo 105, Robinhood 91,
 # IBKR 45, Webull 103, and ``UNCURATED`` names the ones deliberately left out.
 _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
     "moomoo": {
@@ -318,7 +318,6 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "get_equity_analyst_ratings",
             "get_equity_fundamentals",
             "get_equity_historicals",
-            "get_equity_news",
             "get_equity_price_book",
             "get_equity_quotes",
             "get_equity_technical_indicators",
@@ -388,6 +387,7 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         "account": (
             "get_accounts",
+            "get_advanced_orders",
             "get_crypto_account_onboarding_info",
             "get_crypto_orders",
             "get_crypto_positions",
@@ -401,18 +401,28 @@ _CURATION: dict[str, dict[str, tuple[str, ...]]] = {
             "get_pnl_trade_history",
             "get_portfolio",
             "get_realized_pnl",
+            # The trade-approval setting and the requests waiting on the
+            # user's decision in the Robinhood app, read only.
+            "get_trade_approval_setting",
+            "get_trade_approvals",
         ),
         "order_preview": (
             "preview_crypto_order",
+            "review_advanced_order",
             "review_equity_order",
             "review_option_order",
         ),
         "trading": (
+            "cancel_advanced_order",
             "cancel_crypto_order",
             "cancel_equity_order",
             "cancel_option_exercise",
             "cancel_option_order",
+            # Takes back an order waiting on the customer's approval in the
+            # Robinhood app, so it is a cancel of that order.
+            "decline_trade_approval",
             "exercise_option",
+            "place_advanced_order",
             "place_crypto_order",
             "place_equity_order",
             "place_option_order",
@@ -729,6 +739,17 @@ _ORDER_TOOLS: dict[str, dict[str, OrderTool]] = {
         "cancel_option_exercise": OrderTool(
             OrderAction.CANCEL_EXERCISE, OrderMode.LIVE, "option"
         ),
+        # A one-cancels-the-other pair of equity orders, placed and cancelled
+        # as one. Live like every other placement here: a trade approval the
+        # account requires is the answer's to report, not the tool's to be.
+        "place_advanced_order": OrderTool(
+            OrderAction.PLACE, OrderMode.LIVE, "equity"
+        ),
+        "cancel_advanced_order": OrderTool(
+            OrderAction.CANCEL, OrderMode.LIVE, "equity"
+        ),
+        # Names an approval rather than an order, of any class.
+        "decline_trade_approval": OrderTool(OrderAction.CANCEL, OrderMode.LIVE),
     },
     "ibkr": {
         # IBKR calls an instruction "not a live order", and it is not: it is an
