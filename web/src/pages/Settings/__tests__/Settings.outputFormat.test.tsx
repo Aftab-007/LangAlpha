@@ -104,7 +104,7 @@ function renderPreferencesTab() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/settings?tab=preferences']}>
+      <MemoryRouter initialEntries={['/settings?tab=agent']}>
         <Settings />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -135,9 +135,8 @@ describe('Settings — Output format', () => {
 
     const defaultBtn = await screen.findByRole('button', { name: 'Default' });
     const htmlBtn = screen.getByRole('button', { name: 'HTML' });
-    // The active segment uses the accent color; the inactive one uses tertiary.
-    expect(defaultBtn).toHaveStyle({ color: 'var(--color-accent-primary)' });
-    expect(htmlBtn).toHaveStyle({ color: 'var(--color-text-tertiary)' });
+    expect(defaultBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(htmlBtn).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('reflects the saved html value as the active segment', async () => {
@@ -145,8 +144,8 @@ describe('Settings — Output format', () => {
 
     const defaultBtn = await screen.findByRole('button', { name: 'Default' });
     const htmlBtn = screen.getByRole('button', { name: 'HTML' });
-    expect(htmlBtn).toHaveStyle({ color: 'var(--color-accent-primary)' });
-    expect(defaultBtn).toHaveStyle({ color: 'var(--color-text-tertiary)' });
+    expect(htmlBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(defaultBtn).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('selecting HTML saves output_format: "html" through updatePreferences', async () => {
@@ -175,17 +174,14 @@ describe('Settings — Output format', () => {
     expect(payload.agent_preference.output_format).toBeNull();
   });
 
-  it('preserves other agent_preference keys when changing output format', async () => {
+  it('writes only output_format, leaving other agent_preference keys to the server merge', async () => {
     setupAndRender({ tone: 'concise' });
 
     const htmlBtn = await screen.findByRole('button', { name: 'HTML' });
     fireEvent.click(htmlBtn);
 
     await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled());
-    const payload = h.mutateAsync.mock.calls.at(-1)![0] as {
-      agent_preference: Record<string, unknown>;
-    };
-    expect(payload.agent_preference).toMatchObject({ tone: 'concise', output_format: 'html' });
+    expect(h.mutateAsync.mock.calls.at(-1)![0]).toEqual({ agent_preference: { output_format: 'html' } });
   });
 
   it('does not duplicate output_format as a read-only row', async () => {
