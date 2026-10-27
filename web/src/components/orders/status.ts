@@ -64,8 +64,9 @@ export function vendorNamedEnd(unlistedAt: string | null | undefined): boolean {
   return unlistedAt === null;
 }
 
-/** A staged instruction the user confirmed in the broker's own client, as the
- *  broker reported it, in place of the sentence for one that only left. */
+/** An order the user confirmed in the broker's own client, as the broker
+ *  reported it, in place of the sentence for one that only left: a staged
+ *  instruction they sent, or a live order waiting on their approval. */
 const CONFIRMED_KEY = 'toolArtifact.directTool.orderStatus.handedOffConfirmedStaged';
 const CONFIRMED_KEY_UNNAMED = 'toolArtifact.directTool.orderStatus.handedOffConfirmedStagedUnnamed';
 const CONFIRMED_SHORT_KEY = 'toolArtifact.directTool.orderStatusShort.handedOffConfirmed';
@@ -103,8 +104,8 @@ export const ORDER_STATUS_STAGED_KEYS: readonly string[] = [
   CONFIRMED_SHORT_KEY,
 ];
 
-function confirmed(status: OrderStatus, mode: OrderMode | null | undefined, named: boolean): boolean {
-  return named && mode === 'staged' && status === 'handed_off';
+function confirmed(status: OrderStatus, named: boolean): boolean {
+  return named && status === 'handed_off';
 }
 
 /** The one-word verdict for a row. `named` is {@link vendorNamedEnd}. */
@@ -113,7 +114,7 @@ export function orderStatusShortLabel(
   mode?: OrderMode | null,
   named = false,
 ): string {
-  if (confirmed(status, mode, named)) return CONFIRMED_SHORT_KEY;
+  if (confirmed(status, named)) return CONFIRMED_SHORT_KEY;
   if (mode === 'staged' && STAGED_STATUS_SHORT_KEY[status]) {
     return STAGED_STATUS_SHORT_KEY[status] as string;
   }
@@ -128,11 +129,11 @@ export function orderStatusLabel(
   vendorLabel?: string | null,
   named = false,
 ): { key: string; params?: { vendor: string } } {
+  const vendor = vendorLabel?.trim();
+  if (confirmed(status, named)) {
+    return vendor ? { key: CONFIRMED_KEY, params: { vendor } } : { key: CONFIRMED_KEY_UNNAMED };
+  }
   if (mode === 'staged') {
-    const vendor = vendorLabel?.trim();
-    if (confirmed(status, mode, named)) {
-      return vendor ? { key: CONFIRMED_KEY, params: { vendor } } : { key: CONFIRMED_KEY_UNNAMED };
-    }
     if (vendor && STAGED_STATUS_KEY[status]) {
       return { key: STAGED_STATUS_KEY[status] as string, params: { vendor } };
     }

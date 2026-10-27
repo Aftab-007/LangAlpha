@@ -3448,6 +3448,7 @@
       },
       "orderOutcome": {
         "orderId": "订单号",
+        "approvalId": "审批编号",
         "filled": "成交数量",
         "avgFillPrice": "成交均价",
         "fill": "成交",
@@ -4688,6 +4689,7 @@
       "account": "账户",
       "tool": "工具",
       "vendorOrderId": "券商订单号",
+      "approvalId": "审批编号",
       "attemptId": "记录编号",
       "parent": "替代",
       "parentCancel": "撤销",

@@ -98,7 +98,12 @@ export function OrderReceiptCard({ artifact, onClick }: InlineCardProps): React.
       )}
       {(figures.length > 0 || receipt.outcome.orderId || answered) && (
         <div className="order-term-rest">
-          <ReceiptFigures figures={figures} orderId={receipt.outcome.orderId} cols={narrow ? 1 : 3} />
+          <ReceiptFigures
+            figures={figures}
+            orderId={receipt.outcome.orderId}
+            isApproval={receipt.outcome.orderIdIsApproval}
+            cols={narrow ? 1 : 3}
+          />
           <ReceiptOutcome receipt={receipt} />
         </div>
       )}
@@ -245,15 +250,21 @@ const ORDER_ID_IN_COLUMN = 12;
 function ReceiptFigures({
   figures,
   orderId,
+  isApproval,
   cols,
 }: {
   figures: OrderPart[];
   orderId: string | null;
+  isApproval: boolean;
   cols: number;
 }): React.ReactElement | null {
   const { t } = useTranslation();
   if (figures.length === 0 && !orderId) return null;
-  const idLabel = t('toolArtifact.directTool.orderOutcome.orderId');
+  const idLabel = t(
+    isApproval
+      ? 'toolArtifact.directTool.orderOutcome.approvalId'
+      : 'toolArtifact.directTool.orderOutcome.orderId',
+  );
   // The vendor's id is matched by eye against its own app, so one too long
   // for a column takes a row of its own rather than being cut.
   const idInColumn = !!orderId && orderId.length <= ORDER_ID_IN_COLUMN;
