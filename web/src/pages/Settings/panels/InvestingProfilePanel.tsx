@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
-import { clearPreferences } from '@/pages/Dashboard/utils/api';
 import { usePreferences } from '@/hooks/usePreferences';
+import { useClearPreferences } from '@/hooks/useUpdatePreferences';
 import { queryKeys } from '@/lib/queryKeys';
 import ConfirmDialog from '@/pages/Dashboard/components/ConfirmDialog';
 import { welcomeUrl } from '@/pages/Onboarding/welcome/paths';
@@ -45,6 +45,7 @@ export function InvestingProfilePanel() {
   const welcomeOffer = useWelcomeOffer();
   const { preferences: prefsData } = usePreferences();
   const queryClient = useQueryClient();
+  const { mutateAsync: clearPreferences } = useClearPreferences();
   const { t } = useTranslation();
   const copy = useSettingCopy();
   // The answers a reset cleared, hidden until the refetch replaces them.
