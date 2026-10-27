@@ -28,7 +28,7 @@ be declared there (enforced by `web/src/styles/__tests__/tokenRefs.test.ts`).
 | Role | Dark | Light |
 |---|---|---|
 | Page ground | `hsl(var(--background))` charcoal ~#191919 | white |
-| Canvas under card grids | = page | `#F5F4F1` warm paper |
+| Canvas under filled cards (orders; the dashboard's frames sit on the page) | = page | `#F5F4F1` warm paper |
 | Cards | `hsl(var(--card))` ~#202020 | white + `#E8E8E6` hairline |
 | Elevated (menus, tooltips) | `#2A2B2E` | `#F7F7F6` |
 | Primary text | `#E6E6E4` | `#1F1F1E` |
