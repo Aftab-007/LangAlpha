@@ -168,7 +168,7 @@
     "title": "User Settings",
     "fontSize": "Font size",
     "cardStyle": "Card style",
-    "cardStyleDesc": "How data cards and their detail panels look in chat.",
+    "cardStyleDesc": "How data cards and their detail panels look, in chat and on the dashboard.",
     "cardStyleTerminal": "Terminal",
     "cardStyleBalanced": "Balanced",
     "cardStyleQuiet": "Quiet",
@@ -480,8 +480,6 @@
         "resetMessage": "This replaces your current widgets and layout with the default preset. This action can't be undone.",
         "resetConfirm": "Reset layout",
         "deleteConfirm": "Delete",
-        "settingsDialogTitle": "{{title}} settings",
-        "editHoldingTitle": "Edit holding — {{symbol}}",
         "quantityLabel": "Quantity *",
         "quantityPlaceholder": "e.g. 10.5",
         "averageCostLabel": "Average Cost Per Share *",
@@ -489,7 +487,8 @@
         "notesLabel": "Notes",
         "notesPlaceholder": "Optional",
         "cancel": "Cancel",
-        "save": "Save"
+        "save": "Save",
+        "editHolding": "Edit holding"
       },
       "frame": {
         "drag": "Drag to rearrange",
@@ -515,8 +514,6 @@
         "results": "Results",
         "resultCount_one": "{{count}} widget matches \"{{search}}\".",
         "resultCount_other": "{{count}} widgets match \"{{search}}\".",
-        "tip": "tip",
-        "tipBody": "Click a widget to drop it at the next open slot on your dashboard.",
         "totalCount": "{{count}} total widgets",
         "noMatches": "No widgets match your search.",
         "hintAddSentence": "Click to select · double-click or <enter/> to add",
@@ -527,9 +524,6 @@
         "badgeSingleton": "singleton",
         "badgeMulti": "multi",
         "badgeTradingView": "TradingView",
-        "metaConfigurable": "configurable",
-        "metaNoSettings": "no settings",
-        "metaOnDashboard": "· on dashboard",
         "category": {
           "marketsLabel": "Markets",
           "marketsBlurb": "Real-time quotes, indices, charts and calendars.",
@@ -541,7 +535,9 @@
           "agentBlurb": "Kick off a research session from the dashboard.",
           "workspaceLabel": "Workspace",
           "workspaceBlurb": "Jump into a past conversation or workspace."
-        }
+        },
+        "tagSettings": "Settings",
+        "tagOnDashboard": "On dashboard"
       },
       "presetsDialog": {
         "eyebrow": "Dashboard layouts",
@@ -660,7 +656,6 @@
         }
       },
       "holdings": {
-        "stock": "Stock",
         "sharesHidden": "*** shares",
         "shares": "{{n}} shares",
         "nav": "Net Asset Value",
@@ -668,7 +663,15 @@
         "showValues": "Show values",
         "hideValues": "Hide values",
         "delete": "Delete",
-        "edit": "Edit"
+        "edit": "Edit",
+        "colSymbol": "Symbol",
+        "colLast": "Last",
+        "colChange": "Chg",
+        "colShares": "Shares",
+        "colValue": "Value",
+        "colPl": "P/L",
+        "cost": "Cost",
+        "totalPl": "Total P/L"
       },
       "tickerTape": {
         "title": "Ticker Tape",
@@ -904,7 +907,8 @@
       },
       "insightBrief": {
         "title": "AI Daily Brief",
-        "description": "Auto-generated market insight with a \"Read Full Brief\" CTA."
+        "description": "Auto-generated market insight with a \"Read Full Brief\" CTA.",
+        "cardTitle": "Daily brief"
       },
       "newsFeed": {
         "title": "News Feed",
@@ -913,7 +917,6 @@
         "tab_market": "Market",
         "tab_portfolio": "Portfolio",
         "tab_watchlist": "Watchlist",
-        "header": "News · {{label}}",
         "range_all": "All",
         "range_1h": "1H",
         "range_6h": "6H",
@@ -927,7 +930,8 @@
         "emptyFiltered": "No news matching filters",
         "emptyMarket": "No market news",
         "emptyTop": "No top news",
-        "emptyAddTo": "Add to {{label}} to see news"
+        "emptyAddTo": "Add to {{label}} to see news",
+        "cardTitle": "News"
       },
       "earningsCalendar": {
         "title": "Earnings Calendar",
@@ -940,7 +944,8 @@
         "bucket_nextWeek": "Next week",
         "bucket_later": "Later",
         "empty": "No earnings ahead",
-        "emptyHint": "Nothing scheduled in the next {{days}} days."
+        "emptyHint": "Nothing scheduled in the next {{days}} days.",
+        "estEps": "est {{value}}"
       },
       "watchlist": {
         "title": "Watchlist",
@@ -959,10 +964,9 @@
         "description": "Combined holdings and watchlist with a Watch / Holdings tab switcher.",
         "headerWatchlist": "Watchlist",
         "headerHoldings": "Holdings",
-        "tabWatch": "Watch",
-        "tabHoldings": "Holdings",
         "addSymbol": "Add Symbol",
-        "addTransaction": "Add Transaction"
+        "addTransaction": "Add Transaction",
+        "cardTitle": "Portfolio"
       },
       "miniChartGrid": {
         "title": "Mini Chart Grid",
@@ -1054,8 +1058,6 @@
       }
     },
     "brief": {
-      "eyebrow": "AI Generated Insight",
-      "personalizedBrief": "Personalized Brief",
       "basedOnWatchlistPortfolio": "Based on your watchlist & portfolio",
       "updatedWhen": "Updated {{when}}",
       "generatingFirst": "Generating first insight...",
@@ -1066,10 +1068,6 @@
       "earlierInsights": "Earlier Insights",
       "earlierToday_one": "{{count}} earlier today",
       "earlierToday_other": "{{count}} earlier today",
-      "earlierCount_one": "{{count}} earlier",
-      "earlierCount_other": "{{count}} earlier",
-      "overflowMore_one": "+{{count}} more",
-      "overflowMore_other": "+{{count}} more",
       "typeLabel": {
         "preMarket": "Pre-Market",
         "marketUpdate": "Market Update",
@@ -1087,8 +1085,12 @@
     "insightDetail": {
       "eyebrow": "AI Research Brief",
       "notFound": "Insight not found",
-      "allSources_one": "All Sources ({{count}})",
-      "allSources_other": "All Sources ({{count}})"
+      "allSources_one": "All {{count}} source",
+      "allSources_other": "All {{count}} sources",
+      "stories": "Stories",
+      "sources": "Sources",
+      "fewerSources": "Fewer sources",
+      "attachedBrief": "Brief: {{title}}"
     },
     "addWatchlistDialog": {
       "titleSearch": "Add Watchlist Item",
@@ -1137,6 +1139,24 @@
       "suggestion4": "Analyze my portfolio risk",
       "placeholderMobile": "Ask AI about market trends...",
       "placeholderDesktop": "Ask AI about market trends, specific stocks, or portfolio analysis..."
+    },
+    "newsDetail": {
+      "title": "Article",
+      "close": "Close",
+      "notAvailable": "Article details not available",
+      "notFound": "Article not found",
+      "addToChat": "Add to chat",
+      "source": "Source",
+      "summary": "Summary",
+      "summaryMeta": "AI",
+      "tickerImpact": "Ticker impact",
+      "topics": "Topics",
+      "attachedNews": "News: {{title}}",
+      "sentiment": {
+        "profit": "Positive",
+        "loss": "Negative",
+        "muted": "Neutral"
+      }
     }
   },
   "workspace": {

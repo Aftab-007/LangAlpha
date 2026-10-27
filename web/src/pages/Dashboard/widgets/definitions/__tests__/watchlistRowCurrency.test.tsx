@@ -22,7 +22,11 @@ function row(over: Partial<WatchlistRow>): WatchlistRow {
 function renderRow(item: WatchlistRow) {
   return render(
     <MemoryRouter>
-      <WatchlistRowItem item={item} marketStatus={null} />
+      <table>
+        <tbody>
+          <WatchlistRowItem item={item} marketStatus={null} />
+        </tbody>
+      </table>
     </MemoryRouter>,
   );
 }
