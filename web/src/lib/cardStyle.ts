@@ -1,6 +1,7 @@
 /**
- * How the chat's data cards and their detail panels are drawn: Balanced, the
- * default, Quiet, or Terminal. Terminal is the cards' own stylesheets; the
+ * How the data cards, in chat and on the dashboard, and their detail panels
+ * are drawn: Quiet, the default and the nearest to the rest of the app,
+ * Balanced, or Terminal. Terminal is the cards' own stylesheets; the
  * other two take marks away from them (charts/termCardStyles.css). Per device,
  * like the theme and the font size, since it is a question of how this screen
  * reads.
@@ -22,7 +23,7 @@ const KEY = 'cardStyle';
 // falls back to the default rather than stopping the boot.
 export function getCardStyle(): CardStyle {
   const stored = safeLocalStorage.getItem(KEY);
-  return CARD_STYLES.find((s) => s === stored) ?? 'balanced';
+  return CARD_STYLES.find((s) => s === stored) ?? 'quiet';
 }
 
 export function applyCardStyle(style: CardStyle): void {

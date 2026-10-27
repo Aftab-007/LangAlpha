@@ -7,10 +7,10 @@ beforeEach(() => {
 });
 
 describe('card style', () => {
-  it('reads Balanced when nothing, or something unknown, is stored', () => {
-    expect(getCardStyle()).toBe('balanced');
+  it('reads Quiet when nothing, or something unknown, is stored', () => {
+    expect(getCardStyle()).toBe('quiet');
     localStorage.setItem('cardStyle', 'classic');
-    expect(getCardStyle()).toBe('balanced');
+    expect(getCardStyle()).toBe('quiet');
   });
 
   it('keeps a choice for the next load and stamps it on the root', () => {

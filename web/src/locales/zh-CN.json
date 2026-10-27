@@ -168,7 +168,7 @@
     "title": "用户设置",
     "fontSize": "字体大小",
     "cardStyle": "卡片样式",
-    "cardStyleDesc": "对话中数据卡片及其详情面板的外观。",
+    "cardStyleDesc": "对话和看板中数据卡片及其详情面板的外观。",
     "cardStyleTerminal": "终端",
     "cardStyleBalanced": "均衡",
     "cardStyleQuiet": "简洁",

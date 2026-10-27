@@ -126,13 +126,14 @@ A tool call that returns data (a quote, a chart, a filing, an order) lands in
 the transcript as a card and opens a detail panel in the same language
 (`web/src/pages/ChatAgent/components/charts/TermCard.tsx`, `TermPanel.tsx`).
 The reader picks one of three styles in Settings, per device
-(`web/src/lib/cardStyle.ts`, stamped on `<html>` as `data-card-style`):
+(`web/src/lib/cardStyle.ts`, stamped on `<html>` as `data-card-style`); the
+dashboard's widgets and windows follow it too:
 
-- **Balanced**, the default: Terminal's frame, its title set into the top edge,
+- **Balanced**: Terminal's frame, its title set into the top edge,
   with words in the text face, figures in mono and tags as pills. Data reads as
   data beside the filled cards a reply opens (files, dashboards).
-- **Quiet**: the same type and marks in the platform's own card, filled, its
-  title inside, on the warm grays.
+- **Quiet**, the default: the same type and marks in the platform's own card,
+  filled, its title inside, on the warm grays, so cards change the app least.
 - **Terminal**: the unfilled frame with mono throughout, bracket tags, dashed
   rules and dotted leaders, on a cool palette (the `--color-term-*` tokens) so
   a figure reads as data against the warm page.

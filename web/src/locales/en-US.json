@@ -168,7 +168,7 @@
     "title": "User Settings",
     "fontSize": "Font size",
     "cardStyle": "Card style",
-    "cardStyleDesc": "How data cards and their detail panels look in chat.",
+    "cardStyleDesc": "How data cards and their detail panels look, in chat and on the dashboard.",
     "cardStyleTerminal": "Terminal",
     "cardStyleBalanced": "Balanced",
     "cardStyleQuiet": "Quiet",
