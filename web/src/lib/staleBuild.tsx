@@ -1,3 +1,4 @@
+import { RotateCw } from 'lucide-react';
 import i18n from '@/i18n';
 import { toast } from '@/components/ui/use-toast';
 import { StaleBuildReloadAction, StaleBuildToastText } from '@/components/StaleBuildToastCopy';
@@ -205,6 +206,7 @@ export function reportStaleBuild(reason: string, options?: { silent?: boolean })
         // Components, not strings: the toast can outlive a language switch.
         title: <StaleBuildToastText part="title" />,
         description: <StaleBuildToastText part="description" />,
+        icon: <RotateCw className="h-4 w-4 text-(--color-accent-primary)" />,
         // Overrides the Toaster's 3s default (spread onto the Radix Toast). A
         // notice that disappears before the user looks up is not a notice.
         duration: Infinity,

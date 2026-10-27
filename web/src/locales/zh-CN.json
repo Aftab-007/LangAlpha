@@ -2,10 +2,10 @@
   "common": {
     "submit": "提交",
     "staleBuild": {
-      "title": "此标签页与服务器版本不一致",
-      "description": "服务器提供的版本与此标签页加载的版本不同，重新加载即可切换。",
-      "blockedTitle": "页面加载失败",
-      "blockedDescription": "此标签页打开期间应用版本已变更，请重新加载以继续。",
+      "title": "有新版本可用",
+      "description": "请立即重新加载以完成更新，Agent 会继续运行。",
+      "blockedTitle": "此页面需要重新加载",
+      "blockedDescription": "此标签页打开期间 LangAlpha 已更新，重新加载即可继续。",
       "reload": "重新加载"
     },
     "networkBanner": {
