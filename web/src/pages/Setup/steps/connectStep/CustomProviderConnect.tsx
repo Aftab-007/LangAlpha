@@ -31,7 +31,7 @@ export function CustomProviderConnect({ state }: { state: LocationState }) {
 
   const handleSave = async () => {
     const slug = await form.save();
-    if (slug) connected({ method, provider: slug, displayName: form.name.trim(), brandKey: slug, justConnected: true });
+    if (slug) connected({ method, list: state.list, provider: slug, displayName: form.name.trim(), modelsFrom: slug, justConnected: true });
   };
 
   return (
@@ -189,7 +189,7 @@ export function CustomProviderConnect({ state }: { state: LocationState }) {
       </div>
 
       <SetupFooter
-        back={{ label: t('setup.back'), onClick: () => navigate('/setup/provider', { state: { method } }) }}
+        back={{ label: t('setup.back'), onClick: () => navigate('/setup/provider', { state: { list: state.list } }) }}
         primary={{
           label: form.saving ? t('setup.saving') : t('setup.continue'),
           onClick: handleSave,
