@@ -424,7 +424,16 @@ async def test_prefetch_reads_what_the_walk_inspects():
 # cannot drift into or out of sharing without a deliberate edit here.
 @pytest.mark.parametrize(
     "provider",
-    ["moonshot", "moonshot-coding", "minimax", "minimax-coding", "dashscope", "dashscope-intl"],
+    [
+        "moonshot",
+        "minimax",
+        "minimax-coding",
+        "minimax-cn-coding",
+        "z-ai-coding",
+        "z-ai-cn-coding",
+        "dashscope",
+        "dashscope-intl",
+    ],
 )
 def test_shipped_manifest_walks_separate_credential_providers_alone(provider):
     from src.llms.llm import LLM
@@ -435,9 +444,13 @@ def test_shipped_manifest_walks_separate_credential_providers_alone(provider):
 @pytest.mark.parametrize(
     ("provider", "walk"),
     [
-        ("z-ai", ["z-ai", "z-ai-cn", "z-ai-coding"]),
-        ("z-ai-coding", ["z-ai-coding", "z-ai", "z-ai-cn"]),
-        ("z-ai-cn-coding", ["z-ai-cn-coding", "z-ai-cn"]),
+        ("z-ai", ["z-ai", "z-ai-cn"]),
+        # Kimi Code issues one key for both its hosts.
+        ("moonshot-coding", ["moonshot-coding", "moonshot-cn-coding"]),
+        ("moonshot-cn-coding", ["moonshot-cn-coding", "moonshot-coding"]),
+        # OpenCode Go: one key, a route per wire format.
+        ("opencode-go", ["opencode-go", "opencode-go-chat", "opencode-go-responses", "opencode-go-google"]),
+        ("opencode-go-chat", ["opencode-go-chat", "opencode-go", "opencode-go-responses", "opencode-go-google"]),
         ("openrouter", ["openrouter"]),
     ],
 )
