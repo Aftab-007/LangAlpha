@@ -547,9 +547,9 @@ class ComputerPlacement:
 
 async def read_computer_placement(user_id: str) -> ComputerPlacement:
     # Local import: this module loads at agent import time.
-    from src.server.database.computer import get_computer_names_and_home
+    from src.server.database.computer import get_computer_roster
 
-    return ComputerPlacement.from_rows(await get_computer_names_and_home(user_id))
+    return ComputerPlacement.from_rows(await get_computer_roster(user_id))
 
 
 def _run_block(run: dict[str, Any], text: str, zone: ZoneInfo) -> str:

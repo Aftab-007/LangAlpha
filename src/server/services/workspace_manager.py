@@ -128,7 +128,7 @@ class WorkspaceManager(ComputerManager):
             computer = await self._chosen_computer(user_id, computer_id)
         else:
             computer = await self.ensure_primary_computer(
-                user_id, name=name, resource_tier=resource_tier
+                user_id, default_name=name, resource_tier=resource_tier
             )
         # Never had a sandbox and one is being built. A workspace placed on it
         # now would make its first request wait out that build, so it waits here.
