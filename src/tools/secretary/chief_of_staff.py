@@ -63,8 +63,9 @@ async def chief_of_staff_workspaces(
         workspace_id: The workspace to delete; required for "delete". Home cannot be deleted.
 
     Returns:
-        One short row per workspace, with its id, and its folder (dir_name) when it is on
-        this computer; for "create", the new id.
+        One short row per workspace, with its id and its folder (dir_name); with more
+        than one computer, also the computer it is on, and for one on another computer
+        than yours, the folder's whole path there (path); for "create", the new id.
     """
     user_id = config.get("configurable", {}).get("user_id")
     if not user_id:
