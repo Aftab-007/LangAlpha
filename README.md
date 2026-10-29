@@ -166,7 +166,7 @@ When you connect one, you choose what it may do, from read-only to paper trading
 
 ## Get started
 
-**Use the model you already pay for.** Sign in with a Claude or ChatGPT subscription, use a coding plan from Kimi, GLM or MiniMax, bring any API key, or run a local model when you self-host.
+**Use the model you already pay for.** Sign in with a Claude or ChatGPT subscription, use a coding plan from Kimi, GLM, MiniMax or OpenCode Go, bring any API key, or run a local model when you self-host.
 
 **Work where you are.** Use the browser, the [desktop app](https://github.com/ginlix-ai/langalpha/releases) for macOS, Windows and Linux, or Slack, Discord, Telegram, Feishu and iMessage on [LangAlpha.ai](https://langalpha.ai).
 
@@ -326,7 +326,7 @@ Three dials tune each model, set account-wide or per model in Settings:
 | How you connect | Providers |
 | --- | --- |
 | Subscription sign-in | Claude (Claude Code), ChatGPT (Codex) |
-| Coding plans | Kimi, GLM, MiniMax |
+| Coding plans | Kimi, GLM, MiniMax, OpenCode Go |
 | API key | OpenAI, Anthropic, Gemini, DeepSeek, Qwen (DashScope), Kimi (Moonshot), GLM (Zhipu), MiniMax, OpenRouter, Groq, Cerebras |
 | Local | Ollama, LM Studio, vLLM |
 
